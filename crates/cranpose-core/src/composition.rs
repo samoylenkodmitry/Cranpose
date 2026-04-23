@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 pub struct Composition<A: Applier + 'static> {
+    pub(crate) composer_state: Rc<crate::composer::ComposerRuntimeState>,
     pub(crate) slots: Rc<SlotsHost>,
     pub(crate) applier: Rc<ConcreteApplierHost<A>>,
     pub(crate) runtime: Runtime,
@@ -42,6 +43,7 @@ impl<A: Applier + 'static> Composition<A> {
     }
 
     pub fn with_runtime(applier: A, runtime: Runtime) -> Self {
+        let composer_state = Rc::new(crate::composer::ComposerRuntimeState::default());
         let slots = Rc::new(SlotsHost::new(SlotTable::new()));
         let applier = Rc::new(ConcreteApplierHost::new(applier));
         let observer_handle = runtime.handle();
@@ -50,6 +52,7 @@ impl<A: Applier + 'static> Composition<A> {
         });
         observer.start();
         Self {
+            composer_state,
             slots,
             applier,
             runtime,
@@ -147,38 +150,21 @@ impl<A: Applier + 'static> Composition<A> {
         }
     }
 
-    fn clear_pending_invalid_scopes(&mut self) -> HashSet<ScopeId> {
-        let runtime_handle = self.runtime_handle();
-        let mut cleared = HashSet::default();
-        for (id, weak) in runtime_handle.take_invalidated_scopes() {
-            if let Some(inner) = weak.upgrade() {
-                RecomposeScope { inner }.mark_recomposed();
-            } else {
-                runtime_handle.mark_scope_recomposed(id);
-            }
-            cleared.insert(id);
-        }
-        cleared
-    }
-
     fn render_root_pass(
         &mut self,
         key: Key,
         content: &mut dyn FnMut(),
-        clear_pending_invalid_scopes: bool,
+        _clear_pending_invalid_scopes: bool,
     ) -> Result<HashSet<ScopeId>, NodeError> {
         self.root_key = Some(key);
         self.root_render_requested = false;
-        let cleared_invalid_scopes = if clear_pending_invalid_scopes {
-            self.clear_pending_invalid_scopes()
-        } else {
-            HashSet::default()
-        };
+        let cleared_invalid_scopes = HashSet::default();
         let runtime_handle = self.runtime_handle();
         runtime_handle.drain_ui();
         let side_effects = {
             let _teardown = runtime::enter_state_teardown_scope();
-            let composer = Composer::new(
+            let composer = Composer::new_with_shared_state(
+                Rc::clone(&self.composer_state),
                 Rc::clone(&self.slots),
                 self.applier.clone(),
                 runtime_handle.clone(),
@@ -378,8 +364,20 @@ impl<A: Applier + 'static> Composition<A> {
             let mut scope_groups: Vec<(Rc<SlotsHost>, Vec<RecomposeScope>)> = Vec::new();
             let mut scope_group_index: HashMap<usize, usize> = HashMap::default();
             for scope in scopes {
-                let host = scope.slots_host().unwrap_or_else(|| Rc::clone(&root_host));
-                let host_key = Rc::as_ptr(&host) as usize;
+                let host = scope
+                    .slots_runtime_state()
+                    .and_then(|state| {
+                        scope
+                            .slots_storage_key()
+                            .and_then(|storage_key| state.host_for_storage_key(storage_key))
+                    })
+                    .or_else(|| {
+                        scope.slots_storage_key().and_then(|storage_key| {
+                            self.composer_state.host_for_storage_key(storage_key)
+                        })
+                    })
+                    .unwrap_or_else(|| Rc::clone(&root_host));
+                let host_key = host.storage_key();
                 if let Some(index) = scope_group_index.get(&host_key).copied() {
                     scope_groups[index].1.push(scope);
                 } else {
@@ -387,69 +385,83 @@ impl<A: Applier + 'static> Composition<A> {
                     scope_groups.push((host, vec![scope]));
                 }
             }
-            let side_effects = {
-                let _teardown = runtime::enter_state_teardown_scope();
-                let composer = Composer::new(
-                    Rc::clone(&root_host),
-                    self.applier_host(),
-                    runtime_clone,
-                    self.observer.clone(),
-                    self.root,
-                );
-                self.observer.begin_frame();
-                let (root, commands, side_effects, requested_root_render, compact_applier) =
-                    composer.install(|composer| {
-                        let mut compact_applier = false;
-                        for (host, scopes) in scope_groups.into_iter() {
+            let mut host_group_index = 0usize;
+            while host_group_index < scope_groups.len() {
+                let (host, scopes) = &scope_groups[host_group_index];
+                let shared_state = host
+                    .runtime_state()
+                    .or_else(|| scopes.first().and_then(RecomposeScope::slots_runtime_state))
+                    .unwrap_or_else(|| Rc::clone(&self.composer_state));
+                let side_effects = {
+                    let _teardown = runtime::enter_state_teardown_scope();
+                    let composer = Composer::new_with_shared_state(
+                        shared_state,
+                        Rc::clone(host),
+                        self.applier_host(),
+                        runtime_clone.clone(),
+                        self.observer.clone(),
+                        self.root,
+                    );
+                    self.observer.begin_frame();
+                    let (root, commands, side_effects, requested_root_render, compact_applier) =
+                        composer.install(|composer| {
                             let (_, outcome) = composer.with_slot_host_pass(
-                                host,
+                                Rc::clone(host),
                                 crate::slot::SlotPassMode::Recompose,
                                 |composer| {
-                                    for scope in &scopes {
+                                    for scope in scopes {
                                         composer.recranpose_group(scope);
                                     }
                                 },
                             );
-                            compact_applier |= outcome.compacted;
+                            let root = composer.root();
+                            let commands = composer.take_commands();
+                            let side_effects = composer.take_side_effects();
+                            let requested_root_render = composer.take_root_render_request();
+                            (
+                                root,
+                                commands,
+                                side_effects,
+                                requested_root_render,
+                                outcome.compacted,
+                            )
+                        });
+                    self.record_pass_stats(&commands, &side_effects);
+                    {
+                        let mut applier = self.applier.borrow_dyn();
+                        commands.apply(&mut *applier)?;
+                        for update in runtime_handle.take_updates() {
+                            update.apply(&mut *applier)?;
                         }
-                        let root = composer.root();
-                        let commands = composer.take_commands();
-                        let side_effects = composer.take_side_effects();
-                        let requested_root_render = composer.take_root_render_request();
-                        (
-                            root,
-                            commands,
-                            side_effects,
-                            requested_root_render,
-                            compact_applier,
-                        )
-                    });
-                self.record_pass_stats(&commands, &side_effects);
-                {
-                    let mut applier = self.applier.borrow_dyn();
-                    commands.apply(&mut *applier)?;
-                    for update in runtime_handle.take_updates() {
-                        update.apply(&mut *applier)?;
                     }
+                    if compact_applier {
+                        self.applier.compact();
+                        self.applier.borrow_dyn().clear_recycled_nodes();
+                    }
+                    if root.is_some() {
+                        self.root = root;
+                    }
+                    if requested_root_render {
+                        self.root_render_requested = true;
+                    }
+                    side_effects
+                };
+                runtime_handle.drain_ui();
+                for effect in side_effects {
+                    effect();
                 }
-                if compact_applier {
-                    self.applier.compact();
-                    self.applier.borrow_dyn().clear_recycled_nodes();
+                runtime_handle.drain_ui();
+                self.maybe_dump_slot_table("recompose_pass");
+                if self.root_render_requested {
+                    for (_, remaining_scopes) in scope_groups.iter().skip(host_group_index + 1) {
+                        for scope in remaining_scopes {
+                            runtime_handle.requeue_invalid_scope(scope.id(), scope.downgrade());
+                        }
+                    }
+                    break;
                 }
-                if root.is_some() {
-                    self.root = root;
-                }
-                if requested_root_render {
-                    self.root_render_requested = true;
-                }
-                side_effects
-            };
-            runtime_handle.drain_ui();
-            for effect in side_effects {
-                effect();
+                host_group_index += 1;
             }
-            runtime_handle.drain_ui();
-            self.maybe_dump_slot_table("recompose_pass");
             if self.root_render_requested {
                 break;
             }

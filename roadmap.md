@@ -2,13 +2,14 @@
 
 Source of truth: `docs/cranpose_slot_table_v2_design.md`
 
-This file lists only unfinished work. Completed rewrite items were intentionally removed so this stays usable.
+This file lists only unfinished work.
 
 ## Current State
 
 - Slot Table V2 is the active implementation under `crates/cranpose-core/src/slot/*`.
 - The old `slot_table.rs` wrapper surface is removed.
-- Full local verification was green on the current tree:
+- The design docs and the implementation now agree on composer-owned runtime state, per-host scope resolution, and retained detach semantics.
+- Full local verification is green on the current tree:
   - `cargo test`
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - Android `:app:assembleRelease`
@@ -17,7 +18,6 @@ This file lists only unfinished work. Completed rewrite items were intentionally
 
 ## Remaining Required Work
 
-- [ ] Keep `docs/cranpose_slot_table_v2_design.md` and the implementation aligned after every slot/composer change; do not let `roadmap.md` become a second spec again.
 - [ ] Build repeatable performance baselines for keyed reorder, tab switching, subcompose scrolling, and lazy-list scroll reuse.
 - [ ] Reduce unnecessary `Vec` cloning in slot-table and retention hot paths.
 - [ ] Profile subtree insert, move, and detach costs; if `Vec::splice` remains hot after measurement, replace subtree moves with a chunked sequence without changing semantics.

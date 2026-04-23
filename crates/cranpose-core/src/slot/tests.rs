@@ -238,7 +238,6 @@ fn first_composition_records_group_value_and_node() {
     assert_eq!(harness.table.groups[0].subtree_len, 1);
     assert_eq!(harness.table.groups[0].subtree_node_count, 1);
     let payload = harness.table.group_payload_record_at(0, 0);
-    assert_eq!(payload.kind, super::PayloadKind::Remember);
     assert_eq!(payload.type_id, TypeId::of::<i32>());
     assert_eq!(
         harness.table.group_node_record_at(0, 0).lifecycle,
@@ -318,7 +317,6 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
         .find(|group| group.static_key == ROOT_KEY)
         .expect("root group snapshot");
     assert_eq!(root.scope_id, Some(ROOT_SCOPE));
-    assert!(root.flags.is_empty());
     assert_eq!(root.subtree_len, 2);
     assert_eq!(root.payload_len, 1);
     assert_eq!(root.node_len, 1);
@@ -330,9 +328,29 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
         .expect("child group snapshot");
     assert_eq!(child.parent_anchor, root.anchor);
     assert_eq!(child.scope_id, Some(CHILD_SCOPE));
-    assert!(child.flags.is_empty());
     assert_eq!(child.subtree_len, 1);
     assert_eq!(child.payload_len, 1);
+}
+
+#[test]
+fn debug_dump_all_slots_omits_fake_payload_categories() {
+    const GROUP_KEY: Key = 51;
+
+    let table = composed_group_with_value_and_node_table(GROUP_KEY);
+    let rows = table
+        .debug_dump_all_slots()
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect::<Vec<_>>();
+
+    assert!(
+        rows.iter().any(|row| row.starts_with("Value(")),
+        "payload rows should still be visible in debug output"
+    );
+    assert!(
+        rows.iter().all(|row| !row.starts_with("PayloadKind(")),
+        "debug output must not invent payload categories that the runtime does not use"
+    );
 }
 
 #[test]

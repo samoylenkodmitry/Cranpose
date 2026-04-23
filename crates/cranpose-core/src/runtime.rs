@@ -456,6 +456,13 @@ impl RuntimeInner {
         }
     }
 
+    fn requeue_invalid_scope(&self, id: ScopeId, scope: Weak<RecomposeScopeInner>) {
+        if self.invalid_scopes.borrow().contains(&id) {
+            self.scope_queue.borrow_mut().push((id, scope));
+            self.schedule();
+        }
+    }
+
     fn mark_scope_recomposed(&self, id: ScopeId) {
         self.invalid_scopes.borrow_mut().remove(&id);
     }
@@ -1093,6 +1100,12 @@ impl RuntimeHandle {
     pub(crate) fn register_invalid_scope(&self, id: ScopeId, scope: Weak<RecomposeScopeInner>) {
         if let Some(inner) = self.inner.upgrade() {
             inner.register_invalid_scope(id, scope);
+        }
+    }
+
+    pub(crate) fn requeue_invalid_scope(&self, id: ScopeId, scope: Weak<RecomposeScopeInner>) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.requeue_invalid_scope(id, scope);
         }
     }
 

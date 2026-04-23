@@ -68,7 +68,7 @@ pub use runtime::{
     RuntimeHandle, StateId, TaskHandle,
 };
 pub use slot::{
-    GroupFlags, SlotDebugAnchor, SlotDebugGroup, SlotDebugScope, SlotDebugSnapshot, SlotTable,
+    SlotDebugAnchor, SlotDebugGroup, SlotDebugScope, SlotDebugSnapshot, SlotTable,
     SlotTableDebugStats,
 };
 pub use slot_storage::{
@@ -372,7 +372,8 @@ pub(crate) struct RecomposeScopeInner {
     recompose: RefCell<Option<RecomposeCallback>>,
     parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
     local_stack: RefCell<LocalStackSnapshot>,
-    slots_host: RefCell<Option<Weak<SlotsHost>>>,
+    slots_storage_key: Cell<usize>,
+    slots_runtime_state: RefCell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
     state_subscriptions: RefCell<HashSet<StateId>>,
 }
 
@@ -395,7 +396,8 @@ impl RecomposeScopeInner {
             recompose: RefCell::new(None),
             parent_scope: RefCell::new(None),
             local_stack: RefCell::new(empty_local_stack()),
-            slots_host: RefCell::new(None),
+            slots_storage_key: Cell::new(0),
+            slots_runtime_state: RefCell::new(None),
             state_subscriptions: RefCell::new(HashSet::default()),
         }
     }
@@ -455,7 +457,7 @@ impl RecomposeScope {
         }
     }
 
-    fn downgrade(&self) -> Weak<RecomposeScopeInner> {
+    pub(crate) fn downgrade(&self) -> Weak<RecomposeScopeInner> {
         Rc::downgrade(&self.inner)
     }
 
@@ -579,16 +581,23 @@ impl RecomposeScope {
         self.inner.parent_hint.get()
     }
 
-    fn set_slots_host(&self, host: Weak<SlotsHost>) {
-        *self.inner.slots_host.borrow_mut() = Some(host);
+    fn set_slots_host(&self, host: &Rc<SlotsHost>) {
+        self.inner.slots_storage_key.set(host.storage_key());
+        *self.inner.slots_runtime_state.borrow_mut() =
+            host.runtime_state().map(|state| Rc::downgrade(&state));
     }
 
-    fn slots_host(&self) -> Option<Rc<SlotsHost>> {
+    pub(crate) fn slots_storage_key(&self) -> Option<usize> {
+        let key = self.inner.slots_storage_key.get();
+        (key != 0).then_some(key)
+    }
+
+    pub(crate) fn slots_runtime_state(&self) -> Option<Rc<crate::composer::ComposerRuntimeState>> {
         self.inner
-            .slots_host
+            .slots_runtime_state
             .borrow()
             .as_ref()
-            .and_then(Weak::upgrade)
+            .and_then(std::rc::Weak::upgrade)
     }
 
     pub fn deactivate(&self) {
@@ -1407,6 +1416,10 @@ pub(crate) enum Command {
         parent_id: NodeId,
         child_id: NodeId,
     },
+    DetachChild {
+        parent_id: NodeId,
+        child_id: NodeId,
+    },
     SyncChildren {
         parent_id: NodeId,
         expected_children: ChildList,
@@ -1424,15 +1437,39 @@ struct DeferredChildCleanup {
 #[derive(Default)]
 struct DeferredChildCleanupQueue {
     pending: Vec<DeferredChildCleanup>,
+    preserved: Vec<(NodeId, u32)>,
 }
 
 impl DeferredChildCleanupQueue {
     fn push(&mut self, child_id: NodeId, generation: u32, removed_from_parent: bool) {
+        if self
+            .preserved
+            .iter()
+            .any(|&(preserved_id, preserved_generation)| {
+                preserved_id == child_id && preserved_generation == generation
+            })
+        {
+            return;
+        }
         self.pending.push(DeferredChildCleanup {
             child_id,
             generation,
             removed_from_parent,
         });
+    }
+
+    fn preserve(&mut self, child_id: NodeId, generation: u32) {
+        if !self
+            .preserved
+            .iter()
+            .any(|&(preserved_id, preserved_generation)| {
+                preserved_id == child_id && preserved_generation == generation
+            })
+        {
+            self.preserved.push((child_id, generation));
+        }
+        self.pending
+            .retain(|cleanup| cleanup.child_id != child_id || cleanup.generation != generation);
     }
 
     fn flush(self, applier: &mut dyn Applier) -> Result<(), NodeError> {
@@ -1541,6 +1578,15 @@ impl Command {
                 parent_id,
                 child_id,
             } => apply_remove_child(applier, parent_id, child_id, deferred_cleanup),
+            Self::DetachChild {
+                parent_id,
+                child_id,
+            } => {
+                let generation = applier.node_generation(child_id);
+                detach_child_from_parent(applier, parent_id, child_id)?;
+                deferred_cleanup.preserve(child_id, generation);
+                Ok(())
+            }
             Self::SyncChildren {
                 parent_id,
                 expected_children,
@@ -1565,6 +1611,7 @@ enum CommandTag {
     InsertChild,
     MoveChild,
     RemoveChild,
+    DetachChild,
     SyncChildren,
     Callback,
 }
@@ -1611,6 +1658,12 @@ struct RemoveChildCommand {
     child_id: NodeId,
 }
 
+#[derive(Copy, Clone)]
+struct DetachChildCommand {
+    parent_id: NodeId,
+    child_id: NodeId,
+}
+
 struct SyncChildrenCommand {
     parent_id: NodeId,
     child_start: usize,
@@ -1629,6 +1682,7 @@ struct CommandQueue {
     insert_children: Vec<InsertChildCommand>,
     move_children: Vec<MoveChildCommand>,
     remove_children: Vec<RemoveChildCommand>,
+    detach_children: Vec<DetachChildCommand>,
     sync_children: Vec<SyncChildrenCommand>,
     sync_child_ids: Vec<NodeId>,
     callbacks: Vec<CommandCallback>,
@@ -1723,6 +1777,16 @@ impl CommandQueue {
                 });
                 self.push_tag(CommandTag::RemoveChild);
             }
+            Command::DetachChild {
+                parent_id,
+                child_id,
+            } => {
+                self.detach_children.push(DetachChildCommand {
+                    parent_id,
+                    child_id,
+                });
+                self.push_tag(CommandTag::DetachChild);
+            }
             Command::SyncChildren {
                 parent_id,
                 expected_children,
@@ -1792,6 +1856,11 @@ impl CommandQueue {
                     .saturating_mul(std::mem::size_of::<RemoveChildCommand>()),
             )
             .saturating_add(
+                self.detach_children
+                    .len()
+                    .saturating_mul(std::mem::size_of::<DetachChildCommand>()),
+            )
+            .saturating_add(
                 self.sync_children
                     .len()
                     .saturating_mul(std::mem::size_of::<SyncChildrenCommand>()),
@@ -1848,6 +1917,11 @@ impl CommandQueue {
                     .saturating_mul(std::mem::size_of::<RemoveChildCommand>()),
             )
             .saturating_add(
+                self.detach_children
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<DetachChildCommand>()),
+            )
+            .saturating_add(
                 self.sync_children
                     .capacity()
                     .saturating_mul(std::mem::size_of::<SyncChildrenCommand>()),
@@ -1873,6 +1947,7 @@ impl CommandQueue {
         let mut insert_children = self.insert_children.into_iter();
         let mut move_children = self.move_children.into_iter();
         let mut remove_children = self.remove_children.into_iter();
+        let mut detach_children = self.detach_children.into_iter();
         let mut sync_children_commands = self.sync_children.into_iter();
         let sync_child_ids = self.sync_child_ids;
         let mut callbacks = self.callbacks.into_iter();
@@ -1960,6 +2035,17 @@ impl CommandQueue {
                         }
                         .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
+                    CommandTag::DetachChild => {
+                        let DetachChildCommand {
+                            parent_id,
+                            child_id,
+                        } = detach_children.next().expect("missing DetachChild payload");
+                        Command::DetachChild {
+                            parent_id,
+                            child_id,
+                        }
+                        .apply_with_cleanup(applier, &mut deferred_cleanup)?;
+                    }
                     CommandTag::SyncChildren => {
                         let SyncChildrenCommand {
                             parent_id,
@@ -1994,6 +2080,7 @@ impl CommandQueue {
         debug_assert!(insert_children.next().is_none());
         debug_assert!(move_children.next().is_none());
         debug_assert!(remove_children.next().is_none());
+        debug_assert!(detach_children.next().is_none());
         debug_assert!(sync_children_commands.next().is_none());
         debug_assert!(callbacks.next().is_none());
         deferred_cleanup.flush(applier)
@@ -2044,27 +2131,41 @@ fn apply_remove_child(
     child_id: NodeId,
     deferred_cleanup: &mut DeferredChildCleanupQueue,
 ) -> Result<(), NodeError> {
+    detach_child_from_parent(applier, parent_id, child_id)?;
+
+    let generation = applier.node_generation(child_id);
+    let removed_from_parent = if let Ok(node) = applier.get_mut(child_id) {
+        node.parent().is_none()
+    } else {
+        return Ok(());
+    };
+    deferred_cleanup.push(child_id, generation, removed_from_parent);
+    Ok(())
+}
+
+fn detach_child_from_parent(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    child_id: NodeId,
+) -> Result<(), NodeError> {
     if let Ok(parent_node) = applier.get_mut(parent_id) {
         parent_node.remove_child(child_id);
     }
     bubble_layout_dirty(applier, parent_id);
     bubble_measure_dirty(applier, parent_id);
 
-    let generation = applier.node_generation(child_id);
-    let removed_from_parent = if let Ok(node) = applier.get_mut(child_id) {
+    if let Ok(node) = applier.get_mut(child_id) {
         match node.parent() {
             Some(existing_parent_id) if existing_parent_id == parent_id => {
                 node.on_removed_from_parent();
-                true
             }
-            None => false,
+            None => {}
             Some(_) => return Ok(()),
         }
     } else {
         return Ok(());
-    };
+    }
 
-    deferred_cleanup.push(child_id, generation, removed_from_parent);
     Ok(())
 }
 
@@ -3342,12 +3443,19 @@ impl<'a, A: Applier + 'static> DerefMut for ApplierGuard<'a, A> {
 }
 
 pub struct SlotsHost {
+    storage_key: Cell<usize>,
     inner: RefCell<SlotsHostInner>,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct SlotPassOutcome {
     pub(crate) compacted: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct FinishedSlotPass {
+    pub(crate) outcome: SlotPassOutcome,
+    pub(crate) detached_root_children: Vec<slot::DetachedSubtree>,
 }
 
 struct ActivePassState {
@@ -3358,79 +3466,53 @@ struct ActivePassState {
 struct SlotsHostInner {
     table: SlotTable,
     lifecycle: slot::SlotLifecycleCoordinator,
-    retention: retention::RetentionManager,
-    scope_registry: HashMap<ScopeId, RecomposeScope>,
+    runtime_state: Option<Rc<crate::composer::ComposerRuntimeState>>,
     active_pass: Option<ActivePassState>,
 }
 
-impl Drop for SlotsHostInner {
+impl Drop for SlotsHost {
     fn drop(&mut self) {
-        self.lifecycle.dispose_slot_table(&mut self.table);
-        self.retention.clear();
-        self.scope_registry.clear();
-    }
-}
-
-fn detached_subtree_root_nodes(
-    applier: &mut dyn Applier,
-    subtree: &slot::DetachedSubtree,
-) -> Vec<NodeId> {
-    let nodes = subtree.node_ids();
-    let node_set = nodes.iter().copied().collect::<HashSet<_>>();
-    nodes
-        .into_iter()
-        .filter(|&node_id| {
-            let parent = applier.get_mut(node_id).ok().and_then(|node| node.parent());
-            parent.is_none_or(|parent_id| !node_set.contains(&parent_id))
-        })
-        .collect()
-}
-
-fn detach_retained_node_now(applier: &mut dyn Applier, node_id: NodeId) {
-    let parent_id = applier.get_mut(node_id).ok().and_then(|node| node.parent());
-    let Some(parent_id) = parent_id else {
-        return;
-    };
-
-    if let Ok(parent_node) = applier.get_mut(parent_id) {
-        parent_node.remove_child(node_id);
-    }
-    bubble_layout_dirty(applier, parent_id);
-    bubble_measure_dirty(applier, parent_id);
-
-    if let Ok(node) = applier.get_mut(node_id) {
-        if node.parent() == Some(parent_id) {
-            node.on_removed_from_parent();
+        let storage_key = self.storage_key.get();
+        let inner = self.inner.get_mut();
+        if let Some(state) = inner.runtime_state.clone() {
+            state.dispose_retained_subtrees_for_host(
+                storage_key,
+                &mut inner.table,
+                &mut inner.lifecycle,
+            );
+            state.clear_host_storage_key(storage_key);
         }
-    }
-}
-
-fn dispose_detached_root_subtree_now(applier: &mut dyn Applier, subtree: &slot::DetachedSubtree) {
-    for root in detached_subtree_root_nodes(applier, subtree) {
-        let parent_id = applier.get_mut(root).ok().and_then(|node| node.parent());
-        if let Some(parent_id) = parent_id {
-            let _ = remove_child_and_cleanup_now(applier, parent_id, root);
-            continue;
-        }
-        if let Ok(node) = applier.get_mut(root) {
-            node.on_removed_from_parent();
-            node.unmount();
-        }
-        let _ = applier.remove(root);
+        inner.lifecycle.dispose_slot_table(&mut inner.table);
     }
 }
 
 impl SlotsHost {
+    pub(crate) fn storage_key(&self) -> usize {
+        self.storage_key.get()
+    }
+
     pub fn new(storage: SlotTable) -> Self {
+        let storage_key = storage.storage_id();
+        let runtime_state = storage.runtime_state();
         Self {
+            storage_key: Cell::new(storage_key),
             inner: RefCell::new(SlotsHostInner {
                 table: storage,
                 lifecycle: slot::SlotLifecycleCoordinator::default(),
-                retention: retention::RetentionManager::default(),
-                scope_registry: HashMap::default(),
+                runtime_state,
                 active_pass: None,
             }),
         }
+    }
+
+    pub(crate) fn bind_runtime_state(&self, state: &Rc<crate::composer::ComposerRuntimeState>) {
+        let mut inner = self.inner.borrow_mut();
+        inner.runtime_state = Some(Rc::clone(state));
+        inner.table.bind_runtime_state(state);
+    }
+
+    pub(crate) fn runtime_state(&self) -> Option<Rc<crate::composer::ComposerRuntimeState>> {
+        self.inner.borrow().runtime_state.clone()
     }
 
     pub(crate) fn borrow(&self) -> Ref<'_, SlotTable> {
@@ -3442,43 +3524,41 @@ impl SlotsHost {
     }
 
     pub fn take(&self) -> SlotTable {
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow();
         assert!(
             inner.active_pass.is_none(),
             "cannot take SlotsHost during an active pass"
         );
-        assert!(
-            inner.retention.is_empty(),
-            "cannot take SlotsHost while retained subtrees are still owned by the host"
-        );
+        drop(inner);
+        let mut inner = self.inner.borrow_mut();
         inner.lifecycle.flush_pending_drops();
-        inner.retention.clear();
-        inner.scope_registry.clear();
-        std::mem::take(&mut inner.table)
+        let taken = std::mem::take(&mut inner.table);
+        self.storage_key.set(inner.table.storage_id());
+        inner.runtime_state = inner.table.runtime_state();
+        taken
     }
 
     pub fn reset(&self) {
-        let mut inner = self.inner.borrow_mut();
-        let SlotsHostInner {
-            table,
-            lifecycle,
-            retention,
-            scope_registry,
-            active_pass,
-        } = &mut *inner;
+        let inner = self.inner.borrow();
         assert!(
-            active_pass.is_none(),
+            inner.active_pass.is_none(),
             "cannot reset SlotsHost during an active pass"
         );
-        assert!(
-            retention.is_empty(),
-            "cannot reset SlotsHost while retained subtrees are still owned by the host"
-        );
-        lifecycle.dispose_slot_table(table);
-        retention.clear();
-        scope_registry.clear();
-        *table = SlotTable::default();
-        *lifecycle = slot::SlotLifecycleCoordinator::default();
+        drop(inner);
+        if let Some(state) = self.runtime_state() {
+            assert!(
+                state.host_retention_is_empty(self),
+                "cannot reset SlotsHost while retained subtrees are still owned by the host"
+            );
+            state.clear_host(self);
+        }
+        let mut inner = self.inner.borrow_mut();
+        let mut lifecycle = std::mem::take(&mut inner.lifecycle);
+        lifecycle.dispose_slot_table(&mut inner.table);
+        inner.table = SlotTable::default();
+        self.storage_key.set(inner.table.storage_id());
+        inner.runtime_state = inner.table.runtime_state();
+        inner.lifecycle = slot::SlotLifecycleCoordinator::default();
     }
 
     pub(crate) fn debug_stats(&self) -> SlotTableDebugStats {
@@ -3491,12 +3571,9 @@ impl SlotsHost {
     pub(crate) fn debug_snapshot(&self) -> slot::SlotDebugSnapshot {
         let inner = self.inner.borrow();
         let mut snapshot = inner.table.debug_snapshot();
-        let retention = inner.retention.debug_stats();
-        snapshot.scope_registry_count = inner.scope_registry.len();
-        snapshot.retained_subtree_count = retention.subtree_count;
-        snapshot.retained_group_count = retention.group_count;
-        snapshot.retained_node_count = retention.node_count;
-        snapshot.retained_scope_count = retention.scope_count;
+        if let Some(state) = inner.runtime_state.clone() {
+            state.fill_slot_debug_snapshot(self, &mut snapshot);
+        }
         snapshot
     }
 
@@ -3545,44 +3622,16 @@ impl SlotsHost {
         f(table, lifecycle)
     }
 
-    pub(crate) fn take_retained(&self, key: retention::RetainKey) -> Option<slot::DetachedSubtree> {
-        self.inner.borrow_mut().retention.take(key)
-    }
-
-    pub(crate) fn insert_retained(
-        &self,
-        key: retention::RetainKey,
-        subtree: slot::DetachedSubtree,
-    ) {
-        self.inner.borrow_mut().retention.insert(key, subtree);
-    }
-
-    pub(crate) fn scope_for_id(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
-        self.inner.borrow().scope_registry.get(&scope_id).cloned()
-    }
-
-    pub(crate) fn register_scope(&self, scope: &RecomposeScope) {
-        self.inner
-            .borrow_mut()
-            .scope_registry
-            .insert(scope.id(), scope.clone());
-    }
-
-    pub(crate) fn remove_scope(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
-        self.inner.borrow_mut().scope_registry.remove(&scope_id)
-    }
-
-    pub(crate) fn finish_pass(&self, applier: &mut dyn Applier) -> SlotPassOutcome {
+    pub(crate) fn finish_pass(&self, applier: &mut dyn Applier) -> FinishedSlotPass {
         let mut inner = self.inner.borrow_mut();
         let SlotsHostInner {
             table,
             lifecycle,
-            retention,
-            scope_registry,
             active_pass: active_pass_slot,
+            ..
         } = &mut *inner;
-        let Some(active_pass) = active_pass_slot.as_mut() else {
-            return SlotPassOutcome::default();
+        let Some(mut active_pass) = active_pass_slot.take() else {
+            return FinishedSlotPass::default();
         };
 
         #[cfg(debug_assertions)]
@@ -3596,56 +3645,31 @@ impl SlotsHost {
             session.finalize_pass(applier)
         };
 
-        for subtree in detached_root_children {
-            let retention_mode = subtree
-                .root_scope_id()
-                .and_then(|scope_id| scope_registry.get(&scope_id))
-                .map(RecomposeScope::retention_mode)
-                .unwrap_or_default();
-            match retention_mode {
-                RetentionMode::DisposeWhenInactive => {
-                    for scope_id in subtree.scope_ids() {
-                        if let Some(scope) = scope_registry.remove(&scope_id) {
-                            scope.deactivate();
-                            scope.set_group_anchor(AnchorId::INVALID);
-                        }
-                    }
-                    dispose_detached_root_subtree_now(applier, &subtree);
-                    table.invalidate_detached_subtree_anchors(&subtree);
-                    lifecycle.queue_subtree_disposal(subtree);
-                }
-                RetentionMode::RetainWhenInactive => {
-                    for scope_id in subtree.scope_ids() {
-                        if let Some(scope) = scope_registry.get(&scope_id) {
-                            scope.deactivate();
-                        }
-                    }
-                    for root in detached_subtree_root_nodes(applier, &subtree) {
-                        detach_retained_node_now(applier, root);
-                    }
-                    retention.insert(
-                        retention::RetainKey {
-                            parent_scope: None,
-                            key: subtree.root_key(),
-                        },
-                        subtree,
-                    );
-                }
-            }
+        FinishedSlotPass {
+            outcome: SlotPassOutcome {
+                compacted: active_pass.state.request_compaction,
+            },
+            detached_root_children,
         }
+    }
 
+    pub(crate) fn complete_pass_cleanup(&self, compacted: bool) {
+        let mut inner = self.inner.borrow_mut();
+        let SlotsHostInner {
+            table,
+            lifecycle,
+            runtime_state,
+            ..
+        } = &mut *inner;
         lifecycle.flush_pending_drops();
-        let outcome = SlotPassOutcome {
-            compacted: active_pass.state.request_compaction,
-        };
-        if outcome.compacted {
+        if compacted {
             table.compact_storage();
             lifecycle.compact_storage();
         }
         table.debug_verify(Some(lifecycle));
-        retention.debug_verify(table);
-        *active_pass_slot = None;
-        outcome
+        if let Some(state) = runtime_state.clone() {
+            state.debug_verify_host(self, table);
+        }
     }
 }
 

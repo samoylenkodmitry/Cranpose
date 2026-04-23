@@ -1,4 +1,4 @@
-use super::{GroupFlags, SlotTable};
+use super::SlotTable;
 use crate::{
     slot_storage::{GroupId, GroupKey},
     AnchorId, ScopeId,
@@ -17,7 +17,6 @@ pub(super) struct GroupRecord {
     pub(super) generation: u32,
     pub(super) anchor: AnchorId,
     pub(super) scope_id: Option<ScopeId>,
-    pub(super) flags: GroupFlags,
 }
 
 impl SlotTable {

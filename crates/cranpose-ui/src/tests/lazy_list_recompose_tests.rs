@@ -8,6 +8,87 @@ thread_local! {
     static GROWING_LAZY_LIST_CALL_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
+#[composable]
+#[allow(non_snake_case)]
+fn ScrollIndicatorLazyList() {
+    let list_state = remember_lazy_list_state();
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(list_state);
+    });
+
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        Text(
+            format!("First visible {}", list_state.first_visible_item_index()),
+            Modifier::empty(),
+            TextStyle::default(),
+        );
+        LazyColumn(
+            Modifier::empty().fill_max_width().height(240.0),
+            list_state,
+            LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+            |scope| {
+                scope.items(
+                    80,
+                    None::<fn(usize) -> u64>,
+                    None::<fn(usize) -> u64>,
+                    |index| {
+                        Text(
+                            format!("Row {}", index),
+                            Modifier::empty().height(48.0),
+                            TextStyle::default(),
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn ChildScrollIndicator(list_state: LazyListState) {
+    Text(
+        format!(
+            "Child first visible {}",
+            list_state.first_visible_item_index()
+        ),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn ChildScrollIndicatorLazyList() {
+    let list_state = remember_lazy_list_state();
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(list_state);
+    });
+
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        ChildScrollIndicator(list_state);
+        LazyColumn(
+            Modifier::empty().fill_max_width().height(240.0),
+            list_state,
+            LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+            |scope| {
+                scope.items(
+                    80,
+                    None::<fn(usize) -> u64>,
+                    None::<fn(usize) -> u64>,
+                    |index| {
+                        Text(
+                            format!("Row {}", index),
+                            Modifier::empty().height(48.0),
+                            TextStyle::default(),
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
 fn render_texts(composition: &mut Composition<MemoryApplier>, root: NodeId) -> Vec<String> {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
@@ -252,4 +333,112 @@ fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
     LAST_LAZY_STATE.with(|cell| {
         *cell.borrow_mut() = None;
     });
+}
+
+#[test]
+fn scroll_to_item_invalidates_indicator_scope_and_updates_visible_index_text() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            ScrollIndicatorLazyList();
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let viewport = Size {
+        width: 320.0,
+        height: 320.0,
+    };
+    measure_root(&mut composition, root, viewport);
+
+    let texts = render_texts(&mut composition, root);
+    assert!(
+        texts.iter().any(|text| text == "First visible 0"),
+        "expected initial indicator text before scrolling"
+    );
+
+    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    list_state.scroll_to_item(20, 0.0);
+
+    assert!(
+        composition.should_render(),
+        "scroll_to_item must invalidate composition when a scope reads first_visible_item_index()"
+    );
+
+    let mut recomposed = false;
+    while composition
+        .process_invalid_scopes()
+        .expect("scroll indicator recomposition")
+    {
+        recomposed = true;
+        measure_root(&mut composition, root, viewport);
+    }
+    measure_root(&mut composition, root, viewport);
+
+    assert!(
+        recomposed,
+        "expected scroll_to_item to trigger recomposition"
+    );
+
+    let texts = render_texts(&mut composition, root);
+    assert!(
+        texts.iter().any(|text| text == "First visible 20"),
+        "expected indicator text to track scroll_to_item target; texts={texts:?}"
+    );
+
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+}
+
+#[test]
+fn scroll_to_item_updates_child_indicator_scope() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+    LAST_LAZY_STATE.with(|cell| cell.borrow_mut().take());
+
+    composition
+        .render(key, || {
+            ChildScrollIndicatorLazyList();
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("lazy list root");
+    let initial_texts = render_texts(&mut composition, root);
+    assert!(
+        initial_texts
+            .iter()
+            .any(|text| text == "Child first visible 0"),
+        "expected initial child indicator text, got {initial_texts:?}"
+    );
+
+    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    list_state.scroll_to_item(20, 0.0);
+
+    assert!(
+        composition.should_render(),
+        "scroll_to_item must invalidate composition when a child composable scope reads first_visible_item_index()"
+    );
+
+    let mut recomposed = false;
+    while composition
+        .process_invalid_scopes()
+        .expect("recompose child indicator")
+    {
+        recomposed = true;
+    }
+    assert!(
+        recomposed,
+        "expected scroll_to_item to trigger recomposition"
+    );
+
+    let texts = render_texts(&mut composition, root);
+    assert!(
+        texts.iter().any(|text| text == "Child first visible 20"),
+        "expected child indicator text to track scroll_to_item target; texts={texts:?}"
+    );
 }

@@ -1,6 +1,6 @@
 use super::{
-    GroupRecord, PayloadKind, SlotDebugAnchor, SlotDebugGroup, SlotDebugScope, SlotDebugSnapshot,
-    SlotTable, SlotTableDebugStats,
+    GroupRecord, SlotDebugAnchor, SlotDebugGroup, SlotDebugScope, SlotDebugSnapshot, SlotTable,
+    SlotTableDebugStats,
 };
 use crate::{Key, ScopeId};
 use std::mem;
@@ -58,7 +58,6 @@ impl SlotTable {
                 explicit_key: group.key.explicit_key,
                 ordinal: group.key.ordinal,
                 scope_id: group.scope_id,
-                flags: group.flags,
                 depth: group.depth,
                 subtree_len: group.subtree_len,
                 payload_len: self.group_payload_len_at(index),
@@ -112,10 +111,9 @@ impl SlotTable {
             rows.push((
                 index,
                 format!(
-                    "Group(key={:?}, scope={:?}, flags={:?}, subtree_len={}, payload_len={}, node_len={})",
+                    "Group(key={:?}, scope={:?}, subtree_len={}, payload_len={}, node_len={})",
                     group.key,
                     group.scope_id,
-                    group.flags,
                     group.subtree_len,
                     self.group_payload_len_at(index),
                     self.group_node_len_at(index)
@@ -129,27 +127,11 @@ impl SlotTable {
                 rows.push((
                     base + offset,
                     format!(
-                        "Value(owner={:?}, kind={:?}, type={})",
-                        payload.owner, payload.kind, payload.type_name
+                        "Value(owner={:?}, type={})",
+                        payload.owner, payload.type_name
                     ),
                 ));
                 offset += 1;
-            }
-        }
-        if !self.payloads.is_empty() {
-            let mut payload_kind_counts = [0usize; PayloadKind::ALL.len()];
-            for payload in &self.payloads {
-                payload_kind_counts[payload.kind.index()] += 1;
-            }
-            for kind in PayloadKind::ALL {
-                rows.push((
-                    rows.len(),
-                    format!(
-                        "PayloadKind(name={}, count={})",
-                        kind.label(),
-                        payload_kind_counts[kind.index()]
-                    ),
-                ));
             }
         }
         let base = rows.len();

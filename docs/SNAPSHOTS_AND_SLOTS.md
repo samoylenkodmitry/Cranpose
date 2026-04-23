@@ -602,551 +602,211 @@ outer.apply()?;  // Merge into global
 
 ### Architecture Overview
 
-The slot table manages the composition tree structure using a **gap-buffer** design that enables:
-- Efficient reuse of structure during recomposition
-- Preservation of state across conditional rendering
-- Stable references via anchors
-- Fast cursor-based traversal
+The active slot-table implementation is **Slot Table V2**, not the historical gap-buffer design.
+
+It separates the runtime into distinct storage layers:
+- **Active structure** lives in a preorder `Vec<GroupRecord>`.
+- **Remembered payloads** live in a separate payload table.
+- **Node identities** live in a separate node table.
+- **Inactive preserved branches** live outside the active table as explicit `DetachedSubtree` values.
+
+That gives the runtime much simpler semantics:
+- There is no semantic `Gap` inside the active table.
+- Retention is explicit detach/restore, not preserved free space.
+- Scopes are resolved through an index, not by scanning all groups.
+- All structural mutation goes through the writer session state.
+
+The design source of truth is `docs/cranpose_slot_table_v2_design.md`.
 
 ### Core Files
 
 ```
 crates/cranpose-core/src/
-├── slot_table.rs                  - Main gap-buffer implementation
-└── slot_storage.rs                - Slot table contract and shared identifiers
-
-docs/
-└── slot_doc.md                    - Documentation
+├── slot_storage.rs                - Semantic slot-table trait and public handle types
+├── retention.rs                   - Detached-subtree retention bookkeeping
+└── slot/
+    ├── table.rs                   - SlotTable and write-session entry points
+    ├── writer.rs                  - begin/finish/end/skip group traversal
+    ├── groups.rs                  - GroupRecord helpers and child traversal
+    ├── payload.rs                 - Payload storage and value-slot addressing
+    ├── nodes.rs                   - Node record storage and subtree extraction
+    ├── anchors.rs                 - AnchorRegistry and anchor state tracking
+    ├── scope_index.rs             - ScopeId -> active group lookup
+    ├── detach.rs                  - DetachedSubtree extraction and restore
+    ├── validate.rs                - Structural invariant checking
+    ├── debug.rs / reader.rs       - Debug snapshots and textual dumps
+    └── lifecycle.rs               - Deferred payload disposal
 ```
 
 ### Data Structures
 
 #### SlotTable
 
-The primary gap-buffer implementation:
+The active table stores groups, payloads, nodes, anchors, and indexes separately:
 
 ```rust
 pub struct SlotTable {
-    slots: Vec<Slot>,                    // Linear array of slots
-    cursor: usize,                       // Current position in traversal
-    group_stack: Vec<GroupFrame>,        // Runtime group nesting stack
-    anchors: Vec<usize>,                 // Anchor ID → position mapping
-    anchors_dirty: bool,                 // Needs rebuild
-    next_anchor_id: Cell<usize>,         // Allocate unique anchors
-    last_start_was_gap: bool,            // Gap reuse tracking
+    groups: Vec<GroupRecord>,
+    payloads: Vec<PayloadRecord>,
+    nodes: Vec<NodeRecord>,
+    anchors: AnchorRegistry,
+    payload_anchor_to_location: HashMap<usize, (AnchorId, usize)>,
+    scope_anchor_to_group: HashMap<ScopeId, AnchorId>,
+    next_group_generation: u32,
+    next_payload_anchor: usize,
 }
 ```
 
 **Key properties:**
-- **Linear storage**: All slots in single `Vec<Slot>`
-- **Cursor-based**: Most operations happen at cursor position
-- **Gap preservation**: Unused structure marked as gaps, not removed
-- **Anchors**: Stable references that survive reorganization
+- **Exact active structure**: `subtree_len` always means the active preorder span.
+- **Stable addressing**: groups use anchors plus generational `GroupId`; values use anchor-based `ValueSlotId`.
+- **Indexed scopes**: active scopes map directly to group anchors.
+- **Explicit retention**: removed branches are detached from the table before any retain/dispose decision happens.
 
-#### Slot Enum
+#### GroupRecord
 
-Four variants representing different slot types:
+Each group describes one active composable call:
 
 ```rust
-pub enum Slot {
-    /// Group - represents a composable function call
-    Group {
-        key: Key,                        // Unique key for identity
-        anchor: AnchorId,                // Stable reference
-        len: usize,                      // Physical extent (self + children)
-        scope: Option<ScopeId>,          // For targeted recomposition
-        has_gap_children: bool,          // Contains gaps (needs cleanup)
-    },
-
-    /// Value - remembered data
-    Value {
-        anchor: AnchorId,
-        data: Box<dyn Any>,              // Type-erased value
-    },
-
-    /// Node - UI element reference
-    Node {
-        anchor: AnchorId,
-        id: NodeId,                      // Reference to layout node
-    },
-
-    /// Gap - placeholder for conditionally absent structure
-    Gap {
-        anchor: AnchorId,
-        group_key: Option<Key>,          // Preserved for reuse
-        group_scope: Option<ScopeId>,    // Preserved scope
-        group_len: usize,                // Preserved length
-    },
+pub struct GroupRecord {
+    key: GroupKey,
+    parent_anchor: AnchorId,
+    depth: u32,
+    subtree_len: u32,
+    payload_start: u32,
+    payload_len: u32,
+    node_start: u32,
+    node_len: u32,
+    subtree_node_count: u32,
+    generation: u32,
+    anchor: AnchorId,
+    scope_id: Option<ScopeId>,
 }
 ```
 
-**Gap metadata preservation** enables efficient structure reuse:
-```rust
-// Tab A active
-Group { key: TabA, len: 100, scope: Some(123) }
+`parent_anchor` stays stable even when active indexes shift. `subtree_len` and
+`subtree_node_count` are validated against the actual preorder tree.
 
-// Tab B selected → Tab A deactivated
-Gap { group_key: Some(TabA), group_len: 100, group_scope: Some(123) }
+#### PayloadRecord and NodeRecord
 
-// Tab A selected again → Gap promoted back to Group
-Group { key: TabA, len: 100, scope: Some(123) }  // Instant reactivation!
-```
-
-#### GroupFrame
-
-Runtime stack entry tracking group nesting during composition:
+Remembered values and emitted nodes are stored outside the structural group table:
 
 ```rust
-pub struct GroupFrame {
-    key: Key,                            // Group key
-    start: usize,                        // Physical position in slots
-    end: usize,                          // Physical end (start + len)
-    force_children_recompose: bool,      // Force all children to recompose
+pub struct PayloadRecord {
+    owner: AnchorId,
+    anchor: usize,
+    generation: u32,
+    type_id: TypeId,
+    value: Box<dyn Any>,
+}
+
+pub struct NodeRecord {
+    owner: AnchorId,
+    id: NodeId,
+    generation: u32,
+    lifecycle: NodeLifecycle,
 }
 ```
 
-**Stack usage:**
-```rust
-start(key) → push GroupFrame { key, start: cursor, ... }
-    // ... nested composition ...
-end()      → pop GroupFrame, update group len
-```
+Payload anchors back `ValueSlotId`, so remembered values remain addressable even if sibling
+reordering moves the owning group in the active table.
 
-#### Anchor System
+#### DetachedSubtree
 
-Anchors provide stable references across slot reorganization:
+When a branch leaves the active table, storage returns an owned subtree:
 
 ```rust
-pub struct AnchorId(usize);  // Opaque ID
-
-// Allocation
-let anchor = slot_table.allocate_anchor();
-
-// Registration (during slot creation)
-slot_table.register_anchor(anchor, position);
-
-// Resolution (later access)
-let position = slot_table.resolve_anchor(anchor)?;
+pub struct DetachedSubtree {
+    root_key: GroupKey,
+    root_scope_id: Option<ScopeId>,
+    groups: Vec<GroupRecord>,
+    payloads: Vec<PayloadRecord>,
+    nodes: Vec<NodeRecord>,
+}
 ```
 
-**Why needed?**
-Slots can move during gap insertion, group rescue, etc. External references (like scope tracking) use anchors to maintain stable references.
-
-**Anchor updates** happen via:
-- **Incremental**: `shift_anchor_positions_from(start, delta)` - adjust after local changes
-- **Batch**: `rebuild_all_anchor_positions()` - full scan after major reorganization
+Detached subtrees carry remembered payloads, anchors, scope IDs, and node identities together.
+The slot table itself does not decide whether they are retained or disposed.
 
 ### Core Operations
 
-#### start(key) - Begin Group
+#### begin_group() - Begin Group
 
-Begins a new group, reusing structure when possible:
+Writers match groups only among siblings of the current parent:
 
 ```rust
-pub fn start(&mut self, key: Key) {
-    // Fast path: cursor has matching group with no gaps
-    if let Some(Slot::Group {
-        key: slot_key,
-        len,
-        has_gap_children: false,
-        ..
-    }) = self.slots.get(self.cursor) {
-        if *slot_key == key {
-            // Perfect match - reuse directly
-            let end = self.cursor + len;
-            self.group_stack.push(GroupFrame {
-                key,
-                start: self.cursor,
-                end,
-                force_children_recompose: false,
-            });
-            self.cursor += 1;
-            self.last_start_was_gap = false;
-            return;
-        }
+pub fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<GroupId> {
+    if let Some(restored) = input.restored {
+        return restore_started_group(input.key, restored);
     }
 
-    // Check parent force-recompose flag
-    let parent_forces = self.group_stack.last()
-        .map(|f| f.force_children_recompose)
-        .unwrap_or(false);
-
-    if parent_forces {
-        // Must search for matching group/gap
-        if let Some(found_pos) = self.find_matching_group_or_gap(key) {
-            if found_pos != self.cursor {
-                self.move_group_to_cursor(found_pos);
-            }
-
-            // Convert gap to group if needed, set force flag
-            self.ensure_group_at_cursor(key, true);
-            // ... push frame with force_children_recompose: true
-        } else {
-            // Insert new group
-            self.insert_new_group(key, true);
-        }
-        return;
+    if expected_sibling_matches(parent, input.key) {
+        return GroupStartKind::Reused;
     }
 
-    // Slow path: search and rescue
-    self.start_slow_path(key);
+    if let Some(found) = find_later_sibling(parent, input.key) {
+        move_subtree(found, insert_index);
+        return GroupStartKind::Moved;
+    }
+
+    insert_new_group(insert_index, parent, input.key);
+    GroupStartKind::Inserted
 }
 ```
 
-**Search budget:** 16 slots forward scan for matching groups/gaps.
+There is no fixed global search budget and no recursive rescue scan into grandchildren. Large
+sibling ranges build a temporary sibling index inside the active writer frame.
 
-**Group rescue** - When group found elsewhere:
+#### finish_group_body() / end_group()
+
+At the end of a group body, the writer trims payloads and direct nodes that were not visited,
+detaches unvisited child subtrees, and returns them for retain-or-dispose handling:
+
 ```rust
-fn move_group_to_cursor(&mut self, from: usize) {
-    let group_len = self.slots[from].group_len();
+let finish = slots.finish_group_body();
+composer.handle_detached_children(parent_scope, finish.detached_children);
+slots.end_group();
+```
 
-    // Extract group and its children
-    let group_slots: Vec<Slot> = self.slots
-        .drain(from..from + group_len)
-        .collect();
+This is where inactive branches become `DetachedSubtree` values. They are no longer present in
+the active table after `finish_group_body`.
 
-    // Insert at cursor
-    self.slots.splice(
-        self.cursor..self.cursor,
-        group_slots
-    );
+#### value_slot() / remember()
 
-    // Update anchors
-    self.shift_anchor_positions_from(self.cursor, group_len as isize);
+Remembered state is stored in the payload table and addressed by `ValueSlotId`:
 
-    // Update group stack frames
-    for frame in &mut self.group_stack {
-        if frame.start >= self.cursor && frame.start < from {
-            frame.start += group_len;
-            frame.end += group_len;
-        }
-    }
+```rust
+let slot = slots.value_slot(|| SnapshotMutableState::new(0, policy));
+let state = slots.read_value::<SnapshotMutableState<i32>>(slot);
+```
+
+If a payload slot is revisited with a different type, the old boxed value is dropped through the
+slot lifecycle coordinator and the new typed payload replaces it in place.
+
+#### begin_recompose_at_scope()
+
+Targeted recomposition starts from the indexed scope mapping:
+
+```rust
+if let Some(group) = slots.begin_recompose_at_scope(scope_id) {
+    // group handle resolves through scope_anchor_to_group -> anchors -> groups
 }
 ```
 
-#### end() - End Group
+Detached scopes are intentionally absent from that index. They stay inactive until their retained
+subtree is explicitly restored.
 
-Closes the current group and updates its length:
+### Active-Table Invariants
 
-```rust
-pub fn end(&mut self) {
-    let frame = self.group_stack.pop()
-        .expect("end() called without matching start()");
+The slot table validates a small set of invariants after mutations in debug/test builds:
+- active groups form one valid preorder forest;
+- every `subtree_len` and `subtree_node_count` matches the actual active subtree;
+- payload and node ranges are contiguous and owner-correct;
+- every active scope index entry resolves to the correct group anchor;
+- retained subtree anchors are detached or invalidated, never active.
 
-    let new_len = self.cursor - frame.start;
-    let old_len = frame.end - frame.start;
-
-    // Update group's len field
-    if let Some(Slot::Group { len, has_gap_children, .. }) =
-        self.slots.get_mut(frame.start)
-    {
-        // Shrink threshold: only update if change > 10% to reduce churn
-        if new_len != old_len {
-            let shrink_threshold = old_len / 10;
-            if old_len > new_len + shrink_threshold || new_len > old_len {
-                *len = new_len;
-            }
-        }
-
-        // Mark if we have gaps (for later cleanup)
-        if new_len < old_len {
-            *has_gap_children = true;
-        }
-    }
-
-    // Update parent frame's end
-    if let Some(parent_frame) = self.group_stack.last_mut() {
-        if parent_frame.end < self.cursor {
-            parent_frame.end = self.cursor;
-        }
-    }
-}
-```
-
-**Shrink threshold** (10%) prevents excessive updates when lengths fluctuate slightly.
-
-#### use_value_slot&lt;T&gt;() - Allocate Value Slot
-
-Allocates or reuses a value slot at the cursor:
-
-```rust
-pub fn use_value_slot<T: 'static>(&mut self) -> &mut T {
-    let anchor = self.allocate_anchor();
-
-    match self.slots.get_mut(self.cursor) {
-        Some(Slot::Value { data, .. }) => {
-            // Try to reuse if type matches
-            if data.is::<T>() {
-                self.cursor += 1;
-                return data.downcast_mut::<T>().unwrap();
-            }
-            // Type mismatch - overwrite
-        }
-        Some(Slot::Gap { .. }) => {
-            // Replace gap with value
-        }
-        _ => {
-            // Insert new value
-        }
-    }
-
-    // Create new value slot
-    let value = Box::new(T::default());
-    self.slots[self.cursor] = Slot::Value {
-        anchor,
-        data: value,
-    };
-    self.register_anchor(anchor, self.cursor);
-    self.cursor += 1;
-
-    self.update_parent_frame_end();
-
-    self.slots[self.cursor - 1]
-        .value_data_mut()
-        .downcast_mut::<T>()
-        .unwrap()
-}
-```
-
-**Remember pattern:**
-```rust
-let state_slot = slot_table.use_value_slot::<SnapshotMutableState<i32>>();
-if state_slot is empty {
-    *state_slot = SnapshotMutableState::new(0, policy);
-}
-let value = state_slot.read(&snapshot);
-```
-
-#### mark_range_as_gaps() - Create Gaps
-
-Converts a range of slots to gaps when structure becomes conditional:
-
-```rust
-pub fn mark_range_as_gaps(&mut self, range: Range<usize>) {
-    for i in range.clone() {
-        self.mark_slot_as_gap_recursive(i);
-    }
-
-    // Mark parent groups as having gap children
-    self.mark_parents_have_gap_children(range.start);
-}
-
-fn mark_slot_as_gap_recursive(&mut self, index: usize) {
-    match &self.slots[index] {
-        Slot::Group { key, len, scope, anchor, .. } => {
-            let key = *key;
-            let len = *len;
-            let scope = *scope;
-            let anchor = *anchor;
-
-            // Recursively mark children
-            for child_idx in (index + 1)..(index + len) {
-                self.mark_slot_as_gap_recursive(child_idx);
-            }
-
-            // Convert group to gap, preserving metadata
-            self.slots[index] = Slot::Gap {
-                anchor,
-                group_key: Some(key),
-                group_len: len,
-                group_scope: scope,
-            };
-        }
-        Slot::Value { anchor, .. } | Slot::Node { anchor, .. } => {
-            // Convert to simple gap
-            self.slots[index] = Slot::Gap {
-                anchor: *anchor,
-                group_key: None,
-                group_len: 0,
-                group_scope: None,
-            };
-        }
-        Slot::Gap { .. } => {
-            // Already a gap
-        }
-    }
-}
-```
-
-**Metadata preservation** enables fast reactivation of conditional branches.
-
-### Gap Management
-
-Gaps are the key to efficient recomposition with conditional rendering.
-
-#### Gap Buffer Strategy
-
-**Core idea:** Don't delete unused structure, mark it as gaps and reuse later.
-
-**Example: Tab switching**
-```rust
-Initial: [TabGroup, Tab1Group, ..., Tab2Group, ..., Tab3Group, ...]
-
-Tab1 active:
-[TabGroup, Tab1Group (active), Gap(Tab2), Gap(Tab3)]
-
-Tab2 active:
-[TabGroup, Gap(Tab1), Tab2Group (active), Gap(Tab3)]
-
-Tab1 active again:
-[TabGroup, Tab1Group (active), Gap(Tab2), Gap(Tab3)]
-// Tab1Group restored from Gap instantly!
-```
-
-#### ensure_gap_at(cursor)
-
-Ensures there's a gap at the cursor position for insertion:
-
-```rust
-pub fn ensure_gap_at(&mut self, position: usize) {
-    if matches!(self.slots.get(position), Some(Slot::Gap { .. })) {
-        return;  // Already a gap
-    }
-
-    // Try to find gaps elsewhere and move them here
-    let scan_limit = position + LOCAL_GAP_SCAN;
-    if let Some(gap_range) = self.find_right_gap_run(position, scan_limit) {
-        self.rotate_gaps_to_cursor(gap_range, position);
-        return;
-    }
-
-    // No nearby gaps - insert new gap (expensive)
-    self.slots.insert(position, Slot::Gap {
-        anchor: self.allocate_anchor(),
-        group_key: None,
-        group_len: 0,
-        group_scope: None,
-    });
-
-    // Update all anchors and frames
-    self.shift_anchor_positions_from(position, 1);
-    self.shift_group_frames(position, 1);
-}
-```
-
-**Local gap search** (budget: 256 slots):
-```rust
-fn find_right_gap_run(&self, from: usize, limit: usize) -> Option<Range<usize>> {
-    let mut start = None;
-    let mut end = None;
-
-    for i in from..limit.min(self.slots.len()) {
-        match &self.slots[i] {
-            Slot::Gap { group_key: None, .. } => {
-                // Found an INVALID gap (best for reuse)
-                if start.is_none() {
-                    start = Some(i);
-                }
-                end = Some(i + 1);
-            }
-            _ if start.is_some() => {
-                // End of gap run
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    start.and_then(|s| end.map(|e| s..e))
-}
-```
-
-**Rotate gaps** (move gaps from elsewhere to cursor):
-```rust
-fn rotate_gaps_to_cursor(&mut self, gap_range: Range<usize>, to: usize) {
-    let gap_count = gap_range.len();
-
-    // Extract gaps
-    let gaps: Vec<Slot> = self.slots.drain(gap_range.clone()).collect();
-
-    // Insert at cursor
-    self.slots.splice(to..to, gaps);
-
-    // Update anchors (complex shifting logic)
-    self.rebuild_all_anchor_positions();
-}
-```
-
-**Rotation budget:** `MAX_ROTATE_WINDOW` = 4096 slots to prevent O(n²) behavior.
-
-### Anchor Management
-
-Anchors provide stable references that survive slot reorganization.
-
-#### Allocation and Registration
-
-```rust
-pub fn allocate_anchor(&self) -> AnchorId {
-    let id = self.next_anchor_id.get();
-    self.next_anchor_id.set(id + 1);
-    AnchorId(id)
-}
-
-pub fn register_anchor(&mut self, anchor: AnchorId, position: usize) {
-    let id = anchor.0;
-
-    // Grow anchors vec if needed
-    if id >= self.anchors.len() {
-        self.anchors.resize(id + 1, usize::MAX);
-    }
-
-    self.anchors[id] = position;
-}
-```
-
-#### Resolution
-
-```rust
-pub fn resolve_anchor(&self, anchor: AnchorId) -> Option<usize> {
-    let id = anchor.0;
-    if id < self.anchors.len() {
-        let pos = self.anchors[id];
-        if pos != usize::MAX {
-            return Some(pos);
-        }
-    }
-    None
-}
-```
-
-#### Updates After Reorganization
-
-**Incremental shift** (for local changes):
-```rust
-pub fn shift_anchor_positions_from(&mut self, start: usize, delta: isize) {
-    for position in &mut self.anchors {
-        if *position >= start && *position != usize::MAX {
-            *position = (*position as isize + delta) as usize;
-        }
-    }
-}
-```
-
-**Batch rebuild** (after major reorganization):
-```rust
-pub fn rebuild_all_anchor_positions(&mut self) {
-    // Reset all anchors
-    self.anchors.fill(usize::MAX);
-
-    // Scan all slots and re-register anchors
-    for (i, slot) in self.slots.iter().enumerate() {
-        let anchor = match slot {
-            Slot::Group { anchor, .. } => *anchor,
-            Slot::Value { anchor, .. } => *anchor,
-            Slot::Node { anchor, .. } => *anchor,
-            Slot::Gap { anchor, .. } => *anchor,
-        };
-
-        if anchor.0 < self.anchors.len() {
-            self.anchors[anchor.0] = i;
-        }
-    }
-
-    self.anchors_dirty = false;
-}
-```
-
-**Trade-off:** Incremental updates are O(A) where A = anchor count, rebuild is O(S) where S = slot count. Choose based on change magnitude.
+The active debug helpers are `SlotTable::validate()`, `SlotTable::debug_snapshot()`,
+`SlotTable::debug_dump_groups()`, and `SlotTable::debug_dump_all_slots()`.
 
 ---
 
@@ -1156,39 +816,29 @@ The snapshot and slot table systems integrate at several key points:
 
 ### 1. State Storage in Slots
 
-State objects are stored in slot table value slots:
+State objects are stored in slot-table payload records and accessed through composer helpers:
 
 ```rust
-// During composition
-slot_table.start(key);
-
-// Remember state
-let state_slot = slot_table.use_value_slot::<SnapshotMutableState<i32>>();
-if state_slot.is_none() {
-    *state_slot = Some(SnapshotMutableState::new(0, policy));
-}
-
-// Read state with snapshot isolation
-let value = state_slot.read(&current_snapshot);
-
-slot_table.end();
+composer.with_group(key, |composer| {
+    let state = composer.remember(|| {
+        SnapshotMutableState::new(0, policy)
+    });
+    let value = state.value();
+});
 ```
 
 **Key insight:** Slot table manages **where** state is stored, snapshots manage **what** values are visible.
 
 ### 2. Scope-Based Recomposition
 
-Slot table scopes enable targeted recomposition:
+Scopes are attached to groups during composition and later resolved through the active scope index:
 
 ```rust
-// Store scope during composition
-slot_table.start_with_scope(key, scope_id);
-// ...
-slot_table.end();
+let started = slots.begin_group(BeginGroupInput::new(group_key, restored));
+slots.set_group_scope(started.group, scope_id);
 
-// Later: recompose specific scope
-slot_table.begin_recompose_at_scope(scope_id);
-// Cursor positioned at scope's group
+// Later:
+slots.begin_recompose_at_scope(scope_id);
 ```
 
 **Snapshot integration:**
@@ -1206,7 +856,10 @@ snapshot.set_read_observer(Box::new(move |state_obj| {
 **Flow:**
 1. Composition reads state → observer records `(scope, state_obj)` mapping
 2. State changes → observer invalidates affected scopes
-3. Slot table finds group by scope → recompose at that group
+3. Active scope index resolves the group anchor → recompose at that group
+
+Detached scopes are intentionally absent from the active scope index. When a retained subtree is
+restored, its scope is reactivated and can re-enter normal recomposition.
 
 ### 3. Invalidation Tracking
 
@@ -1238,45 +891,22 @@ let invalid_scopes = observer.notify_changed_objects(&changed_objects);
 
 // 3. Recompose each scope
 for scope in invalid_scopes {
-    slot_table.begin_recompose_at_scope(scope);
-    // Run composition with new snapshot
+    composer.recranpose_group(scope);
 }
 ```
 
 ### 4. Composition Context
 
-The composition context bridges both systems:
+The composition runtime coordinates slot passes, command application, and retention policy:
 
 ```rust
-pub struct CompositionContext {
-    slot_table: SlotTable,
-    current_snapshot: Arc<dyn Snapshot>,
-    observer: SnapshotStateObserver,
-    // ...
-}
-
-impl CompositionContext {
-    pub fn remember<T>(&mut self, init: impl FnOnce() -> T) -> &mut T {
-        // Use slot table
-        let slot = self.slot_table.use_value_slot::<T>();
-        if slot is empty {
-            *slot = init();
-        }
-        slot
-    }
-
-    pub fn remember_state<T>(&mut self, init: T) -> SnapshotMutableState<T> {
-        let state = self.remember(|| {
-            SnapshotMutableState::new(init, StructuralEqualityPolicy::new())
-        });
-        state.clone()
-    }
-
-    pub fn read_state<T>(&mut self, state: &SnapshotMutableState<T>) -> T {
-        // Use current snapshot
-        state.read(&*self.current_snapshot)
-    }
-}
+composition.render(root_key, || ui());
+// inside:
+// - SlotsHost begins a compose/recompose pass
+// - SlotWriteSession mutates the active SlotTable
+// - detached children become DetachedSubtree values
+// - composer/host decide retain vs dispose
+// - command queue applies node attach/move/remove work to the applier
 ```
 
 ---
@@ -1347,91 +977,62 @@ applied:  ["a", "b", "c", "y"]  (appended "y")
 merge:    ["a", "x", "b", "c", "y"]  (apply both ops) → CommitMerged
 ```
 
-### Group Rescue Algorithm
+### Sibling Matching and Movement
 
-Finding and moving groups during recomposition:
+The V2 writer only matches direct siblings under the current parent:
 
 ```rust
-pub fn find_matching_group_or_gap(&self, key: Key) -> Option<usize> {
-    let search_start = self.cursor;
-    let search_limit = (self.cursor + 16).min(self.slots.len());
-
-    // 1. Linear scan forward (budget: 16 slots)
-    for i in search_start..search_limit {
-        if self.is_matching_group_or_gap(i, key) {
-            return Some(i);
-        }
+pub fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<GroupId> {
+    if let Some(restored) = input.restored {
+        return restore_started_group(input.key, restored);
     }
 
-    // 2. Search inside groups for nested gaps
-    for i in search_start..search_limit {
-        if let Some(Slot::Group { len, .. }) = self.slots.get(i) {
-            let group_end = i + len;
-
-            // Search within group
-            for j in (i + 1)..group_end {
-                if self.is_matching_gap(j, key) {
-                    return Some(j);
-                }
-            }
-        }
+    if expected_sibling_matches(parent, input.key) {
+        return GroupStartKind::Reused;
     }
 
-    None
-}
-
-fn is_matching_group_or_gap(&self, index: usize, key: Key) -> bool {
-    match &self.slots[index] {
-        Slot::Group { key: k, .. } if *k == key => true,
-        Slot::Gap { group_key: Some(k), .. } if *k == key => true,
-        _ => false,
+    if let Some(found) = find_later_sibling(parent, input.key) {
+        move_subtree(found, insert_index);
+        return GroupStartKind::Moved;
     }
+
+    insert_new_group(insert_index, parent, input.key);
+    GroupStartKind::Inserted
 }
 ```
 
-**Budget rationale:** 16-slot scan balances:
-- **Hit rate**: Most groups are at cursor (fast path) or nearby
-- **Complexity**: Prevents O(n) scans in worst case
-- **Fairness**: Consistent performance regardless of table size
+**Why it matters:**
+- the search is parent-bounded;
+- grandchildren are never treated as sibling matches;
+- retention is not mixed into sibling search;
+- the semantics depend on exact keys, not rescue budgets.
 
-### Gap Consolidation
+### Detach and Restore
 
-Cleaning up fragmented gaps:
+Conditional structure changes become explicit subtree extraction and reinsertion:
 
 ```rust
-pub fn consolidate_gaps(&mut self) {
-    let mut write_pos = 0;
-    let mut read_pos = 0;
+pub fn detach_subtree(&mut self, anchor: AnchorId) -> DetachedSubtree {
+    let groups = drain_group_range(root_index, subtree_len);
+    let payloads = detach_payloads_for_groups(root_index, &mut groups);
+    let nodes = detach_nodes_for_groups(root_index, &mut groups);
+    clear_group_indexes(&groups);
+    clear_scope_index_for_groups(&groups);
+    DetachedSubtree { groups, payloads, nodes, .. }
+}
 
-    while read_pos < self.slots.len() {
-        match &self.slots[read_pos] {
-            Slot::Gap { group_key: None, .. } => {
-                // Skip INVALID gaps
-                read_pos += 1;
-            }
-            _ => {
-                // Keep slot
-                if write_pos != read_pos {
-                    self.slots.swap(write_pos, read_pos);
-                }
-                write_pos += 1;
-                read_pos += 1;
-            }
-        }
-    }
-
-    // Truncate removed slots
-    self.slots.truncate(write_pos);
-
-    // Rebuild anchors
-    self.rebuild_all_anchor_positions();
+pub fn restore_subtree(&mut self, insert_index: usize, subtree: DetachedSubtree) -> AnchorId {
+    restore_payloads_for_groups(insert_index, &mut groups, subtree.payloads);
+    restore_nodes_for_groups(insert_index, &mut groups, subtree.nodes);
+    groups.splice(insert_index..insert_index, subtree.groups);
+    recompute_all_metadata();
 }
 ```
 
-**When to consolidate:**
-- After many recompositions
-- When `has_gap_children` flags accumulate
-- During idle time / GC passes
+**Why it matters:**
+- removed structure is no longer present in the active table;
+- retained state is explicit and owner-controlled;
+- restoring a retained subtree preserves remembered payloads, scopes, and node identities.
 
 ---
 
@@ -1496,7 +1097,7 @@ below_bound: Option<Arc<[SnapshotId]>>,  // Share via Arc
 
 ### Object Pool
 
-**Used in:** StateRecord reuse, Gap reuse
+**Used in:** StateRecord reuse
 
 **Pattern:**
 ```rust
@@ -1561,31 +1162,31 @@ pub struct NeverEqualPolicy<T>(PhantomData<T>);
 - Different merge strategies per type
 - Extensible without modifying core
 
-### Cursor Pattern
+### Writer Frame Pattern
 
-**Used in:** Slot table traversal
+**Used in:** Slot table composition and recomposition sessions
 
 **Pattern:**
 ```rust
-pub struct SlotTable {
-    cursor: usize,
-    // ...
+pub(crate) struct SlotWriteSessionState {
+    root: RootFrame,
+    group_stack: Vec<GroupFrame>,
 }
 
-impl SlotTable {
-    pub fn start(&mut self, key: Key) {
-        // Operations at cursor
-        let slot = &self.slots[self.cursor];
-        // ...
-        self.cursor += 1;
-    }
+pub(in crate::slot) struct GroupFrame {
+    group_anchor: AnchorId,
+    old_children: Vec<AnchorId>,
+    old_cursor: usize,
+    next_child_index: usize,
+    payload_cursor: usize,
+    node_cursor: usize,
 }
 ```
 
 **Benefits:**
-- Stateful traversal without explicit position tracking
-- Composition code doesn't manage indices
-- Enables fast-path optimizations (check cursor first)
+- Traversal state is scoped to the active writer session instead of living inside table storage
+- Group reuse, movement, and restoration operate against sibling lists and anchors
+- Composition code works through semantic `begin_group`/`finish_group_body`/`end_group` operations
 
 ---
 
@@ -1613,22 +1214,21 @@ impl SlotTable {
 
 | Operation | Time Complexity | Notes |
 |-----------|----------------|-------|
-| start() fast path | O(1) | Cursor has matching group |
-| start() slow path | O(S) | S = search budget (16) |
-| end() | O(1) | Update group len |
-| use_value_slot() | O(1) | At cursor |
-| mark_as_gaps() | O(N) | N = range size (recursive) |
-| ensure_gap_at() | O(G) | G = gap search budget (256) |
-| Group rescue | O(S + M) | S = search, M = move slots |
-| Anchor resolve | O(1) | Array lookup |
-| Anchor update | O(A) incremental, O(S) rebuild | A = anchors, S = slots |
-| consolidate_gaps() | O(S) | S = total slots |
+| `begin_group()` reuse | O(1) | Expected sibling already matches |
+| `begin_group()` sibling search | O(D) | `D` = number of direct siblings examined |
+| `move_subtree()` | O(G + P + N + T) | moved groups, payloads, nodes, and suffix metadata shifts |
+| `finish_group_body()` | O(R + C) | trims direct payload/node tails and detaches remaining child subtrees |
+| `detach_subtree()` | O(G + P + N + T) | extracts subtree records and repairs active indexes |
+| `restore_subtree()` | O(G + P + N + T) | reinserts subtree records and recomputes metadata |
+| `value_slot()` / `read_value()` | O(1) | payload anchor lookup plus owner-relative offset |
+| `begin_recompose_at_scope()` | O(1) | scope index -> anchor -> active group |
+| `validate()` | O(G + P + N + A + S) | full structural check in debug/test builds |
 
 **Optimization opportunities:**
-- Minimize force-recompose propagation
-- Consolidate gaps during idle time
-- Use anchors only when needed
-- Choose appropriate search budgets for workload
+- Reduce temporary `Vec` cloning in detach/retention hot paths
+- Profile subtree `Vec::drain` / `Vec::splice` costs before changing storage layout
+- Add retained-memory instrumentation before pursuing more complex backends
+- Keep validation strong while optimizing
 
 ### Memory Usage
 
@@ -1638,12 +1238,12 @@ impl SlotTable {
 - MutableSnapshot: ~200 bytes + modified map
 
 **Slot table:**
-- Each Slot: ~40 bytes (enum + largest variant)
-- GroupFrame: 32 bytes
-- Anchor mapping: 8 bytes per anchor
+- Group storage, payload storage, and node storage scale independently
+- Anchor and scope indexes add hash-map overhead on top of active records
+- Retained branches consume separate detached subtree allocations while inactive
 
 **Scaling:**
-- 10,000 UI elements: ~400 KB for slots
+- 10,000 UI elements no longer imply one flat slot array
 - 1,000 state objects with 10 records each: ~640 KB
 - Typical app: 1-10 MB for composition runtime
 
@@ -1683,38 +1283,32 @@ let new_value = state.read(&current_snapshot);  // Returns 42
 
 ```rust
 // Initial composition - Tab 1 active
-slot_table.start(TAB_GROUP);
-    slot_table.start(TAB_1);
+composer.with_group(TAB_GROUP, |composer| {
+    composer.cranpose_with_reuse(TAB_1, RecomposeOptions::default(), |composer| {
         // ... tab 1 content ...
-    slot_table.end();
-    slot_table.start(TAB_2);
-        // ... tab 2 content ...
-    slot_table.end();
-slot_table.end();
+    });
+});
 
-// Slots: [Group(TAB_GROUP), Group(TAB_1), ..., Group(TAB_2), ...]
+// Hide Tab 1
+composer.with_group(TAB_GROUP, |_composer| {
+    // tab 1 branch omitted
+});
 
-// Recomposition - Tab 2 active
-slot_table.start(TAB_GROUP);
-    // Tab 1 not rendered
-    slot_table.start(TAB_2);
-        // ... tab 2 content ...
-    slot_table.end();
-slot_table.end();
+// Result:
+// - finish_group_body() detaches Tab 1 as DetachedSubtree
+// - retain policy keeps it outside the active SlotTable
+// - its remembered payloads, scopes, and node IDs stay owned by the detached subtree
 
-// Slots: [Group(TAB_GROUP), Gap(TAB_1, preserved), Group(TAB_2), ...]
-
-// Recomposition - Tab 1 active again
-slot_table.start(TAB_GROUP);
-    slot_table.start(TAB_1);  // Gap found and promoted back!
-        // ... tab 1 content restored ...
-    slot_table.end();
-slot_table.end();
-
-// Slots: [Group(TAB_GROUP), Group(TAB_1, restored), Gap(TAB_2), ...]
+// Show Tab 1 again
+composer.with_group(TAB_GROUP, |composer| {
+    composer.cranpose_with_reuse(TAB_1, RecomposeOptions::default(), |composer| {
+        // ... tab 1 content restored from DetachedSubtree ...
+    });
+});
 ```
 
-**Key benefit:** Tab 1's state preserved in slots, instantly restored on reactivation.
+**Key benefit:** Tab 1's state is preserved by an explicit retained subtree, not by hidden gap
+metadata in the active table.
 
 ### Scenario 3: Concurrent Snapshot Conflict
 
@@ -1809,10 +1403,10 @@ assert_eq!(state2.read(&global_snapshot), 20);
 
 ### Slot Table System
 
-1. **B-Tree Layout**: Hierarchical slot storage for better locality
-2. **Incremental Anchors**: Only update anchors actually used
-3. **Gap Coalescing**: Merge adjacent gaps automatically
-4. **Parallel Recomposition**: Recompose independent subtrees concurrently
+1. **Chunked subtree storage**: Replace hot `Vec::drain` / `Vec::splice` paths only if profiling proves they dominate.
+2. **Denser group storage**: Pack `GroupRecord` fields or split arrays only if cache pressure matters in real traces.
+3. **Retained-memory diagnostics**: Add stronger retained-subtree and anchor-capacity telemetry for leak hunting.
+4. **Parallel recomposition**: Only after current invariants, retention semantics, and applier-side node ownership stay deterministic.
 
 ---
 
@@ -1854,40 +1448,31 @@ fn is_visible_to_snapshot(
 
 ### Slot Table Debugging
 
-**Print slot table:**
+**Dump the active slot table:**
 ```rust
-fn debug_print_slots(table: &SlotTable) {
-    for (i, slot) in table.slots.iter().enumerate() {
-        let cursor_marker = if i == table.cursor { " <-" } else { "" };
-        println!("{:4}: {:?}{}", i, slot, cursor_marker);
+fn debug_print_slots(composition: &Composition) {
+    for (index, row) in composition.debug_dump_all_slots() {
+        println!("{index:4}: {row}");
     }
 }
 ```
 
-**Visualize group nesting:**
+**Inspect structured debug state:**
 ```rust
-fn debug_print_groups(table: &SlotTable) {
-    let mut depth = 0;
-
-    for slot in &table.slots {
-        match slot {
-            Slot::Group { key, len, scope, .. } => {
-                println!("{:indent$}Group {{ key: {:?}, len: {}, scope: {:?} }}",
-                    "", key, len, scope, indent = depth * 2);
-                depth += 1;
-            }
-            Slot::Value { .. } => {
-                println!("{:indent$}Value", "", indent = depth * 2);
-            }
-            Slot::Node { id, .. } => {
-                println!("{:indent$}Node {{ id: {:?} }}", "", id, indent = depth * 2);
-            }
-            Slot::Gap { group_key, .. } => {
-                println!("{:indent$}Gap {{ key: {:?} }}", "", group_key, indent = depth * 2);
-            }
-        }
-    }
+fn debug_snapshot(composition: &Composition) {
+    let snapshot = composition.debug_slot_snapshot();
+    println!("{snapshot:#?}");
 }
+```
+
+**Force validation in debug/test paths:**
+```rust
+assert_eq!(slot_table.validate(), Ok(()));
+```
+
+**Enable automatic pass dumps:**
+```bash
+COMPOSE_DEBUG_SLOT_TABLE=1 cargo test -p cranpose-core slot::tests
 ```
 
 ---
@@ -1903,10 +1488,10 @@ The Snapshots and Slot Table system provides a sophisticated foundation for cran
 - Efficient garbage collection
 
 **Slot Tables** deliver:
-- Gap-buffer structure reuse
-- Stable anchors across reorganization
-- Cursor-based efficient traversal
-- Conditional rendering optimization
+- Exact active-tree storage with separate payload and node tables
+- Stable anchors and indexed scopes for targeted recomposition
+- Explicit detached-subtree retention instead of semantic gaps
+- Strong validation and debug snapshots for structural correctness
 
 **Together** they enable:
 - Predictable recomposition

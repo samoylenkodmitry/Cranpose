@@ -1,4 +1,4 @@
-use crate::{slot::GroupFlags, AnchorId, Key, ScopeId};
+use crate::{AnchorId, Key, ScopeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SlotTableDebugStats {
@@ -34,7 +34,6 @@ pub struct SlotDebugGroup {
     pub explicit_key: Option<Key>,
     pub ordinal: u32,
     pub scope_id: Option<ScopeId>,
-    pub flags: GroupFlags,
     pub depth: u32,
     pub subtree_len: u32,
     pub payload_len: usize,

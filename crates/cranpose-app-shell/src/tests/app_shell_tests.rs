@@ -3,12 +3,14 @@ use cranpose_core::{
     __launched_effect_async_impl as launched_effect_async_impl, compositionLocalOf, location_key,
     useState, CompositionLocal, CompositionLocalProvider, MutableState,
 };
+use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_macros::composable;
 use cranpose_ui::{
     BlendMode, Box, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
-    HeadlessRenderer, IntrinsicSize, LinearArrangement, Modifier, PointerInputScope, Rect,
-    RenderOp, Row, RowSpec, ScrollState, Size, Text, TextStyle, VerticalAlignment,
+    HeadlessRenderer, IntrinsicSize, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier,
+    PointerInputScope, Rect, RenderOp, Row, RowSpec, ScrollState, Size, Text, TextStyle,
+    VerticalAlignment,
 };
 use cranpose_ui_graphics::{DrawPrimitive, GraphicsLayer, Point, RoundedCornerShape};
 use std::cell::{Cell, RefCell};
@@ -36,6 +38,21 @@ fn layout_tree_texts(tree: &cranpose_ui::LayoutTree) -> Vec<String> {
     let mut texts = Vec::new();
     collect(tree.root(), &mut texts);
     texts
+}
+
+fn semantics_tree_descriptions(tree: &cranpose_ui::SemanticsTree) -> Vec<String> {
+    fn collect(node: &cranpose_ui::SemanticsNode, out: &mut Vec<String>) {
+        if let Some(description) = &node.description {
+            out.push(description.clone());
+        }
+        for child in &node.children {
+            collect(child, out);
+        }
+    }
+
+    let mut descriptions = Vec::new();
+    collect(tree.root(), &mut descriptions);
+    descriptions
 }
 
 fn find_layout_box_with_text<'a>(
@@ -120,12 +137,263 @@ fn live_slot_count(slots: &[(usize, String)]) -> usize {
 }
 
 thread_local! {
+    static APP_SHELL_LAZY_LIST_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellScrollIndicatorLazyList() {
+    let list_state = remember_lazy_list_state();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(list_state);
+    });
+
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("First visible {}", list_state.first_visible_item_index()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            LazyColumn(
+                Modifier::empty().fill_max_width().weight(1.0),
+                list_state,
+                LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+                |scope| {
+                    scope.items(
+                        80,
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        |index| {
+                            Text(
+                                format!("Row {}", index),
+                                Modifier::empty().height(48.0),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellChildFirstVisible(list_state: LazyListState) {
+    Text(
+        format!(
+            "Child first visible {}",
+            list_state.first_visible_item_index()
+        ),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellChildStats(list_state: LazyListState) {
+    let stats = list_state.stats();
+    Text(
+        format!("Child visible {}", stats.items_in_use),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellSiblingIndicatorsLazyList() {
+    let list_state = remember_lazy_list_state();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(list_state);
+    });
+
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            AppShellChildStats(list_state);
+            AppShellChildFirstVisible(list_state);
+            LazyColumn(
+                Modifier::empty().fill_max_width().weight(1.0),
+                list_state,
+                LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+                |scope| {
+                    scope.items(
+                        80,
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        |index| {
+                            Text(
+                                format!("Row {}", index),
+                                Modifier::empty().height(48.0),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellVariableHeightSiblingIndicatorsLazyList() {
+    let list_state = remember_lazy_list_state();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(list_state);
+    });
+
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            AppShellChildStats(list_state);
+            AppShellChildFirstVisible(list_state);
+            LazyColumn(
+                Modifier::empty().fill_max_width().weight(1.0),
+                list_state,
+                LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+                |scope| {
+                    scope.items(
+                        100,
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        |index| {
+                            Text(
+                                format!("Row {}", index),
+                                Modifier::empty().height(48.0 + (index % 5) as f32 * 8.0),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellLifecycleCountDisplay(count: MutableState<usize>) {
+    Text(
+        format!("Lifecycle count {}", count.get()),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellLifecycleListItem(index: usize, count: MutableState<usize>) {
+    cranpose_core::DisposableEffect!(index, move |_| {
+        count.update(|current| *current += 1);
+        cranpose_core::DisposableEffectResult::new(|| {})
+    });
+
+    Text(
+        format!("Row {}", index),
+        Modifier::empty().height(48.0 + (index % 5) as f32 * 8.0),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellLifecycleIndicatorsLazyList() {
+    let list_state = remember_lazy_list_state();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(list_state);
+    });
+    let lifecycle_count = cranpose_core::useState(|| 0usize);
+
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            AppShellLifecycleCountDisplay(lifecycle_count);
+            AppShellChildStats(list_state);
+            AppShellChildFirstVisible(list_state);
+            let lifecycle_count_for_items = lifecycle_count;
+            LazyColumn(
+                Modifier::empty().fill_max_width().weight(1.0),
+                list_state,
+                LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+                move |scope| {
+                    let lifecycle_count = lifecycle_count_for_items;
+                    scope.items(
+                        100,
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        move |index| {
+                            AppShellLifecycleListItem(index, lifecycle_count);
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+thread_local! {
     static APP_SHELL_ACTIVE_TAB_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     static APP_SHELL_COUNTER_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     static FRAME_STABLE_HANDLER_MODE: RefCell<Option<MutableState<bool>>> = const { RefCell::new(None) };
     static FRAME_STABLE_RENDERED_CLICKS: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     static FRAME_STABLE_PENDING_CLICKS: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     static ROOT_RENDER_TEST_INVALIDATED: Cell<bool> = const { Cell::new(false) };
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellKeyedSiblingIndicatorsRoot() {
+    let active = cranpose_core::useState(|| 0i32);
+    APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(active);
+    });
+
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("Tab {}", active.get()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            cranpose_core::with_key(&active.get(), || {
+                AppShellSiblingIndicatorsLazyList();
+            });
+        },
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellSwitchingKeyedLazyListRoot() {
+    let active = cranpose_core::useState(|| 0i32);
+    APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(active);
+    });
+
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            cranpose_core::with_key(&active.get(), || {
+                if active.get() == 0 {
+                    Text("Counter branch", Modifier::empty(), TextStyle::default());
+                } else {
+                    AppShellSiblingIndicatorsLazyList();
+                }
+            });
+        },
+    );
 }
 
 fn app_shell_local_count() -> CompositionLocal<i32> {
@@ -1623,6 +1891,248 @@ fn semantics_collection_is_opt_in_for_app_shell() {
     assert!(
         shell.semantics_tree().is_none(),
         "disabling semantics should drop the cached tree"
+    );
+}
+
+#[test]
+fn scroll_to_item_updates_indicator_in_layout_tree_and_semantics_tree() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, || {
+        AppShellScrollIndicatorLazyList();
+    });
+
+    shell.set_semantics_enabled(true);
+    shell.update();
+
+    let initial_layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        initial_layout_texts
+            .iter()
+            .any(|text| text == "First visible 0"),
+        "expected initial layout text, got {initial_layout_texts:?}"
+    );
+    let initial_semantics = semantics_tree_descriptions(shell.semantics_tree().expect("semantics"));
+    assert!(
+        initial_semantics
+            .iter()
+            .any(|text| text == "First visible 0"),
+        "expected initial semantics text, got {initial_semantics:?}"
+    );
+
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("lazy list state registered");
+    list_state.scroll_to_item(20, 0.0);
+
+    for _ in 0..8 {
+        if !shell.needs_redraw() && !shell.has_active_animations() {
+            break;
+        }
+        shell.update();
+    }
+
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    let semantics = semantics_tree_descriptions(shell.semantics_tree().expect("semantics"));
+
+    assert!(
+        layout_texts.iter().any(|text| text == "First visible 20"),
+        "expected layout tree text to reflect scroll target, got {layout_texts:?}"
+    );
+    assert!(
+        semantics.iter().any(|text| text == "First visible 20"),
+        "expected semantics tree text to reflect scroll target, got {semantics:?}"
+    );
+}
+
+#[test]
+fn scroll_to_item_updates_first_visible_when_sibling_stats_scope_is_present() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, || {
+        AppShellSiblingIndicatorsLazyList();
+    });
+
+    shell.update();
+
+    let initial_layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        initial_layout_texts
+            .iter()
+            .any(|text| text == "Child first visible 0"),
+        "expected initial child indicator text, got {initial_layout_texts:?}"
+    );
+
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("lazy list state registered");
+    list_state.scroll_to_item(20, 0.0);
+
+    for _ in 0..8 {
+        if !shell.needs_redraw() && !shell.has_active_animations() {
+            break;
+        }
+        shell.update();
+    }
+
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        layout_texts
+            .iter()
+            .any(|text| text == "Child first visible 20"),
+        "expected child indicator text to reflect scroll target with sibling stats scope present, got {layout_texts:?}"
+    );
+}
+
+#[test]
+fn scroll_to_item_updates_first_visible_under_callbackless_with_key_parent() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    APP_SHELL_ACTIVE_TAB_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, || {
+        AppShellKeyedSiblingIndicatorsRoot();
+    });
+
+    shell.update();
+
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("lazy list state registered");
+    list_state.scroll_to_item(20, 0.0);
+
+    for _ in 0..8 {
+        if !shell.needs_redraw() && !shell.has_active_animations() {
+            break;
+        }
+        shell.update();
+    }
+
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        layout_texts
+            .iter()
+            .any(|text| text == "Child first visible 20"),
+        "expected child indicator text to reflect scroll target under keyed callbackless parent, got {layout_texts:?}"
+    );
+}
+
+#[test]
+fn scroll_to_item_updates_first_visible_after_switching_to_keyed_lazy_list_branch() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    APP_SHELL_ACTIVE_TAB_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, || {
+        AppShellSwitchingKeyedLazyListRoot();
+    });
+
+    shell.update();
+
+    let active = APP_SHELL_ACTIVE_TAB_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("active branch state registered");
+    active.set(1);
+
+    for _ in 0..8 {
+        if !shell.needs_redraw() && !shell.has_active_animations() {
+            break;
+        }
+        shell.update();
+    }
+
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("lazy list state registered after branch switch");
+    list_state.scroll_to_item(20, 0.0);
+
+    for _ in 0..8 {
+        if !shell.needs_redraw() && !shell.has_active_animations() {
+            break;
+        }
+        shell.update();
+    }
+
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        layout_texts
+            .iter()
+            .any(|text| text == "Child first visible 20"),
+        "expected child indicator text to reflect scroll target after keyed branch switch, got {layout_texts:?}"
+    );
+}
+
+#[test]
+fn scroll_to_item_updates_first_visible_when_variable_height_stats_also_change() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, || {
+        AppShellVariableHeightSiblingIndicatorsLazyList();
+    });
+
+    shell.update();
+
+    let initial_layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        initial_layout_texts
+            .iter()
+            .any(|text| text == "Child first visible 0"),
+        "expected initial child indicator text, got {initial_layout_texts:?}"
+    );
+
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("lazy list state registered");
+    list_state.scroll_to_item(50, 0.0);
+
+    for _ in 0..8 {
+        if !shell.needs_redraw() && !shell.has_active_animations() {
+            break;
+        }
+        shell.update();
+    }
+
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        layout_texts
+            .iter()
+            .any(|text| text == "Child first visible 50"),
+        "expected child indicator text to reflect scroll target when stats sibling also changes, got {layout_texts:?}"
+    );
+}
+
+#[test]
+fn scroll_to_item_updates_first_visible_when_scroll_also_composes_lifecycle_items() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, || {
+        AppShellLifecycleIndicatorsLazyList();
+    });
+
+    shell.update();
+
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("lazy list state registered");
+    list_state.scroll_to_item(50, 0.0);
+
+    for _ in 0..12 {
+        if !shell.needs_redraw() && !shell.has_active_animations() {
+            break;
+        }
+        shell.update();
+    }
+
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        layout_texts
+            .iter()
+            .any(|text| text == "Child first visible 50"),
+        "expected child indicator text to reflect scroll target when item composition also invalidates sibling state, got {layout_texts:?}"
     );
 }
 

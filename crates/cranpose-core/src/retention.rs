@@ -1,7 +1,7 @@
-use crate::collections::map::{HashMap, HashSet};
+use crate::collections::map::HashMap;
 use crate::{
     slot::AnchorState, slot::DetachedSubtree, slot::NodeLifecycle, slot::SlotInvariantError,
-    slot_storage::GroupKey, NodeId, ScopeId, SlotTable,
+    slot_storage::GroupKey, ScopeId, SlotTable,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -19,8 +19,16 @@ pub(crate) struct RetainKey {
 
 pub(crate) struct RetainedGroup {
     pub(crate) subtree: DetachedSubtree,
-    retained_nodes: Vec<NodeId>,
-    scope_ids: Vec<ScopeId>,
+}
+
+impl RetainedGroup {
+    fn node_count(&self) -> usize {
+        self.subtree.node_count()
+    }
+
+    fn scope_count(&self) -> usize {
+        self.subtree.scope_count()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -34,45 +42,18 @@ pub(crate) struct RetentionDebugStats {
 #[derive(Default)]
 pub(crate) struct RetentionManager {
     groups: HashMap<RetainKey, RetainedGroup>,
-    nodes: HashSet<NodeId>,
-    scopes: HashMap<ScopeId, RetainKey>,
 }
 
 impl RetentionManager {
     pub(crate) fn take(&mut self, key: RetainKey) -> Option<DetachedSubtree> {
         let mut retained = self.groups.remove(&key)?;
-        for node_id in &retained.retained_nodes {
-            self.nodes.remove(node_id);
-        }
-        for scope_id in &retained.scope_ids {
-            self.scopes.remove(scope_id);
-        }
         retained.subtree.mark_nodes_active();
         Some(retained.subtree)
     }
 
     pub(crate) fn insert(&mut self, key: RetainKey, mut subtree: DetachedSubtree) {
         subtree.mark_nodes_retained_detached();
-        let retained_nodes = subtree.node_ids();
-        let scope_ids = subtree.scope_ids();
-        self.nodes.extend(retained_nodes.iter().copied());
-        for &scope_id in &scope_ids {
-            self.scopes.insert(scope_id, key);
-        }
-        self.groups.insert(
-            key,
-            RetainedGroup {
-                subtree,
-                retained_nodes,
-                scope_ids,
-            },
-        );
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.groups.clear();
-        self.nodes.clear();
-        self.scopes.clear();
+        self.groups.insert(key, RetainedGroup { subtree });
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -87,9 +68,16 @@ impl RetentionManager {
                 .values()
                 .map(|retained| retained.subtree.group_count())
                 .sum(),
-            node_count: self.nodes.len(),
-            scope_count: self.scopes.len(),
+            node_count: self.groups.values().map(RetainedGroup::node_count).sum(),
+            scope_count: self.groups.values().map(RetainedGroup::scope_count).sum(),
         }
+    }
+
+    pub(crate) fn into_subtrees(self) -> Vec<DetachedSubtree> {
+        self.groups
+            .into_values()
+            .map(|retained| retained.subtree)
+            .collect()
     }
 
     pub(crate) fn validate(&self, table: &SlotTable) -> Result<(), SlotInvariantError> {

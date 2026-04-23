@@ -6,6 +6,7 @@ use cranpose_core::{
     self, compositionLocalOf, CompositionLocal, CompositionLocalProvider, DisposableEffect,
     DisposableEffectResult, LaunchedEffect, MutableState,
 };
+use cranpose_foundation::lazy::LazyListState;
 use cranpose_foundation::text::TextFieldState;
 use cranpose_foundation::PointerEventKind;
 use cranpose_foundation::SemanticsConfiguration;
@@ -51,6 +52,7 @@ thread_local! {
     pub static TEST_COUNTER_APP_POINTER_DOWN_STATE: RefCell<Option<MutableState<bool>>> = const { RefCell::new(None) };
     pub static TEST_COUNTER_APP_POINTER_POSITION_STATE: RefCell<Option<MutableState<Point>>> = const { RefCell::new(None) };
     pub static TEST_RECURSIVE_LAYOUT_DEPTH_STATE: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
+    pub static TEST_LAZY_LIST_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

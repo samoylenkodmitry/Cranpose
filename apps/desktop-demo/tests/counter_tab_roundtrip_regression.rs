@@ -11,7 +11,7 @@ use cranpose_ui::{LayoutTree, SemanticsAction, SemanticsNode, SemanticsRole, Siz
 use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};
 use desktop_app::app::{
     combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COUNTER_APP_COUNTER_STATE,
-    TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
+    TEST_LAZY_LIST_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
 };
 use std::rc::Rc;
 use tab_switch_regression_support::{active_tab_state, pump_shell_until_stable};
@@ -113,6 +113,21 @@ fn semantics_text(node: &SemanticsNode) -> Option<&str> {
         SemanticsRole::Text { value } => Some(value.as_str()),
         _ => node.description.as_deref(),
     }
+}
+
+fn collect_layout_texts(node: &cranpose_ui::LayoutBox, out: &mut Vec<String>) {
+    if let Some(text) = node.node_data.modifier_slices().text_content() {
+        out.push(text.to_string());
+    }
+    for child in &node.children {
+        collect_layout_texts(child, out);
+    }
+}
+
+fn layout_tree_texts(tree: &LayoutTree) -> Vec<String> {
+    let mut texts = Vec::new();
+    collect_layout_texts(tree.root(), &mut texts);
+    texts
 }
 
 fn is_clickable(node: &SemanticsNode) -> bool {
@@ -236,6 +251,13 @@ fn click_button_by_text(shell: &mut AppShell<HitGraphRenderer>, text: &str) {
     robot_click(shell, x + w * 0.5, y + h * 0.5);
 }
 
+fn first_index_from_texts(texts: &[String]) -> Option<usize> {
+    texts.iter().find_map(|text| {
+        let value = text.strip_prefix("FirstIndex: ")?;
+        value.trim().parse::<usize>().ok()
+    })
+}
+
 #[test]
 fn counter_increment_survives_combined_app_tab_roundtrip_robot_path() {
     TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
@@ -289,6 +311,78 @@ fn counter_increment_survives_combined_app_tab_roundtrip_robot_path() {
     assert!(
         texts.iter().any(|text| text.contains("Counter: 1")),
         "counter label did not update after increment: {texts:?}",
+    );
+}
+
+#[test]
+fn lazy_list_jump_updates_first_index_in_combined_app_shell_robot_path() {
+    TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
+    TEST_COUNTER_APP_COUNTER_STATE.with(|cell| cell.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, combined_app);
+    shell.set_buffer_size(1200, 800);
+    shell.set_viewport(1200.0, 800.0);
+    shell.set_semantics_enabled(true);
+    pump_shell_until_stable(&mut shell);
+
+    active_tab_state().set(DemoTab::LazyList);
+    pump_shell_until_stable(&mut shell);
+
+    let initial_layout = layout_tree_texts(shell.layout_tree().expect("lazy list layout"));
+    let initial_semantics = semantics_texts(&shell);
+    assert_eq!(
+        first_index_from_texts(&initial_layout),
+        Some(0),
+        "expected initial layout indicator to start at 0; texts={initial_layout:?}"
+    );
+    assert_eq!(
+        first_index_from_texts(&initial_semantics),
+        Some(0),
+        "expected initial semantics indicator to start at 0; texts={initial_semantics:?}"
+    );
+
+    click_button_by_text(&mut shell, "Jump to Middle");
+    pump_shell_until_stable(&mut shell);
+
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("updated lazy list layout"));
+    let semantics = semantics_texts(&shell);
+    let layout_index = first_index_from_texts(&layout_texts);
+    let semantics_index = first_index_from_texts(&semantics);
+
+    assert!(
+        layout_index.is_some_and(|index| (45..=55).contains(&index)),
+        "expected layout indicator to jump near 50; layout_index={layout_index:?} texts={layout_texts:?}"
+    );
+    assert!(
+        semantics_index.is_some_and(|index| (45..=55).contains(&index)),
+        "expected semantics indicator to jump near 50; semantics_index={semantics_index:?} texts={semantics:?}"
+    );
+}
+
+#[test]
+fn lazy_list_direct_scroll_updates_first_index_in_combined_app_shell() {
+    TEST_LAZY_LIST_STATE.with(|cell| cell.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, || {
+        combined_app();
+    });
+
+    pump_shell_until_stable(&mut shell);
+    active_tab_state().set(DemoTab::LazyList);
+    pump_shell_until_stable(&mut shell);
+
+    let list_state = TEST_LAZY_LIST_STATE
+        .with(|cell| cell.borrow().as_ref().copied())
+        .expect("lazy list state should be registered");
+    list_state.scroll_to_item(50, 0.0);
+    pump_shell_until_stable(&mut shell);
+
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    let layout_index = first_index_from_texts(&layout_texts);
+    assert!(
+        layout_index.is_some_and(|index| index >= 45),
+        "expected direct scroll to update combined-app layout indicator near 50; layout_index={layout_index:?} texts={layout_texts:?}"
     );
 }
 

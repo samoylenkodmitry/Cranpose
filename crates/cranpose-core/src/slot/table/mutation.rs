@@ -1,4 +1,4 @@
-use super::super::{GroupFlags, GroupRecord};
+use super::super::GroupRecord;
 use super::SlotTable;
 use crate::{slot_storage::GroupKey, AnchorId};
 
@@ -95,7 +95,6 @@ impl SlotTable {
                 generation,
                 anchor,
                 scope_id: None,
-                flags: GroupFlags::EMPTY,
             },
         );
         self.refresh_group_indexes_from(insert_index);

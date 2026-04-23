@@ -1,6 +1,6 @@
 use crate::collections::map::HashMap;
 use crate::remove_child_and_cleanup_now;
-use crate::retention::RetainKey;
+use crate::retention::{RetainKey, RetentionManager};
 use crate::{
     composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
     BeginGroupInput, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, GroupId,
@@ -50,6 +50,174 @@ where
     slots.skip_group();
 }
 
+fn slots_storage_key(host: &Rc<SlotsHost>) -> usize {
+    host.storage_key()
+}
+
+pub(crate) struct ComposerRuntimeState {
+    scope_registry: RefCell<HashMap<ScopeId, RecomposeScope>>,
+    retention_by_host: RefCell<HashMap<usize, RetentionManager>>,
+    live_hosts: RefCell<HashMap<usize, std::rc::Weak<SlotsHost>>>,
+    applier_host: RefCell<Option<std::rc::Weak<dyn ApplierHost>>>,
+}
+
+impl Default for ComposerRuntimeState {
+    fn default() -> Self {
+        Self {
+            scope_registry: RefCell::new(HashMap::default()),
+            retention_by_host: RefCell::new(HashMap::default()),
+            live_hosts: RefCell::new(HashMap::default()),
+            applier_host: RefCell::new(None),
+        }
+    }
+}
+
+impl ComposerRuntimeState {
+    pub(crate) fn clear_host_storage_key(&self, host_key: usize) {
+        self.retention_by_host.borrow_mut().remove(&host_key);
+        self.live_hosts.borrow_mut().remove(&host_key);
+        self.scope_registry
+            .borrow_mut()
+            .retain(|_, scope| scope.slots_storage_key() != Some(host_key));
+    }
+
+    pub(crate) fn bind_applier_host(&self, applier: &Rc<dyn ApplierHost>) {
+        *self.applier_host.borrow_mut() = Some(Rc::downgrade(applier));
+    }
+
+    pub(crate) fn bind_slots_host(self: &Rc<Self>, host: &Rc<SlotsHost>) {
+        host.bind_runtime_state(self);
+        self.live_hosts
+            .borrow_mut()
+            .insert(host.storage_key(), Rc::downgrade(host));
+    }
+
+    pub(crate) fn scope_for_id(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
+        self.scope_registry.borrow().get(&scope_id).cloned()
+    }
+
+    pub(crate) fn register_scope(&self, scope: &RecomposeScope) {
+        self.scope_registry
+            .borrow_mut()
+            .insert(scope.id(), scope.clone());
+    }
+
+    pub(crate) fn remove_scope(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
+        self.scope_registry.borrow_mut().remove(&scope_id)
+    }
+
+    pub(crate) fn scope_registry_len(&self) -> usize {
+        self.scope_registry.borrow().len()
+    }
+
+    pub(crate) fn take_retained(
+        &self,
+        host: &Rc<SlotsHost>,
+        key: RetainKey,
+    ) -> Option<crate::slot::DetachedSubtree> {
+        let host_key = slots_storage_key(host);
+        let mut retention = self.retention_by_host.borrow_mut();
+        let subtree = retention.get_mut(&host_key)?.take(key);
+        if retention
+            .get(&host_key)
+            .is_some_and(RetentionManager::is_empty)
+        {
+            retention.remove(&host_key);
+        }
+        subtree
+    }
+
+    pub(crate) fn insert_retained(
+        &self,
+        host: &Rc<SlotsHost>,
+        key: RetainKey,
+        subtree: crate::slot::DetachedSubtree,
+    ) {
+        self.retention_by_host
+            .borrow_mut()
+            .entry(slots_storage_key(host))
+            .or_default()
+            .insert(key, subtree);
+    }
+
+    pub(crate) fn fill_slot_debug_snapshot(
+        &self,
+        host: &SlotsHost,
+        snapshot: &mut crate::SlotDebugSnapshot,
+    ) {
+        let retention = self
+            .retention_by_host
+            .borrow()
+            .get(&host.storage_key())
+            .map(RetentionManager::debug_stats)
+            .unwrap_or_default();
+        snapshot.scope_registry_count = self.scope_registry_len();
+        snapshot.retained_subtree_count = retention.subtree_count;
+        snapshot.retained_group_count = retention.group_count;
+        snapshot.retained_node_count = retention.node_count;
+        snapshot.retained_scope_count = retention.scope_count;
+    }
+
+    pub(crate) fn clear_host(&self, host: &SlotsHost) {
+        let host_key = host.storage_key();
+        debug_assert!(
+            self.host_retention_is_empty(host),
+            "host retention must be drained before clearing host ownership"
+        );
+        self.clear_host_storage_key(host_key);
+    }
+
+    pub(crate) fn dispose_retained_subtrees_for_host(
+        &self,
+        host_key: usize,
+        table: &mut SlotTable,
+        lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
+    ) {
+        let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key) else {
+            return;
+        };
+        let applier_host = self
+            .applier_host
+            .borrow()
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade);
+        for subtree in retention.into_subtrees() {
+            for scope_id in subtree.scope_ids() {
+                if let Some(scope) = self.remove_scope(scope_id) {
+                    scope.deactivate();
+                    scope.set_group_anchor(crate::AnchorId::INVALID);
+                }
+            }
+            if let Some(applier_host) = applier_host.as_ref() {
+                let mut applier = applier_host.borrow_dyn();
+                crate::slot::dispose_detached_subtree_now(&mut *applier, &subtree);
+            }
+            table.invalidate_detached_subtree_anchors(&subtree);
+            lifecycle.queue_subtree_disposal(subtree);
+        }
+    }
+
+    pub(crate) fn host_retention_is_empty(&self, host: &SlotsHost) -> bool {
+        self.retention_by_host
+            .borrow()
+            .get(&host.storage_key())
+            .is_none_or(RetentionManager::is_empty)
+    }
+
+    pub(crate) fn debug_verify_host(&self, host: &SlotsHost, table: &SlotTable) {
+        if let Some(retention) = self.retention_by_host.borrow().get(&host.storage_key()) {
+            retention.debug_verify(table);
+        }
+    }
+
+    pub(crate) fn host_for_storage_key(&self, storage_key: usize) -> Option<Rc<SlotsHost>> {
+        self.live_hosts
+            .borrow()
+            .get(&storage_key)
+            .and_then(std::rc::Weak::upgrade)
+    }
+}
+
 pub(crate) struct ParentFrame {
     pub(crate) id: NodeId,
     pub(crate) previous: ChildList,
@@ -75,6 +243,7 @@ pub(crate) struct LocalContext {
 }
 
 pub(crate) struct ComposerCore {
+    pub(crate) shared_state: Rc<ComposerRuntimeState>,
     pub(crate) slots: Rc<SlotsHost>,
     slot_hosts: RefCell<Vec<Rc<SlotsHost>>>,
     pub(crate) applier: Rc<dyn ApplierHost>,
@@ -97,6 +266,7 @@ pub(crate) struct ComposerCore {
 
 impl ComposerCore {
     pub(crate) fn new(
+        shared_state: Rc<ComposerRuntimeState>,
         slots: Rc<SlotsHost>,
         applier: Rc<dyn ApplierHost>,
         runtime: RuntimeHandle,
@@ -115,6 +285,7 @@ impl ComposerCore {
         };
 
         Self {
+            shared_state,
             slots,
             slot_hosts: RefCell::new(Vec::new()),
             applier,
@@ -148,6 +319,28 @@ pub(crate) enum EmittedNode {
 }
 
 impl Composer {
+    pub(crate) fn new_with_shared_state(
+        shared_state: Rc<ComposerRuntimeState>,
+        slots: Rc<SlotsHost>,
+        applier: Rc<dyn ApplierHost>,
+        runtime: RuntimeHandle,
+        observer: SnapshotStateObserver,
+        root: Option<NodeId>,
+    ) -> Self {
+        let shared_state = slots.runtime_state().unwrap_or(shared_state);
+        shared_state.bind_applier_host(&applier);
+        shared_state.bind_slots_host(&slots);
+        let core = Rc::new(ComposerCore::new(
+            shared_state,
+            slots,
+            applier,
+            runtime,
+            observer,
+            root,
+        ));
+        Self { core }
+    }
+
     pub fn new(
         slots: Rc<SlotsHost>,
         applier: Rc<dyn ApplierHost>,
@@ -155,8 +348,16 @@ impl Composer {
         observer: SnapshotStateObserver,
         root: Option<NodeId>,
     ) -> Self {
-        let core = Rc::new(ComposerCore::new(slots, applier, runtime, observer, root));
-        Self { core }
+        Self::new_with_shared_state(
+            slots
+                .runtime_state()
+                .unwrap_or_else(|| Rc::new(ComposerRuntimeState::default())),
+            slots,
+            applier,
+            runtime,
+            observer,
+            root,
+        )
     }
 
     pub(crate) fn from_core(core: Rc<ComposerCore>) -> Self {
@@ -219,6 +420,16 @@ impl Composer {
         mode: crate::slot::SlotPassMode,
         f: impl FnOnce(&Composer) -> R,
     ) -> (R, SlotPassOutcome) {
+        match slots.runtime_state() {
+            Some(state) => {
+                assert!(
+                    Rc::ptr_eq(&state, &self.core.shared_state),
+                    "slot host already belongs to a different composer runtime state"
+                );
+                state.bind_slots_host(&slots);
+            }
+            None => self.core.shared_state.bind_slots_host(&slots),
+        }
         slots.begin_pass(mode);
         self.core.slot_hosts.borrow_mut().push(Rc::clone(&slots));
 
@@ -229,6 +440,17 @@ impl Composer {
         }
         impl Drop for Guard {
             fn drop(&mut self) {
+                let finished = {
+                    let mut applier = self.core.applier.borrow_dyn();
+                    self.host.finish_pass(&mut *applier)
+                };
+                let composer = Composer::from_core(Rc::clone(&self.core));
+                composer.handle_detached_children_in_host(
+                    &self.host,
+                    None,
+                    finished.detached_root_children,
+                );
+                self.host.complete_pass_cleanup(finished.outcome.compacted);
                 let host = self
                     .core
                     .slot_hosts
@@ -237,12 +459,7 @@ impl Composer {
                     .expect("slot host underflow");
                 debug_assert!(Rc::ptr_eq(&host, &self.host));
 
-                let outcome = {
-                    let mut applier = self.core.applier.borrow_dyn();
-                    self.host.finish_pass(&mut *applier)
-                };
-
-                *self.outcome.borrow_mut() = Some(outcome);
+                *self.outcome.borrow_mut() = Some(finished.outcome);
             }
         }
         let outcome = Rc::new(RefCell::new(None));
@@ -292,15 +509,15 @@ impl Composer {
     }
 
     fn scope_for_id(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
-        self.active_slots_host().scope_for_id(scope_id)
+        self.core.shared_state.scope_for_id(scope_id)
     }
 
     fn register_scope(&self, scope: &RecomposeScope) {
-        self.active_slots_host().register_scope(scope);
+        self.core.shared_state.register_scope(scope);
     }
 
     fn remove_scope(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
-        self.active_slots_host().remove_scope(scope_id)
+        self.core.shared_state.remove_scope(scope_id)
     }
 
     pub(crate) fn local_stack(&self) -> RefMut<'_, LocalStackSnapshot> {
@@ -455,10 +672,14 @@ impl Composer {
         let options = self.pending_scope_options().take().unwrap_or_default();
         let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
         let reserved_key = self.with_slot_session_mut(|slots| slots.preview_group_key(key));
-        let restored = self.active_slots_host().take_retained(RetainKey {
-            parent_scope: parent_scope_id,
-            key: reserved_key,
-        });
+        let host = self.active_slots_host();
+        let restored = self.core.shared_state.take_retained(
+            &host,
+            RetainKey {
+                parent_scope: parent_scope_id,
+                key: reserved_key,
+            },
+        );
         let (group, group_anchor, start_scope_id, start_kind) =
             self.with_slot_session_mut(|slots| {
                 let GroupStart {
@@ -494,8 +715,7 @@ impl Composer {
             scope_ref.force_recompose();
         }
 
-        let slots_host = self.active_slots_host();
-        scope_ref.set_slots_host(Rc::downgrade(&slots_host));
+        scope_ref.set_slots_host(&host);
 
         {
             let mut stack = self.scope_stack();
@@ -598,8 +818,9 @@ impl Composer {
         }
     }
 
-    fn retain_detached_subtree(
+    fn retain_detached_subtree_in_host(
         &self,
+        slots_host: &Rc<SlotsHost>,
         parent_scope: Option<ScopeId>,
         subtree: crate::slot::DetachedSubtree,
     ) {
@@ -612,13 +833,14 @@ impl Composer {
                 applier.get_mut(root).ok().and_then(|node| node.parent())
             };
             if let Some(parent_id) = parent_id {
-                self.commands_mut().push(Command::RemoveChild {
+                self.commands_mut().push(Command::DetachChild {
                     parent_id,
                     child_id: root,
                 });
             }
         }
-        self.active_slots_host().insert_retained(
+        self.core.shared_state.insert_retained(
+            slots_host,
             RetainKey {
                 parent_scope,
                 key: subtree.root_key(),
@@ -627,20 +849,24 @@ impl Composer {
         );
     }
 
-    fn dispose_detached_subtree(&self, subtree: crate::slot::DetachedSubtree) {
+    fn dispose_detached_subtree_in_host(
+        &self,
+        slots_host: &Rc<SlotsHost>,
+        subtree: crate::slot::DetachedSubtree,
+    ) {
         let scope_ids = subtree.scope_ids();
         self.dispose_scope_ids(&scope_ids);
         let roots = self.skipped_group_root_nodes(&subtree.node_ids());
         self.dispose_detached_nodes(roots);
-        self.active_slots_host()
-            .with_table_and_lifecycle_mut(|table, lifecycle| {
-                table.invalidate_detached_subtree_anchors(&subtree);
-                lifecycle.queue_subtree_disposal(subtree);
-            });
+        slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {
+            table.invalidate_detached_subtree_anchors(&subtree);
+            lifecycle.queue_subtree_disposal(subtree);
+        });
     }
 
-    pub(crate) fn handle_detached_children(
+    fn handle_detached_children_in_host(
         &self,
+        slots_host: &Rc<SlotsHost>,
         parent_scope: Option<ScopeId>,
         detached: Vec<crate::slot::DetachedSubtree>,
     ) {
@@ -651,12 +877,23 @@ impl Composer {
                 .map(|scope| scope.retention_mode())
                 .unwrap_or_default();
             match retention_mode {
-                RetentionMode::DisposeWhenInactive => self.dispose_detached_subtree(subtree),
+                RetentionMode::DisposeWhenInactive => {
+                    self.dispose_detached_subtree_in_host(slots_host, subtree)
+                }
                 RetentionMode::RetainWhenInactive => {
-                    self.retain_detached_subtree(parent_scope, subtree)
+                    self.retain_detached_subtree_in_host(slots_host, parent_scope, subtree)
                 }
             }
         }
+    }
+
+    pub(crate) fn handle_detached_children(
+        &self,
+        parent_scope: Option<ScopeId>,
+        detached: Vec<crate::slot::DetachedSubtree>,
+    ) {
+        let host = self.active_slots_host();
+        self.handle_detached_children_in_host(&host, parent_scope, detached);
     }
 
     pub fn remember<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
@@ -835,7 +1072,11 @@ impl Composer {
         let runtime_handle = self.runtime_handle();
         let phase = self.phase();
         let locals = self.current_local_stack();
+        let shared_state = slots
+            .runtime_state()
+            .unwrap_or_else(|| Rc::clone(&self.core.shared_state));
         let core = Rc::new(ComposerCore::new(
+            shared_state,
             Rc::clone(slots),
             Rc::clone(&self.core.applier),
             runtime_handle.clone(),
@@ -887,7 +1128,11 @@ impl Composer {
         let runtime_handle = self.runtime_handle();
         let phase = self.phase();
         let locals = self.current_local_stack();
+        let shared_state = slots
+            .runtime_state()
+            .unwrap_or_else(|| Rc::clone(&self.core.shared_state));
         let core = Rc::new(ComposerCore::new(
+            shared_state,
             Rc::clone(slots),
             Rc::clone(&self.core.applier),
             runtime_handle.clone(),

@@ -8,60 +8,6 @@ pub(crate) enum SlotPassMode {
     Recompose,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct GroupFlags(u8);
-
-impl GroupFlags {
-    pub const EMPTY: Self = Self(0);
-
-    pub const fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PayloadKind {
-    Remember,
-    Param,
-    Return,
-    Effect,
-    Scope,
-    Internal,
-}
-
-impl PayloadKind {
-    pub(super) const ALL: [Self; 6] = [
-        Self::Remember,
-        Self::Param,
-        Self::Return,
-        Self::Effect,
-        Self::Scope,
-        Self::Internal,
-    ];
-
-    pub(super) const fn index(self) -> usize {
-        match self {
-            Self::Remember => 0,
-            Self::Param => 1,
-            Self::Return => 2,
-            Self::Effect => 3,
-            Self::Scope => 4,
-            Self::Internal => 5,
-        }
-    }
-
-    pub(super) const fn label(self) -> &'static str {
-        match self {
-            Self::Remember => "remember",
-            Self::Param => "param",
-            Self::Return => "return",
-            Self::Effect => "effect",
-            Self::Scope => "scope",
-            Self::Internal => "internal",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NodeLifecycle {
     Active,
@@ -74,9 +20,7 @@ pub(super) struct PayloadRecord {
     pub(super) anchor: usize,
     pub(super) generation: u32,
     pub(super) type_id: TypeId,
-    pub(super) kind: PayloadKind,
     pub(super) type_name: &'static str,
-    pub(super) inline_payload_bytes: usize,
     pub(super) value: Box<dyn Any>,
 }
 
@@ -136,6 +80,13 @@ impl DetachedSubtree {
             .iter()
             .filter_map(|group| group.scope_id)
             .collect()
+    }
+
+    pub(crate) fn scope_count(&self) -> usize {
+        self.groups
+            .iter()
+            .filter(|group| group.scope_id.is_some())
+            .count()
     }
 
     pub(crate) fn group_anchors(&self) -> impl Iterator<Item = AnchorId> + '_ {

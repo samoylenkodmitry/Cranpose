@@ -1353,6 +1353,112 @@ fn retained_branch_restores_the_same_node_id() {
 }
 
 #[test]
+fn retained_branch_detaches_child_from_parent_while_hidden_and_restores_same_node_id() {
+    const BRANCH_KEY: Key = 0xD04;
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+    let parent_id = Rc::new(Cell::new(None::<NodeId>));
+    let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
+
+    let render = |composition: &mut Composition<MemoryApplier>,
+                  show_branch: MutableState<bool>,
+                  parent_id: &Rc<Cell<Option<NodeId>>>,
+                  captured: &Rc<RefCell<Vec<NodeId>>>| {
+        let parent_id = Rc::clone(parent_id);
+        let captured = Rc::clone(captured);
+        composition
+            .render(root_key, || {
+                let container =
+                    with_current_composer(|composer| composer.emit_node(RecordingNode::default));
+                parent_id.set(Some(container));
+                cranpose_core::push_parent(container);
+                if show_branch.value() {
+                    with_current_composer(|composer| {
+                        let captured = Rc::clone(&captured);
+                        composer.cranpose_with_reuse(
+                            BRANCH_KEY,
+                            RecomposeOptions::default(),
+                            move |_composer| {
+                                let node_id = cranpose_test_node(TrackingChild::default);
+                                captured.borrow_mut().push(node_id);
+                            },
+                        );
+                    });
+                }
+                cranpose_core::pop_parent();
+            })
+            .expect("render retained child branch");
+    };
+
+    render(&mut composition, show_branch, &parent_id, &captured);
+    let parent = parent_id.get().expect("parent id");
+    let first = *captured
+        .borrow()
+        .last()
+        .expect("initial retained child node id");
+
+    {
+        let mut applier = composition.applier_mut();
+        let child_parent = applier
+            .with_node::<TrackingChild, _>(first, |node| node.parent())
+            .expect("retained child should exist");
+        let parent_children = applier
+            .with_node::<RecordingNode, _>(parent, |node| node.children.clone())
+            .expect("parent should exist");
+        assert_eq!(child_parent, Some(parent));
+        assert_eq!(parent_children, vec![first]);
+    }
+
+    show_branch.set_value(false);
+    render(&mut composition, show_branch, &parent_id, &captured);
+
+    {
+        let mut applier = composition.applier_mut();
+        let child_parent = applier
+            .with_node::<TrackingChild, _>(first, |node| node.parent())
+            .expect("hidden retained child must stay live");
+        let parent_children = applier
+            .with_node::<RecordingNode, _>(parent, |node| node.children.clone())
+            .expect("parent should still exist");
+        assert_eq!(
+            child_parent, None,
+            "hidden retained children must detach from the live parent tree",
+        );
+        assert!(
+            parent_children.is_empty(),
+            "retained children must leave the active parent child list while hidden",
+        );
+    }
+
+    show_branch.set_value(true);
+    render(&mut composition, show_branch, &parent_id, &captured);
+    let restored = *captured
+        .borrow()
+        .last()
+        .expect("restored retained child node id");
+
+    assert_eq!(
+        restored, first,
+        "restoring a retained nested branch must reuse the original child node id",
+    );
+
+    {
+        let mut applier = composition.applier_mut();
+        let child_parent = applier
+            .with_node::<TrackingChild, _>(restored, |node| node.parent())
+            .expect("restored retained child should exist");
+        let parent_children = applier
+            .with_node::<RecordingNode, _>(parent, |node| node.children.clone())
+            .expect("parent should still exist");
+        assert_eq!(child_parent, Some(parent));
+        assert_eq!(parent_children, vec![restored]);
+    }
+}
+
+#[test]
 fn disposed_branch_recreates_node_id_without_explicit_reuse() {
     const BRANCH_KEY: Key = 0xD02;
 
@@ -1754,6 +1860,137 @@ fn subcompose_in_retains_root_level_groups() {
         "root-level retained groups in subcompose_in must restore remembered state"
     );
     assert_eq!(subcompose_slots.debug_snapshot().retained_subtree_count, 0);
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
+fn subcompose_in_retained_root_level_nodes_stay_live_while_hidden_and_restore_same_id() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+    let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
+    let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
+    let group_key = location_key(file!(), line!(), column!());
+
+    let render = |show_branch: bool| {
+        let captured = Rc::clone(&captured);
+        composer
+            .subcompose_in(&subcompose_slots, None, |composer| {
+                if show_branch {
+                    composer.cranpose_with_reuse(
+                        group_key,
+                        RecomposeOptions::default(),
+                        move |_composer| {
+                            let node_id = cranpose_test_node(TrackingChild::default);
+                            captured.borrow_mut().push(node_id);
+                        },
+                    );
+                }
+            })
+            .expect("subcompose_in retained root node render");
+    };
+
+    render(true);
+    let first = *captured
+        .borrow()
+        .last()
+        .expect("captured retained root-level node");
+
+    render(false);
+    let hidden_snapshot = subcompose_slots.debug_snapshot();
+    assert_eq!(hidden_snapshot.retained_subtree_count, 1);
+    assert_eq!(hidden_snapshot.retained_scope_count, 1);
+    {
+        let mut applier = applier_host.borrow_typed();
+        let hidden_parent = applier
+            .with_node::<TrackingChild, _>(first, |node| node.parent())
+            .expect("hidden retained root-level node must stay live");
+        assert_eq!(
+            hidden_parent, None,
+            "root-level retained nodes must stay detached while hidden",
+        );
+    }
+
+    render(true);
+    let restored = *captured
+        .borrow()
+        .last()
+        .expect("restored retained root-level node");
+    assert_eq!(
+        restored, first,
+        "root-level retained groups in subcompose_in must restore the same node id",
+    );
+    assert_eq!(subcompose_slots.debug_snapshot().retained_subtree_count, 0);
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
+fn dropping_subcompose_host_disposes_hidden_retained_nodes() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+    let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
+    let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
+    let group_key = location_key(file!(), line!(), column!());
+
+    let render = |show_branch: bool| {
+        let captured = Rc::clone(&captured);
+        composer
+            .subcompose_in(&subcompose_slots, None, |composer| {
+                if show_branch {
+                    composer.cranpose_with_reuse(
+                        group_key,
+                        RecomposeOptions::default(),
+                        move |_composer| {
+                            let node_id = cranpose_test_node(TrackingChild::default);
+                            captured.borrow_mut().push(node_id);
+                        },
+                    );
+                }
+            })
+            .expect("subcompose_in retained root node render");
+    };
+
+    render(true);
+    let retained_node = *captured
+        .borrow()
+        .last()
+        .expect("captured retained root-level node");
+
+    render(false);
+    let hidden_snapshot = subcompose_slots.debug_snapshot();
+    assert_eq!(hidden_snapshot.retained_subtree_count, 1);
+    assert_eq!(hidden_snapshot.retained_scope_count, 1);
+    {
+        let mut applier = applier_host.borrow_typed();
+        let hidden_parent = applier
+            .with_node::<TrackingChild, _>(retained_node, |node| node.parent())
+            .expect("hidden retained root-level node must stay live");
+        assert_eq!(
+            hidden_parent, None,
+            "hidden retained root-level node must stay detached before host disposal",
+        );
+    }
+
+    drop(subcompose_slots);
+    {
+        let mut applier = applier_host.borrow_typed();
+        assert!(
+            matches!(
+                applier.get_mut(retained_node),
+                Err(NodeError::Missing { .. })
+            ),
+            "dropping a SlotsHost must dispose retained hidden nodes instead of leaking them",
+        );
+    }
 
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);

@@ -227,6 +227,9 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
 #[composable]
 pub fn lazy_list_example() {
     let list_state = remember_lazy_list_state();
+    super::TEST_LAZY_LIST_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(list_state);
+    });
     let item_count = cranpose_core::useState(|| DEFAULT_DEMO_ITEM_COUNT);
     let lifecycle_stats =
         cranpose_core::remember(|| cranpose_core::mutableStateOf(LifecycleStats::default()))

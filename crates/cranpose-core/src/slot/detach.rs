@@ -119,10 +119,7 @@ pub(in crate::slot) fn dispose_detached_node_now(applier: &mut dyn Applier, node
     let _ = applier.remove(node_id);
 }
 
-pub(in crate::slot) fn dispose_detached_subtree_now(
-    applier: &mut dyn Applier,
-    subtree: &DetachedSubtree,
-) {
+pub(crate) fn dispose_detached_subtree_now(applier: &mut dyn Applier, subtree: &DetachedSubtree) {
     let nodes = subtree.node_ids();
     let node_set = nodes
         .iter()

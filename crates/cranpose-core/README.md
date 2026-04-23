@@ -11,10 +11,12 @@ Use `cranpose-core` directly if you are:
 
 ## Key Concepts
 
--   **Slot Table**: A linear, gap-buffer-based data structure that stores the composition tree efficiently in memory. It optimizes for locality and minimizes allocations compared to pointer-based trees.
--   **Composer**: The primary interface for building and updating the slot table. It tracks the current position in the tree and handles inserting, updating, or removing nodes.
+-   **Slot Table V2**: A preorder group table backed by separate group, payload, and node storage. Active structure stays in the table; inactive retained branches are detached into explicit `DetachedSubtree` objects instead of being encoded as gaps.
+-   **Composer**: The primary interface for building and updating the slot table. It coordinates scopes, retention/disposal policy, remembered values, and node lifecycle on top of the semantic slot-storage API.
 -   **Snapshot System**: A multi-version concurrency control (MVCC) system for state. It allows `MutableState` to be read and written transactions, enabling atomic updates and ensuring UI consistency during concurrent operations.
 -   **Recomposition**: The process of re-executing composable functions when their dependencies change. The runtime tracks dependencies at a fine-grained level (scopes) to minimize re-execution.
+
+For the active slot-table design and invariants, see [`docs/cranpose_slot_table_v2_design.md`](../../docs/cranpose_slot_table_v2_design.md).
 
 ## Example: Manual State Transaction
 

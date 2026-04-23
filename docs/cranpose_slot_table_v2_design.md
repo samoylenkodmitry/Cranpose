@@ -601,7 +601,7 @@ Storage restores bytes/records. Composer reactivates scopes and reattaches nodes
 
 ---
 
-## 11. Composer-owned retention
+## 11. Composer-owned runtime state and retention
 
 Add a new file:
 
@@ -609,7 +609,7 @@ Add a new file:
 crates/cranpose-core/src/retention.rs
 ```
 
-### 11.1 Retention API
+### 11.1 Runtime-state and retention API
 
 ```rust
 pub enum RetentionMode {
@@ -617,37 +617,48 @@ pub enum RetentionMode {
     RetainWhenInactive,
 }
 
-pub struct RetainKey {
+pub(crate) struct ComposerRuntimeState {
+    scope_registry: RefCell<HashMap<ScopeId, RecomposeScope>>,
+    retention_by_host: RefCell<HashMap<usize, RetentionManager>>,
+    live_hosts: RefCell<HashMap<usize, Weak<SlotsHost>>>,
+}
+
+pub(crate) struct RetainKey {
     pub parent_scope: Option<ScopeId>,
     pub key: GroupKey,
 }
 
-pub struct RetainedGroup {
-    pub retain_key: RetainKey,
+pub(crate) struct RetainedGroup {
     pub subtree: DetachedSubtree,
-    pub dirty: bool,
-    pub retained_nodes: Vec<NodeId>,
-    pub scope_ids: Vec<ScopeId>,
 }
 
-pub struct RetentionManager {
+pub(crate) struct RetentionManager {
     groups: HashMap<RetainKey, RetainedGroup>,
-    nodes: HashSet<NodeId>,
 }
 ```
+
+`ComposerRuntimeState` is the semantic owner shared by every composer operating on the same composition family, including subcompose passes that use their own `SlotsHost`.
+
+Rules:
+
+- scopes are registered in `scope_registry`;
+- retained subtrees are stored per host storage key in `retention_by_host`;
+- live hosts are resolved through `live_hosts` during recomposition;
+- `SlotTable` carries the runtime-state pointer so ownership survives `take()`, and `SlotsHost::reset()` clears host ownership only after retained subtrees are gone;
+- every `RecomposeScope` stores both `slots_storage_key` and a weak `slots_runtime_state`, which is the data needed to route invalid scopes back to the correct host.
 
 ### 11.2 ComposerCore additions
 
 ```rust
 pub(crate) struct ComposerCore {
-    // existing fields
-    retention: RefCell<RetentionManager>,
-    scope_registry: RefCell<HashMap<ScopeId, RecomposeScope>>,
-    current_group_options: RefCell<Vec<GroupOptionsFrame>>,
+    shared_state: Rc<ComposerRuntimeState>,
+    slots: Rc<SlotsHost>,
+    pending_scope_options: RefCell<Option<RecomposeOptions>>,
+    // other existing fields
 }
 ```
 
-`scope_registry` lets the composer deactivate/reactivate scopes by ID without forcing `SlotTable` to store concrete `RecomposeScope` values as semantic metadata.
+`ComposerCore` does not own retention maps directly. It holds a shared runtime state and uses that for scope lookup, retained-subtree storage, and host resolution. This keeps root composition passes, nested groups, and subcompose passes on one semantic system without forcing `SlotsHost` to make retention policy decisions.
 
 ### 11.3 RecomposeOptions V2
 
@@ -685,37 +696,68 @@ impl Default for RecomposeOptions {
 ### 11.4 Composer with_group V2 flow
 
 ```rust
-pub fn with_group<R>(&self, key: GroupKey, f: impl FnOnce(&Composer) -> R) -> R {
-    let parent_scope = self.current_recranpose_scope().map(|s| s.id());
-    let options = self.take_pending_or_default_group_options();
-    let retain_key = RetainKey { parent_scope, key };
+pub fn with_group_seed<R>(&self, key: GroupKeySeed, f: impl FnOnce(&Composer) -> R) -> R {
+    let parent_scope = self.current_recranpose_scope();
+    let options = self.pending_scope_options().take().unwrap_or_default();
+    let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
+    let host = self.active_slots_host();
+    let reserved_key = self.with_slot_session_mut(|slots| slots.preview_group_key(key));
 
-    let restored = self.core
-        .retention
-        .borrow_mut()
-        .take(&retain_key)
-        .map(|retained| retained.subtree);
+    let restored = self.core.shared_state.take_retained(
+        &host,
+        RetainKey {
+            parent_scope: parent_scope_id,
+            key: reserved_key,
+        },
+    );
 
-    let start = self.with_slots_mut(|slots| {
-        slots.begin_group(BeginGroupInput { key, restored })
+    let GroupStart {
+        group,
+        anchor,
+        scope_id,
+        kind,
+        ..
+    } = self.with_slot_session_mut(|slots| {
+        slots.begin_group(BeginGroupInput::new(reserved_key, restored))
     });
 
-    let scope_ref = self.obtain_scope_for_started_group(&start);
-    self.core.scope_registry.borrow_mut().insert(scope_ref.id(), scope_ref.clone());
-    self.with_slots_mut(|slots| slots.set_group_scope(start.group, scope_ref.id()));
+    let scope = if let Some(scope_id) = scope_id {
+        self.scope_for_id(scope_id)
+            .expect("group scope id must resolve through runtime state")
+    } else {
+        let scope = RecomposeScope::new(self.runtime_handle());
+        self.core.shared_state.register_scope(&scope);
+        self.with_slot_session_mut(|slots| slots.set_group_scope(group, scope.id()));
+        scope
+    };
 
-    self.prepare_scope(&scope_ref, &options, start.kind);
-    self.push_scope(scope_ref.clone());
+    scope.reactivate();
+    scope.set_group_anchor(anchor);
+    scope.set_parent_scope(parent_scope);
+    scope.set_retention_mode(options.retention);
+    scope.set_slots_host(&host);
 
-    let result = self.observe_scope(&scope_ref, || f(self));
+    if options.force_recompose || matches!(kind, GroupStartKind::Restored) {
+        scope.force_recompose();
+    } else if options.force_reuse {
+        scope.force_reuse();
+    }
 
-    let finish = self.with_slots_mut(|slots| slots.finish_group_body());
-    self.handle_detached_children(finish.detached_children, options.retention);
+    self.scope_stack().push(scope.clone());
+    let result = self.observe_scope(&scope, || f(self));
+    scope.mark_composed_once();
 
-    self.pop_scope();
-    scope_ref.mark_recomposed();
-    self.with_slots_mut(|slots| slots.end_group());
+    let FinishGroupResult {
+        detached_children,
+        direct_nodes,
+        ..
+    } = self.with_slot_session_mut(|slots| slots.finish_group_body());
+    self.dispose_detached_nodes(direct_nodes);
+    self.handle_detached_children(Some(scope.id()), detached_children);
 
+    self.scope_stack().pop();
+    scope.mark_recomposed();
+    self.with_slot_session_mut(|slots| slots.end_group());
     result
 }
 ```
@@ -724,12 +766,24 @@ pub fn with_group<R>(&self, key: GroupKey, f: impl FnOnce(&Composer) -> R) -> R 
 
 When a retained inactive scope is invalidated:
 
-- do not attempt slot-table recomposition by anchor;
-- mark the retained group dirty;
-- optionally schedule the nearest active ancestor/root;
+- keep the scope invalid;
+- do not enqueue active recomposition while it is inactive;
+- preserve the scope's `slots_storage_key` and weak `slots_runtime_state`;
 - when restored, call `scope.reactivate()` and `scope.force_recompose()`.
 
-The current `RecomposeScope::invalidate` already has a useful behavior: if inactive, it sets invalid state but does not enqueue active recomposition. V2 should keep that general rule and make retained restore reactivate the scope.
+`RecomposeScope::invalidate` follows this rule directly: inactive retained scopes stay invalid but are not scheduled. `reactivate()` re-enqueues them if they are still invalid, and restored groups force one recomposition even if no new invalidation happened while detached.
+
+### 11.6 Host binding and recomposition routing
+
+Each pass binds a `SlotsHost` to exactly one `ComposerRuntimeState`. `Composer::with_slot_host_pass` asserts that an already-bound host cannot be silently rebound to a different runtime state.
+
+`Composition::process_invalid_scopes_filtered` resolves the host for each invalid scope in this order:
+
+1. `scope.slots_runtime_state() -> host_for_storage_key(scope.slots_storage_key())`
+2. composition root `composer_state.host_for_storage_key(scope.slots_storage_key())`
+3. root slots host fallback
+
+Scopes are grouped by resolved host and each group is recomposed with `Composer::new_with_shared_state(...)`, using the host's bound runtime state. This is the mechanism that keeps measure/subcompose composers and root recomposition on the same scope/retention graph.
 
 ---
 
@@ -737,12 +791,11 @@ The current `RecomposeScope::invalidate` already has a useful behavior: if inact
 
 ### 12.1 ScopeIndex
 
-Use a real index:
+Use a real active-scope index inside `SlotTable`:
 
 ```rust
 pub struct ScopeIndex {
     active: HashMap<ScopeId, GroupAnchor>,
-    detached: HashMap<ScopeId, RetainKey>,
 }
 ```
 
@@ -750,19 +803,18 @@ Active recomposition:
 
 ```rust
 fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<GroupId> {
-    let anchor = self.scopes.active.get(&scope)?;
-    let group = self.anchors.resolve_group(*anchor)?;
-    self.writer.start_recompose(group);
-    Some(group)
+    self.group_for_scope(scope)
 }
 ```
 
-Detached recomposition:
+Detached scopes are not indexed in `SlotTable`. The slot table only answers active-group lookups. Detached scope routing is a runtime-state concern because retained subtrees are stored outside the active table and are partitioned by host storage key.
 
-- storage returns `None` for detached scopes;
-- runtime/composer checks retention manager;
-- retained entry is marked dirty;
-- restore later forces recomposition.
+Retained-scope recomposition behavior:
+
+- slot storage returns `None` for detached scopes because there is no active group;
+- the scope itself keeps the invalid flag while inactive;
+- restore later reactivates the scope and forces recomposition;
+- `Composition` routes that restore to the correct host through `slots_runtime_state + slots_storage_key`.
 
 Slot storage must not scan all groups for a scope.
 
@@ -797,13 +849,28 @@ When a group is removed from the active tree and retained:
 
 - remove its root node IDs from parent child lists;
 - do not call `applier.remove(node_id)`;
-- optionally call `on_removed_from_parent` / `unmount` if the renderer requires detached nodes to be inactive;
-- mark node IDs as retained in `RetentionManager`.
+- do not unmount the nodes;
+- mark node IDs as retained in `RetentionManager`;
+- preserve the node generation in the deferred-cleanup queue so a later cleanup pass does not dispose the detached node by accident.
+
+The concrete mechanism is `Command::DetachChild`:
+
+```rust
+Command::DetachChild { parent_id, child_id }
+```
+
+`DetachChild`:
+
+- removes the child from the parent's child list;
+- calls `on_removed_from_parent`;
+- bubbles layout/measure dirtiness on the parent;
+- records `(child_id, generation)` in `DeferredChildCleanupQueue::preserve(...)`.
 
 When restored:
 
-- the group records existing node IDs again;
-- parent diff reattaches them;
+- `RetentionManager::take(...)` marks the nodes active again;
+- `begin_group(... restored ...)` restores the recorded node IDs into the active table;
+- normal parent attach / insert / sync logic reattaches those IDs;
 - do not create new nodes unless the composable emits a genuinely different node type/key.
 
 ### 13.3 Disposing nodes
@@ -815,17 +882,24 @@ When a group is removed and not retained:
 - call `applier.remove(node_id)`;
 - allow payload/effect drops.
 
-### 13.4 Parent diff integration
+### 13.4 Apply-path separation
 
-The current parent diff logic must learn about retained nodes. During child removal:
+The apply layer distinguishes disposal from retention by command type, not by a special retained-node query inside `sync_children`.
 
 ```rust
-if retention.is_retained_node(child) {
-    detach_child_from_parent_without_removing_applier_node(child);
-} else {
-    remove_child_and_dispose_node(child);
+match command {
+    Command::RemoveChild { .. } => apply_remove_child(..., deferred_cleanup),
+    Command::DetachChild { .. } => {
+        detach_child_from_parent(...)?;
+        deferred_cleanup.preserve(child_id, generation);
+    }
+    _ => { /* other commands */ }
 }
 ```
+
+`RemoveChild` detaches and queues cleanup, which leads to unmount + `applier.remove(...)` if the node stays parentless.
+
+`DetachChild` detaches and cancels cleanup for that `(NodeId, generation)` pair, so retained nodes stay live while hidden.
 
 This is essential. Retaining only slot payloads while deleting nodes defeats node reuse.
 
@@ -1152,7 +1226,7 @@ Tests to pass:
 - nested restore preserves payloads;
 - disposed subtree drops payloads and invalidates anchors.
 
-### Phase 6 — composer retention manager
+### Phase 6 — composer runtime state and retention manager
 
 Create `src/retention.rs`.
 
@@ -1162,14 +1236,23 @@ Implement:
 - `RetainKey`;
 - `RetainedGroup`;
 - `RetentionManager`;
-- retained node set;
-- dirty retained scope tracking.
+- `ComposerRuntimeState`;
+- per-host retained subtree pools keyed by `SlotsHost::storage_key()`.
 
-Update `ComposerCore`:
+Update runtime-owned state:
 
-- add `retention`;
-- add `scope_registry`;
-- update `pending_scope_options` to include retention mode.
+- `ComposerCore.shared_state`;
+- `SlotsHost.runtime_state`;
+- `SlotTable.runtime_state`;
+- `RecomposeScope.slots_storage_key`;
+- `RecomposeScope.slots_runtime_state`;
+- `pending_scope_options` to include retention mode.
+
+Update recomposition entry:
+
+- resolve hosts through `scope.slots_runtime_state()` and `scope.slots_storage_key()`;
+- group invalid scopes by resolved host;
+- construct each pass with `Composer::new_with_shared_state(...)`.
 
 Tests to pass:
 
@@ -1185,16 +1268,19 @@ Required flow:
 
 1. compute group key;
 2. compute retain key;
-3. take retained subtree if present;
-4. call `begin_group` with optional restored subtree;
-5. obtain/create remembered `RecomposeScope`;
-6. register scope ID;
-7. apply `force_recompose`, `force_reuse`, and `Restored` behavior;
-8. run body under observer;
-9. call `finish_group_body`;
-10. retain or dispose returned children;
-11. pop scope;
-12. end group.
+3. resolve the active `SlotsHost`;
+4. take retained subtree from `shared_state.take_retained(&host, key)` if present;
+5. call `begin_group` with optional restored subtree;
+6. obtain/create remembered `RecomposeScope`;
+7. register new scope IDs in `shared_state`;
+8. bind the scope to the active host;
+9. apply `force_recompose`, `force_reuse`, and `Restored` behavior;
+10. run body under observer;
+11. call `finish_group_body`;
+12. dispose direct detached nodes;
+13. retain or dispose detached child subtrees;
+14. pop scope;
+15. end group.
 
 Delete all use of `restored_from_gap`.
 
@@ -1202,9 +1288,10 @@ Delete all use of `restored_from_gap`.
 
 Update parent diff/removal logic:
 
-- retained nodes are detached, not removed from applier;
+- retained nodes are detached with `DetachChild`, not removed from applier;
 - disposed nodes are removed;
-- restored retained nodes can be reattached by existing parent diff.
+- deferred cleanup preserves detached retained nodes by `(NodeId, generation)`;
+- restored retained nodes can be reattached by existing parent attach / insert / sync logic.
 
 Tests to pass:
 
@@ -1282,9 +1369,18 @@ Do not reintroduce semantic gaps for performance.
 ### 19.1 SlotStorage usage from composer
 
 ```rust
-let start = slots.begin_group(BeginGroupInput {
-    key,
-    restored: retained.map(|r| r.subtree),
+let host = self.active_slots_host();
+let reserved_key = self.with_slot_session_mut(|slots| slots.preview_group_key(key));
+let restored = self.core.shared_state.take_retained(
+    &host,
+    RetainKey {
+        parent_scope,
+        key: reserved_key,
+    },
+);
+
+let start = self.with_slot_session_mut(|slots| {
+    slots.begin_group(BeginGroupInput::new(reserved_key, restored))
 });
 
 match start.kind {
@@ -1298,11 +1394,21 @@ match start.kind {
 ### 19.2 Retain/dispose handling
 
 ```rust
-fn handle_detached_children(&self, detached: Vec<DetachedSubtree>, mode: RetentionMode) {
+fn handle_detached_children(&self, parent_scope: Option<ScopeId>, detached: Vec<DetachedSubtree>) {
+    let host = self.active_slots_host();
     for subtree in detached {
+        let mode = subtree
+            .root_scope_id()
+            .and_then(|scope_id| self.scope_for_id(scope_id))
+            .map(|scope| scope.retention_mode())
+            .unwrap_or_default();
         match mode {
-            RetentionMode::RetainWhenInactive => self.retain_subtree(subtree),
-            RetentionMode::DisposeWhenInactive => self.dispose_subtree(subtree),
+            RetentionMode::RetainWhenInactive => {
+                self.retain_detached_subtree_in_host(&host, parent_scope, subtree)
+            }
+            RetentionMode::DisposeWhenInactive => {
+                self.dispose_detached_subtree_in_host(&host, subtree)
+            }
         }
     }
 }
@@ -1311,36 +1417,52 @@ fn handle_detached_children(&self, detached: Vec<DetachedSubtree>, mode: Retenti
 ### 19.3 Retain subtree
 
 ```rust
-fn retain_subtree(&self, subtree: DetachedSubtree) {
+fn retain_detached_subtree_in_host(
+    &self,
+    host: &Rc<SlotsHost>,
+    parent_scope: Option<ScopeId>,
+    subtree: DetachedSubtree,
+) {
     for scope_id in subtree.scope_ids() {
-        if let Some(scope) = self.core.scope_registry.borrow().get(&scope_id) {
+        if let Some(scope) = self.scope_for_id(scope_id) {
             scope.deactivate();
         }
     }
 
-    for node in subtree.root_nodes() {
-        self.core.retention.borrow_mut().mark_node_retained(node);
-        self.detach_node_without_dispose(node);
+    for root in self.skipped_group_root_nodes(&subtree.node_ids()) {
+        let parent_id = {
+            let mut applier = self.borrow_applier();
+            applier.get_mut(root).ok().and_then(|node| node.parent())
+        };
+        if let Some(parent_id) = parent_id {
+            self.commands_mut().push(Command::DetachChild { parent_id, child_id: root });
+        }
     }
 
-    let key = self.make_retain_key(&subtree);
-    self.core.retention.borrow_mut().insert(key, subtree);
+    self.core.shared_state.insert_retained(
+        host,
+        RetainKey {
+            parent_scope,
+            key: subtree.root_key(),
+        },
+        subtree,
+    );
 }
 ```
 
 ### 19.4 Dispose subtree
 
 ```rust
-fn dispose_subtree(&self, subtree: DetachedSubtree) {
-    for node in subtree.root_nodes() {
-        self.dispose_node(node);
-    }
+fn dispose_detached_subtree_in_host(&self, host: &Rc<SlotsHost>, subtree: DetachedSubtree) {
+    let scope_ids = subtree.scope_ids();
+    self.dispose_scope_ids(&scope_ids);
+    let roots = self.skipped_group_root_nodes(&subtree.node_ids());
+    self.dispose_detached_nodes(roots);
 
-    for scope_id in subtree.scope_ids() {
-        self.core.scope_registry.borrow_mut().remove(&scope_id);
-    }
-
-    drop(subtree); // drops remembered payloads/effects
+    host.with_table_and_lifecycle_mut(|table, lifecycle| {
+        table.invalidate_detached_subtree_anchors(&subtree);
+        lifecycle.queue_subtree_disposal(subtree);
+    });
 }
 ```
 

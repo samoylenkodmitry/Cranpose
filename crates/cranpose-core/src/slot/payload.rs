@@ -1,4 +1,4 @@
-use super::{GroupRecord, PayloadKind, PayloadRecord, SlotTable};
+use super::{GroupRecord, PayloadRecord, SlotTable};
 use crate::AnchorId;
 use std::any::TypeId;
 use std::{mem, ops::Range};
@@ -165,9 +165,7 @@ impl SlotTable {
                 anchor,
                 generation,
                 type_id: TypeId::of::<T>(),
-                kind: PayloadKind::Remember,
                 type_name: std::any::type_name::<T>(),
-                inline_payload_bytes: mem::size_of::<T>(),
                 value: Box::new(value),
             },
         );
@@ -187,7 +185,6 @@ impl SlotTable {
         let old_value = mem::replace(&mut record.value, Box::new(value));
         record.type_id = TypeId::of::<T>();
         record.type_name = std::any::type_name::<T>();
-        record.inline_payload_bytes = mem::size_of::<T>();
         old_value
     }
 
