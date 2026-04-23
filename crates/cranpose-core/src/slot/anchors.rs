@@ -2,7 +2,7 @@ use super::{dense_id_map::DenseIdMap, DetachedSubtree, GroupRecord, SlotTable};
 use crate::{
     collections::map::HashMap, retention::RetentionManager, AnchorId, RecomposeScope, ScopeId,
 };
-use std::mem;
+use std::{cmp::Reverse, collections::BinaryHeap, mem};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AnchorState {
@@ -20,25 +20,27 @@ struct AnchorSlot {
 #[derive(Default)]
 pub(crate) struct AnchorRegistry {
     states: DenseIdMap<AnchorSlot>,
-    free_ids: Vec<u32>,
+    free_ids: BinaryHeap<Reverse<u32>>,
     reused_generations: HashMap<u32, u32>,
     next_anchor: usize,
     active_count: usize,
+    detached_count: usize,
 }
 
 impl AnchorRegistry {
     pub(super) fn new() -> Self {
         Self {
             states: DenseIdMap::new(),
-            free_ids: Vec::new(),
+            free_ids: BinaryHeap::new(),
             reused_generations: HashMap::default(),
             next_anchor: 1,
             active_count: 0,
+            detached_count: 0,
         }
     }
 
     pub(super) fn allocate(&mut self) -> AnchorId {
-        let anchor = if let Some(id) = self.free_ids.pop() {
+        let anchor = if let Some(Reverse(id)) = self.free_ids.pop() {
             AnchorId {
                 id,
                 generation: self.reused_generations.remove(&id).unwrap_or(2),
@@ -75,6 +77,30 @@ impl AnchorRegistry {
         self.active_count
     }
 
+    pub(super) fn slot_len(&self) -> usize {
+        self.states.len()
+    }
+
+    pub(super) fn sparse_slot_len(&self) -> usize {
+        let reserved_zero_slot = usize::from(self.states.storage_len() > 0);
+        self.states
+            .storage_len()
+            .saturating_sub(self.states.len() + reserved_zero_slot)
+    }
+
+    pub(super) fn detached_len(&self) -> usize {
+        self.detached_count
+    }
+
+    pub(super) fn invalidated_len(&self) -> usize {
+        self.slot_len()
+            .saturating_sub(self.active_count + self.detached_count)
+    }
+
+    pub(super) fn free_len(&self) -> usize {
+        self.free_ids.len()
+    }
+
     pub(super) fn active_entries(&self) -> impl Iterator<Item = (AnchorId, usize)> + '_ {
         self.states
             .iter()
@@ -96,7 +122,7 @@ impl AnchorRegistry {
 
     pub(super) fn heap_bytes(&self) -> usize {
         self.states.capacity() * mem::size_of::<Option<AnchorSlot>>()
-            + self.free_ids.capacity() * mem::size_of::<u32>()
+            + self.free_ids.capacity() * mem::size_of::<Reverse<u32>>()
             + self.reused_generations.capacity() * mem::size_of::<(u32, u32)>()
     }
 
@@ -129,6 +155,7 @@ impl AnchorRegistry {
         self.reused_generations.clear();
         self.next_anchor = 1;
         self.active_count = 0;
+        self.detached_count = 0;
     }
 
     pub(super) fn shrink_to_fit(&mut self) {
@@ -151,7 +178,7 @@ impl AnchorRegistry {
             .states
             .remove(index)
             .expect("validated anchor state must remove");
-        self.adjust_active_count(Some(removed.state), None);
+        self.adjust_state_counts(Some(removed.state), None);
         self.enqueue_reuse(anchor);
         true
     }
@@ -170,7 +197,7 @@ impl AnchorRegistry {
                 state,
             },
         );
-        self.adjust_active_count(previous.map(|slot| slot.state), Some(state));
+        self.adjust_state_counts(previous.map(|slot| slot.state), Some(state));
         previous.map(|slot| slot.state)
     }
 
@@ -178,17 +205,23 @@ impl AnchorRegistry {
         anchor.is_valid().then_some(anchor.id as usize)
     }
 
-    fn adjust_active_count(&mut self, previous: Option<AnchorState>, next: Option<AnchorState>) {
+    fn adjust_state_counts(&mut self, previous: Option<AnchorState>, next: Option<AnchorState>) {
         if matches!(previous, Some(AnchorState::Active(_))) {
             self.active_count -= 1;
+        }
+        if matches!(previous, Some(AnchorState::Detached)) {
+            self.detached_count -= 1;
         }
         if matches!(next, Some(AnchorState::Active(_))) {
             self.active_count += 1;
         }
+        if matches!(next, Some(AnchorState::Detached)) {
+            self.detached_count += 1;
+        }
     }
 
     fn enqueue_reuse(&mut self, anchor: AnchorId) {
-        self.free_ids.push(anchor.id);
+        self.free_ids.push(Reverse(anchor.id));
         let next_generation = anchor
             .generation
             .checked_add(1)

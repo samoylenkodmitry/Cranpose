@@ -27,7 +27,7 @@ This file tracks the current forward work and marks boxes closed only after full
 
 - [ ] Reduce modifier slice collection churn in lazy-list scroll-reuse hot paths.
 - [ ] Reduce layout-box and semantics allocation churn in lazy-list scroll-reuse hot paths.
-- [ ] Add retained-memory instrumentation and anchor-capacity diagnostics that are cheap enough for regular debug investigation and strong enough for regression tests.
+- [x] Add retained-memory instrumentation and anchor-capacity diagnostics that are cheap enough for regular debug investigation and strong enough for regression tests; `SlotTableDebugStats` now reports retained subtree counts/heap plus active/detached/invalidated/free anchor breakdown, and the coverage exercises both raw slot tables and composition-owned retention.
 - [ ] Audit lazy-list and subcompose retention/reuse behavior under perf load and add specialized policy only if profiling proves the generic retained-subtree path is the bottleneck.
 
 ## Follow-Up Work

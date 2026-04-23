@@ -13,9 +13,22 @@ pub struct SlotTableDebugStats {
     pub pending_drop_count: usize,
     pub pending_drop_capacity: usize,
     pub active_anchor_count: usize,
+    pub anchor_slot_count: usize,
+    pub anchor_sparse_count: usize,
+    pub detached_anchor_count: usize,
+    pub invalidated_anchor_count: usize,
+    pub free_anchor_count: usize,
     pub anchor_capacity: usize,
+    pub anchor_heap_bytes: usize,
     pub scope_index_count: usize,
     pub scope_index_capacity: usize,
+    pub retained_subtree_count: usize,
+    pub retained_group_count: usize,
+    pub retained_payload_count: usize,
+    pub retained_node_count: usize,
+    pub retained_scope_count: usize,
+    pub retained_anchor_count: usize,
+    pub retained_heap_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

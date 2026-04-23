@@ -371,6 +371,11 @@ fn debug_stats_report_explicit_v2_table_counts() {
     assert_eq!(stats.payload_location_count, 1);
     assert_eq!(stats.node_count, 1);
     assert_eq!(stats.active_anchor_count, 1);
+    assert_eq!(stats.anchor_slot_count, 1);
+    assert_eq!(stats.anchor_sparse_count, 0);
+    assert_eq!(stats.detached_anchor_count, 0);
+    assert_eq!(stats.invalidated_anchor_count, 0);
+    assert_eq!(stats.free_anchor_count, 0);
     assert_eq!(stats.scope_index_count, 0);
     assert_eq!(stats.pending_drop_count, 0);
     assert!(stats.group_capacity >= stats.group_count);
@@ -378,8 +383,16 @@ fn debug_stats_report_explicit_v2_table_counts() {
     assert!(stats.payload_location_capacity >= stats.payload_location_count);
     assert!(stats.node_capacity >= stats.node_count);
     assert!(stats.anchor_capacity >= stats.active_anchor_count);
+    assert!(stats.anchor_heap_bytes > 0);
     assert!(stats.scope_index_capacity >= stats.scope_index_count);
     assert!(stats.pending_drop_capacity >= stats.pending_drop_count);
+    assert_eq!(stats.retained_subtree_count, 0);
+    assert_eq!(stats.retained_group_count, 0);
+    assert_eq!(stats.retained_payload_count, 0);
+    assert_eq!(stats.retained_node_count, 0);
+    assert_eq!(stats.retained_scope_count, 0);
+    assert_eq!(stats.retained_anchor_count, 0);
+    assert_eq!(stats.retained_heap_bytes, 0);
 }
 
 #[test]
@@ -860,6 +873,63 @@ fn retention_marks_detached_nodes_and_reactivates_on_take() {
         restored.node_states().collect::<Vec<_>>(),
         vec![(child_id, super::NodeLifecycle::Active)]
     );
+}
+
+#[test]
+fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
+    const PARENT_KEY: Key = 366;
+    const CHILD_KEY: Key = 367;
+    const CHILD_SCOPE: ScopeId = 22;
+
+    let mut harness = SlotHarness::new();
+    let child_id = harness
+        .applier
+        .create(Box::new(UnmountTrackingNode::new(Rc::new(Cell::new(0)))));
+    let child_generation = harness.applier.node_generation(child_id);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let child = begin_unkeyed(session, CHILD_KEY, None);
+        session.set_group_scope(child.group, CHILD_SCOPE);
+        let _remembered = session.remember(|| 91_i32);
+        session.record_node(child_id, child_generation);
+        let child_result = session.finish_group_body();
+        assert!(child_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(parent_result.detached_children.len(), 0);
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+        let parent_result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(parent_result.detached_children.len(), 1);
+        parent_result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+    let stats = retention.debug_stats();
+
+    assert_eq!(stats.subtree_count, 1);
+    assert_eq!(stats.group_count, 1);
+    assert_eq!(stats.payload_count, 1);
+    assert_eq!(stats.node_count, 1);
+    assert_eq!(stats.scope_count, 1);
+    assert_eq!(stats.anchor_count, 1);
+    assert!(stats.heap_bytes > 0);
 }
 
 #[test]
@@ -2096,11 +2166,18 @@ fn released_anchors_are_reused_without_sparse_growth() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.finish_pass(SlotPassMode::Compose);
     assert_eq!(harness.table.anchor_state(first_anchor), None);
-    let capacity_after_clear = harness.table.debug_stats().anchor_capacity;
+    let stats_after_clear = harness.table.debug_stats();
+    let capacity_after_clear = stats_after_clear.anchor_capacity;
     assert!(
         capacity_after_clear <= GROUP_COUNT * 2,
         "releasing groups must not leave sparse anchor storage behind: after_clear={capacity_after_clear}",
     );
+    assert_eq!(stats_after_clear.active_anchor_count, 0);
+    assert_eq!(stats_after_clear.anchor_slot_count, 0);
+    assert_eq!(stats_after_clear.anchor_sparse_count, 0);
+    assert_eq!(stats_after_clear.detached_anchor_count, 0);
+    assert_eq!(stats_after_clear.invalidated_anchor_count, 0);
+    assert_eq!(stats_after_clear.free_anchor_count, GROUP_COUNT);
 
     harness.begin_pass(SlotPassMode::Compose);
     let reused_anchor = harness.session(SlotPassMode::Compose, |session| {
@@ -2112,13 +2189,20 @@ fn released_anchors_are_reused_without_sparse_growth() {
     });
     harness.finish_pass(SlotPassMode::Compose);
 
-    let capacity_after_reuse = harness.table.debug_stats().anchor_capacity;
+    let stats_after_reuse = harness.table.debug_stats();
+    let capacity_after_reuse = stats_after_reuse.anchor_capacity;
     assert!(reused_anchor.generation > 1);
     assert_ne!(reused_anchor, first_anchor);
     assert!(
         capacity_after_reuse <= GROUP_COUNT * 2,
         "reusing released anchors must keep storage bounded: after_reuse={capacity_after_reuse}",
     );
+    assert_eq!(stats_after_reuse.active_anchor_count, 1);
+    assert_eq!(stats_after_reuse.anchor_slot_count, 1);
+    assert_eq!(stats_after_reuse.anchor_sparse_count, 0);
+    assert_eq!(stats_after_reuse.detached_anchor_count, 0);
+    assert_eq!(stats_after_reuse.invalidated_anchor_count, 0);
+    assert_eq!(stats_after_reuse.free_anchor_count, GROUP_COUNT - 1);
     assert_eq!(harness.table.validate(), Ok(()));
 }
 

@@ -2,6 +2,7 @@ use super::GroupRecord;
 use crate::slot::DeferredDrop;
 use crate::{slot_storage::GroupKey, AnchorId, NodeId, ScopeId};
 use std::any::{Any, TypeId};
+use std::mem;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SlotPassMode {
@@ -106,6 +107,10 @@ impl DetachedSubtree {
         self.nodes.len()
     }
 
+    pub(crate) fn payload_count(&self) -> usize {
+        self.payloads.len()
+    }
+
     pub(crate) fn root_nodes(&self) -> &[NodeId] {
         &self.root_nodes
     }
@@ -129,6 +134,19 @@ impl DetachedSubtree {
 
     pub(crate) fn scope_count(&self) -> usize {
         self.scope_ids.len()
+    }
+
+    pub(crate) fn anchor_count(&self) -> usize {
+        self.anchors.group_anchors.len()
+    }
+
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.groups.capacity() * mem::size_of::<GroupRecord>()
+            + self.payloads.capacity() * mem::size_of::<PayloadRecord>()
+            + self.nodes.capacity() * mem::size_of::<NodeRecord>()
+            + self.root_nodes.capacity() * mem::size_of::<NodeId>()
+            + self.scope_ids.capacity() * mem::size_of::<ScopeId>()
+            + self.anchors.group_anchors.capacity() * mem::size_of::<AnchorId>()
     }
 
     pub(crate) fn group_anchors(&self) -> impl Iterator<Item = AnchorId> + '_ {

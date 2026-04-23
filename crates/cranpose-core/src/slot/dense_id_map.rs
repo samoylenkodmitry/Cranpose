@@ -55,6 +55,10 @@ impl<T> DenseIdMap<T> {
         self.entries.capacity()
     }
 
+    pub(super) fn storage_len(&self) -> usize {
+        self.entries.len()
+    }
+
     pub(super) fn iter(&self) -> impl Iterator<Item = (usize, &T)> + '_ {
         self.entries
             .iter()

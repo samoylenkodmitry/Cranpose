@@ -26,7 +26,13 @@ impl SlotTable {
             node_count: self.total_node_count(),
             node_capacity: self.node_debug_capacity(),
             active_anchor_count: self.anchors.active_len(),
+            anchor_slot_count: self.anchors.slot_len(),
+            anchor_sparse_count: self.anchors.sparse_slot_len(),
+            detached_anchor_count: self.anchors.detached_len(),
+            invalidated_anchor_count: self.anchors.invalidated_len(),
+            free_anchor_count: self.anchors.free_len(),
             anchor_capacity: self.anchors.capacity(),
+            anchor_heap_bytes: self.anchors.heap_bytes(),
             scope_index_count: self.scope_anchor_to_group.len(),
             scope_index_capacity: self.scope_anchor_to_group.capacity(),
             ..SlotTableDebugStats::default()

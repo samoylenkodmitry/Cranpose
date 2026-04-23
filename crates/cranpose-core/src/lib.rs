@@ -3565,6 +3565,9 @@ impl SlotsHost {
         let inner = self.inner.borrow();
         let mut stats = inner.table.debug_stats();
         inner.lifecycle.fill_debug_stats(&mut stats);
+        if let Some(state) = inner.runtime_state.clone() {
+            state.fill_slot_debug_stats(self, &mut stats);
+        }
         stats
     }
 

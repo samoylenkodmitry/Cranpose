@@ -1033,8 +1033,17 @@ fn retained_scope_stays_inactive_until_restored() {
         .expect("initial composition");
 
     let initial_snapshot = composition.debug_slot_snapshot();
+    let initial_stats = composition.debug_slot_table_stats();
     assert_eq!(initial_snapshot.retained_subtree_count, 0);
     assert_eq!(initial_snapshot.retained_scope_count, 0);
+    assert_eq!(initial_stats.retained_subtree_count, 0);
+    assert_eq!(initial_stats.retained_group_count, 0);
+    assert_eq!(initial_stats.retained_payload_count, 0);
+    assert_eq!(initial_stats.retained_node_count, 0);
+    assert_eq!(initial_stats.retained_scope_count, 0);
+    assert_eq!(initial_stats.retained_anchor_count, 0);
+    assert_eq!(initial_stats.retained_heap_bytes, 0);
+    assert_eq!(initial_stats.detached_anchor_count, 0);
     assert!(
         initial_snapshot.active_scope_count >= 1,
         "initial render should expose the active retained-branch scope in the slot snapshot"
@@ -1059,12 +1068,38 @@ fn retained_scope_stays_inactive_until_restored() {
         .expect("hide branch render");
 
     let hidden_snapshot = composition.debug_slot_snapshot();
+    let hidden_stats = composition.debug_slot_table_stats();
     assert_eq!(hidden_snapshot.retained_subtree_count, 1);
     assert!(
         hidden_snapshot.retained_group_count >= 1,
         "hiding a retained branch must move at least one group into retained storage",
     );
     assert_eq!(hidden_snapshot.retained_scope_count, 1);
+    assert_eq!(hidden_stats.retained_subtree_count, 1);
+    assert!(
+        hidden_stats.retained_group_count >= 1,
+        "retained groups must appear in runtime slot diagnostics after hiding the branch",
+    );
+    assert_eq!(hidden_stats.retained_scope_count, 1);
+    assert!(
+        hidden_stats.retained_anchor_count >= 1,
+        "retained subtree anchors must stay visible in diagnostics while detached",
+    );
+    assert!(
+        hidden_stats.retained_heap_bytes > 0,
+        "retained subtree slot storage must report non-zero heap once hidden",
+    );
+    assert!(
+        hidden_stats.detached_anchor_count >= hidden_stats.retained_anchor_count,
+        "retained anchors should be tracked as detached in the active anchor registry",
+    );
+    assert_eq!(
+        hidden_stats.active_anchor_count
+            + hidden_stats.detached_anchor_count
+            + hidden_stats.invalidated_anchor_count,
+        hidden_stats.anchor_slot_count,
+        "anchor diagnostics must account for every occupied registry slot",
+    );
 
     assert!(
         !scope.is_active(),
@@ -1091,8 +1126,17 @@ fn retained_scope_stays_inactive_until_restored() {
         .expect("restore retained branch");
 
     let restored_snapshot = composition.debug_slot_snapshot();
+    let restored_stats = composition.debug_slot_table_stats();
     assert_eq!(restored_snapshot.retained_subtree_count, 0);
     assert_eq!(restored_snapshot.retained_scope_count, 0);
+    assert_eq!(restored_stats.retained_subtree_count, 0);
+    assert_eq!(restored_stats.retained_group_count, 0);
+    assert_eq!(restored_stats.retained_payload_count, 0);
+    assert_eq!(restored_stats.retained_node_count, 0);
+    assert_eq!(restored_stats.retained_scope_count, 0);
+    assert_eq!(restored_stats.retained_anchor_count, 0);
+    assert_eq!(restored_stats.retained_heap_bytes, 0);
+    assert_eq!(restored_stats.detached_anchor_count, 0);
 
     let restored_scope = CAPTURED_SCOPE
         .with(|slot| slot.borrow().clone())

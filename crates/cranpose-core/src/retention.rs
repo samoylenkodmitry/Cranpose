@@ -26,8 +26,20 @@ impl RetainedGroup {
         self.subtree.node_count()
     }
 
+    fn payload_count(&self) -> usize {
+        self.subtree.payload_count()
+    }
+
     fn scope_count(&self) -> usize {
         self.subtree.scope_count()
+    }
+
+    fn anchor_count(&self) -> usize {
+        self.subtree.anchor_count()
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.subtree.heap_bytes()
     }
 }
 
@@ -35,8 +47,11 @@ impl RetainedGroup {
 pub(crate) struct RetentionDebugStats {
     pub(crate) subtree_count: usize,
     pub(crate) group_count: usize,
+    pub(crate) payload_count: usize,
     pub(crate) node_count: usize,
     pub(crate) scope_count: usize,
+    pub(crate) anchor_count: usize,
+    pub(crate) heap_bytes: usize,
 }
 
 #[derive(Default)]
@@ -68,8 +83,11 @@ impl RetentionManager {
                 .values()
                 .map(|retained| retained.subtree.group_count())
                 .sum(),
+            payload_count: self.groups.values().map(RetainedGroup::payload_count).sum(),
             node_count: self.groups.values().map(RetainedGroup::node_count).sum(),
             scope_count: self.groups.values().map(RetainedGroup::scope_count).sum(),
+            anchor_count: self.groups.values().map(RetainedGroup::anchor_count).sum(),
+            heap_bytes: self.groups.values().map(RetainedGroup::heap_bytes).sum(),
         }
     }
 

@@ -144,17 +144,27 @@ impl ComposerRuntimeState {
         host: &SlotsHost,
         snapshot: &mut crate::SlotDebugSnapshot,
     ) {
-        let retention = self
-            .retention_by_host
-            .borrow()
-            .get(&host.storage_key())
-            .map(RetentionManager::debug_stats)
-            .unwrap_or_default();
+        let retention = self.retention_debug_stats(host.storage_key());
         snapshot.scope_registry_count = self.scope_registry_len();
         snapshot.retained_subtree_count = retention.subtree_count;
         snapshot.retained_group_count = retention.group_count;
         snapshot.retained_node_count = retention.node_count;
         snapshot.retained_scope_count = retention.scope_count;
+    }
+
+    pub(crate) fn fill_slot_debug_stats(
+        &self,
+        host: &SlotsHost,
+        stats: &mut crate::SlotTableDebugStats,
+    ) {
+        let retention = self.retention_debug_stats(host.storage_key());
+        stats.retained_subtree_count = retention.subtree_count;
+        stats.retained_group_count = retention.group_count;
+        stats.retained_payload_count = retention.payload_count;
+        stats.retained_node_count = retention.node_count;
+        stats.retained_scope_count = retention.scope_count;
+        stats.retained_anchor_count = retention.anchor_count;
+        stats.retained_heap_bytes = retention.heap_bytes;
     }
 
     pub(crate) fn compact_table_namespaces_for_host(
@@ -230,6 +240,14 @@ impl ComposerRuntimeState {
             .borrow()
             .get(&storage_key)
             .and_then(std::rc::Weak::upgrade)
+    }
+
+    fn retention_debug_stats(&self, host_key: usize) -> crate::retention::RetentionDebugStats {
+        self.retention_by_host
+            .borrow()
+            .get(&host_key)
+            .map(RetentionManager::debug_stats)
+            .unwrap_or_default()
     }
 }
 
