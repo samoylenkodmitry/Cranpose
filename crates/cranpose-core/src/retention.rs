@@ -80,6 +80,16 @@ impl RetentionManager {
             .collect()
     }
 
+    pub(crate) fn subtrees(&self) -> impl Iterator<Item = &DetachedSubtree> + '_ {
+        self.groups.values().map(|retained| &retained.subtree)
+    }
+
+    pub(crate) fn subtrees_mut(&mut self) -> impl Iterator<Item = &mut DetachedSubtree> + '_ {
+        self.groups
+            .values_mut()
+            .map(|retained| &mut retained.subtree)
+    }
+
     pub(crate) fn validate(&self, table: &SlotTable) -> Result<(), SlotInvariantError> {
         for retained in self.groups.values() {
             let subtree = &retained.subtree;

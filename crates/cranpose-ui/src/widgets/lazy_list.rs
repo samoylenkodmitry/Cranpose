@@ -288,9 +288,12 @@ fn measure_lazy_list_internal(
     let effective_viewport_size = result.viewport_size;
 
     // Cache measured item sizes for better scroll estimation
-    for item in &result.visible_items {
-        state.cache_item_size(item.index, item.main_axis_size);
-    }
+    let average_size = state.cache_item_sizes(
+        result
+            .visible_items
+            .iter()
+            .map(|item| (item.index, item.main_axis_size)),
+    );
 
     // Update stats: count only items WITHIN viewport, not beyond-bounds buffer
     let truly_visible_count = result
@@ -324,7 +327,6 @@ fn measure_lazy_list_internal(
         // 3. Pre-compose prefetched items (compose but don't place)
         // Uses cached item sizes when available for better size estimation
         let prefetch_indices = state.take_prefetch_indices();
-        let average_size = state.average_item_size();
         for idx in prefetch_indices {
             if idx < items_count {
                 // Subcompose without placing - just to have it ready

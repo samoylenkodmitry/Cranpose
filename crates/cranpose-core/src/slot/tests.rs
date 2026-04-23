@@ -223,7 +223,6 @@ fn first_composition_records_group_value_and_node() {
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         assert!(result.direct_nodes.is_empty());
-        assert!(result.subtree_nodes.is_empty());
         session.end_group();
         slot
     });
@@ -1140,7 +1139,7 @@ fn validate_reports_group_anchor_count_mismatch_structurally() {
 }
 
 #[test]
-fn validate_reports_anchor_mismatch_for_invalidated_anchor_structurally() {
+fn validate_reports_anchor_mismatch_for_missing_anchor_structurally() {
     let mut table = composed_parent_child_table(494, 495, None);
     let root_anchor = table.groups[0].anchor;
     table.anchors.invalidate(root_anchor);
@@ -1150,7 +1149,7 @@ fn validate_reports_anchor_mismatch_for_invalidated_anchor_structurally() {
         Err(SlotInvariantError::AnchorMismatch {
             anchor: root_anchor,
             expected: 0,
-            actual: Some(AnchorState::Invalidated),
+            actual: None,
         })
     );
 }
@@ -1259,8 +1258,8 @@ fn validate_reports_payload_location_stale_owner_structurally() {
 fn validate_reports_payload_anchor_count_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(483);
     table
-        .payload_anchor_to_location
-        .insert(999, (table.groups[0].anchor, 0));
+        .payload_locations
+        .insert(999, table.groups[0].anchor, 0);
 
     assert_eq!(
         table.validate(),
@@ -1269,6 +1268,97 @@ fn validate_reports_payload_anchor_count_mismatch_structurally() {
             actual: 2,
         })
     );
+}
+
+#[test]
+fn compact_storage_discards_removed_payload_location_entries() {
+    let mut table = composed_group_with_value_and_node_table(601);
+    let owner = table.groups[0].anchor;
+    let payload_anchor = table.group_payload_record_at(0, 0).anchor;
+
+    let removed = table.remove_payload_range(owner, 0, 1);
+    assert_eq!(removed.len(), 1);
+    assert_eq!(table.payload_locations.get(payload_anchor), None);
+
+    let capacity_before = table.payload_locations.capacity();
+    table.compact_storage();
+    let capacity_after = table.payload_locations.capacity();
+
+    assert_eq!(table.payload_locations.len(), 0);
+    assert!(
+        capacity_after < capacity_before,
+        "compaction must drop removed payload-location entries: before={capacity_before} after={capacity_after}",
+    );
+    assert_eq!(table.validate(), Ok(()));
+}
+
+#[test]
+fn compact_payload_namespace_remaps_retained_subtree_payloads() {
+    const PARENT_KEY: Key = 610;
+    const CHILD_KEY: Key = 611;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let parent_anchor = harness.session(SlotPassMode::Compose, |session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let _ = session.value_slot(|| 10_i32);
+
+        begin_unkeyed(session, CHILD_KEY, None);
+        let _ = session.value_slot(|| 20_i32);
+        let child_result = session.finish_group_body();
+        assert!(child_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        parent.anchor
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+        let parent_result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(parent_result.detached_children.len(), 1);
+        parent_result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+    let restore_key = detached.root_key();
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+
+    harness
+        .table
+        .compact_payload_anchor_namespace(Some(&mut retention));
+    let _ = harness
+        .table
+        .insert_value_payload(parent_anchor, 0, 1, 30_i32);
+
+    let restored = retention
+        .take(retain_key)
+        .expect("retained subtree must restore");
+    harness
+        .table
+        .restore_subtree(1, parent_anchor, restore_key, restored);
+
+    let payload_anchor_count = harness
+        .table
+        .payloads
+        .iter()
+        .map(|payload| payload.anchor)
+        .collect::<HashSet<_>>()
+        .len();
+    assert_eq!(payload_anchor_count, harness.table.payloads.len());
+    assert_eq!(harness.table.validate(), Ok(()));
 }
 
 #[test]
@@ -1511,8 +1601,8 @@ fn scope_index_resolves_active_groups_and_omits_detached_ones() {
     );
     assert_eq!(
         harness.table.anchors.state(group_anchor),
-        Some(AnchorState::Invalidated),
-        "disposed groups must leave an invalidated anchor entry behind"
+        None,
+        "disposed groups must remove their anchor lookup"
     );
 
     harness.begin_pass(SlotPassMode::Recompose);
@@ -1563,7 +1653,7 @@ fn set_group_scope_replaces_previous_scope_lookup() {
 }
 
 #[test]
-fn compact_storage_prunes_invalidated_anchor_entries() {
+fn released_anchors_are_reused_without_sparse_growth() {
     const GROUP_COUNT: usize = 2048;
 
     let mut harness = SlotHarness::new();
@@ -1582,20 +1672,31 @@ fn compact_storage_prunes_invalidated_anchor_entries() {
 
     harness.begin_pass(SlotPassMode::Compose);
     harness.finish_pass(SlotPassMode::Compose);
-    assert_eq!(
-        harness.table.anchor_state(first_anchor),
-        Some(AnchorState::Invalidated)
-    );
-
-    let capacity_before = harness.table.debug_stats().anchors_cap;
-    harness.table.compact_storage();
-    let capacity_after = harness.table.debug_stats().anchors_cap;
-
     assert_eq!(harness.table.anchor_state(first_anchor), None);
+    let capacity_after_clear = harness.table.debug_stats().anchors_cap;
     assert!(
-        capacity_after < capacity_before,
-        "compaction must drop invalidated anchor entries: before={capacity_before} after={capacity_after}",
+        capacity_after_clear <= GROUP_COUNT * 2,
+        "releasing groups must not leave sparse anchor storage behind: after_clear={capacity_after_clear}",
     );
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let reused_anchor = harness.session(SlotPassMode::Compose, |session| {
+        let started = begin_unkeyed(session, 90_000, None);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        started.anchor
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    let capacity_after_reuse = harness.table.debug_stats().anchors_cap;
+    assert!(reused_anchor.generation > 1);
+    assert_ne!(reused_anchor, first_anchor);
+    assert!(
+        capacity_after_reuse <= GROUP_COUNT * 2,
+        "reusing released anchors must keep storage bounded: after_reuse={capacity_after_reuse}",
+    );
+    assert_eq!(harness.table.validate(), Ok(()));
 }
 
 #[test]

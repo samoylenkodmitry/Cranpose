@@ -147,6 +147,21 @@ fn draining_inactive_precomposed_returns_nodes() {
 }
 
 #[test]
+fn draining_inactive_precomposed_uses_current_pass_activation() {
+    let mut state = SubcomposeState::default();
+    state.begin_pass();
+    state.register_active(SlotId::new(1), &[10], &[]);
+    assert!(state.finish_pass().is_empty());
+
+    state.register_precomposed(SlotId::new(1), 99);
+
+    state.begin_pass();
+    let disposed = state.drain_inactive_precomposed();
+    assert_eq!(disposed, vec![99]);
+    assert!(state.precomposed().is_empty());
+}
+
+#[test]
 fn finish_pass_disposes_inactive_slots() {
     let mut state = SubcomposeState::default();
     state.begin_pass();
@@ -280,4 +295,57 @@ fn content_type_none_clears_policy() {
         reused, None,
         "Untyped slot should not match typed slot 2 (type 100)"
     );
+}
+
+#[test]
+fn migrating_last_reusable_node_prunes_dead_slot_bookkeeping() {
+    let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy::new()));
+    let slot_a = SlotId::new(1);
+    let slot_b = SlotId::new(2);
+
+    state.register_content_type(slot_a, 7);
+    state.register_content_type(slot_b, 7);
+    let _host = state.get_or_create_slots(slot_a);
+    let _callback = state.callback_holder(slot_a);
+
+    state.register_active(slot_a, &[10], &[]);
+    assert!(state.dispose_or_reuse_starting_from_index(0).is_empty());
+    assert!(state.slot_compositions.contains_key(&slot_a));
+    assert!(state.slot_callbacks.contains_key(&slot_a));
+    assert_eq!(state.get_content_type(slot_a), Some(7));
+    assert_eq!(state.reusable_count, 1);
+
+    let reused = state.take_node_from_reusables(slot_b);
+    assert_eq!(reused, Some(10));
+    assert!(!state.slot_compositions.contains_key(&slot_a));
+    assert!(!state.slot_callbacks.contains_key(&slot_a));
+    assert_eq!(state.get_content_type(slot_a), None);
+    assert_eq!(state.reusable_count, 0);
+    assert!(!state.reusable_node_counts.contains_key(&slot_a));
+}
+
+#[test]
+fn finish_pass_disposes_overflow_slot_and_prunes_dead_slot_bookkeeping() {
+    let mut state = SubcomposeState::default();
+    let slot = SlotId::new(1);
+
+    state.max_reusable_per_type = 0;
+    state.register_content_type(slot, 9);
+    let _host = state.get_or_create_slots(slot);
+    let _callback = state.callback_holder(slot);
+
+    state.begin_pass();
+    state.register_active(slot, &[10], &[]);
+    assert!(state.finish_pass().is_empty());
+    assert!(state.slot_compositions.contains_key(&slot));
+    assert!(state.slot_callbacks.contains_key(&slot));
+
+    state.begin_pass();
+    let disposed = state.finish_pass();
+    assert_eq!(disposed, vec![10]);
+    assert!(!state.slot_compositions.contains_key(&slot));
+    assert!(!state.slot_callbacks.contains_key(&slot));
+    assert_eq!(state.get_content_type(slot), None);
+    assert_eq!(state.reusable_count, 0);
+    assert!(!state.reusable_node_counts.contains_key(&slot));
 }

@@ -17,7 +17,6 @@ impl Composer {
                     detached_children,
                     structure_changed: _structure_changed,
                     direct_nodes,
-                    subtree_nodes: _subtree_nodes,
                 } = self
                     .composer
                     .with_slot_session_mut(|slots| slots.finish_group_body());

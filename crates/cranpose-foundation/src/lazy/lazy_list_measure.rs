@@ -149,14 +149,26 @@ where
         return LazyListMeasureResult::default();
     }
 
+    let measure_state = state.begin_measure_pass();
+
     // 1. Viewport handling - detect and handle infinite viewports
-    let viewport = ViewportHandler::new(viewport_size, state.average_item_size(), config.spacing);
+    let viewport = ViewportHandler::new(
+        viewport_size,
+        measure_state.average_item_size,
+        config.spacing,
+    );
     let effective_viewport_size = viewport.effective_size();
     let is_infinite_viewport = viewport.is_infinite();
 
     // 2. Resolve and normalize scroll position
-    let pending_scroll_delta = state.peek_scroll_delta();
-    let resolver = ScrollPositionResolver::new(state, config, items_count, effective_viewport_size);
+    let pending_scroll_delta = measure_state.pending_scroll_delta;
+    let resolver = ScrollPositionResolver::new(
+        state,
+        measure_state,
+        config,
+        items_count,
+        effective_viewport_size,
+    );
     let (mut first_index, mut first_offset) = resolver.apply_pending_scroll_delta();
 
     let mut pre_measured = Vec::new();
@@ -231,7 +243,7 @@ where
         items_count,
         &visible_items,
         config,
-        state.average_item_size(),
+        measure_state.average_item_size,
     );
 
     // Update scroll position - find actual first visible item

@@ -3666,6 +3666,11 @@ impl SlotsHost {
             table.compact_storage();
             lifecycle.compact_storage();
         }
+        if let Some(state) = runtime_state.clone() {
+            state.compact_table_namespaces_for_host(self, table);
+        } else {
+            table.compact_payload_anchor_namespace(None);
+        }
         table.debug_verify(Some(lifecycle));
         if let Some(state) = runtime_state.clone() {
             state.debug_verify_host(self, table);

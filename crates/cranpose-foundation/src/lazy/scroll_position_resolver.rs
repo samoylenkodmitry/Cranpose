@@ -4,7 +4,7 @@
 //! including jump optimization for large scrolls.
 
 use super::lazy_list_measure::LazyListMeasureConfig;
-use super::lazy_list_state::LazyListState;
+use super::lazy_list_state::{LazyListMeasureStateSnapshot, LazyListState};
 
 /// Resolves and normalizes scroll position for lazy list measurement.
 ///
@@ -15,6 +15,7 @@ use super::lazy_list_state::LazyListState;
 /// - Offset normalization across item boundaries
 pub struct ScrollPositionResolver<'a> {
     state: &'a LazyListState,
+    measure_state: LazyListMeasureStateSnapshot,
     config: &'a LazyListMeasureConfig,
     items_count: usize,
     effective_viewport_size: f32,
@@ -24,12 +25,14 @@ impl<'a> ScrollPositionResolver<'a> {
     /// Creates a new ScrollPositionResolver.
     pub fn new(
         state: &'a LazyListState,
+        measure_state: LazyListMeasureStateSnapshot,
         config: &'a LazyListMeasureConfig,
         items_count: usize,
         effective_viewport_size: f32,
     ) -> Self {
         Self {
             state,
+            measure_state,
             config,
             items_count,
             effective_viewport_size,
@@ -39,22 +42,21 @@ impl<'a> ScrollPositionResolver<'a> {
     /// Gets initial position and applies the pending scroll delta without normalization.
     pub(crate) fn apply_pending_scroll_delta(&self) -> (usize, f32) {
         let (index, mut offset) = self.get_initial_position();
-        let scroll_delta = self.state.consume_scroll_delta();
-        offset -= scroll_delta; // Negate: drag down (-delta) => increase offset
+        offset -= self.measure_state.pending_scroll_delta;
         (index, offset)
     }
 
     /// Gets initial position from pending scroll-to request or current state.
     fn get_initial_position(&self) -> (usize, f32) {
-        if let Some((target_index, target_offset)) = self.state.consume_scroll_to_index() {
+        if let Some((target_index, target_offset)) = self.measure_state.pending_scroll_to {
             let clamped = target_index.min(self.items_count.saturating_sub(1));
             (clamped, target_offset)
         } else {
             (
-                self.state
-                    .first_visible_item_index()
+                self.measure_state
+                    .first_visible_item_index
                     .min(self.items_count.saturating_sub(1)),
-                self.state.first_visible_item_scroll_offset(),
+                self.measure_state.first_visible_item_scroll_offset,
             )
         }
     }
@@ -69,7 +71,7 @@ impl<'a> ScrollPositionResolver<'a> {
             return (index, offset);
         }
 
-        let average_size = self.state.average_item_size();
+        let average_size = self.measure_state.average_item_size;
 
         // Jump optimization for large backward scrolls
         if average_size > 0.0 && offset < -self.effective_viewport_size {
@@ -122,7 +124,7 @@ impl<'a> ScrollPositionResolver<'a> {
             return (index, offset);
         }
 
-        let average_size = self.state.average_item_size();
+        let average_size = self.measure_state.average_item_size;
         if average_size <= 0.0 {
             return (index, offset);
         }
@@ -163,7 +165,13 @@ mod tests {
         with_test_runtime(|| {
             let state = new_lazy_list_state();
             let config = LazyListMeasureConfig::default();
-            let resolver = ScrollPositionResolver::new(&state, &config, 100, 500.0);
+            let resolver = ScrollPositionResolver::new(
+                &state,
+                state.begin_measure_pass(),
+                &config,
+                100,
+                500.0,
+            );
 
             let (index, offset) = resolver.apply_pending_scroll_delta();
             assert_eq!(index, 0);
@@ -176,7 +184,13 @@ mod tests {
         with_test_runtime(|| {
             let state = new_lazy_list_state_with_position(5, 25.0);
             let config = LazyListMeasureConfig::default();
-            let resolver = ScrollPositionResolver::new(&state, &config, 100, 500.0);
+            let resolver = ScrollPositionResolver::new(
+                &state,
+                state.begin_measure_pass(),
+                &config,
+                100,
+                500.0,
+            );
 
             let (index, offset) = resolver.apply_pending_scroll_delta();
             assert_eq!(index, 5);
@@ -190,7 +204,8 @@ mod tests {
             let state = new_lazy_list_state_with_position(50, 0.0);
             let config = LazyListMeasureConfig::default();
             // Only 10 items, but positioned at 50
-            let resolver = ScrollPositionResolver::new(&state, &config, 10, 500.0);
+            let resolver =
+                ScrollPositionResolver::new(&state, state.begin_measure_pass(), &config, 10, 500.0);
 
             let (index, _offset) = resolver.apply_pending_scroll_delta();
             assert_eq!(index, 9); // Clamped to last item
@@ -203,7 +218,13 @@ mod tests {
             let state = new_lazy_list_state();
             state.scroll_to_item(10, 15.0);
             let config = LazyListMeasureConfig::default();
-            let resolver = ScrollPositionResolver::new(&state, &config, 100, 500.0);
+            let resolver = ScrollPositionResolver::new(
+                &state,
+                state.begin_measure_pass(),
+                &config,
+                100,
+                500.0,
+            );
 
             let (index, offset) = resolver.apply_pending_scroll_delta();
             assert_eq!(index, 10);
@@ -218,7 +239,13 @@ mod tests {
             // Seed an average size so forward normalization can estimate
             state.cache_item_size(0, 100.0);
             let config = LazyListMeasureConfig::default();
-            let resolver = ScrollPositionResolver::new(&state, &config, 100, 500.0);
+            let resolver = ScrollPositionResolver::new(
+                &state,
+                state.begin_measure_pass(),
+                &config,
+                100,
+                500.0,
+            );
 
             // Large forward offset should skip items
             let (index, offset) = resolver.normalize_forward(0, 1500.0);
@@ -240,7 +267,8 @@ mod tests {
                 spacing: 8.0,
                 ..Default::default()
             };
-            let resolver = ScrollPositionResolver::new(&state, &config, 32, 260.0);
+            let resolver =
+                ScrollPositionResolver::new(&state, state.begin_measure_pass(), &config, 32, 260.0);
 
             let (index, offset) = resolver.normalize_forward_with_cache(5, 900.0);
 
@@ -255,7 +283,13 @@ mod tests {
             let state = new_lazy_list_state();
             state.cache_item_size(0, 100.0);
             let config = LazyListMeasureConfig::default();
-            let resolver = ScrollPositionResolver::new(&state, &config, 100, 500.0);
+            let resolver = ScrollPositionResolver::new(
+                &state,
+                state.begin_measure_pass(),
+                &config,
+                100,
+                500.0,
+            );
 
             // Start at index 50 with large negative offset
             let (index, offset) = resolver.normalize_backward_jump(50, -2000.0);

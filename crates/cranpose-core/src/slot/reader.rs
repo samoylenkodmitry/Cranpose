@@ -10,9 +10,8 @@ impl SlotTable {
         self.groups.capacity() * mem::size_of::<GroupRecord>()
             + self.payload_heap_bytes()
             + self.node_heap_bytes()
-            + self.anchors.capacity() * mem::size_of::<(crate::AnchorId, super::AnchorState)>()
-            + self.payload_anchor_to_location.capacity()
-                * mem::size_of::<(usize, (crate::AnchorId, usize))>()
+            + self.anchors.heap_bytes()
+            + self.payload_locations.capacity() * mem::size_of::<Option<(crate::AnchorId, usize)>>()
             + self.scope_anchor_to_group.capacity() * mem::size_of::<(ScopeId, crate::AnchorId)>()
     }
 

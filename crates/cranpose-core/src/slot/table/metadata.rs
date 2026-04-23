@@ -5,7 +5,7 @@ impl SlotTable {
         self.anchors.recompute_active(&self.groups);
     }
 
-    pub(super) fn recompute_scope_index(&mut self) {
+    pub(in crate::slot) fn recompute_scope_index(&mut self) {
         self.scope_anchor_to_group.clear();
         for group in &self.groups {
             if let Some(scope_id) = group.scope_id {

@@ -1,5 +1,5 @@
 use super::{GroupRecord, PayloadRecord, SlotTable};
-use crate::AnchorId;
+use crate::{retention::RetentionManager, AnchorId};
 use std::any::TypeId;
 use std::{mem, ops::Range};
 
@@ -190,37 +190,26 @@ impl SlotTable {
 
     pub(super) fn clear_payload_locations_for_payloads(&mut self, payloads: &[PayloadRecord]) {
         for payload in payloads {
-            self.payload_anchor_to_location.remove(&payload.anchor);
+            self.payload_locations.remove(payload.anchor);
         }
     }
 
     fn refresh_group_payload_locations(&mut self, owner: AnchorId, start: usize) {
         let group_index = self.current_group_index(owner);
-        let locations = self
-            .group_payload_records_at(group_index)
-            .iter()
-            .enumerate()
-            .skip(start)
-            .map(|(index, payload)| (payload.anchor, index))
-            .collect::<Vec<_>>();
-        for (payload_anchor, index) in locations {
-            self.payload_anchor_to_location
-                .insert(payload_anchor, (owner, index));
+        let range = self.group_payload_range_at(group_index);
+        for index in start..(range.end - range.start) {
+            let payload_anchor = self.payloads[range.start + index].anchor;
+            self.payload_locations.insert(payload_anchor, owner, index);
         }
     }
 
     pub(super) fn rebuild_payload_locations_for_group_range(&mut self, start: usize, end: usize) {
         for group_index in start..end {
             let owner = self.groups[group_index].anchor;
-            let locations = self
-                .group_payload_records_at(group_index)
-                .iter()
-                .enumerate()
-                .map(|(index, payload)| (payload.anchor, index))
-                .collect::<Vec<_>>();
-            for (payload_anchor, index) in locations {
-                self.payload_anchor_to_location
-                    .insert(payload_anchor, (owner, index));
+            let range = self.group_payload_range_at(group_index);
+            for index in 0..(range.end - range.start) {
+                let payload_anchor = self.payloads[range.start + index].anchor;
+                self.payload_locations.insert(payload_anchor, owner, index);
             }
         }
     }
@@ -280,5 +269,83 @@ impl SlotTable {
         Self::offset_detached_group_payload_starts(groups, payload_insert_index as i64);
         self.payloads
             .splice(payload_insert_index..payload_insert_index, payloads);
+    }
+
+    pub(crate) fn compact_payload_anchor_namespace(
+        &mut self,
+        retention: Option<&mut RetentionManager>,
+    ) {
+        let retained_payload_count = retention
+            .as_ref()
+            .map(|retention| {
+                retention
+                    .subtrees()
+                    .map(|subtree| subtree.payloads.len())
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+        let total_payload_count = self.payloads.len() + retained_payload_count;
+        if total_payload_count == 0 {
+            self.payload_locations.clear();
+            self.payload_locations.shrink_to_fit();
+            self.next_payload_anchor = 1;
+            return;
+        }
+
+        let max_payload_anchor = self
+            .payloads
+            .iter()
+            .map(|payload| payload.anchor)
+            .chain(
+                retention
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|retention| retention.subtrees())
+                    .flat_map(|subtree| subtree.payloads.iter().map(|payload| payload.anchor)),
+            )
+            .max()
+            .unwrap_or(0);
+        let sparse_namespace = max_payload_anchor > total_payload_count.max(256) * 4;
+        let sparse_capacity = self.payload_locations.capacity() > total_payload_count.max(256) * 8;
+        if !sparse_namespace && !sparse_capacity {
+            return;
+        }
+
+        let mut remapped = crate::collections::map::HashMap::default();
+        let mut next_anchor = 1usize;
+        for payload in &self.payloads {
+            remapped.insert(payload.anchor, next_anchor);
+            next_anchor += 1;
+        }
+        if let Some(retention) = retention.as_ref() {
+            for subtree in retention.subtrees() {
+                for payload in &subtree.payloads {
+                    remapped.insert(payload.anchor, next_anchor);
+                    next_anchor += 1;
+                }
+            }
+        }
+
+        for payload in &mut self.payloads {
+            payload.anchor = remapped
+                .get(&payload.anchor)
+                .copied()
+                .expect("active payload anchor must remap");
+        }
+        if let Some(retention) = retention {
+            for subtree in retention.subtrees_mut() {
+                for payload in &mut subtree.payloads {
+                    payload.anchor = remapped
+                        .get(&payload.anchor)
+                        .copied()
+                        .expect("retained payload anchor must remap");
+                }
+            }
+        }
+
+        self.payload_locations.clear();
+        self.payload_locations.shrink_to_fit();
+        self.rebuild_payload_locations_for_group_range(0, self.groups.len());
+        self.next_payload_anchor = total_payload_count + 1;
     }
 }

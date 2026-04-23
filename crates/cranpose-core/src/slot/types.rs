@@ -56,8 +56,13 @@ impl DetachedSubtree {
         self.root_scope_id
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn node_ids(&self) -> Vec<NodeId> {
-        self.nodes.iter().map(|node| node.id).collect()
+        self.node_ids_iter().collect()
+    }
+
+    pub(crate) fn node_ids_iter(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.nodes.iter().map(|node| node.id)
     }
 
     pub(crate) fn node_states(&self) -> impl Iterator<Item = (NodeId, NodeLifecycle)> + '_ {
@@ -75,11 +80,13 @@ impl DetachedSubtree {
         self.groups.len()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn scope_ids(&self) -> Vec<ScopeId> {
-        self.groups
-            .iter()
-            .filter_map(|group| group.scope_id)
-            .collect()
+        self.scope_ids_iter().collect()
+    }
+
+    pub(crate) fn scope_ids_iter(&self) -> impl Iterator<Item = ScopeId> + '_ {
+        self.groups.iter().filter_map(|group| group.scope_id)
     }
 
     pub(crate) fn scope_count(&self) -> usize {
@@ -124,5 +131,4 @@ pub(crate) struct FinishGroupResult {
     pub(crate) detached_children: Vec<DetachedSubtree>,
     pub(crate) structure_changed: bool,
     pub(crate) direct_nodes: Vec<NodeId>,
-    pub(crate) subtree_nodes: Vec<NodeId>,
 }

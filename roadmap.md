@@ -2,7 +2,7 @@
 
 Source of truth: `docs/cranpose_slot_table_v2_design.md`
 
-This file lists only unfinished work.
+This file tracks the current forward work and marks boxes closed only after full verification.
 
 ## Current State
 
@@ -16,15 +16,14 @@ This file lists only unfinished work.
   - `apps/desktop-demo/build-web.sh`
   - `./run_robot_test.sh --sequential`
 
-## Remaining Required Work
+## Open Required Work
 
-- [ ] Build repeatable performance baselines for keyed reorder, tab switching, subcompose scrolling, and lazy-list scroll reuse.
-- [ ] Reduce unnecessary `Vec` cloning in slot-table and retention hot paths.
-- [ ] Profile subtree insert, move, and detach costs; if `Vec::splice` remains hot after measurement, replace subtree moves with a chunked sequence without changing semantics.
+- [ ] Reduce modifier slice collection churn in lazy-list scroll-reuse hot paths.
+- [ ] Reduce layout-box and semantics allocation churn in lazy-list scroll-reuse hot paths.
 - [ ] Add retained-memory instrumentation and anchor-capacity diagnostics that are cheap enough for regular debug investigation and strong enough for regression tests.
 - [ ] Audit lazy-list and subcompose retention/reuse behavior under perf load and add specialized policy only if profiling proves the generic retained-subtree path is the bottleneck.
 
-## Optional Follow-Up Work
+## Open Follow-Up Work
 
 - [ ] Pack `GroupRecord` fields into denser arrays if profiling shows group-table bandwidth or cache pressure matters.
 - [ ] Add retained-subtree LRU limits once a real memory-budget policy exists.

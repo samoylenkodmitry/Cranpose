@@ -120,13 +120,15 @@ pub(in crate::slot) fn dispose_detached_node_now(applier: &mut dyn Applier, node
 }
 
 pub(crate) fn dispose_detached_subtree_now(applier: &mut dyn Applier, subtree: &DetachedSubtree) {
-    let nodes = subtree.node_ids();
-    let node_set = nodes
+    let node_set = subtree
+        .nodes
         .iter()
-        .copied()
+        .map(|node| node.id)
         .collect::<std::collections::HashSet<_>>();
-    let roots = nodes
-        .into_iter()
+    let roots = subtree
+        .nodes
+        .iter()
+        .map(|node| node.id)
         .filter(|id| {
             let parent = applier.get_mut(*id).ok().and_then(|node| node.parent());
             parent.is_none_or(|parent_id| !node_set.contains(&parent_id))

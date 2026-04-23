@@ -1,4 +1,4 @@
-use crate::collections::map::HashMap;
+use crate::collections::map::{HashMap, HashSet};
 use crate::remove_child_and_cleanup_now;
 use crate::retention::{RetainKey, RetentionManager};
 use crate::{
@@ -158,6 +158,22 @@ impl ComposerRuntimeState {
         snapshot.retained_scope_count = retention.scope_count;
     }
 
+    pub(crate) fn compact_table_namespaces_for_host(
+        &self,
+        host: &SlotsHost,
+        table: &mut SlotTable,
+    ) {
+        let host_key = host.storage_key();
+        let mut retention = self.retention_by_host.borrow_mut();
+        if let Some(retained) = retention.get_mut(&host_key) {
+            table.compact_anchor_namespace(Some(retained), |scope_id| self.scope_for_id(scope_id));
+            table.compact_payload_anchor_namespace(Some(retained));
+        } else {
+            table.compact_anchor_namespace(None, |scope_id| self.scope_for_id(scope_id));
+            table.compact_payload_anchor_namespace(None);
+        }
+    }
+
     pub(crate) fn clear_host(&self, host: &SlotsHost) {
         let host_key = host.storage_key();
         debug_assert!(
@@ -222,8 +238,11 @@ pub(crate) struct ParentFrame {
     pub(crate) id: NodeId,
     pub(crate) previous: ChildList,
     pub(crate) new_children: ChildList,
+    pub(crate) new_children_membership: Option<HashSet<NodeId>>,
     pub(crate) attach_mode: ParentAttachMode,
 }
+
+const LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ParentAttachMode {
@@ -278,6 +297,7 @@ impl ComposerCore {
                 id: root_id,
                 previous: ChildList::new(),
                 new_children: ChildList::new(),
+                new_children_membership: None,
                 attach_mode: ParentAttachMode::DeferredSync,
             }]
         } else {
@@ -593,10 +613,22 @@ impl Composer {
     pub fn record_subcompose_child(&self, child_id: NodeId) {
         let mut parent_stack = self.parent_stack();
         if let Some(frame) = parent_stack.last_mut() {
-            if matches!(frame.attach_mode, ParentAttachMode::DeferredSync)
-                && !frame.new_children.contains(&child_id)
-            {
-                frame.new_children.push(child_id);
+            if matches!(frame.attach_mode, ParentAttachMode::DeferredSync) {
+                if let Some(membership) = frame.new_children_membership.as_mut() {
+                    if membership.insert(child_id) {
+                        frame.new_children.push(child_id);
+                    }
+                } else if frame.new_children.len() >= LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD {
+                    let mut membership = HashSet::default();
+                    membership.reserve(frame.new_children.len() + 1);
+                    membership.extend(frame.new_children.iter().copied());
+                    if membership.insert(child_id) {
+                        frame.new_children.push(child_id);
+                    }
+                    frame.new_children_membership = Some(membership);
+                } else if !frame.new_children.contains(&child_id) {
+                    frame.new_children.push(child_id);
+                }
             }
         }
     }
@@ -653,7 +685,6 @@ impl Composer {
                     detached_children,
                     structure_changed: _structure_changed,
                     direct_nodes,
-                    subtree_nodes: _subtree_nodes,
                 } = self
                     .composer
                     .with_slot_session_mut(|slots| slots.finish_group_body());
@@ -801,16 +832,16 @@ impl Composer {
         }
     }
 
-    fn deactivate_scope_ids(&self, scope_ids: &[ScopeId]) {
-        for &scope_id in scope_ids {
+    fn deactivate_scope_ids(&self, scope_ids: impl IntoIterator<Item = ScopeId>) {
+        for scope_id in scope_ids {
             if let Some(scope) = self.scope_for_id(scope_id) {
                 scope.deactivate();
             }
         }
     }
 
-    fn dispose_scope_ids(&self, scope_ids: &[ScopeId]) {
-        for &scope_id in scope_ids {
+    fn dispose_scope_ids(&self, scope_ids: impl IntoIterator<Item = ScopeId>) {
+        for scope_id in scope_ids {
             if let Some(scope) = self.remove_scope(scope_id) {
                 scope.deactivate();
                 scope.set_group_anchor(crate::AnchorId::INVALID);
@@ -824,9 +855,8 @@ impl Composer {
         parent_scope: Option<ScopeId>,
         subtree: crate::slot::DetachedSubtree,
     ) {
-        let scope_ids = subtree.scope_ids();
-        self.deactivate_scope_ids(&scope_ids);
-        let roots = self.skipped_group_root_nodes(&subtree.node_ids());
+        self.deactivate_scope_ids(subtree.scope_ids_iter());
+        let roots = self.skipped_group_root_nodes(subtree.node_ids_iter());
         for root in roots {
             let parent_id = {
                 let mut applier = self.borrow_applier();
@@ -854,9 +884,8 @@ impl Composer {
         slots_host: &Rc<SlotsHost>,
         subtree: crate::slot::DetachedSubtree,
     ) {
-        let scope_ids = subtree.scope_ids();
-        self.dispose_scope_ids(&scope_ids);
-        let roots = self.skipped_group_root_nodes(&subtree.node_ids());
+        self.dispose_scope_ids(subtree.scope_ids_iter());
+        let roots = self.skipped_group_root_nodes(subtree.node_ids_iter());
         self.dispose_detached_nodes(roots);
         slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {
             table.invalidate_detached_subtree_anchors(&subtree);
@@ -1201,7 +1230,11 @@ impl Composer {
         Ok((result, frame.scopes))
     }
 
-    pub(crate) fn skipped_group_root_nodes(&self, nodes: &[NodeId]) -> Vec<NodeId> {
+    pub(crate) fn skipped_group_root_nodes(
+        &self,
+        nodes: impl IntoIterator<Item = NodeId>,
+    ) -> Vec<NodeId> {
+        let nodes = nodes.into_iter().collect::<Vec<_>>();
         let node_set: std::collections::HashSet<NodeId> = nodes.iter().copied().collect();
         let mut applier = self.borrow_applier();
         nodes
@@ -1216,7 +1249,7 @@ impl Composer {
 
     pub fn skip_current_group(&self) {
         let nodes = self.with_slot_session_mut(|slots| slots.nodes_in_current_group());
-        let root_nodes = self.skipped_group_root_nodes(&nodes);
+        let root_nodes = self.skipped_group_root_nodes(nodes);
         self.with_slot_session_mut(|slots| skip_slot_group(slots));
         for id in root_nodes {
             self.attach_to_parent_with_mode(id, true);

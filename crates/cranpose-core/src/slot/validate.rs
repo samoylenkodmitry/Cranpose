@@ -228,10 +228,7 @@ impl SlotTable {
                     });
                 }
                 let expected_location = (group.anchor, payload_index);
-                let actual = self
-                    .payload_anchor_to_location
-                    .get(&payload.anchor)
-                    .copied();
+                let actual = self.payload_locations.get(payload.anchor);
                 if actual != Some(expected_location) {
                     return Err(SlotInvariantError::PayloadLocationMismatch {
                         payload_anchor: payload.anchor,
@@ -304,10 +301,10 @@ impl SlotTable {
             });
         }
 
-        if self.payload_anchor_to_location.len() != payload_count {
+        if self.payload_locations.len() != payload_count {
             return Err(SlotInvariantError::PayloadAnchorCountMismatch {
                 expected: payload_count,
-                actual: self.payload_anchor_to_location.len(),
+                actual: self.payload_locations.len(),
             });
         }
 
@@ -318,7 +315,7 @@ impl SlotTable {
             });
         }
 
-        for (&payload_anchor, &(owner, payload_index)) in &self.payload_anchor_to_location {
+        for (payload_anchor, (owner, payload_index)) in self.payload_locations.iter() {
             let Some(group_index) = self.anchors.active_index(owner) else {
                 return Err(SlotInvariantError::PayloadLocationMismatch {
                     payload_anchor,

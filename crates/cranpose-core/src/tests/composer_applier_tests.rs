@@ -248,6 +248,52 @@ fn non_reused_parent_with_existing_children_still_defers_to_sync_children() {
 }
 
 #[test]
+fn record_subcompose_child_deduplicates_large_deferred_sync_frames() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+
+    let parent_id = applier.create(Box::new(RecordingNode::default()));
+    let stale_child_id = applier.create(Box::new(RecordingNode::default()));
+    applier
+        .with_node(parent_id, |node: &mut RecordingNode| {
+            node.insert_child(stale_child_id);
+        })
+        .expect("parent exists");
+    applier
+        .with_node(stale_child_id, |node: &mut RecordingNode| {
+            node.on_attached_to_parent(parent_id);
+        })
+        .expect("stale child exists");
+
+    let child_ids: Vec<NodeId> = (0..24)
+        .map(|_| applier.create(Box::new(RecordingNode::default())))
+        .collect();
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+
+    composer.core.last_node_reused.set(Some(true));
+    composer.push_parent(parent_id);
+    for &child_id in &child_ids {
+        composer.record_subcompose_child(child_id);
+    }
+    for &child_id in child_ids.iter().rev() {
+        composer.record_subcompose_child(child_id);
+    }
+    composer.pop_parent();
+
+    let commands = composer.take_commands();
+    assert_eq!(commands.attach_children.len(), 0);
+    assert_eq!(commands.sync_children.len(), 1);
+    assert_eq!(commands.sync_children[0].parent_id, parent_id);
+    assert_eq!(commands.sync_child_ids.as_slice(), child_ids.as_slice());
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
 fn sync_children_reorders_small_child_lists_without_regressing_behavior() {
     let mut applier = test_applier();
 
@@ -355,7 +401,7 @@ fn skipped_group_root_nodes_only_considers_direct_parent_membership() {
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
 
-    let roots = composer.skipped_group_root_nodes(&[grandparent, child]);
+    let roots = composer.skipped_group_root_nodes([grandparent, child]);
     assert_eq!(
         roots,
         vec![grandparent, child],

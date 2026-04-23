@@ -27,6 +27,16 @@ fn lazy_measure_telemetry_enabled() -> bool {
 }
 
 const MAX_PENDING_SCROLL_DELTA: f32 = 2000.0;
+const ITEM_SIZE_CACHE_CAPACITY: usize = 100;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LazyListMeasureStateSnapshot {
+    pub(crate) first_visible_item_index: usize,
+    pub(crate) first_visible_item_scroll_offset: f32,
+    pub(crate) pending_scroll_delta: f32,
+    pub(crate) pending_scroll_to: Option<(usize, f32)>,
+    pub(crate) average_item_size: f32,
+}
 
 /// Statistics about lazy layout item lifecycle.
 ///
@@ -126,11 +136,11 @@ impl LazyListScrollPosition {
         });
 
         // Only update reactive state if value changed (avoids recomposition loops)
-        let old_index = self.index.get();
+        let old_index = self.index.get_non_reactive();
         if old_index != first_visible_index {
             self.index.set(first_visible_index);
         }
-        let old_offset = self.scroll_offset.get();
+        let old_offset = self.scroll_offset.get_non_reactive();
         if (old_offset - first_visible_scroll_offset).abs() > 0.001 {
             self.scroll_offset.set(first_visible_scroll_offset);
         }
@@ -147,10 +157,10 @@ impl LazyListScrollPosition {
             return;
         }
         // Update reactive state
-        if self.index.get() != index {
+        if self.index.get_non_reactive() != index {
             self.index.set(index);
         }
-        if (self.scroll_offset.get() - scroll_offset).abs() > 0.001 {
+        if (self.scroll_offset.get_non_reactive() - scroll_offset).abs() > 0.001 {
             self.scroll_offset.set(scroll_offset);
         }
         // Clear key and update nearest range
@@ -289,7 +299,6 @@ struct LazyListStateInner {
 
     /// Cache of recently measured item sizes (index -> main_axis_size).
     item_size_cache: std::collections::HashMap<usize, f32>,
-    /// LRU order tracking - front is oldest, back is newest.
     item_size_lru: std::collections::VecDeque<usize>,
 
     /// Running average of measured item sizes for estimation.
@@ -617,9 +626,13 @@ impl LazyListState {
             .with(|rc| rc.borrow().layout_info.total_items_count > 0);
         let pushing_forward = delta < -0.001;
         let pushing_backward = delta > 0.001;
+        let can_scroll_forward = self.can_scroll_forward_state.is_alive()
+            && self.can_scroll_forward_state.get_non_reactive();
+        let can_scroll_backward = self.can_scroll_backward_state.is_alive()
+            && self.can_scroll_backward_state.get_non_reactive();
         let blocked_by_bounds = has_scroll_bounds
-            && ((pushing_forward && !self.can_scroll_forward())
-                || (pushing_backward && !self.can_scroll_backward()));
+            && ((pushing_forward && !can_scroll_forward)
+                || (pushing_backward && !can_scroll_backward));
 
         if blocked_by_bounds {
             let should_invalidate = self.inner.with(|rc| {
@@ -685,20 +698,6 @@ impl LazyListState {
         delta // Will be adjusted during layout
     }
 
-    /// Consumes and returns the pending scroll delta.
-    ///
-    /// Called by the layout during measure.
-    pub(crate) fn consume_scroll_delta(&self) -> f32 {
-        self.inner
-            .try_with(|rc| {
-                let mut inner = rc.borrow_mut();
-                let delta = inner.scroll_to_be_consumed;
-                inner.scroll_to_be_consumed = 0.0;
-                delta
-            })
-            .unwrap_or(0.0)
-    }
-
     /// Peeks at the pending scroll delta without consuming it.
     ///
     /// Used for direction inference before measurement consumes the delta.
@@ -711,66 +710,99 @@ impl LazyListState {
             .unwrap_or(0.0)
     }
 
-    /// Consumes and returns the pending scroll-to-item request.
-    ///
-    /// Called by the layout during measure.
-    pub(crate) fn consume_scroll_to_index(&self) -> Option<(usize, f32)> {
-        self.inner
-            .try_with(|rc| rc.borrow_mut().pending_scroll_to_index.take())
-            .flatten()
+    pub(crate) fn begin_measure_pass(&self) -> LazyListMeasureStateSnapshot {
+        let (pending_scroll_delta, pending_scroll_to, average_item_size) = self
+            .inner
+            .try_with(|rc| {
+                let mut inner = rc.borrow_mut();
+                let pending_scroll_delta = inner.scroll_to_be_consumed;
+                inner.scroll_to_be_consumed = 0.0;
+                let pending_scroll_to = inner.pending_scroll_to_index.take();
+                (
+                    pending_scroll_delta,
+                    pending_scroll_to,
+                    inner.average_item_size,
+                )
+            })
+            .unwrap_or((0.0, None, super::DEFAULT_ITEM_SIZE_ESTIMATE));
+
+        LazyListMeasureStateSnapshot {
+            first_visible_item_index: self.scroll_position.current_index(),
+            first_visible_item_scroll_offset: self.scroll_position.current_scroll_offset(),
+            pending_scroll_delta,
+            pending_scroll_to,
+            average_item_size,
+        }
+    }
+
+    fn record_item_size_sample(inner: &mut LazyListStateInner, size: f32) {
+        inner.total_measured_items += 1;
+        let n = inner.total_measured_items as f32;
+        inner.average_item_size = inner.average_item_size * ((n - 1.0) / n) + size / n;
+    }
+
+    fn insert_item_size(inner: &mut LazyListStateInner, index: usize, size: f32) -> bool {
+        use std::collections::hash_map::Entry;
+
+        if let Entry::Occupied(mut entry) = inner.item_size_cache.entry(index) {
+            entry.insert(size);
+            if let Some(pos) = inner
+                .item_size_lru
+                .iter()
+                .position(|&cached| cached == index)
+            {
+                inner.item_size_lru.remove(pos);
+            }
+            inner.item_size_lru.push_back(index);
+            return false;
+        }
+
+        while inner.item_size_cache.len() >= ITEM_SIZE_CACHE_CAPACITY {
+            if let Some(oldest) = inner.item_size_lru.pop_front() {
+                if inner.item_size_cache.remove(&oldest).is_some() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        inner.item_size_cache.insert(index, size);
+        inner.item_size_lru.push_back(index);
+        true
     }
 
     /// Caches the measured size of an item for scroll estimation.
-    ///
-    /// Uses a HashMap + VecDeque LRU pattern with O(1) insertion and eviction.
-    /// Re-measurement of existing items (uncommon during normal scrolling)
-    /// requires O(n) VecDeque position lookup, but the cache is small (100 items).
-    ///
-    /// # Performance Note
-    /// If profiling shows this as a bottleneck, consider using the `lru` crate
-    /// for O(1) update-in-place operations, or a linked hash map.
     pub fn cache_item_size(&self, index: usize, size: f32) {
-        use std::collections::hash_map::Entry;
         if !self.inner.is_alive() {
             return;
         }
         self.inner.with(|rc| {
             let mut inner = rc.borrow_mut();
-            const MAX_CACHE_SIZE: usize = 100;
-
-            // Check if already in cache (update existing)
-            if let Entry::Occupied(mut entry) = inner.item_size_cache.entry(index) {
-                // Update value and move to back of LRU
-                entry.insert(size);
-                // Remove old position from LRU (O(n) but rare - only on re-measurement)
-                if let Some(pos) = inner.item_size_lru.iter().position(|&k| k == index) {
-                    inner.item_size_lru.remove(pos);
-                }
-                inner.item_size_lru.push_back(index);
-                return;
+            if Self::insert_item_size(&mut inner, index, size) {
+                Self::record_item_size_sample(&mut inner, size);
             }
-
-            // Evict oldest entries until under limit - O(1) per eviction
-            while inner.item_size_cache.len() >= MAX_CACHE_SIZE {
-                if let Some(oldest) = inner.item_size_lru.pop_front() {
-                    // Only remove if still in cache (may have been updated)
-                    if inner.item_size_cache.remove(&oldest).is_some() {
-                        break; // Removed one entry, now under limit
-                    }
-                } else {
-                    break; // LRU empty, shouldn't happen
-                }
-            }
-
-            // Add new entry
-            inner.item_size_cache.insert(index, size);
-            inner.item_size_lru.push_back(index);
-
-            // Update running average
-            inner.total_measured_items += 1;
-            let n = inner.total_measured_items as f32;
-            inner.average_item_size = inner.average_item_size * ((n - 1.0) / n) + size / n;
         });
+    }
+
+    /// Caches multiple measured item sizes in one pass and returns the updated average.
+    pub fn cache_item_sizes<I>(&self, sizes: I) -> f32
+    where
+        I: IntoIterator<Item = (usize, f32)>,
+    {
+        if !self.inner.is_alive() {
+            return super::DEFAULT_ITEM_SIZE_ESTIMATE;
+        }
+
+        self.inner.with(|rc| {
+            let mut inner = rc.borrow_mut();
+            for (index, size) in sizes {
+                if Self::insert_item_size(&mut inner, index, size) {
+                    Self::record_item_size_sample(&mut inner, size);
+                }
+            }
+            inner.average_item_size
+        })
     }
 
     /// Gets a cached item size if available.
@@ -1112,7 +1144,9 @@ pub mod test_helpers {
 
 #[cfg(test)]
 mod tests {
-    use super::test_helpers::{new_lazy_list_state, with_test_runtime};
+    use super::test_helpers::{
+        new_lazy_list_state, new_lazy_list_state_with_position, with_test_runtime,
+    };
     use super::{LazyListLayoutInfo, LazyListState};
     use cranpose_core::{location_key, Composition, MemoryApplier};
     use std::cell::Cell;
@@ -1140,8 +1174,9 @@ mod tests {
             state.dispatch_scroll_delta(-8.0);
 
             assert!((state.peek_scroll_delta() + 20.0).abs() < 0.001);
-            assert!((state.consume_scroll_delta() + 20.0).abs() < 0.001);
-            assert_eq!(state.consume_scroll_delta(), 0.0);
+            let snapshot = state.begin_measure_pass();
+            assert!((snapshot.pending_scroll_delta + 20.0).abs() < 0.001);
+            assert_eq!(state.begin_measure_pass().pending_scroll_delta, 0.0);
         });
     }
 
@@ -1158,8 +1193,9 @@ mod tests {
             state.dispatch_scroll_delta(18.0);
 
             assert!((state.peek_scroll_delta() - 18.0).abs() < 0.001);
-            assert!((state.consume_scroll_delta() - 18.0).abs() < 0.001);
-            assert_eq!(state.consume_scroll_delta(), 0.0);
+            let snapshot = state.begin_measure_pass();
+            assert!((snapshot.pending_scroll_delta - 18.0).abs() < 0.001);
+            assert_eq!(state.begin_measure_pass().pending_scroll_delta, 0.0);
         });
     }
 
@@ -1200,6 +1236,59 @@ mod tests {
             // Opposite-direction input changes pending and should invalidate again.
             state.dispatch_scroll_delta(100.0);
             assert_eq!(invalidations.get(), 2);
+        });
+    }
+
+    #[test]
+    fn begin_measure_pass_takes_coherent_snapshot_and_consumes_pending_inputs() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state_with_position(3, 12.0);
+            state.dispatch_scroll_delta(-20.0);
+            state.inner.with(|rc| {
+                rc.borrow_mut().pending_scroll_to_index = Some((8, 4.0));
+            });
+
+            let snapshot = state.begin_measure_pass();
+
+            assert_eq!(snapshot.first_visible_item_index, 3);
+            assert!((snapshot.first_visible_item_scroll_offset - 12.0).abs() < 0.001);
+            assert!((snapshot.pending_scroll_delta + 20.0).abs() < 0.001);
+            assert_eq!(snapshot.pending_scroll_to, Some((8, 4.0)));
+            assert_eq!(state.peek_scroll_delta(), 0.0);
+            assert_eq!(state.begin_measure_pass().pending_scroll_to, None);
+        });
+    }
+
+    #[test]
+    fn item_size_cache_refresh_keeps_recent_entry_and_evicts_oldest_live_entry() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            for index in 0..super::ITEM_SIZE_CACHE_CAPACITY {
+                state.cache_item_size(index, index as f32 + 10.0);
+            }
+
+            state.cache_item_size(0, 999.0);
+            state.cache_item_size(super::ITEM_SIZE_CACHE_CAPACITY, 123.0);
+
+            assert_eq!(state.get_cached_size(0), Some(999.0));
+            assert_eq!(state.get_cached_size(1), None);
+            assert_eq!(
+                state.get_cached_size(super::ITEM_SIZE_CACHE_CAPACITY),
+                Some(123.0),
+            );
+        });
+    }
+
+    #[test]
+    fn cache_item_sizes_updates_average_only_for_new_entries() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+
+            let average = state.cache_item_sizes([(0, 10.0), (1, 20.0), (0, 12.0)]);
+
+            assert_eq!(state.get_cached_size(0), Some(12.0));
+            assert_eq!(state.get_cached_size(1), Some(20.0));
+            assert!((average - 15.0).abs() < 0.001);
         });
     }
 

@@ -72,7 +72,6 @@ impl SlotTable {
                     detached_children: Vec::new(),
                     structure_changed: false,
                     direct_nodes: Vec::new(),
-                    subtree_nodes: Vec::new(),
                 };
             }
 
@@ -102,11 +101,6 @@ impl SlotTable {
         }
 
         let detached_children = self.detach_unvisited_children_internal(state);
-
-        let subtree_nodes = detached_children
-            .iter()
-            .flat_map(DetachedSubtree::node_ids)
-            .collect::<Vec<_>>();
         let structure_changed = !matches!(start_kind, GroupStartKind::Reused)
             || !direct_nodes.is_empty()
             || !detached_children.is_empty();
@@ -115,7 +109,6 @@ impl SlotTable {
             detached_children,
             structure_changed,
             direct_nodes,
-            subtree_nodes,
         }
     }
 }
