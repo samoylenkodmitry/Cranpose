@@ -32,7 +32,7 @@ This file tracks the current forward work and marks boxes closed only after full
 
 ## Follow-Up Work
 
-- [ ] Remove full-table `recompute_all_metadata()` from `restore_subtree()` and make restore update anchors, scopes, and spans incrementally; current restore cost scales with the entire table.
+- [x] Remove full-table `recompute_all_metadata()` from `restore_subtree()` and make restore update anchors, scopes, and spans incrementally; restore now updates active anchors, scope entries, ancestor spans, and payload locations incrementally.
 - [x] Deduplicate detached-node disposal between `Composer::dispose_detached_nodes` and `slot/detach.rs::dispose_detached_node_now` so node cleanup semantics live in one place.
 - [x] Remove or hide test-only helpers from production slot types, starting with `DetachedSubtree::node_ids()`; `#[allow(dead_code)]` on production slot APIs is a smell.
 - [x] Replace aggregated `slots_len`/`slots_cap` counters in `SlotTableDebugStats` and leak tooling with V2-native per-table counters (`group_count`, `payload_count`, `node_count`, and related capacities).
@@ -44,8 +44,5 @@ This file tracks the current forward work and marks boxes closed only after full
 
 ## Next Execution Order
 
-1. Create a checkpoint commit for the verified writer-frame slice before changing `restore_subtree()`; the tree is green and the next step rewrites core slot restore invariants.
-2. Replace `restore_subtree()` global `recompute_all_metadata()` with incremental updates for active anchor indices, scope index entries, ancestor subtree spans, payload starts, node starts, and payload-location bookkeeping.
-3. Add focused restore regression tests that prove retained subtree restore stays exact across sibling inserts, sibling moves, and scope reactivation without any full-table metadata recompute.
-4. Add retained-memory instrumentation and cheap anchor-capacity diagnostics so further retention and restore work can be profiled without ad hoc debugging.
-5. Profile lazy-list modifier/layout/semantics churn after the restore rewrite and only add specialized reuse policy if measurements show the generic retained-subtree path is still the bottleneck.
+1. Add retained-memory instrumentation and cheap anchor-capacity diagnostics so further retention and restore work can be profiled without ad hoc debugging.
+2. Profile lazy-list modifier/layout/semantics churn after the restore rewrite and only add specialized reuse policy if measurements show the generic retained-subtree path is still the bottleneck.

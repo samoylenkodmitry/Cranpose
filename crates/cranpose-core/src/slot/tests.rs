@@ -657,6 +657,107 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
 }
 
 #[test]
+fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexes() {
+    const PARENT_KEY: Key = 320;
+    const CHILD_A_KEY: Key = 321;
+    const CHILD_B_KEY: Key = 322;
+    const CHILD_C_KEY: Key = 323;
+    const CHILD_B_SCOPE: ScopeId = 324;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (parent_anchor, child_a_anchor, child_b_anchor, child_c_anchor, child_b_slot) = harness
+        .session(SlotPassMode::Compose, |session| {
+            let parent = begin_unkeyed(session, PARENT_KEY, None);
+
+            let child_a = begin_unkeyed(session, CHILD_A_KEY, None);
+            let child_a_result = session.finish_group_body();
+            assert!(child_a_result.detached_children.is_empty());
+            session.end_group();
+
+            let child_b = begin_unkeyed(session, CHILD_B_KEY, None);
+            session.set_group_scope(child_b.group, CHILD_B_SCOPE);
+            let child_b_slot = session.value_slot(|| 80_i32);
+            let child_b_result = session.finish_group_body();
+            assert!(child_b_result.detached_children.is_empty());
+            session.end_group();
+
+            let child_c = begin_unkeyed(session, CHILD_C_KEY, None);
+            let child_c_result = session.finish_group_body();
+            assert!(child_c_result.detached_children.is_empty());
+            session.end_group();
+
+            let parent_result = session.finish_group_body();
+            assert!(parent_result.detached_children.is_empty());
+            session.end_group();
+
+            (
+                parent.anchor,
+                child_a.anchor,
+                child_b.anchor,
+                child_c.anchor,
+                child_b_slot,
+            )
+        });
+    harness.finish_pass(SlotPassMode::Compose);
+    harness.table.write_value(child_b_slot, 88_i32);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        begin_unkeyed(session, CHILD_A_KEY, None);
+        let child_a_result = session.finish_group_body();
+        assert!(child_a_result.detached_children.is_empty());
+        session.end_group();
+
+        begin_unkeyed(session, CHILD_C_KEY, None);
+        let child_c_result = session.finish_group_body();
+        assert!(child_c_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(parent_result.detached_children.len(), 1);
+        parent_result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    assert_eq!(
+        harness.table.anchors.state(child_b_anchor),
+        Some(AnchorState::Detached)
+    );
+    assert!(
+        harness.table.group_for_scope(CHILD_B_SCOPE).is_none(),
+        "detached scopes must leave the active scope index"
+    );
+
+    let insert_index = harness.table.current_group_index(child_c_anchor);
+    let restored_anchor =
+        harness
+            .table
+            .restore_subtree(insert_index, parent_anchor, detached.root_key(), detached);
+
+    assert_eq!(restored_anchor, child_b_anchor);
+    assert_eq!(
+        harness.table.anchors.state(restored_anchor),
+        Some(AnchorState::Active(2))
+    );
+    assert_eq!(harness.table.groups[1].anchor, child_a_anchor);
+    assert_eq!(harness.table.groups[2].anchor, child_b_anchor);
+    assert_eq!(harness.table.groups[3].anchor, child_c_anchor);
+
+    let restored_group = harness
+        .table
+        .group_for_scope(CHILD_B_SCOPE)
+        .expect("restored child scope must become active again");
+    assert_eq!(harness.table.group_anchor(restored_group), child_b_anchor);
+    assert_eq!(*harness.table.read_value::<i32>(child_b_slot), 88);
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
 fn removing_conditional_child_returns_detached_subtree() {
     const PARENT_KEY: Key = 350;
     const CHILD_KEY: Key = 351;
@@ -1086,6 +1187,141 @@ fn keyed_sibling_search_never_matches_a_grandchild() {
 
     assert_eq!(moved_anchor, direct_anchor);
     assert_eq!(reused_grandchild_anchor, grandchild_anchor);
+}
+
+#[test]
+fn restored_keyed_sibling_can_move_on_a_later_pass() {
+    const PARENT_KEY: Key = 440;
+    const STATIC_KEY: Key = 441;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (second_slot, second_anchor) = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        let second = begin_keyed(session, STATIC_KEY, 2, None);
+        let second_slot = session.value_slot(|| 20_i32);
+        let second_result = session.finish_group_body();
+        assert!(second_result.detached_children.is_empty());
+        session.end_group();
+
+        let third = begin_keyed(session, STATIC_KEY, 3, None);
+        let third_result = session.finish_group_body();
+        assert!(third_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        assert_eq!(first.kind, GroupStartKind::Inserted);
+        assert_eq!(third.kind, GroupStartKind::Inserted);
+        (second_slot, second.anchor)
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+    harness.table.write_value(second_slot, 202_i32);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        let third = begin_keyed(session, STATIC_KEY, 3, None);
+        let third_result = session.finish_group_body();
+        assert!(third_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        session.end_group();
+
+        assert_eq!(first.kind, GroupStartKind::Reused);
+        assert_eq!(third.kind, GroupStartKind::Moved);
+        assert_eq!(parent_result.detached_children.len(), 1);
+        parent_result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (restored_kind, restored_anchor, restored_slot) =
+        harness.session(SlotPassMode::Compose, move |session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+
+            let first = begin_keyed(session, STATIC_KEY, 1, None);
+            let first_result = session.finish_group_body();
+            assert!(first_result.detached_children.is_empty());
+            session.end_group();
+
+            let second = begin_keyed(session, STATIC_KEY, 2, Some(detached));
+            let second_slot = session.value_slot(|| 0_i32);
+            let second_result = session.finish_group_body();
+            assert!(second_result.detached_children.is_empty());
+            session.end_group();
+
+            let third = begin_keyed(session, STATIC_KEY, 3, None);
+            let third_result = session.finish_group_body();
+            assert!(third_result.detached_children.is_empty());
+            session.end_group();
+
+            let parent_result = session.finish_group_body();
+            assert!(parent_result.detached_children.is_empty());
+            session.end_group();
+
+            assert_eq!(first.kind, GroupStartKind::Reused);
+            assert_eq!(third.kind, GroupStartKind::Reused);
+            (second.kind, second.anchor, second_slot)
+        });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    assert_eq!(restored_kind, GroupStartKind::Restored);
+    assert_eq!(restored_anchor, second_anchor);
+    assert_eq!(restored_slot, second_slot);
+    assert_eq!(*harness.table.read_value::<i32>(restored_slot), 202);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (moved_kind, moved_anchor, moved_slot) =
+        harness.session(SlotPassMode::Compose, |session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+
+            let second = begin_keyed(session, STATIC_KEY, 2, None);
+            let second_slot = session.value_slot(|| 0_i32);
+            let second_result = session.finish_group_body();
+            assert!(second_result.detached_children.is_empty());
+            session.end_group();
+
+            let first = begin_keyed(session, STATIC_KEY, 1, None);
+            let first_result = session.finish_group_body();
+            assert!(first_result.detached_children.is_empty());
+            session.end_group();
+
+            let third = begin_keyed(session, STATIC_KEY, 3, None);
+            let third_result = session.finish_group_body();
+            assert!(third_result.detached_children.is_empty());
+            session.end_group();
+
+            let parent_result = session.finish_group_body();
+            assert!(parent_result.detached_children.is_empty());
+            session.end_group();
+
+            assert_eq!(first.kind, GroupStartKind::Reused);
+            assert_eq!(third.kind, GroupStartKind::Reused);
+            (second.kind, second.anchor, second_slot)
+        });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    assert_eq!(moved_kind, GroupStartKind::Moved);
+    assert_eq!(moved_anchor, second_anchor);
+    assert_eq!(moved_slot, second_slot);
+    assert_eq!(*harness.table.read_value::<i32>(moved_slot), 202);
 }
 
 #[test]

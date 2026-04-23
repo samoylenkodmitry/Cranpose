@@ -1,10 +1,8 @@
 use super::super::GroupRecord;
 use super::SlotTable;
-impl SlotTable {
-    pub(super) fn recompute_group_indexes(&mut self) {
-        self.anchors.recompute_active(&self.groups);
-    }
+use crate::{AnchorId, ScopeId};
 
+impl SlotTable {
     pub(in crate::slot) fn recompute_scope_index(&mut self) {
         self.scope_anchor_to_group.clear();
         for group in &self.groups {
@@ -12,35 +10,6 @@ impl SlotTable {
                 self.scope_anchor_to_group.insert(scope_id, group.anchor);
             }
         }
-    }
-
-    pub(super) fn recompute_group_spans(&mut self) {
-        for group_index in 0..self.groups.len() {
-            let node_count = self.group_node_len_at(group_index) as u32;
-            let group = &mut self.groups[group_index];
-            group.subtree_len = 1;
-            group.subtree_node_count = node_count;
-        }
-
-        for index in (0..self.groups.len()).rev() {
-            let parent_anchor = self.groups[index].parent_anchor;
-            if !parent_anchor.is_valid() {
-                continue;
-            }
-            let Some(parent_index) = self.anchors.active_index(parent_anchor) else {
-                continue;
-            };
-            let subtree_len = self.groups[index].subtree_len;
-            let subtree_nodes = self.groups[index].subtree_node_count;
-            self.groups[parent_index].subtree_len += subtree_len;
-            self.groups[parent_index].subtree_node_count += subtree_nodes;
-        }
-    }
-
-    pub(in crate::slot) fn recompute_all_metadata(&mut self) {
-        self.recompute_group_indexes();
-        self.recompute_scope_index();
-        self.recompute_group_spans();
     }
 
     pub(in crate::slot) fn refresh_group_indexes_from(&mut self, start: usize) {
@@ -58,6 +27,21 @@ impl SlotTable {
             if let Some(scope_id) = group.scope_id {
                 self.scope_anchor_to_group.remove(&scope_id);
             }
+        }
+    }
+
+    pub(in crate::slot) fn restore_scope_index_entries(
+        &mut self,
+        entries: impl IntoIterator<Item = (ScopeId, AnchorId)>,
+    ) {
+        for (scope_id, group_anchor) in entries {
+            if let Some(existing_anchor) = self.scope_anchor_to_group.get(&scope_id).copied() {
+                assert_eq!(
+                    existing_anchor, group_anchor,
+                    "restored scope id must resolve to a single active group"
+                );
+            }
+            self.scope_anchor_to_group.insert(scope_id, group_anchor);
         }
     }
 }

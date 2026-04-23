@@ -83,11 +83,36 @@ impl SlotTable {
         key: GroupKey,
         mut subtree: DetachedSubtree,
     ) -> AnchorId {
+        let restored_group_count = subtree.groups.len();
+        let restored_subtree_len = subtree
+            .groups
+            .first()
+            .map(|group| group.subtree_len as i32)
+            .expect("detached subtree must contain a root group");
+        let restored_subtree_node_count = subtree
+            .groups
+            .first()
+            .map(|group| group.subtree_node_count as i32)
+            .expect("detached subtree must contain a root group");
+        debug_assert_eq!(
+            restored_subtree_len as usize, restored_group_count,
+            "detached subtree root span must match the stored group slice"
+        );
+        debug_assert_eq!(
+            restored_subtree_node_count as usize,
+            subtree.nodes.len(),
+            "detached subtree root node count must match the stored node slice"
+        );
         let root_anchor = subtree
             .groups
             .first()
             .map(|group| group.anchor)
             .expect("detached subtree must contain a root group");
+        let restored_scope_entries = subtree
+            .groups
+            .iter()
+            .filter_map(|group| group.scope_id.map(|scope_id| (scope_id, group.anchor)))
+            .collect::<Vec<_>>();
 
         let depth_delta = if parent_anchor.is_valid() {
             self.current_group(parent_anchor).depth + 1
@@ -102,14 +127,22 @@ impl SlotTable {
             group.depth = ((group.depth as i32) + depth_delta) as u32;
         }
 
-        let subtree_len = subtree.groups.len();
         subtree.mark_nodes_active();
         self.restore_payloads_for_groups(insert_index, &mut subtree.groups, subtree.payloads);
         self.restore_nodes_for_groups(insert_index, &mut subtree.groups, subtree.nodes);
         self.groups
             .splice(insert_index..insert_index, subtree.groups);
-        self.recompute_all_metadata();
-        self.rebuild_payload_locations_for_group_range(insert_index, insert_index + subtree_len);
+        self.refresh_group_indexes_from(insert_index);
+        self.restore_scope_index_entries(restored_scope_entries);
+        self.adjust_ancestor_group_spans(
+            parent_anchor,
+            restored_subtree_len,
+            restored_subtree_node_count,
+        );
+        self.rebuild_payload_locations_for_group_range(
+            insert_index,
+            insert_index + restored_group_count,
+        );
         root_anchor
     }
 

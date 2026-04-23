@@ -117,12 +117,6 @@ impl AnchorRegistry {
         }
     }
 
-    pub(super) fn recompute_active(&mut self, groups: &[GroupRecord]) {
-        for (group_index, group) in groups.iter().enumerate() {
-            self.set_active(group.anchor, group_index);
-        }
-    }
-
     pub(super) fn mark_detached_groups(&mut self, groups: &[GroupRecord]) {
         for group in groups {
             self.mark_detached(group.anchor);
