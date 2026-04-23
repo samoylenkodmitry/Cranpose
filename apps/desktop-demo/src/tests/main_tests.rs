@@ -257,7 +257,7 @@ fn async_runtime_test_content_does_not_grow_slots_across_cycle() {
         .expect("initial render");
     drain_all(&mut composition).expect("initial drain");
 
-    let baseline_slots = composition.debug_dump_all_slots().len();
+    let baseline_slots = composition.debug_dump_slot_entries().len();
     let mut time = 0u64;
     let mut reached_upper_peak = false;
     let mut returned_to_zero = false;
@@ -279,7 +279,7 @@ fn async_runtime_test_content_does_not_grow_slots_across_cycle() {
         }
     }
 
-    let final_slots = composition.debug_dump_all_slots();
+    let final_slots = composition.debug_dump_slot_entries();
     assert!(
         final_slots.len() <= baseline_slots + 64,
         "async runtime test content leaked slots: baseline={} final={} slots={final_slots:#?}",
@@ -307,7 +307,7 @@ fn scrollable_async_runtime_does_not_grow_slots_across_cycle() {
         .expect("initial render");
     drain_all(&mut composition).expect("initial drain");
 
-    let baseline_slots = composition.debug_dump_all_slots().len();
+    let baseline_slots = composition.debug_dump_slot_entries().len();
     let mut time = 0u64;
     let mut reached_upper_peak = false;
     let mut returned_to_zero = false;
@@ -329,7 +329,7 @@ fn scrollable_async_runtime_does_not_grow_slots_across_cycle() {
         }
     }
 
-    let final_slots = composition.debug_dump_all_slots();
+    let final_slots = composition.debug_dump_slot_entries();
     assert!(
         final_slots.len() <= baseline_slots + 64,
         "scrollable async runtime leaked slots: baseline={} final={} slots={final_slots:#?}",
@@ -351,7 +351,7 @@ fn combined_app_starting_on_async_does_not_grow_slots_across_cycle() {
     drain_all(&mut composition).expect("initial drain");
 
     let runtime = composition.runtime_handle();
-    let baseline_slots = composition.debug_dump_all_slots().len();
+    let baseline_slots = composition.debug_dump_slot_entries().len();
     let mut time = 0u64;
 
     for _ in 0..240 {
@@ -360,7 +360,7 @@ fn combined_app_starting_on_async_does_not_grow_slots_across_cycle() {
         drain_all(&mut composition).expect("drain after frame");
     }
 
-    let final_slots = composition.debug_dump_all_slots();
+    let final_slots = composition.debug_dump_slot_entries();
     assert!(
         final_slots.len() <= baseline_slots + 64,
         "combined app starting on async leaked slots: baseline={} final={} slots={final_slots:#?}",

@@ -198,7 +198,7 @@ fn infinite_transition_conditional_cycle_does_not_leak_slots() {
 
     drain_all(&mut composition).expect("initial drain");
 
-    let baseline_slots = composition.debug_dump_all_slots().len();
+    let baseline_slots = composition.debug_dump_slot_entries().len();
     let mut time = 0u64;
     for _ in 0..240 {
         time += 16_666_667;
@@ -206,7 +206,7 @@ fn infinite_transition_conditional_cycle_does_not_leak_slots() {
         drain_all(&mut composition).expect("drain after frame");
     }
 
-    let final_slots = composition.debug_dump_all_slots();
+    let final_slots = composition.debug_dump_slot_entries();
     assert!(
         final_slots.len() <= baseline_slots + 16,
         "infinite transition conditional cycle leaked slots: baseline={} final={} slots={final_slots:#?}",

@@ -103,17 +103,8 @@ fn assert_composition_contains_text(
     );
 }
 
-fn live_slot_count(slots: &[(usize, String)]) -> usize {
-    slots
-        .iter()
-        .filter(|(_, desc)| {
-            *desc != "Gap"
-                && !desc.starts_with("Gap(")
-                && !desc.starts_with("HiddenGroup(")
-                && *desc != "HiddenValue"
-                && !desc.starts_with("HiddenNode(")
-        })
-        .count()
+fn live_slot_count(slots: &[cranpose_core::SlotDebugEntry]) -> usize {
+    slots.len()
 }
 
 fn async_progress_percent(texts: &[String]) -> Option<i32> {
@@ -551,7 +542,7 @@ fn animations_tab_keeps_tree_after_frame_recomposition() {
         drain_all(&mut composition).expect("advance animation frame and settle");
     }
 
-    let after_slots = composition.debug_dump_all_slots();
+    let after_slots = composition.debug_dump_slot_entries();
     let after_groups = composition.debug_dump_slot_table_groups();
     assert!(
         after_groups.len() >= before_groups.len().saturating_sub(8),
@@ -744,10 +735,10 @@ fn async_runtime_to_other_tabs_after_second_forward_pass_preserves_content() {
     for (target_tab, marker) in tab_markers {
         set_active_tab(DemoTab::Async);
         drain_all(&mut composition).expect("switch to async runtime tab before frame advancement");
-        let slots_before_wait_dump = composition.debug_dump_all_slots();
+        let slots_before_wait_dump = composition.debug_dump_slot_entries();
         let live_slots_before_wait = live_slot_count(&slots_before_wait_dump);
         advance_async_runtime_to_second_forward_half(&mut composition, &mut frame_time);
-        let slots_after_wait_dump = composition.debug_dump_all_slots();
+        let slots_after_wait_dump = composition.debug_dump_slot_entries();
         let live_slots_after_wait = live_slot_count(&slots_after_wait_dump);
         assert_composition_contains_text(
             &mut composition,

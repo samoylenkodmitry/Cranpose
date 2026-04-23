@@ -386,33 +386,6 @@ fn queued_sync_children_preserves_child_reparented_later_in_same_apply() {
 }
 
 #[test]
-fn skipped_group_root_nodes_only_considers_direct_parent_membership() {
-    let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotTable::default();
-    let mut applier = test_applier();
-
-    let grandparent = applier.create(Box::new(RecordingNode::default()));
-    let parent = applier.create(Box::new(RecordingNode::default()));
-    let child = applier.create(Box::new(RecordingNode::default()));
-
-    insert_child_with_reparenting(&mut applier, grandparent, parent);
-    insert_child_with_reparenting(&mut applier, parent, child);
-
-    let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle, None);
-
-    let roots = composer.skipped_group_root_nodes([grandparent, child]);
-    assert_eq!(
-        roots,
-        vec![grandparent, child],
-        "a node stays a skipped-group root when only a higher ancestor is in the skipped set",
-    );
-
-    drop(composer);
-    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
-}
-
-#[test]
 fn cold_recycled_nodes_are_not_reused_in_same_frame() {
     #[derive(Default)]
     struct RecyclableTestNode;

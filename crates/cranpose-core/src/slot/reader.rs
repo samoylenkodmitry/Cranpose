@@ -1,6 +1,6 @@
 use super::{
-    GroupRecord, SlotDebugAnchor, SlotDebugGroup, SlotDebugScope, SlotDebugSnapshot, SlotTable,
-    SlotTableDebugStats,
+    GroupRecord, SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup,
+    SlotDebugScope, SlotDebugSnapshot, SlotTable, SlotTableDebugStats,
 };
 use crate::{Key, ScopeId};
 use std::mem;
@@ -16,15 +16,19 @@ impl SlotTable {
     }
 
     pub fn debug_stats(&self) -> SlotTableDebugStats {
-        let payload_len = self.total_payload_count();
-        let payload_cap = self.payload_debug_capacity();
-        let node_len = self.total_node_count();
-        let node_cap = self.node_debug_capacity();
         SlotTableDebugStats {
-            slots_len: self.groups.len() + payload_len + node_len,
-            slots_cap: self.groups.capacity() + payload_cap + node_cap,
-            anchors_len: self.anchors.active_len(),
-            anchors_cap: self.anchors.capacity(),
+            group_count: self.groups.len(),
+            group_capacity: self.groups.capacity(),
+            payload_count: self.total_payload_count(),
+            payload_capacity: self.payload_debug_capacity(),
+            payload_location_count: self.payload_locations.len(),
+            payload_location_capacity: self.payload_locations.capacity(),
+            node_count: self.total_node_count(),
+            node_capacity: self.node_debug_capacity(),
+            active_anchor_count: self.anchors.active_len(),
+            anchor_capacity: self.anchors.capacity(),
+            scope_index_count: self.scope_anchor_to_group.len(),
+            scope_index_capacity: self.scope_anchor_to_group.capacity(),
             ..SlotTableDebugStats::default()
         }
     }
@@ -104,12 +108,13 @@ impl SlotTable {
         }
     }
 
-    pub fn debug_dump_all_slots(&self) -> Vec<(usize, String)> {
+    pub fn debug_dump_slot_entries(&self) -> Vec<SlotDebugEntry> {
         let mut rows = Vec::new();
         for (index, group) in self.groups.iter().enumerate() {
-            rows.push((
-                index,
-                format!(
+            rows.push(SlotDebugEntry {
+                kind: SlotDebugEntryKind::Group,
+                path: format!("group[{index}]"),
+                line: format!(
                     "Group(key={:?}, scope={:?}, subtree_len={}, payload_len={}, node_len={})",
                     group.key,
                     group.scope_id,
@@ -117,34 +122,36 @@ impl SlotTable {
                     self.group_payload_len_at(index),
                     self.group_node_len_at(index)
                 ),
-            ));
+            });
         }
-        let base = rows.len();
-        let mut offset = 0usize;
         for (group_index, _) in self.groups.iter().enumerate() {
-            for payload in self.group_payload_records_at(group_index) {
-                rows.push((
-                    base + offset,
-                    format!(
-                        "Value(owner={:?}, type={})",
-                        payload.owner, payload.type_name
+            for (payload_index, payload) in self
+                .group_payload_records_at(group_index)
+                .iter()
+                .enumerate()
+            {
+                rows.push(SlotDebugEntry {
+                    kind: SlotDebugEntryKind::Payload,
+                    path: format!("group[{group_index}].payload[{payload_index}]"),
+                    line: format!(
+                        "Payload(owner={:?}, kind={}, type={})",
+                        payload.owner,
+                        payload.kind.label(),
+                        payload.type_name
                     ),
-                ));
-                offset += 1;
+                });
             }
         }
-        let base = rows.len();
-        let mut offset = 0usize;
         for (group_index, _) in self.groups.iter().enumerate() {
-            for node in self.group_node_records_at(group_index) {
-                rows.push((
-                    base + offset,
-                    format!(
-                        "Node(owner={:?}, id={}, gen={}, lifecycle={:?})",
-                        node.owner, node.id, node.generation, node.lifecycle
+            for (node_index, node) in self.group_node_records_at(group_index).iter().enumerate() {
+                rows.push(SlotDebugEntry {
+                    kind: SlotDebugEntryKind::Node,
+                    path: format!("group[{group_index}].node[{node_index}]"),
+                    line: format!(
+                        "Node(owner={:?}, parent={:?}, id={}, gen={}, lifecycle={:?})",
+                        node.owner, node.parent_id, node.id, node.generation, node.lifecycle
                     ),
-                ));
-                offset += 1;
+                });
             }
         }
         rows

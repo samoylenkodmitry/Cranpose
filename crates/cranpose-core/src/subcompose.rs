@@ -781,9 +781,9 @@ impl SubcomposeState {
     }
 
     #[doc(hidden)]
-    pub fn debug_slot_table_for_slot(&self, slot_id: SlotId) -> Option<Vec<(usize, String)>> {
+    pub fn debug_slot_table_for_slot(&self, slot_id: SlotId) -> Option<Vec<crate::SlotDebugEntry>> {
         let slots = self.slot_compositions.get(&slot_id)?;
-        Some(slots.borrow().debug_dump_all_slots())
+        Some(slots.borrow().debug_dump_slot_entries())
     }
 
     #[doc(hidden)]

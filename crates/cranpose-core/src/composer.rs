@@ -1,5 +1,4 @@
 use crate::collections::map::{HashMap, HashSet};
-use crate::remove_child_and_cleanup_now;
 use crate::retention::{RetainKey, RetentionManager};
 use crate::{
     composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
@@ -685,9 +684,15 @@ impl Composer {
                     detached_children,
                     structure_changed: _structure_changed,
                     direct_nodes,
+                    root_nodes,
+                    subtree_nodes: _subtree_nodes,
+                    was_skipped,
                 } = self
                     .composer
                     .with_slot_session_mut(|slots| slots.finish_group_body());
+                if was_skipped {
+                    self.composer.attach_root_nodes(root_nodes);
+                }
                 self.composer.dispose_detached_nodes(direct_nodes);
                 self.composer
                     .handle_detached_children(Some(self.scope.id()), detached_children);
@@ -816,20 +821,27 @@ impl Composer {
     pub(crate) fn dispose_detached_nodes(&self, nodes: Vec<NodeId>) {
         for node_id in nodes {
             self.commands_mut().push(Command::callback(move |applier| {
-                let parent_id = applier.get_mut(node_id).ok().and_then(|node| node.parent());
-                if let Some(parent_id) = parent_id {
-                    return remove_child_and_cleanup_now(applier, parent_id, node_id);
-                }
-                if let Ok(node) = applier.get_mut(node_id) {
-                    node.on_removed_from_parent();
-                    node.unmount();
-                }
-                match applier.remove(node_id) {
-                    Ok(()) | Err(NodeError::Missing { .. }) => Ok(()),
-                    Err(err) => Err(err),
-                }
+                crate::slot::dispose_detached_node_now(applier, node_id)
             }));
         }
+    }
+
+    fn debug_assert_detached_subtree_metadata(&self, subtree: &crate::slot::DetachedSubtree) {
+        debug_assert!(
+            subtree.generation() > 0,
+            "detached subtrees must carry a non-zero generation",
+        );
+        debug_assert!(
+            subtree.node_count() == 0 || !subtree.root_nodes().is_empty(),
+            "detached subtree nodes must carry stored root metadata",
+        );
+        debug_assert!(
+            {
+                let node_ids = subtree.node_ids_iter().collect::<HashSet<_>>();
+                subtree.root_nodes().iter().all(|id| node_ids.contains(id))
+            },
+            "detached subtree root ids must belong to the subtree node set",
+        );
     }
 
     fn deactivate_scope_ids(&self, scope_ids: impl IntoIterator<Item = ScopeId>) {
@@ -855,9 +867,9 @@ impl Composer {
         parent_scope: Option<ScopeId>,
         subtree: crate::slot::DetachedSubtree,
     ) {
+        self.debug_assert_detached_subtree_metadata(&subtree);
         self.deactivate_scope_ids(subtree.scope_ids_iter());
-        let roots = self.skipped_group_root_nodes(subtree.node_ids_iter());
-        for root in roots {
+        for root in subtree.root_nodes_iter() {
             let parent_id = {
                 let mut applier = self.borrow_applier();
                 applier.get_mut(root).ok().and_then(|node| node.parent())
@@ -884,9 +896,9 @@ impl Composer {
         slots_host: &Rc<SlotsHost>,
         subtree: crate::slot::DetachedSubtree,
     ) {
+        self.debug_assert_detached_subtree_metadata(&subtree);
         self.dispose_scope_ids(subtree.scope_ids_iter());
-        let roots = self.skipped_group_root_nodes(subtree.node_ids_iter());
-        self.dispose_detached_nodes(roots);
+        self.dispose_detached_nodes(subtree.root_nodes().to_vec());
         slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {
             table.invalidate_detached_subtree_anchors(&subtree);
             lifecycle.queue_subtree_disposal(subtree);
@@ -1230,30 +1242,14 @@ impl Composer {
         Ok((result, frame.scopes))
     }
 
-    pub(crate) fn skipped_group_root_nodes(
-        &self,
-        nodes: impl IntoIterator<Item = NodeId>,
-    ) -> Vec<NodeId> {
-        let nodes = nodes.into_iter().collect::<Vec<_>>();
-        let node_set: std::collections::HashSet<NodeId> = nodes.iter().copied().collect();
-        let mut applier = self.borrow_applier();
-        nodes
-            .iter()
-            .copied()
-            .filter(|id| {
-                let parent = applier.get_mut(*id).ok().and_then(|node| node.parent());
-                parent.is_none_or(|parent_id| !node_set.contains(&parent_id))
-            })
-            .collect()
-    }
-
-    pub fn skip_current_group(&self) {
-        let nodes = self.with_slot_session_mut(|slots| slots.nodes_in_current_group());
-        let root_nodes = self.skipped_group_root_nodes(nodes);
-        self.with_slot_session_mut(|slots| skip_slot_group(slots));
+    pub(crate) fn attach_root_nodes(&self, root_nodes: Vec<NodeId>) {
         for id in root_nodes {
             self.attach_to_parent_with_mode(id, true);
         }
+    }
+
+    pub fn skip_current_group(&self) {
+        self.with_slot_session_mut(|slots| skip_slot_group(slots));
     }
 
     pub fn runtime_handle(&self) -> RuntimeHandle {

@@ -13,6 +13,83 @@ use crate::{
 };
 
 impl SlotTable {
+    fn collect_subtree_node_records(&self, group_anchor: AnchorId) -> Vec<super::NodeRecord> {
+        let group_index = self.current_group_index(group_anchor);
+        let subtree_end = group_index + self.groups[group_index].subtree_len as usize;
+        let mut nodes = Vec::with_capacity(self.groups[group_index].subtree_node_count as usize);
+        for index in group_index..subtree_end {
+            nodes.extend(self.group_node_records_at(index).iter().copied());
+        }
+        nodes
+    }
+
+    fn collect_subtree_node_ids(&self, group_anchor: AnchorId) -> Vec<NodeId> {
+        self.collect_subtree_node_records(group_anchor)
+            .into_iter()
+            .map(|node| node.id)
+            .collect()
+    }
+
+    fn collect_subtree_root_node_ids(&self, group_anchor: AnchorId) -> Vec<NodeId> {
+        let nodes = self.collect_subtree_node_records(group_anchor);
+        Self::root_node_ids_from_records(&nodes)
+    }
+
+    fn find_later_sibling(
+        &self,
+        parent_anchor: AnchorId,
+        key: GroupKey,
+        search_start: usize,
+    ) -> Option<usize> {
+        const SIBLING_INDEX_THRESHOLD: usize = 16;
+
+        let parent_end = self.direct_child_range_end(parent_anchor);
+        if search_start >= parent_end {
+            return None;
+        }
+
+        let mut probe = search_start;
+        let mut direct_children_seen = 0usize;
+        while probe < parent_end && direct_children_seen < SIBLING_INDEX_THRESHOLD {
+            let group = &self.groups[probe];
+            debug_assert_eq!(
+                group.parent_anchor, parent_anchor,
+                "later sibling scans must stay on direct children"
+            );
+            direct_children_seen += 1;
+            probe += group.subtree_len as usize;
+        }
+
+        if direct_children_seen >= SIBLING_INDEX_THRESHOLD {
+            let mut sibling_index = HashMap::default();
+            let mut index = search_start;
+            while index < parent_end {
+                let group = &self.groups[index];
+                debug_assert_eq!(
+                    group.parent_anchor, parent_anchor,
+                    "later sibling index must stay on direct children"
+                );
+                sibling_index.entry(group.key).or_insert(index);
+                index += group.subtree_len as usize;
+            }
+            sibling_index.get(&key).copied()
+        } else {
+            let mut index = search_start;
+            while index < parent_end {
+                let group = &self.groups[index];
+                debug_assert_eq!(
+                    group.parent_anchor, parent_anchor,
+                    "later sibling scans must stay on direct children"
+                );
+                if group.key == key {
+                    return Some(index);
+                }
+                index += group.subtree_len as usize;
+            }
+            None
+        }
+    }
+
     fn open_group_frame(
         &mut self,
         state: &mut SlotWriteSessionState,
@@ -23,7 +100,6 @@ impl SlotTable {
         state.push_group_frame(
             anchor,
             start_kind,
-            self.direct_child_anchors(anchor),
             group_index + 1,
             self.group_payload_len_at(group_index),
             self.group_node_len_at(group_index),
@@ -35,24 +111,17 @@ impl SlotTable {
         &mut self,
         state: &mut SlotWriteSessionState,
     ) -> Vec<DetachedSubtree> {
-        let remaining_children = {
+        let (parent_anchor, next_child_index) = {
             let frame = state
                 .group_stack
-                .last_mut()
+                .last()
                 .expect("detach_unvisited_children requires an active group");
-            frame
-                .old_children
-                .drain(frame.old_cursor..)
-                .collect::<Vec<_>>()
+            (frame.group_anchor, frame.next_child_index)
         };
-
         let mut detached_children = Vec::new();
-        for anchor in remaining_children.into_iter().rev() {
-            if self.anchors.contains_active(anchor) {
-                detached_children.push(self.detach_subtree(anchor));
-            }
+        while let Some(anchor) = self.direct_child_anchor_at(parent_anchor, next_child_index) {
+            detached_children.push(self.detach_subtree(anchor));
         }
-        detached_children.reverse();
         state.note_detached_subtrees(&detached_children);
         detached_children
     }
@@ -62,7 +131,7 @@ impl SlotTable {
         lifecycle: &mut SlotLifecycleCoordinator,
         state: &mut SlotWriteSessionState,
     ) -> FinishGroupResult {
-        let (group_anchor, payload_cursor, node_cursor, start_kind) = {
+        let (group_anchor, payload_cursor, node_cursor, start_kind, was_skipped) = {
             let frame = state
                 .group_stack
                 .last_mut()
@@ -72,6 +141,9 @@ impl SlotTable {
                     detached_children: Vec::new(),
                     structure_changed: false,
                     direct_nodes: Vec::new(),
+                    subtree_nodes: Vec::new(),
+                    root_nodes: Vec::new(),
+                    was_skipped: false,
                 };
             }
 
@@ -81,6 +153,7 @@ impl SlotTable {
                 frame.payload_cursor,
                 frame.node_cursor,
                 frame.start_kind,
+                frame.was_skipped,
             )
         };
 
@@ -88,7 +161,7 @@ impl SlotTable {
         if payload_cursor < payload_len {
             let removed = self.remove_payload_range(group_anchor, payload_cursor, payload_len);
             for payload in removed {
-                lifecycle.queue_drop(DeferredDrop::Value(payload.value));
+                lifecycle.queue_drop(payload.into_deferred_drop());
             }
         }
 
@@ -101,6 +174,14 @@ impl SlotTable {
         }
 
         let detached_children = self.detach_unvisited_children_internal(state);
+        let (subtree_nodes, root_nodes) = if was_skipped {
+            (
+                self.collect_subtree_node_ids(group_anchor),
+                self.collect_subtree_root_node_ids(group_anchor),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let structure_changed = !matches!(start_kind, GroupStartKind::Reused)
             || !direct_nodes.is_empty()
             || !detached_children.is_empty();
@@ -109,6 +190,9 @@ impl SlotTable {
             detached_children,
             structure_changed,
             direct_nodes,
+            subtree_nodes,
+            root_nodes,
+            was_skipped,
         }
     }
 }
@@ -158,78 +242,39 @@ impl SlotWriteSession<'_> {
         &mut self,
         input: BeginGroupInput<DetachedSubtree>,
     ) -> GroupStart<GroupId> {
-        const SIBLING_INDEX_THRESHOLD: usize = 16;
-
         let BeginGroupInput { key, restored } = input;
         self.state.consume_group_key(key);
         let parent_anchor = self.state.current_parent_anchor();
         let insert_index = *self.state.current_next_child_index();
 
-        let (old_children, old_cursor, sibling_index) = self.state.current_child_cursor();
-        let mut reused_position = None;
-        let mut moved = false;
-        if restored.is_none() {
-            if let Some(&expected_anchor) = old_children.get(*old_cursor) {
-                let expected = self.table.current_group(expected_anchor);
-                if expected.parent_anchor == parent_anchor && expected.key == key {
-                    reused_position = Some(*old_cursor);
-                } else {
-                    let later_position = if old_children.len().saturating_sub(*old_cursor + 1)
-                        >= SIBLING_INDEX_THRESHOLD
-                    {
-                        let index = sibling_index.get_or_insert_with(|| {
-                            let mut index = HashMap::default();
-                            for (position, &anchor) in
-                                old_children.iter().enumerate().skip(*old_cursor + 1)
-                            {
-                                let group = self.table.current_group(anchor);
-                                if group.parent_anchor == parent_anchor {
-                                    index.entry(group.key).or_insert(position);
-                                }
-                            }
-                            index
-                        });
-                        index.get(&key).copied()
-                    } else {
-                        None
-                    };
-                    let search_start = *old_cursor + 1;
-                    let search_position = later_position.or_else(|| {
-                        (search_start..old_children.len()).find(|&position| {
-                            let anchor = old_children[position];
-                            let group = self.table.current_group(anchor);
-                            group.parent_anchor == parent_anchor && group.key == key
-                        })
-                    });
-                    if let Some(position) = search_position {
-                        let anchor = old_children[position];
-                        old_children.remove(position);
-                        old_children.insert(*old_cursor, anchor);
-                        *sibling_index = None;
-                        reused_position = Some(*old_cursor);
-                        self.table.move_subtree(anchor, insert_index);
-                        moved = true;
-                    }
-                }
-            }
-        }
-
         if let Some(restored) = restored {
             return self.restore_started_group(key, restored);
         }
 
-        let (anchor, kind) = if reused_position.is_some() {
-            let anchor = old_children[*old_cursor];
-            *old_cursor += 1;
-            *sibling_index = None;
-            (
-                anchor,
-                if moved {
-                    GroupStartKind::Moved
+        let (anchor, kind) = if let Some(expected_anchor) = self
+            .table
+            .direct_child_anchor_at(parent_anchor, insert_index)
+        {
+            let expected_group = self.table.current_group(expected_anchor);
+            if expected_group.key == key {
+                (expected_anchor, GroupStartKind::Reused)
+            } else {
+                let search_start = insert_index + expected_group.subtree_len as usize;
+                if let Some(found_index) =
+                    self.table
+                        .find_later_sibling(parent_anchor, key, search_start)
+                {
+                    let found_anchor = self.table.groups[found_index].anchor;
+                    self.table.move_subtree(found_anchor, insert_index);
+                    (found_anchor, GroupStartKind::Moved)
                 } else {
-                    GroupStartKind::Reused
-                },
-            )
+                    (
+                        self.table
+                            .insert_new_group(insert_index, parent_anchor, key),
+                        GroupStartKind::Inserted,
+                    )
+                }
+            }
         } else {
             (
                 self.table
@@ -267,9 +312,11 @@ impl SlotWriteSession<'_> {
             .group_stack
             .last_mut()
             .expect("skip_group requires an active group");
-        frame.old_cursor = frame.old_children.len();
+        let group_index = self.table.current_group_index(frame.group_anchor);
+        frame.next_child_index = group_index + self.table.groups[group_index].subtree_len as usize;
         frame.payload_cursor = frame.old_payload_len;
         frame.node_cursor = frame.old_node_len;
+        frame.was_skipped = true;
     }
 
     pub(crate) fn set_group_scope(&mut self, group: GroupId, scope_id: ScopeId) {
@@ -300,10 +347,11 @@ impl SlotWriteSession<'_> {
             {
                 (anchor, generation)
             } else {
-                let old_value =
+                let (old_kind, old_value) =
                     self.table
                         .replace_payload_value(group_index, frame.payload_cursor, init());
-                self.lifecycle.queue_drop(DeferredDrop::Value(old_value));
+                self.lifecycle
+                    .queue_drop(DeferredDrop::payload(old_kind, old_value));
                 (anchor, generation)
             }
         } else {
@@ -328,6 +376,15 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn record_node(&mut self, id: NodeId, generation: u32) -> NodeRecordResult {
+        self.record_node_with_parent(id, generation, None)
+    }
+
+    pub(crate) fn record_node_with_parent(
+        &mut self,
+        id: NodeId,
+        generation: u32,
+        parent_id: Option<NodeId>,
+    ) -> NodeRecordResult {
         let frame = self
             .state
             .group_stack
@@ -340,6 +397,7 @@ impl SlotWriteSession<'_> {
             frame.node_cursor,
             group_anchor,
             id,
+            parent_id,
             generation,
         );
         if !recorded.reused_slot {
@@ -371,18 +429,7 @@ impl SlotWriteSession<'_> {
             .group_stack
             .last()
             .expect("nodes_in_current_group requires an active group");
-        let group_index = self.table.current_group_index(frame.group_anchor);
-        let subtree_end = group_index + self.table.groups[group_index].subtree_len as usize;
-        self.table.groups[group_index..subtree_end]
-            .iter()
-            .enumerate()
-            .flat_map(|(offset, _)| {
-                self.table
-                    .group_node_records_at(group_index + offset)
-                    .iter()
-            })
-            .map(|node| node.id)
-            .collect()
+        self.table.collect_subtree_node_ids(frame.group_anchor)
     }
 
     pub(crate) fn finalize_pass(&mut self, applier: &mut dyn Applier) -> Vec<DetachedSubtree> {
@@ -394,7 +441,7 @@ impl SlotWriteSession<'_> {
                 self.lifecycle.queue_subtree_disposal(subtree);
             }
             for node_id in result.direct_nodes {
-                dispose_detached_node_now(applier, node_id);
+                let _ = dispose_detached_node_now(applier, node_id);
             }
             self.end_group();
         }

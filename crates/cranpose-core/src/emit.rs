@@ -6,6 +6,11 @@ use crate::{
 use std::any::TypeId;
 
 impl Composer {
+    fn recorded_node_parent(&self, id: NodeId) -> Option<NodeId> {
+        let mut applier = self.borrow_applier();
+        applier.get_mut(id).ok().and_then(|node| node.parent())
+    }
+
     pub fn use_state<T: Clone + 'static>(&self, init: impl FnOnce() -> T) -> MutableState<T> {
         let runtime = self.runtime_handle();
         let state = self.with_slot_session_mut(|slots| {
@@ -49,17 +54,19 @@ impl Composer {
                     scope_debug.0,
                     scope_debug.1,
                 );
+                self.commands_mut().push(Command::update_node::<N>(id));
+                self.attach_to_parent(id);
                 let slot_gen =
                     existing_generation.expect("reused node must keep its slot generation");
-                let recorded = self.with_slot_session_mut(|slots| slots.record_node(id, slot_gen));
+                let parent_id = self.recorded_node_parent(id);
+                let recorded = self.with_slot_session_mut(|slots| {
+                    slots.record_node_with_parent(id, slot_gen, parent_id)
+                });
                 debug_assert!(
                     recorded.reused && recorded.id == id,
                     "reused node recording must keep the same node identity"
                 );
                 self.core.last_node_reused.set(Some(recorded.reused));
-
-                self.commands_mut().push(Command::update_node::<N>(id));
-                self.attach_to_parent(id);
                 return id;
             }
         }
@@ -117,14 +124,16 @@ impl Composer {
             scope_debug.0,
             scope_debug.1,
         );
-        let recorded = self.with_slot_session_mut(|slots| slots.record_node(id, gen));
+        self.commands_mut().push(Command::MountNode { id });
+        self.attach_to_parent(id);
+        let parent_id = self.recorded_node_parent(id);
+        let recorded =
+            self.with_slot_session_mut(|slots| slots.record_node_with_parent(id, gen, parent_id));
         debug_assert!(
             !recorded.reused && recorded.id == id,
             "fresh or replacement node recording must report a non-reused node"
         );
         self.core.last_node_reused.set(Some(recorded.reused));
-        self.commands_mut().push(Command::MountNode { id });
-        self.attach_to_parent(id);
         id
     }
 

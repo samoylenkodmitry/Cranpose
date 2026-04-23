@@ -77,7 +77,7 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
 
     let baseline_active = rule.applier_mut().len();
     let baseline_capacity = rule.applier_mut().capacity();
-    let baseline_slots = rule.composition().debug_dump_all_slots().len();
+    let baseline_slots = rule.composition().debug_dump_slot_entries().len();
     let baseline_recycled_nodes = rule.applier_mut().debug_recycled_node_count();
     let baseline_recycled_heap = rule.applier_mut().debug_recycled_node_heap_bytes();
     let baseline_runtime = capture_runtime_debug_stats(&mut rule);
@@ -93,7 +93,7 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
         .expect("increase recursive layout depth");
 
     let peak_active = rule.applier_mut().len();
-    let peak_slots = rule.composition().debug_dump_all_slots().len();
+    let peak_slots = rule.composition().debug_dump_slot_entries().len();
     let peak_recycled_nodes = rule.applier_mut().debug_recycled_node_count();
     let peak_recycled_heap = rule.applier_mut().debug_recycled_node_heap_bytes();
     let peak_runtime = capture_runtime_debug_stats(&mut rule);
@@ -113,7 +113,7 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
     let after_active = rule.applier_mut().len();
     let after_capacity = rule.applier_mut().capacity();
     let after_tombstones = rule.applier_mut().tombstone_count();
-    let after_slots = rule.composition().debug_dump_all_slots().len();
+    let after_slots = rule.composition().debug_dump_slot_entries().len();
     let after_recycled_nodes = rule.applier_mut().debug_recycled_node_count();
     let after_recycled_heap = rule.applier_mut().debug_recycled_node_heap_bytes();
     let after_runtime = capture_runtime_debug_stats(&mut rule);

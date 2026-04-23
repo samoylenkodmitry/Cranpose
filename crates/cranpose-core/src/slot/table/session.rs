@@ -10,26 +10,22 @@ use crate::{
 
 #[derive(Default)]
 pub(in crate::slot) struct RootFrame {
-    pub(in crate::slot) old_children: Vec<AnchorId>,
-    pub(in crate::slot) old_cursor: usize,
     pub(in crate::slot) next_child_index: usize,
+    pub(in crate::slot) detach_remaining_children: bool,
     pub(in crate::slot) key_ordinals: HashMap<Key, u32>,
-    pub(in crate::slot) sibling_index: Option<HashMap<GroupKey, usize>>,
 }
 
 pub(in crate::slot) struct GroupFrame {
     pub(in crate::slot) group_anchor: AnchorId,
     pub(in crate::slot) start_kind: GroupStartKind,
-    pub(in crate::slot) old_children: Vec<AnchorId>,
-    pub(in crate::slot) old_cursor: usize,
     pub(in crate::slot) next_child_index: usize,
     pub(in crate::slot) payload_cursor: usize,
     pub(in crate::slot) old_payload_len: usize,
     pub(in crate::slot) node_cursor: usize,
     pub(in crate::slot) old_node_len: usize,
     pub(in crate::slot) key_ordinals: HashMap<Key, u32>,
-    pub(in crate::slot) sibling_index: Option<HashMap<GroupKey, usize>>,
     pub(in crate::slot) body_finished: bool,
+    pub(in crate::slot) was_skipped: bool,
 }
 
 #[derive(Default)]
@@ -45,21 +41,16 @@ impl SlotWriteSessionState {
     const COMPACT_NODE_THRESHOLD: usize = 16 * 1024;
     const COMPACT_GROUP_THRESHOLD: usize = 32 * 1024;
 
-    pub(crate) fn reset_for_pass(&mut self, table: &SlotTable, mode: SlotPassMode) {
+    pub(crate) fn reset_for_pass(&mut self, _table: &SlotTable, mode: SlotPassMode) {
         self.root = RootFrame {
-            old_children: table.direct_child_anchors(AnchorId::INVALID),
-            old_cursor: 0,
             next_child_index: 0,
+            detach_remaining_children: matches!(mode, SlotPassMode::Compose),
             key_ordinals: HashMap::default(),
-            sibling_index: None,
         };
         self.group_stack.clear();
         self.removed_node_count = 0;
         self.removed_group_count = 0;
         self.request_compaction = false;
-        if matches!(mode, SlotPassMode::Recompose) {
-            self.root.old_children.clear();
-        }
     }
 
     #[cfg(any(test, debug_assertions))]
@@ -104,17 +95,39 @@ impl SlotWriteSessionState {
     }
 
     #[cfg(any(test, debug_assertions))]
+    fn validate_child_boundary(
+        table: &SlotTable,
+        frame_index: usize,
+        group_anchor: AnchorId,
+        expected_parent: AnchorId,
+        next_child_index: usize,
+    ) -> Result<(), SlotInvariantError> {
+        if table
+            .direct_child_anchor_at(expected_parent, next_child_index)
+            .is_some()
+            || next_child_index == table.direct_child_range_end(expected_parent)
+        {
+            return Ok(());
+        }
+
+        let actual_parent = table
+            .groups
+            .get(next_child_index)
+            .map(|group| group.parent_anchor)
+            .unwrap_or(AnchorId::INVALID);
+        Err(SlotInvariantError::WriterFrameNotAtChildBoundary {
+            frame_index,
+            group_anchor,
+            next_child_index,
+            expected_parent,
+            actual_parent,
+        })
+    }
+
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn validate(&self, table: &SlotTable) -> Result<(), SlotInvariantError> {
         table.validate()?;
 
-        Self::validate_cursor(
-            0,
-            AnchorId::INVALID,
-            "root.old_cursor",
-            self.root.old_cursor,
-            0,
-            self.root.old_children.len(),
-        )?;
         Self::validate_cursor(
             0,
             AnchorId::INVALID,
@@ -123,6 +136,15 @@ impl SlotWriteSessionState {
             0,
             table.groups.len(),
         )?;
+        if self.root.detach_remaining_children {
+            Self::validate_child_boundary(
+                table,
+                0,
+                AnchorId::INVALID,
+                AnchorId::INVALID,
+                self.root.next_child_index,
+            )?;
+        }
 
         let mut parent_group_index = None;
         let mut parent_subtree_end = table.groups.len();
@@ -169,18 +191,17 @@ impl SlotWriteSessionState {
             Self::validate_cursor(
                 frame_index,
                 frame.group_anchor,
-                "old_cursor",
-                frame.old_cursor,
-                0,
-                frame.old_children.len(),
-            )?;
-            Self::validate_cursor(
-                frame_index,
-                frame.group_anchor,
                 "next_child_index",
                 frame.next_child_index,
                 group_index + 1,
                 subtree_end,
+            )?;
+            Self::validate_child_boundary(
+                table,
+                frame_index,
+                frame.group_anchor,
+                frame.group_anchor,
+                frame.next_child_index,
             )?;
             Self::validate_cursor(
                 frame_index,
@@ -281,28 +302,6 @@ impl SlotWriteSessionState {
             .unwrap_or(AnchorId::INVALID)
     }
 
-    pub(in crate::slot) fn current_child_cursor(
-        &mut self,
-    ) -> (
-        &mut Vec<AnchorId>,
-        &mut usize,
-        &mut Option<HashMap<GroupKey, usize>>,
-    ) {
-        if let Some(frame) = self.group_stack.last_mut() {
-            (
-                &mut frame.old_children,
-                &mut frame.old_cursor,
-                &mut frame.sibling_index,
-            )
-        } else {
-            (
-                &mut self.root.old_children,
-                &mut self.root.old_cursor,
-                &mut self.root.sibling_index,
-            )
-        }
-    }
-
     pub(in crate::slot) fn current_next_child_index(&mut self) -> &mut usize {
         if let Some(frame) = self.group_stack.last_mut() {
             &mut frame.next_child_index
@@ -315,7 +314,6 @@ impl SlotWriteSessionState {
         &mut self,
         anchor: AnchorId,
         start_kind: GroupStartKind,
-        old_children: Vec<AnchorId>,
         next_child_index: usize,
         old_payload_len: usize,
         old_node_len: usize,
@@ -323,24 +321,15 @@ impl SlotWriteSessionState {
         self.group_stack.push(GroupFrame {
             group_anchor: anchor,
             start_kind,
-            old_children,
-            old_cursor: 0,
             next_child_index,
             payload_cursor: 0,
             old_payload_len,
             node_cursor: 0,
             old_node_len,
             key_ordinals: HashMap::default(),
-            sibling_index: None,
             body_finished: false,
+            was_skipped: false,
         });
-    }
-
-    pub(in crate::slot) fn take_remaining_root_children(&mut self) -> Vec<AnchorId> {
-        self.root
-            .old_children
-            .drain(self.root.old_cursor..)
-            .collect::<Vec<_>>()
     }
 }
 
@@ -375,6 +364,42 @@ mod tests {
                 value: 2,
                 min: 1,
                 max: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_reports_writer_frame_not_at_direct_child_boundary() {
+        let mut table = SlotTable::new();
+        let mut lifecycle = SlotLifecycleCoordinator::default();
+        let mut state = SlotWriteSessionState::default();
+        state.reset_for_pass(&table, SlotPassMode::Compose);
+
+        {
+            let mut session =
+                table.write_session(&mut lifecycle, &mut state, SlotPassMode::Compose);
+            let root_key = session.preview_group_key(GroupKeySeed::unkeyed(10));
+            let _ = session.begin_group(BeginGroupInput::new(root_key, None));
+
+            let child_key = session.preview_group_key(GroupKeySeed::unkeyed(11));
+            let _ = session.begin_group(BeginGroupInput::new(child_key, None));
+
+            let grandchild_key = session.preview_group_key(GroupKeySeed::unkeyed(12));
+            let _ = session.begin_group(BeginGroupInput::new(grandchild_key, None));
+        }
+
+        let root_anchor = table.groups[0].anchor;
+        let child_anchor = table.groups[1].anchor;
+        state.group_stack[0].next_child_index = 2;
+
+        assert_eq!(
+            state.validate(&table),
+            Err(SlotInvariantError::WriterFrameNotAtChildBoundary {
+                frame_index: 1,
+                group_anchor: root_anchor,
+                next_child_index: 2,
+                expected_parent: root_anchor,
+                actual_parent: child_anchor,
             })
         );
     }

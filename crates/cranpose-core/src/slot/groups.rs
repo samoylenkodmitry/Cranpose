@@ -54,34 +54,24 @@ impl SlotTable {
         self.groups[group_index].anchor
     }
 
-    pub(in crate::slot) fn direct_child_anchors(&self, parent_anchor: AnchorId) -> Vec<AnchorId> {
-        let mut children = Vec::new();
+    pub(in crate::slot) fn direct_child_range_end(&self, parent_anchor: AnchorId) -> usize {
         if !parent_anchor.is_valid() {
-            let mut index = 0;
-            while index < self.groups.len() {
-                let group = &self.groups[index];
-                debug_assert!(
-                    !group.parent_anchor.is_valid(),
-                    "root-level traversal should only step through root groups"
-                );
-                children.push(group.anchor);
-                index += group.subtree_len as usize;
-            }
-            return children;
+            self.groups.len()
+        } else {
+            let parent_index = self.current_group_index(parent_anchor);
+            parent_index + self.groups[parent_index].subtree_len as usize
         }
+    }
 
-        let parent_index = self.current_group_index(parent_anchor);
-        let end = parent_index + self.groups[parent_index].subtree_len as usize;
-        let mut index = parent_index + 1;
-        while index < end {
-            let group = &self.groups[index];
-            debug_assert_eq!(
-                group.parent_anchor, parent_anchor,
-                "direct child traversal must land on immediate children only"
-            );
-            children.push(group.anchor);
-            index += group.subtree_len as usize;
+    pub(in crate::slot) fn direct_child_anchor_at(
+        &self,
+        parent_anchor: AnchorId,
+        child_index: usize,
+    ) -> Option<AnchorId> {
+        if child_index >= self.direct_child_range_end(parent_anchor) {
+            return None;
         }
-        children
+        let group = self.groups.get(child_index)?;
+        (group.parent_anchor == parent_anchor).then_some(group.anchor)
     }
 }

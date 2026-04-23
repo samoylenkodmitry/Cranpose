@@ -35,6 +35,7 @@ pub struct SlotTable {
     pub(super) payload_locations: PayloadLocationRegistry,
     pub(super) scope_anchor_to_group: HashMap<ScopeId, AnchorId>,
     next_group_generation: u32,
+    pub(super) next_detached_generation: u64,
     pub(super) next_payload_anchor: usize,
 }
 
@@ -50,6 +51,7 @@ impl SlotTable {
             payload_locations: PayloadLocationRegistry::new(),
             scope_anchor_to_group: HashMap::default(),
             next_group_generation: 1,
+            next_detached_generation: 1,
             next_payload_anchor: 1,
         }
     }
@@ -92,7 +94,7 @@ impl SlotTable {
         let payload_count = self.payloads.len();
         let mut drops = Vec::with_capacity(self.groups.len() + payload_count);
         for payload in self.payloads.drain(..).rev() {
-            drops.push(DeferredDrop::Value(payload.value));
+            drops.push(payload.into_deferred_drop());
         }
         self.groups.clear();
         self.nodes.clear();

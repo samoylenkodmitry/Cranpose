@@ -1,5 +1,5 @@
 use super::{GroupRecord, NodeLifecycle, NodeRecord, SlotTable};
-use crate::NodeId;
+use crate::{collections::map::HashSet, NodeId};
 use std::{mem, ops::Range};
 
 pub(super) struct GroupNodeRecordResult {
@@ -108,6 +108,7 @@ impl SlotTable {
         node_index: usize,
         owner: crate::AnchorId,
         id: NodeId,
+        parent_id: Option<NodeId>,
         generation: u32,
     ) -> GroupNodeRecordResult {
         if node_index < self.group_node_len_at(group_index) {
@@ -115,6 +116,7 @@ impl SlotTable {
             *self.group_node_record_at_mut(group_index, node_index) = NodeRecord {
                 owner,
                 id,
+                parent_id,
                 generation,
                 lifecycle: NodeLifecycle::Active,
             };
@@ -129,6 +131,7 @@ impl SlotTable {
                 NodeRecord {
                     owner,
                     id,
+                    parent_id,
                     generation,
                     lifecycle: NodeLifecycle::Active,
                 },
@@ -194,5 +197,17 @@ impl SlotTable {
         Self::offset_detached_group_node_starts(groups, node_insert_index as i64);
         self.nodes
             .splice(node_insert_index..node_insert_index, nodes);
+    }
+
+    pub(in crate::slot) fn root_node_ids_from_records(nodes: &[NodeRecord]) -> Vec<NodeId> {
+        let node_set = nodes.iter().map(|node| node.id).collect::<HashSet<_>>();
+        nodes
+            .iter()
+            .filter(|node| {
+                node.parent_id
+                    .is_none_or(|parent_id| !node_set.contains(&parent_id))
+            })
+            .map(|node| node.id)
+            .collect()
     }
 }

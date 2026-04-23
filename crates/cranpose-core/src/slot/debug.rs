@@ -2,12 +2,34 @@ use crate::{AnchorId, Key, ScopeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SlotTableDebugStats {
-    pub slots_len: usize,
-    pub slots_cap: usize,
-    pub pending_slot_drops_len: usize,
-    pub pending_slot_drops_cap: usize,
-    pub anchors_len: usize,
-    pub anchors_cap: usize,
+    pub group_count: usize,
+    pub group_capacity: usize,
+    pub payload_count: usize,
+    pub payload_capacity: usize,
+    pub payload_location_count: usize,
+    pub payload_location_capacity: usize,
+    pub node_count: usize,
+    pub node_capacity: usize,
+    pub pending_drop_count: usize,
+    pub pending_drop_capacity: usize,
+    pub active_anchor_count: usize,
+    pub anchor_capacity: usize,
+    pub scope_index_count: usize,
+    pub scope_index_capacity: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotDebugEntryKind {
+    Group,
+    Payload,
+    Node,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotDebugEntry {
+    pub kind: SlotDebugEntryKind,
+    pub path: String,
+    pub line: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

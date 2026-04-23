@@ -334,7 +334,7 @@ fn keyed_progress_branch_does_not_grow_slots_across_toggle_cycles() {
         .expect("initial render");
     drain_all(&mut composition).expect("initial drain");
 
-    let baseline_slots = composition.debug_dump_all_slots().len();
+    let baseline_slots = composition.debug_dump_slot_entries().len();
     for cycle in 0..12 {
         progress.set_value(0.0);
         drain_all(&mut composition).expect("drain after collapse");
@@ -342,7 +342,7 @@ fn keyed_progress_branch_does_not_grow_slots_across_toggle_cycles() {
         progress.set_value(0.8);
         drain_all(&mut composition).expect("drain after restore");
 
-        let current_slots = composition.debug_dump_all_slots();
+        let current_slots = composition.debug_dump_slot_entries();
         assert!(
             current_slots.len() <= baseline_slots + 8,
             "keyed progress branch leaked slots on cycle {cycle}: baseline={} current={} slots={current_slots:#?}",

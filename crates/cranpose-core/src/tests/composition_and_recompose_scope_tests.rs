@@ -1071,7 +1071,7 @@ fn retained_scope_stays_inactive_until_restored() {
         "retained scope must deactivate when its subtree leaves the active table; scope_id={} groups={:?} slots={:?}",
         scope.id(),
         composition.debug_dump_slot_table_groups(),
-        composition.debug_dump_all_slots(),
+        composition.debug_dump_slot_entries(),
     );
 
     observed.set_value(1);

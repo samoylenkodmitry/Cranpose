@@ -118,6 +118,13 @@ pub(crate) enum SlotInvariantError {
         min: usize,
         max: usize,
     },
+    WriterFrameNotAtChildBoundary {
+        frame_index: usize,
+        group_anchor: AnchorId,
+        next_child_index: usize,
+        expected_parent: AnchorId,
+        actual_parent: AnchorId,
+    },
 }
 
 impl SlotTable {

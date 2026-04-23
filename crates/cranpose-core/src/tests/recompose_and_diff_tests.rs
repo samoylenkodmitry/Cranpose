@@ -716,14 +716,16 @@ fn unit_return_composable_skips_without_return_slot_storage() {
         .render(key, || unit_leaf(1))
         .expect("initial unit render");
 
-    let all_slots = composition.debug_dump_all_slots();
+    let all_slots = composition.debug_dump_slot_entries();
     let value_count = all_slots
         .iter()
-        .filter(|(_, kind)| kind.starts_with("Value"))
+        .filter(|entry| entry.kind == crate::SlotDebugEntryKind::Payload)
         .count();
     let scoped_group_count = all_slots
         .iter()
-        .filter(|(_, kind)| kind.starts_with("Group(") && !kind.contains("scope=None"))
+        .filter(|entry| {
+            entry.kind == crate::SlotDebugEntryKind::Group && !entry.line.contains("scope=None")
+        })
         .count();
 
     assert_eq!(

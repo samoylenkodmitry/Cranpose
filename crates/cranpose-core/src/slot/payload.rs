@@ -1,9 +1,47 @@
-use super::{GroupRecord, PayloadRecord, SlotTable};
+use super::{GroupRecord, PayloadKind, PayloadRecord, SlotTable};
 use crate::{retention::RetentionManager, AnchorId};
 use std::any::TypeId;
 use std::{mem, ops::Range};
 
 impl SlotTable {
+    fn classify_payload_kind<T: 'static>() -> PayloadKind {
+        Self::classify_payload_kind_name(std::any::type_name::<T>())
+    }
+
+    fn classify_payload_kind_name(type_name: &'static str) -> PayloadKind {
+        if type_name.contains("::callbacks::ParamState<")
+            || type_name.ends_with("::callbacks::CallbackHolder")
+            || type_name.contains("::callbacks::CallbackHolder1<")
+        {
+            return PayloadKind::Param;
+        }
+
+        if type_name.contains("::callbacks::ReturnSlot<") {
+            return PayloadKind::Return;
+        }
+
+        if type_name.contains("DisposableEffectState")
+            || type_name.contains("LaunchedEffectState")
+            || type_name.contains("LaunchedEffectAsyncState")
+        {
+            return PayloadKind::Effect;
+        }
+
+        if type_name.contains("RecomposeScope") {
+            return PayloadKind::Scope;
+        }
+
+        if type_name.contains("LocalStateEntry<") || type_name.contains("StaticLocalEntry<") {
+            return PayloadKind::Internal;
+        }
+
+        if type_name.contains("::owned::Owned<") || type_name.starts_with("cranpose_core::Owned<") {
+            return PayloadKind::Remember;
+        }
+
+        PayloadKind::Internal
+    }
+
     fn group_payload_start_at(&self, group_index: usize) -> usize {
         self.groups[group_index].payload_start as usize
     }
@@ -166,6 +204,7 @@ impl SlotTable {
                 generation,
                 type_id: TypeId::of::<T>(),
                 type_name: std::any::type_name::<T>(),
+                kind: Self::classify_payload_kind::<T>(),
                 value: Box::new(value),
             },
         );
@@ -180,12 +219,14 @@ impl SlotTable {
         group_index: usize,
         payload_index: usize,
         value: T,
-    ) -> Box<dyn std::any::Any> {
+    ) -> (PayloadKind, Box<dyn std::any::Any>) {
         let record = self.group_payload_record_at_mut(group_index, payload_index);
         let old_value = mem::replace(&mut record.value, Box::new(value));
+        let old_kind = record.kind;
         record.type_id = TypeId::of::<T>();
         record.type_name = std::any::type_name::<T>();
-        old_value
+        record.kind = Self::classify_payload_kind::<T>();
+        (old_kind, old_value)
     }
 
     pub(super) fn clear_payload_locations_for_payloads(&mut self, payloads: &[PayloadRecord]) {

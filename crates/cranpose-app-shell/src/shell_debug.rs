@@ -90,8 +90,8 @@ where
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn debug_all_slots(&self) -> Vec<(usize, String)> {
-        self.composition.debug_dump_all_slots()
+    pub fn debug_slot_entries(&self) -> Vec<cranpose_core::SlotDebugEntry> {
+        self.composition.debug_dump_slot_entries()
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -133,7 +133,7 @@ where
         &mut self,
         node_id: NodeId,
         slot_id: u64,
-    ) -> Option<Vec<(usize, String)>> {
+    ) -> Option<Vec<cranpose_core::SlotDebugEntry>> {
         let mut applier = self.composition.applier_mut();
         applier
             .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {

@@ -19,9 +19,10 @@ mod tests;
 
 pub(crate) use anchors::{AnchorRegistry, AnchorState};
 pub use debug::{
-    SlotDebugAnchor, SlotDebugGroup, SlotDebugScope, SlotDebugSnapshot, SlotTableDebugStats,
+    SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
+    SlotDebugSnapshot, SlotTableDebugStats,
 };
-pub(crate) use detach::dispose_detached_subtree_now;
+pub(crate) use detach::{dispose_detached_node_now, dispose_detached_subtree_now};
 use groups::GroupRecord;
 pub(crate) use lifecycle::{DeferredDrop, SlotLifecycleCoordinator};
 use payload_locations::PayloadLocationRegistry;
@@ -29,6 +30,8 @@ pub use table::SlotTable;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use table::{SlotWriteSession, SlotWriteSessionState};
 pub(crate) use types::NodeLifecycle;
-pub(crate) use types::{DetachedSubtree, FinishGroupResult, SlotPassMode};
+pub(crate) use types::{
+    DetachedAnchorSet, DetachedSubtree, FinishGroupResult, PayloadKind, SlotPassMode,
+};
 use types::{NodeRecord, PayloadRecord};
 pub(crate) use validate::SlotInvariantError;

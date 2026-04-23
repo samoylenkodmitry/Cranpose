@@ -1,7 +1,18 @@
-use super::{DetachedSubtree, GroupRecord, SlotTable, SlotWriteSessionState};
-use crate::{remove_child_and_cleanup_now, slot_storage::GroupKey, AnchorId, Applier, NodeId};
+use super::{DetachedAnchorSet, DetachedSubtree, GroupRecord, SlotTable, SlotWriteSessionState};
+use crate::{
+    remove_child_and_cleanup_now, slot_storage::GroupKey, AnchorId, Applier, NodeError, NodeId,
+};
 
 impl SlotTable {
+    fn allocate_detached_generation(&mut self) -> u64 {
+        let generation = self.next_detached_generation;
+        self.next_detached_generation = self
+            .next_detached_generation
+            .checked_add(1)
+            .expect("detached subtree generation overflow");
+        generation
+    }
+
     pub(in crate::slot) fn detach_range(
         &mut self,
         start_index: usize,
@@ -44,12 +55,24 @@ impl SlotTable {
             -(root_subtree_node_count as i32),
         );
 
+        let scope_ids = removed_groups
+            .iter()
+            .filter_map(|group| group.scope_id)
+            .collect::<Vec<_>>();
+        let anchors = DetachedAnchorSet {
+            group_anchors: removed_groups.iter().map(|group| group.anchor).collect(),
+        };
+        let root_nodes = Self::root_node_ids_from_records(&removed_nodes);
         DetachedSubtree {
             root_key,
             root_scope_id,
             groups: removed_groups,
             payloads: removed_payloads,
             nodes: removed_nodes,
+            root_nodes,
+            scope_ids,
+            anchors,
+            generation: self.allocate_detached_generation(),
         }
     }
 
@@ -94,48 +117,45 @@ impl SlotTable {
         &mut self,
         state: &mut SlotWriteSessionState,
     ) -> Vec<DetachedSubtree> {
-        let remaining = state.take_remaining_root_children();
-        let mut detached = Vec::new();
-        for anchor in remaining.into_iter().rev() {
-            if self.anchors.contains_active(anchor) {
-                detached.push(self.detach_subtree(anchor));
-            }
+        if !state.root.detach_remaining_children {
+            return Vec::new();
         }
-        detached.reverse();
+
+        let next_child_index = state.root.next_child_index;
+        let mut detached = Vec::new();
+        while let Some(anchor) = self.direct_child_anchor_at(AnchorId::INVALID, next_child_index) {
+            detached.push(self.detach_subtree(anchor));
+        }
         detached
     }
 }
 
-pub(in crate::slot) fn dispose_detached_node_now(applier: &mut dyn Applier, node_id: NodeId) {
+pub(crate) fn dispose_detached_node_now(
+    applier: &mut dyn Applier,
+    node_id: NodeId,
+) -> Result<(), NodeError> {
     let parent_id = applier.get_mut(node_id).ok().and_then(|node| node.parent());
     if let Some(parent_id) = parent_id {
-        let _ = remove_child_and_cleanup_now(applier, parent_id, node_id);
-        return;
+        return remove_child_and_cleanup_now(applier, parent_id, node_id);
     }
     if let Ok(node) = applier.get_mut(node_id) {
         node.on_removed_from_parent();
         node.unmount();
     }
-    let _ = applier.remove(node_id);
+    match applier.remove(node_id) {
+        Ok(()) | Err(NodeError::Missing { .. }) => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 pub(crate) fn dispose_detached_subtree_now(applier: &mut dyn Applier, subtree: &DetachedSubtree) {
-    let node_set = subtree
-        .nodes
-        .iter()
-        .map(|node| node.id)
-        .collect::<std::collections::HashSet<_>>();
-    let roots = subtree
-        .nodes
-        .iter()
-        .map(|node| node.id)
-        .filter(|id| {
-            let parent = applier.get_mut(*id).ok().and_then(|node| node.parent());
-            parent.is_none_or(|parent_id| !node_set.contains(&parent_id))
-        })
-        .collect::<Vec<_>>();
+    let roots = if subtree.root_nodes().is_empty() && !subtree.nodes.is_empty() {
+        SlotTable::root_node_ids_from_records(&subtree.nodes)
+    } else {
+        subtree.root_nodes().to_vec()
+    };
 
     for root in roots {
-        dispose_detached_node_now(applier, root);
+        let _ = dispose_detached_node_now(applier, root);
     }
 }

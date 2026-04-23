@@ -2517,7 +2517,7 @@ mod tests {
         robot: &mut RobotTestRule<TestRenderer>,
         node_id: usize,
         slot_id: u64,
-    ) -> Vec<(usize, String)> {
+    ) -> Vec<cranpose_core::SlotDebugEntry> {
         robot
             .shell_mut()
             .debug_subcompose_slot_table(node_id, slot_id)
@@ -2567,10 +2567,12 @@ mod tests {
         slot_id: u64,
         target_node_id: usize,
         radius: usize,
-    ) -> Vec<(usize, String)> {
+    ) -> Vec<cranpose_core::SlotDebugEntry> {
         let slots = subcompose_slot_table(robot, node_id, slot_id);
-        let needle = format!("Node(id={target_node_id})");
-        let Some(index) = slots.iter().position(|(_, entry)| entry == &needle) else {
+        let needle = format!("id={target_node_id},");
+        let Some(index) = slots.iter().position(|entry| {
+            entry.kind == cranpose_core::SlotDebugEntryKind::Node && entry.line.contains(&needle)
+        }) else {
             return Vec::new();
         };
         let start = index.saturating_sub(radius);
@@ -2583,10 +2585,12 @@ mod tests {
         robot: &mut RobotTestRule<TestRenderer>,
         node_id: usize,
         radius: usize,
-    ) -> Vec<(usize, String)> {
-        let slots = robot.shell_mut().debug_all_slots();
-        let needle = format!("Node(id={node_id})");
-        let Some(index) = slots.iter().position(|(_, entry)| entry == &needle) else {
+    ) -> Vec<cranpose_core::SlotDebugEntry> {
+        let slots = robot.shell_mut().debug_slot_entries();
+        let needle = format!("id={node_id},");
+        let Some(index) = slots.iter().position(|entry| {
+            entry.kind == cranpose_core::SlotDebugEntryKind::Node && entry.line.contains(&needle)
+        }) else {
             return Vec::new();
         };
         let start = index.saturating_sub(radius);
@@ -3024,7 +3028,7 @@ mod tests {
             "slots before pump: {:?}",
             robot
                 .shell_mut()
-                .debug_all_slots()
+                .debug_slot_entries()
                 .into_iter()
                 .take(40)
                 .collect::<Vec<_>>()

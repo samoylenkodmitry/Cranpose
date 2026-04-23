@@ -68,8 +68,8 @@ pub use runtime::{
     RuntimeHandle, StateId, TaskHandle,
 };
 pub use slot::{
-    SlotDebugAnchor, SlotDebugGroup, SlotDebugScope, SlotDebugSnapshot, SlotTable,
-    SlotTableDebugStats,
+    SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
+    SlotDebugSnapshot, SlotTable, SlotTableDebugStats,
 };
 pub use slot_storage::{
     BeginGroupInput, GroupAnchor, GroupId, GroupKey, GroupStart, GroupStartKind, NodeRecordResult,

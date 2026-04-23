@@ -129,11 +129,8 @@ where
     }
 }
 
-fn live_slot_count(slots: &[(usize, String)]) -> usize {
-    slots
-        .iter()
-        .filter(|(_, desc)| *desc != "Gap" && !desc.starts_with("Gap("))
-        .count()
+fn live_slot_count(slots: &[cranpose_core::SlotDebugEntry]) -> usize {
+    slots.len()
 }
 
 thread_local! {
@@ -1127,7 +1124,7 @@ fn layout_recovers_after_tab_switching_updates() {
             shell.layout_tree().is_some(),
             "layout_tree should remain available after update cycle {frame}"
         );
-        let live_slots = live_slot_count(&shell.debug_all_slots());
+        let live_slots = live_slot_count(&shell.debug_slot_entries());
         baseline_live_slots.get_or_insert(live_slots);
         peak_live_slots = peak_live_slots.max(live_slots);
     }

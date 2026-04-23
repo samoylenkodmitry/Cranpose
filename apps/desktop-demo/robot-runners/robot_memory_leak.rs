@@ -255,18 +255,26 @@ fn log_runtime_stats(robot: &cranpose::Robot, phase: &str) {
     match robot.get_runtime_leak_debug_stats() {
         Ok(stats) => {
             eprintln!(
-                "[runtime:{phase}] nodes={}/{} live_heap_mb={:.1} recycled_heap_mb={:.1} slot_heap_mb={:.1} slots={}/{} pending={}/{} anchors={}/{} scopes={}/{} commands={}/{} observer_states={}/{}",
+                "[runtime:{phase}] nodes={}/{} live_heap_mb={:.1} recycled_heap_mb={:.1} slot_heap_mb={:.1} groups={}/{} payloads={}/{} payload_locations={}/{} slot_nodes={}/{} pending_drops={}/{} anchors={}/{} scope_index={}/{} scopes={}/{} commands={}/{} observer_states={}/{}",
                 stats.applier_stats.nodes_len,
                 stats.applier_stats.nodes_cap,
                 stats.live_node_heap_bytes as f64 / (1024.0 * 1024.0),
                 stats.recycled_node_heap_bytes as f64 / (1024.0 * 1024.0),
                 stats.slot_table_heap_bytes as f64 / (1024.0 * 1024.0),
-                stats.slot_stats.slots_len,
-                stats.slot_stats.slots_cap,
-                stats.slot_stats.pending_slot_drops_len,
-                stats.slot_stats.pending_slot_drops_cap,
-                stats.slot_stats.anchors_len,
-                stats.slot_stats.anchors_cap,
+                stats.slot_stats.group_count,
+                stats.slot_stats.group_capacity,
+                stats.slot_stats.payload_count,
+                stats.slot_stats.payload_capacity,
+                stats.slot_stats.payload_location_count,
+                stats.slot_stats.payload_location_capacity,
+                stats.slot_stats.node_count,
+                stats.slot_stats.node_capacity,
+                stats.slot_stats.pending_drop_count,
+                stats.slot_stats.pending_drop_capacity,
+                stats.slot_stats.active_anchor_count,
+                stats.slot_stats.anchor_capacity,
+                stats.slot_stats.scope_index_count,
+                stats.slot_stats.scope_index_capacity,
                 stats.recompose_scope_stats.len,
                 stats.recompose_scope_stats.capacity,
                 stats.pass_stats.commands_len,
@@ -482,11 +490,29 @@ fn main() {
                         after_runtime.applier_stats.nodes_cap
                     ));
                 }
-                if after_runtime.slot_stats.slots_len > baseline_runtime.slot_stats.slots_len + 512
+                if after_runtime.slot_stats.group_count > baseline_runtime.slot_stats.group_count + 128
                 {
                     framework_issues.push(format!(
-                        "slot count grew from {} to {}",
-                        baseline_runtime.slot_stats.slots_len, after_runtime.slot_stats.slots_len
+                        "group count grew from {} to {}",
+                        baseline_runtime.slot_stats.group_count,
+                        after_runtime.slot_stats.group_count
+                    ));
+                }
+                if after_runtime.slot_stats.payload_count
+                    > baseline_runtime.slot_stats.payload_count + 256
+                {
+                    framework_issues.push(format!(
+                        "payload count grew from {} to {}",
+                        baseline_runtime.slot_stats.payload_count,
+                        after_runtime.slot_stats.payload_count
+                    ));
+                }
+                if after_runtime.slot_stats.node_count > baseline_runtime.slot_stats.node_count + 128
+                {
+                    framework_issues.push(format!(
+                        "slot node count grew from {} to {}",
+                        baseline_runtime.slot_stats.node_count,
+                        after_runtime.slot_stats.node_count
                     ));
                 }
                 if after_runtime.live_node_heap_bytes

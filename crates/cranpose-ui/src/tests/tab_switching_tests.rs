@@ -936,7 +936,7 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
 
     let baseline_active = composition.applier_mut().len();
     let baseline_capacity = composition.applier_mut().capacity();
-    let baseline_slots = composition.debug_dump_all_slots().len();
+    let baseline_slots = composition.debug_dump_slot_entries().len();
 
     // Run many cycles
     for _ in 0..50 {
@@ -948,7 +948,7 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
 
     let final_active = composition.applier_mut().len();
     let final_capacity = composition.applier_mut().capacity();
-    let final_slots = composition.debug_dump_all_slots().len();
+    let final_slots = composition.debug_dump_slot_entries().len();
 
     assert_eq!(
         baseline_active, final_active,

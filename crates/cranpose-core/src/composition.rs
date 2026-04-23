@@ -291,8 +291,8 @@ impl<A: Applier + 'static> Composition<A> {
         self.slots.borrow().debug_dump_groups()
     }
 
-    pub fn debug_dump_all_slots(&self) -> Vec<(usize, String)> {
-        self.slots.borrow().debug_dump_all_slots()
+    pub fn debug_dump_slot_entries(&self) -> Vec<crate::SlotDebugEntry> {
+        self.slots.borrow().debug_dump_slot_entries()
     }
 
     pub fn slot_table_heap_bytes(&self) -> usize {

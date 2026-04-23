@@ -66,6 +66,7 @@ impl AnchorRegistry {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn contains_active(&self, anchor: AnchorId) -> bool {
         self.active_index(anchor).is_some()
     }
@@ -125,16 +126,6 @@ impl AnchorRegistry {
     pub(super) fn mark_detached_groups(&mut self, groups: &[GroupRecord]) {
         for group in groups {
             self.mark_detached(group.anchor);
-        }
-    }
-
-    pub(super) fn invalidate_groups(&mut self, groups: &[GroupRecord]) {
-        let mut removed = false;
-        for group in groups {
-            removed |= self.invalidate_state(group.anchor);
-        }
-        if removed {
-            self.maybe_shrink_sparse_storage();
         }
     }
 
@@ -234,7 +225,13 @@ impl SlotTable {
     }
 
     pub(crate) fn invalidate_detached_subtree_anchors(&mut self, subtree: &DetachedSubtree) {
-        self.anchors.invalidate_groups(&subtree.groups);
+        let mut removed = false;
+        for anchor in subtree.group_anchors() {
+            removed |= self.anchors.invalidate_state(anchor);
+        }
+        if removed {
+            self.anchors.maybe_shrink_sparse_storage();
+        }
     }
 
     pub(crate) fn compact_anchor_namespace(
@@ -397,6 +394,12 @@ impl SlotTable {
                 .get(&node.owner)
                 .copied()
                 .expect("detached node owner must remap");
+        }
+        for anchor in &mut subtree.anchors.group_anchors {
+            *anchor = remapped
+                .get(anchor)
+                .copied()
+                .expect("detached anchor metadata must remap");
         }
     }
 

@@ -208,7 +208,7 @@ fn slot_v2_empty_table_validates() {
     assert_eq!(table.validate(), Ok(()));
     assert!(table.groups.is_empty());
     assert!(table.debug_dump_groups().is_empty());
-    assert!(table.debug_dump_all_slots().is_empty());
+    assert!(table.debug_dump_slot_entries().is_empty());
 }
 
 #[test]
@@ -265,6 +265,9 @@ fn slot_storage_trait_exposes_semantic_session_surface() {
         SlotStorage::skip_group(session);
         let result = SlotStorage::finish_group_body(session);
         assert!(result.detached_children.is_empty());
+        assert_eq!(result.subtree_nodes, vec![55]);
+        assert_eq!(result.root_nodes, vec![55]);
+        assert!(result.was_skipped);
         SlotStorage::end_recompose(session);
         assert!(SlotStorage::validate(session).is_ok());
     });
@@ -332,23 +335,89 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
 }
 
 #[test]
-fn debug_dump_all_slots_omits_fake_payload_categories() {
+fn debug_dump_slot_entries_use_v2_native_labels() {
     const GROUP_KEY: Key = 51;
 
     let table = composed_group_with_value_and_node_table(GROUP_KEY);
-    let rows = table
-        .debug_dump_all_slots()
-        .into_iter()
-        .map(|(_, row)| row)
-        .collect::<Vec<_>>();
+    let rows = table.debug_dump_slot_entries();
 
     assert!(
-        rows.iter().any(|row| row.starts_with("Value(")),
-        "payload rows should still be visible in debug output"
+        rows.iter()
+            .any(|entry| entry.kind == super::SlotDebugEntryKind::Payload),
+        "payload entries should still be visible in debug output"
     );
     assert!(
-        rows.iter().all(|row| !row.starts_with("PayloadKind(")),
-        "debug output must not invent payload categories that the runtime does not use"
+        rows.iter()
+            .any(|entry| entry.line.contains("kind=internal")),
+        "debug output must expose the stored payload classification"
+    );
+    assert!(
+        rows.iter().all(|entry| {
+            !entry.line.starts_with("Value(") && !entry.line.starts_with("PayloadKind(")
+        }),
+        "debug output must speak in V2 entry labels rather than fake slot-stream wrappers"
+    );
+}
+
+#[test]
+fn debug_stats_report_explicit_v2_table_counts() {
+    const GROUP_KEY: Key = 34;
+
+    let table = composed_group_with_value_and_node_table(GROUP_KEY);
+    let stats = table.debug_stats();
+
+    assert_eq!(stats.group_count, 1);
+    assert_eq!(stats.payload_count, 1);
+    assert_eq!(stats.payload_location_count, 1);
+    assert_eq!(stats.node_count, 1);
+    assert_eq!(stats.active_anchor_count, 1);
+    assert_eq!(stats.scope_index_count, 0);
+    assert_eq!(stats.pending_drop_count, 0);
+    assert!(stats.group_capacity >= stats.group_count);
+    assert!(stats.payload_capacity >= stats.payload_count);
+    assert!(stats.payload_location_capacity >= stats.payload_location_count);
+    assert!(stats.node_capacity >= stats.node_count);
+    assert!(stats.anchor_capacity >= stats.active_anchor_count);
+    assert!(stats.scope_index_capacity >= stats.scope_index_count);
+    assert!(stats.pending_drop_capacity >= stats.pending_drop_count);
+}
+
+#[test]
+fn payload_records_store_semantic_payload_kinds() {
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, 52, None);
+        let _remembered = session.remember(|| 17_i32);
+        let _param_slot = session.value_slot(crate::ParamState::<i32>::default);
+        let _callback_slot = session.value_slot(crate::CallbackHolder::new);
+        let _return_slot = session.value_slot(crate::ReturnSlot::<i32>::default);
+        let _effect_slot = session.remember(crate::DisposableEffectState::default);
+        let _internal_slot = session.value_slot(|| 99_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    let payload_kinds = harness
+        .table
+        .group_payload_records_at(0)
+        .iter()
+        .map(|payload| payload.kind)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        payload_kinds,
+        vec![
+            super::PayloadKind::Remember,
+            super::PayloadKind::Param,
+            super::PayloadKind::Param,
+            super::PayloadKind::Return,
+            super::PayloadKind::Effect,
+            super::PayloadKind::Internal,
+        ]
     );
 }
 
@@ -627,12 +696,15 @@ fn removing_conditional_child_returns_detached_subtree() {
     assert_eq!(detached.root_scope_id(), Some(CHILD_SCOPE));
     assert_eq!(detached.group_count(), 1);
     assert_eq!(detached.node_count(), 1);
-    assert_eq!(detached.node_ids(), vec![41]);
+    assert_eq!(detached.node_ids_iter().collect::<Vec<_>>(), vec![41]);
+    assert_eq!(detached.root_nodes(), &[41]);
     assert_eq!(
         detached.node_states().collect::<Vec<_>>(),
         vec![(41, super::NodeLifecycle::Active)]
     );
+    assert_eq!(detached.generation(), 1);
     assert_eq!(detached.scope_ids(), vec![CHILD_SCOPE]);
+    assert_eq!(detached.group_anchors().collect::<Vec<_>>().len(), 1);
     assert_eq!(detached.groups[0].parent_anchor, AnchorId::INVALID);
     assert_eq!(detached.groups[0].depth, 0);
 }
@@ -786,7 +858,7 @@ fn retained_detached_child_nodes_stay_live_across_restore() {
     });
     harness.finish_pass(SlotPassMode::Compose);
 
-    assert_eq!(detached.node_ids(), vec![child_id]);
+    assert_eq!(detached.node_ids_iter().collect::<Vec<_>>(), vec![child_id]);
     assert_eq!(child_unmounts.get(), 0);
     assert_eq!(harness.applier.len(), 1);
     assert!(
@@ -946,6 +1018,74 @@ fn keyed_sibling_reorder_preserves_values_and_anchors() {
     assert_eq!(reordered_first_anchor, first_anchor);
     assert_eq!(*harness.table.read_value::<i32>(reordered_second_slot), 202);
     assert_eq!(*harness.table.read_value::<i32>(reordered_first_slot), 101);
+}
+
+#[test]
+fn keyed_sibling_search_never_matches_a_grandchild() {
+    const PARENT_KEY: Key = 410;
+    const STATIC_KEY: Key = 411;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (direct_anchor, grandchild_anchor) = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let _first = begin_keyed(session, STATIC_KEY, 1, None);
+        let grandchild = begin_keyed(session, STATIC_KEY, 2, None);
+        let grandchild_result = session.finish_group_body();
+        assert!(grandchild_result.detached_children.is_empty());
+        session.end_group();
+
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        let second = begin_keyed(session, STATIC_KEY, 2, None);
+        let second_result = session.finish_group_body();
+        assert!(second_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        (second.anchor, grandchild.anchor)
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (moved_anchor, reused_grandchild_anchor) =
+        harness.session(SlotPassMode::Compose, |session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+
+            let moved = begin_keyed(session, STATIC_KEY, 2, None);
+            assert_eq!(moved.kind, GroupStartKind::Moved);
+            let moved_result = session.finish_group_body();
+            assert!(moved_result.detached_children.is_empty());
+            session.end_group();
+
+            let _first = begin_keyed(session, STATIC_KEY, 1, None);
+            let reused_grandchild = begin_keyed(session, STATIC_KEY, 2, None);
+            assert_eq!(reused_grandchild.kind, GroupStartKind::Reused);
+            let grandchild_result = session.finish_group_body();
+            assert!(grandchild_result.detached_children.is_empty());
+            session.end_group();
+
+            let first_result = session.finish_group_body();
+            assert!(first_result.detached_children.is_empty());
+            session.end_group();
+
+            let parent_result = session.finish_group_body();
+            assert!(parent_result.detached_children.is_empty());
+            session.end_group();
+
+            (moved.anchor, reused_grandchild.anchor)
+        });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    assert_eq!(moved_anchor, direct_anchor);
+    assert_eq!(reused_grandchild_anchor, grandchild_anchor);
 }
 
 #[test]
@@ -1430,6 +1570,7 @@ fn validate_reports_node_count_mismatch_structurally() {
     table.nodes.push(super::NodeRecord {
         owner: table.groups[0].anchor,
         id: 999,
+        parent_id: None,
         generation: 1,
         lifecycle: super::NodeLifecycle::Active,
     });
@@ -1510,9 +1651,9 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_A_KEY, None);
-        session.record_node(10, 1);
+        session.record_node_with_parent(10, 1, None);
         begin_unkeyed(session, GRANDCHILD_KEY, None);
-        session.record_node(20, 1);
+        session.record_node_with_parent(20, 1, Some(10));
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -1542,6 +1683,9 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         session.skip_group();
         let child_a_result = session.finish_group_body();
         assert!(child_a_result.detached_children.is_empty());
+        assert_eq!(child_a_result.subtree_nodes, vec![10, 20]);
+        assert_eq!(child_a_result.root_nodes, vec![10]);
+        assert!(child_a_result.was_skipped);
         session.end_group();
 
         let child_b = begin_unkeyed(session, CHILD_B_KEY, None);
@@ -1616,6 +1760,49 @@ fn scope_index_resolves_active_groups_and_omits_detached_ones() {
 }
 
 #[test]
+fn detached_subtree_preserves_root_nodes_from_stored_parent_links() {
+    const PARENT_KEY: Key = 611;
+    const CHILD_KEY: Key = 612;
+    const GRANDCHILD_KEY: Key = 613;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        begin_unkeyed(session, CHILD_KEY, None);
+        session.record_node_with_parent(41, 1, None);
+        begin_unkeyed(session, GRANDCHILD_KEY, None);
+        session.record_node_with_parent(42, 1, Some(41));
+        let grandchild_result = session.finish_group_body();
+        assert!(grandchild_result.detached_children.is_empty());
+        session.end_group();
+        let child_result = session.finish_group_body();
+        assert!(child_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+        let parent_result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(parent_result.detached_children.len(), 1);
+        parent_result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    assert_eq!(detached.node_ids_iter().collect::<Vec<_>>(), vec![41, 42]);
+    assert_eq!(detached.root_nodes(), &[41]);
+}
+
+#[test]
 fn set_group_scope_replaces_previous_scope_lookup() {
     const GROUP_KEY: Key = 610;
     const OLD_SCOPE_ID: ScopeId = 56;
@@ -1673,7 +1860,7 @@ fn released_anchors_are_reused_without_sparse_growth() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.finish_pass(SlotPassMode::Compose);
     assert_eq!(harness.table.anchor_state(first_anchor), None);
-    let capacity_after_clear = harness.table.debug_stats().anchors_cap;
+    let capacity_after_clear = harness.table.debug_stats().anchor_capacity;
     assert!(
         capacity_after_clear <= GROUP_COUNT * 2,
         "releasing groups must not leave sparse anchor storage behind: after_clear={capacity_after_clear}",
@@ -1689,7 +1876,7 @@ fn released_anchors_are_reused_without_sparse_growth() {
     });
     harness.finish_pass(SlotPassMode::Compose);
 
-    let capacity_after_reuse = harness.table.debug_stats().anchors_cap;
+    let capacity_after_reuse = harness.table.debug_stats().anchor_capacity;
     assert!(reused_anchor.generation > 1);
     assert_ne!(reused_anchor, first_anchor);
     assert!(

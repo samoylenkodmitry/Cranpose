@@ -1,14 +1,24 @@
-use super::{DetachedSubtree, SlotTable, SlotTableDebugStats};
+use super::{DetachedSubtree, PayloadKind, SlotTable, SlotTableDebugStats};
 use std::any::Any;
 
 pub(crate) enum DeferredDrop {
-    Value(Box<dyn Any>),
+    Payload {
+        kind: PayloadKind,
+        value: Box<dyn Any>,
+    },
 }
 
 impl DeferredDrop {
+    pub(crate) fn payload(kind: PayloadKind, value: Box<dyn Any>) -> Self {
+        Self::Payload { kind, value }
+    }
+
     fn dispose(self) {
         match self {
-            Self::Value(value) => drop(value),
+            Self::Payload { kind, value } => {
+                let _ = kind.label();
+                drop(value);
+            }
         }
     }
 }
@@ -26,8 +36,8 @@ impl SlotLifecycleCoordinator {
     pub(crate) fn queue_subtree_disposal(&mut self, subtree: DetachedSubtree) {
         let mut subtree = subtree;
         subtree.mark_nodes_disposed();
-        for value in subtree.into_payload_values_rev() {
-            self.queue_drop(DeferredDrop::Value(value));
+        for drop in subtree.into_payload_drops_rev() {
+            self.queue_drop(drop);
         }
     }
 
@@ -52,8 +62,8 @@ impl SlotLifecycleCoordinator {
     }
 
     pub(crate) fn fill_debug_stats(&self, stats: &mut SlotTableDebugStats) {
-        stats.pending_slot_drops_len = self.pending_drops_len();
-        stats.pending_slot_drops_cap = self.pending_drops_capacity();
+        stats.pending_drop_count = self.pending_drops_len();
+        stats.pending_drop_capacity = self.pending_drops_capacity();
     }
 
     pub(crate) fn dispose_slot_table(&mut self, table: &mut SlotTable) {

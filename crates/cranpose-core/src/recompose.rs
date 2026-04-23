@@ -17,9 +17,15 @@ impl Composer {
                     detached_children,
                     structure_changed: _structure_changed,
                     direct_nodes,
+                    root_nodes,
+                    subtree_nodes: _subtree_nodes,
+                    was_skipped,
                 } = self
                     .composer
                     .with_slot_session_mut(|slots| slots.finish_group_body());
+                if was_skipped {
+                    self.composer.attach_root_nodes(root_nodes);
+                }
                 self.composer.dispose_detached_nodes(direct_nodes);
                 self.composer
                     .handle_detached_children(Some(self.scope.id()), detached_children);

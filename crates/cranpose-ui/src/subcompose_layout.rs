@@ -454,7 +454,7 @@ impl SubcomposeLayoutNode {
     pub fn debug_slot_table_for_slot(
         &self,
         slot_id: cranpose_core::SlotId,
-    ) -> Option<Vec<(usize, String)>> {
+    ) -> Option<Vec<cranpose_core::SlotDebugEntry>> {
         self.inner.borrow().state.debug_slot_table_for_slot(slot_id)
     }
 

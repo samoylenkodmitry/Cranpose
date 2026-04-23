@@ -78,9 +78,9 @@ fn recursive_decrease_increase_preserves_structure() {
             .map(|(idx, key, _, _)| (idx, key))
             .collect::<Vec<_>>()
     );
-    eprintln!("All slots:");
-    for (idx, desc) in composition.debug_dump_all_slots() {
-        eprintln!("  [{}] {}", idx, desc);
+    eprintln!("Slot entries:");
+    for entry in composition.debug_dump_slot_entries() {
+        eprintln!("  [{}] {}", entry.path, entry.line);
     }
 
     // The important property is that the active tree shrinks after the render.
@@ -107,9 +107,9 @@ fn recursive_decrease_increase_preserves_structure() {
             .map(|(idx, key, _, _)| (idx, key))
             .collect::<Vec<_>>()
     );
-    eprintln!("All slots (first 30):");
-    for (idx, desc) in composition.debug_dump_all_slots().iter().take(30) {
-        eprintln!("  [{}] {}", idx, desc);
+    eprintln!("Slot entries (first 30):");
+    for entry in composition.debug_dump_slot_entries().iter().take(30) {
+        eprintln!("  [{}] {}", entry.path, entry.line);
     }
 
     // After increasing back, we should have restored the original structure exactly
