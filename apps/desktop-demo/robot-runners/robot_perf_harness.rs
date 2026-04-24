@@ -8,7 +8,9 @@
 
 use cranpose::fps_stats;
 use cranpose::AppLauncher;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+use cranpose_foundation::lazy::{
+    remember_lazy_list_state, LazyLayoutStats, LazyListScope, LazyListState,
+};
 use cranpose_render_wgpu::RenderStatsSnapshot;
 use cranpose_ui::widgets::{
     Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
@@ -16,6 +18,7 @@ use cranpose_ui::widgets::{
 use cranpose_ui::{
     composable, Color, GraphicsLayer, LinearArrangement, Modifier, RenderEffect, TextStyle,
 };
+use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
 const DEFAULT_DURATION_SECS: u64 = 3;
@@ -29,6 +32,11 @@ const SCROLL_X_DEFAULT: f32 = 450.0;
 const SCROLL_X_BACKDROP: f32 = 700.0;
 const SCROLL_START_Y: f32 = 590.0;
 const SCROLL_END_Y: f32 = 180.0;
+const LAZY_STATS_HOOK: &str = "perf.lazy_stats";
+
+thread_local! {
+    static PERF_LAZY_LIST_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PerfScenario {
@@ -195,6 +203,9 @@ impl RenderStatsAccumulator {
 #[allow(non_snake_case)]
 fn PerfHarnessApp(scenario: PerfScenario) {
     let list_state = remember_lazy_list_state();
+    PERF_LAZY_LIST_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(list_state);
+    });
 
     Box(
         Modifier::empty().fill_max_size(),
@@ -651,6 +662,72 @@ fn print_memory_summary(
     }
 }
 
+fn lazy_reuse_rate_pct(stats: &LazyLayoutStats) -> f64 {
+    if stats.total_composed == 0 {
+        0.0
+    } else {
+        (stats.reuse_count as f64 / stats.total_composed as f64) * 100.0
+    }
+}
+
+fn format_lazy_summary(stats: LazyLayoutStats) -> String {
+    format!(
+        "items_in_use={} items_in_pool={} total_composed={} reuse_count={} reuse_rate_pct={:.2}",
+        stats.items_in_use,
+        stats.items_in_pool,
+        stats.total_composed,
+        stats.reuse_count,
+        lazy_reuse_rate_pct(&stats),
+    )
+}
+
+fn lazy_summary_from_app_thread() -> Option<String> {
+    PERF_LAZY_LIST_STATE.with(|slot| {
+        let state = *slot.borrow();
+        state.map(|state| format_lazy_summary(state.stats()))
+    })
+}
+
+fn print_lazy_summary(robot: &cranpose::Robot, scenario: PerfScenario) {
+    let summary = robot
+        .invoke_app_hook(LAZY_STATS_HOOK, "")
+        .unwrap_or_else(|err| fatal(robot, format!("failed to read lazy stats: {err}")));
+
+    match summary {
+        Some(summary) => println!("PERF_LAZY_SUMMARY scenario={} {}", scenario.name(), summary),
+        None => println!(
+            "PERF_LAZY_SUMMARY scenario={} unavailable=true",
+            scenario.name()
+        ),
+    }
+}
+
+fn print_runtime_summary(robot: &cranpose::Robot, scenario: PerfScenario) {
+    let stats = robot
+        .get_runtime_leak_debug_stats()
+        .unwrap_or_else(|err| fatal(robot, format!("failed to read runtime stats: {err}")));
+
+    println!(
+        "PERF_RUNTIME_SUMMARY scenario={} groups={} payloads={} nodes={} active_anchors={} detached_anchors={} invalidated_anchors={} free_anchors={} anchor_capacity={} retained_subtrees={} retained_groups={} retained_payloads={} retained_nodes={} retained_scopes={} retained_anchors={} retained_heap_bytes={}",
+        scenario.name(),
+        stats.slot_stats.group_count,
+        stats.slot_stats.payload_count,
+        stats.slot_stats.node_count,
+        stats.slot_stats.active_anchor_count,
+        stats.slot_stats.detached_anchor_count,
+        stats.slot_stats.invalidated_anchor_count,
+        stats.slot_stats.free_anchor_count,
+        stats.slot_stats.anchor_capacity,
+        stats.slot_stats.retained_subtree_count,
+        stats.slot_stats.retained_group_count,
+        stats.slot_stats.retained_payload_count,
+        stats.slot_stats.retained_node_count,
+        stats.slot_stats.retained_scope_count,
+        stats.slot_stats.retained_anchor_count,
+        stats.slot_stats.retained_heap_bytes,
+    );
+}
+
 fn main() {
     env_logger::init();
     let scenario = PerfScenario::from_env();
@@ -680,6 +757,10 @@ fn main() {
         .with_title(format!("Robot Perf Harness - {}", scenario.title()))
         .with_size(900, 700)
         .with_headless(env_bool("CRANPOSE_HEADLESS", true))
+        .with_robot_app_hook(|name, _argument| match name.as_str() {
+            LAZY_STATS_HOOK => Ok(lazy_summary_from_app_thread()),
+            _ => Err(format!("unknown robot app hook: {name}")),
+        })
         .with_test_driver(move |robot| {
             let timeout_secs = timeout_budget_secs(duration_secs, warmup_secs, timeout_slack_secs);
             std::thread::spawn(move || {
@@ -791,6 +872,8 @@ fn main() {
 
             print_memory_summary(scenario, baseline_rss_kb, peak_rss_kb, sample_count);
             print_render_summary(scenario, render_stats);
+            print_lazy_summary(&robot, scenario);
+            print_runtime_summary(&robot, scenario);
             if perf_isolate_debug_enabled() {
                 match robot.get_render_stats() {
                     Ok(Some(snapshot)) => {
@@ -841,8 +924,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        timeout_budget_secs, timeout_slack_secs_from, PerfScenario, RenderStatsAccumulator,
-        RenderStatsSnapshot, DEFAULT_TIMEOUT_SLACK_SECS,
+        format_lazy_summary, lazy_reuse_rate_pct, timeout_budget_secs, timeout_slack_secs_from,
+        LazyLayoutStats, PerfScenario, RenderStatsAccumulator, RenderStatsSnapshot,
+        DEFAULT_TIMEOUT_SLACK_SECS,
     };
 
     #[test]
@@ -928,5 +1012,25 @@ mod tests {
         assert_eq!(stats.max_upload_bytes, 512);
         assert_eq!(stats.average_u64(stats.upload_bytes), 384);
         assert!((stats.cache_hit_rate_pct() - 71.428).abs() < 0.01);
+    }
+
+    #[test]
+    fn lazy_reuse_rate_is_zero_without_compositions() {
+        assert_eq!(lazy_reuse_rate_pct(&LazyLayoutStats::default()), 0.0);
+    }
+
+    #[test]
+    fn lazy_summary_reports_reuse_rate() {
+        let summary = format_lazy_summary(LazyLayoutStats {
+            items_in_use: 6,
+            items_in_pool: 3,
+            total_composed: 20,
+            reuse_count: 15,
+        });
+
+        assert_eq!(
+            summary,
+            "items_in_use=6 items_in_pool=3 total_composed=20 reuse_count=15 reuse_rate_pct=75.00",
+        );
     }
 }

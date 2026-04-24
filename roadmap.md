@@ -8,8 +8,8 @@ This file tracks the current forward work and marks boxes closed only after full
 
 - Slot Table V2 is the active implementation under `crates/cranpose-core/src/slot/*`.
 - The old `slot_table.rs` wrapper surface is removed.
-- Strict audit found remaining drift between `docs/cranpose_slot_table_v2_design.md` and the current implementation; the checklists below track the required convergence work.
-- Last recorded full local verification on 2026-04-23 was green:
+- Strict audit convergence work against `docs/cranpose_slot_table_v2_design.md` is complete; the remaining unchecked items are conditional follow-ups that require profiling or a concrete target policy before implementation.
+- Last recorded full local verification on 2026-04-24 was green:
   - `cargo fmt`
   - `cargo test`
   - `cargo clippy --workspace --all-targets -- -D warnings`
@@ -28,7 +28,7 @@ This file tracks the current forward work and marks boxes closed only after full
 - [x] Reduce modifier slice collection churn in lazy-list scroll-reuse hot paths.
 - [x] Reduce layout-box and semantics allocation churn in lazy-list scroll-reuse hot paths.
 - [x] Add retained-memory instrumentation and anchor-capacity diagnostics that are cheap enough for regular debug investigation and strong enough for regression tests; `SlotTableDebugStats` now reports retained subtree counts/heap plus active/detached/invalidated/free anchor breakdown, and the coverage exercises both raw slot tables and composition-owned retention.
-- [ ] Audit lazy-list and subcompose retention/reuse behavior under perf load and add specialized policy only if profiling proves the generic retained-subtree path is the bottleneck.
+- [x] Audit lazy-list and subcompose retention/reuse behavior under perf load and add specialized policy only if profiling proves the generic retained-subtree path is the bottleneck; perf instrumentation showed no retained-subtree bottleneck, so no specialized policy was added.
 
 ## Slot Table Review Mitigation
 
@@ -41,13 +41,13 @@ This file tracks the current forward work and marks boxes closed only after full
 
 ## Full Verification Gate
 
-- [ ] `cargo fmt`
-- [ ] `cargo test > 1.tmp 2>&1`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`
-- [ ] Android release build: `./gradlew :app:assembleRelease` in `apps/android-demo/android`
-- [ ] Wasm build: `apps/desktop-demo/build-web.sh`
-- [ ] Robot e2e: `./run_robot_test.sh --sequential`
-- [ ] Read every verification log and fix every warning/failure before committing.
+- [x] `cargo fmt`
+- [x] `cargo test > 1.tmp 2>&1`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`
+- [x] Android release build: `./gradlew :app:assembleRelease` in `apps/android-demo/android`
+- [x] Wasm build: `apps/desktop-demo/build-web.sh`
+- [x] Robot e2e: `./run_robot_test.sh --sequential`
+- [x] Read every verification log and fix every warning/failure before committing.
 
 ## Follow-Up Work
 
@@ -63,5 +63,5 @@ This file tracks the current forward work and marks boxes closed only after full
 
 ## Next Execution Order
 
-- [ ] Complete the Slot Table Review Mitigation items in order, with the full verification gate and a separate commit after each completed item.
-- [ ] Profile lazy-list modifier/layout/semantics churn after review mitigation and only add specialized reuse policy if measurements show the generic retained-subtree path is still the bottleneck.
+- [x] Complete the Slot Table Review Mitigation items in order, with the full verification gate and a separate commit after each completed item.
+- [x] Profile lazy-list modifier/layout/semantics churn after review mitigation and only add specialized reuse policy if measurements show the generic retained-subtree path is still the bottleneck.
