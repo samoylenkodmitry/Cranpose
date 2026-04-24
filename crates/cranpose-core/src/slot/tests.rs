@@ -129,6 +129,7 @@ fn detached_single_child_with_options(
     parent_key: Key,
     child_key: Key,
     child_scope: Option<ScopeId>,
+    record_child_payload: bool,
     record_child_node: bool,
 ) -> (SlotHarness, DetachedSubtree, Option<NodeId>) {
     let mut harness = SlotHarness::new();
@@ -146,6 +147,9 @@ fn detached_single_child_with_options(
         let child = begin_unkeyed(session, child_key, None);
         if let Some(scope_id) = child_scope {
             session.set_group_scope(child.group, scope_id);
+        }
+        if record_child_payload {
+            let _ = session.value_slot(|| 17_i32);
         }
         if let (Some(node_id), Some(generation)) = (child_node, child_generation) {
             session.record_node(node_id, generation);
@@ -173,7 +177,42 @@ fn detached_single_child_with_options(
 
 fn detached_single_child(parent_key: Key, child_key: Key) -> (SlotHarness, DetachedSubtree) {
     let (harness, detached, _) =
-        detached_single_child_with_options(parent_key, child_key, None, false);
+        detached_single_child_with_options(parent_key, child_key, None, false, false);
+    (harness, detached)
+}
+
+fn detached_child_with_grandchild(
+    parent_key: Key,
+    child_key: Key,
+    grandchild_key: Key,
+) -> (SlotHarness, DetachedSubtree) {
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, parent_key, None);
+        begin_unkeyed(session, child_key, None);
+        begin_unkeyed(session, grandchild_key, None);
+        let grandchild_result = session.finish_group_body();
+        assert!(grandchild_result.detached_children.is_empty());
+        session.end_group();
+        let child_result = session.finish_group_body();
+        assert!(child_result.detached_children.is_empty());
+        session.end_group();
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, parent_key, None);
+        let parent_result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(parent_result.detached_children.len(), 1);
+        parent_result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass(SlotPassMode::Compose);
     (harness, detached)
 }
 
@@ -1091,7 +1130,7 @@ fn retention_validate_rejects_retained_scope_in_active_scope_index() {
     const CHILD_SCOPE: ScopeId = 23;
 
     let (mut harness, detached, _) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, Some(CHILD_SCOPE), false);
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, Some(CHILD_SCOPE), false, false);
     let retained_anchor = detached
         .group_anchors()
         .next()
@@ -1124,7 +1163,7 @@ fn retention_validate_rejects_disposed_retained_node() {
     const CHILD_KEY: Key = 379;
 
     let (harness, detached, child_node) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, true);
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
     let child_node = child_node.expect("test helper must record a child node");
     let retain_key = RetainKey {
         parent_scope: None,
@@ -1170,6 +1209,223 @@ fn retention_validate_rejects_retained_root_with_active_parent() {
         Err(SlotInvariantError::RetainedRootHasActiveParent {
             root_key: retain_key.key,
             parent_anchor,
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_root_key_mismatch() {
+    const PARENT_KEY: Key = 382;
+    const CHILD_KEY: Key = 383;
+
+    let (_, mut detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let expected = detached.root_key();
+    detached.groups[0].key = GroupKey::new(CHILD_KEY + 100, None, 0);
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedRootKeyMismatch {
+            expected,
+            actual: detached.groups[0].key,
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_root_scope_mismatch() {
+    const PARENT_KEY: Key = 384;
+    const CHILD_KEY: Key = 385;
+    const CHILD_SCOPE: ScopeId = 25;
+
+    let (_, mut detached, _) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, Some(CHILD_SCOPE), false, false);
+    let root_key = detached.root_key();
+    detached.root_scope_id = None;
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedRootScopeMismatch {
+            root_key,
+            expected: Some(CHILD_SCOPE),
+            actual: None,
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_non_preorder_parent() {
+    const PARENT_KEY: Key = 386;
+    const CHILD_KEY: Key = 387;
+    const GRANDCHILD_KEY: Key = 388;
+
+    let (_, mut detached) = detached_child_with_grandchild(PARENT_KEY, CHILD_KEY, GRANDCHILD_KEY);
+    let root_key = detached.root_key();
+    let expected_parent = detached.groups[0].anchor;
+    detached.groups[1].parent_anchor = AnchorId::INVALID;
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedInvalidParent {
+            root_key,
+            group_index: 1,
+            expected: expected_parent,
+            actual: AnchorId::INVALID,
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_bad_depth() {
+    const PARENT_KEY: Key = 389;
+    const CHILD_KEY: Key = 390;
+    const GRANDCHILD_KEY: Key = 391;
+
+    let (_, mut detached) = detached_child_with_grandchild(PARENT_KEY, CHILD_KEY, GRANDCHILD_KEY);
+    let root_key = detached.root_key();
+    detached.groups[1].depth = 2;
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedBadDepth {
+            root_key,
+            group_index: 1,
+            expected: 1,
+            actual: 2,
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_subtree_len_out_of_range() {
+    const PARENT_KEY: Key = 392;
+    const CHILD_KEY: Key = 393;
+    const GRANDCHILD_KEY: Key = 394;
+
+    let (_, mut detached) = detached_child_with_grandchild(PARENT_KEY, CHILD_KEY, GRANDCHILD_KEY);
+    let root_key = detached.root_key();
+    detached.groups[0].subtree_len = 3;
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedBadSubtreeLen {
+            root_key,
+            group_index: 0,
+            expected: 0,
+            actual: 3,
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_payload_owner_outside_subtree() {
+    const PARENT_KEY: Key = 395;
+    const CHILD_KEY: Key = 396;
+
+    let (harness, mut detached, _) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, true, false);
+    let root_key = detached.root_key();
+    let expected_owner = detached.groups[0].anchor;
+    let outside_anchor = harness.table.groups[0].anchor;
+    let payload_anchor = detached.payloads[0].anchor;
+    detached.payloads[0].owner = outside_anchor;
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedPayloadOwnerMismatch {
+            root_key,
+            payload_anchor,
+            expected: expected_owner,
+            actual: outside_anchor,
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_node_owner_outside_subtree() {
+    const PARENT_KEY: Key = 397;
+    const CHILD_KEY: Key = 398;
+
+    let (harness, mut detached, child_node) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
+    let root_key = detached.root_key();
+    let expected_owner = detached.groups[0].anchor;
+    let outside_anchor = harness.table.groups[0].anchor;
+    let child_node = child_node.expect("test helper must record a child node");
+    detached.nodes[0].owner = outside_anchor;
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedNodeOwnerMismatch {
+            root_key,
+            node_id: child_node,
+            expected: expected_owner,
+            actual: outside_anchor,
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_root_node_mismatch() {
+    const PARENT_KEY: Key = 399;
+    const CHILD_KEY: Key = 400;
+
+    let (_, mut detached, child_node) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
+    let root_key = detached.root_key();
+    let child_node = child_node.expect("test helper must record a child node");
+    detached.root_nodes.clear();
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedRootNodesMismatch {
+            root_key,
+            expected: vec![child_node],
+            actual: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_anchor_metadata_mismatch() {
+    const PARENT_KEY: Key = 401;
+    const CHILD_KEY: Key = 402;
+
+    let (_, mut detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let root_key = detached.root_key();
+    let expected = detached
+        .groups
+        .iter()
+        .map(|group| group.anchor)
+        .collect::<Vec<_>>();
+    detached.anchors.group_anchors.clear();
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedAnchorMetadataMismatch {
+            root_key,
+            expected,
+            actual: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_scope_ids_mismatch() {
+    const PARENT_KEY: Key = 403;
+    const CHILD_KEY: Key = 404;
+    const CHILD_SCOPE: ScopeId = 26;
+
+    let (_, mut detached, _) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, Some(CHILD_SCOPE), false, false);
+    let root_key = detached.root_key();
+    detached.scope_ids.clear();
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedScopeIdsMismatch {
+            root_key,
+            expected: vec![CHILD_SCOPE],
+            actual: Vec::new(),
         })
     );
 }

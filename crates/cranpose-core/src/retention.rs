@@ -132,6 +132,9 @@ impl RetentionManager {
                 });
             }
 
+            #[cfg(any(test, debug_assertions))]
+            subtree.validate_detached()?;
+
             for anchor in subtree.group_anchors() {
                 match table.anchor_state(anchor) {
                     Some(AnchorState::Detached) => {}

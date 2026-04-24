@@ -1,4 +1,8 @@
+#[cfg(any(test, debug_assertions))]
+use super::DetachedSubtree;
 use super::{AnchorState, NodeLifecycle, SlotLifecycleCoordinator, SlotTable};
+#[cfg(any(test, debug_assertions))]
+use crate::collections::map::HashSet;
 use crate::{collections::map::HashMap, slot_storage::GroupKey, AnchorId, NodeId, ScopeId};
 
 #[cfg_attr(not(debug_assertions), allow(dead_code))]
@@ -124,6 +128,109 @@ pub(crate) enum SlotInvariantError {
         root_key: GroupKey,
         node_id: NodeId,
         actual: NodeLifecycle,
+    },
+    DetachedSubtreeEmpty {
+        root_key: GroupKey,
+    },
+    DetachedRootKeyMismatch {
+        expected: GroupKey,
+        actual: GroupKey,
+    },
+    DetachedRootScopeMismatch {
+        root_key: GroupKey,
+        expected: Option<ScopeId>,
+        actual: Option<ScopeId>,
+    },
+    DetachedAnchorMetadataMismatch {
+        root_key: GroupKey,
+        expected: Vec<AnchorId>,
+        actual: Vec<AnchorId>,
+    },
+    DetachedDuplicateAnchor {
+        root_key: GroupKey,
+        anchor: AnchorId,
+    },
+    DetachedInvalidParent {
+        root_key: GroupKey,
+        group_index: usize,
+        expected: AnchorId,
+        actual: AnchorId,
+    },
+    DetachedBadDepth {
+        root_key: GroupKey,
+        group_index: usize,
+        expected: u32,
+        actual: u32,
+    },
+    DetachedBadSubtreeLen {
+        root_key: GroupKey,
+        group_index: usize,
+        expected: u32,
+        actual: u32,
+    },
+    DetachedBadSubtreeNodeCount {
+        root_key: GroupKey,
+        group_index: usize,
+        expected: u32,
+        actual: u32,
+    },
+    DetachedPayloadStartMismatch {
+        root_key: GroupKey,
+        group_index: usize,
+        expected: usize,
+        actual: usize,
+    },
+    DetachedPayloadOutOfRange {
+        root_key: GroupKey,
+        group_index: usize,
+        start: usize,
+        len: usize,
+        payload_count: usize,
+    },
+    DetachedPayloadCountMismatch {
+        root_key: GroupKey,
+        expected: usize,
+        actual: usize,
+    },
+    DetachedPayloadOwnerMismatch {
+        root_key: GroupKey,
+        payload_anchor: usize,
+        expected: AnchorId,
+        actual: AnchorId,
+    },
+    DetachedNodeStartMismatch {
+        root_key: GroupKey,
+        group_index: usize,
+        expected: usize,
+        actual: usize,
+    },
+    DetachedNodeOutOfRange {
+        root_key: GroupKey,
+        group_index: usize,
+        start: usize,
+        len: usize,
+        node_count: usize,
+    },
+    DetachedNodeCountMismatch {
+        root_key: GroupKey,
+        expected: usize,
+        actual: usize,
+    },
+    DetachedNodeOwnerMismatch {
+        root_key: GroupKey,
+        node_id: NodeId,
+        expected: AnchorId,
+        actual: AnchorId,
+    },
+    DetachedRootNodesMismatch {
+        root_key: GroupKey,
+        expected: Vec<NodeId>,
+        actual: Vec<NodeId>,
+    },
+    DetachedScopeIdsMismatch {
+        root_key: GroupKey,
+        expected: Vec<ScopeId>,
+        actual: Vec<ScopeId>,
     },
     WriterFrameOutOfBounds {
         frame_index: usize,
@@ -393,6 +500,241 @@ impl SlotTable {
                     actual: group.subtree_node_count,
                 });
             }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(any(test, debug_assertions))]
+impl DetachedSubtree {
+    pub(crate) fn validate_detached(&self) -> Result<(), SlotInvariantError> {
+        let root_key = self.root_key;
+        let Some(root) = self.groups.first() else {
+            return Err(SlotInvariantError::DetachedSubtreeEmpty { root_key });
+        };
+        if root.key != root_key {
+            return Err(SlotInvariantError::DetachedRootKeyMismatch {
+                expected: root_key,
+                actual: root.key,
+            });
+        }
+        if self.root_scope_id != root.scope_id {
+            return Err(SlotInvariantError::DetachedRootScopeMismatch {
+                root_key,
+                expected: root.scope_id,
+                actual: self.root_scope_id,
+            });
+        }
+
+        let expected_anchors = self
+            .groups
+            .iter()
+            .map(|group| group.anchor)
+            .collect::<Vec<_>>();
+        if self.anchors.group_anchors != expected_anchors {
+            return Err(SlotInvariantError::DetachedAnchorMetadataMismatch {
+                root_key,
+                expected: expected_anchors,
+                actual: self.anchors.group_anchors.clone(),
+            });
+        }
+
+        let mut anchor_to_group = HashMap::default();
+        let mut anchor_set = HashSet::default();
+        for (index, anchor) in self.groups.iter().map(|group| group.anchor).enumerate() {
+            if !anchor_set.insert(anchor) {
+                return Err(SlotInvariantError::DetachedDuplicateAnchor { root_key, anchor });
+            }
+            anchor_to_group.insert(anchor, index);
+        }
+
+        let mut stack: Vec<(AnchorId, usize)> = Vec::new();
+        let mut expected_payload_start = 0usize;
+        let mut expected_node_start = 0usize;
+
+        for (index, group) in self.groups.iter().enumerate() {
+            while let Some((_, end)) = stack.last() {
+                if *end <= index {
+                    stack.pop();
+                } else {
+                    break;
+                }
+            }
+
+            let expected_parent = stack
+                .last()
+                .map(|(anchor, _)| *anchor)
+                .unwrap_or(AnchorId::INVALID);
+            if group.parent_anchor != expected_parent {
+                return Err(SlotInvariantError::DetachedInvalidParent {
+                    root_key,
+                    group_index: index,
+                    expected: expected_parent,
+                    actual: group.parent_anchor,
+                });
+            }
+
+            let expected_depth = stack.len() as u32;
+            if group.depth != expected_depth {
+                return Err(SlotInvariantError::DetachedBadDepth {
+                    root_key,
+                    group_index: index,
+                    expected: expected_depth,
+                    actual: group.depth,
+                });
+            }
+
+            let subtree_end = index + group.subtree_len as usize;
+            if subtree_end == index || subtree_end > self.groups.len() {
+                return Err(SlotInvariantError::DetachedBadSubtreeLen {
+                    root_key,
+                    group_index: index,
+                    expected: 0,
+                    actual: group.subtree_len,
+                });
+            }
+
+            let payload_start = group.payload_start as usize;
+            if payload_start != expected_payload_start {
+                return Err(SlotInvariantError::DetachedPayloadStartMismatch {
+                    root_key,
+                    group_index: index,
+                    expected: expected_payload_start,
+                    actual: payload_start,
+                });
+            }
+            let payload_len = group.payload_len as usize;
+            let payload_end = payload_start.saturating_add(payload_len);
+            if payload_end > self.payloads.len() {
+                return Err(SlotInvariantError::DetachedPayloadOutOfRange {
+                    root_key,
+                    group_index: index,
+                    start: payload_start,
+                    len: payload_len,
+                    payload_count: self.payloads.len(),
+                });
+            }
+            for payload in &self.payloads[payload_start..payload_end] {
+                if payload.owner != group.anchor || !anchor_set.contains(&payload.owner) {
+                    return Err(SlotInvariantError::DetachedPayloadOwnerMismatch {
+                        root_key,
+                        payload_anchor: payload.anchor,
+                        expected: group.anchor,
+                        actual: payload.owner,
+                    });
+                }
+            }
+            expected_payload_start = payload_end;
+
+            let node_start = group.node_start as usize;
+            if node_start != expected_node_start {
+                return Err(SlotInvariantError::DetachedNodeStartMismatch {
+                    root_key,
+                    group_index: index,
+                    expected: expected_node_start,
+                    actual: node_start,
+                });
+            }
+            let node_len = group.node_len as usize;
+            let node_end = node_start.saturating_add(node_len);
+            if node_end > self.nodes.len() {
+                return Err(SlotInvariantError::DetachedNodeOutOfRange {
+                    root_key,
+                    group_index: index,
+                    start: node_start,
+                    len: node_len,
+                    node_count: self.nodes.len(),
+                });
+            }
+            for node in &self.nodes[node_start..node_end] {
+                if node.owner != group.anchor || !anchor_set.contains(&node.owner) {
+                    return Err(SlotInvariantError::DetachedNodeOwnerMismatch {
+                        root_key,
+                        node_id: node.id,
+                        expected: group.anchor,
+                        actual: node.owner,
+                    });
+                }
+            }
+            expected_node_start = node_end;
+
+            stack.push((group.anchor, subtree_end));
+        }
+
+        if expected_payload_start != self.payloads.len() {
+            return Err(SlotInvariantError::DetachedPayloadCountMismatch {
+                root_key,
+                expected: expected_payload_start,
+                actual: self.payloads.len(),
+            });
+        }
+        if expected_node_start != self.nodes.len() {
+            return Err(SlotInvariantError::DetachedNodeCountMismatch {
+                root_key,
+                expected: expected_node_start,
+                actual: self.nodes.len(),
+            });
+        }
+
+        let mut expected_subtree_len = vec![1u32; self.groups.len()];
+        let mut expected_subtree_node_count = self
+            .groups
+            .iter()
+            .map(|group| group.node_len)
+            .collect::<Vec<_>>();
+        for index in (0..self.groups.len()).rev() {
+            let parent_anchor = self.groups[index].parent_anchor;
+            if !parent_anchor.is_valid() {
+                continue;
+            }
+            let parent_index = anchor_to_group
+                .get(&parent_anchor)
+                .copied()
+                .expect("validated detached parents must be local");
+            expected_subtree_len[parent_index] += expected_subtree_len[index];
+            expected_subtree_node_count[parent_index] += expected_subtree_node_count[index];
+        }
+
+        for (index, group) in self.groups.iter().enumerate() {
+            if group.subtree_len != expected_subtree_len[index] {
+                return Err(SlotInvariantError::DetachedBadSubtreeLen {
+                    root_key,
+                    group_index: index,
+                    expected: expected_subtree_len[index],
+                    actual: group.subtree_len,
+                });
+            }
+            if group.subtree_node_count != expected_subtree_node_count[index] {
+                return Err(SlotInvariantError::DetachedBadSubtreeNodeCount {
+                    root_key,
+                    group_index: index,
+                    expected: expected_subtree_node_count[index],
+                    actual: group.subtree_node_count,
+                });
+            }
+        }
+
+        let expected_root_nodes = SlotTable::root_node_ids_from_records(&self.nodes);
+        if self.root_nodes != expected_root_nodes {
+            return Err(SlotInvariantError::DetachedRootNodesMismatch {
+                root_key,
+                expected: expected_root_nodes,
+                actual: self.root_nodes.clone(),
+            });
+        }
+
+        let expected_scope_ids = self
+            .groups
+            .iter()
+            .filter_map(|group| group.scope_id)
+            .collect::<Vec<_>>();
+        if self.scope_ids != expected_scope_ids {
+            return Err(SlotInvariantError::DetachedScopeIdsMismatch {
+                root_key,
+                expected: expected_scope_ids,
+                actual: self.scope_ids.clone(),
+            });
         }
 
         Ok(())

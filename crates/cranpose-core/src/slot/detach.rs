@@ -63,7 +63,7 @@ impl SlotTable {
             group_anchors: removed_groups.iter().map(|group| group.anchor).collect(),
         };
         let root_nodes = Self::root_node_ids_from_records(&removed_nodes);
-        DetachedSubtree {
+        let subtree = DetachedSubtree {
             root_key,
             root_scope_id,
             groups: removed_groups,
@@ -73,7 +73,12 @@ impl SlotTable {
             scope_ids,
             anchors,
             generation: self.allocate_detached_generation(),
-        }
+        };
+        #[cfg(any(test, debug_assertions))]
+        subtree
+            .validate_detached()
+            .expect("detached subtree must validate after detach");
+        subtree
     }
 
     pub(in crate::slot) fn restore_subtree(
@@ -88,6 +93,10 @@ impl SlotTable {
             key,
             "restored subtree root key must match the requested group key",
         );
+        #[cfg(any(test, debug_assertions))]
+        subtree
+            .validate_detached()
+            .expect("detached subtree must validate before restore");
         let restored_group_count = subtree.groups.len();
         let restored_subtree_len = subtree
             .groups
