@@ -2931,10 +2931,59 @@ fn stale_group_handle_does_not_alias_recreated_group() {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ModelChild {
+struct ModelPayload {
     value: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModelNode {
     node_id: NodeId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModelGroup {
+    payloads: Vec<ModelPayload>,
+    nodes: Vec<ModelNode>,
     scope_id: ScopeId,
+}
+
+impl ModelGroup {
+    fn new(key: Key, node_id: NodeId) -> Self {
+        Self {
+            payloads: vec![ModelPayload {
+                value: (key as i32) * 10,
+            }],
+            nodes: vec![ModelNode { node_id }],
+            scope_id: ModelState::scope_id_for(key),
+        }
+    }
+
+    fn remembered_value(&self) -> i32 {
+        self.payloads
+            .first()
+            .expect("model groups carry one remembered payload")
+            .value
+    }
+
+    fn increment_remembered_value(&mut self) {
+        self.payloads
+            .first_mut()
+            .expect("model groups carry one remembered payload")
+            .value += 1;
+    }
+
+    fn node_id(&self) -> NodeId {
+        self.nodes
+            .first()
+            .expect("model groups carry one emitted node")
+            .node_id
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModelRoot {
+    key: Key,
+    children: Vec<Key>,
 }
 
 #[derive(Debug)]
@@ -2951,15 +3000,25 @@ enum ModelOperation {
 
 #[derive(Debug, Default)]
 struct ModelState {
-    active_order: Vec<Key>,
-    active: BTreeMap<Key, ModelChild>,
-    retained: BTreeMap<Key, ModelChild>,
+    active_roots: Vec<ModelRoot>,
+    active_groups: BTreeMap<Key, ModelGroup>,
+    retained_groups: BTreeMap<Key, ModelGroup>,
     next_node_id: NodeId,
 }
 
 impl ModelState {
     fn scope_id_for(key: Key) -> ScopeId {
         10_000 + key as ScopeId
+    }
+
+    fn active_order(&self) -> &[Key] {
+        self.active_roots
+            .first()
+            .map_or(&[], |root| root.children.as_slice())
+    }
+
+    fn set_active_root(&mut self, key: Key, children: Vec<Key>) {
+        self.active_roots = vec![ModelRoot { key, children }];
     }
 }
 
@@ -3005,8 +3064,9 @@ fn generate_model_operation(
     model: &ModelState,
     children: &[Key],
 ) -> ModelOperation {
-    if !model.active_order.is_empty() && next_bool(seed) {
-        let key = model.active_order[next_index(seed, model.active_order.len())];
+    let active_order = model.active_order();
+    if !active_order.is_empty() && next_bool(seed) {
+        let key = active_order[next_index(seed, active_order.len())];
         return ModelOperation::RecomposeSkip { key };
     }
 
@@ -3019,7 +3079,7 @@ fn generate_model_operation(
 
     let order_set = order.iter().copied().collect::<HashSet<_>>();
     let retain_detached = model
-        .active_order
+        .active_order()
         .iter()
         .copied()
         .filter(|key| !order_set.contains(key) && next_bool(seed))
@@ -3045,19 +3105,26 @@ fn assert_model_matches_slot_table(
     child_static_key: Key,
 ) {
     let snapshot = harness.table.debug_snapshot();
-    assert_eq!(snapshot.active_groups.len(), model.active_order.len() + 1);
-    assert_eq!(snapshot.active_payload_count, model.active_order.len());
-    assert_eq!(snapshot.active_node_count, model.active_order.len());
-    assert_eq!(snapshot.active_scope_count, model.active_order.len());
-    assert_eq!(snapshot.scope_registry_count, model.active_order.len());
+    let active_order = model.active_order();
+    assert_eq!(model.active_roots.len(), 1);
+    assert_eq!(snapshot.active_groups.len(), active_order.len() + 1);
+    assert_eq!(snapshot.active_payload_count, active_order.len());
+    assert_eq!(snapshot.active_node_count, active_order.len());
+    assert_eq!(snapshot.active_scope_count, active_order.len());
+    assert_eq!(snapshot.scope_registry_count, active_order.len());
 
     let root = snapshot
         .active_groups
         .first()
         .expect("model test root group must exist");
-    assert_eq!(root.static_key, parent_key);
+    let expected_root = model
+        .active_roots
+        .first()
+        .expect("model test root group must exist");
+    assert_eq!(expected_root.key, parent_key);
+    assert_eq!(root.static_key, expected_root.key);
     assert_eq!(root.depth, 0);
-    assert_eq!(root.subtree_len as usize, model.active_order.len() + 1);
+    assert_eq!(root.subtree_len as usize, active_order.len() + 1);
     assert_eq!(root.payload_len, 0);
     assert_eq!(root.node_len, 0);
 
@@ -3067,10 +3134,10 @@ fn assert_model_matches_slot_table(
         .skip(1)
         .copied()
         .collect::<Vec<_>>();
-    assert_eq!(active_children.len(), model.active_order.len());
+    assert_eq!(active_children.len(), active_order.len());
 
-    for (group, key) in active_children.iter().zip(model.active_order.iter()) {
-        let expected = model.active.get(key).expect("active model child");
+    for (group, key) in active_children.iter().zip(active_order.iter()) {
+        let expected = model.active_groups.get(key).expect("active model group");
         assert_eq!(group.static_key, child_static_key);
         assert_eq!(group.explicit_key, Some(*key));
         assert_eq!(group.ordinal, 0);
@@ -3091,7 +3158,8 @@ fn assert_model_matches_slot_table(
             .downcast_ref::<i32>()
             .expect("model child payload must be i32");
         assert_eq!(
-            *payload, expected.value,
+            *payload,
+            expected.remembered_value(),
             "remembered values must match the reference model for key {key}"
         );
         assert_eq!(
@@ -3101,7 +3169,7 @@ fn assert_model_matches_slot_table(
                 .first()
                 .expect("model child node must exist")
                 .id,
-            expected.node_id,
+            expected.node_id(),
             "node identity must match the reference model for key {key}"
         );
     }
@@ -3118,15 +3186,18 @@ fn assert_model_matches_slot_table(
     );
 
     let retained_keys = retained_subtrees.keys().copied().collect::<HashSet<_>>();
-    let active_keys = model.active.keys().copied().collect::<HashSet<_>>();
+    let active_keys = model.active_groups.keys().copied().collect::<HashSet<_>>();
     assert!(
         active_keys.is_disjoint(&retained_keys),
         "active groups and retained groups must stay disjoint"
     );
-    assert_eq!(retained_keys.len(), model.retained.len());
+    assert_eq!(retained_keys.len(), model.retained_groups.len());
 
     for (&key, subtree) in retained_subtrees {
-        let expected = model.retained.get(&key).expect("retained model child");
+        let expected = model
+            .retained_groups
+            .get(&key)
+            .expect("retained model group");
         let root_group = subtree
             .groups
             .first()
@@ -3150,7 +3221,8 @@ fn assert_model_matches_slot_table(
             .downcast_ref::<i32>()
             .expect("retained subtree payload must be i32");
         assert_eq!(
-            *payload, expected.value,
+            *payload,
+            expected.remembered_value(),
             "retained values must match the reference model for key {key}"
         );
         assert_eq!(
@@ -3158,7 +3230,7 @@ fn assert_model_matches_slot_table(
                 .first()
                 .expect("retained subtree node must exist")
                 .id,
-            expected.node_id,
+            expected.node_id(),
             "retained node identity must match the reference model for key {key}"
         );
         for group in &subtree.groups {
@@ -3186,10 +3258,10 @@ fn apply_model_operation(
             retain_detached,
             mutate_values,
         } => {
-            let previous_active = model.active.clone();
-            let previous_retained = model.retained.clone();
+            let previous_active = model.active_groups.clone();
+            let previous_retained = model.retained_groups.clone();
             let mut next_retained = previous_retained.clone();
-            let mut next_active = BTreeMap::<Key, ModelChild>::new();
+            let mut next_active = BTreeMap::<Key, ModelGroup>::new();
             let mut next_node_id = model.next_node_id;
             let mut carried_retained = std::mem::take(retained_subtrees);
 
@@ -3221,26 +3293,22 @@ fn apply_model_operation(
                         ),
                     }
 
-                    let mut child =
-                        existing_active
-                            .or(existing_retained)
-                            .unwrap_or_else(|| ModelChild {
-                                value: (key as i32) * 10,
-                                node_id: {
-                                    let node_id = next_node_id;
-                                    next_node_id += 1;
-                                    node_id
-                                },
-                                scope_id: ModelState::scope_id_for(key),
-                            });
+                    let mut child = existing_active.or(existing_retained).unwrap_or_else(|| {
+                        let node_id = {
+                            let node_id = next_node_id;
+                            next_node_id += 1;
+                            node_id
+                        };
+                        ModelGroup::new(key, node_id)
+                    });
 
                     next_retained.remove(&key);
                     session.set_group_scope(started.group, child.scope_id);
                     let slot = session.value_slot(|| (key as i32) * 10);
-                    session.record_node(child.node_id, 1);
+                    session.record_node(child.node_id(), 1);
                     if mutate_values.contains(&key) {
-                        child.value += 1;
-                        session.table.write_value(slot, child.value);
+                        child.increment_remembered_value();
+                        session.table.write_value(slot, child.remembered_value());
                     }
 
                     let child_result = session.finish_group_body();
@@ -3270,9 +3338,9 @@ fn apply_model_operation(
                 }
             }
 
-            model.active_order = order;
-            model.active = next_active;
-            model.retained = next_retained;
+            model.set_active_root(parent_key, order);
+            model.active_groups = next_active;
+            model.retained_groups = next_retained;
             model.next_node_id = next_node_id;
             *retained_subtrees = carried_retained;
         }
