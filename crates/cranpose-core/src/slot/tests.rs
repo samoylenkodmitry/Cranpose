@@ -7,9 +7,11 @@ use crate::{
     slot_storage::{GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, SlotStorage},
     AnchorId, Applier, BeginGroupInput, Key, MemoryApplier, Node, NodeId, ScopeId,
 };
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
+use std::fmt::Write as _;
+use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 
 struct SlotHarness {
@@ -2998,6 +3000,24 @@ enum ModelOperation {
     },
 }
 
+impl ModelOperation {
+    fn compact(&self) -> String {
+        match self {
+            Self::Compose {
+                order,
+                retain_detached,
+                mutate_values,
+            } => format!(
+                "compose(order={}, retain={}, mutate={})",
+                model_key_list(order),
+                model_sorted_key_set(retain_detached),
+                model_sorted_key_set(mutate_values)
+            ),
+            Self::RecomposeSkip { key } => format!("skip(key={key})"),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct ModelState {
     active_roots: Vec<ModelRoot>,
@@ -3031,24 +3051,192 @@ struct ModelScenario {
     children: &'static [Key],
 }
 
+struct ModelRunContext<'a> {
+    initial_seed: Option<u64>,
+    frame_seed: Option<u64>,
+    frame_index: usize,
+    parent_key: Key,
+    child_static_key: Key,
+    script: &'a [ModelOperation],
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RetainedSubtreeSummary {
+    key: Key,
+    root_key: GroupKey,
+    root_parent_anchor: AnchorId,
+    group_count: usize,
+    payload_count: usize,
+    node_count: usize,
+    scope_count: usize,
+    anchor_count: usize,
+    root_nodes: Vec<NodeId>,
+    group_anchors: Vec<AnchorId>,
+}
+
 impl ModelScenario {
     fn run(self) {
         let mut harness = SlotHarness::new();
         let mut retained_subtrees = BTreeMap::<Key, DetachedSubtree>::new();
         let mut model = ModelState::default();
         let mut seed = self.seed;
+        let mut script = Vec::<ModelOperation>::with_capacity(self.frame_count);
 
-        for _ in 0..self.frame_count {
+        for frame_index in 0..self.frame_count {
+            let frame_seed = seed;
             let operation = generate_model_operation(&mut seed, &model, self.children);
-            apply_model_operation(
+            script.push(operation.clone());
+            apply_model_operation_with_diagnostics(
                 &mut harness,
                 &mut retained_subtrees,
                 &mut model,
                 operation,
                 self.parent_key,
                 self.child_static_key,
+                ModelRunContext {
+                    initial_seed: Some(self.seed),
+                    frame_seed: Some(frame_seed),
+                    frame_index,
+                    parent_key: self.parent_key,
+                    child_static_key: self.child_static_key,
+                    script: &script,
+                },
             );
         }
+    }
+}
+
+fn model_key_list(keys: &[Key]) -> String {
+    let mut output = String::from("[");
+    for (index, key) in keys.iter().enumerate() {
+        if index > 0 {
+            output.push(',');
+        }
+        write!(&mut output, "{key}").expect("writing to String cannot fail");
+    }
+    output.push(']');
+    output
+}
+
+fn model_sorted_key_set(keys: &HashSet<Key>) -> String {
+    let mut sorted = keys.iter().copied().collect::<Vec<_>>();
+    sorted.sort_unstable();
+    model_key_list(&sorted)
+}
+
+fn model_failure_script(script: &[ModelOperation], frame_index: usize) -> String {
+    let mut output = String::new();
+    for (index, operation) in script.iter().enumerate() {
+        let marker = if index == frame_index {
+            " <-- failure"
+        } else {
+            ""
+        };
+        writeln!(&mut output, "{index:04}: {}{marker}", operation.compact())
+            .expect("writing to String cannot fail");
+    }
+    output
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_owned();
+    }
+    "non-string panic payload".to_owned()
+}
+
+fn retained_subtree_summary(
+    retained_subtrees: &BTreeMap<Key, DetachedSubtree>,
+) -> Vec<RetainedSubtreeSummary> {
+    retained_subtrees
+        .iter()
+        .map(|(&key, subtree)| RetainedSubtreeSummary {
+            key,
+            root_key: subtree.root_key(),
+            root_parent_anchor: subtree.root_parent_anchor(),
+            group_count: subtree.group_count(),
+            payload_count: subtree.payload_count(),
+            node_count: subtree.node_count(),
+            scope_count: subtree.scope_count(),
+            anchor_count: subtree.anchor_count(),
+            root_nodes: subtree.root_nodes().to_vec(),
+            group_anchors: subtree.group_anchors().collect(),
+        })
+        .collect()
+}
+
+fn model_failure_report(
+    context: &ModelRunContext<'_>,
+    failure: &str,
+    harness: &SlotHarness,
+    retained_subtrees: &BTreeMap<Key, DetachedSubtree>,
+) -> String {
+    let active_snapshot = panic::catch_unwind(AssertUnwindSafe(|| harness.table.debug_snapshot()))
+        .map(|snapshot| format!("{snapshot:#?}"))
+        .unwrap_or_else(|payload| {
+            format!(
+                "<active debug snapshot panicked: {}>",
+                panic_payload_message(payload.as_ref())
+            )
+        });
+    let retained_summary = retained_subtree_summary(retained_subtrees);
+    let seed = context
+        .initial_seed
+        .map(|seed| format!("0x{seed:016x}"))
+        .unwrap_or_else(|| "scripted".to_owned());
+    let frame_seed = context
+        .frame_seed
+        .map(|seed| format!("0x{seed:016x}"))
+        .unwrap_or_else(|| "scripted".to_owned());
+
+    format!(
+        "slot model failure\n\
+         seed: {seed}\n\
+         frame seed: {frame_seed}\n\
+         frame: {}\n\
+         parent key: {}\n\
+         child static key: {}\n\
+         failed invariant: {failure}\n\
+         compact scenario script:\n{}\
+         active debug snapshot:\n{active_snapshot}\n\
+         retained-subtree summary:\n{retained_summary:#?}",
+        context.frame_index,
+        context.parent_key,
+        context.child_static_key,
+        model_failure_script(context.script, context.frame_index),
+    )
+}
+
+fn apply_model_operation_with_diagnostics(
+    harness: &mut SlotHarness,
+    retained_subtrees: &mut BTreeMap<Key, DetachedSubtree>,
+    model: &mut ModelState,
+    operation: ModelOperation,
+    parent_key: Key,
+    child_static_key: Key,
+    context: ModelRunContext<'_>,
+) {
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        apply_model_operation(
+            harness,
+            retained_subtrees,
+            model,
+            operation,
+            parent_key,
+            child_static_key,
+        );
+    }));
+
+    if let Err(payload) = result {
+        let failure = panic_payload_message(payload.as_ref());
+        eprintln!(
+            "{}",
+            model_failure_report(&context, &failure, harness, retained_subtrees)
+        );
+        panic::resume_unwind(payload);
     }
 }
 
@@ -3401,16 +3589,38 @@ fn run_model_script(parent_key: Key, child_static_key: Key, script: &[ModelOpera
     let mut retained_subtrees = BTreeMap::<Key, DetachedSubtree>::new();
     let mut model = ModelState::default();
 
-    for operation in script.iter().cloned() {
-        apply_model_operation(
+    for (frame_index, operation) in script.iter().cloned().enumerate() {
+        apply_model_operation_with_diagnostics(
             &mut harness,
             &mut retained_subtrees,
             &mut model,
             operation,
             parent_key,
             child_static_key,
+            ModelRunContext {
+                initial_seed: None,
+                frame_seed: None,
+                frame_index,
+                parent_key,
+                child_static_key,
+                script,
+            },
         );
     }
+}
+
+#[test]
+fn model_operation_compact_format_is_deterministic() {
+    let operation = model_compose_frame(&[3, 1, 2], &[8, 4, 6], &[7, 5]);
+
+    assert_eq!(
+        operation.compact(),
+        "compose(order=[3,1,2], retain=[4,6,8], mutate=[5,7])"
+    );
+    assert_eq!(
+        ModelOperation::RecomposeSkip { key: 11 }.compact(),
+        "skip(key=11)"
+    );
 }
 
 #[test]
