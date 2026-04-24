@@ -240,6 +240,17 @@ impl ComposerRuntimeState {
         }
     }
 
+    pub(crate) fn validate_host_retention(
+        &self,
+        host: &SlotsHost,
+        table: &SlotTable,
+    ) -> Result<(), crate::slot::SlotInvariantError> {
+        if let Some(retention) = self.retention_by_host.borrow().get(&host.storage_key()) {
+            retention.validate(table)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn host_for_storage_key(&self, storage_key: usize) -> Option<Rc<SlotsHost>> {
         self.live_hosts
             .borrow()

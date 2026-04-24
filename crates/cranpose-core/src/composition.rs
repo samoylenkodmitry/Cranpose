@@ -315,6 +315,14 @@ impl<A: Applier + 'static> Composition<A> {
         self.last_pass_stats
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn debug_validate_slots(&self) -> Result<(), crate::slot::SlotInvariantError> {
+        let table = self.slots.borrow();
+        table.validate()?;
+        self.composer_state
+            .validate_host_retention(self.slots.as_ref(), &table)
+    }
+
     fn process_invalid_scopes_filtered(
         &mut self,
         suppressed_invalid_scopes: Option<&HashSet<ScopeId>>,

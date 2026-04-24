@@ -1031,6 +1031,7 @@ fn retained_scope_stays_inactive_until_restored() {
     composition
         .render(root_key, || root(show_branch, observed))
         .expect("initial composition");
+    assert_composition_valid(&composition);
 
     let initial_snapshot = composition.debug_slot_snapshot();
     let initial_stats = composition.debug_slot_table_stats();
@@ -1066,6 +1067,7 @@ fn retained_scope_stays_inactive_until_restored() {
     composition
         .render(root_key, || root(show_branch, observed))
         .expect("hide branch render");
+    assert_composition_valid(&composition);
 
     let hidden_snapshot = composition.debug_slot_snapshot();
     let hidden_stats = composition.debug_slot_table_stats();
@@ -1113,6 +1115,7 @@ fn retained_scope_stays_inactive_until_restored() {
     let _ = composition
         .process_invalid_scopes()
         .expect("hidden scope invalidation should be ignored");
+    assert_composition_valid(&composition);
 
     assert_eq!(
         INVOCATIONS.with(|count| count.get()),
@@ -1124,6 +1127,7 @@ fn retained_scope_stays_inactive_until_restored() {
     composition
         .render(root_key, || root(show_branch, observed))
         .expect("restore retained branch");
+    assert_composition_valid(&composition);
 
     let restored_snapshot = composition.debug_slot_snapshot();
     let restored_stats = composition.debug_slot_table_stats();
@@ -1327,6 +1331,7 @@ fn retained_branch_hides_without_running_disposable_effect_cleanup() {
                 }
             })
             .expect("render retained disposable branch");
+        assert_composition_valid(&composition);
     };
 
     render();
@@ -1378,6 +1383,7 @@ fn retained_branch_restores_the_same_node_id() {
                 }
             })
             .expect("render retained node branch");
+        assert_composition_valid(&composition);
     };
 
     render();

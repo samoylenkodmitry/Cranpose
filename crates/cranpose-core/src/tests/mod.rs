@@ -84,6 +84,12 @@ pub(crate) fn test_composition() -> Composition<MemoryApplier> {
     Composition::new(test_applier())
 }
 
+pub(crate) fn assert_composition_valid(composition: &Composition<MemoryApplier>) {
+    composition
+        .debug_validate_slots()
+        .expect("slot table must validate");
+}
+
 pub(crate) fn test_slot_table() -> SlotTable {
     with_test_slot_lifecycle(|lifecycle| {
         *lifecycle = crate::slot::SlotLifecycleCoordinator::default()
