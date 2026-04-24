@@ -614,9 +614,13 @@ impl SubcomposeLayoutNode {
         self.needs_semantics.get()
     }
 
+    pub(crate) fn clear_needs_semantics(&self) {
+        self.needs_semantics.set(false);
+    }
+
     #[cfg(test)]
     pub(crate) fn clear_needs_semantics_for_tests(&self) {
-        self.needs_semantics.set(false);
+        self.clear_needs_semantics();
     }
 
     /// Returns true when this node requested a redraw since the last render pass.

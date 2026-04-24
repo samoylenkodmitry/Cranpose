@@ -482,6 +482,165 @@ pub fn build_semantics_tree_from_layout_tree(layout_tree: &LayoutTree) -> Semant
     SemanticsTree::new(build_semantics_node_from_layout_box(layout_tree.root()))
 }
 
+/// Builds a layout snapshot from retained layout state in the live applier tree.
+///
+/// Renderers use retained node state directly. This function exists for debug,
+/// robot, and tests that need an owned [`LayoutTree`] without forcing every
+/// layout pass to allocate one.
+pub fn build_layout_tree_from_applier(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+) -> Result<Option<LayoutTree>, NodeError> {
+    fn snapshot(
+        applier: &mut MemoryApplier,
+        node_id: NodeId,
+    ) -> Result<Option<(crate::widgets::nodes::layout_node::LayoutState, Vec<NodeId>)>, NodeError>
+    {
+        match applier.with_node::<LayoutNode, _>(node_id, |node| {
+            (node.layout_state(), node.children.clone())
+        }) {
+            Ok(snapshot) => return Ok(Some(snapshot)),
+            Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
+            Err(err) => return Err(err),
+        }
+
+        match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+            (node.layout_state(), node.active_children())
+        }) {
+            Ok(snapshot) => Ok(Some(snapshot)),
+            Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn place(
+        applier: &mut MemoryApplier,
+        node_id: NodeId,
+        parent_content_origin: Point,
+    ) -> Result<Option<LayoutBox>, NodeError> {
+        let Some((state, child_ids)) = snapshot(applier, node_id)? else {
+            return Ok(None);
+        };
+        if !state.is_placed {
+            return Ok(None);
+        }
+
+        let top_left = Point {
+            x: parent_content_origin.x + state.position.x,
+            y: parent_content_origin.y + state.position.y,
+        };
+        let rect = GeometryRect {
+            x: top_left.x,
+            y: top_left.y,
+            width: state.size.width,
+            height: state.size.height,
+        };
+        let info = runtime_metadata_for(applier, node_id)?;
+        let kind = layout_kind_from_metadata(node_id, &info);
+        let RuntimeNodeMetadata {
+            modifier,
+            resolved_modifiers,
+            modifier_slices,
+            ..
+        } = info;
+        let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
+        let child_origin = Point {
+            x: top_left.x + state.content_offset.x,
+            y: top_left.y + state.content_offset.y,
+        };
+        let mut children = Vec::with_capacity(child_ids.len());
+        for child_id in child_ids {
+            if let Some(child) = place(applier, child_id, child_origin)? {
+                children.push(child);
+            }
+        }
+
+        Ok(Some(LayoutBox::new(
+            node_id,
+            rect,
+            state.content_offset,
+            data,
+            children,
+        )))
+    }
+
+    place(applier, root, Point::default()).map(|root| root.map(LayoutTree::new))
+}
+
+/// Builds a semantics snapshot from retained layout state in the live applier tree.
+///
+/// This is the on-demand counterpart to [`build_layout_tree_from_applier`].
+/// It follows the currently placed child set, including subcompose active
+/// children, and clears semantics dirty flags for nodes it visits.
+pub fn build_semantics_tree_from_applier(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+) -> Result<Option<SemanticsTree>, NodeError> {
+    fn node(
+        applier: &mut MemoryApplier,
+        node_id: NodeId,
+    ) -> Result<Option<SemanticsNode>, NodeError> {
+        match applier.with_node::<LayoutNode, _>(node_id, |layout| {
+            let state = layout.layout_state();
+            if !state.is_placed {
+                return None;
+            }
+            let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
+            let config = layout.semantics_configuration();
+            let children = layout.children.clone();
+            layout.clear_needs_semantics();
+            Some((role, config, children))
+        }) {
+            Ok(Some((role, config, child_ids))) => {
+                let mut children = Vec::with_capacity(child_ids.len());
+                for child_id in child_ids {
+                    if let Some(child) = node(applier, child_id)? {
+                        children.push(child);
+                    }
+                }
+                return Ok(Some(semantics_node_from_parts(
+                    node_id, role, config, children,
+                )));
+            }
+            Ok(None) => return Ok(None),
+            Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
+            Err(err) => return Err(err),
+        }
+
+        match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
+            let state = subcompose.layout_state();
+            if !state.is_placed {
+                return None;
+            }
+            let config = collect_semantics_from_modifier(&subcompose.modifier());
+            let children = subcompose.active_children();
+            subcompose.clear_needs_semantics();
+            Some((config, children))
+        }) {
+            Ok(Some((config, child_ids))) => {
+                let mut children = Vec::with_capacity(child_ids.len());
+                for child_id in child_ids {
+                    if let Some(child) = node(applier, child_id)? {
+                        children.push(child);
+                    }
+                }
+                Ok(Some(semantics_node_from_parts(
+                    node_id,
+                    SemanticsRole::Subcompose,
+                    config,
+                    children,
+                )))
+            }
+            Ok(None) | Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
+                Ok(None)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    node(applier, root).map(|root| root.map(SemanticsTree::new))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MeasureLayoutOptions {
     pub collect_semantics: bool,
@@ -1993,13 +2152,20 @@ fn clear_semantics_dirty_flags(
     applier: &mut MemoryApplier,
     node: &MeasuredNode,
 ) -> Result<(), NodeError> {
-    if let Err(err) = applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
+    match applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
         layout.clear_needs_semantics();
     }) {
-        match err {
-            NodeError::Missing { .. } | NodeError::TypeMismatch { .. } => {}
-            _ => return Err(err),
+        Ok(()) => {}
+        Err(NodeError::Missing { .. }) => {}
+        Err(NodeError::TypeMismatch { .. }) => {
+            match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
+                subcompose.clear_needs_semantics();
+            }) {
+                Ok(()) | Err(NodeError::Missing { .. }) | Err(NodeError::TypeMismatch { .. }) => {}
+                Err(err) => return Err(err),
+            }
         }
+        Err(err) => return Err(err),
     }
 
     for child in &node.children {
@@ -2055,6 +2221,7 @@ fn build_semantics_node_from_live_nodes(
         Ok(data) => data,
         Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
             match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
+                subcompose.clear_needs_semantics();
                 (
                     SemanticsRole::Subcompose,
                     collect_semantics_from_modifier(&subcompose.modifier()),

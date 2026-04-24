@@ -188,7 +188,7 @@ fn collect_semantics_texts(node: &SemanticsNode, out: &mut Vec<String>) {
     }
 }
 
-fn semantics_texts(shell: &AppShell<HitGraphRenderer>) -> Vec<String> {
+fn semantics_texts(shell: &mut AppShell<HitGraphRenderer>) -> Vec<String> {
     let Some(root) = shell.semantics_tree().map(|tree| tree.root().clone()) else {
         return Vec::new();
     };
@@ -307,7 +307,7 @@ fn counter_increment_survives_combined_app_tab_roundtrip_robot_path() {
     robot_click(&mut shell, x + w * 0.5, y + h * 0.5);
 
     assert_eq!(counter_state().get(), 1);
-    let texts = semantics_texts(&shell);
+    let texts = semantics_texts(&mut shell);
     assert!(
         texts.iter().any(|text| text.contains("Counter: 1")),
         "counter label did not update after increment: {texts:?}",
@@ -330,7 +330,7 @@ fn lazy_list_jump_updates_first_index_in_combined_app_shell_robot_path() {
     pump_shell_until_stable(&mut shell);
 
     let initial_layout = layout_tree_texts(shell.layout_tree().expect("lazy list layout"));
-    let initial_semantics = semantics_texts(&shell);
+    let initial_semantics = semantics_texts(&mut shell);
     assert_eq!(
         first_index_from_texts(&initial_layout),
         Some(0),
@@ -346,7 +346,7 @@ fn lazy_list_jump_updates_first_index_in_combined_app_shell_robot_path() {
     pump_shell_until_stable(&mut shell);
 
     let layout_texts = layout_tree_texts(shell.layout_tree().expect("updated lazy list layout"));
-    let semantics = semantics_texts(&shell);
+    let semantics = semantics_texts(&mut shell);
     let layout_index = first_index_from_texts(&layout_texts);
     let semantics_index = first_index_from_texts(&semantics);
 
@@ -401,7 +401,7 @@ fn recursive_layout_depth_six_survives_combined_app_shell_robot_path() {
     click_button_by_text(&mut shell, "Recursive Layout");
     assert_eq!(active_tab_state().get(), DemoTab::Layout);
 
-    let mut texts = semantics_texts(&shell);
+    let mut texts = semantics_texts(&mut shell);
     assert!(
         texts
             .iter()
@@ -411,7 +411,7 @@ fn recursive_layout_depth_six_survives_combined_app_shell_robot_path() {
 
     for depth in 4..=6 {
         click_button_by_text(&mut shell, "Increase depth");
-        texts = semantics_texts(&shell);
+        texts = semantics_texts(&mut shell);
         assert!(
             texts
                 .iter()
@@ -437,7 +437,7 @@ fn async_runtime_progress_advances_after_animations_click_robot_path() {
     pump_shell_until_stable(&mut shell);
 
     click_button_by_text(&mut shell, "Animations");
-    let animations_texts = semantics_texts(&shell);
+    let animations_texts = semantics_texts(&mut shell);
     assert!(
         animations_texts
             .iter()
@@ -446,7 +446,7 @@ fn async_runtime_progress_advances_after_animations_click_robot_path() {
     );
 
     click_button_by_text(&mut shell, "Async Runtime");
-    let initial_texts = semantics_texts(&shell);
+    let initial_texts = semantics_texts(&mut shell);
     let initial_progress = async_progress_percent(&initial_texts)
         .expect("async progress text should be present after switching from Animations");
 
@@ -455,7 +455,7 @@ fn async_runtime_progress_advances_after_animations_click_robot_path() {
     for _ in 0..40 {
         std::thread::sleep(std::time::Duration::from_millis(50));
         shell.update();
-        let texts = semantics_texts(&shell);
+        let texts = semantics_texts(&mut shell);
         let progress = async_progress_percent(&texts)
             .expect("async progress text should remain present while advancing");
         last_progress = progress;
@@ -490,7 +490,7 @@ fn async_runtime_progress_advances_after_animations_direct_state_switch_in_shell
     active_tab_state().set(DemoTab::Async);
     pump_shell_until_stable(&mut shell);
 
-    let initial_texts = semantics_texts(&shell);
+    let initial_texts = semantics_texts(&mut shell);
     let initial_progress = async_progress_percent(&initial_texts)
         .expect("async progress text should be present after direct state switch");
 
@@ -499,7 +499,7 @@ fn async_runtime_progress_advances_after_animations_direct_state_switch_in_shell
     for _ in 0..40 {
         std::thread::sleep(std::time::Duration::from_millis(50));
         shell.update();
-        let texts = semantics_texts(&shell);
+        let texts = semantics_texts(&mut shell);
         let progress = async_progress_percent(&texts)
             .expect("async progress text should remain present while advancing");
         last_progress = progress;
@@ -532,7 +532,7 @@ fn animations_tab_alpha_advances_on_shell_path() {
     active_tab_state().set(DemoTab::Animations);
     pump_shell_until_stable(&mut shell);
 
-    let initial_texts = semantics_texts(&shell);
+    let initial_texts = semantics_texts(&mut shell);
     let initial_alpha =
         animation_alpha_value(&initial_texts).expect("animations alpha text should be present");
 
@@ -541,7 +541,7 @@ fn animations_tab_alpha_advances_on_shell_path() {
     for _ in 0..40 {
         std::thread::sleep(std::time::Duration::from_millis(50));
         shell.update();
-        let texts = semantics_texts(&shell);
+        let texts = semantics_texts(&mut shell);
         let alpha =
             animation_alpha_value(&texts).expect("animations alpha text should remain present");
         last_alpha = alpha;

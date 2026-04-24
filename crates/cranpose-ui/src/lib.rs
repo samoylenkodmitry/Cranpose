@@ -47,6 +47,7 @@ pub use focus_dispatch::{
 // Re-export FocusManager from cranpose-foundation to avoid duplication
 pub use cranpose_foundation::nodes::input::focus::FocusManager;
 pub use layout::{
+    build_layout_tree_from_applier, build_semantics_tree_from_applier,
     build_semantics_tree_from_layout_tree,
     core::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,

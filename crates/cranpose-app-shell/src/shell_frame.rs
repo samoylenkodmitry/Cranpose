@@ -117,19 +117,8 @@ where
                     true // Assume dirty on error
                 });
 
-            let tree_needs_semantics_check = self.semantics_enabled
-                && cranpose_ui::tree_needs_semantics(&mut *applier, root).unwrap_or_else(|err| {
-                    log::warn!(
-                        "Cannot check semantics dirty status for root #{}: {}",
-                        root,
-                        err
-                    );
-                    true
-                });
-            let needs_layout = self.force_layout_pass
-                || has_scoped_repasses
-                || tree_needs_layout_check
-                || tree_needs_semantics_check;
+            let needs_layout =
+                self.force_layout_pass || has_scoped_repasses || tree_needs_layout_check;
 
             if !needs_layout {
                 log::trace!("Skipping layout: tree is clean");
@@ -148,14 +137,15 @@ where
                 root,
                 viewport_size,
                 MeasureLayoutOptions {
-                    collect_semantics: self.semantics_enabled,
-                    build_layout_tree: true,
+                    collect_semantics: false,
+                    build_layout_tree: false,
                 },
             ) {
-                Ok(measurements) => {
-                    let semantics_tree = measurements.semantics_tree().cloned();
-                    self.layout_tree = Some(measurements.into_layout_tree());
-                    self.semantics_tree = semantics_tree;
+                Ok(_measurements) => {
+                    self.layout_tree = None;
+                    if self.semantics_enabled {
+                        self.semantics_tree = None;
+                    }
                     self.scene_dirty = true;
                 }
                 Err(err) => {

@@ -33,11 +33,47 @@ where
 
     /// Get the current layout tree (for robot/testing)
     pub fn layout_tree(&mut self) -> Option<&LayoutTree> {
+        if self.layout_tree.is_none() {
+            let root = self.composition.root()?;
+            let mut applier = self.composition.applier_mut();
+            match cranpose_ui::build_layout_tree_from_applier(&mut applier, root) {
+                Ok(layout_tree) => {
+                    self.layout_tree = layout_tree;
+                }
+                Err(err) => {
+                    log::debug!("failed to build layout snapshot: {err}");
+                    return None;
+                }
+            }
+        }
         self.layout_tree.as_ref()
     }
 
     /// Get the current semantics tree (for robot/testing)
-    pub fn semantics_tree(&self) -> Option<&SemanticsTree> {
+    pub fn semantics_tree(&mut self) -> Option<&SemanticsTree> {
+        if !self.semantics_enabled {
+            return None;
+        }
+        let root = self.composition.root()?;
+        let semantics_dirty = {
+            let mut applier = self.composition.applier_mut();
+            cranpose_ui::tree_needs_semantics(&mut *applier, root).unwrap_or_else(|err| {
+                log::debug!("failed to check semantics dirty status for root #{root}: {err}");
+                true
+            })
+        };
+        if self.semantics_tree.is_none() || semantics_dirty {
+            let mut applier = self.composition.applier_mut();
+            match cranpose_ui::build_semantics_tree_from_applier(&mut applier, root) {
+                Ok(semantics_tree) => {
+                    self.semantics_tree = semantics_tree;
+                }
+                Err(err) => {
+                    log::debug!("failed to build semantics snapshot: {err}");
+                    return None;
+                }
+            }
+        }
         self.semantics_tree.as_ref()
     }
 

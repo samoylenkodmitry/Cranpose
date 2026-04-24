@@ -1684,8 +1684,8 @@ fn draw_repass_updates_render_data_without_layout() {
 
     shell.update();
     assert!(
-        shell.layout_tree.is_some(),
-        "update should populate the retained layout tree cache"
+        shell.layout_tree().is_some(),
+        "layout tree should be available when a caller requests a snapshot"
     );
     let initial_scene = shell
         .renderer
@@ -1749,7 +1749,7 @@ fn app_shell_new_drains_root_render_requests_before_first_frame() {
         "initial shell setup should not leave a pending root render request behind"
     );
 
-    let texts = layout_tree_texts(shell.layout_tree.as_ref().expect("layout tree available"));
+    let texts = layout_tree_texts(shell.layout_tree().expect("layout tree available"));
     assert!(
         texts.iter().any(|text| text == "Render 2"),
         "initial frame should reflect the replayed root render, got {texts:?}"
@@ -1888,6 +1888,26 @@ fn semantics_collection_is_opt_in_for_app_shell() {
     assert!(
         shell.semantics_tree().is_none(),
         "disabling semantics should drop the cached tree"
+    );
+}
+
+#[test]
+fn layout_tree_snapshot_is_built_on_demand() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, semantics_content);
+
+    assert!(
+        shell.layout_tree.is_none(),
+        "layout should render from retained node state without eagerly caching a LayoutTree"
+    );
+    assert!(
+        shell.layout_tree().is_some(),
+        "debug and robot callers should still be able to request a LayoutTree snapshot"
+    );
+    assert!(
+        shell.layout_tree.is_some(),
+        "requested LayoutTree snapshot should be cached until the next layout pass"
     );
 }
 
@@ -2168,8 +2188,8 @@ fn layout_bounds_index_matches_cached_layout_tree() {
 
     shell.update();
     assert!(
-        shell.layout_tree.is_some(),
-        "update should retain the measured layout tree for query helpers"
+        shell.layout_tree().is_some(),
+        "query helpers should be able to request a measured layout tree"
     );
 
     let cached_tree_ptr = shell
