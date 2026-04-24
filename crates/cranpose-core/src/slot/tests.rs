@@ -430,10 +430,19 @@ fn payload_records_store_semantic_payload_kinds() {
     harness.session(SlotPassMode::Compose, |session| {
         begin_unkeyed(session, 52, None);
         let _remembered = session.remember(|| 17_i32);
-        let _param_slot = session.value_slot(crate::ParamState::<i32>::default);
-        let _callback_slot = session.value_slot(crate::CallbackHolder::new);
-        let _return_slot = session.value_slot(crate::ReturnSlot::<i32>::default);
-        let _effect_slot = session.remember(crate::DisposableEffectState::default);
+        let _param_slot = session
+            .value_slot_with_kind(super::PayloadKind::Param, crate::ParamState::<i32>::default);
+        let _callback_slot =
+            session.value_slot_with_kind(super::PayloadKind::Param, crate::CallbackHolder::new);
+        let _return_slot = session.value_slot_with_kind(
+            super::PayloadKind::Return,
+            crate::ReturnSlot::<i32>::default,
+        );
+        let _effect_slot = session.remember_with_kind(
+            super::PayloadKind::Effect,
+            crate::DisposableEffectState::default,
+        );
+        let _type_named_internal_slot = session.value_slot(crate::ReturnSlot::<i32>::default);
         let _internal_slot = session.value_slot(|| 99_i32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -456,6 +465,7 @@ fn payload_records_store_semantic_payload_kinds() {
             super::PayloadKind::Param,
             super::PayloadKind::Return,
             super::PayloadKind::Effect,
+            super::PayloadKind::Internal,
             super::PayloadKind::Internal,
         ]
     );
@@ -1912,9 +1922,13 @@ fn compact_payload_namespace_remaps_retained_subtree_payloads() {
     harness
         .table
         .compact_payload_anchor_namespace(Some(&mut retention));
-    let _ = harness
-        .table
-        .insert_value_payload(parent_anchor, 0, 1, 30_i32);
+    let _ = harness.table.insert_value_payload(
+        parent_anchor,
+        0,
+        1,
+        super::PayloadKind::Internal,
+        30_i32,
+    );
 
     let restored = retention
         .take(retain_key)

@@ -810,7 +810,7 @@ where
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
             let key_hash = hash_key(&keys);
-            let state = composer.remember(DisposableEffectState::default);
+            let state = composer.remember_effect(DisposableEffectState::default);
             if state.with(|state| state.should_run(key_hash)) {
                 state.update(|state| {
                     state.run_cleanup();

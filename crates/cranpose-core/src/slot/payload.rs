@@ -4,44 +4,6 @@ use std::any::TypeId;
 use std::{mem, ops::Range};
 
 impl SlotTable {
-    fn classify_payload_kind<T: 'static>() -> PayloadKind {
-        Self::classify_payload_kind_name(std::any::type_name::<T>())
-    }
-
-    fn classify_payload_kind_name(type_name: &'static str) -> PayloadKind {
-        if type_name.contains("::callbacks::ParamState<")
-            || type_name.ends_with("::callbacks::CallbackHolder")
-            || type_name.contains("::callbacks::CallbackHolder1<")
-        {
-            return PayloadKind::Param;
-        }
-
-        if type_name.contains("::callbacks::ReturnSlot<") {
-            return PayloadKind::Return;
-        }
-
-        if type_name.contains("DisposableEffectState")
-            || type_name.contains("LaunchedEffectState")
-            || type_name.contains("LaunchedEffectAsyncState")
-        {
-            return PayloadKind::Effect;
-        }
-
-        if type_name.contains("RecomposeScope") {
-            return PayloadKind::Scope;
-        }
-
-        if type_name.contains("LocalStateEntry<") || type_name.contains("StaticLocalEntry<") {
-            return PayloadKind::Internal;
-        }
-
-        if type_name.contains("::owned::Owned<") || type_name.starts_with("cranpose_core::Owned<") {
-            return PayloadKind::Remember;
-        }
-
-        PayloadKind::Internal
-    }
-
     fn group_payload_start_at(&self, group_index: usize) -> usize {
         self.groups[group_index].payload_start as usize
     }
@@ -191,6 +153,7 @@ impl SlotTable {
         owner: AnchorId,
         insert_index: usize,
         generation: u32,
+        kind: PayloadKind,
         value: T,
     ) -> usize {
         let owner_index = self.current_group_index(owner);
@@ -204,7 +167,7 @@ impl SlotTable {
                 generation,
                 type_id: TypeId::of::<T>(),
                 type_name: std::any::type_name::<T>(),
-                kind: Self::classify_payload_kind::<T>(),
+                kind,
                 value: Box::new(value),
             },
         );
@@ -218,6 +181,7 @@ impl SlotTable {
         &mut self,
         group_index: usize,
         payload_index: usize,
+        kind: PayloadKind,
         value: T,
     ) -> (PayloadKind, Box<dyn std::any::Any>) {
         let record = self.group_payload_record_at_mut(group_index, payload_index);
@@ -225,7 +189,7 @@ impl SlotTable {
         let old_kind = record.kind;
         record.type_id = TypeId::of::<T>();
         record.type_name = std::any::type_name::<T>();
-        record.kind = Self::classify_payload_kind::<T>();
+        record.kind = kind;
         (old_kind, old_value)
     }
 

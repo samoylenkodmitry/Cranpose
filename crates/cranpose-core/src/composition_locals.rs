@@ -110,7 +110,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
             key,
             apply: Box::new(move |composer: &Composer| {
                 let runtime = composer.runtime_handle();
-                let entry_ref = composer.remember(|| {
+                let entry_ref = composer.remember_internal(|| {
                     Rc::new(LocalStateEntry::new(
                         value.clone(),
                         runtime.clone(),
@@ -181,7 +181,8 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
         ProvidedValue {
             key,
             apply: Box::new(move |composer: &Composer| {
-                let entry_ref = composer.remember(|| Rc::new(StaticLocalEntry::new(value.clone())));
+                let entry_ref =
+                    composer.remember_internal(|| Rc::new(StaticLocalEntry::new(value.clone())));
                 entry_ref.update(|entry| entry.set(value.clone()));
                 entry_ref.with(|entry| entry.clone() as Rc<dyn Any>)
             }),

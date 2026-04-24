@@ -44,6 +44,9 @@ impl SlotTable {
 
     pub(crate) fn write_value<T: 'static>(&mut self, slot: ValueSlotId, value: T) {
         let (group_index, payload_index) = self.checked_value_slot(slot);
-        drop(self.replace_payload_value(group_index, payload_index, value));
+        let kind = self
+            .group_payload_record_at(group_index, payload_index)
+            .kind;
+        drop(self.replace_payload_value(group_index, payload_index, kind, value));
     }
 }

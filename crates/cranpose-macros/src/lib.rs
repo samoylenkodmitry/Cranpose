@@ -314,7 +314,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let ident = &info.ident;
                     quote! {
                         let #slot_ident = __composer
-                            .use_value_slot(|| #core_path::CallbackHolder::new());
+                            .__use_param_slot(|| #core_path::CallbackHolder::new());
                         __composer.with_slot_value::<#core_path::CallbackHolder, _>(
                             #slot_ident,
                             |holder| {
@@ -331,7 +331,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let ty = &info.ty;
                     quote! {
                         let #slot_ident = __composer
-                            .use_value_slot(|| #core_path::ParamState::<#ty>::default());
+                            .__use_param_slot(|| #core_path::ParamState::<#ty>::default());
                         if __composer.with_slot_value_mut::<#core_path::ParamState<#ty>, _>(
                             #slot_ident,
                             |state| state.update(&#ident),
@@ -353,7 +353,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 {
                     quote! {
                         let #slot_ident = __composer
-                            .use_value_slot(|| #core_path::CallbackHolder::new());
+                            .__use_param_slot(|| #core_path::CallbackHolder::new());
                     }
                 } else if info.is_impl_trait {
                     quote! {}
@@ -361,7 +361,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let ty = &info.ty;
                     quote! {
                         let #slot_ident = __composer
-                            .use_value_slot(|| #core_path::ParamState::<#ty>::default());
+                            .__use_param_slot(|| #core_path::ParamState::<#ty>::default());
                     }
                 }
             })
@@ -498,7 +498,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #(#param_setup)*
                 #recranpose_setter
                 let __result_slot_index = __composer
-                    .use_value_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
+                    .__use_return_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
                 let __has_previous = __composer
                     .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
                         __result_slot_index,
@@ -541,7 +541,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             quote! {
                 #(#param_setup_recompose)*
                 let __result_slot_index = __composer
-                    .use_value_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
+                    .__use_return_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
                 #(#rebinds_for_recompose)*
                 let __value: #return_ty = {
                     #recranpose_block

@@ -328,12 +328,12 @@ pub enum PayloadKind {
     Param,
     Return,
     Effect,
-    Scope,
     Internal,
 }
 ```
 
 Remembered state stays in storage. Lifecycle restore is not storage-owned; the composer chooses whether a detached subtree survives.
+Recomposition scopes are group metadata, not payload records.
 
 ### 7.5 NodeTable
 

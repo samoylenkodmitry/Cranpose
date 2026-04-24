@@ -4,7 +4,7 @@
 //! composer talks in terms of group/value/node operations rather than physical
 //! table layout details.
 
-use crate::slot::{DetachedSubtree, FinishGroupResult, SlotInvariantError};
+use crate::slot::{DetachedSubtree, FinishGroupResult, PayloadKind, SlotInvariantError};
 use crate::{AnchorId, Key, NodeId, Owned, ScopeId, SlotDebugSnapshot};
 
 /// Stable structural identity for a group among siblings.
@@ -146,10 +146,20 @@ pub(crate) trait SlotStorage {
     fn end_recompose(&mut self);
 
     fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Self::ValueSlot;
+    fn value_slot_with_kind<T: 'static>(
+        &mut self,
+        kind: PayloadKind,
+        init: impl FnOnce() -> T,
+    ) -> Self::ValueSlot;
     fn read_value<T: 'static>(&self, slot: Self::ValueSlot) -> &T;
     fn read_value_mut<T: 'static>(&mut self, slot: Self::ValueSlot) -> &mut T;
     fn write_value<T: 'static>(&mut self, slot: Self::ValueSlot, value: T);
     fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T>;
+    fn remember_with_kind<T: 'static>(
+        &mut self,
+        kind: PayloadKind,
+        init: impl FnOnce() -> T,
+    ) -> Owned<T>;
 
     fn record_node(&mut self, id: NodeId, generation: u32) -> NodeRecordResult;
     fn nodes_in_current_group(&self) -> Vec<NodeId>;

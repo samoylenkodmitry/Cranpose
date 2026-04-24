@@ -1,7 +1,7 @@
 use super::{
     detach::{dispose_detached_node_now, dispose_detached_subtree_now},
-    DeferredDrop, DetachedSubtree, FinishGroupResult, SlotLifecycleCoordinator, SlotTable,
-    SlotWriteSession, SlotWriteSessionState,
+    DeferredDrop, DetachedSubtree, FinishGroupResult, PayloadKind, SlotLifecycleCoordinator,
+    SlotTable, SlotWriteSession, SlotWriteSessionState,
 };
 use crate::{
     collections::map::HashMap,
@@ -328,6 +328,14 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> ValueSlotId {
+        self.value_slot_with_kind(PayloadKind::Internal, init)
+    }
+
+    pub(crate) fn value_slot_with_kind<T: 'static>(
+        &mut self,
+        kind: PayloadKind,
+        init: impl FnOnce() -> T,
+    ) -> ValueSlotId {
         let frame = self
             .state
             .group_stack
@@ -347,9 +355,12 @@ impl SlotWriteSession<'_> {
             {
                 (anchor, generation)
             } else {
-                let (old_kind, old_value) =
-                    self.table
-                        .replace_payload_value(group_index, frame.payload_cursor, init());
+                let (old_kind, old_value) = self.table.replace_payload_value(
+                    group_index,
+                    frame.payload_cursor,
+                    kind,
+                    init(),
+                );
                 self.lifecycle
                     .queue_drop(DeferredDrop::payload(old_kind, old_value));
                 (anchor, generation)
@@ -360,6 +371,7 @@ impl SlotWriteSession<'_> {
                 group_anchor,
                 frame.payload_cursor,
                 generation,
+                kind,
                 init(),
             );
             (anchor, generation)
@@ -371,7 +383,15 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T> {
-        let slot = self.value_slot(|| Owned::new(init()));
+        self.remember_with_kind(PayloadKind::Remember, init)
+    }
+
+    pub(crate) fn remember_with_kind<T: 'static>(
+        &mut self,
+        kind: PayloadKind,
+        init: impl FnOnce() -> T,
+    ) -> Owned<T> {
+        let slot = self.value_slot_with_kind(kind, || Owned::new(init()));
         self.table.read_value::<Owned<T>>(slot).clone()
     }
 

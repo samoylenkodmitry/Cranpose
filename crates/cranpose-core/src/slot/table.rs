@@ -1,6 +1,6 @@
 use super::{
-    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadLocationRegistry, PayloadRecord,
-    SlotLifecycleCoordinator, SlotPassMode,
+    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadKind, PayloadLocationRegistry,
+    PayloadRecord, SlotLifecycleCoordinator, SlotPassMode,
 };
 use crate::{
     collections::map::HashMap,
@@ -150,6 +150,14 @@ impl SlotStorage for SlotWriteSession<'_> {
         SlotWriteSession::value_slot(self, init)
     }
 
+    fn value_slot_with_kind<T: 'static>(
+        &mut self,
+        kind: PayloadKind,
+        init: impl FnOnce() -> T,
+    ) -> Self::ValueSlot {
+        SlotWriteSession::value_slot_with_kind(self, kind, init)
+    }
+
     fn read_value<T: 'static>(&self, slot: Self::ValueSlot) -> &T {
         self.table.read_value(slot)
     }
@@ -164,6 +172,14 @@ impl SlotStorage for SlotWriteSession<'_> {
 
     fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T> {
         SlotWriteSession::remember(self, init)
+    }
+
+    fn remember_with_kind<T: 'static>(
+        &mut self,
+        kind: PayloadKind,
+        init: impl FnOnce() -> T,
+    ) -> Owned<T> {
+        SlotWriteSession::remember_with_kind(self, kind, init)
     }
 
     fn record_node(&mut self, id: NodeId, generation: u32) -> NodeRecordResult {

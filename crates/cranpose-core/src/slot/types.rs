@@ -33,7 +33,6 @@ pub(crate) enum PayloadKind {
     Param,
     Return,
     Effect,
-    Scope,
     Internal,
 }
 
@@ -44,7 +43,6 @@ impl PayloadKind {
             Self::Param => "param",
             Self::Return => "return",
             Self::Effect => "effect",
-            Self::Scope => "scope",
             Self::Internal => "internal",
         }
     }

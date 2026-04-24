@@ -1,5 +1,6 @@
 use crate::collections::map::{HashMap, HashSet};
 use crate::retention::{RetainKey, RetentionManager};
+use crate::slot::PayloadKind;
 use crate::{
     composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
     BeginGroupInput, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, GroupId,
@@ -35,11 +36,15 @@ impl ValueSlotHandle<'_> {
     }
 }
 
-fn reserve_value_slot<T: 'static, S>(slots: &mut S, init: impl FnOnce() -> T) -> ValueSlotId
+fn reserve_value_slot<T: 'static, S>(
+    slots: &mut S,
+    kind: PayloadKind,
+    init: impl FnOnce() -> T,
+) -> ValueSlotId
 where
     S: crate::slot_storage::SlotStorage<Group = GroupId, ValueSlot = ValueSlotId>,
 {
-    slots.value_slot(init)
+    slots.value_slot_with_kind(kind, init)
 }
 
 fn skip_slot_group<S>(slots: &mut S)
@@ -956,14 +961,51 @@ impl Composer {
     }
 
     pub fn remember<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
-        self.with_slot_session_mut(|slots| slots.remember(init))
+        self.remember_with_kind(PayloadKind::Remember, init)
+    }
+
+    pub(crate) fn remember_internal<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
+        self.remember_with_kind(PayloadKind::Internal, init)
+    }
+
+    pub(crate) fn remember_effect<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
+        self.remember_with_kind(PayloadKind::Effect, init)
+    }
+
+    fn remember_with_kind<T: 'static>(
+        &self,
+        kind: PayloadKind,
+        init: impl FnOnce() -> T,
+    ) -> Owned<T> {
+        self.with_slot_session_mut(|slots| slots.remember_with_kind(kind, init))
     }
 
     pub fn use_value_slot<'pass, T: 'static>(
         &'pass self,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass> {
-        let slot = self.with_slot_session_mut(|slots| reserve_value_slot(slots, init));
+        let slot = self
+            .with_slot_session_mut(|slots| reserve_value_slot(slots, PayloadKind::Internal, init));
+        ValueSlotHandle::new(slot)
+    }
+
+    #[doc(hidden)]
+    pub fn __use_param_slot<'pass, T: 'static>(
+        &'pass self,
+        init: impl FnOnce() -> T,
+    ) -> ValueSlotHandle<'pass> {
+        let slot =
+            self.with_slot_session_mut(|slots| reserve_value_slot(slots, PayloadKind::Param, init));
+        ValueSlotHandle::new(slot)
+    }
+
+    #[doc(hidden)]
+    pub fn __use_return_slot<'pass, T: 'static>(
+        &'pass self,
+        init: impl FnOnce() -> T,
+    ) -> ValueSlotHandle<'pass> {
+        let slot = self
+            .with_slot_session_mut(|slots| reserve_value_slot(slots, PayloadKind::Return, init));
         ValueSlotHandle::new(slot)
     }
 
