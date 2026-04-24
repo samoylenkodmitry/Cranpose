@@ -2963,6 +2963,36 @@ impl ModelState {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ModelScenario {
+    seed: u64,
+    frame_count: usize,
+    parent_key: Key,
+    child_static_key: Key,
+    children: &'static [Key],
+}
+
+impl ModelScenario {
+    fn run(self) {
+        let mut harness = SlotHarness::new();
+        let mut retained_subtrees = BTreeMap::<Key, DetachedSubtree>::new();
+        let mut model = ModelState::default();
+        let mut seed = self.seed;
+
+        for _ in 0..self.frame_count {
+            let operation = generate_model_operation(&mut seed, &model, self.children);
+            apply_model_operation(
+                &mut harness,
+                &mut retained_subtrees,
+                &mut model,
+                operation,
+                self.parent_key,
+                self.child_static_key,
+            );
+        }
+    }
+}
+
 fn next_index(seed: &mut u64, len: usize) -> usize {
     *seed ^= *seed << 13;
     *seed ^= *seed >> 7;
@@ -3283,25 +3313,32 @@ fn apply_model_operation(
 }
 
 #[test]
-fn generated_model_operations_match_slot_table() {
-    const PARENT_KEY: Key = 700;
-    const STATIC_KEY: Key = 701;
-    const CHILDREN: [Key; 4] = [1, 2, 3, 4];
+fn deterministic_model_render_frames_match_slot_table() {
+    let scenarios = [
+        ModelScenario {
+            seed: 0x9E37_79B9_7F4A_7C15,
+            frame_count: 96,
+            parent_key: 700,
+            child_static_key: 701,
+            children: &[1, 2, 3, 4],
+        },
+        ModelScenario {
+            seed: 0xD1B5_4A32_D192_ED03,
+            frame_count: 128,
+            parent_key: 710,
+            child_static_key: 711,
+            children: &[11, 12, 13, 14, 15, 16],
+        },
+        ModelScenario {
+            seed: 0xA24B_AED4_963E_E407,
+            frame_count: 160,
+            parent_key: 720,
+            child_static_key: 721,
+            children: &[21, 22, 23, 24, 25, 26, 27, 28],
+        },
+    ];
 
-    let mut harness = SlotHarness::new();
-    let mut retained_subtrees = BTreeMap::<Key, DetachedSubtree>::new();
-    let mut model = ModelState::default();
-    let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
-
-    for _ in 0..96 {
-        let operation = generate_model_operation(&mut seed, &model, &CHILDREN);
-        apply_model_operation(
-            &mut harness,
-            &mut retained_subtrees,
-            &mut model,
-            operation,
-            PARENT_KEY,
-            STATIC_KEY,
-        );
+    for scenario in scenarios {
+        scenario.run();
     }
 }
