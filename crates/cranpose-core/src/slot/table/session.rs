@@ -7,6 +7,56 @@ use crate::{
     slot_storage::{GroupKey, GroupKeySeed, GroupStartKind},
     AnchorId, Key,
 };
+use smallvec::SmallVec;
+
+const SIBLING_INDEX_THRESHOLD: usize = 16;
+
+#[derive(Default)]
+pub(in crate::slot) struct SiblingIndex {
+    by_key: HashMap<GroupKey, SmallVec<[AnchorId; 2]>>,
+}
+
+impl SiblingIndex {
+    fn build(table: &SlotTable, parent_anchor: AnchorId, search_start: usize) -> Self {
+        let parent_end = table.direct_child_range_end(parent_anchor);
+        let mut by_key: HashMap<GroupKey, SmallVec<[AnchorId; 2]>> = HashMap::default();
+        let mut index = search_start;
+        while index < parent_end {
+            let group = &table.groups[index];
+            debug_assert_eq!(
+                group.parent_anchor, parent_anchor,
+                "later sibling index must stay on direct children"
+            );
+            by_key.entry(group.key).or_default().push(group.anchor);
+            index += group.subtree_len as usize;
+        }
+        Self { by_key }
+    }
+
+    fn find(
+        &self,
+        table: &SlotTable,
+        parent_anchor: AnchorId,
+        key: GroupKey,
+        search_start: usize,
+    ) -> Option<usize> {
+        let parent_end = table.direct_child_range_end(parent_anchor);
+        self.by_key.get(&key).and_then(|anchors| {
+            anchors
+                .iter()
+                .filter_map(|anchor| {
+                    let index = table.anchors.active_index(*anchor)?;
+                    let group = table.groups.get(index)?;
+                    (index >= search_start
+                        && index < parent_end
+                        && group.parent_anchor == parent_anchor
+                        && group.key == key)
+                        .then_some(index)
+                })
+                .min()
+        })
+    }
+}
 
 #[derive(Default)]
 pub(in crate::slot) struct RootFrame {
@@ -14,6 +64,7 @@ pub(in crate::slot) struct RootFrame {
     pub(in crate::slot) detach_remaining_children: bool,
     pub(in crate::slot) key_ordinals: HashMap<Key, u32>,
     pub(in crate::slot) seen_group_keys: HashSet<GroupKey>,
+    pub(in crate::slot) sibling_index: Option<SiblingIndex>,
 }
 
 pub(in crate::slot) struct GroupFrame {
@@ -26,6 +77,7 @@ pub(in crate::slot) struct GroupFrame {
     pub(in crate::slot) old_node_len: usize,
     pub(in crate::slot) key_ordinals: HashMap<Key, u32>,
     pub(in crate::slot) seen_group_keys: HashSet<GroupKey>,
+    pub(in crate::slot) sibling_index: Option<SiblingIndex>,
     pub(in crate::slot) body_finished: bool,
     pub(in crate::slot) was_skipped: bool,
 }
@@ -49,6 +101,7 @@ impl SlotWriteSessionState {
             detach_remaining_children: matches!(mode, SlotPassMode::Compose),
             key_ordinals: HashMap::default(),
             seen_group_keys: HashSet::default(),
+            sibling_index: None,
         };
         self.group_stack.clear();
         self.removed_node_count = 0;
@@ -287,6 +340,55 @@ impl SlotWriteSessionState {
         }
     }
 
+    fn current_sibling_index(&mut self) -> &mut Option<SiblingIndex> {
+        if let Some(frame) = self.group_stack.last_mut() {
+            &mut frame.sibling_index
+        } else {
+            &mut self.root.sibling_index
+        }
+    }
+
+    pub(in crate::slot) fn find_later_sibling(
+        &mut self,
+        table: &SlotTable,
+        parent_anchor: AnchorId,
+        key: GroupKey,
+        search_start: usize,
+    ) -> Option<usize> {
+        if let Some(sibling_index) = self.current_sibling_index().as_ref() {
+            return sibling_index.find(table, parent_anchor, key, search_start);
+        }
+
+        let parent_end = table.direct_child_range_end(parent_anchor);
+        if search_start >= parent_end {
+            return None;
+        }
+
+        let mut index = search_start;
+        let mut direct_children_seen = 0usize;
+        while index < parent_end && direct_children_seen < SIBLING_INDEX_THRESHOLD {
+            let group = &table.groups[index];
+            debug_assert_eq!(
+                group.parent_anchor, parent_anchor,
+                "later sibling scans must stay on direct children"
+            );
+            if group.key == key {
+                return Some(index);
+            }
+            direct_children_seen += 1;
+            index += group.subtree_len as usize;
+        }
+
+        if index >= parent_end {
+            return None;
+        }
+
+        let sibling_index = SiblingIndex::build(table, parent_anchor, search_start);
+        let found = sibling_index.find(table, parent_anchor, key, search_start);
+        *self.current_sibling_index() = Some(sibling_index);
+        found
+    }
+
     pub(in crate::slot) fn preview_group_key(&self, seed: GroupKeySeed) -> GroupKey {
         let ordinal = seed.explicit_key.map_or_else(
             || Self::expected_key_ordinal(self.current_key_ordinals_ref(), seed.static_key),
@@ -344,6 +446,7 @@ impl SlotWriteSessionState {
             old_node_len,
             key_ordinals: HashMap::default(),
             seen_group_keys: HashSet::default(),
+            sibling_index: None,
             body_finished: false,
             was_skipped: false,
         });

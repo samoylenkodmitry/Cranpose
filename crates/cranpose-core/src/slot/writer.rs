@@ -4,7 +4,6 @@ use super::{
     SlotTable, SlotWriteSession, SlotWriteSessionState,
 };
 use crate::{
-    collections::map::HashMap,
     slot_storage::{
         BeginGroupInput, GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind,
         NodeRecordResult, ValueSlotId,
@@ -33,61 +32,6 @@ impl SlotTable {
     fn collect_subtree_root_node_ids(&self, group_anchor: AnchorId) -> Vec<NodeId> {
         let nodes = self.collect_subtree_node_records(group_anchor);
         Self::root_node_ids_from_records(&nodes)
-    }
-
-    fn find_later_sibling(
-        &self,
-        parent_anchor: AnchorId,
-        key: GroupKey,
-        search_start: usize,
-    ) -> Option<usize> {
-        const SIBLING_INDEX_THRESHOLD: usize = 16;
-
-        let parent_end = self.direct_child_range_end(parent_anchor);
-        if search_start >= parent_end {
-            return None;
-        }
-
-        let mut probe = search_start;
-        let mut direct_children_seen = 0usize;
-        while probe < parent_end && direct_children_seen < SIBLING_INDEX_THRESHOLD {
-            let group = &self.groups[probe];
-            debug_assert_eq!(
-                group.parent_anchor, parent_anchor,
-                "later sibling scans must stay on direct children"
-            );
-            direct_children_seen += 1;
-            probe += group.subtree_len as usize;
-        }
-
-        if direct_children_seen >= SIBLING_INDEX_THRESHOLD {
-            let mut sibling_index = HashMap::default();
-            let mut index = search_start;
-            while index < parent_end {
-                let group = &self.groups[index];
-                debug_assert_eq!(
-                    group.parent_anchor, parent_anchor,
-                    "later sibling index must stay on direct children"
-                );
-                sibling_index.entry(group.key).or_insert(index);
-                index += group.subtree_len as usize;
-            }
-            sibling_index.get(&key).copied()
-        } else {
-            let mut index = search_start;
-            while index < parent_end {
-                let group = &self.groups[index];
-                debug_assert_eq!(
-                    group.parent_anchor, parent_anchor,
-                    "later sibling scans must stay on direct children"
-                );
-                if group.key == key {
-                    return Some(index);
-                }
-                index += group.subtree_len as usize;
-            }
-            None
-        }
     }
 
     fn open_group_frame(
@@ -261,8 +205,8 @@ impl SlotWriteSession<'_> {
             } else {
                 let search_start = insert_index + expected_group.subtree_len as usize;
                 if let Some(found_index) =
-                    self.table
-                        .find_later_sibling(parent_anchor, key, search_start)
+                    self.state
+                        .find_later_sibling(self.table, parent_anchor, key, search_start)
                 {
                     let found_anchor = self.table.groups[found_index].anchor;
                     self.table.move_subtree(found_anchor, insert_index);

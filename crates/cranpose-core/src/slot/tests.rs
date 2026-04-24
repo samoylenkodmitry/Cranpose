@@ -1293,6 +1293,76 @@ fn keyed_sibling_reorder_preserves_values_and_anchors() {
 }
 
 #[test]
+fn large_keyed_sibling_reorder_preserves_values_and_anchors() {
+    const PARENT_KEY: Key = 405;
+    const STATIC_KEY: Key = 406;
+    const CHILD_COUNT: Key = 24;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let original = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+        let mut children = Vec::new();
+
+        for key in 1..=CHILD_COUNT {
+            let child = begin_keyed(session, STATIC_KEY, key, None);
+            let slot = session.value_slot(|| key as i32);
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+            children.push((key, child.anchor, slot));
+        }
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+        children
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    for (key, _, slot) in original.iter().copied() {
+        harness.table.write_value(slot, 10_000 + key as i32);
+    }
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let reordered = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+        let mut children = Vec::new();
+
+        for key in (1..=CHILD_COUNT).rev() {
+            let child = begin_keyed(session, STATIC_KEY, key, None);
+            assert!(
+                matches!(child.kind, GroupStartKind::Reused | GroupStartKind::Moved),
+                "large keyed reorder must reuse or move existing child {key}, got {:?}",
+                child.kind,
+            );
+            let slot = session.value_slot(|| -1_i32);
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+            children.push((key, child.anchor, slot));
+        }
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+        children
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    for (key, anchor, slot) in reordered {
+        let (_, original_anchor, _) = original
+            .iter()
+            .copied()
+            .find(|(original_key, _, _)| *original_key == key)
+            .expect("original child key must exist");
+        assert_eq!(anchor, original_anchor);
+        assert_eq!(*harness.table.read_value::<i32>(slot), 10_000 + key as i32);
+    }
+}
+
+#[test]
 fn keyed_sibling_search_never_matches_a_grandchild() {
     const PARENT_KEY: Key = 410;
     const STATIC_KEY: Key = 411;
