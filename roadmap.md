@@ -77,7 +77,7 @@ The execution order is correctness first, then documentation and repeatable gate
 - [x] Add retained-state validation that checks retained keys, detached anchors, retained scopes, retained node lifecycle, and detached root parentage.
 - [x] Add detached-subtree validation for preorder, depths, payload owners, node owners, root nodes, and anchor locality.
 - [x] Add a composition-level debug validation helper and call it from integration tests.
-- [ ] Add negative validation tests for retained active anchors, active scope-index leakage, payload owner leakage, disposed retained nodes, and duplicate retained keys.
+- [x] Add negative validation tests for retained active anchors, active scope-index leakage, payload owner leakage, disposed retained nodes, and duplicate retained keys.
 
 ### Phase 2 - Add Model And Property Tests
 
