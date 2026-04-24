@@ -1858,6 +1858,7 @@ fn list_item_reorder_with_explicit_keys_preserves_item_state() {
                 }
             })
             .expect("render keyed list");
+        assert_composition_valid(&composition);
     };
 
     render();
@@ -1917,6 +1918,7 @@ fn list_item_reorder_without_explicit_keys_follows_positional_identity() {
                 });
             })
             .expect("render unkeyed list");
+        assert_composition_valid(&composition);
     };
 
     render();
