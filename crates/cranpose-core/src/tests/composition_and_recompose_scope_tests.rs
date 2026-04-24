@@ -562,6 +562,7 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
     composition
         .render(root_key, || capture_scope(state))
         .expect("initial composition");
+    assert_composition_valid(&composition);
 
     assert_eq!(INVOCATIONS.with(|count| count.get()), 1);
 
@@ -576,6 +577,7 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
     let _ = composition
         .process_invalid_scopes()
         .expect("no recomposition while inactive");
+    assert_composition_valid(&composition);
 
     assert_eq!(INVOCATIONS.with(|count| count.get()), 1);
 
@@ -584,6 +586,7 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
     let _ = composition
         .process_invalid_scopes()
         .expect("recomposition after reactivation");
+    assert_composition_valid(&composition);
 
     assert_eq!(INVOCATIONS.with(|count| count.get()), 2);
 }
@@ -612,6 +615,7 @@ fn invalidating_active_scope_recomposes_that_scope() {
     composition
         .render(root_key, capture_scope)
         .expect("initial composition");
+    assert_composition_valid(&composition);
     assert_eq!(INVOCATIONS.with(|count| count.get()), 1);
 
     let scope = CAPTURED_SCOPE
@@ -623,6 +627,7 @@ fn invalidating_active_scope_recomposes_that_scope() {
     let recomposed = composition
         .process_invalid_scopes()
         .expect("recompose after explicit invalidation");
+    assert_composition_valid(&composition);
     assert!(
         recomposed,
         "active scope invalidation must trigger recomposition"
