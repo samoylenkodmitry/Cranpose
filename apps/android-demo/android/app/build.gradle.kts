@@ -97,6 +97,14 @@ android {
             jniLibs.srcDirs("../target/android")
         }
     }
+
+    packaging {
+        jniLibs {
+            if (releaseRustFast) {
+                keepDebugSymbols += "**/libdesktop_app.so"
+            }
+        }
+    }
 }
 
 dependencies {

@@ -125,12 +125,31 @@ fn composed_parent_child_table(
     harness.table
 }
 
-fn detached_single_child(parent_key: Key, child_key: Key) -> (SlotHarness, DetachedSubtree) {
+fn detached_single_child_with_options(
+    parent_key: Key,
+    child_key: Key,
+    child_scope: Option<ScopeId>,
+    record_child_node: bool,
+) -> (SlotHarness, DetachedSubtree, Option<NodeId>) {
     let mut harness = SlotHarness::new();
+    let child_node = record_child_node.then(|| {
+        harness
+            .applier
+            .create(Box::new(UnmountTrackingNode::new(Rc::new(Cell::new(0)))))
+    });
+    let child_generation = child_node.map(|id| harness.applier.node_generation(id));
+
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(SlotPassMode::Compose, |session| {
         begin_unkeyed(session, parent_key, None);
-        begin_unkeyed(session, child_key, None);
+
+        let child = begin_unkeyed(session, child_key, None);
+        if let Some(scope_id) = child_scope {
+            session.set_group_scope(child.group, scope_id);
+        }
+        if let (Some(node_id), Some(generation)) = (child_node, child_generation) {
+            session.record_node(node_id, generation);
+        }
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -149,6 +168,12 @@ fn detached_single_child(parent_key: Key, child_key: Key) -> (SlotHarness, Detac
         parent_result.detached_children.into_iter().next().unwrap()
     });
     harness.finish_pass(SlotPassMode::Compose);
+    (harness, detached, child_node)
+}
+
+fn detached_single_child(parent_key: Key, child_key: Key) -> (SlotHarness, DetachedSubtree) {
+    let (harness, detached, _) =
+        detached_single_child_with_options(parent_key, child_key, None, false);
     (harness, detached)
 }
 
@@ -974,6 +999,179 @@ fn retention_insert_rejects_duplicate_key_without_replacing_existing_subtree() {
         .take(retain_key)
         .expect("original retained subtree must remain available after duplicate rejection");
     assert_eq!(restored.root_key(), retain_key.key);
+}
+
+#[test]
+fn retention_validate_rejects_root_key_mismatch() {
+    const PARENT_KEY: Key = 370;
+    const CHILD_KEY: Key = 371;
+
+    let (harness, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let actual_root_key = detached.root_key();
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: GroupKey::new(CHILD_KEY + 10, None, 0),
+    };
+
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+
+    assert_eq!(
+        retention.validate(&harness.table),
+        Err(SlotInvariantError::RetainedRootKeyMismatch {
+            parent_scope: None,
+            expected: retain_key.key,
+            actual: actual_root_key,
+        })
+    );
+}
+
+#[test]
+fn retention_validate_rejects_active_retained_anchor() {
+    const PARENT_KEY: Key = 372;
+    const CHILD_KEY: Key = 373;
+
+    let (mut harness, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let retained_anchor = detached
+        .group_anchors()
+        .next()
+        .expect("detached subtree must contain an anchor");
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+    harness.table.anchors.set_active(retained_anchor, 0);
+
+    assert_eq!(
+        retention.validate(&harness.table),
+        Err(SlotInvariantError::RetainedSubtreeAnchorStillActive {
+            root_key: retain_key.key,
+            anchor: retained_anchor,
+            active_index: 0,
+        })
+    );
+}
+
+#[test]
+fn retention_validate_rejects_non_detached_retained_anchor() {
+    const PARENT_KEY: Key = 374;
+    const CHILD_KEY: Key = 375;
+
+    let (mut harness, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let retained_anchor = detached
+        .group_anchors()
+        .next()
+        .expect("detached subtree must contain an anchor");
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+    harness.table.anchors.invalidate(retained_anchor);
+
+    assert_eq!(
+        retention.validate(&harness.table),
+        Err(SlotInvariantError::RetainedAnchorStateMismatch {
+            root_key: retain_key.key,
+            anchor: retained_anchor,
+            actual: None,
+        })
+    );
+}
+
+#[test]
+fn retention_validate_rejects_retained_scope_in_active_scope_index() {
+    const PARENT_KEY: Key = 376;
+    const CHILD_KEY: Key = 377;
+    const CHILD_SCOPE: ScopeId = 23;
+
+    let (mut harness, detached, _) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, Some(CHILD_SCOPE), false);
+    let retained_anchor = detached
+        .group_anchors()
+        .next()
+        .expect("detached subtree must contain an anchor");
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+    harness
+        .table
+        .scope_anchor_to_group
+        .insert(CHILD_SCOPE, retained_anchor);
+
+    assert_eq!(
+        retention.validate(&harness.table),
+        Err(SlotInvariantError::RetainedScopeStillActive {
+            root_key: retain_key.key,
+            scope_id: CHILD_SCOPE,
+            active_anchor: retained_anchor,
+        })
+    );
+}
+
+#[test]
+fn retention_validate_rejects_disposed_retained_node() {
+    const PARENT_KEY: Key = 378;
+    const CHILD_KEY: Key = 379;
+
+    let (harness, detached, child_node) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, true);
+    let child_node = child_node.expect("test helper must record a child node");
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+    retention
+        .subtrees_mut()
+        .next()
+        .expect("retained subtree must exist")
+        .mark_nodes_disposed();
+
+    assert_eq!(
+        retention.validate(&harness.table),
+        Err(SlotInvariantError::RetainedNodeLifecycleMismatch {
+            root_key: retain_key.key,
+            node_id: child_node,
+            actual: super::NodeLifecycle::Disposed,
+        })
+    );
+}
+
+#[test]
+fn retention_validate_rejects_retained_root_with_active_parent() {
+    const PARENT_KEY: Key = 380;
+    const CHILD_KEY: Key = 381;
+
+    let (harness, mut detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let parent_anchor = harness.table.groups[0].anchor;
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+    detached.groups[0].parent_anchor = parent_anchor;
+
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+
+    assert_eq!(
+        retention.validate(&harness.table),
+        Err(SlotInvariantError::RetainedRootHasActiveParent {
+            root_key: retain_key.key,
+            parent_anchor,
+        })
+    );
 }
 
 #[test]

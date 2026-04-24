@@ -1,7 +1,11 @@
 use super::SlotTable;
-use crate::{slot_storage::GroupId, ScopeId};
+use crate::{slot_storage::GroupId, AnchorId, ScopeId};
 
 impl SlotTable {
+    pub(crate) fn scope_index_anchor(&self, scope_id: ScopeId) -> Option<AnchorId> {
+        self.scope_anchor_to_group.get(&scope_id).copied()
+    }
+
     pub(super) fn group_for_scope(&self, scope_id: ScopeId) -> Option<GroupId> {
         let anchor = self.scope_anchor_to_group.get(&scope_id).copied()?;
         let group_index = self.anchors.active_index(anchor)?;

@@ -96,10 +96,25 @@ pub(crate) enum SlotInvariantError {
         expected: AnchorId,
         actual: Option<AnchorId>,
     },
+    RetainedRootKeyMismatch {
+        parent_scope: Option<ScopeId>,
+        expected: GroupKey,
+        actual: GroupKey,
+    },
     RetainedSubtreeAnchorStillActive {
         root_key: GroupKey,
         anchor: AnchorId,
         active_index: usize,
+    },
+    RetainedAnchorStateMismatch {
+        root_key: GroupKey,
+        anchor: AnchorId,
+        actual: Option<AnchorState>,
+    },
+    RetainedScopeStillActive {
+        root_key: GroupKey,
+        scope_id: ScopeId,
+        active_anchor: AnchorId,
     },
     RetainedRootHasActiveParent {
         root_key: GroupKey,

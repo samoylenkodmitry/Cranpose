@@ -115,8 +115,16 @@ impl RetentionManager {
     }
 
     pub(crate) fn validate(&self, table: &SlotTable) -> Result<(), SlotInvariantError> {
-        for retained in self.groups.values() {
+        for (key, retained) in &self.groups {
             let subtree = &retained.subtree;
+            if subtree.root_key() != key.key {
+                return Err(SlotInvariantError::RetainedRootKeyMismatch {
+                    parent_scope: key.parent_scope,
+                    expected: key.key,
+                    actual: subtree.root_key(),
+                });
+            }
+
             if subtree.root_parent_anchor().is_valid() {
                 return Err(SlotInvariantError::RetainedRootHasActiveParent {
                     root_key: subtree.root_key(),
@@ -125,11 +133,31 @@ impl RetentionManager {
             }
 
             for anchor in subtree.group_anchors() {
-                if let Some(AnchorState::Active(active_index)) = table.anchor_state(anchor) {
-                    return Err(SlotInvariantError::RetainedSubtreeAnchorStillActive {
+                match table.anchor_state(anchor) {
+                    Some(AnchorState::Detached) => {}
+                    Some(AnchorState::Active(active_index)) => {
+                        return Err(SlotInvariantError::RetainedSubtreeAnchorStillActive {
+                            root_key: subtree.root_key(),
+                            anchor,
+                            active_index,
+                        });
+                    }
+                    actual => {
+                        return Err(SlotInvariantError::RetainedAnchorStateMismatch {
+                            root_key: subtree.root_key(),
+                            anchor,
+                            actual,
+                        });
+                    }
+                }
+            }
+
+            for scope_id in subtree.scope_ids_iter() {
+                if let Some(active_anchor) = table.scope_index_anchor(scope_id) {
+                    return Err(SlotInvariantError::RetainedScopeStillActive {
                         root_key: subtree.root_key(),
-                        anchor,
-                        active_index,
+                        scope_id,
+                        active_anchor,
                     });
                 }
             }
