@@ -33,7 +33,7 @@ This file tracks the current forward work and marks boxes closed only after full
 ## Slot Table Review Mitigation
 
 - [x] Make retained-subtree insertion reject or explicitly dispose displaced retained groups instead of silently overwriting a matching `RetainKey`.
-- [ ] Make `SlotTable::restore_subtree` reject detached subtrees whose root key does not match the requested `GroupKey`.
+- [x] Make `SlotTable::restore_subtree` reject detached subtrees whose root key does not match the requested `GroupKey`.
 - [ ] Make duplicate explicit sibling keys fail during writer traversal or always-on debug validation, not only when slot diagnostics are enabled manually.
 - [ ] Replace type-name based `PayloadKind` inference with explicit payload-kind ownership at the call site.
 - [ ] Add the lazy per-writer-frame sibling index described by `docs/cranpose_slot_table_v2_design.md` so large keyed sibling ranges do not rebuild transient maps per lookup.

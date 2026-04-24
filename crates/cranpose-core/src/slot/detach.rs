@@ -83,6 +83,11 @@ impl SlotTable {
         key: GroupKey,
         mut subtree: DetachedSubtree,
     ) -> AnchorId {
+        assert_eq!(
+            subtree.root_key(),
+            key,
+            "restored subtree root key must match the requested group key",
+        );
         let restored_group_count = subtree.groups.len();
         let restored_subtree_len = subtree
             .groups

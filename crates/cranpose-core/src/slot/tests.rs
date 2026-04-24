@@ -798,6 +798,38 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
 }
 
 #[test]
+fn restore_subtree_rejects_mismatched_root_key_without_mutating_table() {
+    const PARENT_KEY: Key = 354;
+    const CHILD_KEY: Key = 355;
+
+    let (mut harness, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let parent_anchor = harness.table.groups[0].anchor;
+    let group_count_before = harness.table.groups.len();
+    let detached_anchor = detached
+        .group_anchors()
+        .next()
+        .expect("detached subtree must contain an anchor");
+    let wrong_key = GroupKey::new(CHILD_KEY + 1, None, 0);
+
+    let restore = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        harness
+            .table
+            .restore_subtree(1, parent_anchor, wrong_key, detached);
+    }));
+    assert!(
+        restore.is_err(),
+        "restoring a detached subtree under a different group key must be rejected",
+    );
+    assert_eq!(harness.table.groups.len(), group_count_before);
+    assert_eq!(
+        harness.table.anchor_state(detached_anchor),
+        Some(AnchorState::Detached),
+        "failed restore must leave the detached anchor out of the active table",
+    );
+    harness.table.debug_verify(Some(&harness.lifecycle));
+}
+
+#[test]
 fn removing_conditional_child_returns_detached_subtree() {
     const PARENT_KEY: Key = 350;
     const CHILD_KEY: Key = 351;
