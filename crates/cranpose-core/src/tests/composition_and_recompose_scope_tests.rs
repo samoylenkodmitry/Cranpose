@@ -1729,6 +1729,7 @@ fn switching_tabs_with_retention_preserves_each_tab_state() {
                 });
             })
             .expect("render retained tabs");
+        assert_composition_valid(&composition);
     };
 
     render();
@@ -1797,6 +1798,7 @@ fn switching_tabs_without_retention_resets_inactive_tab_state() {
                 });
             })
             .expect("render non-retained tabs");
+        assert_composition_valid(&composition);
     };
 
     render();

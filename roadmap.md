@@ -90,7 +90,7 @@ The execution order is correctness first, then documentation and repeatable gate
 ### Phase 3 - Complete Behavior Integration Tests
 
 - [x] Audit or add remember survival/reset tests for recomposition, default conditional disposal, and retained restoration.
-- [ ] Audit or add tab-retention tests covering preserved state with retention and disposal without retention.
+- [x] Audit or add tab-retention tests covering preserved state with retention and disposal without retention.
 - [ ] Audit or add keyed and unkeyed list identity tests.
 - [ ] Audit or add active/inactive scope invalidation tests.
 - [ ] Audit or add `DisposableEffect` cleanup tests for dispose versus retain.
