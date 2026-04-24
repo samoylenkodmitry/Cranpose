@@ -1544,7 +1544,7 @@ fn unkeyed_siblings_follow_positional_identity() {
 }
 
 #[test]
-fn duplicate_explicit_keys_are_rejected_by_validation() {
+fn duplicate_explicit_keys_are_rejected_during_writer_traversal() {
     const PARENT_KEY: Key = 460;
     const STATIC_KEY: Key = 461;
     const EXPLICIT_KEY: Key = 77;
@@ -1562,7 +1562,41 @@ fn duplicate_explicit_keys_are_rejected_by_validation() {
         assert!(first.detached_children.is_empty());
         session.end_group();
 
-        begin_keyed(&mut session, STATIC_KEY, EXPLICIT_KEY, None);
+        let duplicate = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            begin_keyed(&mut session, STATIC_KEY, EXPLICIT_KEY, None);
+        }));
+        assert!(
+            duplicate.is_err(),
+            "duplicate explicit sibling keys must fail before mutating the slot table",
+        );
+
+        let parent = session.finish_group_body();
+        assert!(parent.detached_children.is_empty());
+        session.end_group();
+    }
+
+    assert_eq!(table.validate(), Ok(()));
+}
+
+#[test]
+fn validate_reports_duplicate_sibling_key_structurally() {
+    const PARENT_KEY: Key = 462;
+    const STATIC_KEY: Key = 463;
+
+    let mut table = SlotTable::new();
+    let mut lifecycle = SlotLifecycleCoordinator::default();
+    let mut state = SlotWriteSessionState::default();
+    state.reset_for_pass(&table, SlotPassMode::Compose);
+    {
+        let mut session = table.write_session(&mut lifecycle, &mut state, SlotPassMode::Compose);
+        begin_unkeyed(&mut session, PARENT_KEY, None);
+
+        begin_keyed(&mut session, STATIC_KEY, 1, None);
+        let first = session.finish_group_body();
+        assert!(first.detached_children.is_empty());
+        session.end_group();
+
+        begin_keyed(&mut session, STATIC_KEY, 2, None);
         let second = session.finish_group_body();
         assert!(second.detached_children.is_empty());
         session.end_group();
@@ -1572,12 +1606,14 @@ fn duplicate_explicit_keys_are_rejected_by_validation() {
         session.end_group();
     }
 
-    assert!(
-        matches!(
-            table.validate(),
-            Err(SlotInvariantError::DuplicateSiblingKey { .. })
-        ),
-        "duplicate explicit sibling keys must fail validation instead of silently aliasing state",
+    table.groups[2].key = table.groups[1].key;
+
+    assert_eq!(
+        table.validate(),
+        Err(SlotInvariantError::DuplicateSiblingKey {
+            parent_anchor: table.groups[0].anchor,
+            key: table.groups[1].key,
+        })
     );
 }
 

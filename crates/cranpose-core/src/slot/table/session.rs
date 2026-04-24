@@ -3,7 +3,7 @@ use super::super::SlotInvariantError;
 use super::super::{DetachedSubtree, SlotPassMode};
 use super::SlotTable;
 use crate::{
-    collections::map::HashMap,
+    collections::map::{HashMap, HashSet},
     slot_storage::{GroupKey, GroupKeySeed, GroupStartKind},
     AnchorId, Key,
 };
@@ -13,6 +13,7 @@ pub(in crate::slot) struct RootFrame {
     pub(in crate::slot) next_child_index: usize,
     pub(in crate::slot) detach_remaining_children: bool,
     pub(in crate::slot) key_ordinals: HashMap<Key, u32>,
+    pub(in crate::slot) seen_group_keys: HashSet<GroupKey>,
 }
 
 pub(in crate::slot) struct GroupFrame {
@@ -24,6 +25,7 @@ pub(in crate::slot) struct GroupFrame {
     pub(in crate::slot) node_cursor: usize,
     pub(in crate::slot) old_node_len: usize,
     pub(in crate::slot) key_ordinals: HashMap<Key, u32>,
+    pub(in crate::slot) seen_group_keys: HashSet<GroupKey>,
     pub(in crate::slot) body_finished: bool,
     pub(in crate::slot) was_skipped: bool,
 }
@@ -46,6 +48,7 @@ impl SlotWriteSessionState {
             next_child_index: 0,
             detach_remaining_children: matches!(mode, SlotPassMode::Compose),
             key_ordinals: HashMap::default(),
+            seen_group_keys: HashSet::default(),
         };
         self.group_stack.clear();
         self.removed_node_count = 0;
@@ -276,6 +279,14 @@ impl SlotWriteSessionState {
         }
     }
 
+    fn current_seen_group_keys(&mut self) -> &mut HashSet<GroupKey> {
+        if let Some(frame) = self.group_stack.last_mut() {
+            &mut frame.seen_group_keys
+        } else {
+            &mut self.root.seen_group_keys
+        }
+    }
+
     pub(in crate::slot) fn preview_group_key(&self, seed: GroupKeySeed) -> GroupKey {
         let ordinal = seed.explicit_key.map_or_else(
             || Self::expected_key_ordinal(self.current_key_ordinals_ref(), seed.static_key),
@@ -292,6 +303,11 @@ impl SlotWriteSessionState {
         debug_assert_eq!(
             ordinal, key.ordinal,
             "reserved group ordinal must match the active writer state"
+        );
+        assert!(
+            self.current_seen_group_keys().insert(key),
+            "duplicate sibling group key: {:?}",
+            key,
         );
     }
 
@@ -327,6 +343,7 @@ impl SlotWriteSessionState {
             node_cursor: 0,
             old_node_len,
             key_ordinals: HashMap::default(),
+            seen_group_keys: HashSet::default(),
             body_finished: false,
             was_skipped: false,
         });
