@@ -806,7 +806,7 @@ The slot table validates a small set of invariants after mutations in debug/test
 - retained subtree anchors are detached or invalidated, never active.
 
 The active debug helpers are `SlotTable::validate()`, `SlotTable::debug_snapshot()`,
-`SlotTable::debug_dump_groups()`, and `SlotTable::debug_dump_all_slots()`.
+`SlotTable::debug_dump_groups()`, and `SlotTable::debug_dump_slot_entries()`.
 
 ---
 
@@ -1451,8 +1451,8 @@ fn is_visible_to_snapshot(
 **Dump the active slot table:**
 ```rust
 fn debug_print_slots(composition: &Composition) {
-    for (index, row) in composition.debug_dump_all_slots() {
-        println!("{index:4}: {row}");
+    for entry in composition.debug_dump_slot_entries() {
+        println!("{}: {}", entry.path, entry.line);
     }
 }
 ```

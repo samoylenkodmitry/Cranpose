@@ -12,6 +12,8 @@
 
 Cranpose is a declarative UI framework for Rust, inspired by Jetpack Compose. It enables developers to build user interfaces for Desktop (Linux, macOS, Windows), Android, iOS, and Web (WASM) from a single Rust codebase.
 
+The composition runtime uses Slot Table V2: active groups live in preorder group, payload, and node tables, while inactive retained branches are explicit detached subtrees. Gap-table notes are historical rationale only; the active slot-table specification is [`docs/cranpose_slot_table_v2_design.md`](docs/cranpose_slot_table_v2_design.md).
+
 ## Quick Start via Isolated Demo
 
 To get started, we recommend using the **Isolated Demo** template found in `apps/isolated-demo`. This project is pre-configured with the necessary dependencies and build scripts for all supported platforms.

@@ -26,7 +26,7 @@ If you are developing a custom widget library or a low-level extension, you migh
 
 Cranpose is composed of several crates:
 
--   `cranpose-core`: The composition runtime, slot table, and state snapshot system.
+-   `cranpose-core`: The composition runtime, Slot Table V2, and state snapshot system. Slot Table V2 is the active runtime; gap-table material is historical rationale only.
 -   `cranpose-ui`: UI primitives, layout protocol, and high-level widgets.
 -   `cranpose-foundation`: Essential building blocks (Box, Row, Column) and the Modifier system.
 -   `cranpose-animation`: Physics-based animation system.

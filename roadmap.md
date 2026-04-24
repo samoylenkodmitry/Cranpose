@@ -70,7 +70,7 @@ The execution order is correctness first, then documentation and repeatable gate
 - [x] Keep `docs/cranpose_slot_table_v2_design.md` as the only active slot-table design specification.
 - [x] Add `docs/slot_table_v2_invariants.md` as the short invariant checklist for active groups, payload/node ownership, anchors, retention, scope lookup, and sibling matching.
 - [x] Add `verify_slot_table.sh` that runs the full verification gate and writes/readable logs for every step.
-- [ ] Update user-facing crate docs to say Slot Table V2 is active and gap-table semantics are historical only.
+- [x] Update user-facing crate docs to say Slot Table V2 is active and gap-table semantics are historical only.
 
 ### Phase 1 - Strengthen Validation
 
@@ -148,4 +148,4 @@ The execution order is correctness first, then documentation and repeatable gate
 
 - [x] Complete the Slot Table Review Mitigation items in order, with the full verification gate and a separate commit after each completed item.
 - [x] Profile lazy-list modifier/layout/semantics churn after review mitigation and only add specialized reuse policy if measurements show the generic retained-subtree path is still the bottleneck.
-- [ ] Execute Phase 0 production-hardening items first, with one verified commit per closed checklist item.
+- [x] Execute Phase 0 production-hardening items first, with one verified commit per closed checklist item.
