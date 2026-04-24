@@ -1117,7 +1117,7 @@ Use `proptest` if acceptable; otherwise write deterministic random tests with a 
 
 1. Create a rewrite branch.
 2. Run current tests to get baseline failures/pass count.
-3. Add a `docs/slot_table_v2.md` copy of this design.
+3. Keep this file as the single active slot-table design source.
 4. Add a failing placeholder test: `slot_v2_empty_table_validates`.
 
 ### Phase 1 — define V2 types
