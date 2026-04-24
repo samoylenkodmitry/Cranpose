@@ -61,7 +61,91 @@ This file tracks the current forward work and marks boxes closed only after full
 - [ ] Add collision-resistant debug/profile keys if diagnostics show location-key collisions in real workloads.
 - [ ] Add allocator-backed tables for `no_std` only if that target becomes real again.
 
+## Production Hardening Roadmap
+
+The execution order is correctness first, then documentation and repeatable gates, then performance evidence, then targeted optimization. A LinkBuffer/arena backend remains a conditional prototype only after the current V2 implementation has model-test coverage and measured structural-edit bottlenecks.
+
+### Phase 0 - Freeze Current Truth
+
+- [x] Keep `docs/cranpose_slot_table_v2_design.md` as the only active slot-table design specification.
+- [ ] Add `docs/slot_table_v2_invariants.md` as the short invariant checklist for active groups, payload/node ownership, anchors, retention, scope lookup, and sibling matching.
+- [ ] Add `verify_slot_table.sh` that runs the full verification gate and writes/readable logs for every step.
+- [ ] Update user-facing crate docs to say Slot Table V2 is active and gap-table semantics are historical only.
+
+### Phase 1 - Strengthen Validation
+
+- [ ] Add retained-state validation that checks retained keys, detached anchors, retained scopes, retained node lifecycle, and detached root parentage.
+- [ ] Add detached-subtree validation for preorder, depths, payload owners, node owners, root nodes, and anchor locality.
+- [ ] Add a composition-level debug validation helper and call it from integration tests.
+- [ ] Add negative validation tests for retained active anchors, active scope-index leakage, payload owner leakage, disposed retained nodes, and duplicate retained keys.
+
+### Phase 2 - Add Model And Property Tests
+
+- [ ] Add a deterministic model/property-test harness for Slot Table V2 render-frame scenarios.
+- [ ] Add a reference model for active roots, retained groups, payloads, nodes, scopes, and remembered values.
+- [ ] Generate complete render-frame scripts for conditionals, keyed moves, tab retention, remembered values, invalidation, and skip paths.
+- [ ] Add core properties for keyed identity, unkeyed positional identity, dispose/reset, retain/restore, nested detach/restore, inactive retained invalidation, skip metadata, stale payload alias prevention, active/retained anchor separation, and random frame validation.
+- [ ] Make property failures print a reproducible seed, compact scenario script, active debug snapshot, retained-subtree summary, and failed invariant.
+
+### Phase 3 - Complete Behavior Integration Tests
+
+- [ ] Audit or add remember survival/reset tests for recomposition, default conditional disposal, and retained restoration.
+- [ ] Audit or add tab-retention tests covering preserved state with retention and disposal without retention.
+- [ ] Audit or add keyed and unkeyed list identity tests.
+- [ ] Audit or add active/inactive scope invalidation tests.
+- [ ] Audit or add `DisposableEffect` cleanup tests for dispose versus retain.
+- [ ] Audit or add retained/disposed node lifecycle tests.
+- [ ] Audit or add subcompose and lazy-list slot reuse tests, including lazy-list jump alias prevention.
+
+### Phase 4 - Lock Performance Baselines
+
+- [ ] Expand `slot_table_v2` Criterion benchmarks across keyed reverse sizes, keyed rotate, seeded shuffle, conditional toggle positions, tab payload sizes, and lazy scroll/jump modes.
+- [ ] Add allocation and storage counters for modifier slices, layout boxes, semantics, group/payload/node counts and capacities, and retained subtree counts/bytes.
+- [ ] Document the baseline process using `./perf_slot_table_v2.sh --save-baseline`, `--baseline`, and `--stability-check`.
+- [ ] Document regression budgets for keyed reorder, tab switching, subcompose scrolling, lazy-list reuse, retained bytes, and anchor growth.
+
+### Phase 5 - Optimize Current V2 Hot Paths
+
+- [ ] Benchmark sibling-index thresholds of 4, 8, 16, 32, and 64 before changing the default.
+- [ ] Instrument subtree moves with counts/spans for moved groups, payloads, nodes, payload-location rebuilds, and group-index refresh.
+- [ ] Optimize proven `move_subtree` hot spots without changing semantics.
+- [ ] Continue lazy-list allocation-churn reductions only where counters show real allocation pressure.
+- [ ] Revisit `GroupRecord` field packing only if profiling shows group-table bandwidth or cache pressure matters.
+
+### Phase 6 - Improve Lifecycle And Memory Policy
+
+- [ ] Design `RetentionBudget` with max retained subtrees, retained bytes, and age limits.
+- [ ] Add eviction policy choices for least-recently-restored, least-recently-detached, and largest-first retention.
+- [ ] Add retained-state diagnostics for retained counts, estimated bytes, and eviction totals.
+- [ ] Add memory plateau tests for repeated tab/list/subcompose retention.
+
+### Phase 7 - Conditional LinkBuffer/Arena Prototype
+
+- [ ] Define objective trigger criteria before prototyping any linked backend.
+- [ ] Add a storage abstraction that preserves the current V2 semantic API and keeps preorder `Vec` storage as the default backend.
+- [ ] Prototype linked group storage behind an explicit feature only after the trigger criteria are met.
+- [ ] Run the full model/property and integration test suite against both backends.
+- [ ] Ship the linked backend only if it proves large structural-edit wins without normal-case or memory regressions.
+
+### Phase 8 - Release Hardening
+
+- [ ] Add CI jobs for default features, alternate hash/internal features, property smoke, criterion smoke, wasm build, Android release, and robot e2e.
+- [ ] Add stress commands for slot validation, high-case property tests, perf stability, and sequential robot tests.
+- [ ] Add a release checklist covering stale docs, full verification, persisted property failures, perf baseline, regression budgets, retained-memory plateau, anchor growth, and panic classification.
+
+## PR Sequence
+
+- [ ] PR 1: documentation and verification gate.
+- [ ] PR 2: retained-state validation.
+- [ ] PR 3: property-test harness.
+- [ ] PR 4: behavior integration tests.
+- [ ] PR 5: performance baseline matrix.
+- [ ] PR 6: measured current-V2 optimizations.
+- [ ] PR 7: retention memory budget.
+- [ ] PR 8: optional LinkBuffer/arena prototype.
+
 ## Next Execution Order
 
 - [x] Complete the Slot Table Review Mitigation items in order, with the full verification gate and a separate commit after each completed item.
 - [x] Profile lazy-list modifier/layout/semantics churn after review mitigation and only add specialized reuse policy if measurements show the generic retained-subtree path is still the bottleneck.
+- [ ] Execute Phase 0 production-hardening items first, with one verified commit per closed checklist item.
