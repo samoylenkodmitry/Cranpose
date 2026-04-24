@@ -1299,6 +1299,96 @@ fn conditional_branch_without_retention_resets_remembered_state() {
 }
 
 #[test]
+fn retained_conditional_branch_restores_remembered_state() {
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+    let branch_key = location_key(file!(), line!(), column!());
+    let remembered = Rc::new(RefCell::new(None::<Owned<i32>>));
+
+    fn render(
+        composition: &mut Composition<MemoryApplier>,
+        show_branch: &MutableState<bool>,
+        root_key: Key,
+        branch_key: Key,
+        remembered: &Rc<RefCell<Option<Owned<i32>>>>,
+    ) {
+        let remembered = Rc::clone(remembered);
+        composition
+            .render(root_key, || {
+                remembered.replace(None);
+                if show_branch.value() {
+                    with_current_composer(|composer| {
+                        composer.cranpose_with_reuse(
+                            branch_key,
+                            RecomposeOptions::default(),
+                            |composer| {
+                                let slot = composer.remember(|| 7_i32);
+                                remembered.replace(Some(slot));
+                            },
+                        );
+                    });
+                }
+            })
+            .expect("render retained conditional branch");
+        assert_composition_valid(composition);
+    }
+
+    render(
+        &mut composition,
+        &show_branch,
+        root_key,
+        branch_key,
+        &remembered,
+    );
+    let first = remembered
+        .borrow()
+        .clone()
+        .expect("initial retained remembered state");
+    first.replace(41);
+    assert_eq!(composition.debug_slot_snapshot().retained_subtree_count, 0);
+
+    show_branch.set_value(false);
+    render(
+        &mut composition,
+        &show_branch,
+        root_key,
+        branch_key,
+        &remembered,
+    );
+    assert!(
+        remembered.borrow().is_none(),
+        "hidden retained branches must not expose an active remembered slot"
+    );
+    let hidden_snapshot = composition.debug_slot_snapshot();
+    assert_eq!(hidden_snapshot.retained_subtree_count, 1);
+    assert_eq!(
+        composition.debug_slot_table_stats().retained_payload_count,
+        1
+    );
+
+    show_branch.set_value(true);
+    render(
+        &mut composition,
+        &show_branch,
+        root_key,
+        branch_key,
+        &remembered,
+    );
+    let restored = remembered
+        .borrow()
+        .clone()
+        .expect("remembered state after retained restore");
+    assert_eq!(
+        restored.with(|value| *value),
+        41,
+        "retention must restore remembered state after the conditional branch returns",
+    );
+    assert_eq!(composition.debug_slot_snapshot().retained_subtree_count, 0);
+}
+
+#[test]
 fn retained_branch_hides_without_running_disposable_effect_cleanup() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
