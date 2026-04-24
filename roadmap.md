@@ -68,7 +68,7 @@ The execution order is correctness first, then documentation and repeatable gate
 ### Phase 0 - Freeze Current Truth
 
 - [x] Keep `docs/cranpose_slot_table_v2_design.md` as the only active slot-table design specification.
-- [ ] Add `docs/slot_table_v2_invariants.md` as the short invariant checklist for active groups, payload/node ownership, anchors, retention, scope lookup, and sibling matching.
+- [x] Add `docs/slot_table_v2_invariants.md` as the short invariant checklist for active groups, payload/node ownership, anchors, retention, scope lookup, and sibling matching.
 - [ ] Add `verify_slot_table.sh` that runs the full verification gate and writes/readable logs for every step.
 - [ ] Update user-facing crate docs to say Slot Table V2 is active and gap-table semantics are historical only.
 
