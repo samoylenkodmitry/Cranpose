@@ -268,3 +268,19 @@ fn active_children_follow_last_rendered_placements() {
     assert_eq!(node.active_children(), vec![33, 44]);
     assert_eq!(cranpose_core::Node::children(&node), vec![33, 44]);
 }
+
+#[test]
+fn subcompose_modifier_slices_cache_reuses_unique_snapshot_allocation() {
+    let policy: Rc<MeasurePolicy> =
+        Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
+    let mut node =
+        SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    let snapshot = node.modifier_slices_snapshot();
+    let snapshot_ptr = Rc::as_ptr(&snapshot);
+    drop(snapshot);
+
+    node.set_modifier(crate::modifier::Modifier::empty().padding(4.0));
+
+    let updated = node.modifier_slices_snapshot();
+    assert_eq!(Rc::as_ptr(&updated), snapshot_ptr);
+}

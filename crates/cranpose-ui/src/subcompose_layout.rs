@@ -371,8 +371,6 @@ pub struct SubcomposeLayoutNode {
     virtual_children_count: Cell<usize>,
     /// Retained layout state (size, position) for rendering.
     layout_state: RefCell<LayoutState>,
-    // Caching for modifier slices to avoid repeated allocation
-    modifier_slices_buffer: RefCell<ModifierNodeSlices>,
     modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
     modifier_slices_dirty: Cell<bool>,
 }
@@ -392,7 +390,6 @@ impl SubcomposeLayoutNode {
             needs_focus_sync: Cell::new(false),
             virtual_children_count: Cell::new(0),
             layout_state: RefCell::new(LayoutState::default()),
-            modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
         };
@@ -427,7 +424,6 @@ impl SubcomposeLayoutNode {
             needs_focus_sync: Cell::new(false),
             virtual_children_count: Cell::new(0),
             layout_state: RefCell::new(LayoutState::default()),
-            modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
         };
@@ -500,9 +496,8 @@ impl SubcomposeLayoutNode {
     /// Updates the cached modifier slices from the modifier chain.
     fn update_modifier_slices_cache(&self) {
         let inner = self.inner.borrow();
-        let mut buffer = self.modifier_slices_buffer.borrow_mut();
-        collect_modifier_slices_into(inner.modifier_chain.chain(), &mut buffer);
-        *self.modifier_slices_snapshot.borrow_mut() = Rc::new(buffer.clone());
+        let mut snapshot = self.modifier_slices_snapshot.borrow_mut();
+        collect_modifier_slices_into(inner.modifier_chain.chain(), Rc::make_mut(&mut snapshot));
         self.modifier_slices_dirty.set(false);
     }
 

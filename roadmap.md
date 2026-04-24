@@ -25,7 +25,7 @@ This file tracks the current forward work and marks boxes closed only after full
 - [x] Replace the remaining composer-side root discovery with stored root-node metadata so skip/retain/dispose paths consume root ids carried by `FinishGroupResult`, `NodeRecord`, and `DetachedSubtree` instead of walking the applier.
 - [x] Rework writer frames to use parent-bounded table ranges instead of eagerly cloning `old_children` vectors on every `open_group_frame`; writer traversal now operates on direct-child table boundaries with explicit invariant checks and no per-group child-list copies.
 
-- [ ] Reduce modifier slice collection churn in lazy-list scroll-reuse hot paths.
+- [x] Reduce modifier slice collection churn in lazy-list scroll-reuse hot paths.
 - [ ] Reduce layout-box and semantics allocation churn in lazy-list scroll-reuse hot paths.
 - [x] Add retained-memory instrumentation and anchor-capacity diagnostics that are cheap enough for regular debug investigation and strong enough for regression tests; `SlotTableDebugStats` now reports retained subtree counts/heap plus active/detached/invalidated/free anchor breakdown, and the coverage exercises both raw slot tables and composition-owned retention.
 - [ ] Audit lazy-list and subcompose retention/reuse behavior under perf load and add specialized policy only if profiling proves the generic retained-subtree path is the bottleneck.

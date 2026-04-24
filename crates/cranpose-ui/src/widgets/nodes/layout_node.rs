@@ -212,8 +212,6 @@ pub struct LayoutNode {
     /// Count of virtual children (for lazy unfolded children computation)
     virtual_children_count: Cell<usize>,
 
-    // Caching for modifier slices to avoid repeated allocation
-    modifier_slices_buffer: RefCell<ModifierNodeSlices>,
     modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
     modifier_slices_dirty: Cell<bool>,
 
@@ -260,7 +258,6 @@ impl LayoutNode {
         shell.debug_modifiers.set(false);
         shell.virtual_children_count.set(0);
         shell.cache = LayoutNodeCacheHandles::default();
-        shell.modifier_slices_buffer = RefCell::new(ModifierNodeSlices::default());
         shell.modifier_slices_snapshot = RefCell::new(Rc::default());
         shell.modifier_slices_dirty = Cell::new(true);
         shell.layout_state = Rc::new(RefCell::new(LayoutState::default()));
@@ -293,7 +290,6 @@ impl LayoutNode {
             debug_modifiers: Cell::new(false),
             is_virtual,
             virtual_children_count: Cell::new(0),
-            modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
             layout_state: Rc::new(RefCell::new(LayoutState::default())),
@@ -344,9 +340,8 @@ impl LayoutNode {
     fn update_modifier_slices_cache(&self) {
         use crate::modifier::collect_modifier_slices_into;
 
-        let mut buffer = self.modifier_slices_buffer.borrow_mut();
-        collect_modifier_slices_into(self.modifier_chain.chain(), &mut buffer);
-        *self.modifier_slices_snapshot.borrow_mut() = Rc::new(buffer.clone());
+        let mut snapshot = self.modifier_slices_snapshot.borrow_mut();
+        collect_modifier_slices_into(self.modifier_chain.chain(), Rc::make_mut(&mut snapshot));
         self.modifier_slices_dirty.set(false);
     }
 
@@ -741,7 +736,6 @@ impl Clone for LayoutNode {
             debug_modifiers: Cell::new(self.debug_modifiers.get()),
             is_virtual: self.is_virtual,
             virtual_children_count: Cell::new(self.virtual_children_count.get()),
-            modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
             // Share the same layout state across clones
@@ -1103,6 +1097,32 @@ mod tests {
 
     fn fresh_node() -> LayoutNode {
         LayoutNode::new(Modifier::empty(), Rc::new(TestMeasurePolicy))
+    }
+
+    #[test]
+    fn modifier_slices_cache_reuses_unique_snapshot_allocation() {
+        let mut node = fresh_node();
+        let snapshot = node.modifier_slices_snapshot();
+        let snapshot_ptr = Rc::as_ptr(&snapshot);
+        drop(snapshot);
+
+        node.set_modifier(Modifier::empty().padding(4.0));
+
+        let updated = node.modifier_slices_snapshot();
+        assert_eq!(Rc::as_ptr(&updated), snapshot_ptr);
+    }
+
+    #[test]
+    fn modifier_slices_cache_preserves_live_snapshot_isolation() {
+        let mut node = fresh_node();
+        let old_snapshot = node.modifier_slices_snapshot();
+        let old_snapshot_ptr = Rc::as_ptr(&old_snapshot);
+
+        node.set_modifier(Modifier::empty().padding(4.0));
+
+        let updated = node.modifier_slices_snapshot();
+        assert_ne!(Rc::as_ptr(&updated), old_snapshot_ptr);
+        assert_eq!(old_snapshot.draw_commands().len(), 0);
     }
 
     #[test]
