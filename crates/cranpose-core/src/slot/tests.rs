@@ -2986,7 +2986,7 @@ struct ModelRoot {
     children: Vec<Key>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum ModelOperation {
     Compose {
         order: Vec<Key>,
@@ -3380,6 +3380,39 @@ fn apply_model_operation(
     );
 }
 
+fn model_key_set(keys: &[Key]) -> HashSet<Key> {
+    keys.iter().copied().collect()
+}
+
+fn model_compose_frame(
+    order: &[Key],
+    retain_detached: &[Key],
+    mutate_values: &[Key],
+) -> ModelOperation {
+    ModelOperation::Compose {
+        order: order.to_vec(),
+        retain_detached: model_key_set(retain_detached),
+        mutate_values: model_key_set(mutate_values),
+    }
+}
+
+fn run_model_script(parent_key: Key, child_static_key: Key, script: &[ModelOperation]) {
+    let mut harness = SlotHarness::new();
+    let mut retained_subtrees = BTreeMap::<Key, DetachedSubtree>::new();
+    let mut model = ModelState::default();
+
+    for operation in script.iter().cloned() {
+        apply_model_operation(
+            &mut harness,
+            &mut retained_subtrees,
+            &mut model,
+            operation,
+            parent_key,
+            child_static_key,
+        );
+    }
+}
+
 #[test]
 fn deterministic_model_render_frames_match_slot_table() {
     let scenarios = [
@@ -3409,4 +3442,22 @@ fn deterministic_model_render_frames_match_slot_table() {
     for scenario in scenarios {
         scenario.run();
     }
+}
+
+#[test]
+fn scripted_model_render_frames_cover_slot_table_behaviors() {
+    let script = [
+        model_compose_frame(&[1, 2, 3], &[], &[1, 2]),
+        model_compose_frame(&[3, 2, 1], &[], &[3]),
+        ModelOperation::RecomposeSkip { key: 2 },
+        model_compose_frame(&[3, 1], &[2], &[]),
+        model_compose_frame(&[2, 3, 1], &[], &[2]),
+        model_compose_frame(&[10], &[2, 3, 1], &[10]),
+        ModelOperation::RecomposeSkip { key: 10 },
+        model_compose_frame(&[1, 2], &[], &[1]),
+        model_compose_frame(&[], &[1, 2], &[]),
+        model_compose_frame(&[2, 1, 4], &[], &[4]),
+    ];
+
+    run_model_script(730, 731, &script);
 }
