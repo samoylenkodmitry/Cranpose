@@ -84,7 +84,7 @@ The execution order is correctness first, then documentation and repeatable gate
 - [x] Add a deterministic model/property-test harness for Slot Table V2 render-frame scenarios.
 - [x] Add a reference model for active roots, retained groups, payloads, nodes, scopes, and remembered values.
 - [x] Generate complete render-frame scripts for conditionals, keyed moves, tab retention, remembered values, invalidation, and skip paths.
-- [ ] Add core properties for keyed identity, unkeyed positional identity, dispose/reset, retain/restore, nested detach/restore, inactive retained invalidation, skip metadata, stale payload alias prevention, active/retained anchor separation, and random frame validation.
+- [x] Add core properties for keyed identity, unkeyed positional identity, dispose/reset, retain/restore, nested detach/restore, inactive retained invalidation, skip metadata, stale payload alias prevention, active/retained anchor separation, and random frame validation.
 - [ ] Make property failures print a reproducible seed, compact scenario script, active debug snapshot, retained-subtree summary, and failed invariant.
 
 ### Phase 3 - Complete Behavior Integration Tests
