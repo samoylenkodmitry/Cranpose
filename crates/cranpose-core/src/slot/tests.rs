@@ -125,6 +125,33 @@ fn composed_parent_child_table(
     harness.table
 }
 
+fn detached_single_child(parent_key: Key, child_key: Key) -> (SlotHarness, DetachedSubtree) {
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, parent_key, None);
+        begin_unkeyed(session, child_key, None);
+        let child_result = session.finish_group_body();
+        assert!(child_result.detached_children.is_empty());
+        session.end_group();
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, parent_key, None);
+        let parent_result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(parent_result.detached_children.len(), 1);
+        parent_result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+    (harness, detached)
+}
+
 fn composed_group_with_value_and_node_table(group_key: Key) -> SlotTable {
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
@@ -876,9 +903,41 @@ fn retention_marks_detached_nodes_and_reactivates_on_take() {
 }
 
 #[test]
-fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
+fn retention_insert_rejects_duplicate_key_without_replacing_existing_subtree() {
     const PARENT_KEY: Key = 366;
     const CHILD_KEY: Key = 367;
+
+    let (harness, first_detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let (_, duplicate_detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: first_detached.root_key(),
+    };
+    assert_eq!(duplicate_detached.root_key(), retain_key.key);
+
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, first_detached);
+
+    let duplicate_insert = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        retention.insert(retain_key, duplicate_detached);
+    }));
+    assert!(
+        duplicate_insert.is_err(),
+        "retention must reject duplicate retained keys instead of dropping the existing subtree",
+    );
+    assert_eq!(retention.debug_stats().subtree_count, 1);
+    assert_eq!(retention.validate(&harness.table), Ok(()));
+
+    let restored = retention
+        .take(retain_key)
+        .expect("original retained subtree must remain available after duplicate rejection");
+    assert_eq!(restored.root_key(), retain_key.key);
+}
+
+#[test]
+fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
+    const PARENT_KEY: Key = 368;
+    const CHILD_KEY: Key = 369;
     const CHILD_SCOPE: ScopeId = 22;
 
     let mut harness = SlotHarness::new();

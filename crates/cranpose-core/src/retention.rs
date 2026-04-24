@@ -67,6 +67,12 @@ impl RetentionManager {
     }
 
     pub(crate) fn insert(&mut self, key: RetainKey, mut subtree: DetachedSubtree) {
+        assert!(
+            !self.groups.contains_key(&key),
+            "retained subtree key collision: parent_scope={:?} key={:?}",
+            key.parent_scope,
+            key.key,
+        );
         subtree.mark_nodes_retained_detached();
         self.groups.insert(key, RetainedGroup { subtree });
     }
