@@ -30,6 +30,25 @@ This file tracks the current forward work and marks boxes closed only after full
 - [x] Add retained-memory instrumentation and anchor-capacity diagnostics that are cheap enough for regular debug investigation and strong enough for regression tests; `SlotTableDebugStats` now reports retained subtree counts/heap plus active/detached/invalidated/free anchor breakdown, and the coverage exercises both raw slot tables and composition-owned retention.
 - [ ] Audit lazy-list and subcompose retention/reuse behavior under perf load and add specialized policy only if profiling proves the generic retained-subtree path is the bottleneck.
 
+## Slot Table Review Mitigation
+
+- [ ] Make retained-subtree insertion reject or explicitly dispose displaced retained groups instead of silently overwriting a matching `RetainKey`.
+- [ ] Make `SlotTable::restore_subtree` reject detached subtrees whose root key does not match the requested `GroupKey`.
+- [ ] Make duplicate explicit sibling keys fail during writer traversal or always-on debug validation, not only when slot diagnostics are enabled manually.
+- [ ] Replace type-name based `PayloadKind` inference with explicit payload-kind ownership at the call site.
+- [ ] Add the lazy per-writer-frame sibling index described by `docs/cranpose_slot_table_v2_design.md` so large keyed sibling ranges do not rebuild transient maps per lookup.
+- [ ] Remove or rewrite stale duplicate slot-table design documentation so `docs/cranpose_slot_table_v2_design.md` remains the single active slot-table specification.
+
+## Full Verification Gate
+
+- [ ] `cargo fmt`
+- [ ] `cargo test > 1.tmp 2>&1`
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`
+- [ ] Android release build: `./gradlew :app:assembleRelease` in `apps/android-demo/android`
+- [ ] Wasm build: `apps/desktop-demo/build-web.sh`
+- [ ] Robot e2e: `./run_robot_test.sh --sequential`
+- [ ] Read every verification log and fix every warning/failure before committing.
+
 ## Follow-Up Work
 
 - [x] Remove full-table `recompute_all_metadata()` from `restore_subtree()` and make restore update anchors, scopes, and spans incrementally; restore now updates active anchors, scope entries, ancestor spans, and payload locations incrementally.
@@ -44,5 +63,5 @@ This file tracks the current forward work and marks boxes closed only after full
 
 ## Next Execution Order
 
-1. Add retained-memory instrumentation and cheap anchor-capacity diagnostics so further retention and restore work can be profiled without ad hoc debugging.
-2. Profile lazy-list modifier/layout/semantics churn after the restore rewrite and only add specialized reuse policy if measurements show the generic retained-subtree path is still the bottleneck.
+- [ ] Complete the Slot Table Review Mitigation items in order, with the full verification gate and a separate commit after each completed item.
+- [ ] Profile lazy-list modifier/layout/semantics churn after review mitigation and only add specialized reuse policy if measurements show the generic retained-subtree path is still the bottleneck.
