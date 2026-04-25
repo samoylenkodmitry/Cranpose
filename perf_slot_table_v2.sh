@@ -54,6 +54,8 @@ COOLDOWN_SECS="${CRANPOSE_SLOT_TABLE_COOLDOWN_SECS:-20}"
 STABILITY_CHECK="0"
 STABILITY_THRESHOLD_PCT="${CRANPOSE_SLOT_TABLE_STABILITY_THRESHOLD_PCT:-5}"
 PLOT="0"
+SIBLING_THRESHOLD_MATRIX="0"
+SIBLING_THRESHOLD_VALUES="${CRANPOSE_SIBLING_INDEX_THRESHOLDS:-4 8 16 32 64}"
 
 baseline_stamp_path() {
     local baseline_name="$1"
@@ -199,11 +201,57 @@ run_stability_check() {
     echo "Stability check passed: all drifts stayed within ${STABILITY_THRESHOLD_PCT}%."
 }
 
+validate_sibling_threshold_matrix_values() {
+    if [[ -z "${SIBLING_THRESHOLD_VALUES// /}" ]]; then
+        echo "CRANPOSE_SIBLING_INDEX_THRESHOLDS must contain at least one positive integer." >&2
+        exit 1
+    fi
+
+    local threshold
+    for threshold in $SIBLING_THRESHOLD_VALUES; do
+        if ! [[ "$threshold" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Invalid sibling index threshold '$threshold'. Use positive integers only." >&2
+            exit 1
+        fi
+    done
+}
+
+run_sibling_threshold_matrix() {
+    validate_sibling_threshold_matrix_values
+
+    local -a filters=(
+        "keyed_reverse_16"
+        "keyed_reverse_64"
+        "keyed_reverse_256"
+        "keyed_reverse_1024"
+        "keyed_rotate_front_to_back_1024"
+        "keyed_random_shuffle_1024_seed_1"
+    )
+
+    local threshold filter target_dir
+    for threshold in $SIBLING_THRESHOLD_VALUES; do
+        target_dir="$SCRIPT_DIR/target/sibling-threshold-$threshold"
+        for filter in "${filters[@]}"; do
+            echo "Running sibling index threshold ${threshold} for ${filter}"
+            (
+                export CRANPOSE_SIBLING_INDEX_THRESHOLD="$threshold"
+                export CARGO_TARGET_DIR="$target_dir"
+                FILTER="$filter"
+                run_bench "" ""
+            )
+        done
+    done
+}
+
 usage() {
     cat <<EOF
-Usage: $0 [--profile NAME] [--filter NAME] [--save-baseline NAME] [--baseline NAME] [--measurement-time SECS] [--warmup-time SECS] [--sample-size N] [--cpu-set LIST|none] [--cooldown-secs SECS] [--stability-check] [--stability-threshold-pct N] [--plot]
+Usage: $0 [--profile NAME] [--filter NAME] [--save-baseline NAME] [--baseline NAME] [--measurement-time SECS] [--warmup-time SECS] [--sample-size N] [--cpu-set LIST|none] [--cooldown-secs SECS] [--stability-check] [--stability-threshold-pct N] [--sibling-threshold-matrix] [--plot]
 
 Runs the slot-table Criterion benchmark suite with stable defaults.
+
+Environment:
+  CRANPOSE_SIBLING_INDEX_THRESHOLD sets the compile-time sibling index threshold for one run.
+  CRANPOSE_SIBLING_INDEX_THRESHOLDS sets the matrix values for --sibling-threshold-matrix.
 
 Benchmarks:
   slot_table_v2_keyed_reverse_16
@@ -230,6 +278,7 @@ Examples:
   $0 --baseline main
   $0 --filter lazy_scroll_steady --save-baseline lazy-list
   $0 --stability-check
+  $0 --sibling-threshold-matrix
 EOF
 }
 
@@ -279,6 +328,10 @@ while [[ $# -gt 0 ]]; do
             STABILITY_THRESHOLD_PCT="$2"
             shift 2
             ;;
+        --sibling-threshold-matrix)
+            SIBLING_THRESHOLD_MATRIX="1"
+            shift
+            ;;
         --plot)
             PLOT="1"
             shift
@@ -300,6 +353,11 @@ if [[ "$STABILITY_CHECK" == "1" && ( -n "$SAVE_BASELINE" || -n "$COMPARE_BASELIN
     exit 1
 fi
 
+if [[ "$SIBLING_THRESHOLD_MATRIX" == "1" && ( -n "$SAVE_BASELINE" || -n "$COMPARE_BASELINE" || "$STABILITY_CHECK" == "1" || -n "$FILTER" ) ]]; then
+    echo "--sibling-threshold-matrix cannot be combined with --filter, --save-baseline, --baseline, or --stability-check." >&2
+    exit 1
+fi
+
 if [[ -n "$SAVE_BASELINE" && -n "$COMPARE_BASELINE" ]]; then
     echo "Use either --save-baseline or --baseline in one invocation, or use --stability-check." >&2
     exit 1
@@ -314,8 +372,12 @@ echo "  warmup_time=${WARMUP_TIME}s"
 echo "  sample_size=$SAMPLE_SIZE"
 echo "  cpu_set=${CPU_SET:-<none>}"
 echo "  cooldown_secs=${COOLDOWN_SECS}s"
+echo "  sibling_threshold=${CRANPOSE_SIBLING_INDEX_THRESHOLD:-<default>}"
 
-if [[ "$STABILITY_CHECK" == "1" ]]; then
+if [[ "$SIBLING_THRESHOLD_MATRIX" == "1" ]]; then
+    echo "  sibling_threshold_matrix=$SIBLING_THRESHOLD_VALUES"
+    run_sibling_threshold_matrix
+elif [[ "$STABILITY_CHECK" == "1" ]]; then
     run_stability_check
 else
     run_bench "$SAVE_BASELINE" "$COMPARE_BASELINE"

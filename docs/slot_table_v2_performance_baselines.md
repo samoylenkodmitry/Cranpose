@@ -35,6 +35,38 @@ Use filters for focused investigations:
 ./perf_slot_table_v2.sh --filter lazy_scroll_steady --baseline lazy-main
 ```
 
+## Sibling Index Threshold Matrix
+
+The writer builds a temporary sibling index only after a direct-child scan crosses
+`CRANPOSE_SIBLING_INDEX_THRESHOLD`. The production default is `16`. Before
+changing it, run the focused matrix:
+
+```bash
+./perf_slot_table_v2.sh --sibling-threshold-matrix
+```
+
+The matrix tests thresholds `4 8 16 32 64` against:
+
+- `slot_table_v2_keyed_reverse_16`
+- `slot_table_v2_keyed_reverse_64`
+- `slot_table_v2_keyed_reverse_256`
+- `slot_table_v2_keyed_reverse_1024`
+- `slot_table_v2_keyed_rotate_front_to_back_1024`
+- `slot_table_v2_keyed_random_shuffle_1024_seed_1`
+
+Set `CRANPOSE_SIBLING_INDEX_THRESHOLDS` to replace the threshold list. The script
+uses a separate `CARGO_TARGET_DIR` for each threshold under
+`target/sibling-threshold-*` so the compile-time `option_env!` value cannot be
+accidentally reused between matrix entries.
+
+Use the threshold that improves the 1024-item keyed reorder family without
+regressing small sibling lists. Confirm that choice with the full keyed reorder
+matrix before changing the default:
+
+```bash
+CRANPOSE_SIBLING_INDEX_THRESHOLD=8 ./perf_slot_table_v2.sh --filter keyed_reverse
+```
+
 Use the same machine, power profile, CPU set, sample size, warmup, and measurement time for both baseline and candidate runs. The script defaults are intentionally conservative for local comparison:
 
 - `CRANPOSE_SLOT_TABLE_CPU_SET` or `--cpu-set` chooses the CPU affinity. Use `none` only when pinning is unavailable.
@@ -42,6 +74,7 @@ Use the same machine, power profile, CPU set, sample size, warmup, and measureme
 - `CRANPOSE_SLOT_TABLE_WARMUP_TIME` or `--warmup-time` controls warmup seconds.
 - `CRANPOSE_SLOT_TABLE_MEASUREMENT_TIME` or `--measurement-time` controls measurement seconds.
 - `CRANPOSE_SLOT_TABLE_COOLDOWN_SECS` or `--cooldown-secs` controls the pause after saving a baseline before comparison.
+- `CRANPOSE_SIBLING_INDEX_THRESHOLD` sets the compile-time sibling-index threshold for one benchmark run.
 
 Record the commit SHA, command line, benchmark filter, CPU set, sample size, warmup, measurement time, and stability-check result with any performance claim. Do not compare numbers from different machines or different script settings.
 

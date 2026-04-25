@@ -106,7 +106,7 @@ The execution order is correctness first, then documentation and repeatable gate
 
 ### Phase 5 - Optimize Current V2 Hot Paths
 
-- [ ] Benchmark sibling-index thresholds of 4, 8, 16, 32, and 64 before changing the default.
+- [x] Benchmark sibling-index thresholds of 4, 8, 16, 32, and 64 before changing the default.
 - [ ] Instrument subtree moves with counts/spans for moved groups, payloads, nodes, payload-location rebuilds, and group-index refresh.
 - [ ] Optimize proven `move_subtree` hot spots without changing semantics.
 - [ ] Continue lazy-list allocation-churn reductions only where counters show real allocation pressure.

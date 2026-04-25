@@ -9,7 +9,51 @@ use crate::{
 };
 use smallvec::SmallVec;
 
-const SIBLING_INDEX_THRESHOLD: usize = 16;
+const DEFAULT_SIBLING_INDEX_THRESHOLD: usize = 16;
+const SIBLING_INDEX_THRESHOLD: usize =
+    parse_sibling_index_threshold(option_env!("CRANPOSE_SIBLING_INDEX_THRESHOLD"));
+
+const fn parse_sibling_index_threshold(value: Option<&'static str>) -> usize {
+    match value {
+        Some(value) => match parse_positive_usize(value) {
+            Some(parsed) => parsed,
+            None => DEFAULT_SIBLING_INDEX_THRESHOLD,
+        },
+        None => DEFAULT_SIBLING_INDEX_THRESHOLD,
+    }
+}
+
+const fn parse_positive_usize(value: &str) -> Option<usize> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let mut index = 0usize;
+    let mut parsed = 0usize;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+
+        let digit = (byte - b'0') as usize;
+        match parsed.checked_mul(10) {
+            Some(next) => match next.checked_add(digit) {
+                Some(next) => parsed = next,
+                None => return None,
+            },
+            None => return None,
+        }
+        index += 1;
+    }
+
+    if parsed == 0 {
+        None
+    } else {
+        Some(parsed)
+    }
+}
 
 #[derive(Default)]
 pub(in crate::slot) struct SiblingIndex {
@@ -458,6 +502,37 @@ mod tests {
     use super::*;
     use crate::slot::SlotLifecycleCoordinator;
     use crate::slot_storage::BeginGroupInput;
+
+    #[test]
+    fn sibling_index_threshold_parser_accepts_positive_values() {
+        assert_eq!(parse_sibling_index_threshold(Some("1")), 1);
+        assert_eq!(parse_sibling_index_threshold(Some("4")), 4);
+        assert_eq!(parse_sibling_index_threshold(Some("64")), 64);
+    }
+
+    #[test]
+    fn sibling_index_threshold_parser_rejects_invalid_values() {
+        assert_eq!(
+            parse_sibling_index_threshold(None),
+            DEFAULT_SIBLING_INDEX_THRESHOLD
+        );
+        assert_eq!(
+            parse_sibling_index_threshold(Some("")),
+            DEFAULT_SIBLING_INDEX_THRESHOLD
+        );
+        assert_eq!(
+            parse_sibling_index_threshold(Some("0")),
+            DEFAULT_SIBLING_INDEX_THRESHOLD
+        );
+        assert_eq!(
+            parse_sibling_index_threshold(Some("abc")),
+            DEFAULT_SIBLING_INDEX_THRESHOLD
+        );
+        assert_eq!(
+            parse_sibling_index_threshold(Some("16x")),
+            DEFAULT_SIBLING_INDEX_THRESHOLD
+        );
+    }
 
     #[test]
     fn validate_reports_writer_frame_out_of_bounds() {
