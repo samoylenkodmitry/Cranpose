@@ -26,11 +26,11 @@ This file tracks the current forward work and marks boxes closed only after full
 - [x] [M] Wasm build: `apps/desktop-demo/build-web.sh`
 - [x] [L] Robot e2e: `./run_robot_test.sh --sequential`
 - [x] [M] Read every verification log and fix every warning/failure before committing.
-- [ ] [S] Keep `docs/cranpose_slot_table_v2_design.md` as the only active slot-table design specification.
-- [ ] [S] Add `docs/slot_table_v2_invariants.md` as the short invariant checklist for active groups, payload/node ownership, anchors, retention, scope lookup, and sibling matching.
-- [ ] [S] Add `verify_slot_table.sh` that runs the full verification gate and writes/readable logs for every step.
-- [ ] [S] Update user-facing crate docs to say Slot Table V2 is active and gap-table semantics are historical only.
-- [ ] [S] Document the baseline process using `./perf_slot_table_v2.sh --save-baseline`, `--baseline`, and `--stability-check` in `docs/slot_table_v2_performance_baselines.md`.
+- [x] [S] Keep `docs/cranpose_slot_table_v2_design.md` as the only active slot-table design specification.
+- [x] [S] Add `docs/slot_table_v2_invariants.md` as the short invariant checklist for active groups, payload/node ownership, anchors, retention, scope lookup, and sibling matching.
+- [x] [S] Add `verify_slot_table.sh` that runs the full verification gate and writes/readable logs for every step.
+- [x] [S] Update user-facing crate docs to say Slot Table V2 is active and gap-table semantics are historical only.
+- [x] [S] Document the baseline process using `./perf_slot_table_v2.sh --save-baseline`, `--baseline`, and `--stability-check` in `docs/slot_table_v2_performance_baselines.md`.
 
 ## Slot Table Cleanup Backlog
 
