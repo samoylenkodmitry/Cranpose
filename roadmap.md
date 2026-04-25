@@ -36,7 +36,7 @@ This file tracks the current forward work and marks boxes closed only after full
 
 - [x] [M] Remove dead production fields from `FinishGroupResult`; keep only detached children, direct node removals, skipped-root nodes, and skipped state.
 - [x] [L] Collapse the half-wired `SlotStorage` trait boundary; either make it the real composer storage API or remove it and its test-only surface.
-- [ ] [XL] Replace duplicated detached-subtree metadata with one canonical detached tree representation; derive root key, root scope, root nodes, scope ids, and anchor lists from the records.
+- [x] [XL] Replace duplicated detached-subtree metadata with one canonical detached tree representation; derive root key, root scope, root nodes, scope ids, and anchor lists from the records.
 - [ ] [S] Track removed payload count in `SlotWriteSessionState` so payload-heavy removals trigger slot-table compaction.
 - [ ] [XL] Factor duplicated payload/node segmented-storage mechanics into one reusable internal primitive.
 - [ ] [L] Deduplicate active-table and detached-subtree validation through one preorder/span validator over active and detached views.

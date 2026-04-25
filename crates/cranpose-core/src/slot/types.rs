@@ -1,4 +1,5 @@
 use super::GroupRecord;
+use crate::collections::map::HashSet;
 use crate::slot::DeferredDrop;
 use crate::{slot_storage::GroupKey, AnchorId, NodeId, ScopeId};
 use std::any::{Any, TypeId};
@@ -57,36 +58,30 @@ pub(super) struct NodeRecord {
     pub(super) lifecycle: NodeLifecycle,
 }
 
-pub(crate) struct DetachedAnchorSet {
-    pub(super) group_anchors: Vec<AnchorId>,
-}
-
 pub(crate) struct DetachedSubtree {
-    pub(super) root_key: GroupKey,
-    pub(super) root_scope_id: Option<ScopeId>,
     pub(super) groups: Vec<GroupRecord>,
     pub(super) payloads: Vec<PayloadRecord>,
     pub(super) nodes: Vec<NodeRecord>,
-    pub(super) root_nodes: Vec<NodeId>,
-    pub(super) scope_ids: Vec<ScopeId>,
-    pub(super) anchors: DetachedAnchorSet,
     pub(super) generation: u64,
 }
 
 impl DetachedSubtree {
+    fn root(&self) -> &GroupRecord {
+        self.groups
+            .first()
+            .expect("detached subtree must contain a root group")
+    }
+
     pub(crate) fn root_key(&self) -> GroupKey {
-        self.root_key
+        self.root().key
     }
 
     pub(crate) fn root_parent_anchor(&self) -> AnchorId {
-        self.groups
-            .first()
-            .map(|group| group.parent_anchor)
-            .unwrap_or(AnchorId::INVALID)
+        self.root().parent_anchor
     }
 
     pub(crate) fn root_scope_id(&self) -> Option<ScopeId> {
-        self.root_scope_id
+        self.root().scope_id
     }
 
     pub(crate) fn generation(&self) -> u64 {
@@ -109,46 +104,42 @@ impl DetachedSubtree {
         self.payloads.len()
     }
 
-    pub(crate) fn root_nodes(&self) -> &[NodeId] {
-        &self.root_nodes
+    pub(crate) fn root_nodes(&self) -> Vec<NodeId> {
+        root_node_ids_from_records(&self.nodes)
     }
 
-    pub(crate) fn root_nodes_iter(&self) -> impl Iterator<Item = NodeId> + '_ {
-        self.root_nodes.iter().copied()
+    pub(crate) fn root_nodes_iter(&self) -> std::vec::IntoIter<NodeId> {
+        self.root_nodes().into_iter()
     }
 
     pub(crate) fn group_count(&self) -> usize {
         self.groups.len()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn scope_ids(&self) -> Vec<ScopeId> {
-        self.scope_ids.clone()
+        self.scope_ids_iter().collect()
     }
 
     pub(crate) fn scope_ids_iter(&self) -> impl Iterator<Item = ScopeId> + '_ {
-        self.scope_ids.iter().copied()
+        self.groups.iter().filter_map(|group| group.scope_id)
     }
 
     pub(crate) fn scope_count(&self) -> usize {
-        self.scope_ids.len()
+        self.scope_ids_iter().count()
     }
 
     pub(crate) fn anchor_count(&self) -> usize {
-        self.anchors.group_anchors.len()
+        self.groups.len()
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
         self.groups.capacity() * mem::size_of::<GroupRecord>()
             + self.payloads.capacity() * mem::size_of::<PayloadRecord>()
             + self.nodes.capacity() * mem::size_of::<NodeRecord>()
-            + self.root_nodes.capacity() * mem::size_of::<NodeId>()
-            + self.scope_ids.capacity() * mem::size_of::<ScopeId>()
-            + self.anchors.group_anchors.capacity() * mem::size_of::<AnchorId>()
     }
 
     pub(crate) fn group_anchors(&self) -> impl Iterator<Item = AnchorId> + '_ {
-        self.anchors.group_anchors.iter().copied()
+        self.groups.iter().map(|group| group.anchor)
     }
 
     pub(crate) fn mark_nodes_retained_detached(&mut self) {
@@ -189,4 +180,16 @@ impl PayloadRecord {
     pub(crate) fn into_deferred_drop(self) -> DeferredDrop {
         DeferredDrop::payload(self.kind, self.value)
     }
+}
+
+pub(in crate::slot) fn root_node_ids_from_records(nodes: &[NodeRecord]) -> Vec<NodeId> {
+    let node_set = nodes.iter().map(|node| node.id).collect::<HashSet<_>>();
+    nodes
+        .iter()
+        .filter(|node| {
+            node.parent_id
+                .is_none_or(|parent_id| !node_set.contains(&parent_id))
+        })
+        .map(|node| node.id)
+        .collect()
 }

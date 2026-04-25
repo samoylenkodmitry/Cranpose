@@ -29,9 +29,8 @@ use payload_locations::PayloadLocationRegistry;
 pub use table::SlotTable;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use table::{SlotWriteSession, SlotWriteSessionState};
+pub(in crate::slot) use types::root_node_ids_from_records;
 pub(crate) use types::NodeLifecycle;
-pub(crate) use types::{
-    DetachedAnchorSet, DetachedSubtree, FinishGroupResult, PayloadKind, SlotPassMode,
-};
+pub(crate) use types::{DetachedSubtree, FinishGroupResult, PayloadKind, SlotPassMode};
 use types::{NodeRecord, PayloadRecord};
 pub(crate) use validate::SlotInvariantError;

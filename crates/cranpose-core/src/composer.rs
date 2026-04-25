@@ -869,18 +869,19 @@ impl Composer {
     }
 
     fn debug_assert_detached_subtree_metadata(&self, subtree: &crate::slot::DetachedSubtree) {
+        let root_nodes = subtree.root_nodes();
         debug_assert!(
             subtree.generation() > 0,
             "detached subtrees must carry a non-zero generation",
         );
         debug_assert!(
-            subtree.node_count() == 0 || !subtree.root_nodes().is_empty(),
-            "detached subtree nodes must carry stored root metadata",
+            subtree.node_count() == 0 || !root_nodes.is_empty(),
+            "detached subtree nodes must expose root metadata",
         );
         debug_assert!(
             {
                 let node_ids = subtree.node_ids_iter().collect::<HashSet<_>>();
-                subtree.root_nodes().iter().all(|id| node_ids.contains(id))
+                root_nodes.iter().all(|id| node_ids.contains(id))
             },
             "detached subtree root ids must belong to the subtree node set",
         );
@@ -950,7 +951,7 @@ impl Composer {
     ) {
         self.debug_assert_detached_subtree_metadata(&subtree);
         self.dispose_scope_ids(subtree.scope_ids_iter());
-        self.dispose_detached_nodes(subtree.root_nodes().to_vec());
+        self.dispose_detached_nodes(subtree.root_nodes());
         slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {
             table.invalidate_detached_subtree_anchors(&subtree);
             lifecycle.queue_subtree_disposal(subtree);

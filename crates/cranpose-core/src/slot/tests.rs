@@ -963,7 +963,7 @@ fn removing_conditional_child_returns_detached_subtree() {
     assert_eq!(detached.group_count(), 1);
     assert_eq!(detached.node_count(), 1);
     assert_eq!(detached.node_ids_iter().collect::<Vec<_>>(), vec![41]);
-    assert_eq!(detached.root_nodes(), &[41]);
+    assert_eq!(detached.root_nodes(), vec![41]);
     assert_eq!(
         detached.node_states().collect::<Vec<_>>(),
         vec![(41, super::NodeLifecycle::Active)]
@@ -1233,45 +1233,6 @@ fn retention_validate_rejects_retained_root_with_active_parent() {
 }
 
 #[test]
-fn detached_validate_rejects_root_key_mismatch() {
-    const PARENT_KEY: Key = 382;
-    const CHILD_KEY: Key = 383;
-
-    let (_, mut detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
-    let expected = detached.root_key();
-    detached.groups[0].key = GroupKey::new(CHILD_KEY + 100, None, 0);
-
-    assert_eq!(
-        detached.validate_detached(),
-        Err(SlotInvariantError::DetachedRootKeyMismatch {
-            expected,
-            actual: detached.groups[0].key,
-        })
-    );
-}
-
-#[test]
-fn detached_validate_rejects_root_scope_mismatch() {
-    const PARENT_KEY: Key = 384;
-    const CHILD_KEY: Key = 385;
-    const CHILD_SCOPE: ScopeId = 25;
-
-    let (_, mut detached, _) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, Some(CHILD_SCOPE), false, false);
-    let root_key = detached.root_key();
-    detached.root_scope_id = None;
-
-    assert_eq!(
-        detached.validate_detached(),
-        Err(SlotInvariantError::DetachedRootScopeMismatch {
-            root_key,
-            expected: Some(CHILD_SCOPE),
-            actual: None,
-        })
-    );
-}
-
-#[test]
 fn detached_validate_rejects_non_preorder_parent() {
     const PARENT_KEY: Key = 386;
     const CHILD_KEY: Key = 387;
@@ -1379,72 +1340,6 @@ fn detached_validate_rejects_node_owner_outside_subtree() {
             node_id: child_node,
             expected: expected_owner,
             actual: outside_anchor,
-        })
-    );
-}
-
-#[test]
-fn detached_validate_rejects_root_node_mismatch() {
-    const PARENT_KEY: Key = 399;
-    const CHILD_KEY: Key = 400;
-
-    let (_, mut detached, child_node) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
-    let root_key = detached.root_key();
-    let child_node = child_node.expect("test helper must record a child node");
-    detached.root_nodes.clear();
-
-    assert_eq!(
-        detached.validate_detached(),
-        Err(SlotInvariantError::DetachedRootNodesMismatch {
-            root_key,
-            expected: vec![child_node],
-            actual: Vec::new(),
-        })
-    );
-}
-
-#[test]
-fn detached_validate_rejects_anchor_metadata_mismatch() {
-    const PARENT_KEY: Key = 401;
-    const CHILD_KEY: Key = 402;
-
-    let (_, mut detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
-    let root_key = detached.root_key();
-    let expected = detached
-        .groups
-        .iter()
-        .map(|group| group.anchor)
-        .collect::<Vec<_>>();
-    detached.anchors.group_anchors.clear();
-
-    assert_eq!(
-        detached.validate_detached(),
-        Err(SlotInvariantError::DetachedAnchorMetadataMismatch {
-            root_key,
-            expected,
-            actual: Vec::new(),
-        })
-    );
-}
-
-#[test]
-fn detached_validate_rejects_scope_ids_mismatch() {
-    const PARENT_KEY: Key = 403;
-    const CHILD_KEY: Key = 404;
-    const CHILD_SCOPE: ScopeId = 26;
-
-    let (_, mut detached, _) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, Some(CHILD_SCOPE), false, false);
-    let root_key = detached.root_key();
-    detached.scope_ids.clear();
-
-    assert_eq!(
-        detached.validate_detached(),
-        Err(SlotInvariantError::DetachedScopeIdsMismatch {
-            root_key,
-            expected: vec![CHILD_SCOPE],
-            actual: Vec::new(),
         })
     );
 }
@@ -2934,7 +2829,7 @@ fn detached_subtree_preserves_root_nodes_from_stored_parent_links() {
     harness.finish_pass(SlotPassMode::Compose);
 
     assert_eq!(detached.node_ids_iter().collect::<Vec<_>>(), vec![41, 42]);
-    assert_eq!(detached.root_nodes(), &[41]);
+    assert_eq!(detached.root_nodes(), vec![41]);
 }
 
 #[test]
@@ -3375,7 +3270,7 @@ fn retained_subtree_summary(
             node_count: subtree.node_count(),
             scope_count: subtree.scope_count(),
             anchor_count: subtree.anchor_count(),
-            root_nodes: subtree.root_nodes().to_vec(),
+            root_nodes: subtree.root_nodes(),
             group_anchors: subtree.group_anchors().collect(),
         })
         .collect()

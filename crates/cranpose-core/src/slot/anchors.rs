@@ -422,12 +422,6 @@ impl SlotTable {
                 .copied()
                 .expect("detached node owner must remap");
         }
-        for anchor in &mut subtree.anchors.group_anchors {
-            *anchor = remapped
-                .get(anchor)
-                .copied()
-                .expect("detached anchor metadata must remap");
-        }
     }
 
     fn rebuild_anchor_registry(&mut self, detached_anchors: Vec<AnchorId>) {

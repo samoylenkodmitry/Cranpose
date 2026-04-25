@@ -32,7 +32,7 @@ impl SlotTable {
 
     fn collect_subtree_root_node_ids(&self, group_anchor: AnchorId) -> Vec<NodeId> {
         let nodes = self.collect_subtree_node_records(group_anchor);
-        Self::root_node_ids_from_records(&nodes)
+        super::root_node_ids_from_records(&nodes)
     }
 
     fn open_group_frame(&mut self, state: &mut SlotWriteSessionState, anchor: AnchorId) -> usize {

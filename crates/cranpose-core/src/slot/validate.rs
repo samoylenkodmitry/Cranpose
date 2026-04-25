@@ -129,23 +129,7 @@ pub(crate) enum SlotInvariantError {
         node_id: NodeId,
         actual: NodeLifecycle,
     },
-    DetachedSubtreeEmpty {
-        root_key: GroupKey,
-    },
-    DetachedRootKeyMismatch {
-        expected: GroupKey,
-        actual: GroupKey,
-    },
-    DetachedRootScopeMismatch {
-        root_key: GroupKey,
-        expected: Option<ScopeId>,
-        actual: Option<ScopeId>,
-    },
-    DetachedAnchorMetadataMismatch {
-        root_key: GroupKey,
-        expected: Vec<AnchorId>,
-        actual: Vec<AnchorId>,
-    },
+    DetachedSubtreeEmpty,
     DetachedDuplicateAnchor {
         root_key: GroupKey,
         anchor: AnchorId,
@@ -221,16 +205,6 @@ pub(crate) enum SlotInvariantError {
         node_id: NodeId,
         expected: AnchorId,
         actual: AnchorId,
-    },
-    DetachedRootNodesMismatch {
-        root_key: GroupKey,
-        expected: Vec<NodeId>,
-        actual: Vec<NodeId>,
-    },
-    DetachedScopeIdsMismatch {
-        root_key: GroupKey,
-        expected: Vec<ScopeId>,
-        actual: Vec<ScopeId>,
     },
     WriterFrameOutOfBounds {
         frame_index: usize,
@@ -509,36 +483,10 @@ impl SlotTable {
 #[cfg(any(test, debug_assertions))]
 impl DetachedSubtree {
     pub(crate) fn validate_detached(&self) -> Result<(), SlotInvariantError> {
-        let root_key = self.root_key;
         let Some(root) = self.groups.first() else {
-            return Err(SlotInvariantError::DetachedSubtreeEmpty { root_key });
+            return Err(SlotInvariantError::DetachedSubtreeEmpty);
         };
-        if root.key != root_key {
-            return Err(SlotInvariantError::DetachedRootKeyMismatch {
-                expected: root_key,
-                actual: root.key,
-            });
-        }
-        if self.root_scope_id != root.scope_id {
-            return Err(SlotInvariantError::DetachedRootScopeMismatch {
-                root_key,
-                expected: root.scope_id,
-                actual: self.root_scope_id,
-            });
-        }
-
-        let expected_anchors = self
-            .groups
-            .iter()
-            .map(|group| group.anchor)
-            .collect::<Vec<_>>();
-        if self.anchors.group_anchors != expected_anchors {
-            return Err(SlotInvariantError::DetachedAnchorMetadataMismatch {
-                root_key,
-                expected: expected_anchors,
-                actual: self.anchors.group_anchors.clone(),
-            });
-        }
+        let root_key = root.key;
 
         let mut anchor_to_group: HashMap<AnchorId, usize> = HashMap::default();
         let mut anchor_set: HashSet<AnchorId> = HashSet::default();
@@ -713,28 +661,6 @@ impl DetachedSubtree {
                     actual: group.subtree_node_count,
                 });
             }
-        }
-
-        let expected_root_nodes = SlotTable::root_node_ids_from_records(&self.nodes);
-        if self.root_nodes != expected_root_nodes {
-            return Err(SlotInvariantError::DetachedRootNodesMismatch {
-                root_key,
-                expected: expected_root_nodes,
-                actual: self.root_nodes.clone(),
-            });
-        }
-
-        let expected_scope_ids = self
-            .groups
-            .iter()
-            .filter_map(|group| group.scope_id)
-            .collect::<Vec<_>>();
-        if self.scope_ids != expected_scope_ids {
-            return Err(SlotInvariantError::DetachedScopeIdsMismatch {
-                root_key,
-                expected: expected_scope_ids,
-                actual: self.scope_ids.clone(),
-            });
         }
 
         Ok(())

@@ -1,4 +1,4 @@
-use super::{DetachedAnchorSet, DetachedSubtree, GroupRecord, SlotTable, SlotWriteSessionState};
+use super::{DetachedSubtree, GroupRecord, SlotTable, SlotWriteSessionState};
 use crate::{
     remove_child_and_cleanup_now, slot_storage::GroupKey, AnchorId, Applier, NodeError, NodeId,
 };
@@ -25,8 +25,6 @@ impl SlotTable {
 
     pub(in crate::slot) fn detach_subtree(&mut self, anchor: AnchorId) -> DetachedSubtree {
         let root_index = self.current_group_index(anchor);
-        let root_key = self.groups[root_index].key;
-        let root_scope_id = self.groups[root_index].scope_id;
         let root_parent_anchor = self.groups[root_index].parent_anchor;
         let root_subtree_len = self.groups[root_index].subtree_len;
         let root_subtree_node_count = self.groups[root_index].subtree_node_count;
@@ -55,23 +53,10 @@ impl SlotTable {
             -(root_subtree_node_count as i32),
         );
 
-        let scope_ids = removed_groups
-            .iter()
-            .filter_map(|group| group.scope_id)
-            .collect::<Vec<_>>();
-        let anchors = DetachedAnchorSet {
-            group_anchors: removed_groups.iter().map(|group| group.anchor).collect(),
-        };
-        let root_nodes = Self::root_node_ids_from_records(&removed_nodes);
         let subtree = DetachedSubtree {
-            root_key,
-            root_scope_id,
             groups: removed_groups,
             payloads: removed_payloads,
             nodes: removed_nodes,
-            root_nodes,
-            scope_ids,
-            anchors,
             generation: self.allocate_detached_generation(),
         };
         #[cfg(any(test, debug_assertions))]
@@ -196,13 +181,7 @@ pub(crate) fn dispose_detached_node_now(
 }
 
 pub(crate) fn dispose_detached_subtree_now(applier: &mut dyn Applier, subtree: &DetachedSubtree) {
-    let roots = if subtree.root_nodes().is_empty() && !subtree.nodes.is_empty() {
-        SlotTable::root_node_ids_from_records(&subtree.nodes)
-    } else {
-        subtree.root_nodes().to_vec()
-    };
-
-    for root in roots {
+    for root in subtree.root_nodes() {
         let _ = dispose_detached_node_now(applier, root);
     }
 }
