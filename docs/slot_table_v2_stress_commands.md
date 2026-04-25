@@ -24,3 +24,6 @@ CRANPOSE_SLOT_MODEL_STRESS_FRAMES=25000 ./stress_slot_table.sh
 ```
 
 The perf stability step requires `jq` because `perf_slot_table_v2.sh --stability-check` reads Criterion JSON estimates. Treat a stability failure as an invalid benchmark host until rerun on a quieter machine.
+
+Use `docs/slot_table_v2_release_checklist.md` for release-candidate sign-off
+after the stress suite passes.

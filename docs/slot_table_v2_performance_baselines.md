@@ -108,3 +108,7 @@ When a timing budget fails, include the Criterion comparison output plus the rel
 
 Use `docs/slot_table_v2_link_backend_decision.md` as the decision gate before
 opening any linked or arena-backed group-storage prototype.
+
+For release sign-off, use `docs/slot_table_v2_release_checklist.md` after the
+baseline, comparison, and stability commands have completed on the release
+candidate commit.
