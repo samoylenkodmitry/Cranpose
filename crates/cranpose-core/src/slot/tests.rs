@@ -1749,6 +1749,118 @@ fn keyed_sibling_reorder_preserves_values_and_anchors() {
 }
 
 #[test]
+fn debug_stats_report_subtree_move_work_spans() {
+    const PARENT_KEY: Key = 402;
+    const STATIC_KEY: Key = 403;
+    const NESTED_KEY: Key = 404;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        begin_keyed(session, STATIC_KEY, 1, None);
+        let _ = session.value_slot(|| 10_i32);
+        session.record_node(11, 1);
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        begin_keyed(session, STATIC_KEY, 2, None);
+        let _ = session.value_slot(|| 20_i32);
+        session.record_node(22, 1);
+
+        begin_unkeyed(session, NESTED_KEY, None);
+        let _ = session.value_slot(|| 30_i32);
+        session.record_node(33, 1);
+        let nested_result = session.finish_group_body();
+        assert!(nested_result.detached_children.is_empty());
+        session.end_group();
+
+        let second_result = session.finish_group_body();
+        assert!(second_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    let before = harness.table.debug_stats().mutation;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let moved_kind = harness.session(SlotPassMode::Compose, |session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let moved = begin_keyed(session, STATIC_KEY, 2, None);
+        let _ = session.value_slot(|| 0_i32);
+        session.record_node(22, 1);
+
+        begin_unkeyed(session, NESTED_KEY, None);
+        let _ = session.value_slot(|| 0_i32);
+        session.record_node(33, 1);
+        let nested_result = session.finish_group_body();
+        assert!(nested_result.detached_children.is_empty());
+        session.end_group();
+
+        let second_result = session.finish_group_body();
+        assert!(second_result.detached_children.is_empty());
+        session.end_group();
+
+        begin_keyed(session, STATIC_KEY, 1, None);
+        let _ = session.value_slot(|| 0_i32);
+        session.record_node(11, 1);
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        moved.kind
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    assert_eq!(moved_kind, GroupStartKind::Moved);
+
+    let after = harness.table.debug_stats().mutation;
+    assert_eq!(after.subtree_move_count - before.subtree_move_count, 1);
+    assert_eq!(after.moved_group_count - before.moved_group_count, 2);
+    assert_eq!(after.moved_group_max_span, 2);
+    assert_eq!(after.moved_payload_count - before.moved_payload_count, 2);
+    assert_eq!(after.moved_payload_max_span, 2);
+    assert_eq!(after.moved_node_count - before.moved_node_count, 2);
+    assert_eq!(after.moved_node_max_span, 2);
+    assert_eq!(
+        after.payload_location_rebuild_count - before.payload_location_rebuild_count,
+        1
+    );
+    assert_eq!(
+        after.payload_location_rebuild_group_count - before.payload_location_rebuild_group_count,
+        2
+    );
+    assert_eq!(after.payload_location_rebuild_group_max_span, 2);
+    assert_eq!(
+        after.payload_location_rebuild_payload_count
+            - before.payload_location_rebuild_payload_count,
+        2
+    );
+    assert_eq!(after.payload_location_rebuild_payload_max_span, 2);
+    assert_eq!(
+        after.group_index_refresh_count - before.group_index_refresh_count,
+        1
+    );
+    assert_eq!(
+        after.group_index_refresh_group_count - before.group_index_refresh_group_count,
+        3
+    );
+    assert_eq!(after.group_index_refresh_max_span, 3);
+}
+
+#[test]
 fn large_keyed_sibling_reorder_preserves_values_and_anchors() {
     const PARENT_KEY: Key = 405;
     const STATIC_KEY: Key = 406;

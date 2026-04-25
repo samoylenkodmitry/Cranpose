@@ -69,7 +69,7 @@ pub use runtime::{
 };
 pub use slot::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
-    SlotDebugSnapshot, SlotTable, SlotTableDebugStats,
+    SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotTableMutationDebugStats,
 };
 pub use slot_storage::{
     BeginGroupInput, GroupAnchor, GroupId, GroupKey, GroupStart, GroupStartKind, NodeRecordResult,

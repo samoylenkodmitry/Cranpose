@@ -20,7 +20,7 @@ mod tests;
 pub(crate) use anchors::{AnchorRegistry, AnchorState};
 pub use debug::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
-    SlotDebugSnapshot, SlotTableDebugStats,
+    SlotDebugSnapshot, SlotTableDebugStats, SlotTableMutationDebugStats,
 };
 pub(crate) use detach::{dispose_detached_node_now, dispose_detached_subtree_now};
 use groups::GroupRecord;

@@ -209,14 +209,19 @@ impl SlotTable {
     }
 
     pub(super) fn rebuild_payload_locations_for_group_range(&mut self, start: usize, end: usize) {
+        let group_span = end.saturating_sub(start);
+        let mut payload_span = 0usize;
         for group_index in start..end {
             let owner = self.groups[group_index].anchor;
             let range = self.group_payload_range_at(group_index);
+            payload_span += range.end - range.start;
             for index in 0..(range.end - range.start) {
                 let payload_anchor = self.payloads[range.start + index].anchor;
                 self.payload_locations.insert(payload_anchor, owner, index);
             }
         }
+        self.mutation_debug_stats
+            .record_payload_location_rebuild(group_span, payload_span);
     }
 
     pub(super) fn remove_payload_range(

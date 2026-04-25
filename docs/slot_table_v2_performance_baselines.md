@@ -91,5 +91,6 @@ Apply these budgets only after the same-tree stability check passes on the host 
 | Retained bytes (`SlotTableDebugStats::retained_heap_bytes`) | No unbounded growth | Repeated retain/restore cycles must plateau. Growth across stable cycles is a leak until proven otherwise. |
 | Active anchors (`SlotTableDebugStats::{active_anchor_count, anchor_capacity}`) | No monotonic growth after stable reuse | Stable recomposition, lazy reuse, and tab switching must not keep allocating anchors once the working set is warm. |
 | Layout allocation counters (`LayoutAllocationDebugStats`) | No unexplained monotonic growth | `layout_box_*`, `modifier_*`, and `semantics_*` counters should match the visible tree shape and plateau for steady lazy scrolling. |
+| Slot mutation counters (`SlotTableDebugStats::mutation`) | Explain every timing slope | Subtree moves, moved groups/payloads/nodes, payload-location rebuild spans, and group-index refresh spans identify whether structural table edits dominate a regression. |
 
 When a timing budget fails, include the Criterion comparison output plus the relevant debug counters in the investigation notes. Do not claim a backend rewrite is necessary until the regression is tied to a measured Slot Table V2 path such as subtree moves, index refresh, payload-location rebuilds, or retained-state growth.

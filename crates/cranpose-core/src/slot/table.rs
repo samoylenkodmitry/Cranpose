@@ -1,6 +1,6 @@
 use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadKind, PayloadLocationRegistry,
-    PayloadRecord, SlotLifecycleCoordinator, SlotPassMode,
+    PayloadRecord, SlotLifecycleCoordinator, SlotPassMode, SlotTableMutationDebugStats,
 };
 use crate::{
     collections::map::HashMap,
@@ -34,6 +34,7 @@ pub struct SlotTable {
     pub(super) anchors: AnchorRegistry,
     pub(super) payload_locations: PayloadLocationRegistry,
     pub(super) scope_anchor_to_group: HashMap<ScopeId, AnchorId>,
+    pub(super) mutation_debug_stats: SlotTableMutationDebugStats,
     next_group_generation: u32,
     pub(super) next_detached_generation: u64,
     pub(super) next_payload_anchor: usize,
@@ -50,6 +51,7 @@ impl SlotTable {
             anchors: AnchorRegistry::new(),
             payload_locations: PayloadLocationRegistry::new(),
             scope_anchor_to_group: HashMap::default(),
+            mutation_debug_stats: SlotTableMutationDebugStats::default(),
             next_group_generation: 1,
             next_detached_generation: 1,
             next_payload_anchor: 1,
