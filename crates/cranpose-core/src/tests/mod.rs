@@ -23,24 +23,20 @@ fn reset_snapshot_runtime() -> TestRuntimeGuard {
 
 #[test]
 fn location_key_debug_registry_detects_collisions() {
-    clear_location_key_registry_for_test();
-    register_location_key_debug_info_for_test(7, "first.rs", 10, 20);
+    let forced_key = Key::MAX - 17;
+    register_location_key_debug_info_for_test(forced_key, "forced-collision-first.rs", 10, 20);
 
     let panic = std::panic::catch_unwind(|| {
-        register_location_key_debug_info_for_test(7, "second.rs", 30, 40);
+        register_location_key_debug_info_for_test(forced_key, "forced-collision-second.rs", 30, 40);
     });
     assert!(
         panic.is_err(),
         "debug collision tracking must reject different call sites with the same location key",
     );
-
-    clear_location_key_registry_for_test();
 }
 
 #[test]
 fn location_key_hashes_file_contents_not_string_addresses() {
-    clear_location_key_registry_for_test();
-
     let static_file = "src/example.rs";
     let owned_file = String::from(static_file);
 
@@ -61,14 +57,10 @@ fn location_key_hashes_file_contents_not_string_addresses() {
         location_key(static_file, 42, 9),
         location_key("src/other.rs", 42, 9)
     );
-
-    clear_location_key_registry_for_test();
 }
 
 #[test]
 fn location_key_generated_source_grid_has_no_collisions() {
-    clear_location_key_registry_for_test();
-
     let mut keys = std::collections::HashSet::new();
     for file_index in 0..64 {
         let file = format!("src/generated/module_{file_index}.rs");
@@ -82,8 +74,6 @@ fn location_key_generated_source_grid_has_no_collisions() {
             }
         }
     }
-
-    clear_location_key_registry_for_test();
 }
 
 #[derive(Default)]

@@ -256,11 +256,6 @@ fn location_key_diagnostics_enabled() -> bool {
 }
 
 #[cfg(test)]
-pub(crate) fn clear_location_key_registry_for_test() {
-    lock_location_key_registry().clear();
-}
-
-#[cfg(test)]
 pub(crate) fn register_location_key_debug_info_for_test(
     key: Key,
     file: &str,

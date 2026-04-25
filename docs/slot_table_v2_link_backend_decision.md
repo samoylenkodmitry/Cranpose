@@ -86,8 +86,8 @@ the normal-case budgets stay inside limits.
 
 ## Minimum Prototype Shape
 
-If the trigger fires, the prototype starts behind an explicit feature and keeps
-preorder `Vec` as the default:
+Do not add this abstraction speculatively. If the trigger fires, the prototype
+starts behind an explicit feature and keeps preorder `Vec` as the default:
 
 ```rust
 trait GroupStorage {
