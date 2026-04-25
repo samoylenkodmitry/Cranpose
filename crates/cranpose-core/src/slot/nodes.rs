@@ -1,9 +1,8 @@
 use super::{
     segments::{
-        add_group_segment_len, group_segment_len, group_segment_range_at,
-        group_segment_range_checked, group_segment_start, offset_detached_group_segment_starts,
-        segment_insert_index_for_group, shift_group_segment_starts_from, subtree_segment_span,
-        NodeSegment,
+        add_group_segment_len, group_segment_len, group_segment_range_at, group_segment_start,
+        offset_detached_group_segment_starts, segment_insert_index_for_group,
+        shift_group_segment_starts_from, subtree_segment_span, NodeSegment,
     },
     GroupRecord, NodeLifecycle, NodeRecord, SlotTable,
 };
@@ -22,13 +21,6 @@ impl SlotTable {
 
     pub(in crate::slot) fn group_node_len_at(&self, group_index: usize) -> usize {
         group_segment_len::<NodeSegment>(&self.groups, group_index)
-    }
-
-    pub(in crate::slot) fn group_node_range_checked(
-        &self,
-        group_index: usize,
-    ) -> Option<Range<usize>> {
-        group_segment_range_checked::<NodeSegment>(&self.groups, self.nodes.len(), group_index)
     }
 
     fn group_node_range_at(&self, group_index: usize) -> Range<usize> {

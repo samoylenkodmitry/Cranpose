@@ -2420,6 +2420,32 @@ fn validate_reports_payload_out_of_range_structurally() {
 }
 
 #[test]
+fn validate_reports_payload_count_mismatch_structurally() {
+    let mut table = composed_group_with_value_and_node_table(488);
+    let owner = table.groups[0].anchor;
+    let extra_anchor = 10_001;
+
+    table.payloads.push(super::PayloadRecord {
+        owner,
+        anchor: extra_anchor,
+        generation: 1,
+        type_id: TypeId::of::<i32>(),
+        type_name: std::any::type_name::<i32>(),
+        kind: super::PayloadKind::Internal,
+        value: Box::new(0_i32),
+    });
+    table.payload_locations.insert(extra_anchor, owner, 1);
+
+    assert_eq!(
+        table.validate(),
+        Err(SlotInvariantError::PayloadCountMismatch {
+            expected: 1,
+            actual: 2,
+        })
+    );
+}
+
+#[test]
 fn validate_reports_payload_location_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(482);
     let stale_payload_anchor = table.group_payload_record_at(0, 0).anchor;

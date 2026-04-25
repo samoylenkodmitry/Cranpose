@@ -1,9 +1,8 @@
 use super::{
     segments::{
-        add_group_segment_len, group_segment_len, group_segment_range_at,
-        group_segment_range_checked, group_segment_start, offset_detached_group_segment_starts,
-        segment_insert_index_for_group, shift_group_segment_starts_from, subtree_segment_span,
-        PayloadSegment,
+        add_group_segment_len, group_segment_len, group_segment_range_at, group_segment_start,
+        offset_detached_group_segment_starts, segment_insert_index_for_group,
+        shift_group_segment_starts_from, subtree_segment_span, PayloadSegment,
     },
     GroupRecord, PayloadKind, PayloadRecord, SlotTable,
 };
@@ -18,17 +17,6 @@ impl SlotTable {
 
     pub(super) fn group_payload_len_at(&self, group_index: usize) -> usize {
         group_segment_len::<PayloadSegment>(&self.groups, group_index)
-    }
-
-    pub(in crate::slot) fn group_payload_range_checked(
-        &self,
-        group_index: usize,
-    ) -> Option<Range<usize>> {
-        group_segment_range_checked::<PayloadSegment>(
-            &self.groups,
-            self.payloads.len(),
-            group_index,
-        )
     }
 
     fn group_payload_range_at(&self, group_index: usize) -> Range<usize> {
