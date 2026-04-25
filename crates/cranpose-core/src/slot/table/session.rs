@@ -129,12 +129,14 @@ pub(in crate::slot) struct GroupFrame {
 pub(crate) struct SlotWriteSessionState {
     pub(in crate::slot) root: RootFrame,
     pub(in crate::slot) group_stack: Vec<GroupFrame>,
+    pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
     pub(crate) request_compaction: bool,
 }
 
 impl SlotWriteSessionState {
+    pub(in crate::slot) const COMPACT_PAYLOAD_THRESHOLD: usize = 16 * 1024;
     const COMPACT_NODE_THRESHOLD: usize = 16 * 1024;
     const COMPACT_GROUP_THRESHOLD: usize = 32 * 1024;
 
@@ -147,6 +149,7 @@ impl SlotWriteSessionState {
             sibling_index: None,
         };
         self.group_stack.clear();
+        self.removed_payload_count = 0;
         self.removed_node_count = 0;
         self.removed_group_count = 0;
         self.request_compaction = false;
@@ -327,6 +330,11 @@ impl SlotWriteSessionState {
         Ok(())
     }
 
+    pub(in crate::slot) fn note_removed_payloads(&mut self, count: usize) {
+        self.removed_payload_count += count;
+        self.update_compaction_hint();
+    }
+
     pub(in crate::slot) fn note_removed_nodes(&mut self, count: usize) {
         self.removed_node_count += count;
         self.update_compaction_hint();
@@ -337,6 +345,10 @@ impl SlotWriteSessionState {
             .iter()
             .map(DetachedSubtree::group_count)
             .sum::<usize>();
+        self.removed_payload_count += subtrees
+            .iter()
+            .map(DetachedSubtree::payload_count)
+            .sum::<usize>();
         self.removed_node_count += subtrees
             .iter()
             .map(DetachedSubtree::node_count)
@@ -345,7 +357,8 @@ impl SlotWriteSessionState {
     }
 
     fn update_compaction_hint(&mut self) {
-        self.request_compaction |= self.removed_node_count >= Self::COMPACT_NODE_THRESHOLD
+        self.request_compaction |= self.removed_payload_count >= Self::COMPACT_PAYLOAD_THRESHOLD
+            || self.removed_node_count >= Self::COMPACT_NODE_THRESHOLD
             || self.removed_group_count >= Self::COMPACT_GROUP_THRESHOLD;
     }
 
@@ -529,6 +542,17 @@ mod tests {
             parse_sibling_index_threshold(Some("16x")),
             DEFAULT_SIBLING_INDEX_THRESHOLD
         );
+    }
+
+    #[test]
+    fn removed_payloads_trigger_compaction_hint_at_threshold() {
+        let mut state = SlotWriteSessionState::default();
+
+        state.note_removed_payloads(SlotWriteSessionState::COMPACT_PAYLOAD_THRESHOLD - 1);
+        assert!(!state.request_compaction);
+
+        state.note_removed_payloads(1);
+        assert!(state.request_compaction);
     }
 
     #[test]

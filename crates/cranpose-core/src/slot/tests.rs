@@ -333,6 +333,42 @@ fn first_composition_records_group_value_and_node() {
 }
 
 #[test]
+fn removing_many_payloads_requests_compaction() {
+    const GROUP_KEY: Key = 78;
+    const PAYLOAD_COUNT: usize = SlotWriteSessionState::COMPACT_PAYLOAD_THRESHOLD;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(SlotPassMode::Compose, |session| {
+        let started = begin_unkeyed(session, GROUP_KEY, None);
+        assert_eq!(started.kind, GroupStartKind::Inserted);
+        for index in 0..PAYLOAD_COUNT {
+            let _ = session.value_slot(move || index as i32);
+        }
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass(SlotPassMode::Compose);
+
+    assert!(!harness.state.request_compaction);
+    assert_eq!(harness.table.total_payload_count(), PAYLOAD_COUNT);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(SlotPassMode::Compose, |session| {
+        let started = begin_unkeyed(session, GROUP_KEY, None);
+        assert_eq!(started.kind, GroupStartKind::Reused);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+
+    assert_eq!(harness.state.removed_payload_count, PAYLOAD_COUNT);
+    assert!(harness.state.request_compaction);
+    harness.finish_pass(SlotPassMode::Compose);
+}
+
+#[test]
 fn slot_write_session_exposes_semantic_operations() {
     const GROUP_KEY: Key = 77;
     const SCOPE_ID: ScopeId = 901;

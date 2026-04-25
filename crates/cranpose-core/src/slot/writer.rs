@@ -96,9 +96,11 @@ impl SlotTable {
         let payload_len = self.group_payload_len_at(self.current_group_index(group_anchor));
         if payload_cursor < payload_len {
             let removed = self.remove_payload_range(group_anchor, payload_cursor, payload_len);
+            let removed_payload_count = removed.len();
             for payload in removed {
                 lifecycle.queue_drop(payload.into_deferred_drop());
             }
+            state.note_removed_payloads(removed_payload_count);
         }
 
         let mut direct_nodes = Vec::new();
