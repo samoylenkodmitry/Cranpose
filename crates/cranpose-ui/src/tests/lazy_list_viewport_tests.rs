@@ -6,6 +6,7 @@ use cranpose_foundation::lazy::{
 use cranpose_ui_graphics::Rect;
 use cranpose_ui_graphics::Size as ViewportSize;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 thread_local! {
@@ -117,6 +118,35 @@ fn collect_visible_item_texts(
     items
 }
 
+fn collect_visible_item_state_texts(
+    scene: &crate::renderer::RecordedRenderScene,
+    viewport: Rect,
+) -> Vec<(usize, i32, f32)> {
+    let mut items = Vec::new();
+    for operation in scene.operations() {
+        let crate::renderer::RenderOp::Text { rect, value, .. } = operation else {
+            continue;
+        };
+        let Some(rest) = value.strip_prefix("Item ") else {
+            continue;
+        };
+        let Some((index, state)) = rest.split_once(" state ") else {
+            continue;
+        };
+        let intersects_vertically =
+            rect.y < viewport.y + viewport.height && rect.y + rect.height > viewport.y;
+        if !intersects_vertically {
+            continue;
+        }
+        let (Some(index), Some(state)) = (index.parse().ok(), state.parse().ok()) else {
+            continue;
+        };
+        items.push((index, state, rect.y));
+    }
+    items.sort_by(|left, right| left.2.partial_cmp(&right.2).expect("finite y"));
+    items
+}
+
 fn find_nearest_draw_ancestor_for_text<'a>(
     node: &'a crate::LayoutBox,
     text: &str,
@@ -147,6 +177,140 @@ fn find_nearest_draw_ancestor_for_text<'a>(
     }
 
     visit(node, text, &mut Vec::new())
+}
+
+#[test]
+fn lazy_column_jump_does_not_alias_remembered_item_state() {
+    let captured_slots = Rc::new(RefCell::new(HashMap::new()));
+    let mut composition = run_test_composition({
+        let captured_slots = Rc::clone(&captured_slots);
+        move || {
+            let list_state = remember_lazy_list_state();
+            LAST_LAZY_STATE.with(|cell| {
+                *cell.borrow_mut() = Some(list_state);
+            });
+
+            LazyColumn(
+                Modifier::empty(),
+                list_state,
+                LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
+                {
+                    let captured_slots = Rc::clone(&captured_slots);
+                    move |scope| {
+                        scope.items(
+                            300,
+                            Some(|index: usize| index as u64),
+                            Some(|index: usize| (index % 3) as u64),
+                            {
+                                let captured_slots = Rc::clone(&captured_slots);
+                                move |index| {
+                                    let slot = cranpose_core::with_current_composer(|composer| {
+                                        composer.remember(|| (index as i32) * 10)
+                                    });
+                                    let state_value = slot.with(|value| *value);
+                                    captured_slots.borrow_mut().insert(index, slot);
+                                    Text(
+                                        format!("Item {index} state {state_value}"),
+                                        Modifier::empty().height(40.0),
+                                        TextStyle::default(),
+                                    );
+                                }
+                            },
+                        );
+                    }
+                },
+            );
+        }
+    });
+
+    let root = composition.root().expect("lazy column root");
+    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let viewport_size = ViewportSize {
+        width: 320.0,
+        height: 180.0,
+    };
+    let renderer = HeadlessRenderer::new();
+
+    let initial_layout = measure_tree(&mut composition, root, viewport_size);
+    let initial_visible = collect_visible_item_state_texts(
+        &renderer.render(&initial_layout),
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: viewport_size.width,
+            height: viewport_size.height,
+        },
+    );
+    assert!(
+        !initial_visible.is_empty(),
+        "initial lazy viewport should render items",
+    );
+    for (index, _, _) in &initial_visible {
+        let slot = captured_slots
+            .borrow()
+            .get(index)
+            .cloned()
+            .expect("visible item slot should be captured");
+        slot.replace(10_000 + *index as i32);
+    }
+
+    list_state.scroll_to_item(120, 0.0);
+    let far_layout = measure_tree(&mut composition, root, viewport_size);
+    let far_visible = collect_visible_item_state_texts(
+        &renderer.render(&far_layout),
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: viewport_size.width,
+            height: viewport_size.height,
+        },
+    );
+    assert!(
+        far_visible.iter().any(|(index, _, _)| *index >= 120),
+        "jump should render far lazy items: {far_visible:?}",
+    );
+    for (index, state, _) in &far_visible {
+        assert_eq!(
+            *state,
+            (*index as i32) * 10,
+            "lazy jump must not alias remembered state from another item",
+        );
+    }
+
+    list_state.scroll_to_item(initial_visible[0].0, 0.0);
+    let restored_layout = measure_tree(&mut composition, root, viewport_size);
+    let restored_visible = collect_visible_item_state_texts(
+        &renderer.render(&restored_layout),
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: viewport_size.width,
+            height: viewport_size.height,
+        },
+    );
+    let mut restored_count = 0;
+    for (index, _, _) in initial_visible {
+        let Some((_, restored_state, _)) = restored_visible
+            .iter()
+            .find(|(restored_index, _, _)| *restored_index == index)
+        else {
+            continue;
+        };
+        restored_count += 1;
+        assert_eq!(
+            *restored_state,
+            10_000 + index as i32,
+            "jumping away and back must preserve remembered state for keyed item {index}",
+        );
+    }
+    assert!(
+        restored_count > 0,
+        "jumping back should restore at least one initially visible keyed item: {restored_visible:?}",
+    );
+
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
 }
 
 #[test]
