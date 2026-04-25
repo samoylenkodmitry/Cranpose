@@ -206,15 +206,29 @@ Usage: $0 [--profile NAME] [--filter NAME] [--save-baseline NAME] [--baseline NA
 Runs the slot-table Criterion benchmark suite with stable defaults.
 
 Benchmarks:
-  slot_table_v2_keyed_list_reorder
-  slot_table_v2_tab_switching
+  slot_table_v2_keyed_reverse_16
+  slot_table_v2_keyed_reverse_64
+  slot_table_v2_keyed_reverse_256
+  slot_table_v2_keyed_reverse_1024
+  slot_table_v2_keyed_reverse_4096
+  slot_table_v2_keyed_rotate_front_to_back_1024
+  slot_table_v2_keyed_random_shuffle_1024_seed_1
+  slot_table_v2_keyed_random_shuffle_1024_seed_2
+  slot_table_v2_conditional_toggle_front_1024
+  slot_table_v2_conditional_toggle_middle_1024
+  slot_table_v2_conditional_toggle_end_1024
+  slot_table_v2_tab_switch_16_payload_groups
+  slot_table_v2_tab_switch_192_payload_groups
+  slot_table_v2_tab_switch_1024_payload_groups
   slot_table_v2_subcompose_scrolling
-  slot_table_v2_lazy_list_scroll_reuse
+  slot_table_v2_lazy_scroll_steady
+  slot_table_v2_lazy_scroll_jump_near
+  slot_table_v2_lazy_scroll_jump_far
 
 Examples:
   $0 --save-baseline main
   $0 --baseline main
-  $0 --filter lazy_list_scroll_reuse --save-baseline lazy-list
+  $0 --filter lazy_scroll_steady --save-baseline lazy-list
   $0 --stability-check
 EOF
 }
