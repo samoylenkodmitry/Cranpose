@@ -102,7 +102,7 @@ The execution order is correctness first, then documentation and repeatable gate
 - [x] Expand `slot_table_v2` Criterion benchmarks across keyed reverse sizes, keyed rotate, seeded shuffle, conditional toggle positions, tab payload sizes, and lazy scroll/jump modes.
 - [x] Add allocation and storage counters for modifier slices, layout boxes, semantics, group/payload/node counts and capacities, and retained subtree counts/bytes.
 - [x] Document the baseline process using `./perf_slot_table_v2.sh --save-baseline`, `--baseline`, and `--stability-check` in `docs/slot_table_v2_performance_baselines.md`.
-- [ ] Document regression budgets for keyed reorder, tab switching, subcompose scrolling, lazy-list reuse, retained bytes, and anchor growth.
+- [x] Document regression budgets for keyed reorder, tab switching, subcompose scrolling, lazy-list reuse, retained bytes, and anchor growth in `docs/slot_table_v2_performance_baselines.md`.
 
 ### Phase 5 - Optimize Current V2 Hot Paths
 

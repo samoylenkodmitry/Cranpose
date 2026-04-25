@@ -44,3 +44,19 @@ Use the same machine, power profile, CPU set, sample size, warmup, and measureme
 - `CRANPOSE_SLOT_TABLE_COOLDOWN_SECS` or `--cooldown-secs` controls the pause after saving a baseline before comparison.
 
 Record the commit SHA, command line, benchmark filter, CPU set, sample size, warmup, measurement time, and stability-check result with any performance claim. Do not compare numbers from different machines or different script settings.
+
+## Regression Budgets
+
+Apply these budgets only after the same-tree stability check passes on the host used for the comparison. If stability drift exceeds the threshold, rerun on a quieter machine before accepting or rejecting a candidate.
+
+| Benchmark or counter family | Allowed regression | Required interpretation |
+| --- | ---: | --- |
+| Keyed reorder (`slot_table_v2_keyed_reverse_*`, rotate, seeded shuffle) | 5% | Structural edits are the most sensitive Slot Table V2 path. A larger regression requires profiling before merge. |
+| Tab switching (`slot_table_v2_tab_switch_*`) | 5% | Retention and payload-heavy paths must stay close to baseline. |
+| Subcompose scrolling (`slot_table_v2_subcompose_scrolling`) | 7% | This path is noisier because it includes reusable-slot policy work. |
+| Lazy list reuse (`slot_table_v2_lazy_scroll_*`) | 7% | Includes composition, layout, measure, and reuse churn. Check allocation counters when timing changes. |
+| Retained bytes (`SlotTableDebugStats::retained_heap_bytes`) | No unbounded growth | Repeated retain/restore cycles must plateau. Growth across stable cycles is a leak until proven otherwise. |
+| Active anchors (`SlotTableDebugStats::{active_anchor_count, anchor_capacity}`) | No monotonic growth after stable reuse | Stable recomposition, lazy reuse, and tab switching must not keep allocating anchors once the working set is warm. |
+| Layout allocation counters (`LayoutAllocationDebugStats`) | No unexplained monotonic growth | `layout_box_*`, `modifier_*`, and `semantics_*` counters should match the visible tree shape and plateau for steady lazy scrolling. |
+
+When a timing budget fails, include the Criterion comparison output plus the relevant debug counters in the investigation notes. Do not claim a backend rewrite is necessary until the regression is tied to a measured Slot Table V2 path such as subtree moves, index refresh, payload-location rebuilds, or retained-state growth.
