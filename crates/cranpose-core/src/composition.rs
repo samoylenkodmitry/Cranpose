@@ -2,7 +2,7 @@ use crate::{
     collections::map::{HashMap, HashSet},
     runtime, snapshot_state_observer, Applier, ApplierGuard, ApplierHost, CommandQueue, Composer,
     CompositionPassDebugStats, ConcreteApplierHost, DefaultScheduler, Key, NodeError, NodeId,
-    RecomposeScope, Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable,
+    RecomposeScope, RetentionPolicy, Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable,
     SlotTableDebugStats, SlotsHost, SnapshotStateObserver,
 };
 use std::rc::Rc;
@@ -68,6 +68,10 @@ impl<A: Applier + 'static> Composition<A> {
     /// or `None` before the first render.
     pub fn root_key(&self) -> Option<Key> {
         self.root_key
+    }
+
+    pub fn set_retention_policy(&self, policy: RetentionPolicy) {
+        self.composer_state.set_retention_policy(policy);
     }
 
     fn slots_host(&self) -> Rc<SlotsHost> {

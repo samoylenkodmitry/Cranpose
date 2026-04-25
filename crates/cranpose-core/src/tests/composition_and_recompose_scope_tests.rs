@@ -1397,6 +1397,166 @@ fn retained_conditional_branch_restores_remembered_state() {
 }
 
 #[test]
+fn retention_budget_evicts_least_recently_detached_subtree() {
+    let mut composition = test_composition();
+    composition.set_retention_policy(RetentionPolicy {
+        budget: RetentionBudget {
+            max_retained_subtrees: Some(1),
+            ..Default::default()
+        },
+        eviction: RetentionEvictionPolicy::LeastRecentlyDetached,
+    });
+    let runtime = composition.runtime_handle();
+    let show_first = MutableState::with_runtime(true, runtime.clone());
+    let show_second = MutableState::with_runtime(true, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+    let first_key = location_key(file!(), line!(), column!());
+    let second_key = location_key(file!(), line!(), column!());
+    let first_slot = Rc::new(RefCell::new(None::<Owned<i32>>));
+    let second_slot = Rc::new(RefCell::new(None::<Owned<i32>>));
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let first_slot = Rc::clone(&first_slot);
+        let second_slot = Rc::clone(&second_slot);
+        composition
+            .render(root_key, || {
+                first_slot.replace(None);
+                second_slot.replace(None);
+                with_current_composer(|composer| {
+                    if show_first.value() {
+                        composer.cranpose_with_reuse(
+                            first_key,
+                            RecomposeOptions::default(),
+                            |composer| {
+                                let slot = composer.remember(|| 10_i32);
+                                first_slot.replace(Some(slot));
+                            },
+                        );
+                    }
+                    if show_second.value() {
+                        composer.cranpose_with_reuse(
+                            second_key,
+                            RecomposeOptions::default(),
+                            |composer| {
+                                let slot = composer.remember(|| 20_i32);
+                                second_slot.replace(Some(slot));
+                            },
+                        );
+                    }
+                });
+            })
+            .expect("render retained budget branches");
+        assert_composition_valid(composition);
+    };
+
+    render(&mut composition);
+    let first = first_slot
+        .borrow()
+        .clone()
+        .expect("initial first retained slot");
+    let second = second_slot
+        .borrow()
+        .clone()
+        .expect("initial second retained slot");
+    first.replace(101);
+    second.replace(202);
+
+    show_first.set_value(false);
+    show_second.set_value(false);
+    render(&mut composition);
+    let hidden_stats = composition.debug_slot_table_stats();
+    assert_eq!(hidden_stats.retained_subtree_count, 1);
+    assert_eq!(hidden_stats.retained_evictions_total, 1);
+
+    show_second.set_value(true);
+    render(&mut composition);
+    let restored_second = second_slot
+        .borrow()
+        .clone()
+        .expect("second retained slot after restore");
+    assert_eq!(restored_second.with(|value| *value), 202);
+    assert_eq!(
+        composition
+            .debug_slot_table_stats()
+            .retained_evictions_total,
+        1
+    );
+
+    show_second.set_value(false);
+    show_first.set_value(true);
+    render(&mut composition);
+    let recreated_first = first_slot
+        .borrow()
+        .clone()
+        .expect("first slot after eviction");
+    assert_eq!(
+        recreated_first.with(|value| *value),
+        10,
+        "the oldest retained subtree should be evicted instead of restoring stale remembered state",
+    );
+}
+
+#[test]
+fn retention_budget_evicts_subtree_after_max_age_passes() {
+    let mut composition = test_composition();
+    composition.set_retention_policy(RetentionPolicy {
+        budget: RetentionBudget {
+            max_age_passes: Some(0),
+            ..Default::default()
+        },
+        eviction: RetentionEvictionPolicy::LeastRecentlyDetached,
+    });
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+    let branch_key = location_key(file!(), line!(), column!());
+    let remembered = Rc::new(RefCell::new(None::<Owned<i32>>));
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let remembered = Rc::clone(&remembered);
+        composition
+            .render(root_key, || {
+                remembered.replace(None);
+                if show_branch.value() {
+                    with_current_composer(|composer| {
+                        composer.cranpose_with_reuse(
+                            branch_key,
+                            RecomposeOptions::default(),
+                            |composer| {
+                                let slot = composer.remember(|| 30_i32);
+                                remembered.replace(Some(slot));
+                            },
+                        );
+                    });
+                }
+            })
+            .expect("render retained age budget branch");
+        assert_composition_valid(composition);
+    };
+
+    render(&mut composition);
+    let first = remembered
+        .borrow()
+        .clone()
+        .expect("initial retained age-budget slot");
+    first.replace(303);
+
+    show_branch.set_value(false);
+    render(&mut composition);
+    let hidden_stats = composition.debug_slot_table_stats();
+    assert_eq!(hidden_stats.retained_subtree_count, 0);
+    assert_eq!(hidden_stats.retained_evictions_total, 1);
+
+    show_branch.set_value(true);
+    render(&mut composition);
+    let recreated = remembered
+        .borrow()
+        .clone()
+        .expect("age-evicted branch should compose again");
+    assert_eq!(recreated.with(|value| *value), 30);
+}
+
+#[test]
 fn retained_branch_hides_without_running_disposable_effect_cleanup() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();

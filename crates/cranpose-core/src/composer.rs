@@ -6,8 +6,8 @@ use crate::{
     BeginGroupInput, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, GroupId,
     GroupStart, GroupStartKind, Key, LocalKey, LocalStackSnapshot, LocalStateEntry, MutableState,
     Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions, RecomposeScope, RecycledNode,
-    RetentionMode, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable, SlotsHost,
-    SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal,
+    RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
+    SlotsHost, SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal,
     StaticLocalEntry, SubcomposeState, ValueSlotId, COMMAND_FLUSH_THRESHOLD,
 };
 use smallvec::SmallVec;
@@ -61,6 +61,7 @@ fn slots_storage_key(host: &Rc<SlotsHost>) -> usize {
 pub(crate) struct ComposerRuntimeState {
     scope_registry: RefCell<HashMap<ScopeId, RecomposeScope>>,
     retention_by_host: RefCell<HashMap<usize, RetentionManager>>,
+    retention_policy: Cell<RetentionPolicy>,
     live_hosts: RefCell<HashMap<usize, std::rc::Weak<SlotsHost>>>,
     applier_host: RefCell<Option<std::rc::Weak<dyn ApplierHost>>>,
 }
@@ -70,6 +71,7 @@ impl Default for ComposerRuntimeState {
         Self {
             scope_registry: RefCell::new(HashMap::default()),
             retention_by_host: RefCell::new(HashMap::default()),
+            retention_policy: Cell::new(RetentionPolicy::default()),
             live_hosts: RefCell::new(HashMap::default()),
             applier_host: RefCell::new(None),
         }
@@ -110,6 +112,14 @@ impl ComposerRuntimeState {
         self.scope_registry.borrow_mut().remove(&scope_id)
     }
 
+    pub(crate) fn set_retention_policy(&self, policy: RetentionPolicy) {
+        self.retention_policy.set(policy);
+    }
+
+    pub(crate) fn retention_policy(&self) -> RetentionPolicy {
+        self.retention_policy.get()
+    }
+
     pub(crate) fn scope_registry_len(&self) -> usize {
         self.scope_registry.borrow().len()
     }
@@ -124,7 +134,7 @@ impl ComposerRuntimeState {
         let subtree = retention.get_mut(&host_key)?.take(key);
         if retention
             .get(&host_key)
-            .is_some_and(RetentionManager::is_empty)
+            .is_some_and(|manager| manager.is_empty() && manager.evictions_total() == 0)
         {
             retention.remove(&host_key);
         }
@@ -136,12 +146,28 @@ impl ComposerRuntimeState {
         host: &Rc<SlotsHost>,
         key: RetainKey,
         subtree: crate::slot::DetachedSubtree,
-    ) {
-        self.retention_by_host
-            .borrow_mut()
+    ) -> Vec<crate::slot::DetachedSubtree> {
+        let policy = self.retention_policy();
+        let mut retention_by_host = self.retention_by_host.borrow_mut();
+        let manager = retention_by_host
             .entry(slots_storage_key(host))
-            .or_default()
-            .insert(key, subtree);
+            .or_insert_with(|| RetentionManager::new(policy));
+        manager.set_policy(policy);
+        manager.insert(key, subtree)
+    }
+
+    pub(crate) fn advance_retention_pass(
+        &self,
+        host: &Rc<SlotsHost>,
+    ) -> Vec<crate::slot::DetachedSubtree> {
+        let host_key = slots_storage_key(host);
+        let policy = self.retention_policy();
+        let mut retention_by_host = self.retention_by_host.borrow_mut();
+        let Some(manager) = retention_by_host.get_mut(&host_key) else {
+            return Vec::new();
+        };
+        manager.set_policy(policy);
+        manager.advance_pass()
     }
 
     pub(crate) fn fill_slot_debug_snapshot(
@@ -504,6 +530,7 @@ impl Composer {
                     None,
                     finished.detached_root_children,
                 );
+                composer.evict_retained_subtrees_for_host(&self.host);
                 self.host.complete_pass_cleanup(finished.outcome.compacted);
                 let host = self
                     .core
@@ -916,7 +943,7 @@ impl Composer {
                 });
             }
         }
-        self.core.shared_state.insert_retained(
+        let evicted = self.core.shared_state.insert_retained(
             slots_host,
             RetainKey {
                 parent_scope,
@@ -924,6 +951,16 @@ impl Composer {
             },
             subtree,
         );
+        for subtree in evicted {
+            self.dispose_detached_subtree_in_host(slots_host, subtree);
+        }
+    }
+
+    fn evict_retained_subtrees_for_host(&self, slots_host: &Rc<SlotsHost>) {
+        let evicted = self.core.shared_state.advance_retention_pass(slots_host);
+        for subtree in evicted {
+            self.dispose_detached_subtree_in_host(slots_host, subtree);
+        }
     }
 
     fn dispose_detached_subtree_in_host(

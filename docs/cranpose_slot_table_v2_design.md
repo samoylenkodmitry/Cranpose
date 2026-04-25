@@ -662,6 +662,7 @@ Rules:
 - retained subtrees are stored per host storage key in `retention_by_host`;
 - `RetentionBudget` uses `None` to mean unbounded and otherwise caps retained subtree count, retained heap bytes, or retained age in composition passes;
 - `RetentionEvictionPolicy` names the ordering used when a bounded retention manager has to dispose inactive retained subtrees;
+- bounded retention insertion returns evicted `DetachedSubtree` values to the composer so normal disposal paths remove scopes, anchors, payloads, and detached nodes;
 - retained diagnostics must report retained subtree/group/payload/node/scope/anchor counts, estimated retained heap bytes, and cumulative eviction count;
 - live hosts are resolved through `live_hosts` during recomposition;
 - `SlotTable` carries the runtime-state pointer so ownership survives `take()`, and `SlotsHost::reset()` clears host ownership only after retained subtrees are gone;

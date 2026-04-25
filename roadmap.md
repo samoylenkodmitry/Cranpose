@@ -57,7 +57,7 @@ This file tracks the current forward work and marks boxes closed only after full
 - [x] Replace aggregated `slots_len`/`slots_cap` counters in `SlotTableDebugStats` and leak tooling with V2-native per-table counters (`group_count`, `payload_count`, `node_count`, and related capacities).
 - [x] Replace slot-linear debug surfaces such as `debug_dump_all_slots()` with V2-native diagnostics by switching the repo to typed slot-debug entries instead of fake linear slot rows.
 - [x] Pack `GroupRecord` fields into denser arrays if profiling shows group-table bandwidth or cache pressure matters; no split storage was introduced because current diagnostics do not identify group-table bandwidth as the bottleneck, and `SlotTableDebugStats` now exposes `group_record_size` plus `group_heap_bytes` for future evidence.
-- [ ] Add retained-subtree LRU limits once a real memory-budget policy exists.
+- [x] Add retained-subtree LRU limits once a real memory-budget policy exists.
 - [ ] Add collision-resistant debug/profile keys if diagnostics show location-key collisions in real workloads.
 - [ ] Add allocator-backed tables for `no_std` only if that target becomes real again.
 
