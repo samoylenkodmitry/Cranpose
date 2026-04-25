@@ -13,21 +13,8 @@ impl Composer {
 
         impl Drop for RecomposeGuard {
             fn drop(&mut self) {
-                let crate::slot::FinishGroupResult {
-                    detached_children,
-                    direct_nodes,
-                    root_nodes,
-                    was_skipped,
-                } = self
-                    .composer
-                    .with_slot_session_mut(|slots| slots.finish_group_body());
-                if was_skipped {
-                    self.composer.attach_root_nodes(root_nodes);
-                }
-                self.composer.dispose_detached_nodes(direct_nodes);
                 self.composer
-                    .handle_detached_children(Some(self.scope.id()), detached_children);
-                self.composer.scope_stack().pop();
+                    .close_current_group_body_for_scope(&self.scope);
                 self.composer
                     .with_slot_session_mut(|slots| slots.end_recompose());
                 log::trace!(

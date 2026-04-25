@@ -1,6 +1,6 @@
 use crate::collections::map::{HashMap, HashSet};
 use crate::retention::{RetainKey, RetentionManager};
-use crate::slot::PayloadKind;
+use crate::slot::{FinishGroupResult, PayloadKind};
 use crate::{
     composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
     BeginGroupInput, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, GroupStart,
@@ -724,21 +724,8 @@ impl Composer {
 
         impl Drop for GroupGuard {
             fn drop(&mut self) {
-                let crate::slot::FinishGroupResult {
-                    detached_children,
-                    direct_nodes,
-                    root_nodes,
-                    was_skipped,
-                } = self
-                    .composer
-                    .with_slot_session_mut(|slots| slots.finish_group_body());
-                if was_skipped {
-                    self.composer.attach_root_nodes(root_nodes);
-                }
-                self.composer.dispose_detached_nodes(direct_nodes);
                 self.composer
-                    .handle_detached_children(Some(self.scope.id()), detached_children);
-                self.composer.scope_stack().pop();
+                    .close_current_group_body_for_scope(&self.scope);
                 self.scope.mark_recomposed();
                 self.composer
                     .with_slot_session_mut(|slots| slots.end_group());
@@ -860,7 +847,7 @@ impl Composer {
         self.with_group_seed(seed, f)
     }
 
-    pub(crate) fn dispose_detached_nodes(&self, nodes: Vec<NodeId>) {
+    fn dispose_detached_nodes(&self, nodes: Vec<NodeId>) {
         for node_id in nodes {
             self.commands_mut().push(Command::callback(move |applier| {
                 crate::slot::dispose_detached_node_now(applier, node_id)
@@ -981,13 +968,42 @@ impl Composer {
         }
     }
 
-    pub(crate) fn handle_detached_children(
+    fn handle_detached_children(
         &self,
         parent_scope: Option<ScopeId>,
         detached: Vec<crate::slot::DetachedSubtree>,
     ) {
         let host = self.active_slots_host();
         self.handle_detached_children_in_host(&host, parent_scope, detached);
+    }
+
+    fn handle_finished_group_result(
+        &self,
+        parent_scope: Option<ScopeId>,
+        result: FinishGroupResult,
+    ) {
+        let FinishGroupResult {
+            detached_children,
+            direct_nodes,
+            root_nodes,
+            was_skipped,
+        } = result;
+        if was_skipped {
+            self.attach_root_nodes(root_nodes);
+        }
+        self.dispose_detached_nodes(direct_nodes);
+        self.handle_detached_children(parent_scope, detached_children);
+    }
+
+    pub(crate) fn close_current_group_body_for_scope(&self, scope: &RecomposeScope) {
+        let result = self.with_slot_session_mut(|slots| slots.finish_group_body());
+        self.handle_finished_group_result(Some(scope.id()), result);
+        let popped = self.scope_stack().pop().expect("scope stack underflow");
+        debug_assert_eq!(
+            popped.id(),
+            scope.id(),
+            "closed scope must match the active scope stack"
+        );
     }
 
     pub fn remember<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
@@ -1332,7 +1348,7 @@ impl Composer {
         Ok((result, frame.scopes))
     }
 
-    pub(crate) fn attach_root_nodes(&self, root_nodes: Vec<NodeId>) {
+    fn attach_root_nodes(&self, root_nodes: Vec<NodeId>) {
         for id in root_nodes {
             self.attach_to_parent_with_mode(id, true);
         }
