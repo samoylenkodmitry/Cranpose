@@ -105,3 +105,6 @@ Apply these budgets only after the same-tree stability check passes on the host 
 | Group table bytes (`SlotTableDebugStats::{group_record_size, group_heap_bytes}`) | No unprofiled storage split | Keep `Vec<GroupRecord>` until timing slopes and byte counters show group-table bandwidth or cache pressure is the limiting path. |
 
 When a timing budget fails, include the Criterion comparison output plus the relevant debug counters in the investigation notes. Do not claim a backend rewrite is necessary until the regression is tied to a measured Slot Table V2 path such as subtree moves, index refresh, payload-location rebuilds, or retained-state growth.
+
+Use `docs/slot_table_v2_link_backend_decision.md` as the decision gate before
+opening any linked or arena-backed group-storage prototype.

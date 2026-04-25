@@ -121,7 +121,7 @@ The execution order is correctness first, then documentation and repeatable gate
 
 ### Phase 7 - Conditional LinkBuffer/Arena Prototype
 
-- [ ] Define objective trigger criteria before prototyping any linked backend.
+- [x] Define objective trigger criteria before prototyping any linked backend.
 - [ ] Add a storage abstraction that preserves the current V2 semantic API and keeps preorder `Vec` storage as the default backend.
 - [ ] Prototype linked group storage behind an explicit feature only after the trigger criteria are met.
 - [ ] Run the full model/property and integration test suite against both backends.
