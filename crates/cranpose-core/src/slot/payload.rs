@@ -340,7 +340,8 @@ impl SlotTable {
             return;
         }
 
-        let mut remapped = crate::collections::map::HashMap::default();
+        let mut remapped: crate::collections::map::HashMap<usize, usize> =
+            crate::collections::map::HashMap::default();
         let mut next_anchor = 1usize;
         for payload in &self.payloads {
             remapped.insert(payload.anchor, next_anchor);

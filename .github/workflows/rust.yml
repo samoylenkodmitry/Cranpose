@@ -2,21 +2,194 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  default-features:
+    name: linux / stable / default features
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --profile ci --verbose
-    - name: Run tests
-      run: cargo test --profile ci --verbose
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-default
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev libxkbcommon-dev \
+            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run workspace tests
+        run: cargo test --profile ci --workspace --verbose
+
+      - name: Run workspace clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  feature-smoke:
+    name: linux / stable / ${{ matrix.feature }} feature
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        feature: [std-hash, internal]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-${{ matrix.feature }}
+
+      - name: Run cranpose-core feature tests
+        run: cargo test --profile ci -p cranpose-core --features ${{ matrix.feature }} --verbose
+
+  property-smoke:
+    name: linux / stable / property smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-property-smoke
+
+      - name: Run deterministic slot-table model smoke
+        run: >
+          cargo test --profile ci
+          -p cranpose-core
+          deterministic_model_render_frames_match_slot_table
+          --verbose
+
+  criterion-smoke:
+    name: linux / stable / criterion smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-criterion-smoke
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev libxkbcommon-dev \
+            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Run slot-table Criterion smoke
+        run: cargo bench --package cranpose-ui --bench slot_table_v2 -- --test
+
+  wasm-build:
+    name: wasm build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-wasm
+
+      - name: Install binaryen 120
+        run: |
+          curl -L https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-x86_64-linux.tar.gz | tar xz
+          sudo mv binaryen-version_120/bin/* /usr/local/bin/
+          wasm-opt --version
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1
+
+      - name: Build web demo
+        run: apps/desktop-demo/build-web.sh
+
+  android-release:
+    name: Android release build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-android
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: sdkmanager "ndk;27.0.12077973"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Android release APK
+        working-directory: apps/android-demo/android
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: ./gradlew :app:assembleRelease
+
+  robot-e2e:
+    name: robot e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-robot
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev libxkbcommon-dev \
+            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Run sequential robot tests
+        run: ./run_robot_test.sh --sequential

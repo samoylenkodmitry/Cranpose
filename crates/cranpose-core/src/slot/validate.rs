@@ -540,8 +540,8 @@ impl DetachedSubtree {
             });
         }
 
-        let mut anchor_to_group = HashMap::default();
-        let mut anchor_set = HashSet::default();
+        let mut anchor_to_group: HashMap<AnchorId, usize> = HashMap::default();
+        let mut anchor_set: HashSet<AnchorId> = HashSet::default();
         for (index, anchor) in self.groups.iter().map(|group| group.anchor).enumerate() {
             if !anchor_set.insert(anchor) {
                 return Err(SlotInvariantError::DetachedDuplicateAnchor { root_key, anchor });
