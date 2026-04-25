@@ -133,16 +133,16 @@ The execution order is correctness first, then documentation and repeatable gate
 - [x] Add stress commands for slot validation, high-case property tests, perf stability, and sequential robot tests.
 - [x] Add a release checklist covering stale docs, full verification, persisted property failures, perf baseline, regression budgets, retained-memory plateau, anchor growth, and panic classification.
 
-## PR Sequence
+## Implementation Slice Status
 
-- [ ] PR 1: documentation and verification gate.
-- [ ] PR 2: retained-state validation.
-- [ ] PR 3: property-test harness.
-- [ ] PR 4: behavior integration tests.
-- [ ] PR 5: performance baseline matrix.
-- [ ] PR 6: measured current-V2 optimizations.
-- [ ] PR 7: retention memory budget.
-- [ ] PR 8: optional LinkBuffer/arena prototype.
+- [x] Documentation and verification gate: Phase 0 is complete, `verify_slot_table.sh` is the full local gate, and `docs/cranpose_slot_table_v2_design.md` is the single active design spec.
+- [x] Retained-state validation: Phase 1 is complete, including retained/detached validation and negative invariant tests.
+- [x] Property-test harness: Phase 2 is complete with deterministic generated render-frame model coverage and a configurable high-frame stress command.
+- [x] Behavior integration tests: Phase 3 is complete across remember, retention, keyed/unkeyed identity, invalidation, effects, node lifecycle, subcompose, and lazy-list reuse.
+- [x] Performance baseline matrix: Phase 4 is complete with expanded Criterion coverage, counters, baseline workflow, and regression budgets.
+- [x] Measured current-V2 optimizations: Phase 5 is complete for the measured hot paths; further storage changes stay gated by profiling evidence.
+- [x] Retention memory budget: Phase 6 is complete with retention budget policy, diagnostics, eviction coverage, and memory plateau tests.
+- [x] Optional LinkBuffer/arena prototype: Phase 7 is closed as a gated non-action; no linked backend is implemented unless `docs/slot_table_v2_link_backend_decision.md` trigger criteria pass.
 
 ## Next Execution Order
 
