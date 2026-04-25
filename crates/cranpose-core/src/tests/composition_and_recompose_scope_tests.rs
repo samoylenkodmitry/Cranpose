@@ -1587,6 +1587,7 @@ fn retained_branch_detaches_child_from_parent_while_hidden_and_restores_same_nod
                 cranpose_core::pop_parent();
             })
             .expect("render retained child branch");
+        assert_composition_valid(composition);
     };
 
     render(&mut composition, show_branch, &parent_id, &captured);
@@ -1679,6 +1680,7 @@ fn disposed_branch_recreates_node_id_without_explicit_reuse() {
                 }
             })
             .expect("render disposable node branch");
+        assert_composition_valid(&composition);
     };
 
     render();
@@ -1728,6 +1730,7 @@ fn conditional_branch_without_retention_disposes_removed_node() {
                 }
             })
             .expect("render disposable branch");
+        assert_composition_valid(&composition);
     };
 
     render();
