@@ -93,7 +93,7 @@ The execution order is correctness first, then documentation and repeatable gate
 - [x] Audit or add tab-retention tests covering preserved state with retention and disposal without retention.
 - [x] Audit or add keyed and unkeyed list identity tests.
 - [x] Audit or add active/inactive scope invalidation tests.
-- [ ] Audit or add `DisposableEffect` cleanup tests for dispose versus retain.
+- [x] Audit or add `DisposableEffect` cleanup tests for dispose versus retain.
 - [ ] Audit or add retained/disposed node lifecycle tests.
 - [ ] Audit or add subcompose and lazy-list slot reuse tests, including lazy-list jump alias prevention.
 

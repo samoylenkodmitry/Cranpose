@@ -1450,6 +1450,57 @@ fn retained_branch_hides_without_running_disposable_effect_cleanup() {
 }
 
 #[test]
+fn conditional_branch_without_retention_runs_disposable_effect_cleanup() {
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let cleanup_calls = Rc::new(Cell::new(0usize));
+    let root_key = location_key(file!(), line!(), column!());
+    let branch_key = location_key(file!(), line!(), column!());
+
+    let mut render = || {
+        let cleanup_calls = Rc::clone(&cleanup_calls);
+        composition
+            .render(root_key, || {
+                if show_branch.value() {
+                    with_current_composer(|composer| {
+                        composer.with_group(branch_key, |_composer| {
+                            let cleanup_calls = Rc::clone(&cleanup_calls);
+                            DisposableEffect!((), move |_| {
+                                let cleanup_calls = Rc::clone(&cleanup_calls);
+                                DisposableEffectResult::new(move || {
+                                    cleanup_calls.set(cleanup_calls.get() + 1);
+                                })
+                            });
+                        });
+                    });
+                }
+            })
+            .expect("render disposable conditional branch");
+        assert_composition_valid(&composition);
+    };
+
+    render();
+    assert_eq!(cleanup_calls.get(), 0);
+
+    show_branch.set_value(false);
+    render();
+    assert_eq!(
+        cleanup_calls.get(),
+        1,
+        "removing a non-retained branch must run DisposableEffect cleanup",
+    );
+
+    show_branch.set_value(true);
+    render();
+    assert_eq!(
+        cleanup_calls.get(),
+        1,
+        "recreating a disposed branch must not run cleanup until it is removed again",
+    );
+}
+
+#[test]
 fn retained_branch_restores_the_same_node_id() {
     const BRANCH_KEY: Key = 0xD01;
 
