@@ -632,6 +632,23 @@ pub(crate) struct RetainedGroup {
     pub subtree: DetachedSubtree,
 }
 
+pub struct RetentionBudget {
+    pub max_retained_subtrees: Option<usize>,
+    pub max_retained_bytes: Option<usize>,
+    pub max_age_passes: Option<u64>,
+}
+
+pub enum RetentionEvictionPolicy {
+    LeastRecentlyDetached,
+    LeastRecentlyRestored,
+    LargestFirst,
+}
+
+pub struct RetentionPolicy {
+    pub budget: RetentionBudget,
+    pub eviction: RetentionEvictionPolicy,
+}
+
 pub(crate) struct RetentionManager {
     groups: HashMap<RetainKey, RetainedGroup>,
 }
@@ -643,6 +660,8 @@ Rules:
 
 - scopes are registered in `scope_registry`;
 - retained subtrees are stored per host storage key in `retention_by_host`;
+- `RetentionBudget` uses `None` to mean unbounded and otherwise caps retained subtree count, retained heap bytes, or retained age in composition passes;
+- `RetentionEvictionPolicy` names the ordering used when a bounded retention manager has to dispose inactive retained subtrees;
 - live hosts are resolved through `live_hosts` during recomposition;
 - `SlotTable` carries the runtime-state pointer so ownership survives `take()`, and `SlotsHost::reset()` clears host ownership only after retained subtrees are gone;
 - every `RecomposeScope` stores both `slots_storage_key` and a weak `slots_runtime_state`, which is the data needed to route invalid scopes back to the correct host.

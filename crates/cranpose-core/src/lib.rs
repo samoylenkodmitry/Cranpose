@@ -61,7 +61,7 @@ pub use launched_effect::{
 };
 pub use owned::Owned;
 pub use platform::{Clock, RuntimeScheduler};
-pub use retention::RetentionMode;
+pub use retention::{RetentionBudget, RetentionEvictionPolicy, RetentionMode, RetentionPolicy};
 #[doc(hidden)]
 pub use runtime::{
     current_runtime_handle, schedule_frame, schedule_node_update, DefaultScheduler, Runtime,

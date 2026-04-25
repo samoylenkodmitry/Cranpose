@@ -114,8 +114,8 @@ The execution order is correctness first, then documentation and repeatable gate
 
 ### Phase 6 - Improve Lifecycle And Memory Policy
 
-- [ ] Design `RetentionBudget` with max retained subtrees, retained bytes, and age limits.
-- [ ] Add eviction policy choices for least-recently-restored, least-recently-detached, and largest-first retention.
+- [x] Design `RetentionBudget` with max retained subtrees, retained bytes, and age limits.
+- [x] Add eviction policy choices for least-recently-restored, least-recently-detached, and largest-first retention.
 - [ ] Add retained-state diagnostics for retained counts, estimated bytes, and eviction totals.
 - [ ] Add memory plateau tests for repeated tab/list/subcompose retention.
 

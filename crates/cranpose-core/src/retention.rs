@@ -11,6 +11,54 @@ pub enum RetentionMode {
     RetainWhenInactive,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionBudget {
+    pub max_retained_subtrees: Option<usize>,
+    pub max_retained_bytes: Option<usize>,
+    pub max_age_passes: Option<u64>,
+}
+
+impl RetentionBudget {
+    pub const UNBOUNDED: Self = Self {
+        max_retained_subtrees: None,
+        max_retained_bytes: None,
+        max_age_passes: None,
+    };
+}
+
+impl Default for RetentionBudget {
+    fn default() -> Self {
+        Self::UNBOUNDED
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RetentionEvictionPolicy {
+    #[default]
+    LeastRecentlyDetached,
+    LeastRecentlyRestored,
+    LargestFirst,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionPolicy {
+    pub budget: RetentionBudget,
+    pub eviction: RetentionEvictionPolicy,
+}
+
+impl RetentionPolicy {
+    pub const UNBOUNDED: Self = Self {
+        budget: RetentionBudget::UNBOUNDED,
+        eviction: RetentionEvictionPolicy::LeastRecentlyDetached,
+    };
+}
+
+impl Default for RetentionPolicy {
+    fn default() -> Self {
+        Self::UNBOUNDED
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RetainKey {
     pub(crate) parent_scope: Option<ScopeId>,
@@ -184,5 +232,44 @@ impl RetentionManager {
                 panic!("retention invariant violation: {err:?}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retention_budget_default_is_unbounded() {
+        assert_eq!(RetentionBudget::default(), RetentionBudget::UNBOUNDED);
+        assert_eq!(RetentionBudget::default().max_retained_subtrees, None);
+        assert_eq!(RetentionBudget::default().max_retained_bytes, None);
+        assert_eq!(RetentionBudget::default().max_age_passes, None);
+    }
+
+    #[test]
+    fn retention_policy_default_uses_unbounded_budget_and_detach_lru() {
+        assert_eq!(RetentionPolicy::default(), RetentionPolicy::UNBOUNDED);
+        assert_eq!(
+            RetentionPolicy::default().budget,
+            RetentionBudget::UNBOUNDED
+        );
+        assert_eq!(
+            RetentionPolicy::default().eviction,
+            RetentionEvictionPolicy::LeastRecentlyDetached
+        );
+    }
+
+    #[test]
+    fn retention_budget_can_express_all_limits() {
+        let budget = RetentionBudget {
+            max_retained_subtrees: Some(3),
+            max_retained_bytes: Some(4096),
+            max_age_passes: Some(5),
+        };
+
+        assert_eq!(budget.max_retained_subtrees, Some(3));
+        assert_eq!(budget.max_retained_bytes, Some(4096));
+        assert_eq!(budget.max_age_passes, Some(5));
     }
 }
