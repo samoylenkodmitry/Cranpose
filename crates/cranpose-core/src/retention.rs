@@ -100,11 +100,13 @@ pub(crate) struct RetentionDebugStats {
     pub(crate) scope_count: usize,
     pub(crate) anchor_count: usize,
     pub(crate) heap_bytes: usize,
+    pub(crate) evictions_total: usize,
 }
 
 #[derive(Default)]
 pub(crate) struct RetentionManager {
     groups: HashMap<RetainKey, RetainedGroup>,
+    evictions_total: usize,
 }
 
 impl RetentionManager {
@@ -142,6 +144,7 @@ impl RetentionManager {
             scope_count: self.groups.values().map(RetainedGroup::scope_count).sum(),
             anchor_count: self.groups.values().map(RetainedGroup::anchor_count).sum(),
             heap_bytes: self.groups.values().map(RetainedGroup::heap_bytes).sum(),
+            evictions_total: self.evictions_total,
         }
     }
 

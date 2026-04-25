@@ -1049,6 +1049,7 @@ fn retained_scope_stays_inactive_until_restored() {
     assert_eq!(initial_stats.retained_scope_count, 0);
     assert_eq!(initial_stats.retained_anchor_count, 0);
     assert_eq!(initial_stats.retained_heap_bytes, 0);
+    assert_eq!(initial_stats.retained_evictions_total, 0);
     assert_eq!(initial_stats.detached_anchor_count, 0);
     assert!(
         initial_snapshot.active_scope_count >= 1,
@@ -1096,6 +1097,7 @@ fn retained_scope_stays_inactive_until_restored() {
         hidden_stats.retained_heap_bytes > 0,
         "retained subtree slot storage must report non-zero heap once hidden",
     );
+    assert_eq!(hidden_stats.retained_evictions_total, 0);
     assert!(
         hidden_stats.detached_anchor_count >= hidden_stats.retained_anchor_count,
         "retained anchors should be tracked as detached in the active anchor registry",
@@ -1145,6 +1147,7 @@ fn retained_scope_stays_inactive_until_restored() {
     assert_eq!(restored_stats.retained_scope_count, 0);
     assert_eq!(restored_stats.retained_anchor_count, 0);
     assert_eq!(restored_stats.retained_heap_bytes, 0);
+    assert_eq!(restored_stats.retained_evictions_total, 0);
     assert_eq!(restored_stats.detached_anchor_count, 0);
 
     let restored_scope = CAPTURED_SCOPE

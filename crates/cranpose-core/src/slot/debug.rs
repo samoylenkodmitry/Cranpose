@@ -31,6 +31,7 @@ pub struct SlotTableDebugStats {
     pub retained_scope_count: usize,
     pub retained_anchor_count: usize,
     pub retained_heap_bytes: usize,
+    pub retained_evictions_total: usize,
     pub mutation: SlotTableMutationDebugStats,
 }
 

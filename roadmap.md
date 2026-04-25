@@ -116,7 +116,7 @@ The execution order is correctness first, then documentation and repeatable gate
 
 - [x] Design `RetentionBudget` with max retained subtrees, retained bytes, and age limits.
 - [x] Add eviction policy choices for least-recently-restored, least-recently-detached, and largest-first retention.
-- [ ] Add retained-state diagnostics for retained counts, estimated bytes, and eviction totals.
+- [x] Add retained-state diagnostics for retained counts, estimated bytes, and eviction totals.
 - [ ] Add memory plateau tests for repeated tab/list/subcompose retention.
 
 ### Phase 7 - Conditional LinkBuffer/Arena Prototype

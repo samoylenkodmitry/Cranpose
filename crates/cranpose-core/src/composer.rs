@@ -170,6 +170,7 @@ impl ComposerRuntimeState {
         stats.retained_scope_count = retention.scope_count;
         stats.retained_anchor_count = retention.anchor_count;
         stats.retained_heap_bytes = retention.heap_bytes;
+        stats.retained_evictions_total = retention.evictions_total;
     }
 
     pub(crate) fn compact_table_namespaces_for_host(

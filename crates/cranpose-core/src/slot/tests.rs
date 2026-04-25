@@ -492,6 +492,7 @@ fn debug_stats_report_explicit_v2_table_counts() {
     assert_eq!(stats.retained_scope_count, 0);
     assert_eq!(stats.retained_anchor_count, 0);
     assert_eq!(stats.retained_heap_bytes, 0);
+    assert_eq!(stats.retained_evictions_total, 0);
 }
 
 #[test]
@@ -1503,6 +1504,7 @@ fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
     assert_eq!(stats.scope_count, 1);
     assert_eq!(stats.anchor_count, 1);
     assert!(stats.heap_bytes > 0);
+    assert_eq!(stats.evictions_total, 0);
 }
 
 #[test]
