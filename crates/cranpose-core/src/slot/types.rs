@@ -180,9 +180,7 @@ impl DetachedSubtree {
 
 pub(crate) struct FinishGroupResult {
     pub(crate) detached_children: Vec<DetachedSubtree>,
-    pub(crate) structure_changed: bool,
     pub(crate) direct_nodes: Vec<NodeId>,
-    pub(crate) subtree_nodes: Vec<NodeId>,
     pub(crate) root_nodes: Vec<NodeId>,
     pub(crate) was_skipped: bool,
 }

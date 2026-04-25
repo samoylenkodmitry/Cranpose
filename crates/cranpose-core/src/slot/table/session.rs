@@ -4,7 +4,7 @@ use super::super::{DetachedSubtree, SlotPassMode};
 use super::SlotTable;
 use crate::{
     collections::map::{HashMap, HashSet},
-    slot_storage::{GroupKey, GroupKeySeed, GroupStartKind},
+    slot_storage::{GroupKey, GroupKeySeed},
     AnchorId, Key,
 };
 use smallvec::SmallVec;
@@ -113,7 +113,6 @@ pub(in crate::slot) struct RootFrame {
 
 pub(in crate::slot) struct GroupFrame {
     pub(in crate::slot) group_anchor: AnchorId,
-    pub(in crate::slot) start_kind: GroupStartKind,
     pub(in crate::slot) next_child_index: usize,
     pub(in crate::slot) payload_cursor: usize,
     pub(in crate::slot) old_payload_len: usize,
@@ -475,14 +474,12 @@ impl SlotWriteSessionState {
     pub(in crate::slot) fn push_group_frame(
         &mut self,
         anchor: AnchorId,
-        start_kind: GroupStartKind,
         next_child_index: usize,
         old_payload_len: usize,
         old_node_len: usize,
     ) {
         self.group_stack.push(GroupFrame {
             group_anchor: anchor,
-            start_kind,
             next_child_index,
             payload_cursor: 0,
             old_payload_len,

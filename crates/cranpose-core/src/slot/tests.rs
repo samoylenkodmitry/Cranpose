@@ -359,7 +359,6 @@ fn slot_storage_trait_exposes_semantic_session_surface() {
         SlotStorage::skip_group(session);
         let result = SlotStorage::finish_group_body(session);
         assert!(result.detached_children.is_empty());
-        assert_eq!(result.subtree_nodes, vec![55]);
         assert_eq!(result.root_nodes, vec![55]);
         assert!(result.was_skipped);
         SlotStorage::end_recompose(session);
@@ -2819,7 +2818,6 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         session.skip_group();
         let child_a_result = session.finish_group_body();
         assert!(child_a_result.detached_children.is_empty());
-        assert_eq!(child_a_result.subtree_nodes, vec![10, 20]);
         assert_eq!(child_a_result.root_nodes, vec![10]);
         assert!(child_a_result.was_skipped);
         session.end_group();

@@ -34,16 +34,10 @@ impl SlotTable {
         Self::root_node_ids_from_records(&nodes)
     }
 
-    fn open_group_frame(
-        &mut self,
-        state: &mut SlotWriteSessionState,
-        anchor: AnchorId,
-        start_kind: GroupStartKind,
-    ) -> usize {
+    fn open_group_frame(&mut self, state: &mut SlotWriteSessionState, anchor: AnchorId) -> usize {
         let group_index = self.current_group_index(anchor);
         state.push_group_frame(
             anchor,
-            start_kind,
             group_index + 1,
             self.group_payload_len_at(group_index),
             self.group_node_len_at(group_index),
@@ -75,7 +69,7 @@ impl SlotTable {
         lifecycle: &mut SlotLifecycleCoordinator,
         state: &mut SlotWriteSessionState,
     ) -> FinishGroupResult {
-        let (group_anchor, payload_cursor, node_cursor, start_kind, was_skipped) = {
+        let (group_anchor, payload_cursor, node_cursor, was_skipped) = {
             let frame = state
                 .group_stack
                 .last_mut()
@@ -83,9 +77,7 @@ impl SlotTable {
             if frame.body_finished {
                 return FinishGroupResult {
                     detached_children: Vec::new(),
-                    structure_changed: false,
                     direct_nodes: Vec::new(),
-                    subtree_nodes: Vec::new(),
                     root_nodes: Vec::new(),
                     was_skipped: false,
                 };
@@ -96,7 +88,6 @@ impl SlotTable {
                 frame.group_anchor,
                 frame.payload_cursor,
                 frame.node_cursor,
-                frame.start_kind,
                 frame.was_skipped,
             )
         };
@@ -118,23 +109,15 @@ impl SlotTable {
         }
 
         let detached_children = self.detach_unvisited_children_internal(state);
-        let (subtree_nodes, root_nodes) = if was_skipped {
-            (
-                self.collect_subtree_node_ids(group_anchor),
-                self.collect_subtree_root_node_ids(group_anchor),
-            )
+        let root_nodes = if was_skipped {
+            self.collect_subtree_root_node_ids(group_anchor)
         } else {
-            (Vec::new(), Vec::new())
+            Vec::new()
         };
-        let structure_changed = !matches!(start_kind, GroupStartKind::Reused)
-            || !direct_nodes.is_empty()
-            || !detached_children.is_empty();
         state.note_removed_nodes(direct_nodes.len());
         FinishGroupResult {
             detached_children,
-            structure_changed,
             direct_nodes,
-            subtree_nodes,
             root_nodes,
             was_skipped,
         }
@@ -151,7 +134,7 @@ impl SlotWriteSession<'_> {
         anchor: AnchorId,
         kind: GroupStartKind,
     ) -> GroupStart<GroupId> {
-        let group_index = self.table.open_group_frame(self.state, anchor, kind);
+        let group_index = self.table.open_group_frame(self.state, anchor);
         let scope_id = self.table.groups[group_index].scope_id;
         GroupStart {
             group: self.table.group_id_at_index(group_index),
@@ -177,8 +160,7 @@ impl SlotWriteSession<'_> {
     pub(crate) fn begin_recompose_at_scope(&mut self, scope_id: ScopeId) -> Option<GroupId> {
         let group = self.table.group_for_scope(scope_id)?;
         let anchor = self.table.group_anchor(group);
-        self.table
-            .open_group_frame(self.state, anchor, GroupStartKind::Reused);
+        self.table.open_group_frame(self.state, anchor);
         Some(group)
     }
 

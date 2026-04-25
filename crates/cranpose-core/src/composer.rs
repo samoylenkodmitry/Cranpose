@@ -744,10 +744,8 @@ impl Composer {
             fn drop(&mut self) {
                 let crate::slot::FinishGroupResult {
                     detached_children,
-                    structure_changed: _structure_changed,
                     direct_nodes,
                     root_nodes,
-                    subtree_nodes: _subtree_nodes,
                     was_skipped,
                 } = self
                     .composer

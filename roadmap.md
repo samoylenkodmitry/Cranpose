@@ -17,135 +17,30 @@ This file tracks the current forward work and marks boxes closed only after full
   - `apps/desktop-demo/build-web.sh`
   - `./run_robot_test.sh --sequential`
 
-## Required Work
-
-- [x] Extend `FinishGroupResult` to carry `subtree_nodes` plus skip state and feed composer/recompose skip handling from storage results instead of rescanning the slot table.
-- [x] Expand `DetachedSubtree` to store explicit `root_nodes`, `scope_ids`, detached-anchor metadata, and subtree generation instead of reconstructing them from `groups` and `nodes` on demand.
-- [x] Add semantic payload classification (`PayloadKind`) to `PayloadRecord` and wire remember/param/return/effect/internal payloads through it so debug and lifecycle paths stop treating every payload as the same untyped box.
-- [x] Replace the remaining composer-side root discovery with stored root-node metadata so skip/retain/dispose paths consume root ids carried by `FinishGroupResult`, `NodeRecord`, and `DetachedSubtree` instead of walking the applier.
-- [x] Rework writer frames to use parent-bounded table ranges instead of eagerly cloning `old_children` vectors on every `open_group_frame`; writer traversal now operates on direct-child table boundaries with explicit invariant checks and no per-group child-list copies.
-
-- [x] Reduce modifier slice collection churn in lazy-list scroll-reuse hot paths.
-- [x] Reduce layout-box and semantics allocation churn in lazy-list scroll-reuse hot paths.
-- [x] Add retained-memory instrumentation and anchor-capacity diagnostics that are cheap enough for regular debug investigation and strong enough for regression tests; `SlotTableDebugStats` now reports retained subtree counts/heap plus active/detached/invalidated/free anchor breakdown, and the coverage exercises both raw slot tables and composition-owned retention.
-- [x] Audit lazy-list and subcompose retention/reuse behavior under perf load and add specialized policy only if profiling proves the generic retained-subtree path is the bottleneck; perf instrumentation showed no retained-subtree bottleneck, so no specialized policy was added.
-
-## Slot Table Review Mitigation
-
-- [x] Make retained-subtree insertion reject or explicitly dispose displaced retained groups instead of silently overwriting a matching `RetainKey`.
-- [x] Make `SlotTable::restore_subtree` reject detached subtrees whose root key does not match the requested `GroupKey`.
-- [x] Make duplicate explicit sibling keys fail during writer traversal or always-on debug validation, not only when slot diagnostics are enabled manually.
-- [x] Replace type-name based `PayloadKind` inference with explicit payload-kind ownership at the call site.
-- [x] Add the lazy per-writer-frame sibling index described by `docs/cranpose_slot_table_v2_design.md` so large keyed sibling ranges do not rebuild transient maps per lookup.
-- [x] Remove or rewrite stale duplicate slot-table design documentation so `docs/cranpose_slot_table_v2_design.md` remains the single active slot-table specification.
-
 ## Full Verification Gate
 
-- [x] `cargo fmt`
-- [x] `cargo test > 1.tmp 2>&1`
-- [x] `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`
-- [x] Android release build: `./gradlew :app:assembleRelease` in `apps/android-demo/android`
-- [x] Wasm build: `apps/desktop-demo/build-web.sh`
-- [x] Robot e2e: `./run_robot_test.sh --sequential`
-- [x] Read every verification log and fix every warning/failure before committing.
+- [ ] [S] `cargo fmt`
+- [ ] [M] `cargo test > 1.tmp 2>&1`
+- [ ] [M] `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`
+- [ ] [L] Android release build: `./gradlew :app:assembleRelease` in `apps/android-demo/android`
+- [ ] [M] Wasm build: `apps/desktop-demo/build-web.sh`
+- [ ] [L] Robot e2e: `./run_robot_test.sh --sequential`
+- [ ] [M] Read every verification log and fix every warning/failure before committing.
+- [ ] [S] Keep `docs/cranpose_slot_table_v2_design.md` as the only active slot-table design specification.
+- [ ] [S] Add `docs/slot_table_v2_invariants.md` as the short invariant checklist for active groups, payload/node ownership, anchors, retention, scope lookup, and sibling matching.
+- [ ] [S] Add `verify_slot_table.sh` that runs the full verification gate and writes/readable logs for every step.
+- [ ] [S] Update user-facing crate docs to say Slot Table V2 is active and gap-table semantics are historical only.
+- [ ] [S] Document the baseline process using `./perf_slot_table_v2.sh --save-baseline`, `--baseline`, and `--stability-check` in `docs/slot_table_v2_performance_baselines.md`.
 
-## Follow-Up Work
+## Slot Table Cleanup Backlog
 
-- [x] Remove full-table `recompute_all_metadata()` from `restore_subtree()` and make restore update anchors, scopes, and spans incrementally; restore now updates active anchors, scope entries, ancestor spans, and payload locations incrementally.
-- [x] Deduplicate detached-node disposal between `Composer::dispose_detached_nodes` and `slot/detach.rs::dispose_detached_node_now` so node cleanup semantics live in one place.
-- [x] Remove or hide test-only helpers from production slot types, starting with `DetachedSubtree::node_ids()`; `#[allow(dead_code)]` on production slot APIs is a smell.
-- [x] Replace aggregated `slots_len`/`slots_cap` counters in `SlotTableDebugStats` and leak tooling with V2-native per-table counters (`group_count`, `payload_count`, `node_count`, and related capacities).
-- [x] Replace slot-linear debug surfaces such as `debug_dump_all_slots()` with V2-native diagnostics by switching the repo to typed slot-debug entries instead of fake linear slot rows.
-- [x] Pack `GroupRecord` fields into denser arrays if profiling shows group-table bandwidth or cache pressure matters; no split storage was introduced because current diagnostics do not identify group-table bandwidth as the bottleneck, and `SlotTableDebugStats` now exposes `group_record_size` plus `group_heap_bytes` for future evidence.
-- [x] Add retained-subtree LRU limits once a real memory-budget policy exists.
-- [x] Add collision-resistant debug/profile keys if diagnostics show location-key collisions in real workloads; source-location keys now hash file contents with line/column instead of string addresses, and debug builds can enable collision diagnostics with `CRANPOSE_LOCATION_KEY_DIAGNOSTICS`.
-- [x] Add allocator-backed tables for `no_std` only if that target becomes real again; audited current crate targets and left storage on `std`/`Vec` because no active `no_std` target or allocator API exists.
-
-## Production Hardening Roadmap
-
-The execution order is correctness first, then documentation and repeatable gates, then performance evidence, then targeted optimization. A LinkBuffer/arena backend remains a conditional prototype only after the current V2 implementation has model-test coverage and measured structural-edit bottlenecks.
-
-### Phase 0 - Freeze Current Truth
-
-- [x] Keep `docs/cranpose_slot_table_v2_design.md` as the only active slot-table design specification.
-- [x] Add `docs/slot_table_v2_invariants.md` as the short invariant checklist for active groups, payload/node ownership, anchors, retention, scope lookup, and sibling matching.
-- [x] Add `verify_slot_table.sh` that runs the full verification gate and writes/readable logs for every step.
-- [x] Update user-facing crate docs to say Slot Table V2 is active and gap-table semantics are historical only.
-
-### Phase 1 - Strengthen Validation
-
-- [x] Add retained-state validation that checks retained keys, detached anchors, retained scopes, retained node lifecycle, and detached root parentage.
-- [x] Add detached-subtree validation for preorder, depths, payload owners, node owners, root nodes, and anchor locality.
-- [x] Add a composition-level debug validation helper and call it from integration tests.
-- [x] Add negative validation tests for retained active anchors, active scope-index leakage, payload owner leakage, disposed retained nodes, and duplicate retained keys.
-
-### Phase 2 - Add Model And Property Tests
-
-- [x] Add a deterministic model/property-test harness for Slot Table V2 render-frame scenarios.
-- [x] Add a reference model for active roots, retained groups, payloads, nodes, scopes, and remembered values.
-- [x] Generate complete render-frame scripts for conditionals, keyed moves, tab retention, remembered values, invalidation, and skip paths.
-- [x] Add core properties for keyed identity, unkeyed positional identity, dispose/reset, retain/restore, nested detach/restore, inactive retained invalidation, skip metadata, stale payload alias prevention, active/retained anchor separation, and random frame validation.
-- [x] Make property failures print a reproducible seed, compact scenario script, active debug snapshot, retained-subtree summary, and failed invariant.
-
-### Phase 3 - Complete Behavior Integration Tests
-
-- [x] Audit or add remember survival/reset tests for recomposition, default conditional disposal, and retained restoration.
-- [x] Audit or add tab-retention tests covering preserved state with retention and disposal without retention.
-- [x] Audit or add keyed and unkeyed list identity tests.
-- [x] Audit or add active/inactive scope invalidation tests.
-- [x] Audit or add `DisposableEffect` cleanup tests for dispose versus retain.
-- [x] Audit or add retained/disposed node lifecycle tests.
-- [x] Audit or add subcompose and lazy-list slot reuse tests, including lazy-list jump alias prevention.
-
-### Phase 4 - Lock Performance Baselines
-
-- [x] Expand `slot_table_v2` Criterion benchmarks across keyed reverse sizes, keyed rotate, seeded shuffle, conditional toggle positions, tab payload sizes, and lazy scroll/jump modes.
-- [x] Add allocation and storage counters for modifier slices, layout boxes, semantics, group/payload/node counts and capacities, and retained subtree counts/bytes.
-- [x] Document the baseline process using `./perf_slot_table_v2.sh --save-baseline`, `--baseline`, and `--stability-check` in `docs/slot_table_v2_performance_baselines.md`.
-- [x] Document regression budgets for keyed reorder, tab switching, subcompose scrolling, lazy-list reuse, retained bytes, and anchor growth in `docs/slot_table_v2_performance_baselines.md`.
-
-### Phase 5 - Optimize Current V2 Hot Paths
-
-- [x] Benchmark sibling-index thresholds of 4, 8, 16, 32, and 64 before changing the default.
-- [x] Instrument subtree moves with counts/spans for moved groups, payloads, nodes, payload-location rebuilds, and group-index refresh.
-- [x] Optimize proven `move_subtree` hot spots without changing semantics.
-- [x] Continue lazy-list allocation-churn reductions only where counters show real allocation pressure.
-- [x] Revisit `GroupRecord` field packing only if profiling shows group-table bandwidth or cache pressure matters.
-
-### Phase 6 - Improve Lifecycle And Memory Policy
-
-- [x] Design `RetentionBudget` with max retained subtrees, retained bytes, and age limits.
-- [x] Add eviction policy choices for least-recently-restored, least-recently-detached, and largest-first retention.
-- [x] Add retained-state diagnostics for retained counts, estimated bytes, and eviction totals.
-- [x] Add memory plateau tests for repeated tab/list/subcompose retention.
-
-### Phase 7 - Conditional LinkBuffer/Arena Prototype
-
-- [x] Define objective trigger criteria before prototyping any linked backend.
-- [x] Keep the storage abstraction out until the linked-backend trigger criteria pass; the current V2 semantic API remains backed by the single preorder `Vec` group store.
-- [x] Keep linked group storage unimplemented until the trigger criteria are met; no speculative `slot-link-storage` feature is present.
-- [x] Define the dual-backend model/property and integration suite requirement for any future second backend; today only the default preorder `Vec` backend exists.
-- [x] Do not ship a linked backend unless it proves large structural-edit wins without normal-case or memory regressions.
-
-### Phase 8 - Release Hardening
-
-- [x] Add CI jobs for default features, alternate hash/internal features, property smoke, criterion smoke, wasm build, Android release, and robot e2e.
-- [x] Add stress commands for slot validation, high-case property tests, perf stability, and sequential robot tests.
-- [x] Add a release checklist covering stale docs, full verification, persisted property failures, perf baseline, regression budgets, retained-memory plateau, anchor growth, and panic classification.
-
-## Implementation Slice Status
-
-- [x] Documentation and verification gate: Phase 0 is complete, `verify_slot_table.sh` is the full local gate, and `docs/cranpose_slot_table_v2_design.md` is the single active design spec.
-- [x] Retained-state validation: Phase 1 is complete, including retained/detached validation and negative invariant tests.
-- [x] Property-test harness: Phase 2 is complete with deterministic generated render-frame model coverage and a configurable high-frame stress command.
-- [x] Behavior integration tests: Phase 3 is complete across remember, retention, keyed/unkeyed identity, invalidation, effects, node lifecycle, subcompose, and lazy-list reuse.
-- [x] Performance baseline matrix: Phase 4 is complete with expanded Criterion coverage, counters, baseline workflow, and regression budgets.
-- [x] Measured current-V2 optimizations: Phase 5 is complete for the measured hot paths; further storage changes stay gated by profiling evidence.
-- [x] Retention memory budget: Phase 6 is complete with retention budget policy, diagnostics, eviction coverage, and memory plateau tests.
-- [x] Optional LinkBuffer/arena prototype: Phase 7 is closed as a gated non-action; no linked backend is implemented unless `docs/slot_table_v2_link_backend_decision.md` trigger criteria pass.
-
-## Next Execution Order
-
-- [x] Complete the Slot Table Review Mitigation items in order, with the full verification gate and a separate commit after each completed item.
-- [x] Profile lazy-list modifier/layout/semantics churn after review mitigation and only add specialized reuse policy if measurements show the generic retained-subtree path is still the bottleneck.
-- [x] Execute Phase 0 production-hardening items first, with one verified commit per closed checklist item.
+- [x] [M] Remove dead production fields from `FinishGroupResult`; keep only detached children, direct node removals, skipped-root nodes, and skipped state.
+- [ ] [L] Collapse the half-wired `SlotStorage` trait boundary; either make it the real composer storage API or remove it and its test-only surface.
+- [ ] [XL] Replace duplicated detached-subtree metadata with one canonical detached tree representation; derive root key, root scope, root nodes, scope ids, and anchor lists from the records.
+- [ ] [S] Track removed payload count in `SlotWriteSessionState` so payload-heavy removals trigger slot-table compaction.
+- [ ] [XL] Factor duplicated payload/node segmented-storage mechanics into one reusable internal primitive.
+- [ ] [L] Deduplicate active-table and detached-subtree validation through one preorder/span validator over active and detached views.
+- [ ] [M] Move group-close teardown out of duplicated composer/recompose guards into one helper.
+- [ ] [M] Delete or gate test-only/unfinished APIs: `AnchorRegistry::contains_active`, `AnchorRegistry::invalidate`, `SlotWriteSession::nodes_in_current_group`, ignored lifecycle/mode/table parameters, and production `allow(dead_code)` shims.
+- [ ] [M] Make `ValueSlotId` generation real or remove the unused generation field.
+- [ ] [S] Clean small slot-table garbage: over-reserved drop capacity in `take_all_drops`, single-variant `DeferredDrop`, and no-op `kind.label()` disposal.
