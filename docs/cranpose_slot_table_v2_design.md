@@ -1562,4 +1562,4 @@ After V2 is correct:
 5. Add debug instrumentation for retained memory.
 6. Add wider `Key128` storage only if the debug collision registry reports real source-location collisions.
 7. Add specialized lazy-list retention policy.
-8. Support no-std allocator-backed tables if still desired.
+8. Support no-std allocator-backed tables only after a concrete target and allocator API exist; the current workspace remains `std`/`Vec` backed.

@@ -59,7 +59,7 @@ This file tracks the current forward work and marks boxes closed only after full
 - [x] Pack `GroupRecord` fields into denser arrays if profiling shows group-table bandwidth or cache pressure matters; no split storage was introduced because current diagnostics do not identify group-table bandwidth as the bottleneck, and `SlotTableDebugStats` now exposes `group_record_size` plus `group_heap_bytes` for future evidence.
 - [x] Add retained-subtree LRU limits once a real memory-budget policy exists.
 - [x] Add collision-resistant debug/profile keys if diagnostics show location-key collisions in real workloads; source-location keys now hash file contents with line/column instead of string addresses, and debug builds can enable collision diagnostics with `CRANPOSE_LOCATION_KEY_DIAGNOSTICS`.
-- [ ] Add allocator-backed tables for `no_std` only if that target becomes real again.
+- [x] Add allocator-backed tables for `no_std` only if that target becomes real again; audited current crate targets and left storage on `std`/`Vec` because no active `no_std` target or allocator API exists.
 
 ## Production Hardening Roadmap
 
