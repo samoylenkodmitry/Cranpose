@@ -663,6 +663,47 @@ fn read_value_type_mismatch_panics_consistently() {
 }
 
 #[test]
+fn value_slot_type_replacement_advances_generation() {
+    const GROUP_KEY: Key = 16;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let old_slot = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let slot = session.value_slot(|| 5_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let replacement_slot = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let slot = session.value_slot(|| 7_u32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+
+    assert_eq!(replacement_slot.anchor(), old_slot.anchor());
+    assert_ne!(replacement_slot.generation(), old_slot.generation());
+    assert_eq!(*harness.table.read_value::<u32>(replacement_slot), 7);
+
+    let stale_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(old_slot);
+    }));
+    assert!(
+        stale_read.is_err(),
+        "replaced value slot handles must fail instead of reading the replacement"
+    );
+}
+
+#[test]
 fn disposed_value_slot_handle_does_not_alias_new_slot() {
     const OLD_KEY: Key = 13;
     const NEW_KEY: Key = 14;
@@ -683,6 +724,7 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.finish_pass();
     assert!(harness.table.groups.is_empty());
+    harness.table.compact_payload_anchor_namespace(None);
 
     harness.begin_pass(SlotPassMode::Compose);
     let new_slot = harness.session(|session| {
@@ -695,6 +737,8 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     });
     harness.finish_pass();
 
+    assert_eq!(new_slot.anchor(), old_slot.anchor());
+    assert_ne!(new_slot.generation(), old_slot.generation());
     assert_eq!(*harness.table.read_value::<i32>(new_slot), 77);
 
     let stale_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2559,13 +2603,10 @@ fn compact_payload_namespace_remaps_retained_subtree_payloads() {
     harness
         .table
         .compact_payload_anchor_namespace(Some(&mut retention));
-    let _ = harness.table.insert_value_payload(
-        parent_anchor,
-        0,
-        1,
-        super::PayloadKind::Internal,
-        30_i32,
-    );
+    let _ =
+        harness
+            .table
+            .insert_value_payload(parent_anchor, 0, super::PayloadKind::Internal, 30_i32);
 
     let restored = retention
         .take(retain_key)

@@ -10,6 +10,19 @@ use crate::{retention::RetentionManager, AnchorId};
 use std::any::TypeId;
 use std::{mem, ops::Range};
 
+fn replace_payload_record<T: 'static>(
+    record: &mut PayloadRecord,
+    kind: PayloadKind,
+    value: T,
+) -> (PayloadKind, Box<dyn std::any::Any>) {
+    let old_value = mem::replace(&mut record.value, Box::new(value));
+    let old_kind = record.kind;
+    record.type_id = TypeId::of::<T>();
+    record.type_name = std::any::type_name::<T>();
+    record.kind = kind;
+    (old_kind, old_value)
+}
+
 impl SlotTable {
     fn group_payload_start_at(&self, group_index: usize) -> usize {
         group_segment_start::<PayloadSegment>(&self.groups, group_index)
@@ -35,6 +48,15 @@ impl SlotTable {
         let anchor = self.next_payload_anchor;
         self.next_payload_anchor += 1;
         anchor
+    }
+
+    fn allocate_payload_generation(&mut self) -> u32 {
+        let generation = self.next_payload_generation;
+        self.next_payload_generation = self
+            .next_payload_generation
+            .checked_add(1)
+            .expect("payload generation counter overflow");
+        generation
     }
 
     pub(in crate::slot) fn group_payload_records_at(&self, group_index: usize) -> &[PayloadRecord] {
@@ -115,13 +137,13 @@ impl SlotTable {
         &mut self,
         owner: AnchorId,
         insert_index: usize,
-        generation: u32,
         kind: PayloadKind,
         value: T,
-    ) -> usize {
+    ) -> (usize, u32) {
         let owner_index = self.current_group_index(owner);
         let payload_index = self.group_payload_start_at(owner_index) + insert_index;
         let anchor = self.allocate_payload_anchor();
+        let generation = self.allocate_payload_generation();
         self.payloads.insert(
             payload_index,
             PayloadRecord {
@@ -137,7 +159,7 @@ impl SlotTable {
         add_group_segment_len::<PayloadSegment>(&mut self.groups, owner_index, 1);
         shift_group_segment_starts_from::<PayloadSegment>(&mut self.groups, owner_index + 1, 1);
         self.refresh_group_payload_locations(owner, insert_index);
-        anchor
+        (anchor, generation)
     }
 
     pub(super) fn replace_payload_value<T: 'static>(
@@ -148,12 +170,22 @@ impl SlotTable {
         value: T,
     ) -> (PayloadKind, Box<dyn std::any::Any>) {
         let record = self.group_payload_record_at_mut(group_index, payload_index);
-        let old_value = mem::replace(&mut record.value, Box::new(value));
-        let old_kind = record.kind;
-        record.type_id = TypeId::of::<T>();
-        record.type_name = std::any::type_name::<T>();
-        record.kind = kind;
-        (old_kind, old_value)
+        replace_payload_record(record, kind, value)
+    }
+
+    pub(super) fn replace_payload_identity<T: 'static>(
+        &mut self,
+        group_index: usize,
+        payload_index: usize,
+        kind: PayloadKind,
+        value: T,
+    ) -> (usize, u32, PayloadKind, Box<dyn std::any::Any>) {
+        let generation = self.allocate_payload_generation();
+        let record = self.group_payload_record_at_mut(group_index, payload_index);
+        record.generation = generation;
+        let anchor = record.anchor;
+        let (old_kind, old_value) = replace_payload_record(record, kind, value);
+        (anchor, generation, old_kind, old_value)
     }
 
     pub(super) fn clear_payload_locations_for_payloads(&mut self, payloads: &[PayloadRecord]) {

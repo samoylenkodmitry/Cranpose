@@ -34,6 +34,7 @@ pub struct SlotTable {
     next_group_generation: u32,
     pub(super) next_detached_generation: u64,
     pub(super) next_payload_anchor: usize,
+    pub(super) next_payload_generation: u32,
 }
 
 impl SlotTable {
@@ -51,6 +52,7 @@ impl SlotTable {
             next_group_generation: 1,
             next_detached_generation: 1,
             next_payload_anchor: 1,
+            next_payload_generation: 1,
         }
     }
 
