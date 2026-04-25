@@ -1,6 +1,6 @@
 use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadLocationRegistry, PayloadRecord,
-    SlotLifecycleCoordinator, SlotPassMode, SlotTableMutationDebugStats,
+    SlotLifecycleCoordinator, SlotTableMutationDebugStats,
 };
 use crate::{collections::map::HashMap, AnchorId, ScopeId};
 use std::rc::Rc;
@@ -58,7 +58,6 @@ impl SlotTable {
         &'a mut self,
         lifecycle: &'a mut SlotLifecycleCoordinator,
         state: &'a mut SlotWriteSessionState,
-        _mode: SlotPassMode,
     ) -> SlotWriteSession<'a> {
         SlotWriteSession {
             table: self,

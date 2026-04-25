@@ -319,7 +319,7 @@ impl<A: Applier + 'static> Composition<A> {
         self.last_pass_stats
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn debug_validate_slots(&self) -> Result<(), crate::slot::SlotInvariantError> {
         let table = self.slots.borrow();
         table.validate()?;

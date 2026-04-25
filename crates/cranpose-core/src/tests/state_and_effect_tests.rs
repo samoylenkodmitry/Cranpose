@@ -1297,7 +1297,7 @@ fn slot_table_remember_replaces_mismatched_type() {
     let group_key = location_key(file!(), line!(), column!());
 
     {
-        state.reset_for_pass(&slots, crate::slot::SlotPassMode::Compose);
+        state.reset_for_pass(crate::slot::SlotPassMode::Compose);
         begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || 42i32);
         assert_eq!(value.with(|value| *value), 42);
@@ -1305,7 +1305,7 @@ fn slot_table_remember_replaces_mismatched_type() {
     }
 
     {
-        state.reset_for_pass(&slots, crate::slot::SlotPassMode::Compose);
+        state.reset_for_pass(crate::slot::SlotPassMode::Compose);
         begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || "updated");
         assert_eq!(value.with(|&value| value), "updated");
@@ -1313,7 +1313,7 @@ fn slot_table_remember_replaces_mismatched_type() {
     }
 
     {
-        state.reset_for_pass(&slots, crate::slot::SlotPassMode::Compose);
+        state.reset_for_pass(crate::slot::SlotPassMode::Compose);
         begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || "should not run");
         assert_eq!(value.with(|&value| value), "updated");

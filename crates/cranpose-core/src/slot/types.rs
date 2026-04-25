@@ -76,6 +76,7 @@ impl DetachedSubtree {
         self.root().key
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn root_parent_anchor(&self) -> AnchorId {
         self.root().parent_anchor
     }
@@ -92,6 +93,7 @@ impl DetachedSubtree {
         self.nodes.iter().map(|node| node.id)
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn node_states(&self) -> impl Iterator<Item = (NodeId, NodeLifecycle)> + '_ {
         self.nodes.iter().map(|node| (node.id, node.lifecycle))
     }

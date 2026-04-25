@@ -243,12 +243,14 @@ impl ComposerRuntimeState {
             .is_none_or(RetentionManager::is_empty)
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn debug_verify_host(&self, host: &SlotsHost, table: &SlotTable) {
         if let Some(retention) = self.retention_by_host.borrow().get(&host.storage_key()) {
             retention.debug_verify(table);
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn validate_host_retention(
         &self,
         host: &SlotsHost,

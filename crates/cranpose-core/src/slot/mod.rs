@@ -18,7 +18,9 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use anchors::{AnchorRegistry, AnchorState};
+pub(crate) use anchors::AnchorRegistry;
+#[cfg(any(test, debug_assertions))]
+pub(crate) use anchors::AnchorState;
 pub use debug::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
     SlotDebugSnapshot, SlotTableDebugStats, SlotTableMutationDebugStats,
@@ -28,10 +30,10 @@ use groups::GroupRecord;
 pub(crate) use lifecycle::{DeferredDrop, SlotLifecycleCoordinator};
 use payload_locations::PayloadLocationRegistry;
 pub use table::SlotTable;
-#[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use table::{SlotWriteSession, SlotWriteSessionState};
 pub(in crate::slot) use types::root_node_ids_from_records;
 pub(crate) use types::NodeLifecycle;
 pub(crate) use types::{DetachedSubtree, FinishGroupResult, PayloadKind, SlotPassMode};
 use types::{NodeRecord, PayloadRecord};
+#[cfg(any(test, debug_assertions))]
 pub(crate) use validate::SlotInvariantError;

@@ -1,14 +1,13 @@
 #[cfg(any(test, debug_assertions))]
-use super::DetachedSubtree;
 use super::{
-    AnchorState, GroupRecord, NodeLifecycle, NodeRecord, PayloadRecord, SlotLifecycleCoordinator,
-    SlotTable,
+    AnchorState, DetachedSubtree, GroupRecord, NodeLifecycle, NodeRecord, PayloadRecord, SlotTable,
 };
 #[cfg(any(test, debug_assertions))]
-use crate::collections::map::HashSet;
-use crate::{collections::map::HashMap, slot_storage::GroupKey, AnchorId, NodeId, ScopeId};
+use crate::collections::map::{HashMap, HashSet};
+#[cfg(any(test, debug_assertions))]
+use crate::{slot_storage::GroupKey, AnchorId, NodeId, ScopeId};
 
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
+#[cfg(any(test, debug_assertions))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SlotInvariantError {
     GroupAnchorCountMismatch {
@@ -230,6 +229,7 @@ pub(crate) enum SlotInvariantError {
     },
 }
 
+#[cfg(any(test, debug_assertions))]
 struct SlotTreeView<'a> {
     kind: SlotTreeKind,
     groups: &'a [GroupRecord],
@@ -237,13 +237,14 @@ struct SlotTreeView<'a> {
     nodes: &'a [NodeRecord],
 }
 
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
+#[cfg(any(test, debug_assertions))]
 #[derive(Clone, Copy)]
 enum SlotTreeKind {
     Active,
     Detached { root_key: GroupKey },
 }
 
+#[cfg(any(test, debug_assertions))]
 impl SlotTreeKind {
     fn invalid_parent(
         self,
@@ -474,6 +475,7 @@ impl SlotTreeKind {
     }
 }
 
+#[cfg(any(test, debug_assertions))]
 trait SlotTreeChecks {
     fn before_group(
         &mut self,
@@ -519,11 +521,13 @@ trait SlotTreeChecks {
     }
 }
 
+#[cfg(any(test, debug_assertions))]
 struct ActiveSlotTreeChecks<'a> {
     table: &'a SlotTable,
     sibling_keys: HashMap<(AnchorId, GroupKey), usize>,
 }
 
+#[cfg(any(test, debug_assertions))]
 impl<'a> ActiveSlotTreeChecks<'a> {
     fn new(table: &'a SlotTable) -> Self {
         Self {
@@ -533,6 +537,7 @@ impl<'a> ActiveSlotTreeChecks<'a> {
     }
 }
 
+#[cfg(any(test, debug_assertions))]
 impl SlotTreeChecks for ActiveSlotTreeChecks<'_> {
     fn before_group(
         &mut self,
@@ -627,6 +632,7 @@ struct DetachedSlotTreeChecks;
 #[cfg(any(test, debug_assertions))]
 impl SlotTreeChecks for DetachedSlotTreeChecks {}
 
+#[cfg(any(test, debug_assertions))]
 fn validate_slot_tree(
     view: SlotTreeView<'_>,
     checks: &mut impl SlotTreeChecks,
@@ -779,8 +785,9 @@ fn validate_slot_tree(
     Ok(())
 }
 
+#[cfg(any(test, debug_assertions))]
 impl SlotTable {
-    pub(crate) fn debug_verify(&self, _lifecycle: Option<&SlotLifecycleCoordinator>) {
+    pub(crate) fn debug_verify(&self) {
         if crate::slot_validation_diagnostics_enabled() {
             if let Err(err) = self.validate() {
                 panic!("slot table invariant violation: {err:?}");

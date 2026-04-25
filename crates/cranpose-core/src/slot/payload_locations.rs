@@ -25,6 +25,7 @@ impl PayloadLocationRegistry {
         self.locations.remove(payload_anchor)
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(super) fn iter(&self) -> impl Iterator<Item = (usize, (AnchorId, usize))> + '_ {
         self.locations
             .iter()

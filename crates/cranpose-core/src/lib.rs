@@ -276,11 +276,6 @@ pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_VALIDATE_SLOTS").is_some())
 }
 
-#[cfg(not(any(test, debug_assertions)))]
-pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
-    false
-}
-
 fn source_location_key(file: &str, line: u32, column: u32) -> Key {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     hash = fnv1a_location_key_bytes(hash, file.as_bytes());
@@ -3489,7 +3484,6 @@ pub(crate) struct FinishedSlotPass {
 }
 
 struct ActivePassState {
-    mode: slot::SlotPassMode,
     state: slot::SlotWriteSessionState,
 }
 
@@ -3617,8 +3611,8 @@ impl SlotsHost {
             "slot pass already active for host"
         );
         let mut state = slot::SlotWriteSessionState::default();
-        state.reset_for_pass(&inner.table, mode);
-        inner.active_pass = Some(ActivePassState { mode, state });
+        state.reset_for_pass(mode);
+        inner.active_pass = Some(ActivePassState { state });
     }
 
     pub(crate) fn has_active_pass(&self) -> bool {
@@ -3639,8 +3633,7 @@ impl SlotsHost {
         let active_pass = active_pass
             .as_mut()
             .expect("slot write session requires an active pass");
-        let active_mode = active_pass.mode;
-        let mut session = table.write_session(lifecycle, &mut active_pass.state, active_mode);
+        let mut session = table.write_session(lifecycle, &mut active_pass.state);
         f(&mut session)
     }
 
@@ -3673,8 +3666,7 @@ impl SlotsHost {
         }
 
         let detached_root_children = {
-            let mut session =
-                table.write_session(lifecycle, &mut active_pass.state, active_pass.mode);
+            let mut session = table.write_session(lifecycle, &mut active_pass.state);
             session.finalize_pass(applier)
         };
 
@@ -3704,9 +3696,12 @@ impl SlotsHost {
         } else {
             table.compact_payload_anchor_namespace(None);
         }
-        table.debug_verify(Some(lifecycle));
-        if let Some(state) = runtime_state.clone() {
-            state.debug_verify_host(self, table);
+        #[cfg(any(test, debug_assertions))]
+        {
+            table.debug_verify();
+            if let Some(state) = runtime_state.clone() {
+                state.debug_verify_host(self, table);
+            }
         }
     }
 }

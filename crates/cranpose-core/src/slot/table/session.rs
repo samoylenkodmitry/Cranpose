@@ -140,7 +140,7 @@ impl SlotWriteSessionState {
     const COMPACT_NODE_THRESHOLD: usize = 16 * 1024;
     const COMPACT_GROUP_THRESHOLD: usize = 32 * 1024;
 
-    pub(crate) fn reset_for_pass(&mut self, _table: &SlotTable, mode: SlotPassMode) {
+    pub(crate) fn reset_for_pass(&mut self, mode: SlotPassMode) {
         self.root = RootFrame {
             next_child_index: 0,
             detach_remaining_children: matches!(mode, SlotPassMode::Compose),
@@ -560,11 +560,10 @@ mod tests {
         let mut table = SlotTable::new();
         let mut lifecycle = SlotLifecycleCoordinator::default();
         let mut state = SlotWriteSessionState::default();
-        state.reset_for_pass(&table, SlotPassMode::Compose);
+        state.reset_for_pass(SlotPassMode::Compose);
 
         {
-            let mut session =
-                table.write_session(&mut lifecycle, &mut state, SlotPassMode::Compose);
+            let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(BeginGroupInput::new(key, None));
         }
@@ -589,11 +588,10 @@ mod tests {
         let mut table = SlotTable::new();
         let mut lifecycle = SlotLifecycleCoordinator::default();
         let mut state = SlotWriteSessionState::default();
-        state.reset_for_pass(&table, SlotPassMode::Compose);
+        state.reset_for_pass(SlotPassMode::Compose);
 
         {
-            let mut session =
-                table.write_session(&mut lifecycle, &mut state, SlotPassMode::Compose);
+            let mut session = table.write_session(&mut lifecycle, &mut state);
             let root_key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(BeginGroupInput::new(root_key, None));
 
@@ -625,11 +623,10 @@ mod tests {
         let mut table = SlotTable::new();
         let mut lifecycle = SlotLifecycleCoordinator::default();
         let mut state = SlotWriteSessionState::default();
-        state.reset_for_pass(&table, SlotPassMode::Compose);
+        state.reset_for_pass(SlotPassMode::Compose);
 
         {
-            let mut session =
-                table.write_session(&mut lifecycle, &mut state, SlotPassMode::Compose);
+            let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(BeginGroupInput::new(key, None));
             let _ = session.value_slot(|| 17_i32);
@@ -650,10 +647,9 @@ mod tests {
         let mut state = SlotWriteSessionState::default();
         let scope_id = 41;
 
-        state.reset_for_pass(&table, SlotPassMode::Compose);
+        state.reset_for_pass(SlotPassMode::Compose);
         {
-            let mut session =
-                table.write_session(&mut lifecycle, &mut state, SlotPassMode::Compose);
+            let mut session = table.write_session(&mut lifecycle, &mut state);
             let root_key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(BeginGroupInput::new(root_key, None));
 
@@ -667,10 +663,9 @@ mod tests {
             session.end_group();
         }
 
-        state.reset_for_pass(&table, SlotPassMode::Recompose);
+        state.reset_for_pass(SlotPassMode::Recompose);
         {
-            let mut session =
-                table.write_session(&mut lifecycle, &mut state, SlotPassMode::Recompose);
+            let mut session = table.write_session(&mut lifecycle, &mut state);
             let _ = session
                 .begin_recompose_at_scope(scope_id)
                 .expect("scoped recompose should resolve");
@@ -686,10 +681,9 @@ mod tests {
         let mut lifecycle = SlotLifecycleCoordinator::default();
         let mut state = SlotWriteSessionState::default();
 
-        state.reset_for_pass(&table, SlotPassMode::Compose);
+        state.reset_for_pass(SlotPassMode::Compose);
         {
-            let mut session =
-                table.write_session(&mut lifecycle, &mut state, SlotPassMode::Compose);
+            let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(BeginGroupInput::new(key, None));
             session.record_node(31, 1);
@@ -697,10 +691,9 @@ mod tests {
             session.end_group();
         }
 
-        state.reset_for_pass(&table, SlotPassMode::Compose);
+        state.reset_for_pass(SlotPassMode::Compose);
         {
-            let mut session =
-                table.write_session(&mut lifecycle, &mut state, SlotPassMode::Compose);
+            let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(BeginGroupInput::new(key, None));
             let _ = session.finish_group_body();

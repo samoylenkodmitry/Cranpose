@@ -68,7 +68,7 @@ impl AnchorRegistry {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(super) fn contains_active(&self, anchor: AnchorId) -> bool {
         self.active_index(anchor).is_some()
     }
@@ -136,7 +136,7 @@ impl AnchorRegistry {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(super) fn invalidate(&mut self, anchor: AnchorId) {
         if self.invalidate_state(anchor) {
             self.maybe_shrink_sparse_storage();
@@ -247,6 +247,7 @@ impl AnchorRegistry {
 }
 
 impl SlotTable {
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn anchor_state(&self, anchor: AnchorId) -> Option<AnchorState> {
         self.anchors.state(anchor)
     }

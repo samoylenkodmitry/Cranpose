@@ -41,6 +41,6 @@ This file tracks the current forward work and marks boxes closed only after full
 - [x] [XL] Factor duplicated payload/node segmented-storage mechanics into one reusable internal primitive.
 - [x] [L] Deduplicate active-table and detached-subtree validation through one preorder/span validator over active and detached views.
 - [x] [M] Move group-close teardown out of duplicated composer/recompose guards into one helper.
-- [ ] [M] Delete or gate remaining test-only/unfinished APIs: `AnchorRegistry::contains_active`, `AnchorRegistry::invalidate`, ignored lifecycle/mode/table parameters, and remaining production `allow(dead_code)` shims.
+- [x] [M] Delete or gate remaining test-only/unfinished APIs: `AnchorRegistry::contains_active`, `AnchorRegistry::invalidate`, ignored lifecycle/mode/table parameters, and remaining production `allow(dead_code)` shims.
 - [ ] [M] Make `ValueSlotId` generation real or remove the unused generation field.
 - [ ] [S] Clean small slot-table garbage: over-reserved drop capacity in `take_all_drops`, single-variant `DeferredDrop`, and no-op `kind.label()` disposal.

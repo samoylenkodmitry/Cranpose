@@ -1,8 +1,9 @@
 use crate::collections::map::HashMap;
-use crate::{
-    slot::AnchorState, slot::DetachedSubtree, slot::NodeLifecycle, slot::SlotInvariantError,
-    slot_storage::GroupKey, ScopeId, SlotTable,
-};
+#[cfg(any(test, debug_assertions))]
+use crate::slot::{AnchorState, NodeLifecycle, SlotInvariantError};
+#[cfg(any(test, debug_assertions))]
+use crate::SlotTable;
+use crate::{slot::DetachedSubtree, slot_storage::GroupKey, ScopeId};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -210,6 +211,7 @@ impl RetentionManager {
             .map(|retained| &mut retained.subtree)
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn validate(&self, table: &SlotTable) -> Result<(), SlotInvariantError> {
         for (key, retained) in &self.groups {
             let subtree = &retained.subtree;
@@ -228,7 +230,6 @@ impl RetentionManager {
                 });
             }
 
-            #[cfg(any(test, debug_assertions))]
             subtree.validate_detached()?;
 
             for anchor in subtree.group_anchors() {
@@ -274,6 +275,7 @@ impl RetentionManager {
         Ok(())
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn debug_verify(&self, table: &SlotTable) {
         if crate::slot_validation_diagnostics_enabled() {
             if let Err(err) = self.validate(table) {

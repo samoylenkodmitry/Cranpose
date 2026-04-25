@@ -1,7 +1,10 @@
 use super::SlotTable;
-use crate::{slot_storage::GroupId, AnchorId, ScopeId};
+#[cfg(any(test, debug_assertions))]
+use crate::AnchorId;
+use crate::{slot_storage::GroupId, ScopeId};
 
 impl SlotTable {
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn scope_index_anchor(&self, scope_id: ScopeId) -> Option<AnchorId> {
         self.scope_anchor_to_group.get(&scope_id).copied()
     }

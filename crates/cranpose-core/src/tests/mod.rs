@@ -157,7 +157,7 @@ pub(crate) fn begin_test_group(
     key: Key,
 ) -> GroupId {
     with_test_slot_lifecycle(|lifecycle| {
-        let mut session = slots.write_session(lifecycle, state, crate::slot::SlotPassMode::Compose);
+        let mut session = slots.write_session(lifecycle, state);
         let group_key = session.preview_group_key(crate::slot_storage::GroupKeySeed::unkeyed(key));
         session
             .begin_group(crate::BeginGroupInput::new(group_key, None))
@@ -170,11 +170,7 @@ pub(crate) fn remember_test_value<T: 'static>(
     state: &mut crate::slot::SlotWriteSessionState,
     init: impl FnOnce() -> T,
 ) -> Owned<T> {
-    with_test_slot_lifecycle(|lifecycle| {
-        slots
-            .write_session(lifecycle, state, crate::slot::SlotPassMode::Compose)
-            .remember(init)
-    })
+    with_test_slot_lifecycle(|lifecycle| slots.write_session(lifecycle, state).remember(init))
 }
 
 pub(crate) fn end_test_group(
@@ -182,9 +178,7 @@ pub(crate) fn end_test_group(
     state: &mut crate::slot::SlotWriteSessionState,
 ) {
     with_test_slot_lifecycle(|lifecycle| {
-        slots
-            .write_session(lifecycle, state, crate::slot::SlotPassMode::Compose)
-            .end_group();
+        slots.write_session(lifecycle, state).end_group();
     });
 }
 
