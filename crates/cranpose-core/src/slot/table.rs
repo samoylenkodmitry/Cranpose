@@ -1,12 +1,8 @@
 use super::{
-    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadKind, PayloadLocationRegistry,
-    PayloadRecord, SlotLifecycleCoordinator, SlotPassMode, SlotTableMutationDebugStats,
+    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadLocationRegistry, PayloadRecord,
+    SlotLifecycleCoordinator, SlotPassMode, SlotTableMutationDebugStats,
 };
-use crate::{
-    collections::map::HashMap,
-    slot_storage::{GroupId, NodeRecordResult, SlotStorage, ValueSlotId},
-    AnchorId, NodeId, Owned, ScopeId, SlotDebugSnapshot,
-};
+use crate::{collections::map::HashMap, AnchorId, ScopeId};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -110,93 +106,5 @@ impl SlotTable {
 impl Default for SlotTable {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl SlotStorage for SlotWriteSession<'_> {
-    type Group = GroupId;
-    type ValueSlot = ValueSlotId;
-
-    fn begin_group(
-        &mut self,
-        input: crate::slot_storage::BeginGroupInput<super::DetachedSubtree>,
-    ) -> crate::slot_storage::GroupStart<Self::Group> {
-        SlotWriteSession::begin_group(self, input)
-    }
-
-    fn finish_group_body(&mut self) -> super::FinishGroupResult {
-        SlotWriteSession::finish_group_body(self)
-    }
-
-    fn end_group(&mut self) {
-        SlotWriteSession::end_group(self);
-    }
-
-    fn skip_group(&mut self) {
-        SlotWriteSession::skip_group(self);
-    }
-
-    fn set_group_scope(&mut self, group: Self::Group, scope: ScopeId) {
-        SlotWriteSession::set_group_scope(self, group, scope);
-    }
-
-    fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<Self::Group> {
-        SlotWriteSession::begin_recompose_at_scope(self, scope)
-    }
-
-    fn end_recompose(&mut self) {
-        SlotWriteSession::end_recompose(self);
-    }
-
-    fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Self::ValueSlot {
-        SlotWriteSession::value_slot(self, init)
-    }
-
-    fn value_slot_with_kind<T: 'static>(
-        &mut self,
-        kind: PayloadKind,
-        init: impl FnOnce() -> T,
-    ) -> Self::ValueSlot {
-        SlotWriteSession::value_slot_with_kind(self, kind, init)
-    }
-
-    fn read_value<T: 'static>(&self, slot: Self::ValueSlot) -> &T {
-        self.table.read_value(slot)
-    }
-
-    fn read_value_mut<T: 'static>(&mut self, slot: Self::ValueSlot) -> &mut T {
-        self.table.read_value_mut(slot)
-    }
-
-    fn write_value<T: 'static>(&mut self, slot: Self::ValueSlot, value: T) {
-        self.table.write_value(slot, value);
-    }
-
-    fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T> {
-        SlotWriteSession::remember(self, init)
-    }
-
-    fn remember_with_kind<T: 'static>(
-        &mut self,
-        kind: PayloadKind,
-        init: impl FnOnce() -> T,
-    ) -> Owned<T> {
-        SlotWriteSession::remember_with_kind(self, kind, init)
-    }
-
-    fn record_node(&mut self, id: NodeId, generation: u32) -> NodeRecordResult {
-        SlotWriteSession::record_node(self, id, generation)
-    }
-
-    fn nodes_in_current_group(&self) -> Vec<NodeId> {
-        SlotWriteSession::nodes_in_current_group(self)
-    }
-
-    fn validate(&self) -> Result<(), super::SlotInvariantError> {
-        self.table.validate()
-    }
-
-    fn debug_snapshot(&self) -> SlotDebugSnapshot {
-        self.table.debug_snapshot()
     }
 }

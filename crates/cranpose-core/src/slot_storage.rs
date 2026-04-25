@@ -1,11 +1,7 @@
-//! Semantic slot storage types used by [`crate::SlotTable`].
-//!
-//! The runtime still has one concrete slot table implementation, but the
-//! composer talks in terms of group/value/node operations rather than physical
-//! table layout details.
+//! Semantic slot storage identifiers and group operation records used by
+//! [`crate::SlotTable`].
 
-use crate::slot::{DetachedSubtree, FinishGroupResult, PayloadKind, SlotInvariantError};
-use crate::{AnchorId, Key, NodeId, Owned, ScopeId, SlotDebugSnapshot};
+use crate::{AnchorId, Key, NodeId, ScopeId};
 
 /// Stable structural identity for a group among siblings.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -129,41 +125,4 @@ pub struct GroupStart<G> {
 pub struct NodeRecordResult {
     pub reused: bool,
     pub id: NodeId,
-}
-
-#[allow(dead_code)]
-pub(crate) trait SlotStorage {
-    type Group: Copy + Eq;
-    type ValueSlot: Copy + Eq;
-
-    fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<Self::Group>;
-    fn finish_group_body(&mut self) -> FinishGroupResult;
-    fn end_group(&mut self);
-    fn skip_group(&mut self);
-
-    fn set_group_scope(&mut self, group: Self::Group, scope: ScopeId);
-    fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<Self::Group>;
-    fn end_recompose(&mut self);
-
-    fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Self::ValueSlot;
-    fn value_slot_with_kind<T: 'static>(
-        &mut self,
-        kind: PayloadKind,
-        init: impl FnOnce() -> T,
-    ) -> Self::ValueSlot;
-    fn read_value<T: 'static>(&self, slot: Self::ValueSlot) -> &T;
-    fn read_value_mut<T: 'static>(&mut self, slot: Self::ValueSlot) -> &mut T;
-    fn write_value<T: 'static>(&mut self, slot: Self::ValueSlot, value: T);
-    fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T>;
-    fn remember_with_kind<T: 'static>(
-        &mut self,
-        kind: PayloadKind,
-        init: impl FnOnce() -> T,
-    ) -> Owned<T>;
-
-    fn record_node(&mut self, id: NodeId, generation: u32) -> NodeRecordResult;
-    fn nodes_in_current_group(&self) -> Vec<NodeId>;
-
-    fn validate(&self) -> Result<(), SlotInvariantError>;
-    fn debug_snapshot(&self) -> SlotDebugSnapshot;
 }

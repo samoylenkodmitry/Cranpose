@@ -22,6 +22,7 @@ impl SlotTable {
         nodes
     }
 
+    #[cfg(test)]
     fn collect_subtree_node_ids(&self, group_anchor: AnchorId) -> Vec<NodeId> {
         self.collect_subtree_node_records(group_anchor)
             .into_iter()
@@ -253,6 +254,7 @@ impl SlotWriteSession<'_> {
         self.end_group();
     }
 
+    #[cfg(test)]
     pub(crate) fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> ValueSlotId {
         self.value_slot_with_kind(PayloadKind::Internal, init)
     }
@@ -321,6 +323,7 @@ impl SlotWriteSession<'_> {
         self.table.read_value::<Owned<T>>(slot).clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn record_node(&mut self, id: NodeId, generation: u32) -> NodeRecordResult {
         self.record_node_with_parent(id, generation, None)
     }
@@ -369,6 +372,7 @@ impl SlotWriteSession<'_> {
         Some((node.id, node.generation))
     }
 
+    #[cfg(test)]
     pub(crate) fn nodes_in_current_group(&self) -> Vec<NodeId> {
         let frame = self
             .state

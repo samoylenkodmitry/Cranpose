@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     retention::{RetainKey, RetentionManager},
-    slot_storage::{GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, SlotStorage},
+    slot_storage::{GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, ValueSlotId},
     AnchorId, Applier, BeginGroupInput, Key, MemoryApplier, Node, NodeId, ScopeId,
 };
 use std::any::{Any, TypeId};
@@ -251,32 +251,26 @@ fn detached_group_nodes(subtree: &DetachedSubtree, group_index: usize) -> &[supe
     &subtree.nodes[start..end]
 }
 
-fn exercise_slot_storage_trait_surface<S: SlotStorage<Group = GroupId>>(
-    slots: &mut S,
+fn exercise_slot_write_session_surface(
+    slots: &mut SlotWriteSession<'_>,
     group_key: GroupKey,
     scope_id: ScopeId,
-) -> GroupId {
-    let started = SlotStorage::begin_group(slots, BeginGroupInput::new(group_key, None));
+) -> (GroupId, ValueSlotId) {
+    let started = slots.begin_group(BeginGroupInput::new(group_key, None));
     assert_eq!(started.kind, GroupStartKind::Inserted);
-    SlotStorage::set_group_scope(slots, started.group, scope_id);
+    slots.set_group_scope(started.group, scope_id);
 
-    let slot = SlotStorage::value_slot(slots, || 7_i32);
-    assert_eq!(*SlotStorage::read_value::<i32>(slots, slot), 7);
-    *SlotStorage::read_value_mut::<i32>(slots, slot) = 8;
-    SlotStorage::write_value(slots, slot, 9_i32);
-    assert_eq!(*SlotStorage::read_value::<i32>(slots, slot), 9);
+    let slot = slots.value_slot(|| 7_i32);
 
-    let recorded = SlotStorage::record_node(slots, 55, 1);
+    let recorded = slots.record_node(55, 1);
     assert!(!recorded.reused);
     assert_eq!(recorded.id, 55);
-    assert_eq!(SlotStorage::nodes_in_current_group(slots), vec![55]);
+    assert_eq!(slots.nodes_in_current_group(), vec![55]);
 
-    let result = SlotStorage::finish_group_body(slots);
+    let result = slots.finish_group_body();
     assert!(result.detached_children.is_empty());
-    SlotStorage::end_group(slots);
-    assert!(SlotStorage::validate(slots).is_ok());
-    assert_eq!(SlotStorage::debug_snapshot(slots).active_groups.len(), 1);
-    started.group
+    slots.end_group();
+    (started.group, slot)
 }
 
 fn next_bool(seed: &mut u64) -> bool {
@@ -339,32 +333,39 @@ fn first_composition_records_group_value_and_node() {
 }
 
 #[test]
-fn slot_storage_trait_exposes_semantic_session_surface() {
+fn slot_write_session_exposes_semantic_operations() {
     const GROUP_KEY: Key = 77;
     const SCOPE_ID: ScopeId = 901;
 
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
-    let composed_group = harness.session(SlotPassMode::Compose, |session| {
-        exercise_slot_storage_trait_surface(session, GroupKey::new(GROUP_KEY, None, 0), SCOPE_ID)
+    let (composed_group, slot) = harness.session(SlotPassMode::Compose, |session| {
+        exercise_slot_write_session_surface(session, GroupKey::new(GROUP_KEY, None, 0), SCOPE_ID)
     });
     harness.finish_pass(SlotPassMode::Compose);
+    assert_eq!(*harness.table.read_value::<i32>(slot), 7);
+    *harness.table.read_value_mut::<i32>(slot) = 8;
+    harness.table.write_value(slot, 9_i32);
+    assert_eq!(*harness.table.read_value::<i32>(slot), 9);
+    assert_eq!(harness.table.validate(), Ok(()));
+    assert_eq!(harness.table.debug_snapshot().active_groups.len(), 1);
 
     harness.begin_pass(SlotPassMode::Recompose);
     harness.session(SlotPassMode::Recompose, |session| {
-        let recomposed_group = SlotStorage::begin_recompose_at_scope(session, SCOPE_ID)
-            .expect("trait should resolve the indexed scope");
+        let recomposed_group = session
+            .begin_recompose_at_scope(SCOPE_ID)
+            .expect("session should resolve the indexed scope");
         assert_eq!(recomposed_group, composed_group);
-        assert_eq!(SlotStorage::nodes_in_current_group(session), vec![55]);
-        SlotStorage::skip_group(session);
-        let result = SlotStorage::finish_group_body(session);
+        assert_eq!(session.nodes_in_current_group(), vec![55]);
+        session.skip_group();
+        let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         assert_eq!(result.root_nodes, vec![55]);
         assert!(result.was_skipped);
-        SlotStorage::end_recompose(session);
-        assert!(SlotStorage::validate(session).is_ok());
+        session.end_recompose();
     });
     harness.finish_pass(SlotPassMode::Recompose);
+    assert_eq!(harness.table.validate(), Ok(()));
 }
 
 #[test]

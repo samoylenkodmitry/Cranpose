@@ -3,9 +3,9 @@ use crate::retention::{RetainKey, RetentionManager};
 use crate::slot::PayloadKind;
 use crate::{
     composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
-    BeginGroupInput, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, GroupId,
-    GroupStart, GroupStartKind, Key, LocalKey, LocalStackSnapshot, LocalStateEntry, MutableState,
-    Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions, RecomposeScope, RecycledNode,
+    BeginGroupInput, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, GroupStart,
+    GroupStartKind, Key, LocalKey, LocalStackSnapshot, LocalStateEntry, MutableState, Node,
+    NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions, RecomposeScope, RecycledNode,
     RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
     SlotsHost, SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal,
     StaticLocalEntry, SubcomposeState, ValueSlotId, COMMAND_FLUSH_THRESHOLD,
@@ -34,24 +34,6 @@ impl ValueSlotHandle<'_> {
     pub(crate) fn slot(self) -> ValueSlotId {
         self.slot
     }
-}
-
-fn reserve_value_slot<T: 'static, S>(
-    slots: &mut S,
-    kind: PayloadKind,
-    init: impl FnOnce() -> T,
-) -> ValueSlotId
-where
-    S: crate::slot_storage::SlotStorage<Group = GroupId, ValueSlot = ValueSlotId>,
-{
-    slots.value_slot_with_kind(kind, init)
-}
-
-fn skip_slot_group<S>(slots: &mut S)
-where
-    S: crate::slot_storage::SlotStorage<Group = GroupId, ValueSlot = ValueSlotId>,
-{
-    slots.skip_group();
 }
 
 fn slots_storage_key(host: &Rc<SlotsHost>) -> usize {
@@ -1032,7 +1014,7 @@ impl Composer {
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass> {
         let slot = self
-            .with_slot_session_mut(|slots| reserve_value_slot(slots, PayloadKind::Internal, init));
+            .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Internal, init));
         ValueSlotHandle::new(slot)
     }
 
@@ -1041,8 +1023,8 @@ impl Composer {
         &'pass self,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass> {
-        let slot =
-            self.with_slot_session_mut(|slots| reserve_value_slot(slots, PayloadKind::Param, init));
+        let slot = self
+            .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Param, init));
         ValueSlotHandle::new(slot)
     }
 
@@ -1052,7 +1034,7 @@ impl Composer {
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass> {
         let slot = self
-            .with_slot_session_mut(|slots| reserve_value_slot(slots, PayloadKind::Return, init));
+            .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Return, init));
         ValueSlotHandle::new(slot)
     }
 
@@ -1356,7 +1338,7 @@ impl Composer {
     }
 
     pub fn skip_current_group(&self) {
-        self.with_slot_session_mut(|slots| skip_slot_group(slots));
+        self.with_slot_session_mut(|slots| slots.skip_group());
     }
 
     pub fn runtime_handle(&self) -> RuntimeHandle {
