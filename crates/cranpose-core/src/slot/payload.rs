@@ -247,10 +247,11 @@ impl SlotTable {
         removed
     }
 
-    pub(super) fn detach_payloads_for_groups(
+    fn extract_payloads_for_groups(
         &mut self,
         removed_group_index: usize,
         removed_groups: &mut [GroupRecord],
+        clear_locations: bool,
     ) -> Vec<PayloadRecord> {
         let Some((payload_start, payload_len)) = Self::subtree_payload_span(removed_groups) else {
             return Vec::new();
@@ -263,9 +264,27 @@ impl SlotTable {
             .payloads
             .drain(payload_start..payload_start + payload_len)
             .collect::<Vec<_>>();
-        self.clear_payload_locations_for_payloads(&removed);
+        if clear_locations {
+            self.clear_payload_locations_for_payloads(&removed);
+        }
         self.shift_payload_starts_from(removed_group_index, -(payload_len as i64));
         removed
+    }
+
+    pub(super) fn detach_payloads_for_groups(
+        &mut self,
+        removed_group_index: usize,
+        removed_groups: &mut [GroupRecord],
+    ) -> Vec<PayloadRecord> {
+        self.extract_payloads_for_groups(removed_group_index, removed_groups, true)
+    }
+
+    pub(super) fn move_payloads_for_groups(
+        &mut self,
+        removed_group_index: usize,
+        removed_groups: &mut [GroupRecord],
+    ) -> Vec<PayloadRecord> {
+        self.extract_payloads_for_groups(removed_group_index, removed_groups, false)
     }
 
     pub(super) fn restore_payloads_for_groups(

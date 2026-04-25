@@ -112,7 +112,7 @@ impl SlotTable {
             .groups
             .drain(from_index..from_index + subtree_len)
             .collect::<Vec<_>>();
-        let moved_payloads = self.detach_payloads_for_groups(from_index, &mut moved);
+        let moved_payloads = self.move_payloads_for_groups(from_index, &mut moved);
         let moved_nodes = self.detach_nodes_for_groups(from_index, &mut moved);
         let moved_group_count = moved.len();
         let moved_payload_count = moved_payloads.len();
@@ -129,10 +129,6 @@ impl SlotTable {
             moved_group_count,
             moved_payload_count,
             moved_node_count,
-        );
-        self.rebuild_payload_locations_for_group_range(
-            adjusted_index,
-            adjusted_index + moved_group_count,
         );
         self.refresh_group_indexes_from(from_index.min(adjusted_index));
     }

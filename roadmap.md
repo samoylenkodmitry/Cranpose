@@ -108,7 +108,7 @@ The execution order is correctness first, then documentation and repeatable gate
 
 - [x] Benchmark sibling-index thresholds of 4, 8, 16, 32, and 64 before changing the default.
 - [x] Instrument subtree moves with counts/spans for moved groups, payloads, nodes, payload-location rebuilds, and group-index refresh.
-- [ ] Optimize proven `move_subtree` hot spots without changing semantics.
+- [x] Optimize proven `move_subtree` hot spots without changing semantics.
 - [ ] Continue lazy-list allocation-churn reductions only where counters show real allocation pressure.
 - [ ] Revisit `GroupRecord` field packing only if profiling shows group-table bandwidth or cache pressure matters.
 

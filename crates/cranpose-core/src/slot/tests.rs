@@ -1836,19 +1836,25 @@ fn debug_stats_report_subtree_move_work_spans() {
     assert_eq!(after.moved_node_max_span, 2);
     assert_eq!(
         after.payload_location_rebuild_count - before.payload_location_rebuild_count,
-        1
+        0
     );
     assert_eq!(
         after.payload_location_rebuild_group_count - before.payload_location_rebuild_group_count,
-        2
+        0
     );
-    assert_eq!(after.payload_location_rebuild_group_max_span, 2);
+    assert_eq!(
+        after.payload_location_rebuild_group_max_span,
+        before.payload_location_rebuild_group_max_span
+    );
     assert_eq!(
         after.payload_location_rebuild_payload_count
             - before.payload_location_rebuild_payload_count,
-        2
+        0
     );
-    assert_eq!(after.payload_location_rebuild_payload_max_span, 2);
+    assert_eq!(
+        after.payload_location_rebuild_payload_max_span,
+        before.payload_location_rebuild_payload_max_span
+    );
     assert_eq!(
         after.group_index_refresh_count - before.group_index_refresh_count,
         1
@@ -1858,6 +1864,33 @@ fn debug_stats_report_subtree_move_work_spans() {
         3
     );
     assert_eq!(after.group_index_refresh_max_span, 3);
+}
+
+#[test]
+fn debug_stats_report_payload_location_rebuild_work_spans() {
+    const GROUP_KEY: Key = 4041;
+
+    let mut table = composed_group_with_value_and_node_table(GROUP_KEY);
+    let before = table.debug_stats().mutation;
+
+    table.rebuild_payload_locations_for_group_range(0, table.debug_stats().group_count);
+
+    let after = table.debug_stats().mutation;
+    assert_eq!(
+        after.payload_location_rebuild_count - before.payload_location_rebuild_count,
+        1
+    );
+    assert_eq!(
+        after.payload_location_rebuild_group_count - before.payload_location_rebuild_group_count,
+        1
+    );
+    assert_eq!(after.payload_location_rebuild_group_max_span, 1);
+    assert_eq!(
+        after.payload_location_rebuild_payload_count
+            - before.payload_location_rebuild_payload_count,
+        1
+    );
+    assert_eq!(after.payload_location_rebuild_payload_max_span, 1);
 }
 
 #[test]
