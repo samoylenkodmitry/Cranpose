@@ -125,3 +125,7 @@ cargo test -p cranpose-core --features slot-link-storage
 ./perf_slot_table_v2.sh --baseline slot-v2-main
 ./verify_slot_table.sh
 ```
+
+Until the prototype trigger fires, `slot-link-storage` should not exist and the
+dual-backend parity commands remain a requirement for future work, not a current
+CI target.

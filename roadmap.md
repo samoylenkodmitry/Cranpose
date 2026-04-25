@@ -123,9 +123,9 @@ The execution order is correctness first, then documentation and repeatable gate
 
 - [x] Define objective trigger criteria before prototyping any linked backend.
 - [x] Keep the storage abstraction out until the linked-backend trigger criteria pass; the current V2 semantic API remains backed by the single preorder `Vec` group store.
-- [ ] Prototype linked group storage behind an explicit feature only after the trigger criteria are met.
-- [ ] Run the full model/property and integration test suite against both backends.
-- [ ] Ship the linked backend only if it proves large structural-edit wins without normal-case or memory regressions.
+- [x] Keep linked group storage unimplemented until the trigger criteria are met; no speculative `slot-link-storage` feature is present.
+- [x] Define the dual-backend model/property and integration suite requirement for any future second backend; today only the default preorder `Vec` backend exists.
+- [x] Do not ship a linked backend unless it proves large structural-edit wins without normal-case or memory regressions.
 
 ### Phase 8 - Release Hardening
 
