@@ -1,4 +1,5 @@
 use std::fmt;
+use std::mem::size_of;
 use std::rc::Rc;
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
@@ -38,6 +39,23 @@ pub struct ModifierNodeSlices {
 
 struct ChainGuard {
     _handle: ModifierChainHandle,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModifierNodeSlicesDebugStats {
+    pub draw_command_count: usize,
+    pub draw_command_capacity: usize,
+    pub pointer_input_count: usize,
+    pub pointer_input_capacity: usize,
+    pub click_handler_count: usize,
+    pub click_handler_capacity: usize,
+    pub has_text_content: bool,
+    pub has_text_style: bool,
+    pub has_text_layout_options: bool,
+    pub has_prepared_text_layout: bool,
+    pub has_graphics_layer: bool,
+    pub has_graphics_layer_resolver: bool,
+    pub heap_bytes: usize,
 }
 
 impl Clone for ModifierNodeSlices {
@@ -238,6 +256,28 @@ impl ModifierNodeSlices {
     pub fn with_chain_guard(mut self, handle: ModifierChainHandle) -> Self {
         self.chain_guard = Some(Rc::new(ChainGuard { _handle: handle }));
         self
+    }
+
+    pub fn debug_stats(&self) -> ModifierNodeSlicesDebugStats {
+        let draw_command_bytes = self.draw_commands.capacity() * size_of::<DrawCommand>();
+        let pointer_input_bytes =
+            self.pointer_inputs.capacity() * size_of::<Rc<dyn Fn(PointerEvent)>>();
+        let click_handler_bytes = self.click_handlers.capacity() * size_of::<Rc<dyn Fn(Point)>>();
+        ModifierNodeSlicesDebugStats {
+            draw_command_count: self.draw_commands.len(),
+            draw_command_capacity: self.draw_commands.capacity(),
+            pointer_input_count: self.pointer_inputs.len(),
+            pointer_input_capacity: self.pointer_inputs.capacity(),
+            click_handler_count: self.click_handlers.len(),
+            click_handler_capacity: self.click_handlers.capacity(),
+            has_text_content: self.text_content.is_some(),
+            has_text_style: self.text_style.is_some(),
+            has_text_layout_options: self.text_layout_options.is_some(),
+            has_prepared_text_layout: self.prepared_text_layout.is_some(),
+            has_graphics_layer: self.graphics_layer.is_some(),
+            has_graphics_layer_resolver: self.graphics_layer_resolver.is_some(),
+            heap_bytes: draw_command_bytes + pointer_input_bytes + click_handler_bytes,
+        }
     }
 
     /// Resets the slice collection for reuse, retaining vector capacity.

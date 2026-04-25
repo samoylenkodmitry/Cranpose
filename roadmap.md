@@ -100,7 +100,7 @@ The execution order is correctness first, then documentation and repeatable gate
 ### Phase 4 - Lock Performance Baselines
 
 - [x] Expand `slot_table_v2` Criterion benchmarks across keyed reverse sizes, keyed rotate, seeded shuffle, conditional toggle positions, tab payload sizes, and lazy scroll/jump modes.
-- [ ] Add allocation and storage counters for modifier slices, layout boxes, semantics, group/payload/node counts and capacities, and retained subtree counts/bytes.
+- [x] Add allocation and storage counters for modifier slices, layout boxes, semantics, group/payload/node counts and capacities, and retained subtree counts/bytes.
 - [ ] Document the baseline process using `./perf_slot_table_v2.sh --save-baseline`, `--baseline`, and `--stability-check`.
 - [ ] Document regression budgets for keyed reorder, tab switching, subcompose scrolling, lazy-list reuse, retained bytes, and anchor growth.
 

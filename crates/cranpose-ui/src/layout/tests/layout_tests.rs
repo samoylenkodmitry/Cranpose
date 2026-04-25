@@ -1,6 +1,6 @@
 use super::*;
 use crate::layout::policies::LeafMeasurePolicy;
-use crate::modifier::{Modifier, Size};
+use crate::modifier::{Color, Modifier, Size};
 use crate::subcompose_layout::SubcomposeLayoutScope;
 use cranpose_core::{Applier, ConcreteApplierHost, MemoryApplier, Node};
 use cranpose_ui_layout::{MeasurePolicy, MeasureResult, Placement};
@@ -1622,6 +1622,76 @@ fn measure_layout_can_skip_semantics_until_consumer_is_enabled() -> Result<(), N
         !applier.with_node::<LayoutNode, _>(node_id, |node| node.needs_semantics())?,
         "collecting semantics should clear the dirty flag"
     );
+
+    Ok(())
+}
+
+#[test]
+fn measure_layout_debug_allocation_stats_cover_layout_semantics_and_modifier_storage(
+) -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+
+    let root_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty()
+            .background(Color::rgba(0.2, 0.4, 0.6, 1.0))
+            .semantics(|config| {
+                config.content_description = Some("root".into());
+            }),
+        Rc::new(VerticalStackPolicy),
+    )));
+    let button_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty().clickable(|_| {}).semantics(|config| {
+            config.content_description = Some("button".into());
+        }),
+        Rc::new(MaxSizePolicy),
+    )));
+    let leaf_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty().semantics(|config| {
+            config.content_description = Some("leaf".into());
+        }),
+        Rc::new(MaxSizePolicy),
+    )));
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| {
+        node.set_node_id(root_id);
+        node.children.push(button_id);
+        node.children.push(leaf_id);
+    })?;
+    applier.with_node::<LayoutNode, _>(button_id, |node| {
+        node.set_node_id(button_id);
+        node.set_parent(root_id);
+    })?;
+    applier.with_node::<LayoutNode, _>(leaf_id, |node| {
+        node.set_node_id(leaf_id);
+        node.set_parent(root_id);
+    })?;
+
+    let measurements = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let stats = measurements.debug_allocation_stats();
+
+    assert_eq!(stats.layout_box_count, 3);
+    assert_eq!(stats.layout_box_child_count, 2);
+    assert!(stats.layout_box_child_capacity >= stats.layout_box_child_count);
+    assert!(stats.layout_box_heap_bytes > 0);
+    assert_eq!(stats.modifier_slice_count, 3);
+    assert!(
+        stats.modifier_draw_command_count >= 1,
+        "background should be visible in modifier storage stats: {stats:?}"
+    );
+    assert_eq!(stats.modifier_pointer_input_count, 1);
+    assert!(stats.modifier_slice_heap_bytes > 0);
+    assert_eq!(stats.semantics_node_count, 3);
+    assert_eq!(stats.semantics_child_count, 2);
+    assert!(stats.semantics_child_capacity >= stats.semantics_child_count);
+    assert_eq!(stats.semantics_description_count, 3);
+    assert!(stats.semantics_description_bytes >= "rootbuttonleaf".len());
+    assert_eq!(stats.semantics_action_count, 1);
+    assert!(stats.semantics_action_capacity >= stats.semantics_action_count);
+    assert!(stats.semantics_heap_bytes >= stats.semantics_description_bytes);
+
+    let layout_only_stats = measurements.layout_tree().debug_allocation_stats();
+    assert_eq!(layout_only_stats.layout_box_count, 3);
+    assert_eq!(layout_only_stats.semantics_node_count, 0);
 
     Ok(())
 }

@@ -63,7 +63,7 @@ pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use semantics::{collect_semantics_from_chain, collect_semantics_from_modifier};
 pub use slices::{
     collect_modifier_slices, collect_modifier_slices_into, collect_slices_from_modifier,
-    ModifierNodeSlices,
+    ModifierNodeSlices, ModifierNodeSlicesDebugStats,
 };
 // Test accessibility for fling velocity (only with test-helpers feature)
 #[cfg(feature = "test-helpers")]

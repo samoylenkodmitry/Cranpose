@@ -106,6 +106,24 @@ fn lazy_scroll_modifier_keeps_translated_content_context_active_at_rest() {
 }
 
 #[test]
+fn modifier_slices_debug_stats_report_counts_and_capacities() {
+    let modifier = Modifier::empty()
+        .background(Color::rgba(0.2, 0.4, 0.6, 1.0))
+        .clickable(|_| {});
+    let slices = collect_slices_from_modifier(&modifier);
+    let stats = slices.debug_stats();
+
+    assert!(
+        stats.draw_command_count >= 1,
+        "background should produce at least one draw command: {stats:?}"
+    );
+    assert!(stats.draw_command_capacity >= stats.draw_command_count);
+    assert_eq!(stats.pointer_input_count, 1);
+    assert!(stats.pointer_input_capacity >= stats.pointer_input_count);
+    assert!(stats.heap_bytes > 0);
+}
+
+#[test]
 fn then_short_circuits_empty_modifiers() {
     let padding = Modifier::empty().padding(4.0);
     assert_eq!(Modifier::empty().then(padding.clone()), padding);

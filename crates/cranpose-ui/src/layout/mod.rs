@@ -8,6 +8,7 @@ use cranpose_core::collections::map::HashMap;
 use std::{
     cell::{Cell, RefCell},
     fmt,
+    mem::size_of,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -24,7 +25,7 @@ use self::core::Placeable;
 use self::core::{HorizontalAlignment, VerticalAlignment};
 use crate::modifier::{
     collect_semantics_from_modifier, DimensionConstraint, EdgeInsets, Modifier, ModifierNodeSlices,
-    Point, Rect as GeometryRect, ResolvedModifiers, Size,
+    ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
 
 use crate::subcompose_layout::SubcomposeLayoutNode;
@@ -305,6 +306,57 @@ impl SemanticsTree {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayoutAllocationDebugStats {
+    pub layout_box_count: usize,
+    pub layout_box_child_count: usize,
+    pub layout_box_child_capacity: usize,
+    pub layout_box_heap_bytes: usize,
+    pub modifier_slice_count: usize,
+    pub modifier_slice_heap_bytes: usize,
+    pub modifier_draw_command_count: usize,
+    pub modifier_draw_command_capacity: usize,
+    pub modifier_pointer_input_count: usize,
+    pub modifier_pointer_input_capacity: usize,
+    pub modifier_click_handler_count: usize,
+    pub modifier_click_handler_capacity: usize,
+    pub modifier_text_content_count: usize,
+    pub modifier_text_style_count: usize,
+    pub modifier_text_layout_options_count: usize,
+    pub modifier_prepared_text_layout_count: usize,
+    pub modifier_graphics_layer_count: usize,
+    pub modifier_graphics_layer_resolver_count: usize,
+    pub semantics_node_count: usize,
+    pub semantics_action_count: usize,
+    pub semantics_action_capacity: usize,
+    pub semantics_child_count: usize,
+    pub semantics_child_capacity: usize,
+    pub semantics_description_count: usize,
+    pub semantics_description_bytes: usize,
+    pub semantics_text_role_bytes: usize,
+    pub semantics_heap_bytes: usize,
+}
+
+impl LayoutAllocationDebugStats {
+    fn add_modifier_slice(&mut self, stats: ModifierNodeSlicesDebugStats) {
+        self.modifier_slice_count += 1;
+        self.modifier_slice_heap_bytes += stats.heap_bytes;
+        self.modifier_draw_command_count += stats.draw_command_count;
+        self.modifier_draw_command_capacity += stats.draw_command_capacity;
+        self.modifier_pointer_input_count += stats.pointer_input_count;
+        self.modifier_pointer_input_capacity += stats.pointer_input_capacity;
+        self.modifier_click_handler_count += stats.click_handler_count;
+        self.modifier_click_handler_capacity += stats.click_handler_capacity;
+        self.modifier_text_content_count += usize::from(stats.has_text_content);
+        self.modifier_text_style_count += usize::from(stats.has_text_style);
+        self.modifier_text_layout_options_count += usize::from(stats.has_text_layout_options);
+        self.modifier_prepared_text_layout_count += usize::from(stats.has_prepared_text_layout);
+        self.modifier_graphics_layer_count += usize::from(stats.has_graphics_layer);
+        self.modifier_graphics_layer_resolver_count +=
+            usize::from(stats.has_graphics_layer_resolver);
+    }
+}
+
 /// Result of running layout for a Compose tree.
 #[derive(Debug, Clone)]
 pub struct LayoutTree {
@@ -326,6 +378,12 @@ impl LayoutTree {
 
     pub fn into_root(self) -> LayoutBox {
         self.root
+    }
+
+    pub fn debug_allocation_stats(&self) -> LayoutAllocationDebugStats {
+        let mut stats = LayoutAllocationDebugStats::default();
+        record_layout_box_allocation_stats(&self.root, &mut stats);
+        stats
     }
 }
 
@@ -458,6 +516,18 @@ impl LayoutMeasurements {
 
     pub fn semantics_tree(&self) -> Option<&SemanticsTree> {
         self.semantics.as_ref()
+    }
+
+    pub fn debug_allocation_stats(&self) -> LayoutAllocationDebugStats {
+        let mut stats = self
+            .layout_tree
+            .as_ref()
+            .map(LayoutTree::debug_allocation_stats)
+            .unwrap_or_default();
+        if let Some(semantics) = &self.semantics {
+            record_semantics_allocation_stats(semantics.root(), &mut stats);
+        }
+        stats
     }
 
     /// Consumes the measurements and produces a [`LayoutTree`].
@@ -2248,6 +2318,45 @@ fn build_semantics_node_from_live_nodes(
         config,
         children,
     ))
+}
+
+fn record_semantics_allocation_stats(node: &SemanticsNode, stats: &mut LayoutAllocationDebugStats) {
+    stats.semantics_node_count += 1;
+    stats.semantics_action_count += node.actions.len();
+    stats.semantics_action_capacity += node.actions.capacity();
+    stats.semantics_child_count += node.children.len();
+    stats.semantics_child_capacity += node.children.capacity();
+    stats.semantics_heap_bytes += node.actions.capacity() * size_of::<SemanticsAction>();
+    stats.semantics_heap_bytes += node.children.capacity() * size_of::<SemanticsNode>();
+
+    if let Some(description) = &node.description {
+        stats.semantics_description_count += 1;
+        stats.semantics_description_bytes += description.capacity();
+        stats.semantics_heap_bytes += description.capacity();
+    }
+    if let SemanticsRole::Text { value } = &node.role {
+        stats.semantics_text_role_bytes += value.capacity();
+        stats.semantics_heap_bytes += value.capacity();
+    }
+
+    for child in &node.children {
+        record_semantics_allocation_stats(child, stats);
+    }
+}
+
+fn record_layout_box_allocation_stats(
+    layout_box: &LayoutBox,
+    stats: &mut LayoutAllocationDebugStats,
+) {
+    stats.layout_box_count += 1;
+    stats.layout_box_child_count += layout_box.children.len();
+    stats.layout_box_child_capacity += layout_box.children.capacity();
+    stats.layout_box_heap_bytes += layout_box.children.capacity() * size_of::<LayoutBox>();
+    stats.add_modifier_slice(layout_box.node_data.modifier_slices().debug_stats());
+
+    for child in &layout_box.children {
+        record_layout_box_allocation_stats(child, stats);
+    }
 }
 
 fn build_layout_tree(

@@ -54,17 +54,17 @@ pub use layout::{
         VerticalAlignment,
     },
     measure_layout, measure_layout_with_options, tree_needs_layout, tree_needs_semantics,
-    LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData, LayoutNodeKind, LayoutTree,
-    MeasureLayoutOptions, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
-    SemanticsTree,
+    LayoutAllocationDebugStats, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData,
+    LayoutNodeKind, LayoutTree, MeasureLayoutOptions, SemanticsAction, SemanticsCallback,
+    SemanticsNode, SemanticsRole, SemanticsTree,
 };
 pub use modifier::{
     collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, EdgeInsets,
-    FocusDirection, FocusRequester, GraphicsLayer, LayerShape, Modifier, ModifierNodeSlices, Point,
-    PointerEvent, PointerEventKind, PointerInputScope, Rect, RenderEffect, ResolvedBackground,
-    ResolvedModifiers, RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size,
-    TransformOrigin,
+    FocusDirection, FocusRequester, GraphicsLayer, LayerShape, Modifier, ModifierNodeSlices,
+    ModifierNodeSlicesDebugStats, Point, PointerEvent, PointerEventKind, PointerInputScope, Rect,
+    RenderEffect, ResolvedBackground, ResolvedModifiers, RoundedCornerShape, RuntimeShader, Shadow,
+    ShadowScope, Size, TransformOrigin,
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
