@@ -38,7 +38,7 @@ This file tracks the current forward work and marks boxes closed only after full
 - [x] [L] Collapse the half-wired `SlotStorage` trait boundary; either make it the real composer storage API or remove it and its test-only surface.
 - [x] [XL] Replace duplicated detached-subtree metadata with one canonical detached tree representation; derive root key, root scope, root nodes, scope ids, and anchor lists from the records.
 - [x] [S] Track removed payload count in `SlotWriteSessionState` so payload-heavy removals trigger slot-table compaction.
-- [ ] [XL] Factor duplicated payload/node segmented-storage mechanics into one reusable internal primitive.
+- [x] [XL] Factor duplicated payload/node segmented-storage mechanics into one reusable internal primitive.
 - [ ] [L] Deduplicate active-table and detached-subtree validation through one preorder/span validator over active and detached views.
 - [ ] [M] Move group-close teardown out of duplicated composer/recompose guards into one helper.
 - [ ] [M] Delete or gate remaining test-only/unfinished APIs: `AnchorRegistry::contains_active`, `AnchorRegistry::invalidate`, ignored lifecycle/mode/table parameters, and remaining production `allow(dead_code)` shims.

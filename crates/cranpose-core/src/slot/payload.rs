@@ -1,71 +1,46 @@
-use super::{GroupRecord, PayloadKind, PayloadRecord, SlotTable};
+use super::{
+    segments::{
+        add_group_segment_len, group_segment_len, group_segment_range_at,
+        group_segment_range_checked, group_segment_start, offset_detached_group_segment_starts,
+        segment_insert_index_for_group, shift_group_segment_starts_from, subtree_segment_span,
+        PayloadSegment,
+    },
+    GroupRecord, PayloadKind, PayloadRecord, SlotTable,
+};
 use crate::{retention::RetentionManager, AnchorId};
 use std::any::TypeId;
 use std::{mem, ops::Range};
 
 impl SlotTable {
     fn group_payload_start_at(&self, group_index: usize) -> usize {
-        self.groups[group_index].payload_start as usize
+        group_segment_start::<PayloadSegment>(&self.groups, group_index)
     }
 
     pub(super) fn group_payload_len_at(&self, group_index: usize) -> usize {
-        self.groups[group_index].payload_len as usize
+        group_segment_len::<PayloadSegment>(&self.groups, group_index)
     }
 
     pub(in crate::slot) fn group_payload_range_checked(
         &self,
         group_index: usize,
     ) -> Option<Range<usize>> {
-        let start = self.group_payload_start_at(group_index);
-        let len = self.group_payload_len_at(group_index);
-        let end = start.checked_add(len)?;
-        (end <= self.payloads.len()).then_some(start..end)
+        group_segment_range_checked::<PayloadSegment>(
+            &self.groups,
+            self.payloads.len(),
+            group_index,
+        )
     }
 
     fn group_payload_range_at(&self, group_index: usize) -> Range<usize> {
-        self.group_payload_range_checked(group_index)
-            .expect("payload range should resolve")
+        group_segment_range_at::<PayloadSegment>(&self.groups, self.payloads.len(), group_index)
     }
 
     fn payload_insert_index_for_group(&self, group_index: usize) -> usize {
-        if group_index < self.groups.len() {
-            self.group_payload_start_at(group_index)
-        } else {
-            self.payloads.len()
-        }
-    }
-
-    fn apply_payload_start_delta(payload_start: &mut u32, delta: i64) {
-        let updated = (*payload_start as i64) + delta;
-        debug_assert!(updated >= 0, "payload start cannot become negative");
-        *payload_start = updated as u32;
-    }
-
-    fn shift_payload_starts_from(&mut self, start_group_index: usize, delta: i64) {
-        if delta == 0 {
-            return;
-        }
-        for group in &mut self.groups[start_group_index..] {
-            Self::apply_payload_start_delta(&mut group.payload_start, delta);
-        }
-    }
-
-    fn offset_detached_group_payload_starts(groups: &mut [GroupRecord], delta: i64) {
-        if delta == 0 {
-            return;
-        }
-        for group in groups {
-            Self::apply_payload_start_delta(&mut group.payload_start, delta);
-        }
-    }
-
-    fn subtree_payload_span(groups: &[GroupRecord]) -> Option<(usize, usize)> {
-        let payload_start = groups.first()?.payload_start as usize;
-        let payload_len = groups
-            .iter()
-            .map(|group| group.payload_len as usize)
-            .sum::<usize>();
-        Some((payload_start, payload_len))
+        segment_insert_index_for_group::<PayloadSegment>(
+            &self.groups,
+            self.payloads.len(),
+            group_index,
+        )
     }
 
     pub(super) fn allocate_payload_anchor(&mut self) -> usize {
@@ -171,8 +146,8 @@ impl SlotTable {
                 value: Box::new(value),
             },
         );
-        self.groups[owner_index].payload_len += 1;
-        self.shift_payload_starts_from(owner_index + 1, 1);
+        add_group_segment_len::<PayloadSegment>(&mut self.groups, owner_index, 1);
+        shift_group_segment_starts_from::<PayloadSegment>(&mut self.groups, owner_index + 1, 1);
         self.refresh_group_payload_locations(owner, insert_index);
         anchor
     }
@@ -241,8 +216,16 @@ impl SlotTable {
             .drain(payload_start..payload_end)
             .collect::<Vec<_>>();
         self.clear_payload_locations_for_payloads(&removed);
-        self.groups[owner_index].payload_len -= removed.len() as u32;
-        self.shift_payload_starts_from(owner_index + 1, -(removed.len() as i64));
+        add_group_segment_len::<PayloadSegment>(
+            &mut self.groups,
+            owner_index,
+            -(removed.len() as i64),
+        );
+        shift_group_segment_starts_from::<PayloadSegment>(
+            &mut self.groups,
+            owner_index + 1,
+            -(removed.len() as i64),
+        );
         self.refresh_group_payload_locations(owner, start);
         removed
     }
@@ -253,10 +236,15 @@ impl SlotTable {
         removed_groups: &mut [GroupRecord],
         clear_locations: bool,
     ) -> Vec<PayloadRecord> {
-        let Some((payload_start, payload_len)) = Self::subtree_payload_span(removed_groups) else {
+        let Some((payload_start, payload_len)) =
+            subtree_segment_span::<PayloadSegment>(removed_groups)
+        else {
             return Vec::new();
         };
-        Self::offset_detached_group_payload_starts(removed_groups, -(payload_start as i64));
+        offset_detached_group_segment_starts::<PayloadSegment>(
+            removed_groups,
+            -(payload_start as i64),
+        );
         if payload_len == 0 {
             return Vec::new();
         }
@@ -267,7 +255,11 @@ impl SlotTable {
         if clear_locations {
             self.clear_payload_locations_for_payloads(&removed);
         }
-        self.shift_payload_starts_from(removed_group_index, -(payload_len as i64));
+        shift_group_segment_starts_from::<PayloadSegment>(
+            &mut self.groups,
+            removed_group_index,
+            -(payload_len as i64),
+        );
         removed
     }
 
@@ -294,8 +286,12 @@ impl SlotTable {
         payloads: Vec<PayloadRecord>,
     ) {
         let payload_insert_index = self.payload_insert_index_for_group(insert_group_index);
-        self.shift_payload_starts_from(insert_group_index, payloads.len() as i64);
-        Self::offset_detached_group_payload_starts(groups, payload_insert_index as i64);
+        shift_group_segment_starts_from::<PayloadSegment>(
+            &mut self.groups,
+            insert_group_index,
+            payloads.len() as i64,
+        );
+        offset_detached_group_segment_starts::<PayloadSegment>(groups, payload_insert_index as i64);
         self.payloads
             .splice(payload_insert_index..payload_insert_index, payloads);
     }

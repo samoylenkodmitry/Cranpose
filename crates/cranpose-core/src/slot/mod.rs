@@ -9,6 +9,7 @@ mod payload;
 mod payload_locations;
 mod reader;
 mod scope_index;
+mod segments;
 mod table;
 mod types;
 mod validate;

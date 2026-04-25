@@ -1,4 +1,12 @@
-use super::{GroupRecord, NodeLifecycle, NodeRecord, SlotTable};
+use super::{
+    segments::{
+        add_group_segment_len, group_segment_len, group_segment_range_at,
+        group_segment_range_checked, group_segment_start, offset_detached_group_segment_starts,
+        segment_insert_index_for_group, shift_group_segment_starts_from, subtree_segment_span,
+        NodeSegment,
+    },
+    GroupRecord, NodeLifecycle, NodeRecord, SlotTable,
+};
 use crate::NodeId;
 use std::{mem, ops::Range};
 
@@ -9,59 +17,22 @@ pub(super) struct GroupNodeRecordResult {
 
 impl SlotTable {
     fn group_node_start_at(&self, group_index: usize) -> usize {
-        self.groups[group_index].node_start as usize
+        group_segment_start::<NodeSegment>(&self.groups, group_index)
     }
 
     pub(in crate::slot) fn group_node_len_at(&self, group_index: usize) -> usize {
-        self.groups[group_index].node_len as usize
+        group_segment_len::<NodeSegment>(&self.groups, group_index)
     }
 
     pub(in crate::slot) fn group_node_range_checked(
         &self,
         group_index: usize,
     ) -> Option<Range<usize>> {
-        let start = self.group_node_start_at(group_index);
-        let len = self.group_node_len_at(group_index);
-        let end = start.checked_add(len)?;
-        (end <= self.nodes.len()).then_some(start..end)
+        group_segment_range_checked::<NodeSegment>(&self.groups, self.nodes.len(), group_index)
     }
 
     fn group_node_range_at(&self, group_index: usize) -> Range<usize> {
-        self.group_node_range_checked(group_index)
-            .expect("node range should resolve")
-    }
-
-    fn apply_node_start_delta(node_start: &mut u32, delta: i64) {
-        let updated = (*node_start as i64) + delta;
-        debug_assert!(updated >= 0, "node start cannot become negative");
-        *node_start = updated as u32;
-    }
-
-    fn shift_node_starts_from(&mut self, start_group_index: usize, delta: i64) {
-        if delta == 0 {
-            return;
-        }
-        for group in &mut self.groups[start_group_index..] {
-            Self::apply_node_start_delta(&mut group.node_start, delta);
-        }
-    }
-
-    fn offset_detached_group_node_starts(groups: &mut [GroupRecord], delta: i64) {
-        if delta == 0 {
-            return;
-        }
-        for group in groups {
-            Self::apply_node_start_delta(&mut group.node_start, delta);
-        }
-    }
-
-    fn subtree_node_span(groups: &[GroupRecord]) -> Option<(usize, usize)> {
-        let node_start = groups.first()?.node_start as usize;
-        let node_len = groups
-            .iter()
-            .map(|group| group.node_len as usize)
-            .sum::<usize>();
-        Some((node_start, node_len))
+        group_segment_range_at::<NodeSegment>(&self.groups, self.nodes.len(), group_index)
     }
 
     pub(in crate::slot) fn group_node_records_at(&self, group_index: usize) -> &[NodeRecord] {
@@ -125,7 +96,11 @@ impl SlotTable {
                 reused_node: existing.id == id && existing.generation == generation,
             }
         } else {
-            let insert_index = self.group_node_start_at(group_index) + node_index;
+            let insert_index = segment_insert_index_for_group::<NodeSegment>(
+                &self.groups,
+                self.nodes.len(),
+                group_index,
+            ) + node_index;
             self.nodes.insert(
                 insert_index,
                 NodeRecord {
@@ -136,8 +111,8 @@ impl SlotTable {
                     lifecycle: NodeLifecycle::Active,
                 },
             );
-            self.groups[group_index].node_len += 1;
-            self.shift_node_starts_from(group_index + 1, 1);
+            add_group_segment_len::<NodeSegment>(&mut self.groups, group_index, 1);
+            shift_group_segment_starts_from::<NodeSegment>(&mut self.groups, group_index + 1, 1);
             GroupNodeRecordResult {
                 reused_slot: false,
                 reused_node: false,
@@ -157,8 +132,16 @@ impl SlotTable {
         let node_start = self.group_node_start_at(group_index) + start;
         let node_end = self.group_node_start_at(group_index) + node_len;
         let removed = self.nodes.drain(node_start..node_end).collect::<Vec<_>>();
-        self.groups[group_index].node_len -= removed.len() as u32;
-        self.shift_node_starts_from(group_index + 1, -(removed.len() as i64));
+        add_group_segment_len::<NodeSegment>(
+            &mut self.groups,
+            group_index,
+            -(removed.len() as i64),
+        );
+        shift_group_segment_starts_from::<NodeSegment>(
+            &mut self.groups,
+            group_index + 1,
+            -(removed.len() as i64),
+        );
         removed
     }
 
@@ -167,10 +150,11 @@ impl SlotTable {
         removed_group_index: usize,
         removed_groups: &mut [GroupRecord],
     ) -> Vec<NodeRecord> {
-        let Some((node_start, node_len)) = Self::subtree_node_span(removed_groups) else {
+        let Some((node_start, node_len)) = subtree_segment_span::<NodeSegment>(removed_groups)
+        else {
             return Vec::new();
         };
-        Self::offset_detached_group_node_starts(removed_groups, -(node_start as i64));
+        offset_detached_group_segment_starts::<NodeSegment>(removed_groups, -(node_start as i64));
         if node_len == 0 {
             return Vec::new();
         }
@@ -178,7 +162,11 @@ impl SlotTable {
             .nodes
             .drain(node_start..node_start + node_len)
             .collect();
-        self.shift_node_starts_from(removed_group_index, -(node_len as i64));
+        shift_group_segment_starts_from::<NodeSegment>(
+            &mut self.groups,
+            removed_group_index,
+            -(node_len as i64),
+        );
         removed
     }
 
@@ -188,13 +176,17 @@ impl SlotTable {
         groups: &mut [GroupRecord],
         nodes: Vec<NodeRecord>,
     ) {
-        let node_insert_index = if insert_group_index < self.groups.len() {
-            self.groups[insert_group_index].node_start as usize
-        } else {
-            self.nodes.len()
-        };
-        self.shift_node_starts_from(insert_group_index, nodes.len() as i64);
-        Self::offset_detached_group_node_starts(groups, node_insert_index as i64);
+        let node_insert_index = segment_insert_index_for_group::<NodeSegment>(
+            &self.groups,
+            self.nodes.len(),
+            insert_group_index,
+        );
+        shift_group_segment_starts_from::<NodeSegment>(
+            &mut self.groups,
+            insert_group_index,
+            nodes.len() as i64,
+        );
+        offset_detached_group_segment_starts::<NodeSegment>(groups, node_insert_index as i64);
         self.nodes
             .splice(node_insert_index..node_insert_index, nodes);
     }
