@@ -1,0 +1,26 @@
+# Slot Table V2 Stress Commands
+
+Run the full stress suite from the repository root:
+
+```bash
+./stress_slot_table.sh
+```
+
+The script runs these commands and writes one log per step:
+
+```bash
+CRANPOSE_VALIDATE_SLOTS=1 cargo test --workspace
+CRANPOSE_SLOT_MODEL_STRESS_FRAMES=10000 cargo test --release -p cranpose-core deterministic_model_render_frames_match_slot_table -- --nocapture
+./perf_slot_table_v2.sh --stability-check
+./run_robot_test.sh --sequential
+```
+
+`CRANPOSE_VALIDATE_SLOTS=1` enables slot and retained-subtree validation during debug composition passes. The model stress command extends the deterministic Slot Table V2 render-frame model test with the requested number of generated frames; every failure reports the seed, compact scenario script, active debug snapshot, retained-subtree summary, and failed invariant.
+
+Override the generated-frame count when needed:
+
+```bash
+CRANPOSE_SLOT_MODEL_STRESS_FRAMES=25000 ./stress_slot_table.sh
+```
+
+The perf stability step requires `jq` because `perf_slot_table_v2.sh --stability-check` reads Criterion JSON estimates. Treat a stability failure as an invalid benchmark host until rerun on a quieter machine.

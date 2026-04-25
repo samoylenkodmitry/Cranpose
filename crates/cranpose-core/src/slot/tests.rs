@@ -3206,12 +3206,12 @@ impl ModelState {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ModelScenario {
+struct ModelScenario<'a> {
     seed: u64,
     frame_count: usize,
     parent_key: Key,
     child_static_key: Key,
-    children: &'static [Key],
+    children: &'a [Key],
 }
 
 struct ModelRunContext<'a> {
@@ -3237,7 +3237,7 @@ struct RetainedSubtreeSummary {
     group_anchors: Vec<AnchorId>,
 }
 
-impl ModelScenario {
+impl ModelScenario<'_> {
     fn run(self) {
         let mut harness = SlotHarness::new();
         let mut retained_subtrees = BTreeMap::<Key, DetachedSubtree>::new();
@@ -3266,6 +3266,57 @@ impl ModelScenario {
                 },
             );
         }
+    }
+}
+
+fn model_stress_frame_count_from_env() -> usize {
+    const ENV_NAME: &str = "CRANPOSE_SLOT_MODEL_STRESS_FRAMES";
+    let Some(value) = std::env::var_os(ENV_NAME) else {
+        return 0;
+    };
+    let value = value
+        .into_string()
+        .unwrap_or_else(|_| panic!("{ENV_NAME} must be valid UTF-8"));
+    value
+        .parse::<usize>()
+        .unwrap_or_else(|err| panic!("{ENV_NAME} must be a non-negative integer: {err}"))
+}
+
+fn model_stress_seed(index: usize) -> u64 {
+    let mut value = 0xD6E8_FEB8_6659_FD93u64 ^ (index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn run_model_stress_scenarios_from_env() {
+    const FRAMES_PER_SCENARIO: usize = 256;
+
+    let mut remaining_frames = model_stress_frame_count_from_env();
+    let mut scenario_index = 0usize;
+    while remaining_frames > 0 {
+        let frame_count = remaining_frames.min(FRAMES_PER_SCENARIO);
+        let child_count = 4 + (scenario_index % 9);
+        let child_base = 20_000 + (scenario_index as Key) * 100;
+        let children = (0..child_count)
+            .map(|offset| child_base + offset as Key)
+            .collect::<Vec<_>>();
+        let parent_key = 30_000 + (scenario_index as Key) * 2;
+        let child_static_key = parent_key + 1;
+
+        ModelScenario {
+            seed: model_stress_seed(scenario_index),
+            frame_count,
+            parent_key,
+            child_static_key,
+            children: &children,
+        }
+        .run();
+
+        remaining_frames -= frame_count;
+        scenario_index += 1;
     }
 }
 
@@ -3815,6 +3866,7 @@ fn deterministic_model_render_frames_match_slot_table() {
     for scenario in scenarios {
         scenario.run();
     }
+    run_model_stress_scenarios_from_env();
 }
 
 #[test]

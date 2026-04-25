@@ -130,7 +130,7 @@ The execution order is correctness first, then documentation and repeatable gate
 ### Phase 8 - Release Hardening
 
 - [x] Add CI jobs for default features, alternate hash/internal features, property smoke, criterion smoke, wasm build, Android release, and robot e2e.
-- [ ] Add stress commands for slot validation, high-case property tests, perf stability, and sequential robot tests.
+- [x] Add stress commands for slot validation, high-case property tests, perf stability, and sequential robot tests.
 - [ ] Add a release checklist covering stale docs, full verification, persisted property failures, perf baseline, regression budgets, retained-memory plateau, anchor growth, and panic classification.
 
 ## PR Sequence
