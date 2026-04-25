@@ -4,6 +4,8 @@ use crate::{AnchorId, Key, ScopeId};
 pub struct SlotTableDebugStats {
     pub group_count: usize,
     pub group_capacity: usize,
+    pub group_record_size: usize,
+    pub group_heap_bytes: usize,
     pub payload_count: usize,
     pub payload_capacity: usize,
     pub payload_location_count: usize,

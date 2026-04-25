@@ -1,6 +1,6 @@
 use super::{
-    AnchorState, DetachedSubtree, SlotInvariantError, SlotLifecycleCoordinator, SlotPassMode,
-    SlotTable, SlotWriteSession, SlotWriteSessionState,
+    AnchorState, DetachedSubtree, GroupRecord, SlotInvariantError, SlotLifecycleCoordinator,
+    SlotPassMode, SlotTable, SlotWriteSession, SlotWriteSessionState,
 };
 use crate::{
     retention::{RetainKey, RetentionManager},
@@ -11,6 +11,7 @@ use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
+use std::mem;
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 
@@ -464,6 +465,11 @@ fn debug_stats_report_explicit_v2_table_counts() {
     assert_eq!(stats.payload_location_count, 1);
     assert_eq!(stats.node_count, 1);
     assert_eq!(stats.active_anchor_count, 1);
+    assert_eq!(stats.group_record_size, mem::size_of::<GroupRecord>());
+    assert_eq!(
+        stats.group_heap_bytes,
+        stats.group_capacity * stats.group_record_size
+    );
     assert_eq!(stats.anchor_slot_count, 1);
     assert_eq!(stats.anchor_sparse_count, 0);
     assert_eq!(stats.detached_anchor_count, 0);
@@ -486,6 +492,16 @@ fn debug_stats_report_explicit_v2_table_counts() {
     assert_eq!(stats.retained_scope_count, 0);
     assert_eq!(stats.retained_anchor_count, 0);
     assert_eq!(stats.retained_heap_bytes, 0);
+}
+
+#[test]
+fn group_record_footprint_stays_bounded_until_profiling_justifies_split_storage() {
+    let group_record_size = mem::size_of::<GroupRecord>();
+
+    assert!(
+        group_record_size <= 128,
+        "GroupRecord is {group_record_size} bytes; revisit field packing with perf data before accepting more group-table bandwidth"
+    );
 }
 
 #[test]

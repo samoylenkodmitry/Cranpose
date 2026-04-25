@@ -6,8 +6,12 @@ use crate::{Key, ScopeId};
 use std::mem;
 
 impl SlotTable {
-    pub fn heap_bytes(&self) -> usize {
+    fn group_heap_bytes(&self) -> usize {
         self.groups.capacity() * mem::size_of::<GroupRecord>()
+    }
+
+    pub fn heap_bytes(&self) -> usize {
+        self.group_heap_bytes()
             + self.payload_heap_bytes()
             + self.node_heap_bytes()
             + self.anchors.heap_bytes()
@@ -19,6 +23,8 @@ impl SlotTable {
         SlotTableDebugStats {
             group_count: self.groups.len(),
             group_capacity: self.groups.capacity(),
+            group_record_size: mem::size_of::<GroupRecord>(),
+            group_heap_bytes: self.group_heap_bytes(),
             payload_count: self.total_payload_count(),
             payload_capacity: self.payload_debug_capacity(),
             payload_location_count: self.payload_locations.len(),
