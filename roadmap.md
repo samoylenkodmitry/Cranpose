@@ -19,13 +19,13 @@ This file tracks the current forward work and marks boxes closed only after full
 
 ## Full Verification Gate
 
-- [ ] [S] `cargo fmt`
-- [ ] [M] `cargo test > 1.tmp 2>&1`
-- [ ] [M] `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`
-- [ ] [L] Android release build: `./gradlew :app:assembleRelease` in `apps/android-demo/android`
-- [ ] [M] Wasm build: `apps/desktop-demo/build-web.sh`
-- [ ] [L] Robot e2e: `./run_robot_test.sh --sequential`
-- [ ] [M] Read every verification log and fix every warning/failure before committing.
+- [x] [S] `cargo fmt`
+- [x] [M] `cargo test > 1.tmp 2>&1`
+- [x] [M] `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`
+- [x] [L] Android release build: `./gradlew :app:assembleRelease` in `apps/android-demo/android`
+- [x] [M] Wasm build: `apps/desktop-demo/build-web.sh`
+- [x] [L] Robot e2e: `./run_robot_test.sh --sequential`
+- [x] [M] Read every verification log and fix every warning/failure before committing.
 - [ ] [S] Keep `docs/cranpose_slot_table_v2_design.md` as the only active slot-table design specification.
 - [ ] [S] Add `docs/slot_table_v2_invariants.md` as the short invariant checklist for active groups, payload/node ownership, anchors, retention, scope lookup, and sibling matching.
 - [ ] [S] Add `verify_slot_table.sh` that runs the full verification gate and writes/readable logs for every step.
@@ -43,4 +43,4 @@ This file tracks the current forward work and marks boxes closed only after full
 - [x] [M] Move group-close teardown out of duplicated composer/recompose guards into one helper.
 - [x] [M] Delete or gate remaining test-only/unfinished APIs: `AnchorRegistry::contains_active`, `AnchorRegistry::invalidate`, ignored lifecycle/mode/table parameters, and remaining production `allow(dead_code)` shims.
 - [x] [M] Make `ValueSlotId` generation real or remove the unused generation field.
-- [ ] [S] Clean small slot-table garbage: over-reserved drop capacity in `take_all_drops`, single-variant `DeferredDrop`, and no-op `kind.label()` disposal.
+- [x] [S] Clean small slot-table garbage: over-reserved drop capacity in `take_all_drops`, single-variant `DeferredDrop`, and no-op `kind.label()` disposal.

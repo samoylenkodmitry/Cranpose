@@ -91,7 +91,7 @@ impl SlotTable {
 
     pub(crate) fn take_all_drops(&mut self) -> Vec<DeferredDrop> {
         let payload_count = self.payloads.len();
-        let mut drops = Vec::with_capacity(self.groups.len() + payload_count);
+        let mut drops = Vec::with_capacity(payload_count);
         for payload in self.payloads.drain(..).rev() {
             drops.push(payload.into_deferred_drop());
         }

@@ -14,13 +14,12 @@ fn replace_payload_record<T: 'static>(
     record: &mut PayloadRecord,
     kind: PayloadKind,
     value: T,
-) -> (PayloadKind, Box<dyn std::any::Any>) {
+) -> Box<dyn std::any::Any> {
     let old_value = mem::replace(&mut record.value, Box::new(value));
-    let old_kind = record.kind;
     record.type_id = TypeId::of::<T>();
     record.type_name = std::any::type_name::<T>();
     record.kind = kind;
-    (old_kind, old_value)
+    old_value
 }
 
 impl SlotTable {
@@ -168,7 +167,7 @@ impl SlotTable {
         payload_index: usize,
         kind: PayloadKind,
         value: T,
-    ) -> (PayloadKind, Box<dyn std::any::Any>) {
+    ) -> Box<dyn std::any::Any> {
         let record = self.group_payload_record_at_mut(group_index, payload_index);
         replace_payload_record(record, kind, value)
     }
@@ -179,13 +178,13 @@ impl SlotTable {
         payload_index: usize,
         kind: PayloadKind,
         value: T,
-    ) -> (usize, u32, PayloadKind, Box<dyn std::any::Any>) {
+    ) -> (usize, u32, Box<dyn std::any::Any>) {
         let generation = self.allocate_payload_generation();
         let record = self.group_payload_record_at_mut(group_index, payload_index);
         record.generation = generation;
         let anchor = record.anchor;
-        let (old_kind, old_value) = replace_payload_record(record, kind, value);
-        (anchor, generation, old_kind, old_value)
+        let old_value = replace_payload_record(record, kind, value);
+        (anchor, generation, old_value)
     }
 
     pub(super) fn clear_payload_locations_for_payloads(&mut self, payloads: &[PayloadRecord]) {

@@ -486,6 +486,18 @@ fn debug_dump_slot_entries_use_v2_native_labels() {
 }
 
 #[test]
+fn take_all_drops_reserves_only_payload_count() {
+    let mut table = composed_group_with_value_and_node_table(23);
+    let drops = table.take_all_drops();
+
+    assert_eq!(drops.len(), 1);
+    assert_eq!(drops.capacity(), drops.len());
+    assert!(table.groups.is_empty());
+    assert!(table.payloads.is_empty());
+    assert!(table.nodes.is_empty());
+}
+
+#[test]
 fn debug_stats_report_explicit_v2_table_counts() {
     const GROUP_KEY: Key = 34;
 

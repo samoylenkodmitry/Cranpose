@@ -1,25 +1,17 @@
-use super::{DetachedSubtree, PayloadKind, SlotTable, SlotTableDebugStats};
+use super::{DetachedSubtree, SlotTable, SlotTableDebugStats};
 use std::any::Any;
 
-pub(crate) enum DeferredDrop {
-    Payload {
-        kind: PayloadKind,
-        value: Box<dyn Any>,
-    },
+pub(crate) struct DeferredDrop {
+    value: Box<dyn Any>,
 }
 
 impl DeferredDrop {
-    pub(crate) fn payload(kind: PayloadKind, value: Box<dyn Any>) -> Self {
-        Self::Payload { kind, value }
+    pub(crate) fn payload(value: Box<dyn Any>) -> Self {
+        Self { value }
     }
 
     fn dispose(self) {
-        match self {
-            Self::Payload { kind, value } => {
-                let _ = kind.label();
-                drop(value);
-            }
-        }
+        drop(self.value);
     }
 }
 

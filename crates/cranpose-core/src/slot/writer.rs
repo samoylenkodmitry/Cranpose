@@ -285,11 +285,13 @@ impl SlotWriteSession<'_> {
             {
                 (anchor, generation)
             } else {
-                let (anchor, generation, old_kind, old_value) = self
-                    .table
-                    .replace_payload_identity(group_index, frame.payload_cursor, kind, init());
-                self.lifecycle
-                    .queue_drop(DeferredDrop::payload(old_kind, old_value));
+                let (anchor, generation, old_value) = self.table.replace_payload_identity(
+                    group_index,
+                    frame.payload_cursor,
+                    kind,
+                    init(),
+                );
+                self.lifecycle.queue_drop(DeferredDrop::payload(old_value));
                 (anchor, generation)
             }
         } else {

@@ -180,7 +180,7 @@ pub(crate) struct FinishGroupResult {
 
 impl PayloadRecord {
     pub(crate) fn into_deferred_drop(self) -> DeferredDrop {
-        DeferredDrop::payload(self.kind, self.value)
+        DeferredDrop::payload(self.value)
     }
 }
 
