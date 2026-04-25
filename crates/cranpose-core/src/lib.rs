@@ -196,13 +196,13 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 use std::sync::{Mutex, OnceLock};
 
 pub type Key = u64;
 pub type NodeId = usize;
 
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LocationKeyDebugInfo {
     file: String,
@@ -210,13 +210,13 @@ struct LocationKeyDebugInfo {
     column: u32,
 }
 
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 fn location_key_registry() -> &'static Mutex<HashMap<Key, LocationKeyDebugInfo>> {
     static REGISTRY: OnceLock<Mutex<HashMap<Key, LocationKeyDebugInfo>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::default()))
 }
 
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 fn lock_location_key_registry() -> std::sync::MutexGuard<'static, HashMap<Key, LocationKeyDebugInfo>>
 {
     location_key_registry()
@@ -224,7 +224,7 @@ fn lock_location_key_registry() -> std::sync::MutexGuard<'static, HashMap<Key, L
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32) {
     let info = LocationKeyDebugInfo {
         file: file.to_owned(),
@@ -247,6 +247,12 @@ fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32
     if let Some((existing, incoming)) = collision {
         panic!("location key collision: key={key} first={existing:?} second={incoming:?}");
     }
+}
+
+#[cfg(all(debug_assertions, not(test)))]
+fn location_key_diagnostics_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_LOCATION_KEY_DIAGNOSTICS").is_some())
 }
 
 #[cfg(test)]
@@ -280,11 +286,40 @@ pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
     false
 }
 
+fn source_location_key(file: &str, line: u32, column: u32) -> Key {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    hash = fnv1a_location_key_bytes(hash, file.as_bytes());
+    hash = fnv1a_location_key_bytes(hash, &[0xff]);
+    hash = fnv1a_location_key_bytes(hash, &line.to_le_bytes());
+    hash = fnv1a_location_key_bytes(hash, &[0xfe]);
+    hash = fnv1a_location_key_bytes(hash, &column.to_le_bytes());
+    avalanche_location_key(hash)
+}
+
+fn fnv1a_location_key_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn avalanche_location_key(mut value: u64) -> u64 {
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    value ^ (value >> 33)
+}
+
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {
-    let base = file.as_ptr() as u64;
-    let key = base.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((line as u64) << 32) ^ (column as u64);
+    let key = source_location_key(file, line, column);
     #[cfg(test)]
     register_location_key_debug_info(key, file, line, column);
+    #[cfg(all(debug_assertions, not(test)))]
+    if location_key_diagnostics_enabled() {
+        register_location_key_debug_info(key, file, line, column);
+    }
     key
 }
 

@@ -37,6 +37,55 @@ fn location_key_debug_registry_detects_collisions() {
     clear_location_key_registry_for_test();
 }
 
+#[test]
+fn location_key_hashes_file_contents_not_string_addresses() {
+    clear_location_key_registry_for_test();
+
+    let static_file = "src/example.rs";
+    let owned_file = String::from(static_file);
+
+    assert_eq!(
+        location_key(static_file, 42, 9),
+        location_key(&owned_file, 42, 9),
+        "source-location keys must depend on file contents, not the string allocation address",
+    );
+    assert_ne!(
+        location_key(static_file, 42, 9),
+        location_key(static_file, 43, 9)
+    );
+    assert_ne!(
+        location_key(static_file, 42, 9),
+        location_key(static_file, 42, 10)
+    );
+    assert_ne!(
+        location_key(static_file, 42, 9),
+        location_key("src/other.rs", 42, 9)
+    );
+
+    clear_location_key_registry_for_test();
+}
+
+#[test]
+fn location_key_generated_source_grid_has_no_collisions() {
+    clear_location_key_registry_for_test();
+
+    let mut keys = std::collections::HashSet::new();
+    for file_index in 0..64 {
+        let file = format!("src/generated/module_{file_index}.rs");
+        for line in 1..=64 {
+            for column in [1, 8, 16, 32] {
+                let key = location_key(&file, line, column);
+                assert!(
+                    keys.insert(key),
+                    "generated source-location grid produced a duplicate key: file={file} line={line} column={column} key={key}",
+                );
+            }
+        }
+    }
+
+    clear_location_key_registry_for_test();
+}
+
 #[derive(Default)]
 struct TestTextNode {
     text: String,

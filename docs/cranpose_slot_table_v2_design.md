@@ -956,9 +956,9 @@ This means item identity is source-location + user key, not just user key.
 
 ### 14.3 Collision policy
 
-`Key = u64` can collide. V2 should initially accept this risk because current Cranpose already hashes to `u64`, but the data model should allow future `Key128` or debug collision assertions.
+`Key = u64` can collide. V2 keeps the public key type at `u64`, but source-location keys are deterministic hashes of file contents plus line and column rather than string allocation addresses. Test builds always assert that two different source locations do not resolve to the same key. Debug builds can enable the same registry with `CRANPOSE_LOCATION_KEY_DIAGNOSTICS=1`.
 
-Suggested debug mode:
+Debug registry shape:
 
 ```rust
 #[cfg(debug_assertions)]
@@ -1560,6 +1560,6 @@ After V2 is correct:
 3. Use gap-relative anchors internally, but keep semantics unchanged.
 4. Add retained subtree LRU limits.
 5. Add debug instrumentation for retained memory.
-6. Add collision-resistant keys in debug/profile builds.
+6. Add wider `Key128` storage only if the debug collision registry reports real source-location collisions.
 7. Add specialized lazy-list retention policy.
 8. Support no-std allocator-backed tables if still desired.
