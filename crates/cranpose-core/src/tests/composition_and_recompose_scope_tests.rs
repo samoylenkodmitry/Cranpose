@@ -1556,6 +1556,314 @@ fn retention_budget_evicts_subtree_after_max_age_passes() {
     assert_eq!(recreated.with(|value| *value), 30);
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SlotMemoryPlateau {
+    group_count: usize,
+    group_capacity: usize,
+    group_heap_bytes: usize,
+    payload_count: usize,
+    payload_capacity: usize,
+    payload_location_count: usize,
+    payload_location_capacity: usize,
+    node_count: usize,
+    node_capacity: usize,
+    pending_drop_count: usize,
+    pending_drop_capacity: usize,
+    active_anchor_count: usize,
+    anchor_slot_count: usize,
+    anchor_sparse_count: usize,
+    detached_anchor_count: usize,
+    invalidated_anchor_count: usize,
+    free_anchor_count: usize,
+    anchor_capacity: usize,
+    anchor_heap_bytes: usize,
+    scope_index_count: usize,
+    scope_index_capacity: usize,
+    retained_subtree_count: usize,
+    retained_group_count: usize,
+    retained_payload_count: usize,
+    retained_node_count: usize,
+    retained_scope_count: usize,
+    retained_anchor_count: usize,
+    retained_heap_bytes: usize,
+    retained_evictions_total: usize,
+}
+
+type CapturedRetainedSlots = Rc<RefCell<Vec<(usize, Owned<usize>)>>>;
+
+impl From<SlotTableDebugStats> for SlotMemoryPlateau {
+    fn from(stats: SlotTableDebugStats) -> Self {
+        Self {
+            group_count: stats.group_count,
+            group_capacity: stats.group_capacity,
+            group_heap_bytes: stats.group_heap_bytes,
+            payload_count: stats.payload_count,
+            payload_capacity: stats.payload_capacity,
+            payload_location_count: stats.payload_location_count,
+            payload_location_capacity: stats.payload_location_capacity,
+            node_count: stats.node_count,
+            node_capacity: stats.node_capacity,
+            pending_drop_count: stats.pending_drop_count,
+            pending_drop_capacity: stats.pending_drop_capacity,
+            active_anchor_count: stats.active_anchor_count,
+            anchor_slot_count: stats.anchor_slot_count,
+            anchor_sparse_count: stats.anchor_sparse_count,
+            detached_anchor_count: stats.detached_anchor_count,
+            invalidated_anchor_count: stats.invalidated_anchor_count,
+            free_anchor_count: stats.free_anchor_count,
+            anchor_capacity: stats.anchor_capacity,
+            anchor_heap_bytes: stats.anchor_heap_bytes,
+            scope_index_count: stats.scope_index_count,
+            scope_index_capacity: stats.scope_index_capacity,
+            retained_subtree_count: stats.retained_subtree_count,
+            retained_group_count: stats.retained_group_count,
+            retained_payload_count: stats.retained_payload_count,
+            retained_node_count: stats.retained_node_count,
+            retained_scope_count: stats.retained_scope_count,
+            retained_anchor_count: stats.retained_anchor_count,
+            retained_heap_bytes: stats.retained_heap_bytes,
+            retained_evictions_total: stats.retained_evictions_total,
+        }
+    }
+}
+
+fn assert_slot_memory_plateau(
+    label: &str,
+    baseline: SlotMemoryPlateau,
+    current: SlotMemoryPlateau,
+    cycle: usize,
+) {
+    assert_eq!(
+        current, baseline,
+        "{label} retained memory diagnostics changed after warmup cycle {cycle}: baseline={baseline:?} current={current:?}",
+    );
+}
+
+#[test]
+fn retained_tab_cycles_plateau_memory_and_anchors() {
+    const TAB_KEYS: [Key; 4] = [0x7101, 0x7102, 0x7103, 0x7104];
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0usize, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+    let captured: CapturedRetainedSlots = Rc::new(RefCell::new(Vec::new()));
+
+    fn render_tab_host(
+        composition: &mut Composition<MemoryApplier>,
+        active_tab: MutableState<usize>,
+        root_key: Key,
+        captured: &CapturedRetainedSlots,
+    ) {
+        let captured = Rc::clone(captured);
+        composition
+            .render(root_key, || {
+                captured.borrow_mut().clear();
+                let tab = active_tab.value();
+                with_current_composer(|composer| {
+                    composer.cranpose_with_reuse(
+                        TAB_KEYS[tab],
+                        RecomposeOptions::default(),
+                        |composer| {
+                            let slot = composer.remember(|| tab);
+                            captured.borrow_mut().push((tab, slot));
+                        },
+                    );
+                });
+            })
+            .expect("render retained tab host");
+        assert_composition_valid(composition);
+    }
+
+    for tab in 0..TAB_KEYS.len() {
+        active_tab.set_value(tab);
+        render_tab_host(&mut composition, active_tab, root_key, &captured);
+        captured.borrow()[0].1.replace(tab + 100);
+    }
+    active_tab.set_value(0);
+    render_tab_host(&mut composition, active_tab, root_key, &captured);
+
+    let baseline = SlotMemoryPlateau::from(composition.debug_slot_table_stats());
+    assert_eq!(baseline.retained_subtree_count, TAB_KEYS.len() - 1);
+    assert!(
+        baseline.retained_heap_bytes > 0,
+        "retained tabs should report retained heap bytes after warmup",
+    );
+
+    for cycle in 0..25 {
+        for tab in 1..TAB_KEYS.len() {
+            active_tab.set_value(tab);
+            render_tab_host(&mut composition, active_tab, root_key, &captured);
+            let restored = captured.borrow()[0].1.with(|value| *value);
+            assert_eq!(restored, tab + 100);
+        }
+        active_tab.set_value(0);
+        render_tab_host(&mut composition, active_tab, root_key, &captured);
+        assert_eq!(captured.borrow()[0].1.with(|value| *value), 100);
+
+        assert_slot_memory_plateau(
+            "retained tab cycles",
+            baseline,
+            SlotMemoryPlateau::from(composition.debug_slot_table_stats()),
+            cycle,
+        );
+    }
+}
+
+#[test]
+fn retained_keyed_list_window_plateaus_memory_and_anchors() {
+    const ITEM_COUNT: usize = 12;
+    const WINDOW_SIZE: usize = 4;
+    const ITEM_KEYS: [Key; ITEM_COUNT] = [
+        0x7150, 0x7151, 0x7152, 0x7153, 0x7154, 0x7155, 0x7156, 0x7157, 0x7158, 0x7159, 0x715A,
+        0x715B,
+    ];
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let window_start = MutableState::with_runtime(0usize, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+    let captured: CapturedRetainedSlots = Rc::new(RefCell::new(Vec::new()));
+
+    fn render_list_window(
+        composition: &mut Composition<MemoryApplier>,
+        window_start: MutableState<usize>,
+        root_key: Key,
+        captured: &CapturedRetainedSlots,
+    ) {
+        let captured = Rc::clone(captured);
+        composition
+            .render(root_key, || {
+                captured.borrow_mut().clear();
+                let start = window_start.value();
+                for offset in 0..WINDOW_SIZE {
+                    let item = (start + offset) % ITEM_COUNT;
+                    with_current_composer(|composer| {
+                        composer.cranpose_with_reuse(
+                            ITEM_KEYS[item],
+                            RecomposeOptions::default(),
+                            |composer| {
+                                let slot = composer.remember(|| item);
+                                captured.borrow_mut().push((item, slot));
+                            },
+                        );
+                    });
+                }
+            })
+            .expect("render retained keyed list window");
+        assert_composition_valid(composition);
+    }
+
+    for start in 0..ITEM_COUNT {
+        window_start.set_value(start);
+        render_list_window(&mut composition, window_start, root_key, &captured);
+        for (item, slot) in captured.borrow().iter() {
+            slot.replace(item + 1_000);
+        }
+    }
+    window_start.set_value(0);
+    render_list_window(&mut composition, window_start, root_key, &captured);
+
+    let baseline = SlotMemoryPlateau::from(composition.debug_slot_table_stats());
+    assert_eq!(
+        baseline.retained_subtree_count,
+        ITEM_COUNT - WINDOW_SIZE,
+        "warmup should retain exactly the inactive list items",
+    );
+    assert!(
+        baseline.retained_heap_bytes > 0,
+        "retained list window should report retained heap bytes after warmup",
+    );
+
+    for cycle in 0..20 {
+        for start in 1..ITEM_COUNT {
+            window_start.set_value(start);
+            render_list_window(&mut composition, window_start, root_key, &captured);
+            for (item, slot) in captured.borrow().iter() {
+                assert_eq!(slot.with(|value| *value), item + 1_000);
+            }
+        }
+        window_start.set_value(0);
+        render_list_window(&mut composition, window_start, root_key, &captured);
+        for (item, slot) in captured.borrow().iter() {
+            assert_eq!(slot.with(|value| *value), item + 1_000);
+        }
+
+        assert_slot_memory_plateau(
+            "retained keyed list window",
+            baseline,
+            SlotMemoryPlateau::from(composition.debug_slot_table_stats()),
+            cycle,
+        );
+    }
+}
+
+#[test]
+fn subcompose_retained_root_slots_plateau_memory_and_anchors() {
+    const SLOT_KEYS: [Key; 4] = [0x7201, 0x7202, 0x7203, 0x7204];
+
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+    let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
+    let captured: CapturedRetainedSlots = Rc::new(RefCell::new(Vec::new()));
+
+    let render = |active_slot: usize| {
+        let captured = Rc::clone(&captured);
+        composer
+            .subcompose_in(&subcompose_slots, None, |composer| {
+                captured.borrow_mut().clear();
+                composer.cranpose_with_reuse(
+                    SLOT_KEYS[active_slot],
+                    RecomposeOptions::default(),
+                    |composer| {
+                        let slot = composer.remember(|| active_slot);
+                        captured.borrow_mut().push((active_slot, slot));
+                    },
+                );
+            })
+            .expect("subcompose retained root slot render");
+        subcompose_slots
+            .borrow()
+            .validate()
+            .expect("subcompose slot table must validate");
+    };
+
+    for slot in 0..SLOT_KEYS.len() {
+        render(slot);
+        captured.borrow()[0].1.replace(slot + 2_000);
+    }
+    render(0);
+
+    let baseline = SlotMemoryPlateau::from(subcompose_slots.debug_stats());
+    assert_eq!(baseline.retained_subtree_count, SLOT_KEYS.len() - 1);
+    assert!(
+        baseline.retained_heap_bytes > 0,
+        "retained subcompose slots should report retained heap bytes after warmup",
+    );
+
+    for cycle in 0..25 {
+        for slot in 1..SLOT_KEYS.len() {
+            render(slot);
+            assert_eq!(captured.borrow()[0].1.with(|value| *value), slot + 2_000);
+        }
+        render(0);
+        assert_eq!(captured.borrow()[0].1.with(|value| *value), 2_000);
+
+        assert_slot_memory_plateau(
+            "subcompose retained root slots",
+            baseline,
+            SlotMemoryPlateau::from(subcompose_slots.debug_stats()),
+            cycle,
+        );
+    }
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
 #[test]
 fn retained_branch_hides_without_running_disposable_effect_cleanup() {
     let mut composition = test_composition();
