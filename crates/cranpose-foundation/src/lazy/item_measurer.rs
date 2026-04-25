@@ -2,7 +2,7 @@
 //!
 //! This module handles measuring visible items and beyond-bounds buffer items.
 
-use super::lazy_list_measure::LazyListMeasureConfig;
+use super::lazy_list_measure::{LazyListMeasureConfig, DEFAULT_ITEM_SIZE_ESTIMATE};
 use super::lazy_list_measured_item::LazyListMeasuredItem;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,6 +28,7 @@ const DEFAULT_TIME_BUDGET: Duration = Duration::from_millis(50);
 /// Maximum items to measure per pass as a hard safety limit.
 /// Used in addition to time budget to prevent memory exhaustion in extreme cases.
 const MAX_VISIBLE_ITEMS_SAFETY: usize = 10000;
+const MIN_ESTIMATED_ITEM_EXTENT: f32 = 1.0;
 
 static LAZY_MEASURE_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
 static LAZY_MEASURE_PASS_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -63,6 +64,7 @@ pub struct ItemMeasurer<'a, F> {
     config: &'a LazyListMeasureConfig,
     items_count: usize,
     effective_viewport_size: f32,
+    average_item_size: f32,
 }
 
 impl<'a, F> ItemMeasurer<'a, F>
@@ -75,6 +77,7 @@ where
         config: &'a LazyListMeasureConfig,
         items_count: usize,
         effective_viewport_size: f32,
+        average_item_size: f32,
         pre_measured: VecDeque<LazyListMeasuredItem>,
     ) -> Self {
         Self {
@@ -83,6 +86,7 @@ where
             config,
             items_count,
             effective_viewport_size,
+            average_item_size,
         }
     }
 
@@ -117,6 +121,7 @@ where
                 let before_items = self.measure_beyond_before(
                     first_item_index,
                     visible_items[0].offset,
+                    visible_items.len(),
                     start_time,
                 );
                 if !before_items.is_empty() {
@@ -167,7 +172,11 @@ where
         viewport_end: f32,
         start_time: Instant,
     ) -> (Vec<LazyListMeasuredItem>, usize, f32, bool) {
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(self.estimated_measure_capacity(
+            start_index,
+            start_offset,
+            viewport_end,
+        ));
         let mut current_index = start_index;
         let mut current_offset = start_offset;
         let mut hit_time_budget = false;
@@ -247,10 +256,16 @@ where
         &mut self,
         first_index: usize,
         first_offset: f32,
+        following_item_count: usize,
         start_time: Instant,
     ) -> Vec<LazyListMeasuredItem> {
         let before_count = self.config.beyond_bounds_item_count.min(first_index);
-        let mut before_items = Vec::with_capacity(before_count);
+        if before_count == 0 {
+            return Vec::new();
+        }
+
+        let mut before_items =
+            Vec::with_capacity(before_count.saturating_add(following_item_count));
         let mut before_offset = first_offset;
 
         for i in 0..before_count {
@@ -269,6 +284,43 @@ where
 
         before_items.reverse();
         before_items
+    }
+
+    fn estimated_measure_capacity(
+        &self,
+        start_index: usize,
+        start_offset: f32,
+        viewport_end: f32,
+    ) -> usize {
+        let remaining_items = self
+            .items_count
+            .saturating_sub(start_index)
+            .min(MAX_VISIBLE_ITEMS_SAFETY);
+        if remaining_items == 0 || start_offset >= viewport_end {
+            return 0;
+        }
+
+        let viewport_span = viewport_end - start_offset;
+        if !viewport_span.is_finite() || viewport_span <= 0.0 {
+            return 0;
+        }
+
+        let estimated_visible = (viewport_span / self.estimated_item_extent())
+            .ceil()
+            .min(MAX_VISIBLE_ITEMS_SAFETY as f32) as usize;
+
+        estimated_visible
+            .saturating_add(self.config.beyond_bounds_item_count)
+            .min(remaining_items)
+    }
+
+    fn estimated_item_extent(&self) -> f32 {
+        let item_size = if self.average_item_size.is_finite() && self.average_item_size > 0.0 {
+            self.average_item_size
+        } else {
+            DEFAULT_ITEM_SIZE_ESTIMATE
+        };
+        (item_size + self.config.spacing.max(0.0)).max(MIN_ESTIMATED_ITEM_EXTENT)
     }
 
     fn take_pre_measured(&mut self, index: usize) -> Option<LazyListMeasuredItem> {
@@ -297,7 +349,8 @@ mod tests {
     fn test_measure_fills_viewport() {
         let config = LazyListMeasureConfig::default();
         let mut measure = |i| create_test_item(i, 50.0);
-        let mut measurer = ItemMeasurer::new(&mut measure, &config, 100, 200.0, VecDeque::new());
+        let mut measurer =
+            ItemMeasurer::new(&mut measure, &config, 100, 200.0, 50.0, VecDeque::new());
 
         let pass = measurer.measure_all(0, 0.0);
         let items = pass.items;
@@ -312,7 +365,8 @@ mod tests {
     fn test_measure_with_offset() {
         let config = LazyListMeasureConfig::default();
         let mut measure = |i| create_test_item(i, 50.0);
-        let mut measurer = ItemMeasurer::new(&mut measure, &config, 100, 200.0, VecDeque::new());
+        let mut measurer =
+            ItemMeasurer::new(&mut measure, &config, 100, 200.0, 50.0, VecDeque::new());
 
         let pass = measurer.measure_all(5, 25.0);
         let items = pass.items;
@@ -327,7 +381,8 @@ mod tests {
     fn test_measure_respects_items_count() {
         let config = LazyListMeasureConfig::default();
         let mut measure = |i| create_test_item(i, 50.0);
-        let mut measurer = ItemMeasurer::new(&mut measure, &config, 3, 1000.0, VecDeque::new());
+        let mut measurer =
+            ItemMeasurer::new(&mut measure, &config, 3, 1000.0, 50.0, VecDeque::new());
 
         let pass = measurer.measure_all(0, 0.0);
         let items = pass.items;
@@ -343,7 +398,8 @@ mod tests {
             ..Default::default()
         };
         let mut measure = |i| create_test_item(i, 50.0);
-        let mut measurer = ItemMeasurer::new(&mut measure, &config, 100, 200.0, VecDeque::new());
+        let mut measurer =
+            ItemMeasurer::new(&mut measure, &config, 100, 200.0, 50.0, VecDeque::new());
 
         let pass = measurer.measure_all(0, 0.0);
         let items = pass.items;
@@ -351,5 +407,49 @@ mod tests {
         // Check spacing is applied
         assert_eq!(items[0].offset, 0.0);
         assert_eq!(items[1].offset, 60.0); // 50 + 10 spacing
+    }
+
+    #[test]
+    fn measure_capacity_uses_average_item_size_and_beyond_bounds() {
+        let config = LazyListMeasureConfig {
+            beyond_bounds_item_count: 2,
+            ..Default::default()
+        };
+        let mut measure = |i| create_test_item(i, 50.0);
+        let measurer = ItemMeasurer::new(&mut measure, &config, 100, 200.0, 50.0, VecDeque::new());
+
+        assert_eq!(measurer.estimated_measure_capacity(0, 0.0, 200.0), 6);
+    }
+
+    #[test]
+    fn measure_capacity_falls_back_for_invalid_average_item_size() {
+        let config = LazyListMeasureConfig::default();
+        let mut measure = |i| create_test_item(i, 50.0);
+        let measurer =
+            ItemMeasurer::new(&mut measure, &config, 100, 200.0, f32::NAN, VecDeque::new());
+
+        assert_eq!(measurer.estimated_measure_capacity(0, 0.0, 96.0), 4);
+    }
+
+    #[test]
+    fn measure_beyond_before_reserves_capacity_for_following_items() {
+        let config = LazyListMeasureConfig {
+            beyond_bounds_item_count: 2,
+            ..Default::default()
+        };
+        let mut measure = |i| create_test_item(i, 50.0);
+        let mut measurer =
+            ItemMeasurer::new(&mut measure, &config, 100, 200.0, 50.0, VecDeque::new());
+
+        let before_items = measurer.measure_beyond_before(5, 0.0, 6, Instant::now());
+
+        assert_eq!(
+            before_items
+                .iter()
+                .map(|item| item.index)
+                .collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+        assert!(before_items.capacity() >= 8);
     }
 }

@@ -222,6 +222,7 @@ where
         config,
         items_count,
         effective_viewport_size,
+        measure_state.average_item_size,
         pre_measured_queue,
     );
     let measurement_pass = measurer.measure_all(first_index, first_offset);

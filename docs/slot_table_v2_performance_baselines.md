@@ -78,6 +78,16 @@ Use the same machine, power profile, CPU set, sample size, warmup, and measureme
 
 Record the commit SHA, command line, benchmark filter, CPU set, sample size, warmup, measurement time, and stability-check result with any performance claim. Do not compare numbers from different machines or different script settings.
 
+## Lazy List Allocation Churn
+
+The lazy-list measurement path should use existing size estimates before adding
+new allocation caches. `ItemMeasurer` pre-sizes its per-pass item vector from the
+running average item size, viewport span, and beyond-bounds item count, and its
+before-bounds buffer reserves enough capacity for the final prepended result.
+If lazy scrolling still regresses after this, investigate the
+`LayoutAllocationDebugStats` counters and lazy scroll benchmark family before
+adding more retained buffers.
+
 ## Regression Budgets
 
 Apply these budgets only after the same-tree stability check passes on the host used for the comparison. If stability drift exceeds the threshold, rerun on a quieter machine before accepting or rejecting a candidate.
