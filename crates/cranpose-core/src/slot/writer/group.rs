@@ -41,7 +41,7 @@ impl SlotWriteSession<'_> {
         kind: GroupStartKind,
     ) -> GroupStart<GroupId> {
         let group_index = self.table.open_group_frame(self.state, anchor);
-        let scope_id = self.table.groups[group_index].scope_id;
+        let scope_id = self.table.group_scope_id_at_index(group_index);
         GroupStart {
             group: self.table.group_id_at_index(group_index),
             anchor,
@@ -89,7 +89,7 @@ impl SlotWriteSession<'_> {
         self.state
             .find_later_sibling(self.table, parent_anchor, key, search_start)
             .map(|found_index| ActiveChildResolution::MoveLaterSibling {
-                anchor: self.table.groups[found_index].anchor,
+                anchor: self.table.group_anchor_at_index(found_index),
             })
             .unwrap_or(ActiveChildResolution::InsertNew)
     }
@@ -156,7 +156,7 @@ impl SlotWriteSession<'_> {
             .pop()
             .expect("unbalanced group stack");
         let group_index = self.table.current_group_index(frame.group_anchor);
-        let subtree_end = group_index + self.table.groups[group_index].subtree_len as usize;
+        let subtree_end = self.table.group_subtree_end_at_index(group_index);
         self.state.advance_parent_after_child(subtree_end);
     }
 
@@ -169,7 +169,7 @@ impl SlotWriteSession<'_> {
         let group_index = self.table.current_group_index(frame.group_anchor);
         frame.skip_to_existing_group_end(
             group_index,
-            self.table.groups[group_index].subtree_len as usize,
+            self.table.group_subtree_len_at_index(group_index),
         );
     }
 

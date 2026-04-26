@@ -1,3 +1,5 @@
+#[cfg(any(test, debug_assertions))]
+use super::AnchorState;
 use super::SlotTable;
 use crate::{
     slot_storage::{GroupId, GroupKey},
@@ -19,7 +21,28 @@ pub(super) struct GroupRecord {
     pub(super) scope_id: Option<ScopeId>,
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::slot) struct GroupSiblingRecord {
+    pub(in crate::slot) key: GroupKey,
+    pub(in crate::slot) parent_anchor: AnchorId,
+    pub(in crate::slot) anchor: AnchorId,
+    pub(in crate::slot) subtree_len: usize,
+}
+
 impl SlotTable {
+    pub(in crate::slot) fn group_count(&self) -> usize {
+        self.groups.len()
+    }
+
+    pub(in crate::slot) fn active_group_index(&self, anchor: AnchorId) -> Option<usize> {
+        self.anchors.active_index(anchor)
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub(in crate::slot) fn group_anchor_state(&self, anchor: AnchorId) -> Option<AnchorState> {
+        self.anchors.state(anchor)
+    }
+
     pub(in crate::slot) fn current_group_index(&self, anchor: AnchorId) -> usize {
         self.anchors
             .active_index(anchor)
@@ -28,6 +51,74 @@ impl SlotTable {
 
     pub(in crate::slot) fn current_group(&self, anchor: AnchorId) -> &GroupRecord {
         &self.groups[self.current_group_index(anchor)]
+    }
+
+    #[inline(always)]
+    pub(in crate::slot) fn group_anchor_at_index(&self, group_index: usize) -> AnchorId {
+        self.groups[group_index].anchor
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub(in crate::slot) fn group_parent_anchor_at_index(
+        &self,
+        group_index: usize,
+    ) -> Option<AnchorId> {
+        self.groups
+            .get(group_index)
+            .map(|group| group.parent_anchor)
+    }
+
+    #[inline(always)]
+    pub(in crate::slot) fn group_scope_id_at_index(&self, group_index: usize) -> Option<ScopeId> {
+        self.groups[group_index].scope_id
+    }
+
+    #[inline(always)]
+    pub(in crate::slot) fn group_subtree_len_at_index(&self, group_index: usize) -> usize {
+        self.groups[group_index].subtree_len as usize
+    }
+
+    #[inline(always)]
+    pub(in crate::slot) fn group_subtree_end_at_index(&self, group_index: usize) -> usize {
+        group_index + self.group_subtree_len_at_index(group_index)
+    }
+
+    pub(in crate::slot) fn group_subtree_node_count_at_index(&self, group_index: usize) -> usize {
+        self.groups[group_index].subtree_node_count as usize
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub(in crate::slot) fn group_depth_at_index(&self, group_index: usize) -> usize {
+        self.groups[group_index].depth as usize
+    }
+
+    #[inline(always)]
+    pub(in crate::slot) fn group_sibling_record_at_index(
+        &self,
+        group_index: usize,
+    ) -> GroupSiblingRecord {
+        let group = &self.groups[group_index];
+        GroupSiblingRecord {
+            key: group.key,
+            parent_anchor: group.parent_anchor,
+            anchor: group.anchor,
+            subtree_len: group.subtree_len as usize,
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::slot) fn group_sibling_record_at_index_checked(
+        &self,
+        group_index: usize,
+    ) -> Option<GroupSiblingRecord> {
+        self.groups
+            .get(group_index)
+            .map(|group| GroupSiblingRecord {
+                key: group.key,
+                parent_anchor: group.parent_anchor,
+                anchor: group.anchor,
+                subtree_len: group.subtree_len as usize,
+            })
     }
 
     pub(in crate::slot) fn checked_group_index(&self, group: GroupId) -> usize {
@@ -57,10 +148,10 @@ impl SlotTable {
     #[inline(always)]
     pub(in crate::slot) fn direct_child_range_end(&self, parent_anchor: AnchorId) -> usize {
         if !parent_anchor.is_valid() {
-            self.groups.len()
+            self.group_count()
         } else {
             let parent_index = self.current_group_index(parent_anchor);
-            parent_index + self.groups[parent_index].subtree_len as usize
+            self.group_subtree_end_at_index(parent_index)
         }
     }
 

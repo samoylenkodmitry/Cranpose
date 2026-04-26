@@ -97,9 +97,7 @@ impl SlotWriteSessionState {
         }
 
         let actual_parent = table
-            .groups
-            .get(next_child_index)
-            .map(|group| group.parent_anchor)
+            .group_parent_anchor_at_index(next_child_index)
             .unwrap_or(AnchorId::INVALID);
         Err(SlotInvariantError::WriterFrameNotAtChildBoundary {
             frame_index,
@@ -120,7 +118,7 @@ impl SlotWriteSessionState {
             "root.next_child_index",
             self.root.next_child_index,
             0,
-            table.groups.len(),
+            table.group_count(),
         )?;
         if self.root.detach_remaining_children {
             Self::validate_child_boundary(
@@ -133,16 +131,16 @@ impl SlotWriteSessionState {
         }
 
         let mut parent_group_index = None;
-        let mut parent_subtree_end = table.groups.len();
+        let mut parent_subtree_end = table.group_count();
         let mut parent_depth = None;
 
         for (depth, frame) in self.group_stack.iter().enumerate() {
             let frame_index = depth + 1;
-            let Some(group_index) = table.anchors.active_index(frame.group_anchor) else {
+            let Some(group_index) = table.active_group_index(frame.group_anchor) else {
                 return Err(SlotInvariantError::AnchorMismatch {
                     anchor: frame.group_anchor,
                     expected: parent_group_index.unwrap_or(0),
-                    actual: table.anchors.state(frame.group_anchor),
+                    actual: table.group_anchor_state(frame.group_anchor),
                 });
             };
             let min_group_index = parent_group_index.map_or(0, |index| index + 1);
@@ -156,9 +154,8 @@ impl SlotWriteSessionState {
                 max_group_index,
             )?;
 
-            let group = &table.groups[group_index];
-            let payload_len = group.payload_len as usize;
-            let node_len = group.node_len as usize;
+            let payload_len = table.group_payload_len_at(group_index);
+            let node_len = table.group_node_len_at(group_index);
             let payload_limit = frame.old_payload_len.max(payload_len);
             let node_limit = frame.old_node_len.max(node_len);
             if let Some(parent_depth) = parent_depth {
@@ -167,13 +164,13 @@ impl SlotWriteSessionState {
                     frame_index,
                     frame.group_anchor,
                     "group_depth",
-                    group.depth as usize,
+                    table.group_depth_at_index(group_index),
                     expected_depth,
                     expected_depth,
                 )?;
             }
 
-            let subtree_end = group_index + group.subtree_len as usize;
+            let subtree_end = table.group_subtree_end_at_index(group_index);
             Self::validate_cursor(
                 frame_index,
                 frame.group_anchor,
@@ -208,7 +205,7 @@ impl SlotWriteSessionState {
 
             parent_group_index = Some(group_index);
             parent_subtree_end = subtree_end;
-            parent_depth = Some(group.depth as usize);
+            parent_depth = Some(table.group_depth_at_index(group_index));
         }
 
         Ok(())
@@ -322,13 +319,13 @@ mod tests {
             let _ = session.begin_group(BeginGroupInput::new(key, None));
         }
 
-        state.group_stack[0].next_child_index = table.groups.len() + 1;
+        state.group_stack[0].next_child_index = table.group_count() + 1;
 
         assert_eq!(
             state.validate(&table),
             Err(SlotInvariantError::WriterFrameOutOfBounds {
                 frame_index: 1,
-                group_anchor: table.groups[0].anchor,
+                group_anchor: table.group_anchor_at_index(0),
                 field: "next_child_index",
                 value: 2,
                 min: 1,
@@ -356,8 +353,8 @@ mod tests {
             let _ = session.begin_group(BeginGroupInput::new(grandchild_key, None));
         }
 
-        let root_anchor = table.groups[0].anchor;
-        let child_anchor = table.groups[1].anchor;
+        let root_anchor = table.group_anchor_at_index(0);
+        let child_anchor = table.group_anchor_at_index(1);
         state.group_stack[0].next_child_index = 2;
 
         assert_eq!(
@@ -454,7 +451,7 @@ mod tests {
         }
 
         assert_eq!(state.group_stack[0].old_node_len, 1);
-        assert_eq!(table.groups[0].node_len, 0);
+        assert_eq!(table.group_node_len_at(0), 0);
         assert_eq!(state.validate(&table), Ok(()));
     }
 }

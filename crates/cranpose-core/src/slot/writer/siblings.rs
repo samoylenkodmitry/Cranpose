@@ -59,13 +59,13 @@ impl SiblingIndex {
         let mut by_key: HashMap<GroupKey, SmallVec<[AnchorId; 2]>> = HashMap::default();
         let mut index = search_start;
         while index < parent_end {
-            let group = &table.groups[index];
+            let group = table.group_sibling_record_at_index(index);
             debug_assert_eq!(
                 group.parent_anchor, parent_anchor,
                 "later sibling index must stay on direct children"
             );
             by_key.entry(group.key).or_default().push(group.anchor);
-            index += group.subtree_len as usize;
+            index += group.subtree_len;
         }
         Self { by_key }
     }
@@ -82,8 +82,8 @@ impl SiblingIndex {
             anchors
                 .iter()
                 .filter_map(|anchor| {
-                    let index = table.anchors.active_index(*anchor)?;
-                    let group = table.groups.get(index)?;
+                    let index = table.active_group_index(*anchor)?;
+                    let group = table.group_sibling_record_at_index_checked(index)?;
                     (index >= search_start
                         && index < parent_end
                         && group.parent_anchor == parent_anchor
@@ -123,7 +123,7 @@ impl SlotWriteSessionState {
         let mut index = search_start;
         let mut direct_children_seen = 0usize;
         while index < parent_end && direct_children_seen < SIBLING_INDEX_THRESHOLD {
-            let group = &table.groups[index];
+            let group = table.group_sibling_record_at_index(index);
             debug_assert_eq!(
                 group.parent_anchor, parent_anchor,
                 "later sibling scans must stay on direct children"
@@ -132,7 +132,7 @@ impl SlotWriteSessionState {
                 return Some(index);
             }
             direct_children_seen += 1;
-            index += group.subtree_len as usize;
+            index += group.subtree_len;
         }
 
         if index >= parent_end {

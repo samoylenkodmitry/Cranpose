@@ -4,8 +4,8 @@ use crate::{slot_storage::NodeRecordResult, AnchorId, NodeId};
 impl SlotTable {
     fn collect_subtree_node_records(&self, group_anchor: AnchorId) -> Vec<NodeRecord> {
         let group_index = self.current_group_index(group_anchor);
-        let subtree_end = group_index + self.groups[group_index].subtree_len as usize;
-        let mut nodes = Vec::with_capacity(self.groups[group_index].subtree_node_count as usize);
+        let subtree_end = self.group_subtree_end_at_index(group_index);
+        let mut nodes = Vec::with_capacity(self.group_subtree_node_count_at_index(group_index));
         for index in group_index..subtree_end {
             nodes.extend(self.group_node_records_at(index).iter().copied());
         }
