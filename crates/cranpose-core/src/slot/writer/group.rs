@@ -5,6 +5,17 @@ use crate::{
     AnchorId, ScopeId,
 };
 
+enum ActiveChildResolution {
+    ReuseExpected { anchor: AnchorId },
+    MoveLaterSibling { anchor: AnchorId },
+    InsertNew,
+}
+
+struct StartedGroup {
+    anchor: AnchorId,
+    kind: GroupStartKind,
+}
+
 impl SlotTable {
     fn open_group_frame(&mut self, state: &mut SlotWriteSessionState, anchor: AnchorId) -> usize {
         let group_index = self.current_group_index(anchor);
@@ -23,6 +34,7 @@ impl SlotWriteSession<'_> {
         self.state.preview_group_key(seed)
     }
 
+    #[inline(always)]
     fn open_started_group(
         &mut self,
         anchor: AnchorId,
@@ -38,6 +50,7 @@ impl SlotWriteSession<'_> {
         }
     }
 
+    #[inline(always)]
     fn restore_started_group(
         &mut self,
         key: GroupKey,
@@ -49,6 +62,65 @@ impl SlotWriteSession<'_> {
             .table
             .restore_subtree(insert_index, parent_anchor, key, restored);
         self.open_started_group(anchor, GroupStartKind::Restored)
+    }
+
+    #[inline(always)]
+    fn resolve_active_child(
+        &mut self,
+        parent_anchor: AnchorId,
+        insert_index: usize,
+        key: GroupKey,
+    ) -> ActiveChildResolution {
+        let Some(expected_anchor) = self
+            .table
+            .direct_child_anchor_at(parent_anchor, insert_index)
+        else {
+            return ActiveChildResolution::InsertNew;
+        };
+
+        let expected_group = self.table.current_group(expected_anchor);
+        if expected_group.key == key {
+            return ActiveChildResolution::ReuseExpected {
+                anchor: expected_anchor,
+            };
+        }
+
+        let search_start = insert_index + expected_group.subtree_len as usize;
+        self.state
+            .find_later_sibling(self.table, parent_anchor, key, search_start)
+            .map(|found_index| ActiveChildResolution::MoveLaterSibling {
+                anchor: self.table.groups[found_index].anchor,
+            })
+            .unwrap_or(ActiveChildResolution::InsertNew)
+    }
+
+    #[inline(always)]
+    fn materialize_group_at_cursor(
+        &mut self,
+        parent_anchor: AnchorId,
+        insert_index: usize,
+        key: GroupKey,
+        resolution: ActiveChildResolution,
+    ) -> StartedGroup {
+        match resolution {
+            ActiveChildResolution::ReuseExpected { anchor } => StartedGroup {
+                anchor,
+                kind: GroupStartKind::Reused,
+            },
+            ActiveChildResolution::MoveLaterSibling { anchor } => {
+                self.table.move_subtree(anchor, insert_index);
+                StartedGroup {
+                    anchor,
+                    kind: GroupStartKind::Moved,
+                }
+            }
+            ActiveChildResolution::InsertNew => StartedGroup {
+                anchor: self
+                    .table
+                    .insert_new_group(insert_index, parent_anchor, key),
+                kind: GroupStartKind::Inserted,
+            },
+        }
     }
 
     pub(crate) fn begin_recompose_at_scope(&mut self, scope_id: ScopeId) -> Option<GroupId> {
@@ -71,39 +143,10 @@ impl SlotWriteSession<'_> {
             return self.restore_started_group(key, restored);
         }
 
-        let (anchor, kind) = if let Some(expected_anchor) = self
-            .table
-            .direct_child_anchor_at(parent_anchor, insert_index)
-        {
-            let expected_group = self.table.current_group(expected_anchor);
-            if expected_group.key == key {
-                (expected_anchor, GroupStartKind::Reused)
-            } else {
-                let search_start = insert_index + expected_group.subtree_len as usize;
-                if let Some(found_index) =
-                    self.state
-                        .find_later_sibling(self.table, parent_anchor, key, search_start)
-                {
-                    let found_anchor = self.table.groups[found_index].anchor;
-                    self.table.move_subtree(found_anchor, insert_index);
-                    (found_anchor, GroupStartKind::Moved)
-                } else {
-                    (
-                        self.table
-                            .insert_new_group(insert_index, parent_anchor, key),
-                        GroupStartKind::Inserted,
-                    )
-                }
-            }
-        } else {
-            (
-                self.table
-                    .insert_new_group(insert_index, parent_anchor, key),
-                GroupStartKind::Inserted,
-            )
-        };
-
-        self.open_started_group(anchor, kind)
+        let resolution = self.resolve_active_child(parent_anchor, insert_index, key);
+        let started =
+            self.materialize_group_at_cursor(parent_anchor, insert_index, key, resolution);
+        self.open_started_group(started.anchor, started.kind)
     }
 
     pub(crate) fn end_group(&mut self) {
