@@ -41,10 +41,10 @@ This file tracks current forward work and marks boxes closed only after the stat
   Keep `SlotWriteSessionState`, `RootFrame`, `GroupFrame`, and `SiblingIndex` names unless a replacement removes real ambiguity.
   Acceptance run: `cargo test -p cranpose-core slot::writer`, `cargo test -p cranpose-core slot::`, then `CRANPOSE_BUILD_JOBS=2 ./verify_slot_table.sh`.
 
-- [ ] [L] Split `slot/writer.rs` by operation family while keeping `slot/writer/mod.rs` as the facade.
+- [x] [L] Split `slot/writer.rs` by operation family while keeping `slot/writer/mod.rs` as the facade.
   Target modules: `group.rs`, `finish.rs`, `payload.rs`, `nodes.rs`, and `finalize.rs`.
   Do not change algorithms in this step.
-  Acceptance: `cargo test -p cranpose-core slot::`, then `./verify_slot_table.sh`.
+  Acceptance run: `cargo test -p cranpose-core slot::`, then `CRANPOSE_BUILD_JOBS=2 ./verify_slot_table.sh`.
 
 - [ ] [L] Extract active child resolution from `begin_group`.
   Add an internal `ActiveChildResolution` flow where resolution inspects only active direct siblings and does not mutate storage; materialization performs only move/insert/reuse.
