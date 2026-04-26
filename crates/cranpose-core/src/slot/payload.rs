@@ -4,11 +4,11 @@ use super::{
         offset_detached_group_segment_starts, segment_insert_index_for_group,
         shift_group_segment_starts_from, subtree_segment_span, PayloadSegment,
     },
-    GroupRecord, PayloadKind, PayloadRecord, SlotTable,
+    GroupRecord, PayloadKind, PayloadRange, PayloadRecord, SlotTable,
 };
 use crate::{retention::RetentionManager, AnchorId};
 use std::any::TypeId;
-use std::{mem, ops::Range};
+use std::mem;
 
 fn replace_payload_record<T: 'static>(
     record: &mut PayloadRecord,
@@ -31,8 +31,13 @@ impl SlotTable {
         group_segment_len::<PayloadSegment>(&self.groups, group_index)
     }
 
-    fn group_payload_range_at(&self, group_index: usize) -> Range<usize> {
-        group_segment_range_at::<PayloadSegment>(&self.groups, self.payloads.len(), group_index)
+    fn group_payload_range_at(&self, group_index: usize) -> PayloadRange {
+        let range = group_segment_range_at::<PayloadSegment>(
+            &self.groups,
+            self.payloads.len(),
+            group_index,
+        );
+        PayloadRange::new(range.start, range.end)
     }
 
     fn payload_insert_index_for_group(&self, group_index: usize) -> usize {
@@ -60,7 +65,7 @@ impl SlotTable {
 
     pub(in crate::slot) fn group_payload_records_at(&self, group_index: usize) -> &[PayloadRecord] {
         let range = self.group_payload_range_at(group_index);
-        &self.payloads[range]
+        &self.payloads[range.as_range()]
     }
 
     pub(super) fn payload_owner_at(&self, group_index: usize, payload_index: usize) -> AnchorId {
@@ -206,7 +211,7 @@ impl SlotTable {
     fn refresh_group_payload_locations(&mut self, owner: AnchorId, start: usize) {
         let group_index = self.current_group_index(owner);
         let range = self.group_payload_range_at(group_index);
-        for index in start..(range.end - range.start) {
+        for index in start..range.len() {
             let payload_anchor = self.payloads[range.start + index].anchor;
             self.payload_locations.insert(payload_anchor, owner, index);
         }
@@ -218,8 +223,8 @@ impl SlotTable {
         for group_index in start..end {
             let owner = self.groups[group_index].anchor;
             let range = self.group_payload_range_at(group_index);
-            payload_span += range.end - range.start;
-            for index in 0..(range.end - range.start) {
+            payload_span += range.len();
+            for index in 0..range.len() {
                 let payload_anchor = self.payloads[range.start + index].anchor;
                 self.payload_locations.insert(payload_anchor, owner, index);
             }
@@ -240,9 +245,10 @@ impl SlotTable {
         let owner_index = self.current_group_index(owner);
         let payload_start = self.group_payload_start_at(owner_index) + start;
         let payload_end = self.group_payload_start_at(owner_index) + end;
+        let payload_range = PayloadRange::new(payload_start, payload_end);
         let removed = self
             .payloads
-            .drain(payload_start..payload_end)
+            .drain(payload_range.as_range())
             .collect::<Vec<_>>();
         self.clear_payload_locations_for_payloads(&removed);
         add_group_segment_len::<PayloadSegment>(
@@ -277,9 +283,10 @@ impl SlotTable {
         if payload_len == 0 {
             return Vec::new();
         }
+        let payload_range = PayloadRange::new(payload_start, payload_start + payload_len);
         let removed = self
             .payloads
-            .drain(payload_start..payload_start + payload_len)
+            .drain(payload_range.as_range())
             .collect::<Vec<_>>();
         if clear_locations {
             self.clear_payload_locations_for_payloads(&removed);

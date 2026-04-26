@@ -54,6 +54,7 @@ impl SlotTable {
         self.groups[group_index].anchor
     }
 
+    #[inline(always)]
     pub(in crate::slot) fn direct_child_range_end(&self, parent_anchor: AnchorId) -> usize {
         if !parent_anchor.is_valid() {
             self.groups.len()

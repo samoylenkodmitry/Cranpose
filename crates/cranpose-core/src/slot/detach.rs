@@ -1,4 +1,4 @@
-use super::{DetachedSubtree, GroupRecord, SlotTable, SlotWriteSessionState};
+use super::{DetachedSubtree, GroupRange, GroupRecord, SlotTable, SlotWriteSessionState};
 use crate::{
     remove_child_and_cleanup_now, slot_storage::GroupKey, AnchorId, Applier, NodeError, NodeId,
 };
@@ -13,14 +13,8 @@ impl SlotTable {
         generation
     }
 
-    pub(in crate::slot) fn detach_range(
-        &mut self,
-        start_index: usize,
-        subtree_len: usize,
-    ) -> Vec<GroupRecord> {
-        self.groups
-            .drain(start_index..start_index + subtree_len)
-            .collect::<Vec<_>>()
+    pub(in crate::slot) fn detach_range(&mut self, range: GroupRange) -> Vec<GroupRecord> {
+        self.groups.drain(range.as_range()).collect::<Vec<_>>()
     }
 
     pub(in crate::slot) fn detach_subtree(&mut self, anchor: AnchorId) -> DetachedSubtree {
@@ -29,7 +23,8 @@ impl SlotTable {
         let root_subtree_len = self.groups[root_index].subtree_len;
         let root_subtree_node_count = self.groups[root_index].subtree_node_count;
         let subtree_len = root_subtree_len as usize;
-        let mut removed_groups = self.detach_range(root_index, subtree_len);
+        let removed_group_range = GroupRange::from_start_len(root_index, subtree_len);
+        let mut removed_groups = self.detach_range(removed_group_range);
         let detached_root_depth = removed_groups
             .first()
             .map(|group| group.depth)

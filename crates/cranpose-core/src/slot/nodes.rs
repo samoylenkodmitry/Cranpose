@@ -4,10 +4,10 @@ use super::{
         offset_detached_group_segment_starts, segment_insert_index_for_group,
         shift_group_segment_starts_from, subtree_segment_span, NodeSegment,
     },
-    GroupRecord, NodeLifecycle, NodeRecord, SlotTable,
+    GroupRecord, NodeLifecycle, NodeRange, NodeRecord, SlotTable,
 };
 use crate::NodeId;
-use std::{mem, ops::Range};
+use std::mem;
 
 pub(super) struct GroupNodeRecordResult {
     pub(super) reused_slot: bool,
@@ -23,13 +23,15 @@ impl SlotTable {
         group_segment_len::<NodeSegment>(&self.groups, group_index)
     }
 
-    fn group_node_range_at(&self, group_index: usize) -> Range<usize> {
-        group_segment_range_at::<NodeSegment>(&self.groups, self.nodes.len(), group_index)
+    fn group_node_range_at(&self, group_index: usize) -> NodeRange {
+        let range =
+            group_segment_range_at::<NodeSegment>(&self.groups, self.nodes.len(), group_index);
+        NodeRange::new(range.start, range.end)
     }
 
     pub(in crate::slot) fn group_node_records_at(&self, group_index: usize) -> &[NodeRecord] {
         let range = self.group_node_range_at(group_index);
-        &self.nodes[range]
+        &self.nodes[range.as_range()]
     }
 
     pub(in crate::slot) fn group_node_record_at(
@@ -123,7 +125,8 @@ impl SlotTable {
         }
         let node_start = self.group_node_start_at(group_index) + start;
         let node_end = self.group_node_start_at(group_index) + node_len;
-        let removed = self.nodes.drain(node_start..node_end).collect::<Vec<_>>();
+        let node_range = NodeRange::new(node_start, node_end);
+        let removed = self.nodes.drain(node_range.as_range()).collect::<Vec<_>>();
         add_group_segment_len::<NodeSegment>(
             &mut self.groups,
             group_index,
@@ -150,10 +153,8 @@ impl SlotTable {
         if node_len == 0 {
             return Vec::new();
         }
-        let removed = self
-            .nodes
-            .drain(node_start..node_start + node_len)
-            .collect();
+        let node_range = NodeRange::new(node_start, node_start + node_len);
+        let removed = self.nodes.drain(node_range.as_range()).collect();
         shift_group_segment_starts_from::<NodeSegment>(
             &mut self.groups,
             removed_group_index,
