@@ -51,9 +51,9 @@ This file tracks current forward work and marks boxes closed only after the stat
   Acceptance run: keyed reorder, duplicate-key, retained-restore, and model slot tests passed under `cargo test -p cranpose-core slot::`; `CRANPOSE_BUILD_JOBS=2 ./verify_slot_table.sh`.
   Perf note: CPU0 perf was rejected as contaminated by external load and thermal throttling. Same-CPU validation used `CRANPOSE_SLOT_TABLE_CPU_SET=29 CARGO_TARGET_DIR=/tmp/cranpose-slot-perf-target ./perf_slot_table_v2.sh --save-baseline slot-v2-refactor-base-cpu29` from tag `slot-v2-refactor-base`, then `CRANPOSE_SLOT_TABLE_CPU_SET=29 CARGO_TARGET_DIR=/tmp/cranpose-slot-perf-target ./perf_slot_table_v2.sh --baseline slot-v2-refactor-base-cpu29` from the current tree, with all benchmark families inside the documented budgets.
 
-- [ ] [M] Encapsulate writer frame cursor mutation behind named methods.
+- [x] [M] Encapsulate writer frame cursor mutation behind named methods.
   Replace direct writes to payload/node cursors, body-finished state, skip state, and parent child cursor advancement with methods on `GroupFrame` and `SlotWriteSessionState`.
-  Acceptance: `cargo test -p cranpose-core slot::`, then `./verify_slot_table.sh`.
+  Acceptance run: `cargo test -p cranpose-core slot::`, then `CRANPOSE_BUILD_JOBS=2 ./verify_slot_table.sh`.
 
 - [ ] [M] Add internal typed ranges for high-risk structural operations.
   Start with subtree, payload, and node ranges used by `move_subtree`, `detach_subtree`, `restore_subtree`, `remove_payload_range`, `remove_group_node_range`, and direct-child range APIs.

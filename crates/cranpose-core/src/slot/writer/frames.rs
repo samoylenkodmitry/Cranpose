@@ -27,3 +27,32 @@ pub(in crate::slot) struct GroupFrame {
     pub(in crate::slot) body_finished: bool,
     pub(in crate::slot) was_skipped: bool,
 }
+
+impl GroupFrame {
+    pub(in crate::slot) fn mark_body_finished(&mut self) -> bool {
+        if self.body_finished {
+            return false;
+        }
+        self.body_finished = true;
+        true
+    }
+
+    pub(in crate::slot) fn advance_payload_cursor(&mut self) {
+        self.payload_cursor += 1;
+    }
+
+    pub(in crate::slot) fn advance_node_cursor(&mut self) {
+        self.node_cursor += 1;
+    }
+
+    pub(in crate::slot) fn skip_to_existing_group_end(
+        &mut self,
+        group_index: usize,
+        subtree_len: usize,
+    ) {
+        self.next_child_index = group_index + subtree_len;
+        self.payload_cursor = self.old_payload_len;
+        self.node_cursor = self.old_node_len;
+        self.was_skipped = true;
+    }
+}

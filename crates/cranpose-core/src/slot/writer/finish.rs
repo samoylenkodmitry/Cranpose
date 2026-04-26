@@ -33,7 +33,7 @@ impl SlotTable {
                 .group_stack
                 .last_mut()
                 .expect("finish_group_body requires an active group");
-            if frame.body_finished {
+            if !frame.mark_body_finished() {
                 return FinishGroupResult {
                     detached_children: Vec::new(),
                     direct_nodes: Vec::new(),
@@ -42,7 +42,6 @@ impl SlotTable {
                 };
             }
 
-            frame.body_finished = true;
             (
                 frame.group_anchor,
                 frame.payload_cursor,

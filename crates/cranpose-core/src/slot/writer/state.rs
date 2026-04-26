@@ -253,11 +253,19 @@ impl SlotWriteSessionState {
             .unwrap_or(AnchorId::INVALID)
     }
 
-    pub(in crate::slot) fn current_next_child_index(&mut self) -> &mut usize {
-        if let Some(frame) = self.group_stack.last_mut() {
-            &mut frame.next_child_index
+    pub(in crate::slot) fn current_child_cursor(&self) -> usize {
+        if let Some(frame) = self.group_stack.last() {
+            frame.next_child_index
         } else {
-            &mut self.root.next_child_index
+            self.root.next_child_index
+        }
+    }
+
+    pub(in crate::slot) fn advance_parent_after_child(&mut self, subtree_end: usize) {
+        if let Some(parent) = self.group_stack.last_mut() {
+            parent.next_child_index = subtree_end;
+        } else {
+            self.root.next_child_index = subtree_end;
         }
     }
 

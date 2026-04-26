@@ -57,7 +57,7 @@ impl SlotWriteSession<'_> {
         restored: DetachedSubtree,
     ) -> GroupStart<GroupId> {
         let parent_anchor = self.state.current_parent_anchor();
-        let insert_index = *self.state.current_next_child_index();
+        let insert_index = self.state.current_child_cursor();
         let anchor = self
             .table
             .restore_subtree(insert_index, parent_anchor, key, restored);
@@ -137,7 +137,7 @@ impl SlotWriteSession<'_> {
         let BeginGroupInput { key, restored } = input;
         self.state.consume_group_key(key);
         let parent_anchor = self.state.current_parent_anchor();
-        let insert_index = *self.state.current_next_child_index();
+        let insert_index = self.state.current_child_cursor();
 
         if let Some(restored) = restored {
             return self.restore_started_group(key, restored);
@@ -157,11 +157,7 @@ impl SlotWriteSession<'_> {
             .expect("unbalanced group stack");
         let group_index = self.table.current_group_index(frame.group_anchor);
         let subtree_end = group_index + self.table.groups[group_index].subtree_len as usize;
-        if let Some(parent) = self.state.group_stack.last_mut() {
-            parent.next_child_index = subtree_end;
-        } else {
-            self.state.root.next_child_index = subtree_end;
-        }
+        self.state.advance_parent_after_child(subtree_end);
     }
 
     pub(crate) fn skip_group(&mut self) {
@@ -171,10 +167,10 @@ impl SlotWriteSession<'_> {
             .last_mut()
             .expect("skip_group requires an active group");
         let group_index = self.table.current_group_index(frame.group_anchor);
-        frame.next_child_index = group_index + self.table.groups[group_index].subtree_len as usize;
-        frame.payload_cursor = frame.old_payload_len;
-        frame.node_cursor = frame.old_node_len;
-        frame.was_skipped = true;
+        frame.skip_to_existing_group_end(
+            group_index,
+            self.table.groups[group_index].subtree_len as usize,
+        );
     }
 
     pub(crate) fn set_group_scope(&mut self, group: GroupId, scope_id: ScopeId) {

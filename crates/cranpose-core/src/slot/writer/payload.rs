@@ -50,7 +50,7 @@ impl SlotWriteSession<'_> {
         };
 
         let slot = ValueSlotId::new(anchor, generation);
-        frame.payload_cursor += 1;
+        frame.advance_payload_cursor();
         slot
     }
 

@@ -57,7 +57,7 @@ impl SlotWriteSession<'_> {
             self.table.adjust_ancestor_node_counts(group_anchor, 1);
         }
 
-        frame.node_cursor += 1;
+        frame.advance_node_cursor();
         NodeRecordResult {
             reused: recorded.reused_node,
             id,
