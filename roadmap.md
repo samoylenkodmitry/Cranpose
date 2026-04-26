@@ -8,6 +8,7 @@ This file tracks current forward work and marks boxes closed only after the stat
 
 - Slot Table V2 is the active implementation under `crates/cranpose-core/src/slot/*`.
 - Completed cleanup and review-fix history is in git through `0bbe9cd6`.
+- The first refactor slice is closed below with its validation gate.
 - Last full local verification on 2026-04-26 was green:
   `cargo fmt`, `cargo test > 1.tmp 2>&1`,
   `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`,
@@ -26,7 +27,7 @@ This file tracks current forward work and marks boxes closed only after the stat
 
 ## Slot Table Refactor Roadmap
 
-- [ ] [M] Split `crates/cranpose-core/src/slot/tests.rs` into behavior-focused modules under `crates/cranpose-core/src/slot/tests/` without changing assertions or test behavior.
+- [x] [M] Split `crates/cranpose-core/src/slot/tests.rs` into behavior-focused modules under `crates/cranpose-core/src/slot/tests/` without changing assertions or test behavior.
   Target modules: `basic.rs`, `payloads.rs`, `keyed_reorder.rs`, `detach_restore.rs`, `retention.rs`, `nodes.rs`, `validation.rs`, `writer_state.rs`, and `model.rs`.
   Acceptance: `cargo test -p cranpose-core slot::`, then `./verify_slot_table.sh`.
 
