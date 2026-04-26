@@ -31,8 +31,9 @@ This file tracks current forward work and marks boxes closed only after the stat
   Target modules: `basic.rs`, `payloads.rs`, `keyed_reorder.rs`, `detach_restore.rs`, `retention.rs`, `nodes.rs`, `validation.rs`, `writer_state.rs`, and `model.rs`.
   Acceptance: `cargo test -p cranpose-core slot::`, then `./verify_slot_table.sh`.
 
-- [ ] [S] Save a Slot Table V2 refactor baseline before production-code movement.
+- [x] [S] Save a Slot Table V2 refactor baseline before production-code movement.
   Suggested commands: `git tag slot-v2-refactor-base` and `./perf_slot_table_v2.sh --save-baseline slot-v2-refactor-base`.
+  Baseline saved at commit `fddc3a7c` with `CRANPOSE_BUILD_JOBS=2 ./perf_slot_table_v2.sh --save-baseline slot-v2-refactor-base`; settings: all benchmarks, CPU set `0`, warmup `1s`, measurement `5s`, sample size `30`.
   Acceptance: baseline artifacts exist and the command/settings are recorded in the item commit message or notes.
 
 - [ ] [L] Move writer session state out of `slot/table/session.rs` into writer-owned modules without changing behavior.
