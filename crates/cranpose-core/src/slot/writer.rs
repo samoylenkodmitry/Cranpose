@@ -283,6 +283,8 @@ impl SlotWriteSession<'_> {
                 .table
                 .payload_value_is::<T>(group_index, frame.payload_cursor)
             {
+                self.table
+                    .update_payload_kind(group_index, frame.payload_cursor, kind);
                 (anchor, generation)
             } else {
                 let (anchor, generation, old_value) = self.table.replace_payload_identity(

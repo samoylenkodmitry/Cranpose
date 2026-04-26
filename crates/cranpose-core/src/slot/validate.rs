@@ -97,6 +97,9 @@ pub(crate) enum SlotInvariantError {
         expected: NodeLifecycle,
         actual: NodeLifecycle,
     },
+    DuplicateNodeId {
+        node_id: NodeId,
+    },
     DuplicateSiblingKey {
         parent_anchor: AnchorId,
         key: GroupKey,
@@ -211,6 +214,10 @@ pub(crate) enum SlotInvariantError {
         node_id: NodeId,
         expected: AnchorId,
         actual: AnchorId,
+    },
+    DetachedDuplicateNodeId {
+        root_key: GroupKey,
+        node_id: NodeId,
     },
     WriterFrameOutOfBounds {
         frame_index: usize,
@@ -473,6 +480,15 @@ impl SlotTreeKind {
             },
         }
     }
+
+    fn duplicate_node_id(self, node_id: NodeId) -> SlotInvariantError {
+        match self {
+            Self::Active => SlotInvariantError::DuplicateNodeId { node_id },
+            Self::Detached { root_key } => {
+                SlotInvariantError::DetachedDuplicateNodeId { root_key, node_id }
+            }
+        }
+    }
 }
 
 #[cfg(any(test, debug_assertions))]
@@ -639,6 +655,7 @@ fn validate_slot_tree(
 ) -> Result<(), SlotInvariantError> {
     let mut stack: Vec<(AnchorId, usize)> = Vec::new();
     let mut anchor_to_group: HashMap<AnchorId, usize> = HashMap::default();
+    let mut node_ids = HashSet::default();
     let mut expected_payload_start = 0usize;
     let mut expected_node_start = 0usize;
 
@@ -723,6 +740,9 @@ fn validate_slot_tree(
                 .node_out_of_range(index, node_start, node_len, view.nodes.len()));
         }
         for node in &view.nodes[node_start..node_end] {
+            if !node_ids.insert(node.id) {
+                return Err(view.kind.duplicate_node_id(node.id));
+            }
             if node.owner != group.anchor {
                 return Err(view
                     .kind

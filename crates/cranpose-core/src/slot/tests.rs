@@ -599,6 +599,46 @@ fn payload_records_store_semantic_payload_kinds() {
 }
 
 #[test]
+fn payload_kind_updates_when_same_type_slot_changes_semantics() {
+    const GROUP_KEY: Key = 54;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let first_slot = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let slot = session.value_slot_with_kind(super::PayloadKind::Param, || 7_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+    assert_eq!(
+        harness.table.group_payload_record_at(0, 0).kind,
+        super::PayloadKind::Param
+    );
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let second_slot = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let slot = session.value_slot_with_kind(super::PayloadKind::Return, || 9_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+
+    assert_eq!(first_slot, second_slot);
+    assert_eq!(
+        harness.table.group_payload_record_at(0, 0).kind,
+        super::PayloadKind::Return
+    );
+    assert_eq!(*harness.table.read_value::<i32>(second_slot), 7);
+}
+
+#[test]
 fn second_identical_composition_reuses_group_and_value() {
     let mut harness = SlotHarness::new();
 
@@ -1427,6 +1467,28 @@ fn detached_validate_rejects_node_owner_outside_subtree() {
             node_id: child_node,
             expected: expected_owner,
             actual: outside_anchor,
+        })
+    );
+}
+
+#[test]
+fn detached_validate_rejects_duplicate_node_id() {
+    const PARENT_KEY: Key = 399;
+    const CHILD_KEY: Key = 400;
+
+    let (_, mut detached, child_node) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
+    let root_key = detached.root_key();
+    let child_node = child_node.expect("test helper must record a child node");
+    detached.nodes.push(detached.nodes[0]);
+    detached.groups[0].node_len = 2;
+    detached.groups[0].subtree_node_count = 2;
+
+    assert_eq!(
+        detached.validate_detached(),
+        Err(SlotInvariantError::DetachedDuplicateNodeId {
+            root_key,
+            node_id: child_node,
         })
     );
 }
@@ -2651,6 +2713,26 @@ fn validate_reports_node_owner_mismatch_structurally() {
             expected: table.groups[0].anchor,
             actual: AnchorId::INVALID,
         })
+    );
+}
+
+#[test]
+fn validate_reports_duplicate_node_id_structurally() {
+    let mut table = composed_group_with_value_and_node_table(480);
+    let node = table.group_node_record_at(0, 0).id;
+    table.nodes.push(super::NodeRecord {
+        owner: table.groups[0].anchor,
+        id: node,
+        parent_id: None,
+        generation: 2,
+        lifecycle: super::NodeLifecycle::Active,
+    });
+    table.groups[0].node_len = 2;
+    table.groups[0].subtree_node_count = 2;
+
+    assert_eq!(
+        table.validate(),
+        Err(SlotInvariantError::DuplicateNodeId { node_id: node })
     );
 }
 

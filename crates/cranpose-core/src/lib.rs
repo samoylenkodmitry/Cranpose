@@ -3547,7 +3547,16 @@ impl SlotsHost {
         RefMut::map(self.inner.borrow_mut(), |inner| &mut inner.table)
     }
 
-    pub fn take(&self) -> SlotTable {
+    pub fn into_table(self: Rc<Self>) -> SlotTable {
+        assert_eq!(
+            Rc::strong_count(&self),
+            1,
+            "cannot transfer SlotsHost table while other host references are alive"
+        );
+        self.take_table_for_transfer()
+    }
+
+    fn take_table_for_transfer(&self) -> SlotTable {
         let inner = self.inner.borrow();
         assert!(
             inner.active_pass.is_none(),

@@ -32,6 +32,12 @@ This file tracks the current forward work and marks boxes closed only after full
 - [x] [S] Update user-facing crate docs to say Slot Table V2 is active and gap-table semantics are historical only.
 - [x] [S] Document the baseline process using `./perf_slot_table_v2.sh --save-baseline`, `--baseline`, and `--stability-check` in `docs/slot_table_v2_performance_baselines.md`.
 
+## Slot Table Review Fixes
+
+- [x] [M] Replace public shared `SlotsHost::take()` with an ownership-transfer API that cannot be called while other host references remain alive.
+- [x] [S] Refresh `PayloadKind` when an existing value slot is reused with the same Rust type but a different semantic kind.
+- [x] [M] Add active and detached duplicate-`NodeId` validation so slot storage cannot record the same node identity twice.
+
 ## Slot Table Cleanup Backlog
 
 - [x] [M] Remove dead production fields from `FinishGroupResult`; keep only detached children, direct node removals, skipped-root nodes, and skipped state.

@@ -172,6 +172,16 @@ impl SlotTable {
         replace_payload_record(record, kind, value)
     }
 
+    pub(super) fn update_payload_kind(
+        &mut self,
+        group_index: usize,
+        payload_index: usize,
+        kind: PayloadKind,
+    ) {
+        self.group_payload_record_at_mut(group_index, payload_index)
+            .kind = kind;
+    }
+
     pub(super) fn replace_payload_identity<T: 'static>(
         &mut self,
         group_index: usize,

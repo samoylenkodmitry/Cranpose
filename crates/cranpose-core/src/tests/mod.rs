@@ -293,9 +293,7 @@ fn teardown_composer(
     slots_host: Rc<SlotsHost>,
     applier_host: Rc<ConcreteApplierHost<MemoryApplier>>,
 ) {
-    *slots = Rc::try_unwrap(slots_host)
-        .unwrap_or_else(|_| panic!("slots host still has outstanding references"))
-        .take();
+    *slots = slots_host.into_table();
     *applier = Rc::try_unwrap(applier_host)
         .unwrap_or_else(|_| panic!("applier host still has outstanding references"))
         .into_inner();

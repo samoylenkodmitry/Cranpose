@@ -31,6 +31,7 @@ This document is the short operational checklist for Slot Table V2. Keep it smal
 - Active node records have `NodeLifecycle::Active`.
 - Retained node records have `NodeLifecycle::RetainedDetached`.
 - Disposed nodes are not retained by slot storage.
+- Node ids are unique within each active or detached slot tree.
 - Skipped-group root node metadata is exact and comes from stored node records, not applier tree scans.
 
 ## Anchors

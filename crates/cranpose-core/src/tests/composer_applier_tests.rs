@@ -1,5 +1,14 @@
 use super::*;
 
+#[test]
+#[should_panic(expected = "cannot transfer SlotsHost table while other host references are alive")]
+fn slots_host_into_table_requires_unique_host_reference() {
+    let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    let _held = Rc::clone(&slots_host);
+
+    let _ = slots_host.into_table();
+}
+
 /// Test that emit_node rejects reuse when the parent's previous children list
 /// didn't contain the candidate node. This prevents nodes from "teleporting"
 /// between parents.
