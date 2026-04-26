@@ -21,6 +21,9 @@ impl SlotWriteSession<'_> {
 
         let root_detached = self.table.root_finish_result(self.state);
         self.state.note_detached_subtrees(&root_detached);
+        #[cfg(any(test, debug_assertions))]
+        self.state
+            .debug_assert_valid_after(self.table, "finalize_pass");
         root_detached
     }
 }

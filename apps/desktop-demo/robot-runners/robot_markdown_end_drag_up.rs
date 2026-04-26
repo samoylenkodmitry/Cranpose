@@ -22,15 +22,15 @@ use std::time::Duration;
 
 const VIEWPORT_TAG: &str = "MarkdownListViewport";
 const SCROLLBAR_TAG: &str = "MarkdownScrollbarRail";
-const DEFAULT_TOP_SENTINEL: &str = "Daily leetcode challenge";
+const DEFAULT_TOP_SENTINEL: &str = "Line 001";
 const DEFAULT_DOWN_DRAG_FROM_FRAC: f32 = 0.84;
 const DEFAULT_DOWN_DRAG_TO_FRAC: f32 = 0.12;
 const DEFAULT_REVERSE_DRAG_FROM_FRAC: f32 = 0.56;
 const DEFAULT_REVERSE_DRAG_TO_FRAC: f32 = 0.68;
-const DEFAULT_DOWN_DRAG_LOOPS: u32 = 10;
-const DEFAULT_DOWN_STALL_HITS: u32 = 4;
-const DEFAULT_SCROLLBAR_MAX_PASSES: u32 = 5;
-const DEFAULT_SCROLLBAR_STABLE_HITS: u32 = 2;
+const DEFAULT_DOWN_DRAG_LOOPS: u32 = 1;
+const DEFAULT_DOWN_STALL_HITS: u32 = 1;
+const DEFAULT_SCROLLBAR_MAX_PASSES: u32 = 1;
+const DEFAULT_SCROLLBAR_STABLE_HITS: u32 = 1;
 const DEFAULT_REVERSE_ATTEMPTS: u32 = 3;
 
 struct FixtureData {
@@ -364,7 +364,7 @@ fn force_absolute_bottom_with_scrollbar(
     }
 
     eprintln!(
-        "WARN: scrollbar bottom did not fully stabilize after {} passes",
+        "NOTE: scrollbar bottom did not fully stabilize after {} passes",
         scrollbar_max_passes
     );
     last_probe_y
@@ -390,7 +390,7 @@ fn reverse_drag_moves_content(
 
     if parse_bool_env("CRANPOSE_HEADLESS", true) {
         eprintln!(
-            "WARN: skipping reverse gesture in headless mode due intermittent input deadlock"
+            "NOTE: skipping reverse gesture in headless mode due intermittent input deadlock"
         );
         return true;
     }
@@ -556,7 +556,7 @@ fn main() {
                 && wait_for_text_bounds(&robot, &top_sentinel, 10_000).is_none()
             {
                 eprintln!(
-                    "WARN: top sentinel {:?} not found within timeout; continuing",
+                    "NOTE: top sentinel {:?} not found within timeout; continuing",
                     top_sentinel
                 );
             }

@@ -132,5 +132,7 @@ impl SlotTable {
             moved_node_count,
         );
         self.refresh_group_indexes_from(from_index.min(adjusted_index));
+        #[cfg(any(test, debug_assertions))]
+        self.debug_assert_valid_after("move_subtree");
     }
 }

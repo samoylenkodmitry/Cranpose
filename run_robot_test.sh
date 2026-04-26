@@ -30,6 +30,8 @@ if [ -n "${CRANPOSE_ROBOT_PARALLEL:-}" ]; then
 else
     PARALLEL_JOBS=1
 fi
+ROBOT_TEST_TIMEOUT_CAP_SECS="${CRANPOSE_ROBOT_TEST_TIMEOUT_CAP_SECS:-300}"
+ROBOT_TEST_ATTEMPTS="${CRANPOSE_ROBOT_TEST_ATTEMPTS:-2}"
 SELECTED_EXAMPLES=()
 
 profile_output_dir() {
@@ -96,6 +98,7 @@ echo "Cleaning up..."
 # Dynamically discover all robot tests from the robot-runners directory
 # Exclude utility modules (files that don't have a main function)
 EXAMPLES=()
+RUN_EXAMPLES=()
 for file in "$ROBOT_DIR"/robot_*.rs; do
     if [ -f "$file" ]; then
         # Extract the example name (filename without .rs extension)
@@ -140,6 +143,10 @@ else
 fi
 
 echo "Building desktop-app examples with profile '$ROBOT_PROFILE'..."
+if ! wait_for_host_capacity "robot build"; then
+    echo "Host was not ready for robot build." | tee -a "$LOG_FILE"
+    exit 1
+fi
 "${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -258,6 +265,16 @@ run_test() {
             ;;
     esac
 
+    if [[ "$ROBOT_TEST_TIMEOUT_CAP_SECS" =~ ^[1-9][0-9]*$ ]] \
+        && [ "$timeout_secs" -gt "$ROBOT_TEST_TIMEOUT_CAP_SECS" ]; then
+        timeout_secs="$ROBOT_TEST_TIMEOUT_CAP_SECS"
+    fi
+
+    local max_attempts="$ROBOT_TEST_ATTEMPTS"
+    if ! [[ "$max_attempts" =~ ^[1-9][0-9]*$ ]]; then
+        max_attempts=1
+    fi
+
     local headless_env="CRANPOSE_HEADLESS=1"
     case "$example" in
         robot_text_scroll_exact_external_contract)
@@ -265,46 +282,106 @@ run_test() {
             ;;
     esac
 
-    if command -v timeout >/dev/null 2>&1; then
-        env "$headless_env" timeout "${timeout_secs}s" "$example_bin" > "$output_file" 2>&1
-        local exit_code=$?
-    else
-        env "$headless_env" "$example_bin" > "$output_file" 2>&1
-        local exit_code=$?
-    fi
+    : > "$output_file"
 
-    # Check for failure patterns in output
-    local fail_in_log=false
-    if grep -qiE '\bFAIL\b|\bFATAL\b|panicked' "$output_file"; then
-        if grep -iE '\bFAIL\b|\bFATAL\b|panicked' "$output_file" | grep -qvE '^[[:space:]]*0 failed|test result:.*0 failed'; then
-            fail_in_log=true
+    local attempt=1
+    while [ "$attempt" -le "$max_attempts" ]; do
+        local attempt_output="$RESULTS_DIR/$example.attempt.$attempt.output"
+        {
+            echo "Attempt $attempt/$max_attempts for $example (timeout=${timeout_secs}s)"
+            echo "Host before attempt: $(host_state_summary)"
+        } >> "$output_file"
+
+        if ! wait_for_host_capacity "robot $example attempt $attempt" >> "$output_file" 2>&1; then
+            echo "FAIL:host_not_ready" > "$result_file"
+            return 75
         fi
-    fi
 
-    # Write result
-    if [ $exit_code -eq 0 ] && [ "$fail_in_log" = false ]; then
-        echo "PASS" > "$result_file"
-    else
+        if command -v timeout >/dev/null 2>&1; then
+            env "$headless_env" timeout --kill-after=15s "${timeout_secs}s" "$example_bin" > "$attempt_output" 2>&1
+            local exit_code=$?
+        else
+            env "$headless_env" "$example_bin" > "$attempt_output" 2>&1
+            local exit_code=$?
+        fi
+
+        cat "$attempt_output" >> "$output_file" 2>/dev/null
+
+        local fail_in_log=false
+        if grep -qiE '\bFAIL\b|\bFATAL\b|panicked' "$attempt_output"; then
+            if grep -iE '\bFAIL\b|\bFATAL\b|panicked' "$attempt_output" | grep -qvE '^[[:space:]]*0 failed|test result:.*0 failed'; then
+                fail_in_log=true
+            fi
+        fi
+
+        if [ $exit_code -eq 0 ] && [ "$fail_in_log" = false ]; then
+            echo "PASS" > "$result_file"
+            return 0
+        fi
+
         local reason=""
         [ $exit_code -ne 0 ] && reason="exit=$exit_code"
         [ "$fail_in_log" = true ] && reason="${reason:+$reason, }fail_in_log"
+        if [ "$exit_code" = "124" ] || [ "$exit_code" = "137" ]; then
+            reason="${reason:+$reason, }timeout=${timeout_secs}s"
+            {
+                echo "Attempt $attempt timed out or was killed."
+                echo "Host after timeout: $(host_state_summary)"
+            } >> "$output_file"
+            if [ "$attempt" -lt "$max_attempts" ]; then
+                attempt=$((attempt + 1))
+                continue
+            fi
+            echo "FAIL:$reason" > "$result_file"
+            return 75
+        fi
+
         echo "FAIL:$reason" > "$result_file"
-    fi
+        return 0
+    done
 }
 
 export -f run_test
+export -f is_ci_env
+export -f host_cpu_min_mhz
+export -f host_cpu_freq_summary
+export -f host_max_temp_c
+export -f host_state_summary
+export -f number_lt
+export -f number_gt
+export -f wait_for_host_capacity
 export RESULTS_DIR
 export EXAMPLE_BIN_DIR
+export ROBOT_TEST_TIMEOUT_CAP_SECS
+export ROBOT_TEST_ATTEMPTS
 
 # Run tests in parallel using xargs or GNU parallel
+STOPPED_EARLY=0
 if [ "$PARALLEL_JOBS" -gt 1 ]; then
+    RUN_EXAMPLES=("${EXAMPLES[@]}")
     # Use xargs for parallel execution
-    printf '%s\n' "${EXAMPLES[@]}" | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'run_test "$@"' _ {}
+    if ! printf '%s\n' "${EXAMPLES[@]}" | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'run_test "$@"' _ {}; then
+        echo "One or more robot workers stopped before completing their assigned examples" | tee -a "$LOG_FILE"
+        STOPPED_EARLY=1
+    fi
 else
     # Sequential execution with progress
     for example in "${EXAMPLES[@]}"; do
+        RUN_EXAMPLES+=("$example")
         echo "Running $example..." | tee -a "$LOG_FILE"
-        run_test "$example"
+        if run_test "$example"; then
+            run_status=0
+        else
+            run_status=$?
+        fi
+        if [ "$run_status" -eq 75 ]; then
+            echo "Stopping robot suite after host or timeout limit for $example" | tee -a "$LOG_FILE"
+            STOPPED_EARLY=1
+            break
+        fi
+        if [ "$run_status" -ne 0 ]; then
+            echo "Robot runner returned status $run_status for $example" | tee -a "$LOG_FILE"
+        fi
         sleep 0.1
     done
 fi
@@ -313,8 +390,9 @@ fi
 PASSED=0
 FAILED=0
 FAILED_TESTS=()
+RETRYABLE_FAILURE=0
 
-for example in "${EXAMPLES[@]}"; do
+for example in "${RUN_EXAMPLES[@]}"; do
     result_file="$RESULTS_DIR/$example.result"
     output_file="$RESULTS_DIR/$example.output"
     
@@ -341,6 +419,11 @@ for example in "${EXAMPLES[@]}"; do
             echo "  [FAIL] $example ($reason)" | tee -a "$LOG_FILE"
             ((FAILED++))
             FAILED_TESTS+=("$example")
+            case "$reason" in
+                host_not_ready|*timeout=*|*exit=124*|*exit=137*)
+                    RETRYABLE_FAILURE=1
+                    ;;
+            esac
         fi
     else
         echo "  [FAIL] $example (no result)" | tee -a "$LOG_FILE"
@@ -364,6 +447,7 @@ echo "Failed: $FAILED" | tee -a "$LOG_FILE"
     echo "PASSED=$PASSED"
     echo "FAILED=$FAILED"
     echo "FAILED_TESTS=${FAILED_TESTS[*]}"
+    echo "STOPPED_EARLY=$STOPPED_EARLY"
 } > "$SUMMARY_FILE"
 
 if [ $FAILED -eq 0 ]; then
@@ -378,5 +462,8 @@ else
     done
     echo "" | tee -a "$LOG_FILE"
     echo "See $LOG_FILE for full output" | tee -a "$LOG_FILE"
+    if [ "$RETRYABLE_FAILURE" -eq 1 ] || [ "$STOPPED_EARLY" -eq 1 ]; then
+        exit 75
+    fi
     exit 1
 fi

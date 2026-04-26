@@ -211,6 +211,17 @@ impl SlotWriteSessionState {
         Ok(())
     }
 
+    #[cfg(any(test, debug_assertions))]
+    pub(in crate::slot) fn debug_assert_valid_after(
+        &self,
+        table: &SlotTable,
+        operation: &'static str,
+    ) {
+        if let Err(err) = self.validate(table) {
+            panic!("slot writer invariant violation after {operation}: {err:?}");
+        }
+    }
+
     pub(in crate::slot) fn note_removed_payloads(&mut self, count: usize) {
         self.removed_payload_count += count;
         self.update_compaction_hint();

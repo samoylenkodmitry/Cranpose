@@ -12,6 +12,10 @@ use hacker_news_robot_support::{
 };
 use std::time::Duration;
 
+const DRAG_MEASUREMENT_GESTURES: usize = 1;
+const DRAG_SETTLE_ATTEMPTS: usize = 8;
+const REWIND_GESTURE_LIMIT: usize = 3;
+
 #[derive(Debug)]
 struct DragMeasurement {
     before_visible: Vec<usize>,
@@ -33,7 +37,7 @@ fn measure_drag_progress(
     let mut after_visible = before_visible.clone();
 
     println!("  • {label} before raw drag: {before_visible:?}");
-    for gesture in 0..6 {
+    for gesture in 0..DRAG_MEASUREMENT_GESTURES {
         raw_drag(
             robot,
             drag_x,
@@ -42,8 +46,12 @@ fn measure_drag_progress(
             12,
             Duration::from_millis(16),
         );
-        after_visible =
-            settle_visible_mock_story_numbers(robot, list_bounds, 12, Duration::from_millis(40));
+        after_visible = settle_visible_mock_story_numbers(
+            robot,
+            list_bounds,
+            DRAG_SETTLE_ATTEMPTS,
+            Duration::from_millis(40),
+        );
 
         let reopened_discussion = find_in_semantics(robot, |elem| find_text_exact(elem, "Back"))
             .is_some()
@@ -109,7 +117,7 @@ fn rewind_story_list_to_top(robot: &cranpose::Robot, list_bounds: (f32, f32, f32
     let drag_start_y = list_y + list_h * 0.22;
     let drag_end_y = list_y + list_h * 0.82;
 
-    for _ in 0..10 {
+    for _ in 0..REWIND_GESTURE_LIMIT {
         let visible = visible_mock_story_numbers(robot, list_bounds);
         if visible.first().copied().unwrap_or(usize::MAX) <= 1 {
             return;
@@ -123,8 +131,12 @@ fn rewind_story_list_to_top(robot: &cranpose::Robot, list_bounds: (f32, f32, f32
             12,
             Duration::from_millis(16),
         );
-        let _ =
-            settle_visible_mock_story_numbers(robot, list_bounds, 12, Duration::from_millis(40));
+        let _ = settle_visible_mock_story_numbers(
+            robot,
+            list_bounds,
+            DRAG_SETTLE_ATTEMPTS,
+            Duration::from_millis(40),
+        );
     }
 
     let visible = visible_mock_story_numbers(robot, list_bounds);

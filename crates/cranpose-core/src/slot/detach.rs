@@ -55,6 +55,8 @@ impl SlotTable {
             generation: self.allocate_detached_generation(),
         };
         #[cfg(any(test, debug_assertions))]
+        self.debug_assert_valid_after("detach_subtree");
+        #[cfg(any(test, debug_assertions))]
         subtree
             .validate_detached()
             .expect("detached subtree must validate after detach");
@@ -137,6 +139,8 @@ impl SlotTable {
             insert_index,
             insert_index + restored_group_count,
         );
+        #[cfg(any(test, debug_assertions))]
+        self.debug_assert_valid_after("restore_subtree");
         root_anchor
     }
 

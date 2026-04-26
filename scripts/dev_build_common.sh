@@ -148,3 +148,139 @@ enable_local_cargo_job_limit() {
 
     export CARGO_BUILD_JOBS="${CRANPOSE_BUILD_JOBS:-$(local_cargo_build_jobs_default)}"
 }
+
+host_cpu_min_mhz() {
+    awk '
+        /cpu MHz/ {
+            mhz = $4
+            if (count == 0 || mhz < min) {
+                min = mhz
+            }
+            count++
+        }
+        END {
+            if (count > 0) {
+                printf "%.0f\n", min
+            }
+        }
+    ' /proc/cpuinfo 2>/dev/null || true
+}
+
+host_cpu_freq_summary() {
+    awk '
+        /cpu MHz/ {
+            mhz = $4
+            if (count == 0 || mhz < min) {
+                min = mhz
+            }
+            if (mhz > max) {
+                max = mhz
+            }
+            sum += mhz
+            count++
+        }
+        END {
+            if (count > 0) {
+                printf "cpu_mhz=min:%.0f avg:%.0f max:%.0f", min, sum / count, max
+            } else {
+                printf "cpu_mhz=unknown"
+            }
+        }
+    ' /proc/cpuinfo 2>/dev/null || printf 'cpu_mhz=unknown'
+}
+
+host_max_temp_c() {
+    if ! command -v sensors >/dev/null 2>&1; then
+        return 0
+    fi
+
+    sensors 2>/dev/null | awk '
+        match($0, /:[[:space:]]*\+?([0-9]+(\.[0-9]+)?)[^0-9]*C/, parts) {
+            temp = parts[1] + 0
+            if (count == 0 || temp > max) {
+                max = temp
+            }
+            count++
+        }
+        END {
+            if (count > 0) {
+                printf "%.1f\n", max
+            }
+        }
+    '
+}
+
+host_state_summary() {
+    local temp
+    temp="$(host_max_temp_c)"
+    if [ -n "$temp" ]; then
+        printf '%s temp_c=max:%s' "$(host_cpu_freq_summary)" "$temp"
+    else
+        printf '%s temp_c=unknown' "$(host_cpu_freq_summary)"
+    fi
+}
+
+number_lt() {
+    awk -v left="$1" -v right="$2" 'BEGIN { exit !(left < right) }'
+}
+
+number_gt() {
+    awk -v left="$1" -v right="$2" 'BEGIN { exit !(left > right) }'
+}
+
+wait_for_host_capacity() {
+    local label="${1:-work}"
+
+    if is_ci_env; then
+        return 0
+    fi
+    if [ "${CRANPOSE_HOST_GUARD:-1}" = "0" ]; then
+        return 0
+    fi
+
+    local min_cpu_mhz="${CRANPOSE_HOST_MIN_CPU_MHZ:-1000}"
+    local max_temp_c="${CRANPOSE_HOST_MAX_TEMP_C:-90}"
+    local resume_temp_c="${CRANPOSE_HOST_RESUME_TEMP_C:-85}"
+    local cooldown_secs="${CRANPOSE_HOST_COOLDOWN_SECS:-30}"
+    local max_wait_secs="${CRANPOSE_HOST_MAX_WAIT_SECS:-300}"
+    local elapsed=0
+    local waiting_for_temp=0
+
+    while true; do
+        local min_mhz max_temp unhealthy reason
+        min_mhz="$(host_cpu_min_mhz)"
+        max_temp="$(host_max_temp_c)"
+        unhealthy=0
+        reason=""
+
+        if [ -n "$min_mhz" ] && number_lt "$min_mhz" "$min_cpu_mhz"; then
+            echo "host capacity guard refusing $label: cpu below ${min_cpu_mhz}MHz; $(host_state_summary)" >&2
+            return 1
+        fi
+
+        if [ -n "$max_temp" ] && number_gt "$max_temp" "$max_temp_c"; then
+            waiting_for_temp=1
+        fi
+        if [ "$waiting_for_temp" = "1" ]; then
+            if [ -n "$max_temp" ] && number_gt "$max_temp" "$resume_temp_c"; then
+                unhealthy=1
+                reason="${reason:+$reason, }temperature above ${resume_temp_c}C resume"
+            else
+                waiting_for_temp=0
+            fi
+        fi
+
+        if [ "$unhealthy" = "0" ]; then
+            return 0
+        fi
+
+        if [ "$elapsed" -ge "$max_wait_secs" ]; then
+            echo "host capacity guard timed out before $label after ${elapsed}s: $reason; $(host_state_summary)" >&2
+            return 1
+        fi
+
+        echo "host capacity guard cooling before $label: $reason; $(host_state_summary)" >&2
+        sleep "$cooldown_secs"
+        elapsed=$((elapsed + cooldown_secs))
+    done
+}
