@@ -1,7 +1,7 @@
 use super::{
     detach::{dispose_detached_node_now, dispose_detached_subtree_now},
     DeferredDrop, DetachedSubtree, FinishGroupResult, PayloadKind, SlotLifecycleCoordinator,
-    SlotTable, SlotWriteSession, SlotWriteSessionState,
+    SlotTable, SlotWriteSession,
 };
 use crate::{
     slot_storage::{
@@ -10,6 +10,13 @@ use crate::{
     },
     AnchorId, Applier, NodeId, Owned, ScopeId,
 };
+
+mod frames;
+mod keys;
+mod siblings;
+mod state;
+
+pub(crate) use state::SlotWriteSessionState;
 
 impl SlotTable {
     fn collect_subtree_node_records(&self, group_anchor: AnchorId) -> Vec<super::NodeRecord> {

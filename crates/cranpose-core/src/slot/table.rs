@@ -1,6 +1,6 @@
 use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadLocationRegistry, PayloadRecord,
-    SlotLifecycleCoordinator, SlotTableMutationDebugStats,
+    SlotLifecycleCoordinator, SlotTableMutationDebugStats, SlotWriteSessionState,
 };
 use crate::{collections::map::HashMap, AnchorId, ScopeId};
 use std::rc::Rc;
@@ -8,10 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod metadata;
 mod mutation;
-mod session;
 mod values;
-
-pub(crate) use session::SlotWriteSessionState;
 
 static NEXT_SLOT_STORAGE_ID: AtomicUsize = AtomicUsize::new(1);
 

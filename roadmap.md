@@ -36,10 +36,10 @@ This file tracks current forward work and marks boxes closed only after the stat
   Baseline saved at commit `fddc3a7c` with `CRANPOSE_BUILD_JOBS=2 ./perf_slot_table_v2.sh --save-baseline slot-v2-refactor-base`; settings: all benchmarks, CPU set `0`, warmup `1s`, measurement `5s`, sample size `30`.
   Acceptance: baseline artifacts exist and the command/settings are recorded in the item commit message or notes.
 
-- [ ] [L] Move writer session state out of `slot/table/session.rs` into writer-owned modules without changing behavior.
+- [x] [L] Move writer session state out of `slot/table/session.rs` into writer-owned modules without changing behavior.
   Target modules: `slot/writer/state.rs`, `slot/writer/frames.rs`, `slot/writer/keys.rs`, and `slot/writer/siblings.rs`.
   Keep `SlotWriteSessionState`, `RootFrame`, `GroupFrame`, and `SiblingIndex` names unless a replacement removes real ambiguity.
-  Acceptance: `cargo test -p cranpose-core slot::table::session`, `cargo test -p cranpose-core slot::`, then `./verify_slot_table.sh`.
+  Acceptance run: `cargo test -p cranpose-core slot::writer`, `cargo test -p cranpose-core slot::`, then `CRANPOSE_BUILD_JOBS=2 ./verify_slot_table.sh`.
 
 - [ ] [L] Split `slot/writer.rs` by operation family while keeping `slot/writer/mod.rs` as the facade.
   Target modules: `group.rs`, `finish.rs`, `payload.rs`, `nodes.rs`, and `finalize.rs`.

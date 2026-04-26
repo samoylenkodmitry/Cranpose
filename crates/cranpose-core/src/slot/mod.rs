@@ -30,10 +30,11 @@ use groups::GroupRecord;
 pub(crate) use lifecycle::{DeferredDrop, SlotLifecycleCoordinator};
 use payload_locations::PayloadLocationRegistry;
 pub use table::SlotTable;
-pub(crate) use table::{SlotWriteSession, SlotWriteSessionState};
+pub(crate) use table::SlotWriteSession;
 pub(in crate::slot) use types::root_node_ids_from_records;
 pub(crate) use types::NodeLifecycle;
 pub(crate) use types::{DetachedSubtree, FinishGroupResult, PayloadKind, SlotPassMode};
 use types::{NodeRecord, PayloadRecord};
 #[cfg(any(test, debug_assertions))]
 pub(crate) use validate::SlotInvariantError;
+pub(crate) use writer::SlotWriteSessionState;

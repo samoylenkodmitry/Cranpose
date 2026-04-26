@@ -1,129 +1,13 @@
+use super::frames::{GroupFrame, RootFrame};
 #[cfg(any(test, debug_assertions))]
-use super::super::SlotInvariantError;
-use super::super::{DetachedSubtree, SlotPassMode};
-use super::SlotTable;
+use crate::slot::SlotInvariantError;
+#[cfg(any(test, debug_assertions))]
+use crate::slot::SlotTable;
 use crate::{
     collections::map::{HashMap, HashSet},
-    slot_storage::{GroupKey, GroupKeySeed},
-    AnchorId, Key,
+    slot::{DetachedSubtree, SlotPassMode},
+    AnchorId,
 };
-use smallvec::SmallVec;
-
-const DEFAULT_SIBLING_INDEX_THRESHOLD: usize = 16;
-const SIBLING_INDEX_THRESHOLD: usize =
-    parse_sibling_index_threshold(option_env!("CRANPOSE_SIBLING_INDEX_THRESHOLD"));
-
-const fn parse_sibling_index_threshold(value: Option<&'static str>) -> usize {
-    match value {
-        Some(value) => match parse_positive_usize(value) {
-            Some(parsed) => parsed,
-            None => DEFAULT_SIBLING_INDEX_THRESHOLD,
-        },
-        None => DEFAULT_SIBLING_INDEX_THRESHOLD,
-    }
-}
-
-const fn parse_positive_usize(value: &str) -> Option<usize> {
-    let bytes = value.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-
-    let mut index = 0usize;
-    let mut parsed = 0usize;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if !byte.is_ascii_digit() {
-            return None;
-        }
-
-        let digit = (byte - b'0') as usize;
-        match parsed.checked_mul(10) {
-            Some(next) => match next.checked_add(digit) {
-                Some(next) => parsed = next,
-                None => return None,
-            },
-            None => return None,
-        }
-        index += 1;
-    }
-
-    if parsed == 0 {
-        None
-    } else {
-        Some(parsed)
-    }
-}
-
-#[derive(Default)]
-pub(in crate::slot) struct SiblingIndex {
-    by_key: HashMap<GroupKey, SmallVec<[AnchorId; 2]>>,
-}
-
-impl SiblingIndex {
-    fn build(table: &SlotTable, parent_anchor: AnchorId, search_start: usize) -> Self {
-        let parent_end = table.direct_child_range_end(parent_anchor);
-        let mut by_key: HashMap<GroupKey, SmallVec<[AnchorId; 2]>> = HashMap::default();
-        let mut index = search_start;
-        while index < parent_end {
-            let group = &table.groups[index];
-            debug_assert_eq!(
-                group.parent_anchor, parent_anchor,
-                "later sibling index must stay on direct children"
-            );
-            by_key.entry(group.key).or_default().push(group.anchor);
-            index += group.subtree_len as usize;
-        }
-        Self { by_key }
-    }
-
-    fn find(
-        &self,
-        table: &SlotTable,
-        parent_anchor: AnchorId,
-        key: GroupKey,
-        search_start: usize,
-    ) -> Option<usize> {
-        let parent_end = table.direct_child_range_end(parent_anchor);
-        self.by_key.get(&key).and_then(|anchors| {
-            anchors
-                .iter()
-                .filter_map(|anchor| {
-                    let index = table.anchors.active_index(*anchor)?;
-                    let group = table.groups.get(index)?;
-                    (index >= search_start
-                        && index < parent_end
-                        && group.parent_anchor == parent_anchor
-                        && group.key == key)
-                        .then_some(index)
-                })
-                .min()
-        })
-    }
-}
-
-#[derive(Default)]
-pub(in crate::slot) struct RootFrame {
-    pub(in crate::slot) next_child_index: usize,
-    pub(in crate::slot) detach_remaining_children: bool,
-    pub(in crate::slot) key_ordinals: HashMap<Key, u32>,
-    pub(in crate::slot) seen_group_keys: HashSet<GroupKey>,
-    pub(in crate::slot) sibling_index: Option<SiblingIndex>,
-}
-
-pub(in crate::slot) struct GroupFrame {
-    pub(in crate::slot) group_anchor: AnchorId,
-    pub(in crate::slot) next_child_index: usize,
-    pub(in crate::slot) payload_cursor: usize,
-    pub(in crate::slot) old_payload_len: usize,
-    pub(in crate::slot) node_cursor: usize,
-    pub(in crate::slot) old_node_len: usize,
-    pub(in crate::slot) key_ordinals: HashMap<Key, u32>,
-    pub(in crate::slot) seen_group_keys: HashSet<GroupKey>,
-    pub(in crate::slot) sibling_index: Option<SiblingIndex>,
-    pub(in crate::slot) body_finished: bool,
-    pub(in crate::slot) was_skipped: bool,
-}
 
 #[derive(Default)]
 pub(crate) struct SlotWriteSessionState {
@@ -362,113 +246,6 @@ impl SlotWriteSessionState {
             || self.removed_group_count >= Self::COMPACT_GROUP_THRESHOLD;
     }
 
-    fn next_key_ordinal(map: &mut HashMap<Key, u32>, key: Key) -> u32 {
-        let ordinal = map.get(&key).copied().unwrap_or(0);
-        map.insert(key, ordinal + 1);
-        ordinal
-    }
-
-    fn expected_key_ordinal(map: &HashMap<Key, u32>, key: Key) -> u32 {
-        map.get(&key).copied().unwrap_or(0)
-    }
-
-    fn current_key_ordinals(&mut self) -> &mut HashMap<Key, u32> {
-        if let Some(frame) = self.group_stack.last_mut() {
-            &mut frame.key_ordinals
-        } else {
-            &mut self.root.key_ordinals
-        }
-    }
-
-    fn current_key_ordinals_ref(&self) -> &HashMap<Key, u32> {
-        if let Some(frame) = self.group_stack.last() {
-            &frame.key_ordinals
-        } else {
-            &self.root.key_ordinals
-        }
-    }
-
-    fn current_seen_group_keys(&mut self) -> &mut HashSet<GroupKey> {
-        if let Some(frame) = self.group_stack.last_mut() {
-            &mut frame.seen_group_keys
-        } else {
-            &mut self.root.seen_group_keys
-        }
-    }
-
-    fn current_sibling_index(&mut self) -> &mut Option<SiblingIndex> {
-        if let Some(frame) = self.group_stack.last_mut() {
-            &mut frame.sibling_index
-        } else {
-            &mut self.root.sibling_index
-        }
-    }
-
-    pub(in crate::slot) fn find_later_sibling(
-        &mut self,
-        table: &SlotTable,
-        parent_anchor: AnchorId,
-        key: GroupKey,
-        search_start: usize,
-    ) -> Option<usize> {
-        if let Some(sibling_index) = self.current_sibling_index().as_ref() {
-            return sibling_index.find(table, parent_anchor, key, search_start);
-        }
-
-        let parent_end = table.direct_child_range_end(parent_anchor);
-        if search_start >= parent_end {
-            return None;
-        }
-
-        let mut index = search_start;
-        let mut direct_children_seen = 0usize;
-        while index < parent_end && direct_children_seen < SIBLING_INDEX_THRESHOLD {
-            let group = &table.groups[index];
-            debug_assert_eq!(
-                group.parent_anchor, parent_anchor,
-                "later sibling scans must stay on direct children"
-            );
-            if group.key == key {
-                return Some(index);
-            }
-            direct_children_seen += 1;
-            index += group.subtree_len as usize;
-        }
-
-        if index >= parent_end {
-            return None;
-        }
-
-        let sibling_index = SiblingIndex::build(table, parent_anchor, search_start);
-        let found = sibling_index.find(table, parent_anchor, key, search_start);
-        *self.current_sibling_index() = Some(sibling_index);
-        found
-    }
-
-    pub(in crate::slot) fn preview_group_key(&self, seed: GroupKeySeed) -> GroupKey {
-        let ordinal = seed.explicit_key.map_or_else(
-            || Self::expected_key_ordinal(self.current_key_ordinals_ref(), seed.static_key),
-            |_| 0,
-        );
-        GroupKey::new(seed.static_key, seed.explicit_key, ordinal)
-    }
-
-    pub(in crate::slot) fn consume_group_key(&mut self, key: GroupKey) {
-        let ordinal = key.explicit_key.map_or_else(
-            || Self::next_key_ordinal(self.current_key_ordinals(), key.static_key),
-            |_| 0,
-        );
-        debug_assert_eq!(
-            ordinal, key.ordinal,
-            "reserved group ordinal must match the active writer state"
-        );
-        assert!(
-            self.current_seen_group_keys().insert(key),
-            "duplicate sibling group key: {:?}",
-            key,
-        );
-    }
-
     pub(in crate::slot) fn current_parent_anchor(&self) -> AnchorId {
         self.group_stack
             .last()
@@ -511,38 +288,7 @@ impl SlotWriteSessionState {
 mod tests {
     use super::*;
     use crate::slot::SlotLifecycleCoordinator;
-    use crate::slot_storage::BeginGroupInput;
-
-    #[test]
-    fn sibling_index_threshold_parser_accepts_positive_values() {
-        assert_eq!(parse_sibling_index_threshold(Some("1")), 1);
-        assert_eq!(parse_sibling_index_threshold(Some("4")), 4);
-        assert_eq!(parse_sibling_index_threshold(Some("64")), 64);
-    }
-
-    #[test]
-    fn sibling_index_threshold_parser_rejects_invalid_values() {
-        assert_eq!(
-            parse_sibling_index_threshold(None),
-            DEFAULT_SIBLING_INDEX_THRESHOLD
-        );
-        assert_eq!(
-            parse_sibling_index_threshold(Some("")),
-            DEFAULT_SIBLING_INDEX_THRESHOLD
-        );
-        assert_eq!(
-            parse_sibling_index_threshold(Some("0")),
-            DEFAULT_SIBLING_INDEX_THRESHOLD
-        );
-        assert_eq!(
-            parse_sibling_index_threshold(Some("abc")),
-            DEFAULT_SIBLING_INDEX_THRESHOLD
-        );
-        assert_eq!(
-            parse_sibling_index_threshold(Some("16x")),
-            DEFAULT_SIBLING_INDEX_THRESHOLD
-        );
-    }
+    use crate::slot_storage::{BeginGroupInput, GroupKeySeed};
 
     #[test]
     fn removed_payloads_trigger_compaction_hint_at_threshold() {
