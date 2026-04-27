@@ -1,6 +1,10 @@
-use super::super::{GroupRecord, NodeRecord, PayloadRecord};
-use super::SlotInvariantError;
-use super::{nodes::validate_group_nodes, payloads::validate_group_payloads};
+use super::super::{GroupRecord, NodeRecord, PayloadRecord, SlotTable};
+use super::{
+    anchors,
+    nodes::{self, validate_group_nodes},
+    payloads::{self, validate_group_payloads},
+    scopes, SlotInvariantError,
+};
 use crate::{
     collections::map::{HashMap, HashSet},
     slot_storage::GroupKey,
@@ -18,6 +22,20 @@ pub(super) struct SlotTreeView<'a> {
 pub(super) enum SlotTreeKind {
     Active,
     Detached { root_key: GroupKey },
+}
+
+pub(super) struct ActiveSlotTreeChecks<'a> {
+    table: &'a SlotTable,
+    sibling_keys: HashMap<(AnchorId, GroupKey), usize>,
+}
+
+impl<'a> ActiveSlotTreeChecks<'a> {
+    pub(super) fn new(table: &'a SlotTable) -> Self {
+        Self {
+            table,
+            sibling_keys: HashMap::default(),
+        }
+    }
 }
 
 impl SlotTreeKind {
@@ -260,6 +278,61 @@ impl SlotTreeKind {
                 SlotInvariantError::DetachedDuplicateNodeId { root_key, node_id }
             }
         }
+    }
+}
+
+impl SlotTreeChecks for ActiveSlotTreeChecks<'_> {
+    fn before_group(
+        &mut self,
+        group_index: usize,
+        group: &GroupRecord,
+    ) -> Result<(), SlotInvariantError> {
+        anchors::validate_active_group_anchor(self.table, group_index, group)
+    }
+
+    fn after_group_header(
+        &mut self,
+        group_index: usize,
+        group: &GroupRecord,
+    ) -> Result<(), SlotInvariantError> {
+        if self
+            .sibling_keys
+            .insert((group.parent_anchor, group.key), group_index)
+            .is_some()
+        {
+            return Err(SlotInvariantError::DuplicateSiblingKey {
+                parent_anchor: group.parent_anchor,
+                key: group.key,
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_payload(
+        &mut self,
+        _group_index: usize,
+        group: &GroupRecord,
+        payload_index: usize,
+        payload: &PayloadRecord,
+    ) -> Result<(), SlotInvariantError> {
+        payloads::validate_active_payload_location(self.table, group, payload_index, payload)
+    }
+
+    fn after_payloads(
+        &mut self,
+        _group_index: usize,
+        group: &GroupRecord,
+    ) -> Result<(), SlotInvariantError> {
+        scopes::validate_active_group_scope(self.table, group)
+    }
+
+    fn validate_node(
+        &mut self,
+        _group_index: usize,
+        _group: &GroupRecord,
+        node: &NodeRecord,
+    ) -> Result<(), SlotInvariantError> {
+        nodes::validate_active_node_lifecycle(node)
     }
 }
 

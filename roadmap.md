@@ -67,10 +67,11 @@ This file tracks current forward work and marks boxes closed only after the stat
   Acceptance: `cargo test -p cranpose-core slot::`, then `./verify_slot_table.sh`.
   Acceptance run: `cargo test -p cranpose-core slot::`; `cargo test > 1.tmp 2>&1`; `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`; `CRANPOSE_BUILD_JOBS=2 ./verify_slot_table.sh`.
 
-- [ ] [L] Split `slot/validate.rs` into invariant-family modules while keeping `SlotInvariantError` stable.
+- [x] [L] Split `slot/validate.rs` into invariant-family modules while keeping `SlotInvariantError` stable.
   Target modules: `groups.rs`, `payloads.rs`, `nodes.rs`, `anchors.rs`, `scopes.rs`, `detached.rs`, and `writer.rs`.
   Do not weaken any invariant or change error semantics.
   Acceptance: validation-focused tests pass under `cargo test -p cranpose-core slot::`; run `./verify_slot_table.sh`.
+  Acceptance run: `cargo test -p cranpose-core slot::`; `cargo test > 1.tmp 2>&1`; `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`; `CRANPOSE_BUILD_JOBS=2 ./verify_slot_table.sh`.
 
 - [ ] [S] Add debug-only structural tripwires after the refactor is complete.
   Candidate locations: after `move_subtree`, `detach_subtree`, `restore_subtree`, writer body finish in debug/test builds, and pass finalization.

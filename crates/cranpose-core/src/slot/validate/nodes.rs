@@ -1,6 +1,6 @@
-use super::super::GroupRecord;
+use super::super::{GroupRecord, NodeLifecycle, NodeRecord};
 use super::{
-    tree::{SlotTreeChecks, SlotTreeView},
+    groups::{SlotTreeChecks, SlotTreeView},
     SlotInvariantError,
 };
 use crate::{collections::map::HashSet, NodeId};
@@ -44,4 +44,16 @@ pub(super) fn validate_group_nodes(
     }
 
     Ok(node_end)
+}
+
+pub(super) fn validate_active_node_lifecycle(node: &NodeRecord) -> Result<(), SlotInvariantError> {
+    if node.lifecycle == NodeLifecycle::Active {
+        return Ok(());
+    }
+
+    Err(SlotInvariantError::NodeLifecycleMismatch {
+        node_id: node.id,
+        expected: NodeLifecycle::Active,
+        actual: node.lifecycle,
+    })
 }

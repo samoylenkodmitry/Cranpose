@@ -1,9 +1,9 @@
 use super::super::DetachedSubtree;
 use super::{
-    tree::{validate_slot_tree, SlotTreeChecks, SlotTreeKind, SlotTreeView},
+    anchors,
+    groups::{validate_slot_tree, SlotTreeChecks, SlotTreeKind, SlotTreeView},
     SlotInvariantError,
 };
-use crate::{collections::map::HashSet, AnchorId};
 
 struct DetachedSlotTreeChecks;
 
@@ -16,12 +16,7 @@ impl DetachedSubtree {
         };
         let root_key = root.key;
 
-        let mut anchor_set: HashSet<AnchorId> = HashSet::default();
-        for anchor in self.groups.iter().map(|group| group.anchor) {
-            if !anchor_set.insert(anchor) {
-                return Err(SlotInvariantError::DetachedDuplicateAnchor { root_key, anchor });
-            }
-        }
+        anchors::validate_detached_anchor_set(root_key, &self.groups)?;
 
         let mut checks = DetachedSlotTreeChecks;
         validate_slot_tree(

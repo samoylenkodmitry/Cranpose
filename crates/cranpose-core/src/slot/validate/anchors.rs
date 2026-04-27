@@ -1,0 +1,45 @@
+use super::super::{AnchorState, GroupRecord, SlotTable};
+use super::SlotInvariantError;
+use crate::{collections::map::HashSet, slot_storage::GroupKey, AnchorId};
+
+pub(super) fn validate_active_group_anchor(
+    table: &SlotTable,
+    group_index: usize,
+    group: &GroupRecord,
+) -> Result<(), SlotInvariantError> {
+    match table.anchors.state(group.anchor) {
+        Some(AnchorState::Active(actual)) if actual == group_index => Ok(()),
+        actual => Err(SlotInvariantError::AnchorMismatch {
+            anchor: group.anchor,
+            expected: group_index,
+            actual,
+        }),
+    }
+}
+
+pub(super) fn validate_active_group_anchor_count(
+    table: &SlotTable,
+) -> Result<(), SlotInvariantError> {
+    if table.anchors.active_len() == table.groups.len() {
+        return Ok(());
+    }
+
+    Err(SlotInvariantError::GroupAnchorCountMismatch {
+        expected: table.groups.len(),
+        actual: table.anchors.active_len(),
+    })
+}
+
+pub(super) fn validate_detached_anchor_set(
+    root_key: GroupKey,
+    groups: &[GroupRecord],
+) -> Result<(), SlotInvariantError> {
+    let mut anchor_set: HashSet<AnchorId> = HashSet::default();
+    for anchor in groups.iter().map(|group| group.anchor) {
+        if !anchor_set.insert(anchor) {
+            return Err(SlotInvariantError::DetachedDuplicateAnchor { root_key, anchor });
+        }
+    }
+
+    Ok(())
+}
