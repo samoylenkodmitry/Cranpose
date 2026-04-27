@@ -47,6 +47,7 @@ fn validate_reports_invalid_parent_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::InvalidParent {
+            tree: SlotTreeContext::Active,
             group_index: 1,
             expected: table.groups[0].anchor,
             actual: AnchorId::INVALID,
@@ -62,6 +63,7 @@ fn validate_reports_bad_subtree_len_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::BadSubtreeLen {
+            tree: SlotTreeContext::Active,
             group_index: 1,
             expected: 0,
             actual: 0,
@@ -157,6 +159,7 @@ fn validate_reports_bad_depth_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::BadDepth {
+            tree: SlotTreeContext::Active,
             group_index: 1,
             expected: 1,
             actual: 0,
@@ -173,6 +176,7 @@ fn validate_reports_payload_owner_mismatch_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::PayloadOwnerMismatch {
+            tree: SlotTreeContext::Active,
             payload_anchor,
             expected: table.groups[0].anchor,
             actual: AnchorId::INVALID,
@@ -188,6 +192,7 @@ fn validate_reports_payload_start_mismatch_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::PayloadStartMismatch {
+            tree: SlotTreeContext::Active,
             group_index: 0,
             expected: 0,
             actual: 1,
@@ -203,6 +208,7 @@ fn validate_reports_payload_out_of_range_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::PayloadOutOfRange {
+            tree: SlotTreeContext::Active,
             group_index: 0,
             start: 0,
             len: 2,
@@ -231,6 +237,7 @@ fn validate_reports_payload_count_mismatch_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::PayloadCountMismatch {
+            tree: SlotTreeContext::Active,
             expected: 1,
             actual: 2,
         })
@@ -407,6 +414,7 @@ fn validate_reports_node_owner_mismatch_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::NodeOwnerMismatch {
+            tree: SlotTreeContext::Active,
             node_id,
             expected: table.groups[0].anchor,
             actual: AnchorId::INVALID,
@@ -430,7 +438,10 @@ fn validate_reports_duplicate_node_id_structurally() {
 
     assert_eq!(
         table.validate(),
-        Err(SlotInvariantError::DuplicateNodeId { node_id: node })
+        Err(SlotInvariantError::DuplicateNodeId {
+            tree: SlotTreeContext::Active,
+            node_id: node,
+        })
     );
 }
 
@@ -458,6 +469,7 @@ fn validate_reports_node_start_mismatch_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::NodeStartMismatch {
+            tree: SlotTreeContext::Active,
             group_index: 0,
             expected: 0,
             actual: 1,
@@ -473,6 +485,7 @@ fn validate_reports_node_out_of_range_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::NodeOutOfRange {
+            tree: SlotTreeContext::Active,
             group_index: 0,
             start: 0,
             len: 2,
@@ -495,6 +508,7 @@ fn validate_reports_node_count_mismatch_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::NodeCountMismatch {
+            tree: SlotTreeContext::Active,
             expected: 1,
             actual: 2,
         })
@@ -547,6 +561,7 @@ fn validate_reports_bad_subtree_node_count_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::BadSubtreeNodeCount {
+            tree: SlotTreeContext::Active,
             group_index: 0,
             expected: 1,
             actual: 0,

@@ -270,8 +270,8 @@ fn detached_validate_rejects_non_preorder_parent() {
 
     assert_eq!(
         detached.validate_detached(),
-        Err(SlotInvariantError::DetachedInvalidParent {
-            root_key,
+        Err(SlotInvariantError::InvalidParent {
+            tree: SlotTreeContext::Detached { root_key },
             group_index: 1,
             expected: expected_parent,
             actual: AnchorId::INVALID,
@@ -291,8 +291,8 @@ fn detached_validate_rejects_bad_depth() {
 
     assert_eq!(
         detached.validate_detached(),
-        Err(SlotInvariantError::DetachedBadDepth {
-            root_key,
+        Err(SlotInvariantError::BadDepth {
+            tree: SlotTreeContext::Detached { root_key },
             group_index: 1,
             expected: 1,
             actual: 2,
@@ -312,8 +312,8 @@ fn detached_validate_rejects_subtree_len_out_of_range() {
 
     assert_eq!(
         detached.validate_detached(),
-        Err(SlotInvariantError::DetachedBadSubtreeLen {
-            root_key,
+        Err(SlotInvariantError::BadSubtreeLen {
+            tree: SlotTreeContext::Detached { root_key },
             group_index: 0,
             expected: 0,
             actual: 3,
@@ -336,8 +336,8 @@ fn detached_validate_rejects_payload_owner_outside_subtree() {
 
     assert_eq!(
         detached.validate_detached(),
-        Err(SlotInvariantError::DetachedPayloadOwnerMismatch {
-            root_key,
+        Err(SlotInvariantError::PayloadOwnerMismatch {
+            tree: SlotTreeContext::Detached { root_key },
             payload_anchor,
             expected: expected_owner,
             actual: outside_anchor,
@@ -360,8 +360,8 @@ fn detached_validate_rejects_node_owner_outside_subtree() {
 
     assert_eq!(
         detached.validate_detached(),
-        Err(SlotInvariantError::DetachedNodeOwnerMismatch {
-            root_key,
+        Err(SlotInvariantError::NodeOwnerMismatch {
+            tree: SlotTreeContext::Detached { root_key },
             node_id: child_node,
             expected: expected_owner,
             actual: outside_anchor,
@@ -384,8 +384,8 @@ fn detached_validate_rejects_duplicate_node_id() {
 
     assert_eq!(
         detached.validate_detached(),
-        Err(SlotInvariantError::DetachedDuplicateNodeId {
-            root_key,
+        Err(SlotInvariantError::DuplicateNodeId {
+            tree: SlotTreeContext::Detached { root_key },
             node_id: child_node,
         })
     );

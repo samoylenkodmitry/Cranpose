@@ -1,6 +1,18 @@
 use super::super::{AnchorState, NodeLifecycle};
 use crate::{slot_storage::GroupKey, AnchorId, NodeId, ScopeId};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlotTreeContext {
+    Active,
+    Detached { root_key: GroupKey },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PayloadLocationRecord {
+    pub(crate) owner: AnchorId,
+    pub(crate) payload_anchor: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SlotInvariantError {
     GroupAnchorCountMismatch {
@@ -13,37 +25,44 @@ pub(crate) enum SlotInvariantError {
         actual: Option<AnchorState>,
     },
     InvalidParent {
+        tree: SlotTreeContext,
         group_index: usize,
         expected: AnchorId,
         actual: AnchorId,
     },
     BadDepth {
+        tree: SlotTreeContext,
         group_index: usize,
         expected: u32,
         actual: u32,
     },
     BadSubtreeLen {
+        tree: SlotTreeContext,
         group_index: usize,
         expected: u32,
         actual: u32,
     },
     BadSubtreeNodeCount {
+        tree: SlotTreeContext,
         group_index: usize,
         expected: u32,
         actual: u32,
     },
     PayloadStartMismatch {
+        tree: SlotTreeContext,
         group_index: usize,
         expected: usize,
         actual: usize,
     },
     PayloadOutOfRange {
+        tree: SlotTreeContext,
         group_index: usize,
         start: usize,
         len: usize,
         payload_count: usize,
     },
     PayloadCountMismatch {
+        tree: SlotTreeContext,
         expected: usize,
         actual: usize,
     },
@@ -56,6 +75,7 @@ pub(crate) enum SlotInvariantError {
         actual: usize,
     },
     PayloadOwnerMismatch {
+        tree: SlotTreeContext,
         payload_anchor: usize,
         expected: AnchorId,
         actual: AnchorId,
@@ -65,22 +85,32 @@ pub(crate) enum SlotInvariantError {
         expected: (AnchorId, usize),
         actual: Option<(AnchorId, usize)>,
     },
+    PayloadLocationTargetMismatch {
+        payload_anchor: usize,
+        expected_owner: AnchorId,
+        expected_payload_index: usize,
+        actual: Option<PayloadLocationRecord>,
+    },
     NodeStartMismatch {
+        tree: SlotTreeContext,
         group_index: usize,
         expected: usize,
         actual: usize,
     },
     NodeOutOfRange {
+        tree: SlotTreeContext,
         group_index: usize,
         start: usize,
         len: usize,
         node_count: usize,
     },
     NodeCountMismatch {
+        tree: SlotTreeContext,
         expected: usize,
         actual: usize,
     },
     NodeOwnerMismatch {
+        tree: SlotTreeContext,
         node_id: NodeId,
         expected: AnchorId,
         actual: AnchorId,
@@ -91,6 +121,7 @@ pub(crate) enum SlotInvariantError {
         actual: NodeLifecycle,
     },
     DuplicateNodeId {
+        tree: SlotTreeContext,
         node_id: NodeId,
     },
     DuplicateSiblingKey {
@@ -135,82 +166,6 @@ pub(crate) enum SlotInvariantError {
     DetachedDuplicateAnchor {
         root_key: GroupKey,
         anchor: AnchorId,
-    },
-    DetachedInvalidParent {
-        root_key: GroupKey,
-        group_index: usize,
-        expected: AnchorId,
-        actual: AnchorId,
-    },
-    DetachedBadDepth {
-        root_key: GroupKey,
-        group_index: usize,
-        expected: u32,
-        actual: u32,
-    },
-    DetachedBadSubtreeLen {
-        root_key: GroupKey,
-        group_index: usize,
-        expected: u32,
-        actual: u32,
-    },
-    DetachedBadSubtreeNodeCount {
-        root_key: GroupKey,
-        group_index: usize,
-        expected: u32,
-        actual: u32,
-    },
-    DetachedPayloadStartMismatch {
-        root_key: GroupKey,
-        group_index: usize,
-        expected: usize,
-        actual: usize,
-    },
-    DetachedPayloadOutOfRange {
-        root_key: GroupKey,
-        group_index: usize,
-        start: usize,
-        len: usize,
-        payload_count: usize,
-    },
-    DetachedPayloadCountMismatch {
-        root_key: GroupKey,
-        expected: usize,
-        actual: usize,
-    },
-    DetachedPayloadOwnerMismatch {
-        root_key: GroupKey,
-        payload_anchor: usize,
-        expected: AnchorId,
-        actual: AnchorId,
-    },
-    DetachedNodeStartMismatch {
-        root_key: GroupKey,
-        group_index: usize,
-        expected: usize,
-        actual: usize,
-    },
-    DetachedNodeOutOfRange {
-        root_key: GroupKey,
-        group_index: usize,
-        start: usize,
-        len: usize,
-        node_count: usize,
-    },
-    DetachedNodeCountMismatch {
-        root_key: GroupKey,
-        expected: usize,
-        actual: usize,
-    },
-    DetachedNodeOwnerMismatch {
-        root_key: GroupKey,
-        node_id: NodeId,
-        expected: AnchorId,
-        actual: AnchorId,
-    },
-    DetachedDuplicateNodeId {
-        root_key: GroupKey,
-        node_id: NodeId,
     },
     WriterFrameOutOfBounds {
         frame_index: usize,

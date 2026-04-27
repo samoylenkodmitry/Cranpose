@@ -1,7 +1,7 @@
 use super::{
     AnchorState, DetachedSubtree, GroupRange, GroupRecord, NodeLifecycle, NodeRecord, PayloadKind,
     PayloadRecord, SlotDebugEntryKind, SlotInvariantError, SlotLifecycleCoordinator, SlotPassMode,
-    SlotTable, SlotWriteSession, SlotWriteSessionState,
+    SlotTable, SlotTreeContext, SlotWriteSession, SlotWriteSessionState,
 };
 use crate::{
     retention::{RetainKey, RetentionManager},

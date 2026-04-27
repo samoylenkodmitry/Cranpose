@@ -18,9 +18,9 @@ mod writer;
 #[cfg(any(test, debug_assertions))]
 use super::SlotTable;
 #[cfg(any(test, debug_assertions))]
-pub(crate) use errors::SlotInvariantError;
+pub(crate) use errors::{PayloadLocationRecord, SlotInvariantError, SlotTreeContext};
 #[cfg(any(test, debug_assertions))]
-use groups::{validate_slot_tree, ActiveSlotTreeChecks, SlotTreeKind, SlotTreeView};
+use groups::{validate_slot_tree, ActiveSlotTreeChecks, SlotTreeView};
 
 #[cfg(any(test, debug_assertions))]
 impl SlotTable {
@@ -42,7 +42,7 @@ impl SlotTable {
         let mut checks = ActiveSlotTreeChecks::new(self);
         validate_slot_tree(
             SlotTreeView {
-                kind: SlotTreeKind::Active,
+                tree: SlotTreeContext::Active,
                 groups: &self.groups,
                 payloads: &self.payloads,
                 nodes: &self.nodes,

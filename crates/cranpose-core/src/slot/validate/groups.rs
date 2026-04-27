@@ -3,7 +3,7 @@ use super::{
     anchors,
     nodes::{self, validate_group_nodes},
     payloads::{self, validate_group_payloads},
-    scopes, SlotInvariantError,
+    scopes, SlotInvariantError, SlotTreeContext,
 };
 use crate::{
     collections::map::{HashMap, HashSet},
@@ -12,16 +12,10 @@ use crate::{
 };
 
 pub(super) struct SlotTreeView<'a> {
-    pub(super) kind: SlotTreeKind,
+    pub(super) tree: SlotTreeContext,
     pub(super) groups: &'a [GroupRecord],
     pub(super) payloads: &'a [PayloadRecord],
     pub(super) nodes: &'a [NodeRecord],
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum SlotTreeKind {
-    Active,
-    Detached { root_key: GroupKey },
 }
 
 pub(super) struct ActiveSlotTreeChecks<'a> {
@@ -38,245 +32,170 @@ impl<'a> ActiveSlotTreeChecks<'a> {
     }
 }
 
-impl SlotTreeKind {
+impl SlotTreeView<'_> {
     fn invalid_parent(
-        self,
+        &self,
         group_index: usize,
         expected: AnchorId,
         actual: AnchorId,
     ) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::InvalidParent {
-                group_index,
-                expected,
-                actual,
-            },
-            Self::Detached { root_key } => SlotInvariantError::DetachedInvalidParent {
-                root_key,
-                group_index,
-                expected,
-                actual,
-            },
+        SlotInvariantError::InvalidParent {
+            tree: self.tree,
+            group_index,
+            expected,
+            actual,
         }
     }
 
-    fn bad_depth(self, group_index: usize, expected: u32, actual: u32) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::BadDepth {
-                group_index,
-                expected,
-                actual,
-            },
-            Self::Detached { root_key } => SlotInvariantError::DetachedBadDepth {
-                root_key,
-                group_index,
-                expected,
-                actual,
-            },
+    fn bad_depth(&self, group_index: usize, expected: u32, actual: u32) -> SlotInvariantError {
+        SlotInvariantError::BadDepth {
+            tree: self.tree,
+            group_index,
+            expected,
+            actual,
         }
     }
 
-    fn bad_subtree_len(self, group_index: usize, expected: u32, actual: u32) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::BadSubtreeLen {
-                group_index,
-                expected,
-                actual,
-            },
-            Self::Detached { root_key } => SlotInvariantError::DetachedBadSubtreeLen {
-                root_key,
-                group_index,
-                expected,
-                actual,
-            },
-        }
-    }
-
-    fn bad_subtree_node_count(
-        self,
+    fn bad_subtree_len(
+        &self,
         group_index: usize,
         expected: u32,
         actual: u32,
     ) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::BadSubtreeNodeCount {
-                group_index,
-                expected,
-                actual,
-            },
-            Self::Detached { root_key } => SlotInvariantError::DetachedBadSubtreeNodeCount {
-                root_key,
-                group_index,
-                expected,
-                actual,
-            },
+        SlotInvariantError::BadSubtreeLen {
+            tree: self.tree,
+            group_index,
+            expected,
+            actual,
+        }
+    }
+
+    fn bad_subtree_node_count(
+        &self,
+        group_index: usize,
+        expected: u32,
+        actual: u32,
+    ) -> SlotInvariantError {
+        SlotInvariantError::BadSubtreeNodeCount {
+            tree: self.tree,
+            group_index,
+            expected,
+            actual,
         }
     }
 
     pub(super) fn payload_start_mismatch(
-        self,
+        &self,
         group_index: usize,
         expected: usize,
         actual: usize,
     ) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::PayloadStartMismatch {
-                group_index,
-                expected,
-                actual,
-            },
-            Self::Detached { root_key } => SlotInvariantError::DetachedPayloadStartMismatch {
-                root_key,
-                group_index,
-                expected,
-                actual,
-            },
+        SlotInvariantError::PayloadStartMismatch {
+            tree: self.tree,
+            group_index,
+            expected,
+            actual,
         }
     }
 
     pub(super) fn payload_out_of_range(
-        self,
+        &self,
         group_index: usize,
         start: usize,
         len: usize,
         payload_count: usize,
     ) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::PayloadOutOfRange {
-                group_index,
-                start,
-                len,
-                payload_count,
-            },
-            Self::Detached { root_key } => SlotInvariantError::DetachedPayloadOutOfRange {
-                root_key,
-                group_index,
-                start,
-                len,
-                payload_count,
-            },
+        SlotInvariantError::PayloadOutOfRange {
+            tree: self.tree,
+            group_index,
+            start,
+            len,
+            payload_count,
         }
     }
 
     pub(super) fn payload_count_mismatch(
-        self,
+        &self,
         expected: usize,
         actual: usize,
     ) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::PayloadCountMismatch { expected, actual },
-            Self::Detached { root_key } => SlotInvariantError::DetachedPayloadCountMismatch {
-                root_key,
-                expected,
-                actual,
-            },
+        SlotInvariantError::PayloadCountMismatch {
+            tree: self.tree,
+            expected,
+            actual,
         }
     }
 
     pub(super) fn payload_owner_mismatch(
-        self,
+        &self,
         payload_anchor: usize,
         expected: AnchorId,
         actual: AnchorId,
     ) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::PayloadOwnerMismatch {
-                payload_anchor,
-                expected,
-                actual,
-            },
-            Self::Detached { root_key } => SlotInvariantError::DetachedPayloadOwnerMismatch {
-                root_key,
-                payload_anchor,
-                expected,
-                actual,
-            },
+        SlotInvariantError::PayloadOwnerMismatch {
+            tree: self.tree,
+            payload_anchor,
+            expected,
+            actual,
         }
     }
 
     pub(super) fn node_start_mismatch(
-        self,
+        &self,
         group_index: usize,
         expected: usize,
         actual: usize,
     ) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::NodeStartMismatch {
-                group_index,
-                expected,
-                actual,
-            },
-            Self::Detached { root_key } => SlotInvariantError::DetachedNodeStartMismatch {
-                root_key,
-                group_index,
-                expected,
-                actual,
-            },
+        SlotInvariantError::NodeStartMismatch {
+            tree: self.tree,
+            group_index,
+            expected,
+            actual,
         }
     }
 
     pub(super) fn node_out_of_range(
-        self,
+        &self,
         group_index: usize,
         start: usize,
         len: usize,
         node_count: usize,
     ) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::NodeOutOfRange {
-                group_index,
-                start,
-                len,
-                node_count,
-            },
-            Self::Detached { root_key } => SlotInvariantError::DetachedNodeOutOfRange {
-                root_key,
-                group_index,
-                start,
-                len,
-                node_count,
-            },
+        SlotInvariantError::NodeOutOfRange {
+            tree: self.tree,
+            group_index,
+            start,
+            len,
+            node_count,
         }
     }
 
-    pub(super) fn node_count_mismatch(self, expected: usize, actual: usize) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::NodeCountMismatch { expected, actual },
-            Self::Detached { root_key } => SlotInvariantError::DetachedNodeCountMismatch {
-                root_key,
-                expected,
-                actual,
-            },
+    pub(super) fn node_count_mismatch(&self, expected: usize, actual: usize) -> SlotInvariantError {
+        SlotInvariantError::NodeCountMismatch {
+            tree: self.tree,
+            expected,
+            actual,
         }
     }
 
     pub(super) fn node_owner_mismatch(
-        self,
+        &self,
         node_id: crate::NodeId,
         expected: AnchorId,
         actual: AnchorId,
     ) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::NodeOwnerMismatch {
-                node_id,
-                expected,
-                actual,
-            },
-            Self::Detached { root_key } => SlotInvariantError::DetachedNodeOwnerMismatch {
-                root_key,
-                node_id,
-                expected,
-                actual,
-            },
+        SlotInvariantError::NodeOwnerMismatch {
+            tree: self.tree,
+            node_id,
+            expected,
+            actual,
         }
     }
 
-    pub(super) fn duplicate_node_id(self, node_id: crate::NodeId) -> SlotInvariantError {
-        match self {
-            Self::Active => SlotInvariantError::DuplicateNodeId { node_id },
-            Self::Detached { root_key } => {
-                SlotInvariantError::DetachedDuplicateNodeId { root_key, node_id }
-            }
+    pub(super) fn duplicate_node_id(&self, node_id: crate::NodeId) -> SlotInvariantError {
+        SlotInvariantError::DuplicateNodeId {
+            tree: self.tree,
+            node_id,
         }
     }
 }
@@ -408,19 +327,17 @@ pub(super) fn validate_slot_tree(
             .map(|(anchor, _)| *anchor)
             .unwrap_or(AnchorId::INVALID);
         if group.parent_anchor != expected_parent {
-            return Err(view
-                .kind
-                .invalid_parent(index, expected_parent, group.parent_anchor));
+            return Err(view.invalid_parent(index, expected_parent, group.parent_anchor));
         }
 
         let expected_depth = stack.len() as u32;
         if group.depth != expected_depth {
-            return Err(view.kind.bad_depth(index, expected_depth, group.depth));
+            return Err(view.bad_depth(index, expected_depth, group.depth));
         }
 
         let subtree_end = index + group.subtree_len as usize;
         if subtree_end == index || subtree_end > view.groups.len() {
-            return Err(view.kind.bad_subtree_len(index, 0, group.subtree_len));
+            return Err(view.bad_subtree_len(index, 0, group.subtree_len));
         }
 
         checks.after_group_header(index, group)?;
@@ -443,14 +360,10 @@ pub(super) fn validate_slot_tree(
     }
 
     if expected_payload_start != view.payloads.len() {
-        return Err(view
-            .kind
-            .payload_count_mismatch(expected_payload_start, view.payloads.len()));
+        return Err(view.payload_count_mismatch(expected_payload_start, view.payloads.len()));
     }
     if expected_node_start != view.nodes.len() {
-        return Err(view
-            .kind
-            .node_count_mismatch(expected_node_start, view.nodes.len()));
+        return Err(view.node_count_mismatch(expected_node_start, view.nodes.len()));
     }
 
     let mut expected_subtree_len = vec![1u32; view.groups.len()];
@@ -474,14 +387,14 @@ pub(super) fn validate_slot_tree(
 
     for (index, group) in view.groups.iter().enumerate() {
         if group.subtree_len != expected_subtree_len[index] {
-            return Err(view.kind.bad_subtree_len(
+            return Err(view.bad_subtree_len(
                 index,
                 expected_subtree_len[index],
                 group.subtree_len,
             ));
         }
         if group.subtree_node_count != expected_subtree_node_count[index] {
-            return Err(view.kind.bad_subtree_node_count(
+            return Err(view.bad_subtree_node_count(
                 index,
                 expected_subtree_node_count[index],
                 group.subtree_node_count,

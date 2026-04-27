@@ -7,14 +7,15 @@ This file tracks current forward work and marks boxes closed only after the stat
 ## Current State
 
 - Slot Table V2 is the active implementation under `crates/cranpose-core/src/slot/*`.
-- Completed cleanup and review-fix history is in git through `6c977dd4`.
+- Completed cleanup and review-fix history is in git through `0a6784ae`.
 - The first refactor slice is closed below with its validation gate.
 - Last full local verification on 2026-04-26 was green:
   `cargo fmt`, `cargo test > 1.tmp 2>&1`,
   `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`,
   Android `:app:assembleRelease`, `apps/desktop-demo/build-web.sh`,
   and `CRANPOSE_BUILD_JOBS=2 ./run_robot_test.sh --sequential`.
-- Latest local verification on 2026-04-27 was green with serialized execution:
+- Latest local verification on 2026-04-27 was green on the validation cleanup
+  tree with serialized execution:
   `env CRANPOSE_USE_SCCACHE=0 ./verify_slot_table.sh` after capping Cargo,
   Rust test, Gradle, and robot execution to one worker/thread. Robot summary:
   `TOTAL=92`, `PASSED=92`, `FAILED=0`.
@@ -27,7 +28,7 @@ This file tracks current forward work and marks boxes closed only after the stat
   `slot_table_v2_keyed_random_shuffle_1024_seed_2` at about `+1.9%`, both
   below the documented `5%` budget; payload tab-switch, subcompose, lazy-list,
   and most keyed benchmarks were within noise or improved.
-- The next work is refactoring for maintainability only: same preorder `Vec`
+- The next work is event-driven namespace compaction: same preorder `Vec`
   backend, same semantics, same tests, no key/retention/node-lifecycle rewrite.
 
 ## Refactor Guardrails
@@ -92,11 +93,11 @@ Scope reviewed: `crates/cranpose-core/src/slot/*`, `crates/cranpose-core/src/slo
 
 ### P1 - Simplify Verbose Validation Plumbing
 
-- [ ] Replace the paired active/detached `SlotInvariantError` variants with one error payload that carries a slot-tree context.
+- [x] Replace the paired active/detached `SlotInvariantError` variants with one error payload that carries a slot-tree context.
   Evidence: `SlotInvariantError` duplicates active and detached variants for parent, depth, subtree len, payload start, payload range, payload count, payload owner, node start, node range, node count, node owner, and duplicate node id. `SlotTreeKind` then repeats a match for each error constructor. This is correct but too verbose and makes new invariants expensive to add.
   Files: `crates/cranpose-core/src/slot/validate/errors.rs`, `crates/cranpose-core/src/slot/validate/groups.rs`.
 
-- [ ] Tighten payload-location validation diagnostics so reverse-registry failures report the actual stale record or use a distinct error variant.
+- [x] Tighten payload-location validation diagnostics so reverse-registry failures report the actual stale record or use a distinct error variant.
   Evidence: `validate_payload_locations` compares the registry key against the payload record but can construct `PayloadLocationMismatch` with `actual: Some((owner, payload_index))`, the same tuple shape as the expected registry location, even when the record mismatch is the real problem.
   Files: `crates/cranpose-core/src/slot/validate/payloads.rs`.
 

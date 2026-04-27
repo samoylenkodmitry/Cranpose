@@ -42,4 +42,6 @@ pub(crate) use types::{DetachedSubtree, FinishGroupResult, PayloadKind, SlotPass
 use types::{NodeRecord, PayloadRecord};
 #[cfg(any(test, debug_assertions))]
 pub(crate) use validate::SlotInvariantError;
+#[cfg(test)]
+pub(crate) use validate::SlotTreeContext;
 pub(crate) use writer::SlotWriteSessionState;

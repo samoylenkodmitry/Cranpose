@@ -1,8 +1,8 @@
 use super::super::DetachedSubtree;
 use super::{
     anchors,
-    groups::{validate_slot_tree, SlotTreeChecks, SlotTreeKind, SlotTreeView},
-    SlotInvariantError,
+    groups::{validate_slot_tree, SlotTreeChecks, SlotTreeView},
+    SlotInvariantError, SlotTreeContext,
 };
 
 struct DetachedSlotTreeChecks;
@@ -21,7 +21,7 @@ impl DetachedSubtree {
         let mut checks = DetachedSlotTreeChecks;
         validate_slot_tree(
             SlotTreeView {
-                kind: SlotTreeKind::Detached { root_key },
+                tree: SlotTreeContext::Detached { root_key },
                 groups: &self.groups,
                 payloads: &self.payloads,
                 nodes: &self.nodes,
