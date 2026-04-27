@@ -5,8 +5,10 @@ use super::{
 };
 use crate::{
     retention::{RetainKey, RetentionManager},
-    slot_storage::{GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, ValueSlotId},
-    AnchorId, Applier, BeginGroupInput, Key, MemoryApplier, Node, NodeId, ScopeId,
+    slot_storage::{
+        BeginGroupInput, GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, ValueSlotId,
+    },
+    AnchorId, Applier, Key, MemoryApplier, Node, NodeId, ScopeId,
 };
 use std::any::{Any, TypeId};
 use std::cell::Cell;
@@ -149,10 +151,10 @@ fn detached_single_child_with_options(
             session.set_group_scope(child.group, scope_id);
         }
         if record_child_payload {
-            let _ = session.value_slot(|| 17_i32);
+            let _ = session.value_slot_with_kind(PayloadKind::Internal, || 17_i32);
         }
         if let (Some(node_id), Some(generation)) = (child_node, child_generation) {
-            session.record_node(node_id, generation);
+            session.record_node_with_parent(node_id, generation, None);
         }
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
@@ -221,8 +223,8 @@ fn composed_group_with_value_and_node_table(group_key: Key) -> SlotTable {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, group_key, None);
-        let _ = session.value_slot(|| 17_i32);
-        session.record_node(31, 1);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 17_i32);
+        session.record_node_with_parent(31, 1, None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -248,6 +250,32 @@ fn detached_group_nodes(subtree: &DetachedSubtree, group_index: usize) -> &[supe
     &subtree.nodes[start..end]
 }
 
+fn node_ids_in_current_subtree(session: &SlotWriteSession<'_>) -> Vec<NodeId> {
+    let frame = session
+        .state
+        .group_stack
+        .last()
+        .expect("node inspection requires an active group");
+    let group_index = session.table.current_group_index(frame.group_anchor);
+    let subtree_end = session.table.group_subtree_end_at_index(group_index);
+    let mut nodes =
+        Vec::with_capacity(session.table.group_subtree_node_count_at_index(group_index));
+    for index in group_index..subtree_end {
+        nodes.extend(
+            session
+                .table
+                .group_node_records_at(index)
+                .iter()
+                .map(|node| node.id),
+        );
+    }
+    nodes
+}
+
+fn anchor_is_active(table: &SlotTable, anchor: AnchorId) -> bool {
+    table.anchors.active_index(anchor).is_some()
+}
+
 fn exercise_slot_write_session_surface(
     slots: &mut SlotWriteSession<'_>,
     group_key: GroupKey,
@@ -257,12 +285,12 @@ fn exercise_slot_write_session_surface(
     assert_eq!(started.kind, GroupStartKind::Inserted);
     slots.set_group_scope(started.group, scope_id);
 
-    let slot = slots.value_slot(|| 7_i32);
+    let slot = slots.value_slot_with_kind(PayloadKind::Internal, || 7_i32);
 
-    let recorded = slots.record_node(55, 1);
+    let recorded = slots.record_node_with_parent(55, 1, None);
     assert!(!recorded.reused);
     assert_eq!(recorded.id, 55);
-    assert_eq!(slots.nodes_in_current_group(), vec![55]);
+    assert_eq!(node_ids_in_current_subtree(slots), vec![55]);
 
     let result = slots.finish_group_body();
     assert!(result.detached_children.is_empty());

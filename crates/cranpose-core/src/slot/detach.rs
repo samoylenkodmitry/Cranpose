@@ -4,15 +4,6 @@ use crate::{
 };
 
 impl SlotTable {
-    fn allocate_detached_generation(&mut self) -> u64 {
-        let generation = self.next_detached_generation;
-        self.next_detached_generation = self
-            .next_detached_generation
-            .checked_add(1)
-            .expect("detached subtree generation overflow");
-        generation
-    }
-
     pub(in crate::slot) fn detach_range(&mut self, range: SubtreeRange) -> Vec<GroupRecord> {
         self.groups.drain(range.as_range()).collect::<Vec<_>>()
     }
@@ -51,7 +42,6 @@ impl SlotTable {
             groups: removed_groups,
             payloads: removed_payloads,
             nodes: removed_nodes,
-            generation: self.allocate_detached_generation(),
         };
         #[cfg(any(test, debug_assertions))]
         self.debug_assert_valid_after("detach_subtree");

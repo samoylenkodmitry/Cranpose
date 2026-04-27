@@ -137,7 +137,7 @@ fn validate_reports_group_anchor_count_mismatch_structurally() {
 fn validate_reports_anchor_mismatch_for_missing_anchor_structurally() {
     let mut table = composed_parent_child_table(494, 495, None);
     let root_anchor = table.groups[0].anchor;
-    table.anchors.invalidate(root_anchor);
+    table.anchors.clear();
 
     assert_eq!(
         table.validate(),
@@ -262,7 +262,7 @@ fn validate_reports_payload_location_stale_owner_structurally() {
 
     table.groups[0].anchor = new_anchor;
     table.group_payload_record_at_mut(0, 0).owner = new_anchor;
-    table.anchors.invalidate(old_anchor);
+    table.anchors.mark_detached(old_anchor);
     table.anchors.set_active(new_anchor, 0);
 
     assert_eq!(
@@ -338,10 +338,10 @@ fn compact_payload_namespace_remaps_retained_subtree_payloads() {
     harness.begin_pass(SlotPassMode::Compose);
     let parent_anchor = harness.session(|session| {
         let parent = begin_unkeyed(session, PARENT_KEY, None);
-        let _ = session.value_slot(|| 10_i32);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
 
         begin_unkeyed(session, CHILD_KEY, None);
-        let _ = session.value_slot(|| 20_i32);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -438,14 +438,14 @@ fn validate_reports_duplicate_node_id_structurally() {
 fn validate_reports_node_lifecycle_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(484);
     let node_id = table.group_node_record_at(0, 0).id;
-    table.group_node_record_at_mut(0, 0).lifecycle = super::NodeLifecycle::Disposed;
+    table.group_node_record_at_mut(0, 0).lifecycle = super::NodeLifecycle::RetainedDetached;
 
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::NodeLifecycleMismatch {
             node_id,
             expected: super::NodeLifecycle::Active,
-            actual: super::NodeLifecycle::Disposed,
+            actual: super::NodeLifecycle::RetainedDetached,
         })
     );
 }
@@ -510,7 +510,7 @@ fn validate_reports_scope_index_stale_anchor_structurally() {
     let new_anchor = AnchorId::new(1_002);
 
     table.groups[1].anchor = new_anchor;
-    table.anchors.invalidate(old_anchor);
+    table.anchors.mark_detached(old_anchor);
     table.anchors.set_active(new_anchor, 1);
 
     assert_eq!(

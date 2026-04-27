@@ -2,11 +2,6 @@ use super::super::{PayloadKind, SlotWriteSession};
 use crate::{slot_storage::ValueSlotId, Owned};
 
 impl SlotWriteSession<'_> {
-    #[cfg(test)]
-    pub(crate) fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> ValueSlotId {
-        self.value_slot_with_kind(PayloadKind::Internal, init)
-    }
-
     pub(crate) fn value_slot_with_kind<T: 'static>(
         &mut self,
         kind: PayloadKind,

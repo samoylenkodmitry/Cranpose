@@ -16,7 +16,7 @@ fn retention_marks_detached_nodes_and_reactivates_on_take() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_KEY, None);
-        session.record_node(child_id, child_generation);
+        session.record_node_with_parent(child_id, child_generation, None);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -155,7 +155,7 @@ fn retention_validate_rejects_non_detached_retained_anchor() {
 
     let mut retention = RetentionManager::default();
     retention.insert(retain_key, detached);
-    harness.table.anchors.invalidate(retained_anchor);
+    harness.table.anchors.clear();
 
     assert_eq!(
         retention.validate(&harness.table),
@@ -202,7 +202,7 @@ fn retention_validate_rejects_retained_scope_in_active_scope_index() {
 }
 
 #[test]
-fn retention_validate_rejects_disposed_retained_node() {
+fn retention_validate_rejects_active_retained_node() {
     const PARENT_KEY: Key = 378;
     const CHILD_KEY: Key = 379;
 
@@ -220,14 +220,14 @@ fn retention_validate_rejects_disposed_retained_node() {
         .subtrees_mut()
         .next()
         .expect("retained subtree must exist")
-        .mark_nodes_disposed();
+        .mark_nodes_active();
 
     assert_eq!(
         retention.validate(&harness.table),
         Err(SlotInvariantError::RetainedNodeLifecycleMismatch {
             root_key: retain_key.key,
             node_id: child_node,
-            actual: super::NodeLifecycle::Disposed,
+            actual: super::NodeLifecycle::Active,
         })
     );
 }
@@ -410,7 +410,7 @@ fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
         let child = begin_unkeyed(session, CHILD_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
         let _remembered = session.remember(|| 91_i32);
-        session.record_node(child_id, child_generation);
+        session.record_node_with_parent(child_id, child_generation, None);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -468,7 +468,7 @@ fn finalize_pass_disposes_removed_child_nodes() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_KEY, None);
-        session.record_node(child_id, child_generation);
+        session.record_node_with_parent(child_id, child_generation, None);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -525,7 +525,7 @@ fn retained_detached_child_nodes_stay_live_across_restore() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_KEY, None);
-        session.record_node(child_id, child_generation);
+        session.record_node_with_parent(child_id, child_generation, None);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -568,7 +568,7 @@ fn retained_detached_child_nodes_stay_live_across_restore() {
             Some((child_id, child_generation)),
             "restored children must expose their retained node for explicit reuse"
         );
-        let recorded = session.record_node(child_id, child_generation);
+        let recorded = session.record_node_with_parent(child_id, child_generation, None);
         assert!(recorded.reused);
         assert_eq!(recorded.id, child_id);
         let child_result = session.finish_group_body();

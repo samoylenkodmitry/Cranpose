@@ -100,39 +100,7 @@ create_local_temp_dir() {
 }
 
 local_cargo_build_jobs_default() {
-    local cpu_count
-    local available_kib
-    local jobs_by_cpu
-    local jobs_by_memory
-    local jobs
-
-    cpu_count="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
-    jobs_by_cpu=$(( cpu_count / 4 ))
-    if [ "$jobs_by_cpu" -lt 1 ]; then
-        jobs_by_cpu=1
-    fi
-
-    available_kib="$(awk '/MemAvailable:/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)"
-    if [ -n "$available_kib" ]; then
-        jobs_by_memory=$(( available_kib / 6291456 ))
-        if [ "$jobs_by_memory" -lt 1 ]; then
-            jobs_by_memory=1
-        fi
-
-        if [ "$jobs_by_memory" -lt "$jobs_by_cpu" ]; then
-            jobs="$jobs_by_memory"
-        else
-            jobs="$jobs_by_cpu"
-        fi
-    else
-        jobs="$jobs_by_cpu"
-    fi
-
-    if [ "$jobs" -gt 8 ]; then
-        jobs=8
-    fi
-
-    printf '%s\n' "$jobs"
+    printf '1\n'
 }
 
 enable_local_cargo_job_limit() {

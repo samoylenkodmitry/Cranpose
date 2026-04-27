@@ -16,13 +16,13 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
 
         let child = begin_unkeyed(session, CHILD_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
-        let child_slot = session.value_slot(|| 70_i32);
-        session.record_node(21, 1);
+        let child_slot = session.value_slot_with_kind(PayloadKind::Internal, || 70_i32);
+        session.record_node_with_parent(21, 1, None);
 
         let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
         session.set_group_scope(grandchild.group, GRANDCHILD_SCOPE);
-        let grandchild_slot = session.value_slot(|| 110_i32);
-        session.record_node(22, 1);
+        let grandchild_slot = session.value_slot_with_kind(PayloadKind::Internal, || 110_i32);
+        session.record_node_with_parent(22, 1, None);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -51,7 +51,7 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
     });
     harness.finish_pass();
     assert!(
-        !harness.table.anchors.contains_active(child_anchor),
+        !anchor_is_active(&harness.table, child_anchor),
         "detached child must leave the active anchor index"
     );
     assert_eq!(
@@ -76,10 +76,10 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         let child = begin_unkeyed(session, CHILD_KEY, Some(detached));
-        let child_slot = session.value_slot(|| 0_i32);
+        let child_slot = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
 
         let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
-        let grandchild_slot = session.value_slot(|| 0_i32);
+        let grandchild_slot = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -136,7 +136,7 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
 
             let child_b = begin_unkeyed(session, CHILD_B_KEY, None);
             session.set_group_scope(child_b.group, CHILD_B_SCOPE);
-            let child_b_slot = session.value_slot(|| 80_i32);
+            let child_b_slot = session.value_slot_with_kind(PayloadKind::Internal, || 80_i32);
             let child_b_result = session.finish_group_body();
             assert!(child_b_result.detached_children.is_empty());
             session.end_group();
@@ -261,8 +261,8 @@ fn removing_conditional_child_returns_detached_subtree() {
 
         let child = begin_unkeyed(session, CHILD_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
-        let _ = session.value_slot(|| 17_i32);
-        session.record_node(41, 1);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 17_i32);
+        session.record_node_with_parent(41, 1, None);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -293,7 +293,6 @@ fn removing_conditional_child_returns_detached_subtree() {
         detached.node_states().collect::<Vec<_>>(),
         vec![(41, super::NodeLifecycle::Active)]
     );
-    assert_eq!(detached.generation(), 1);
     assert_eq!(detached.scope_ids(), vec![CHILD_SCOPE]);
     assert_eq!(detached.group_anchors().collect::<Vec<_>>().len(), 1);
     assert_eq!(detached.groups[0].parent_anchor, AnchorId::INVALID);

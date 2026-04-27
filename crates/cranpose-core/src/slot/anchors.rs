@@ -68,11 +68,6 @@ impl AnchorRegistry {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn contains_active(&self, anchor: AnchorId) -> bool {
-        self.active_index(anchor).is_some()
-    }
-
     pub(super) fn active_len(&self) -> usize {
         self.active_count
     }
@@ -133,13 +128,6 @@ impl AnchorRegistry {
     pub(super) fn mark_detached(&mut self, anchor: AnchorId) {
         if anchor.is_valid() {
             self.set_state(anchor, AnchorState::Detached);
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn invalidate(&mut self, anchor: AnchorId) {
-        if self.invalidate_state(anchor) {
-            self.maybe_shrink_sparse_storage();
         }
     }
 

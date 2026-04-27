@@ -9,7 +9,7 @@ fn record_node_result_is_false_when_replacing_existing_node_slot() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let recorded = session.record_node(11, 1);
+        let recorded = session.record_node_with_parent(11, 1, None);
         assert!(!recorded.reused);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -21,7 +21,7 @@ fn record_node_result_is_false_when_replacing_existing_node_slot() {
     harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
         assert_eq!(session.current_node_record(), Some((11, 1)));
-        let recorded = session.record_node(12, 1);
+        let recorded = session.record_node_with_parent(12, 1, None);
         assert!(
             !recorded.reused,
             "replacing the node at the current cursor must not report a reused node"

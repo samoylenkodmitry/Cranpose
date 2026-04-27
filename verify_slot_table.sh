@@ -13,6 +13,14 @@ fi
 # shellcheck disable=SC1091
 . "$ROOT_DIR/scripts/verification_common.sh"
 
+CRANPOSE_VERIFY_BUILD_JOBS="${CRANPOSE_VERIFY_BUILD_JOBS:-1}"
+CRANPOSE_VERIFY_TEST_THREADS="${CRANPOSE_VERIFY_TEST_THREADS:-1}"
+GRADLE_MAX_WORKERS="${CRANPOSE_VERIFY_GRADLE_WORKERS:-1}"
+export CRANPOSE_BUILD_JOBS="${CRANPOSE_BUILD_JOBS:-$CRANPOSE_VERIFY_BUILD_JOBS}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$CRANPOSE_BUILD_JOBS}"
+export RUST_TEST_THREADS="${RUST_TEST_THREADS:-$CRANPOSE_VERIFY_TEST_THREADS}"
+export CRANPOSE_ROBOT_PARALLEL=1
+
 enable_local_tmpdir
 enable_local_sccache
 enable_local_cargo_job_limit
@@ -24,6 +32,10 @@ ROBOT_LOG_PATTERN="(\\[FAIL\\]|TIMEOUT|panicked|thread '.*' panicked|BUILD FAILE
 
 echo "Slot Table V2 verification"
 echo "root: $ROOT_DIR"
+echo "cargo build jobs: $CARGO_BUILD_JOBS"
+echo "rust test threads: $RUST_TEST_THREADS"
+echo "gradle max workers: $GRADLE_MAX_WORKERS"
+echo "robot jobs: 1"
 
 run_logged "cargo fmt" "$ROOT_DIR/cargo_fmt.tmp" "$ROOT_DIR" "${CARGO_RUNNER[@]}" fmt
 scan_log "cargo fmt" "$ROOT_DIR/cargo_fmt.tmp" "$RUST_LOG_PATTERN"
@@ -34,7 +46,7 @@ run_logged_timed_retry \
     "$ROOT_DIR" \
     "${CRANPOSE_VERIFY_CARGO_TEST_TIMEOUT_SECS:-1800}" \
     "${CRANPOSE_VERIFY_CARGO_TEST_ATTEMPTS:-2}" \
-    "${CARGO_RUNNER[@]}" test
+    "${CARGO_RUNNER[@]}" test --jobs "$CARGO_BUILD_JOBS" -- --test-threads "$RUST_TEST_THREADS"
 scan_log "cargo test" "$ROOT_DIR/1.tmp" "$RUST_LOG_PATTERN"
 
 run_logged_timed_retry \
@@ -43,7 +55,7 @@ run_logged_timed_retry \
     "$ROOT_DIR" \
     "${CRANPOSE_VERIFY_CARGO_CLIPPY_TIMEOUT_SECS:-1200}" \
     "${CRANPOSE_VERIFY_CARGO_CLIPPY_ATTEMPTS:-2}" \
-    "${CARGO_RUNNER[@]}" clippy --workspace --all-targets -- -D warnings
+    "${CARGO_RUNNER[@]}" clippy --workspace --all-targets --jobs "$CARGO_BUILD_JOBS" -- -D warnings
 scan_log "cargo clippy" "$ROOT_DIR/2.tmp" "$RUST_LOG_PATTERN"
 
 run_logged_timed_retry \
@@ -52,7 +64,7 @@ run_logged_timed_retry \
     "$ROOT_DIR/apps/android-demo/android" \
     "${CRANPOSE_VERIFY_ANDROID_TIMEOUT_SECS:-1200}" \
     "${CRANPOSE_VERIFY_ANDROID_ATTEMPTS:-2}" \
-    ./gradlew :app:assembleRelease
+    ./gradlew --no-parallel --max-workers="$GRADLE_MAX_WORKERS" :app:assembleRelease
 scan_log "Android :app:assembleRelease" "$ROOT_DIR/apps/android-demo/android/android_release.tmp" "$ANDROID_LOG_PATTERN"
 
 run_logged_timed_retry \

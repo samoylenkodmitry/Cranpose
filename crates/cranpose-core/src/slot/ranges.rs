@@ -111,24 +111,50 @@ impl DirectChildRange {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(in crate::slot) struct PayloadRange {
-    start: usize,
-    end: usize,
+pub(in crate::slot) trait ItemRangeKind: Copy {
+    const LABEL: &'static str;
 }
 
-impl PayloadRange {
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(in crate::slot) struct PayloadRangeKind;
+
+impl ItemRangeKind for PayloadRangeKind {
+    const LABEL: &'static str = "payload";
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(in crate::slot) struct NodeRangeKind;
+
+impl ItemRangeKind for NodeRangeKind {
+    const LABEL: &'static str = "node";
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(in crate::slot) struct TypedItemRange<K: ItemRangeKind> {
+    start: usize,
+    end: usize,
+    _kind: std::marker::PhantomData<fn() -> K>,
+}
+
+impl<K: ItemRangeKind> TypedItemRange<K> {
     #[inline(always)]
     pub(in crate::slot) fn new(start: usize, end: usize) -> Self {
-        assert!(start <= end, "payload range start must not exceed end");
-        Self { start, end }
+        assert!(start <= end, "{} range start must not exceed end", K::LABEL);
+        Self {
+            start,
+            end,
+            _kind: std::marker::PhantomData,
+        }
     }
 
     #[inline(always)]
     pub(in crate::slot) fn from_start_len(start: usize, len: usize) -> Self {
         Self {
             start,
-            end: start.checked_add(len).expect("payload range overflow"),
+            end: start
+                .checked_add(len)
+                .unwrap_or_else(|| panic!("{} range overflow", K::LABEL)),
+            _kind: std::marker::PhantomData,
         }
     }
 
@@ -149,8 +175,16 @@ impl PayloadRange {
 
     #[inline(always)]
     pub(in crate::slot) fn subrange(self, start: usize, end: usize) -> Self {
-        assert!(start <= end, "payload subrange start must not exceed end");
-        assert!(end <= self.len(), "payload subrange must stay in group");
+        assert!(
+            start <= end,
+            "{} subrange start must not exceed end",
+            K::LABEL
+        );
+        assert!(
+            end <= self.len(),
+            "{} subrange must stay in group",
+            K::LABEL
+        );
         Self::new(self.start + start, self.start + end)
     }
 
@@ -160,11 +194,49 @@ impl PayloadRange {
     }
 }
 
+pub(in crate::slot) type PayloadRange = TypedItemRange<PayloadRangeKind>;
+pub(in crate::slot) type NodeRange = TypedItemRange<NodeRangeKind>;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(in crate::slot) struct GroupItemRange<K: ItemRangeKind> {
+    group_index: usize,
+    items: TypedItemRange<K>,
+}
+
+impl<K: ItemRangeKind> GroupItemRange<K> {
+    #[inline(always)]
+    pub(in crate::slot) fn new(
+        group_index: usize,
+        group_items: TypedItemRange<K>,
+        start_offset: usize,
+        end_offset: usize,
+    ) -> Self {
+        Self {
+            group_index,
+            items: group_items.subrange(start_offset, end_offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::slot) fn group_index(self) -> usize {
+        self.group_index
+    }
+
+    #[inline(always)]
+    pub(in crate::slot) fn is_empty(self) -> bool {
+        self.items.is_empty()
+    }
+
+    #[inline(always)]
+    fn as_item_range(self) -> TypedItemRange<K> {
+        self.items
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(in crate::slot) struct GroupPayloadRange {
-    group_index: usize,
     start_offset: usize,
-    payloads: PayloadRange,
+    range: GroupItemRange<PayloadRangeKind>,
 }
 
 impl GroupPayloadRange {
@@ -176,15 +248,14 @@ impl GroupPayloadRange {
         end_offset: usize,
     ) -> Self {
         Self {
-            group_index,
             start_offset,
-            payloads: group_payloads.subrange(start_offset, end_offset),
+            range: GroupItemRange::new(group_index, group_payloads, start_offset, end_offset),
         }
     }
 
     #[inline(always)]
     pub(in crate::slot) fn group_index(self) -> usize {
-        self.group_index
+        self.range.group_index()
     }
 
     #[inline(always)]
@@ -194,92 +265,21 @@ impl GroupPayloadRange {
 
     #[inline(always)]
     pub(in crate::slot) fn is_empty(self) -> bool {
-        self.payloads.is_empty()
+        self.range.is_empty()
     }
 
     #[inline(always)]
     pub(in crate::slot) fn as_payload_range(self) -> PayloadRange {
-        self.payloads
+        self.range.as_item_range()
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(in crate::slot) struct NodeRange {
-    start: usize,
-    end: usize,
-}
+pub(in crate::slot) type GroupNodeRange = GroupItemRange<NodeRangeKind>;
 
-impl NodeRange {
-    #[inline(always)]
-    pub(in crate::slot) fn new(start: usize, end: usize) -> Self {
-        assert!(start <= end, "node range start must not exceed end");
-        Self { start, end }
-    }
-
-    #[inline(always)]
-    pub(in crate::slot) fn from_start_len(start: usize, len: usize) -> Self {
-        Self {
-            start,
-            end: start.checked_add(len).expect("node range overflow"),
-        }
-    }
-
-    #[inline(always)]
-    pub(in crate::slot) fn len(self) -> usize {
-        self.end - self.start
-    }
-
-    #[inline(always)]
-    pub(in crate::slot) fn is_empty(self) -> bool {
-        self.start == self.end
-    }
-
-    #[inline(always)]
-    pub(in crate::slot) fn subrange(self, start: usize, end: usize) -> Self {
-        assert!(start <= end, "node subrange start must not exceed end");
-        assert!(end <= self.len(), "node subrange must stay in group");
-        Self::new(self.start + start, self.start + end)
-    }
-
-    #[inline(always)]
-    pub(in crate::slot) fn as_range(self) -> Range<usize> {
-        self.start..self.end
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(in crate::slot) struct GroupNodeRange {
-    group_index: usize,
-    nodes: NodeRange,
-}
-
-impl GroupNodeRange {
-    #[inline(always)]
-    pub(in crate::slot) fn new(
-        group_index: usize,
-        group_nodes: NodeRange,
-        start_offset: usize,
-        end_offset: usize,
-    ) -> Self {
-        Self {
-            group_index,
-            nodes: group_nodes.subrange(start_offset, end_offset),
-        }
-    }
-
-    #[inline(always)]
-    pub(in crate::slot) fn group_index(self) -> usize {
-        self.group_index
-    }
-
-    #[inline(always)]
-    pub(in crate::slot) fn is_empty(self) -> bool {
-        self.nodes.is_empty()
-    }
-
+impl GroupItemRange<NodeRangeKind> {
     #[inline(always)]
     pub(in crate::slot) fn as_node_range(self) -> NodeRange {
-        self.nodes
+        self.as_item_range()
     }
 }
 

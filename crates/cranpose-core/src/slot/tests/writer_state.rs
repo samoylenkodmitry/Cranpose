@@ -25,7 +25,7 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         session.end_group();
 
         begin_unkeyed(session, CHILD_B_KEY, None);
-        session.record_node(30, 1);
+        session.record_node_with_parent(30, 1, None);
         let child_b_result = session.finish_group_body();
         assert!(child_b_result.detached_children.is_empty());
         session.end_group();
@@ -42,7 +42,7 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
 
         let child_a = begin_unkeyed(session, CHILD_A_KEY, None);
         assert_eq!(child_a.kind, GroupStartKind::Reused);
-        assert_eq!(session.nodes_in_current_group(), vec![10, 20]);
+        assert_eq!(node_ids_in_current_subtree(session), vec![10, 20]);
         session.skip_group();
         let child_a_result = session.finish_group_body();
         assert!(child_a_result.detached_children.is_empty());
@@ -102,7 +102,7 @@ fn scope_index_resolves_active_groups_and_omits_detached_ones() {
 
     assert!(harness.table.groups.is_empty());
     assert!(
-        !harness.table.anchors.contains_active(group_anchor),
+        !anchor_is_active(&harness.table, group_anchor),
         "disposed groups must invalidate their active anchor lookup"
     );
     assert_eq!(

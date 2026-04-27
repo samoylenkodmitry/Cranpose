@@ -26,8 +26,6 @@ impl SlotLifecycleCoordinator {
     }
 
     pub(crate) fn queue_subtree_disposal(&mut self, subtree: DetachedSubtree) {
-        let mut subtree = subtree;
-        subtree.mark_nodes_disposed();
         for drop in subtree.into_payload_drops_rev() {
             self.queue_drop(drop);
         }

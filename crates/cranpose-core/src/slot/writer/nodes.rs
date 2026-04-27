@@ -12,14 +12,6 @@ impl SlotTable {
         nodes
     }
 
-    #[cfg(test)]
-    fn collect_subtree_node_ids(&self, group_anchor: AnchorId) -> Vec<NodeId> {
-        self.collect_subtree_node_records(group_anchor)
-            .into_iter()
-            .map(|node| node.id)
-            .collect()
-    }
-
     pub(super) fn collect_subtree_root_node_ids(&self, group_anchor: AnchorId) -> Vec<NodeId> {
         let nodes = self.collect_subtree_node_records(group_anchor);
         root_node_ids_from_records(&nodes)
@@ -27,11 +19,6 @@ impl SlotTable {
 }
 
 impl SlotWriteSession<'_> {
-    #[cfg(test)]
-    pub(crate) fn record_node(&mut self, id: NodeId, generation: u32) -> NodeRecordResult {
-        self.record_node_with_parent(id, generation, None)
-    }
-
     pub(crate) fn record_node_with_parent(
         &mut self,
         id: NodeId,
@@ -60,15 +47,5 @@ impl SlotWriteSession<'_> {
         let frame = self.state.group_stack.last()?;
         self.table
             .node_identity_at_cursor(frame.group_anchor, frame.node_cursor)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn nodes_in_current_group(&self) -> Vec<NodeId> {
-        let frame = self
-            .state
-            .group_stack
-            .last()
-            .expect("nodes_in_current_group requires an active group");
-        self.table.collect_subtree_node_ids(frame.group_anchor)
     }
 }

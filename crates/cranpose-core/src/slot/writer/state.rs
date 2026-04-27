@@ -204,8 +204,8 @@ mod tests {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(BeginGroupInput::new(key, None));
-            let _ = session.value_slot(|| 17_i32);
-            session.record_node(31, 1);
+            let _ = session.value_slot_with_kind(crate::slot::PayloadKind::Internal, || 17_i32);
+            session.record_node_with_parent(31, 1, None);
         }
 
         assert_eq!(state.group_stack[0].old_payload_len, 0);
@@ -261,7 +261,7 @@ mod tests {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(BeginGroupInput::new(key, None));
-            session.record_node(31, 1);
+            session.record_node_with_parent(31, 1, None);
             let _ = session.finish_group_body();
             session.end_group();
         }

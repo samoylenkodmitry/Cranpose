@@ -611,8 +611,9 @@ fn apply_model_operation(
 
                     next_retained.remove(&key);
                     session.set_group_scope(started.group, child.scope_id);
-                    let slot = session.value_slot(|| (key as i32) * 10);
-                    session.record_node(child.node_id(), 1);
+                    let slot =
+                        session.value_slot_with_kind(PayloadKind::Internal, || (key as i32) * 10);
+                    session.record_node_with_parent(child.node_id(), 1, None);
                     if mutate_values.contains(&key) {
                         child.increment_remembered_value();
                         session.table.write_value(slot, child.remembered_value());

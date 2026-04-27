@@ -71,10 +71,6 @@ pub use slot::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
     SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotTableMutationDebugStats,
 };
-pub use slot_storage::{
-    BeginGroupInput, GroupAnchor, GroupId, GroupKey, GroupStart, GroupStartKind, NodeRecordResult,
-    ValueSlotId,
-};
 #[doc(hidden)]
 pub use snapshot_state_observer::SnapshotStateObserver;
 

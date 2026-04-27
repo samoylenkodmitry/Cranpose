@@ -15,7 +15,6 @@ pub(crate) enum SlotPassMode {
 pub(crate) enum NodeLifecycle {
     Active,
     RetainedDetached,
-    Disposed,
 }
 
 pub(super) struct PayloadRecord {
@@ -62,7 +61,6 @@ pub(crate) struct DetachedSubtree {
     pub(super) groups: Vec<GroupRecord>,
     pub(super) payloads: Vec<PayloadRecord>,
     pub(super) nodes: Vec<NodeRecord>,
-    pub(super) generation: u64,
 }
 
 impl DetachedSubtree {
@@ -83,10 +81,6 @@ impl DetachedSubtree {
 
     pub(crate) fn root_scope_id(&self) -> Option<ScopeId> {
         self.root().scope_id
-    }
-
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation
     }
 
     pub(crate) fn node_ids_iter(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -146,10 +140,6 @@ impl DetachedSubtree {
 
     pub(crate) fn mark_nodes_retained_detached(&mut self) {
         self.set_node_lifecycle(NodeLifecycle::RetainedDetached);
-    }
-
-    pub(crate) fn mark_nodes_disposed(&mut self) {
-        self.set_node_lifecycle(NodeLifecycle::Disposed);
     }
 
     pub(crate) fn mark_nodes_active(&mut self) {

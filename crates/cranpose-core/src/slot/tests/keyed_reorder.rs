@@ -12,13 +12,13 @@ fn keyed_sibling_reorder_preserves_values_and_anchors() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         let first = begin_keyed(session, STATIC_KEY, 1, None);
-        let first_slot = session.value_slot(|| 10_i32);
+        let first_slot = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
         let second = begin_keyed(session, STATIC_KEY, 2, None);
-        let second_slot = session.value_slot(|| 20_i32);
+        let second_slot = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
         let second_result = session.finish_group_body();
         assert!(second_result.detached_children.is_empty());
         session.end_group();
@@ -45,13 +45,13 @@ fn keyed_sibling_reorder_preserves_values_and_anchors() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         let second = begin_keyed(session, STATIC_KEY, 2, None);
-        let second_slot = session.value_slot(|| 0_i32);
+        let second_slot = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
         let second_result = session.finish_group_body();
         assert!(second_result.detached_children.is_empty());
         session.end_group();
 
         let first = begin_keyed(session, STATIC_KEY, 1, None);
-        let first_slot = session.value_slot(|| 0_i32);
+        let first_slot = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
@@ -92,19 +92,19 @@ fn debug_stats_report_subtree_move_work_spans() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_keyed(session, STATIC_KEY, 1, None);
-        let _ = session.value_slot(|| 10_i32);
-        session.record_node(11, 1);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        session.record_node_with_parent(11, 1, None);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
         begin_keyed(session, STATIC_KEY, 2, None);
-        let _ = session.value_slot(|| 20_i32);
-        session.record_node(22, 1);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
+        session.record_node_with_parent(22, 1, None);
 
         begin_unkeyed(session, NESTED_KEY, None);
-        let _ = session.value_slot(|| 30_i32);
-        session.record_node(33, 1);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        session.record_node_with_parent(33, 1, None);
         let nested_result = session.finish_group_body();
         assert!(nested_result.detached_children.is_empty());
         session.end_group();
@@ -126,12 +126,12 @@ fn debug_stats_report_subtree_move_work_spans() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         let moved = begin_keyed(session, STATIC_KEY, 2, None);
-        let _ = session.value_slot(|| 0_i32);
-        session.record_node(22, 1);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        session.record_node_with_parent(22, 1, None);
 
         begin_unkeyed(session, NESTED_KEY, None);
-        let _ = session.value_slot(|| 0_i32);
-        session.record_node(33, 1);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        session.record_node_with_parent(33, 1, None);
         let nested_result = session.finish_group_body();
         assert!(nested_result.detached_children.is_empty());
         session.end_group();
@@ -141,8 +141,8 @@ fn debug_stats_report_subtree_move_work_spans() {
         session.end_group();
 
         begin_keyed(session, STATIC_KEY, 1, None);
-        let _ = session.value_slot(|| 0_i32);
-        session.record_node(11, 1);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        session.record_node_with_parent(11, 1, None);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
@@ -242,7 +242,7 @@ fn large_keyed_sibling_reorder_preserves_values_and_anchors() {
 
         for key in 1..=CHILD_COUNT {
             let child = begin_keyed(session, STATIC_KEY, key, None);
-            let slot = session.value_slot(|| key as i32);
+            let slot = session.value_slot_with_kind(PayloadKind::Internal, || key as i32);
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
             session.end_group();
@@ -272,7 +272,7 @@ fn large_keyed_sibling_reorder_preserves_values_and_anchors() {
                 "large keyed reorder must reuse or move existing child {key}, got {:?}",
                 child.kind,
             );
-            let slot = session.value_slot(|| -1_i32);
+            let slot = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
             session.end_group();
@@ -381,7 +381,7 @@ fn restored_keyed_sibling_can_move_on_a_later_pass() {
         session.end_group();
 
         let second = begin_keyed(session, STATIC_KEY, 2, None);
-        let second_slot = session.value_slot(|| 20_i32);
+        let second_slot = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
         let second_result = session.finish_group_body();
         assert!(second_result.detached_children.is_empty());
         session.end_group();
@@ -436,7 +436,7 @@ fn restored_keyed_sibling_can_move_on_a_later_pass() {
         session.end_group();
 
         let second = begin_keyed(session, STATIC_KEY, 2, Some(detached));
-        let second_slot = session.value_slot(|| 0_i32);
+        let second_slot = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
         let second_result = session.finish_group_body();
         assert!(second_result.detached_children.is_empty());
         session.end_group();
@@ -466,7 +466,7 @@ fn restored_keyed_sibling_can_move_on_a_later_pass() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         let second = begin_keyed(session, STATIC_KEY, 2, None);
-        let second_slot = session.value_slot(|| 0_i32);
+        let second_slot = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
         let second_result = session.finish_group_body();
         assert!(second_result.detached_children.is_empty());
         session.end_group();
@@ -509,13 +509,13 @@ fn unkeyed_siblings_follow_positional_identity() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, SHARED_KEY, None);
-        let first_slot = session.value_slot(|| 10_i32);
+        let first_slot = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
         begin_unkeyed(session, SHARED_KEY, None);
-        let second_slot = session.value_slot(|| 20_i32);
+        let second_slot = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
         let second_result = session.finish_group_body();
         assert!(second_result.detached_children.is_empty());
         session.end_group();
@@ -536,7 +536,7 @@ fn unkeyed_siblings_follow_positional_identity() {
 
         let remaining = begin_unkeyed(session, SHARED_KEY, None);
         assert_eq!(remaining.kind, GroupStartKind::Reused);
-        let slot = session.value_slot(|| 0_i32);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
         let result = session.finish_group_body();
         assert_eq!(result.detached_children.len(), 0);
         session.end_group();

@@ -20,8 +20,9 @@ fn payload_records_store_semantic_payload_kinds() {
             super::PayloadKind::Effect,
             crate::DisposableEffectState::default,
         );
-        let _type_named_internal_slot = session.value_slot(crate::ReturnSlot::<i32>::default);
-        let _internal_slot = session.value_slot(|| 99_i32);
+        let _type_named_internal_slot =
+            session.value_slot_with_kind(PayloadKind::Internal, crate::ReturnSlot::<i32>::default);
+        let _internal_slot = session.value_slot_with_kind(PayloadKind::Internal, || 99_i32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -96,7 +97,7 @@ fn second_identical_composition_reuses_group_and_value() {
     harness.begin_pass(SlotPassMode::Compose);
     let first_slot = harness.session(|session| {
         begin_unkeyed(session, 11, None);
-        let slot = session.value_slot(|| 10_i32);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -108,7 +109,7 @@ fn second_identical_composition_reuses_group_and_value() {
     harness.begin_pass(SlotPassMode::Compose);
     let (kind, second_slot) = harness.session(|session| {
         let started = begin_unkeyed(session, 11, None);
-        let slot = session.value_slot(|| 0_i32);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -128,7 +129,7 @@ fn read_value_mut_updates_existing_slot_in_place() {
     harness.begin_pass(SlotPassMode::Compose);
     let slot = harness.session(|session| {
         begin_unkeyed(session, 12, None);
-        let slot = session.value_slot(|| 5_i32);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 5_i32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -148,7 +149,7 @@ fn read_value_type_mismatch_panics_consistently() {
     harness.begin_pass(SlotPassMode::Compose);
     let slot = harness.session(|session| {
         begin_unkeyed(session, 15, None);
-        let slot = session.value_slot(|| 5_i32);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 5_i32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -174,7 +175,7 @@ fn value_slot_type_replacement_advances_generation() {
     harness.begin_pass(SlotPassMode::Compose);
     let old_slot = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot(|| 5_i32);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 5_i32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -185,7 +186,7 @@ fn value_slot_type_replacement_advances_generation() {
     harness.begin_pass(SlotPassMode::Compose);
     let replacement_slot = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot(|| 7_u32);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 7_u32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -216,7 +217,7 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     harness.begin_pass(SlotPassMode::Compose);
     let old_slot = harness.session(|session| {
         begin_unkeyed(session, OLD_KEY, None);
-        let slot = session.value_slot(|| 5_i32);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 5_i32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -232,7 +233,7 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     harness.begin_pass(SlotPassMode::Compose);
     let new_slot = harness.session(|session| {
         begin_unkeyed(session, NEW_KEY, None);
-        let slot = session.value_slot(|| 77_i32);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 77_i32);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();

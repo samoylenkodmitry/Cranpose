@@ -1,14 +1,15 @@
 use crate::collections::map::{HashMap, HashSet};
 use crate::retention::{RetainKey, RetentionManager};
 use crate::slot::{FinishGroupResult, PayloadKind};
+use crate::slot_storage::{BeginGroupInput, GroupStart, GroupStartKind, ValueSlotId};
 use crate::{
     composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
-    BeginGroupInput, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, GroupStart,
-    GroupStartKind, Key, LocalKey, LocalStackSnapshot, LocalStateEntry, MutableState, Node,
-    NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions, RecomposeScope, RecycledNode,
-    RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
-    SlotsHost, SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal,
-    StaticLocalEntry, SubcomposeState, ValueSlotId, COMMAND_FLUSH_THRESHOLD,
+    ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey,
+    LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
+    ProvidedValue, RecomposeOptions, RecomposeScope, RecycledNode, RetentionMode, RetentionPolicy,
+    RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList,
+    SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal, StaticLocalEntry,
+    SubcomposeState, COMMAND_FLUSH_THRESHOLD,
 };
 use smallvec::SmallVec;
 use std::any::Any;
@@ -859,10 +860,6 @@ impl Composer {
 
     fn debug_assert_detached_subtree_metadata(&self, subtree: &crate::slot::DetachedSubtree) {
         let root_nodes = subtree.root_nodes();
-        debug_assert!(
-            subtree.generation() > 0,
-            "detached subtrees must carry a non-zero generation",
-        );
         debug_assert!(
             subtree.node_count() == 0 || !root_nodes.is_empty(),
             "detached subtree nodes must expose root metadata",

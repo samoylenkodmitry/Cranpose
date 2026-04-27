@@ -29,7 +29,6 @@ pub struct SlotTable {
     pub(super) scope_anchor_to_group: HashMap<ScopeId, AnchorId>,
     pub(super) mutation_debug_stats: SlotTableMutationDebugStats,
     next_group_generation: u32,
-    pub(super) next_detached_generation: u64,
     pub(super) next_payload_anchor: usize,
     pub(super) next_payload_generation: u32,
 }
@@ -47,7 +46,6 @@ impl SlotTable {
             scope_anchor_to_group: HashMap::default(),
             mutation_debug_stats: SlotTableMutationDebugStats::default(),
             next_group_generation: 1,
-            next_detached_generation: 1,
             next_payload_anchor: 1,
             next_payload_generation: 1,
         }
