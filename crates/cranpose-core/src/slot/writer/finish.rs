@@ -74,12 +74,19 @@ impl SlotTable {
             Vec::new()
         };
         state.note_removed_nodes(direct_nodes.len());
-        FinishGroupResult {
+        let result = FinishGroupResult {
             detached_children,
             direct_nodes,
             root_nodes,
             was_skipped,
+        };
+
+        #[cfg(any(test, debug_assertions))]
+        if state.group_stack.len() == 1 {
+            self.debug_assert_valid_after("finish_group_body");
         }
+
+        result
     }
 }
 
