@@ -4,7 +4,7 @@ use super::{
         offset_detached_group_segment_starts, segment_insert_index_for_group,
         shift_group_segment_starts_from, subtree_segment_span, NodeSegment,
     },
-    GroupRecord, NodeLifecycle, NodeRange, NodeRecord, SlotTable,
+    GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, SlotTable,
 };
 use crate::NodeId;
 use std::mem;
@@ -27,6 +27,21 @@ impl SlotTable {
         let range =
             group_segment_range_at::<NodeSegment>(&self.groups, self.nodes.len(), group_index);
         NodeRange::new(range.start, range.end)
+    }
+
+    pub(in crate::slot) fn group_node_tail_range_at(
+        &self,
+        group_index: usize,
+        start: usize,
+    ) -> GroupNodeRange {
+        let node_len = self.group_node_len_at(group_index);
+        let start = start.min(node_len);
+        GroupNodeRange::new(
+            group_index,
+            self.group_node_range_at(group_index),
+            start,
+            node_len,
+        )
     }
 
     pub(in crate::slot) fn group_node_records_at(&self, group_index: usize) -> &[NodeRecord] {
@@ -116,17 +131,16 @@ impl SlotTable {
 
     pub(super) fn remove_group_node_range(
         &mut self,
-        group_index: usize,
-        start: usize,
+        node_range: GroupNodeRange,
     ) -> Vec<NodeRecord> {
-        let node_len = self.group_node_len_at(group_index);
-        if start >= node_len {
+        if node_range.is_empty() {
             return Vec::new();
         }
-        let node_start = self.group_node_start_at(group_index) + start;
-        let node_end = self.group_node_start_at(group_index) + node_len;
-        let node_range = NodeRange::new(node_start, node_end);
-        let removed = self.nodes.drain(node_range.as_range()).collect::<Vec<_>>();
+        let group_index = node_range.group_index();
+        let removed = self
+            .nodes
+            .drain(node_range.as_node_range().as_range())
+            .collect::<Vec<_>>();
         add_group_segment_len::<NodeSegment>(
             &mut self.groups,
             group_index,
@@ -153,7 +167,7 @@ impl SlotTable {
         if node_len == 0 {
             return Vec::new();
         }
-        let node_range = NodeRange::new(node_start, node_start + node_len);
+        let node_range = NodeRange::from_start_len(node_start, node_len);
         let removed = self.nodes.drain(node_range.as_range()).collect();
         shift_group_segment_starts_from::<NodeSegment>(
             &mut self.groups,

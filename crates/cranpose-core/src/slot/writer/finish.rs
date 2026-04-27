@@ -50,9 +50,12 @@ impl SlotTable {
             )
         };
 
-        let payload_len = self.group_payload_len_at(self.current_group_index(group_anchor));
+        let group_index = self.current_group_index(group_anchor);
+        let payload_len = self.group_payload_len_at(group_index);
         if payload_cursor < payload_len {
-            let removed = self.remove_payload_range(group_anchor, payload_cursor, payload_len);
+            let payload_range =
+                self.group_payload_subrange_at(group_index, payload_cursor, payload_len);
+            let removed = self.remove_payload_range(group_anchor, payload_range);
             let removed_payload_count = removed.len();
             for payload in removed {
                 lifecycle.queue_drop(payload.into_deferred_drop());
@@ -61,8 +64,8 @@ impl SlotTable {
         }
 
         let mut direct_nodes = Vec::new();
-        let group_index = self.current_group_index(group_anchor);
-        let removed = self.remove_group_node_range(group_index, node_cursor);
+        let node_range = self.group_node_tail_range_at(group_index, node_cursor);
+        let removed = self.remove_group_node_range(node_range);
         if !removed.is_empty() {
             self.adjust_ancestor_node_counts(group_anchor, -(removed.len() as i32));
             direct_nodes.extend(removed.into_iter().map(|node| node.id));

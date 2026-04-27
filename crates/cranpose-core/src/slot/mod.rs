@@ -30,7 +30,10 @@ pub(crate) use detach::{dispose_detached_node_now, dispose_detached_subtree_now}
 use groups::GroupRecord;
 pub(crate) use lifecycle::{DeferredDrop, SlotLifecycleCoordinator};
 use payload_locations::PayloadLocationRegistry;
-pub(in crate::slot) use ranges::{GroupRange, NodeRange, PayloadRange};
+pub(in crate::slot) use ranges::{
+    DirectChildRange, GroupNodeRange, GroupPayloadRange, GroupRange, NodeRange, PayloadRange,
+    SubtreeRange,
+};
 pub use table::SlotTable;
 pub(crate) use table::SlotWriteSession;
 pub(in crate::slot) use types::root_node_ids_from_records;

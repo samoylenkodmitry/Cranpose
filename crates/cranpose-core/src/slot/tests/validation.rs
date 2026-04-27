@@ -297,7 +297,8 @@ fn compact_storage_discards_removed_payload_location_entries() {
     let owner = table.groups[0].anchor;
     let payload_anchor = table.group_payload_record_at(0, 0).anchor;
 
-    let removed = table.remove_payload_range(owner, 0, 1);
+    let payload_range = table.group_payload_subrange_at(0, 0, 1);
+    let removed = table.remove_payload_range(owner, payload_range);
     assert_eq!(removed.len(), 1);
     assert_eq!(table.payload_locations.get(payload_anchor), None);
 
@@ -310,6 +311,20 @@ fn compact_storage_discards_removed_payload_location_entries() {
         capacity_after < capacity_before,
         "compaction must drop removed payload-location entries: before={capacity_before} after={capacity_after}",
     );
+    assert_eq!(table.validate(), Ok(()));
+}
+
+#[test]
+fn node_tail_range_past_group_end_removes_nothing() {
+    let mut table = composed_group_with_value_and_node_table(602);
+    let node_count = table.group_node_len_at(0);
+    let range = table.group_node_tail_range_at(0, node_count + 3);
+
+    let removed = table.remove_group_node_range(range);
+
+    assert!(removed.is_empty());
+    assert_eq!(table.group_node_len_at(0), node_count);
+    assert_eq!(table.total_node_count(), node_count);
     assert_eq!(table.validate(), Ok(()));
 }
 

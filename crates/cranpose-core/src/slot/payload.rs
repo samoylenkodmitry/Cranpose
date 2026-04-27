@@ -4,7 +4,8 @@ use super::{
         offset_detached_group_segment_starts, segment_insert_index_for_group,
         shift_group_segment_starts_from, subtree_segment_span, PayloadSegment,
     },
-    GroupRecord, PayloadKind, PayloadRange, PayloadRecord, SlotTable,
+    GroupPayloadRange, GroupRange, GroupRecord, PayloadKind, PayloadRange, PayloadRecord,
+    SlotTable,
 };
 use crate::{retention::RetentionManager, AnchorId};
 use std::any::TypeId;
@@ -38,6 +39,20 @@ impl SlotTable {
             group_index,
         );
         PayloadRange::new(range.start, range.end)
+    }
+
+    pub(in crate::slot) fn group_payload_subrange_at(
+        &self,
+        group_index: usize,
+        start: usize,
+        end: usize,
+    ) -> GroupPayloadRange {
+        GroupPayloadRange::new(
+            group_index,
+            self.group_payload_range_at(group_index),
+            start,
+            end,
+        )
     }
 
     fn payload_insert_index_for_group(&self, group_index: usize) -> usize {
@@ -212,20 +227,20 @@ impl SlotTable {
         let group_index = self.current_group_index(owner);
         let range = self.group_payload_range_at(group_index);
         for index in start..range.len() {
-            let payload_anchor = self.payloads[range.start + index].anchor;
+            let payload_anchor = self.payloads[range.start() + index].anchor;
             self.payload_locations.insert(payload_anchor, owner, index);
         }
     }
 
-    pub(super) fn rebuild_payload_locations_for_group_range(&mut self, start: usize, end: usize) {
-        let group_span = end.saturating_sub(start);
+    pub(super) fn rebuild_payload_locations_for_group_range(&mut self, group_range: GroupRange) {
+        let group_span = group_range.len();
         let mut payload_span = 0usize;
-        for group_index in start..end {
+        for group_index in group_range.as_range() {
             let owner = self.groups[group_index].anchor;
             let range = self.group_payload_range_at(group_index);
             payload_span += range.len();
             for index in 0..range.len() {
-                let payload_anchor = self.payloads[range.start + index].anchor;
+                let payload_anchor = self.payloads[range.start() + index].anchor;
                 self.payload_locations.insert(payload_anchor, owner, index);
             }
         }
@@ -236,19 +251,20 @@ impl SlotTable {
     pub(super) fn remove_payload_range(
         &mut self,
         owner: AnchorId,
-        start: usize,
-        end: usize,
+        payload_range: GroupPayloadRange,
     ) -> Vec<PayloadRecord> {
-        if start >= end {
+        let owner_index = self.current_group_index(owner);
+        assert_eq!(
+            payload_range.group_index(),
+            owner_index,
+            "payload removal range must belong to the owner group",
+        );
+        if payload_range.is_empty() {
             return Vec::new();
         }
-        let owner_index = self.current_group_index(owner);
-        let payload_start = self.group_payload_start_at(owner_index) + start;
-        let payload_end = self.group_payload_start_at(owner_index) + end;
-        let payload_range = PayloadRange::new(payload_start, payload_end);
         let removed = self
             .payloads
-            .drain(payload_range.as_range())
+            .drain(payload_range.as_payload_range().as_range())
             .collect::<Vec<_>>();
         self.clear_payload_locations_for_payloads(&removed);
         add_group_segment_len::<PayloadSegment>(
@@ -261,7 +277,7 @@ impl SlotTable {
             owner_index + 1,
             -(removed.len() as i64),
         );
-        self.refresh_group_payload_locations(owner, start);
+        self.refresh_group_payload_locations(owner, payload_range.start_offset());
         removed
     }
 
@@ -283,7 +299,7 @@ impl SlotTable {
         if payload_len == 0 {
             return Vec::new();
         }
-        let payload_range = PayloadRange::new(payload_start, payload_start + payload_len);
+        let payload_range = PayloadRange::from_start_len(payload_start, payload_len);
         let removed = self
             .payloads
             .drain(payload_range.as_range())
@@ -407,7 +423,7 @@ impl SlotTable {
 
         self.payload_locations.clear();
         self.payload_locations.shrink_to_fit();
-        self.rebuild_payload_locations_for_group_range(0, self.groups.len());
+        self.rebuild_payload_locations_for_group_range(GroupRange::new(0, self.groups.len()));
         self.next_payload_anchor = total_payload_count + 1;
     }
 }

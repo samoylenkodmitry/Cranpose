@@ -55,10 +55,11 @@ This file tracks current forward work and marks boxes closed only after the stat
   Replace direct writes to payload/node cursors, body-finished state, skip state, and parent child cursor advancement with methods on `GroupFrame` and `SlotWriteSessionState`.
   Acceptance run: `cargo test -p cranpose-core slot::`, then `CRANPOSE_BUILD_JOBS=2 ./verify_slot_table.sh`.
 
-- [ ] [M] Add internal typed ranges for high-risk structural operations.
+- [x] [M] Add internal typed ranges for high-risk structural operations.
   Start with subtree, payload, and node ranges used by `move_subtree`, `detach_subtree`, `restore_subtree`, `remove_payload_range`, `remove_group_node_range`, and direct-child range APIs.
   Do not newtype every index at once.
   Acceptance: `cargo test -p cranpose-core slot::`, `./verify_slot_table.sh`, and `./perf_slot_table_v2.sh --baseline slot-v2-refactor-base`.
+  Acceptance run: `cargo test -p cranpose-core slot::`; `cargo test > 1.tmp 2>&1`; `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`; `CRANPOSE_BUILD_JOBS=2 ./verify_slot_table.sh`; `CRANPOSE_BUILD_JOBS=2 ./perf_slot_table_v2.sh --baseline slot-v2-refactor-base`.
 
 - [ ] [M] Narrow direct `SlotTable` field access after the writer split.
   Keep named APIs for sensitive operations such as active group lookup, direct-child lookup, subtree move/detach/restore, payload replacement, node recording, and range removal.

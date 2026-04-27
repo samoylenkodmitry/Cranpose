@@ -343,7 +343,10 @@ impl SlotTable {
         };
 
         self.payload_locations.clear();
-        self.rebuild_payload_locations_for_group_range(0, self.groups.len());
+        self.rebuild_payload_locations_for_group_range(super::GroupRange::new(
+            0,
+            self.groups.len(),
+        ));
         self.recompute_scope_index();
         self.rebuild_anchor_registry(detached_anchors);
     }

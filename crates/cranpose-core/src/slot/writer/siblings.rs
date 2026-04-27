@@ -55,10 +55,14 @@ pub(in crate::slot) struct SiblingIndex {
 
 impl SiblingIndex {
     fn build(table: &SlotTable, parent_anchor: AnchorId, search_start: usize) -> Self {
-        let parent_end = table.direct_child_range_end(parent_anchor);
+        let siblings = table.direct_child_range(parent_anchor);
+        assert!(
+            search_start >= siblings.start(),
+            "sibling index search must start inside the parent child range"
+        );
         let mut by_key: HashMap<GroupKey, SmallVec<[AnchorId; 2]>> = HashMap::default();
         let mut index = search_start;
-        while index < parent_end {
+        while index < siblings.end() {
             let group = table.group_sibling_record_at_index(index);
             debug_assert_eq!(
                 group.parent_anchor, parent_anchor,
@@ -77,7 +81,7 @@ impl SiblingIndex {
         key: GroupKey,
         search_start: usize,
     ) -> Option<usize> {
-        let parent_end = table.direct_child_range_end(parent_anchor);
+        let siblings = table.direct_child_range(parent_anchor);
         self.by_key.get(&key).and_then(|anchors| {
             anchors
                 .iter()
@@ -85,7 +89,7 @@ impl SiblingIndex {
                     let index = table.active_group_index(*anchor)?;
                     let group = table.group_sibling_record_at_index_checked(index)?;
                     (index >= search_start
-                        && index < parent_end
+                        && siblings.contains_index(index)
                         && group.parent_anchor == parent_anchor
                         && group.key == key)
                         .then_some(index)
@@ -115,14 +119,18 @@ impl SlotWriteSessionState {
             return sibling_index.find(table, parent_anchor, key, search_start);
         }
 
-        let parent_end = table.direct_child_range_end(parent_anchor);
-        if search_start >= parent_end {
+        let siblings = table.direct_child_range(parent_anchor);
+        assert!(
+            search_start >= siblings.start(),
+            "later sibling search must start inside the parent child range"
+        );
+        if search_start >= siblings.end() {
             return None;
         }
 
         let mut index = search_start;
         let mut direct_children_seen = 0usize;
-        while index < parent_end && direct_children_seen < SIBLING_INDEX_THRESHOLD {
+        while index < siblings.end() && direct_children_seen < SIBLING_INDEX_THRESHOLD {
             let group = table.group_sibling_record_at_index(index);
             debug_assert_eq!(
                 group.parent_anchor, parent_anchor,
@@ -135,7 +143,7 @@ impl SlotWriteSessionState {
             index += group.subtree_len;
         }
 
-        if index >= parent_end {
+        if index >= siblings.end() {
             return None;
         }
 

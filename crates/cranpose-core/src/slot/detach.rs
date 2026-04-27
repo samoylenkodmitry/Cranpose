@@ -1,4 +1,4 @@
-use super::{DetachedSubtree, GroupRange, GroupRecord, SlotTable, SlotWriteSessionState};
+use super::{DetachedSubtree, GroupRecord, SlotTable, SlotWriteSessionState, SubtreeRange};
 use crate::{
     remove_child_and_cleanup_now, slot_storage::GroupKey, AnchorId, Applier, NodeError, NodeId,
 };
@@ -13,7 +13,7 @@ impl SlotTable {
         generation
     }
 
-    pub(in crate::slot) fn detach_range(&mut self, range: GroupRange) -> Vec<GroupRecord> {
+    pub(in crate::slot) fn detach_range(&mut self, range: SubtreeRange) -> Vec<GroupRecord> {
         self.groups.drain(range.as_range()).collect::<Vec<_>>()
     }
 
@@ -22,8 +22,7 @@ impl SlotTable {
         let root_parent_anchor = self.groups[root_index].parent_anchor;
         let root_subtree_len = self.groups[root_index].subtree_len;
         let root_subtree_node_count = self.groups[root_index].subtree_node_count;
-        let subtree_len = root_subtree_len as usize;
-        let removed_group_range = GroupRange::from_start_len(root_index, subtree_len);
+        let removed_group_range = self.group_subtree_range(anchor);
         let mut removed_groups = self.detach_range(removed_group_range);
         let detached_root_depth = removed_groups
             .first()
@@ -135,10 +134,8 @@ impl SlotTable {
             restored_subtree_len,
             restored_subtree_node_count,
         );
-        self.rebuild_payload_locations_for_group_range(
-            insert_index,
-            insert_index + restored_group_count,
-        );
+        let restored_group_range = SubtreeRange::from_root_len(insert_index, restored_group_count);
+        self.rebuild_payload_locations_for_group_range(restored_group_range.as_group_range());
         #[cfg(any(test, debug_assertions))]
         self.debug_assert_valid_after("restore_subtree");
         root_anchor

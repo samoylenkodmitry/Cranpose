@@ -1,5 +1,5 @@
 use super::{
-    AnchorState, DetachedSubtree, GroupRecord, NodeLifecycle, NodeRecord, PayloadKind,
+    AnchorState, DetachedSubtree, GroupRange, GroupRecord, NodeLifecycle, NodeRecord, PayloadKind,
     PayloadRecord, SlotDebugEntryKind, SlotInvariantError, SlotLifecycleCoordinator, SlotPassMode,
     SlotTable, SlotWriteSession, SlotWriteSessionState,
 };

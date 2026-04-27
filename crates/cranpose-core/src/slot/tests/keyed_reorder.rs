@@ -204,7 +204,10 @@ fn debug_stats_report_payload_location_rebuild_work_spans() {
     let mut table = composed_group_with_value_and_node_table(GROUP_KEY);
     let before = table.debug_stats().mutation;
 
-    table.rebuild_payload_locations_for_group_range(0, table.debug_stats().group_count);
+    table.rebuild_payload_locations_for_group_range(GroupRange::new(
+        0,
+        table.debug_stats().group_count,
+    ));
 
     let after = table.debug_stats().mutation;
     assert_eq!(

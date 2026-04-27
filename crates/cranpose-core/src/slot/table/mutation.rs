@@ -1,4 +1,4 @@
-use super::super::{GroupRange, GroupRecord};
+use super::super::GroupRecord;
 use super::SlotTable;
 use crate::{slot_storage::GroupKey, AnchorId};
 
@@ -107,8 +107,7 @@ impl SlotTable {
         if from_index == insert_index {
             return;
         }
-        let subtree_len = self.groups[from_index].subtree_len as usize;
-        let moving_groups = GroupRange::from_start_len(from_index, subtree_len);
+        let moving_groups = self.group_subtree_range_at_index(from_index);
         let mut moved = self
             .groups
             .drain(moving_groups.as_range())
@@ -118,7 +117,7 @@ impl SlotTable {
         let moved_group_count = moved.len();
         let moved_payload_count = moved_payloads.len();
         let moved_node_count = moved_nodes.len();
-        let adjusted_index = if insert_index > from_index {
+        let adjusted_index = if insert_index > moving_groups.root_index() {
             insert_index - moving_groups.len()
         } else {
             insert_index

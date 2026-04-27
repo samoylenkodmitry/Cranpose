@@ -88,10 +88,11 @@ impl SlotWriteSessionState {
         expected_parent: AnchorId,
         next_child_index: usize,
     ) -> Result<(), SlotInvariantError> {
+        let child_range = table.direct_child_range(expected_parent);
         if table
             .direct_child_anchor_at(expected_parent, next_child_index)
             .is_some()
-            || next_child_index == table.direct_child_range_end(expected_parent)
+            || next_child_index == child_range.end()
         {
             return Ok(());
         }

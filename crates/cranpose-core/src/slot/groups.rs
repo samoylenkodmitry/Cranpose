@@ -1,6 +1,6 @@
 #[cfg(any(test, debug_assertions))]
 use super::AnchorState;
-use super::SlotTable;
+use super::{DirectChildRange, SlotTable, SubtreeRange};
 use crate::{
     slot_storage::{GroupId, GroupKey},
     AnchorId, ScopeId,
@@ -83,6 +83,16 @@ impl SlotTable {
         group_index + self.group_subtree_len_at_index(group_index)
     }
 
+    #[inline(always)]
+    pub(in crate::slot) fn group_subtree_range_at_index(&self, group_index: usize) -> SubtreeRange {
+        SubtreeRange::from_root_len(group_index, self.group_subtree_len_at_index(group_index))
+    }
+
+    #[inline(always)]
+    pub(in crate::slot) fn group_subtree_range(&self, anchor: AnchorId) -> SubtreeRange {
+        self.group_subtree_range_at_index(self.current_group_index(anchor))
+    }
+
     pub(in crate::slot) fn group_subtree_node_count_at_index(&self, group_index: usize) -> usize {
         self.groups[group_index].subtree_node_count as usize
     }
@@ -146,12 +156,15 @@ impl SlotTable {
     }
 
     #[inline(always)]
-    pub(in crate::slot) fn direct_child_range_end(&self, parent_anchor: AnchorId) -> usize {
+    pub(in crate::slot) fn direct_child_range(&self, parent_anchor: AnchorId) -> DirectChildRange {
         if !parent_anchor.is_valid() {
-            self.group_count()
+            DirectChildRange::new(0, self.group_count())
         } else {
             let parent_index = self.current_group_index(parent_anchor);
-            self.group_subtree_end_at_index(parent_index)
+            DirectChildRange::new(
+                parent_index + 1,
+                self.group_subtree_end_at_index(parent_index),
+            )
         }
     }
 
@@ -160,7 +173,10 @@ impl SlotTable {
         parent_anchor: AnchorId,
         child_index: usize,
     ) -> Option<AnchorId> {
-        if child_index >= self.direct_child_range_end(parent_anchor) {
+        if !self
+            .direct_child_range(parent_anchor)
+            .contains_index(child_index)
+        {
             return None;
         }
         let group = self.groups.get(child_index)?;
