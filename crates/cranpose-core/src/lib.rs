@@ -3471,6 +3471,8 @@ pub struct SlotsHost {
 #[derive(Debug, Default)]
 pub(crate) struct SlotPassOutcome {
     pub(crate) compacted: bool,
+    pub(crate) compact_anchor_namespace: bool,
+    pub(crate) compact_payload_namespace: bool,
 }
 
 #[derive(Default)]
@@ -3678,12 +3680,14 @@ impl SlotsHost {
         FinishedSlotPass {
             outcome: SlotPassOutcome {
                 compacted: active_pass.state.request_compaction,
+                compact_anchor_namespace: active_pass.state.request_anchor_namespace_compaction,
+                compact_payload_namespace: active_pass.state.request_payload_namespace_compaction,
             },
             detached_root_children,
         }
     }
 
-    pub(crate) fn complete_pass_cleanup(&self, compacted: bool) {
+    pub(crate) fn complete_pass_cleanup(&self, outcome: &SlotPassOutcome) {
         let mut inner = self.inner.borrow_mut();
         let SlotsHostInner {
             table,
@@ -3692,13 +3696,18 @@ impl SlotsHost {
             ..
         } = &mut *inner;
         lifecycle.flush_pending_drops();
-        if compacted {
+        if outcome.compacted {
             table.compact_storage();
             lifecycle.compact_storage();
         }
         if let Some(state) = runtime_state.clone() {
-            state.compact_table_namespaces_for_host(self, table);
-        } else {
+            state.compact_table_namespaces_for_host(
+                self,
+                table,
+                outcome.compact_anchor_namespace,
+                outcome.compact_payload_namespace,
+            );
+        } else if outcome.compact_payload_namespace {
             table.compact_payload_anchor_namespace(None);
         }
         #[cfg(any(test, debug_assertions))]

@@ -186,15 +186,31 @@ impl ComposerRuntimeState {
         &self,
         host: &SlotsHost,
         table: &mut SlotTable,
+        compact_anchors: bool,
+        compact_payloads: bool,
     ) {
+        if !compact_anchors && !compact_payloads {
+            return;
+        }
+
         let host_key = host.storage_key();
         let mut retention = self.retention_by_host.borrow_mut();
         if let Some(retained) = retention.get_mut(&host_key) {
-            table.compact_anchor_namespace(Some(retained), |scope_id| self.scope_for_id(scope_id));
-            table.compact_payload_anchor_namespace(Some(retained));
+            if compact_anchors {
+                table.compact_anchor_namespace(Some(&mut *retained), |scope_id| {
+                    self.scope_for_id(scope_id)
+                });
+            }
+            if compact_payloads {
+                table.compact_payload_anchor_namespace(Some(&mut *retained));
+            }
         } else {
-            table.compact_anchor_namespace(None, |scope_id| self.scope_for_id(scope_id));
-            table.compact_payload_anchor_namespace(None);
+            if compact_anchors {
+                table.compact_anchor_namespace(None, |scope_id| self.scope_for_id(scope_id));
+            }
+            if compact_payloads {
+                table.compact_payload_anchor_namespace(None);
+            }
         }
     }
 
@@ -516,7 +532,7 @@ impl Composer {
                     finished.detached_root_children,
                 );
                 composer.evict_retained_subtrees_for_host(&self.host);
-                self.host.complete_pass_cleanup(finished.outcome.compacted);
+                self.host.complete_pass_cleanup(&finished.outcome);
                 let host = self
                     .core
                     .slot_hosts

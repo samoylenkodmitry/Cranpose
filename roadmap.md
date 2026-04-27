@@ -7,15 +7,15 @@ This file tracks current forward work and marks boxes closed only after the stat
 ## Current State
 
 - Slot Table V2 is the active implementation under `crates/cranpose-core/src/slot/*`.
-- Completed cleanup and review-fix history is in git through `0a6784ae`.
+- Completed cleanup and review-fix history is in git through `efb015cf`.
 - The first refactor slice is closed below with its validation gate.
 - Last full local verification on 2026-04-26 was green:
   `cargo fmt`, `cargo test > 1.tmp 2>&1`,
   `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`,
   Android `:app:assembleRelease`, `apps/desktop-demo/build-web.sh`,
   and `CRANPOSE_BUILD_JOBS=2 ./run_robot_test.sh --sequential`.
-- Latest local verification on 2026-04-27 was green on the validation cleanup
-  tree with serialized execution:
+- Latest local verification on 2026-04-27 was green on the namespace compaction
+  cleanup tree with serialized execution:
   `env CRANPOSE_USE_SCCACHE=0 ./verify_slot_table.sh` after capping Cargo,
   Rust test, Gradle, and robot execution to one worker/thread. Robot summary:
   `TOTAL=92`, `PASSED=92`, `FAILED=0`.
@@ -28,8 +28,8 @@ This file tracks current forward work and marks boxes closed only after the stat
   `slot_table_v2_keyed_random_shuffle_1024_seed_2` at about `+1.9%`, both
   below the documented `5%` budget; payload tab-switch, subcompose, lazy-list,
   and most keyed benchmarks were within noise or improved.
-- The next work is event-driven namespace compaction: same preorder `Vec`
-  backend, same semantics, same tests, no key/retention/node-lifecycle rewrite.
+- The next work is arithmetic hardening: same preorder `Vec` backend, same
+  semantics, same tests, no key/retention/node-lifecycle rewrite.
 
 ## Refactor Guardrails
 
@@ -103,7 +103,7 @@ Scope reviewed: `crates/cranpose-core/src/slot/*`, `crates/cranpose-core/src/slo
 
 ### P1 - Stop Every-Pass Namespace Scans
 
-- [ ] Gate anchor and payload namespace compaction behind explicit sparse/free counters instead of scanning active and retained storage after every pass.
+- [x] Gate anchor and payload namespace compaction behind explicit sparse/free counters instead of scanning active and retained storage after every pass.
   Evidence: `SlotsHost::complete_pass_cleanup` calls namespace compaction every pass. `ComposerRuntimeState::compact_table_namespaces_for_host` then runs both anchor and payload compaction, and each compaction computes retained counts and max ids before returning early. This is connected production code and should be event-driven by detach/dispose/free-list pressure, not a full scan on stable frames.
   Files: `crates/cranpose-core/src/lib.rs`, `crates/cranpose-core/src/composer.rs`, `crates/cranpose-core/src/slot/anchors.rs`, `crates/cranpose-core/src/slot/payload.rs`.
 
