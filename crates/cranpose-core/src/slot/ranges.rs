@@ -228,8 +228,8 @@ impl<K: ItemRangeKind> GroupItemRange<K> {
     }
 
     #[inline(always)]
-    fn as_item_range(self) -> TypedItemRange<K> {
-        self.items
+    pub(in crate::slot) fn as_range(self) -> Range<usize> {
+        self.items.as_range()
     }
 }
 
@@ -241,15 +241,13 @@ pub(in crate::slot) struct GroupPayloadRange {
 
 impl GroupPayloadRange {
     #[inline(always)]
-    pub(in crate::slot) fn new(
-        group_index: usize,
-        group_payloads: PayloadRange,
+    pub(in crate::slot) fn from_range(
+        range: GroupItemRange<PayloadRangeKind>,
         start_offset: usize,
-        end_offset: usize,
     ) -> Self {
         Self {
             start_offset,
-            range: GroupItemRange::new(group_index, group_payloads, start_offset, end_offset),
+            range,
         }
     }
 
@@ -269,19 +267,12 @@ impl GroupPayloadRange {
     }
 
     #[inline(always)]
-    pub(in crate::slot) fn as_payload_range(self) -> PayloadRange {
-        self.range.as_item_range()
+    pub(in crate::slot) fn into_inner(self) -> GroupItemRange<PayloadRangeKind> {
+        self.range
     }
 }
 
 pub(in crate::slot) type GroupNodeRange = GroupItemRange<NodeRangeKind>;
-
-impl GroupItemRange<NodeRangeKind> {
-    #[inline(always)]
-    pub(in crate::slot) fn as_node_range(self) -> NodeRange {
-        self.as_item_range()
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -307,10 +298,10 @@ mod tests {
     #[test]
     fn group_payload_range_converts_group_offsets_to_table_range() {
         let group_payloads = PayloadRange::new(10, 15);
-        let range = GroupPayloadRange::new(2, group_payloads, 1, 4);
+        let range = GroupPayloadRange::from_range(GroupItemRange::new(2, group_payloads, 1, 4), 1);
         assert_eq!(range.group_index(), 2);
         assert_eq!(range.start_offset(), 1);
-        assert_eq!(range.as_payload_range().as_range(), 11..14);
+        assert_eq!(range.into_inner().as_range(), 11..14);
     }
 
     #[test]
@@ -318,7 +309,7 @@ mod tests {
         let group_nodes = NodeRange::new(20, 26);
         let range = GroupNodeRange::new(5, group_nodes, 2, 6);
         assert_eq!(range.group_index(), 5);
-        assert_eq!(range.as_node_range().as_range(), 22..26);
+        assert_eq!(range.as_range(), 22..26);
     }
 
     #[test]

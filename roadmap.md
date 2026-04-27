@@ -7,7 +7,7 @@ This file tracks current forward work and marks boxes closed only after the stat
 ## Current State
 
 - Slot Table V2 is the active implementation under `crates/cranpose-core/src/slot/*`.
-- Completed cleanup and review-fix history is in git through `0bbe9cd6`.
+- Completed cleanup and review-fix history is in git through `6c977dd4`.
 - The first refactor slice is closed below with its validation gate.
 - Last full local verification on 2026-04-26 was green:
   `cargo fmt`, `cargo test > 1.tmp 2>&1`,
@@ -16,15 +16,17 @@ This file tracks current forward work and marks boxes closed only after the stat
   and `CRANPOSE_BUILD_JOBS=2 ./run_robot_test.sh --sequential`.
 - Latest local verification on 2026-04-27 was green with serialized execution:
   `env CRANPOSE_USE_SCCACHE=0 ./verify_slot_table.sh` after capping Cargo,
-  Rust test, Gradle, and robot execution to one worker/thread.
-- Slot Table V2 perf comparison on the current tree at base commit `077b0559`
-  also completed with `env CRANPOSE_USE_SCCACHE=0 CRANPOSE_BUILD_JOBS=1
+  Rust test, Gradle, and robot execution to one worker/thread. Robot summary:
+  `TOTAL=92`, `PASSED=92`, `FAILED=0`.
+- Slot Table V2 perf comparison on the segment-mutation cleanup tree also
+  completed with `env CRANPOSE_USE_SCCACHE=0 CRANPOSE_BUILD_JOBS=1
   CARGO_BUILD_JOBS=1 ./perf_slot_table_v2.sh --baseline
   slot-v2-refactor-base`; settings: all benchmarks, CPU set `0`, warmup
-  `1s`, measurement `5s`, sample size `30`. The only reported regression was
-  `slot_table_v2_tab_switch_16_payload_groups` at about `+2.8%`, below the
-  documented `5%` tab-switch budget; larger tab-switch, subcompose, lazy-list,
-  and keyed benchmarks were within noise or improved.
+  `1s`, measurement `5s`, sample size `30`. Reported regressions were
+  `slot_table_v2_keyed_rotate_front_to_back_1024` at about `+1.4%` and
+  `slot_table_v2_keyed_random_shuffle_1024_seed_2` at about `+1.9%`, both
+  below the documented `5%` budget; payload tab-switch, subcompose, lazy-list,
+  and most keyed benchmarks were within noise or improved.
 - The next work is refactoring for maintainability only: same preorder `Vec`
   backend, same semantics, same tests, no key/retention/node-lifecycle rewrite.
 
@@ -84,7 +86,7 @@ Scope reviewed: `crates/cranpose-core/src/slot/*`, `crates/cranpose-core/src/slo
   Evidence: both structs wrap a group index plus a subrange. The payload version carries `start_offset`; the node version does not, so the common abstraction should model the shared shape and keep payload-specific refresh data outside the generic core.
   Files: `crates/cranpose-core/src/slot/ranges.rs`, `crates/cranpose-core/src/slot/payload.rs`, `crates/cranpose-core/src/slot/nodes.rs`.
 
-- [ ] Reduce payload/node segment mutation duplication after the typed range cleanup.
+- [x] Reduce payload/node segment mutation duplication after the typed range cleanup.
   Evidence: `payload.rs` and `nodes.rs` both implement group segment start/len/range access, tail removal, subtree extraction, and subtree restore around the generic `GroupSegment` helpers. The abstraction exists but the table operations are still copy-shaped.
   Files: `crates/cranpose-core/src/slot/payload.rs`, `crates/cranpose-core/src/slot/nodes.rs`, `crates/cranpose-core/src/slot/segments.rs`.
 
