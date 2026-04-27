@@ -4,10 +4,10 @@ use super::{
         offset_detached_group_segment_starts, segment_insert_index_for_group,
         shift_group_segment_starts_from, subtree_segment_span, PayloadSegment,
     },
-    GroupPayloadRange, GroupRange, GroupRecord, PayloadKind, PayloadRange, PayloadRecord,
-    SlotTable,
+    DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadKind, PayloadRange,
+    PayloadRecord, SlotTable,
 };
-use crate::{retention::RetentionManager, AnchorId};
+use crate::{retention::RetentionManager, slot_storage::ValueSlotId, AnchorId};
 use std::any::TypeId;
 use std::mem;
 
@@ -98,11 +98,7 @@ impl SlotTable {
             .generation
     }
 
-    pub(super) fn payload_value_is<T: 'static>(
-        &self,
-        group_index: usize,
-        payload_index: usize,
-    ) -> bool {
+    fn payload_value_is<T: 'static>(&self, group_index: usize, payload_index: usize) -> bool {
         self.group_payload_record_at(group_index, payload_index)
             .type_id
             == TypeId::of::<T>()
@@ -118,11 +114,7 @@ impl SlotTable {
             .expect("payload index should resolve")
     }
 
-    pub(super) fn payload_slot_identity_at(
-        &self,
-        group_index: usize,
-        payload_index: usize,
-    ) -> (usize, u32) {
+    fn payload_slot_identity_at(&self, group_index: usize, payload_index: usize) -> (usize, u32) {
         (
             self.payload_anchor_at(group_index, payload_index),
             self.payload_generation_at(group_index, payload_index),
@@ -192,17 +184,12 @@ impl SlotTable {
         replace_payload_record(record, kind, value)
     }
 
-    pub(super) fn update_payload_kind(
-        &mut self,
-        group_index: usize,
-        payload_index: usize,
-        kind: PayloadKind,
-    ) {
+    fn update_payload_kind(&mut self, group_index: usize, payload_index: usize, kind: PayloadKind) {
         self.group_payload_record_at_mut(group_index, payload_index)
             .kind = kind;
     }
 
-    pub(super) fn replace_payload_identity<T: 'static>(
+    fn replace_payload_identity<T: 'static>(
         &mut self,
         group_index: usize,
         payload_index: usize,
@@ -215,6 +202,35 @@ impl SlotTable {
         let anchor = record.anchor;
         let old_value = replace_payload_record(record, kind, value);
         (anchor, generation, old_value)
+    }
+
+    pub(super) fn use_value_payload_at_cursor<T: 'static>(
+        &mut self,
+        owner: AnchorId,
+        payload_index: usize,
+        kind: PayloadKind,
+        init: impl FnOnce() -> T,
+    ) -> (ValueSlotId, Option<DeferredDrop>) {
+        let group_index = self.current_group_index(owner);
+        let payload_len = self.group_payload_len_at(group_index);
+
+        let (anchor, generation, deferred_drop) = if payload_index < payload_len {
+            let (anchor, generation) = self.payload_slot_identity_at(group_index, payload_index);
+            if self.payload_value_is::<T>(group_index, payload_index) {
+                self.update_payload_kind(group_index, payload_index, kind);
+                (anchor, generation, None)
+            } else {
+                let (anchor, generation, old_value) =
+                    self.replace_payload_identity(group_index, payload_index, kind, init());
+                (anchor, generation, Some(DeferredDrop::payload(old_value)))
+            }
+        } else {
+            let (anchor, generation) =
+                self.insert_value_payload(owner, payload_index, kind, init());
+            (anchor, generation, None)
+        };
+
+        (ValueSlotId::new(anchor, generation), deferred_drop)
     }
 
     pub(super) fn clear_payload_locations_for_payloads(&mut self, payloads: &[PayloadRecord]) {
@@ -279,6 +295,22 @@ impl SlotTable {
         );
         self.refresh_group_payload_locations(owner, payload_range.start_offset());
         removed
+    }
+
+    pub(super) fn remove_payload_tail_at_cursor(
+        &mut self,
+        owner: AnchorId,
+        payload_cursor: usize,
+    ) -> Vec<PayloadRecord> {
+        let owner_index = self.current_group_index(owner);
+        let payload_len = self.group_payload_len_at(owner_index);
+        if payload_cursor >= payload_len {
+            return Vec::new();
+        }
+
+        let payload_range =
+            self.group_payload_subrange_at(owner_index, payload_cursor, payload_len);
+        self.remove_payload_range(owner, payload_range)
     }
 
     fn extract_payloads_for_groups(

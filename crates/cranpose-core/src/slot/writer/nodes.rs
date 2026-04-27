@@ -44,36 +44,22 @@ impl SlotWriteSession<'_> {
             .last_mut()
             .expect("node records require an active group");
         let group_anchor = frame.group_anchor;
-        let group_index = self.table.current_group_index(group_anchor);
-        let recorded = self.table.record_group_node(
-            group_index,
-            frame.node_cursor,
+        let result = self.table.record_node_at_cursor(
             group_anchor,
+            frame.node_cursor,
             id,
             parent_id,
             generation,
         );
-        if !recorded.reused_slot {
-            self.table.adjust_ancestor_node_counts(group_anchor, 1);
-        }
 
         frame.advance_node_cursor();
-        NodeRecordResult {
-            reused: recorded.reused_node,
-            id,
-        }
+        result
     }
 
     pub(crate) fn current_node_record(&self) -> Option<(NodeId, u32)> {
         let frame = self.state.group_stack.last()?;
-        let group_index = self.table.current_group_index(frame.group_anchor);
-        if frame.node_cursor >= self.table.group_node_len_at(group_index) {
-            return None;
-        }
-        let node = self
-            .table
-            .group_node_record_at(group_index, frame.node_cursor);
-        Some((node.id, node.generation))
+        self.table
+            .node_identity_at_cursor(frame.group_anchor, frame.node_cursor)
     }
 
     #[cfg(test)]

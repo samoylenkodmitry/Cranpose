@@ -1,4 +1,4 @@
-use super::super::{DeferredDrop, PayloadKind, SlotWriteSession};
+use super::super::{PayloadKind, SlotWriteSession};
 use crate::{slot_storage::ValueSlotId, Owned};
 
 impl SlotWriteSession<'_> {
@@ -18,38 +18,12 @@ impl SlotWriteSession<'_> {
             .last_mut()
             .expect("value slots require an active group");
         let group_anchor = frame.group_anchor;
-        let group_index = self.table.current_group_index(group_anchor);
-        let payload_len = self.table.group_payload_len_at(group_index);
-
-        let (anchor, generation) = if frame.payload_cursor < payload_len {
-            let (anchor, generation) = self
-                .table
-                .payload_slot_identity_at(group_index, frame.payload_cursor);
-            if self
-                .table
-                .payload_value_is::<T>(group_index, frame.payload_cursor)
-            {
-                self.table
-                    .update_payload_kind(group_index, frame.payload_cursor, kind);
-                (anchor, generation)
-            } else {
-                let (anchor, generation, old_value) = self.table.replace_payload_identity(
-                    group_index,
-                    frame.payload_cursor,
-                    kind,
-                    init(),
-                );
-                self.lifecycle.queue_drop(DeferredDrop::payload(old_value));
-                (anchor, generation)
-            }
-        } else {
-            let (anchor, generation) =
-                self.table
-                    .insert_value_payload(group_anchor, frame.payload_cursor, kind, init());
-            (anchor, generation)
-        };
-
-        let slot = ValueSlotId::new(anchor, generation);
+        let (slot, deferred_drop) =
+            self.table
+                .use_value_payload_at_cursor(group_anchor, frame.payload_cursor, kind, init);
+        if let Some(deferred_drop) = deferred_drop {
+            self.lifecycle.queue_drop(deferred_drop);
+        }
         frame.advance_payload_cursor();
         slot
     }

@@ -173,13 +173,22 @@ impl SlotTable {
         parent_anchor: AnchorId,
         child_index: usize,
     ) -> Option<AnchorId> {
+        self.direct_child_sibling_record_at(parent_anchor, child_index)
+            .map(|group| group.anchor)
+    }
+
+    pub(in crate::slot) fn direct_child_sibling_record_at(
+        &self,
+        parent_anchor: AnchorId,
+        child_index: usize,
+    ) -> Option<GroupSiblingRecord> {
         if !self
             .direct_child_range(parent_anchor)
             .contains_index(child_index)
         {
             return None;
         }
-        let group = self.groups.get(child_index)?;
-        (group.parent_anchor == parent_anchor).then_some(group.anchor)
+        let group = self.group_sibling_record_at_index_checked(child_index)?;
+        (group.parent_anchor == parent_anchor).then_some(group)
     }
 }

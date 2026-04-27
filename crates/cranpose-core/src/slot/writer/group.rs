@@ -71,21 +71,20 @@ impl SlotWriteSession<'_> {
         insert_index: usize,
         key: GroupKey,
     ) -> ActiveChildResolution {
-        let Some(expected_anchor) = self
+        let Some(expected_group) = self
             .table
-            .direct_child_anchor_at(parent_anchor, insert_index)
+            .direct_child_sibling_record_at(parent_anchor, insert_index)
         else {
             return ActiveChildResolution::InsertNew;
         };
 
-        let expected_group = self.table.current_group(expected_anchor);
         if expected_group.key == key {
             return ActiveChildResolution::ReuseExpected {
-                anchor: expected_anchor,
+                anchor: expected_group.anchor,
             };
         }
 
-        let search_start = insert_index + expected_group.subtree_len as usize;
+        let search_start = insert_index + expected_group.subtree_len;
         self.state
             .find_later_sibling(self.table, parent_anchor, key, search_start)
             .map(|found_index| ActiveChildResolution::MoveLaterSibling {

@@ -6,7 +6,7 @@ use super::{
     },
     GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, SlotTable,
 };
-use crate::NodeId;
+use crate::{slot_storage::NodeRecordResult, AnchorId, NodeId};
 use std::mem;
 
 pub(super) struct GroupNodeRecordResult {
@@ -82,11 +82,11 @@ impl SlotTable {
         self.nodes.capacity()
     }
 
-    pub(super) fn record_group_node(
+    fn record_group_node(
         &mut self,
         group_index: usize,
         node_index: usize,
-        owner: crate::AnchorId,
+        owner: AnchorId,
         id: NodeId,
         parent_id: Option<NodeId>,
         generation: u32,
@@ -129,6 +129,40 @@ impl SlotTable {
         }
     }
 
+    pub(super) fn record_node_at_cursor(
+        &mut self,
+        owner: AnchorId,
+        node_index: usize,
+        id: NodeId,
+        parent_id: Option<NodeId>,
+        generation: u32,
+    ) -> NodeRecordResult {
+        let group_index = self.current_group_index(owner);
+        let recorded =
+            self.record_group_node(group_index, node_index, owner, id, parent_id, generation);
+        if !recorded.reused_slot {
+            self.adjust_ancestor_node_counts(owner, 1);
+        }
+
+        NodeRecordResult {
+            reused: recorded.reused_node,
+            id,
+        }
+    }
+
+    pub(super) fn node_identity_at_cursor(
+        &self,
+        owner: AnchorId,
+        node_index: usize,
+    ) -> Option<(NodeId, u32)> {
+        let group_index = self.current_group_index(owner);
+        if node_index >= self.group_node_len_at(group_index) {
+            return None;
+        }
+        let node = self.group_node_record_at(group_index, node_index);
+        Some((node.id, node.generation))
+    }
+
     pub(super) fn remove_group_node_range(
         &mut self,
         node_range: GroupNodeRange,
@@ -151,6 +185,20 @@ impl SlotTable {
             group_index + 1,
             -(removed.len() as i64),
         );
+        removed
+    }
+
+    pub(super) fn remove_group_node_tail_at_cursor(
+        &mut self,
+        owner: AnchorId,
+        node_cursor: usize,
+    ) -> Vec<NodeRecord> {
+        let group_index = self.current_group_index(owner);
+        let node_range = self.group_node_tail_range_at(group_index, node_cursor);
+        let removed = self.remove_group_node_range(node_range);
+        if !removed.is_empty() {
+            self.adjust_ancestor_node_counts(owner, -(removed.len() as i32));
+        }
         removed
     }
 
