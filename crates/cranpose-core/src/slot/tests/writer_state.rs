@@ -161,7 +161,9 @@ fn detached_subtree_preserves_root_nodes_from_stored_parent_links() {
     harness.finish_pass();
 
     assert_eq!(detached.node_ids_iter().collect::<Vec<_>>(), vec![41, 42]);
-    assert_eq!(detached.root_nodes(), vec![41]);
+    let mut root_nodes = Vec::new();
+    detached.collect_root_nodes_into(&mut root_nodes);
+    assert_eq!(root_nodes, vec![41]);
 }
 
 #[test]

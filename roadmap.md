@@ -109,21 +109,21 @@ Scope reviewed: `crates/cranpose-core/src/slot/*`, `crates/cranpose-core/src/slo
 
 ### P2 - Make Internal Corruption Fail Locally In Release Builds
 
-- [ ] Replace release-wrap casts after `debug_assert!` with checked arithmetic in structural counters and segment offsets.
+- [x] Replace release-wrap casts after `debug_assert!` with checked arithmetic in structural counters and segment offsets.
   Evidence: `adjust_ancestor_group_spans`, `adjust_ancestor_node_counts`, `add_group_segment_len`, and `apply_group_segment_start_delta` only debug-assert non-negative results before casting to `u32`. If an internal invariant is violated in release, the value can wrap into a huge table span instead of failing at the mutation site.
   Files: `crates/cranpose-core/src/slot/table/mutation.rs`, `crates/cranpose-core/src/slot/segments.rs`.
 
-- [ ] Add checked conversions where `usize` indexes and lengths are stored as `u32`.
+- [x] Add checked conversions where `usize` indexes and lengths are stored as `u32`.
   Evidence: `GroupId::new`, `insert_new_group`, payload/node segment start updates, and subtree spans cast indexes or lengths to `u32`. A clean slot table should have one checked conversion helper so overflow behavior is consistent and local.
   Files: `crates/cranpose-core/src/slot_storage.rs`, `crates/cranpose-core/src/slot/table/mutation.rs`, `crates/cranpose-core/src/slot/segments.rs`.
 
 ### P2 - Clean Up Debug Surface Ownership
 
-- [ ] Split table-local debug data from host/composer-retention debug data.
+- [x] Split table-local debug data from host/composer-retention debug data.
   Evidence: `SlotTableDebugStats` contains retained subtree fields, but raw `SlotTable::debug_stats()` fills only table-local fields and leaves retained fields at default zero. `SlotsHost::debug_stats()` later patches retained fields from `ComposerRuntimeState`. That makes `SlotTable::debug_stats()` look complete when it is only a partial view.
   Files: `crates/cranpose-core/src/slot/debug.rs`, `crates/cranpose-core/src/slot/reader.rs`, `crates/cranpose-core/src/lib.rs`, `crates/cranpose-core/src/composer.rs`.
 
-- [ ] Replace `DetachedSubtree::root_nodes()` plus `root_nodes_iter()` with one allocation-conscious API.
+- [x] Replace `DetachedSubtree::root_nodes()` plus `root_nodes_iter()` with one allocation-conscious API.
   Evidence: `root_nodes_iter()` allocates a `Vec` via `root_nodes()` and immediately converts it to an iterator. Retention and disposal paths call these helpers on inactive subtrees; they should either return a borrowed cached root-node list or write roots into a caller-provided buffer.
   Files: `crates/cranpose-core/src/slot/types.rs`, `crates/cranpose-core/src/slot/detach.rs`, `crates/cranpose-core/src/composer.rs`.
 

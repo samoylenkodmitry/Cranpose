@@ -166,20 +166,21 @@ impl ComposerRuntimeState {
         snapshot.retained_scope_count = retention.scope_count;
     }
 
-    pub(crate) fn fill_slot_debug_stats(
+    pub(crate) fn slot_retention_debug_stats(
         &self,
         host: &SlotsHost,
-        stats: &mut crate::SlotTableDebugStats,
-    ) {
+    ) -> crate::slot::SlotRetentionDebugStats {
         let retention = self.retention_debug_stats(host.storage_key());
-        stats.retained_subtree_count = retention.subtree_count;
-        stats.retained_group_count = retention.group_count;
-        stats.retained_payload_count = retention.payload_count;
-        stats.retained_node_count = retention.node_count;
-        stats.retained_scope_count = retention.scope_count;
-        stats.retained_anchor_count = retention.anchor_count;
-        stats.retained_heap_bytes = retention.heap_bytes;
-        stats.retained_evictions_total = retention.evictions_total;
+        crate::slot::SlotRetentionDebugStats {
+            retained_subtree_count: retention.subtree_count,
+            retained_group_count: retention.group_count,
+            retained_payload_count: retention.payload_count,
+            retained_node_count: retention.node_count,
+            retained_scope_count: retention.scope_count,
+            retained_anchor_count: retention.anchor_count,
+            retained_heap_bytes: retention.heap_bytes,
+            retained_evictions_total: retention.evictions_total,
+        }
     }
 
     pub(crate) fn compact_table_namespaces_for_host(
@@ -866,7 +867,7 @@ impl Composer {
         self.with_group_seed(seed, f)
     }
 
-    fn dispose_detached_nodes(&self, nodes: Vec<NodeId>) {
+    fn dispose_detached_nodes(&self, nodes: impl IntoIterator<Item = NodeId>) {
         for node_id in nodes {
             self.commands_mut().push(Command::callback(move |applier| {
                 crate::slot::dispose_detached_node_now(applier, node_id)
@@ -874,8 +875,11 @@ impl Composer {
         }
     }
 
-    fn debug_assert_detached_subtree_metadata(&self, subtree: &crate::slot::DetachedSubtree) {
-        let root_nodes = subtree.root_nodes();
+    fn debug_assert_detached_subtree_metadata(
+        &self,
+        subtree: &crate::slot::DetachedSubtree,
+        root_nodes: &[NodeId],
+    ) {
         debug_assert!(
             subtree.node_count() == 0 || !root_nodes.is_empty(),
             "detached subtree nodes must expose root metadata",
@@ -912,9 +916,11 @@ impl Composer {
         parent_scope: Option<ScopeId>,
         subtree: crate::slot::DetachedSubtree,
     ) {
-        self.debug_assert_detached_subtree_metadata(&subtree);
+        let mut root_nodes = Vec::new();
+        subtree.collect_root_nodes_into(&mut root_nodes);
+        self.debug_assert_detached_subtree_metadata(&subtree, &root_nodes);
         self.deactivate_scope_ids(subtree.scope_ids_iter());
-        for root in subtree.root_nodes_iter() {
+        for root in root_nodes {
             let parent_id = {
                 let mut applier = self.borrow_applier();
                 applier.get_mut(root).ok().and_then(|node| node.parent())
@@ -951,9 +957,11 @@ impl Composer {
         slots_host: &Rc<SlotsHost>,
         subtree: crate::slot::DetachedSubtree,
     ) {
-        self.debug_assert_detached_subtree_metadata(&subtree);
+        let mut root_nodes = Vec::new();
+        subtree.collect_root_nodes_into(&mut root_nodes);
+        self.debug_assert_detached_subtree_metadata(&subtree, &root_nodes);
         self.dispose_scope_ids(subtree.scope_ids_iter());
-        self.dispose_detached_nodes(subtree.root_nodes());
+        self.dispose_detached_nodes(root_nodes);
         slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {
             table.invalidate_detached_subtree_anchors(&subtree);
             lifecycle.queue_subtree_disposal(subtree);

@@ -1,4 +1,4 @@
-use super::super::{GroupRecord, NodeRecord, PayloadRecord, SlotTable};
+use super::super::{checked_usize_to_u32, GroupRecord, NodeRecord, PayloadRecord, SlotTable};
 use super::{
     anchors,
     nodes::{self, validate_group_nodes},
@@ -330,12 +330,14 @@ pub(super) fn validate_slot_tree(
             return Err(view.invalid_parent(index, expected_parent, group.parent_anchor));
         }
 
-        let expected_depth = stack.len() as u32;
+        let expected_depth = checked_usize_to_u32(stack.len(), "validation group depth");
         if group.depth != expected_depth {
             return Err(view.bad_depth(index, expected_depth, group.depth));
         }
 
-        let subtree_end = index + group.subtree_len as usize;
+        let subtree_end = index
+            .checked_add(group.subtree_len as usize)
+            .unwrap_or_else(|| panic!("validation subtree end overflow at group {index}"));
         if subtree_end == index || subtree_end > view.groups.len() {
             return Err(view.bad_subtree_len(index, 0, group.subtree_len));
         }

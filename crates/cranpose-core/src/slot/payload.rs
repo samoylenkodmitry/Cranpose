@@ -110,7 +110,10 @@ impl SlotTable {
 
     pub(super) fn allocate_payload_anchor(&mut self) -> usize {
         let anchor = self.next_payload_anchor;
-        self.next_payload_anchor += 1;
+        self.next_payload_anchor = self
+            .next_payload_anchor
+            .checked_add(1)
+            .expect("payload anchor counter overflow");
         anchor
     }
 
@@ -427,13 +430,17 @@ impl SlotTable {
         let mut next_anchor = 1usize;
         for payload in &self.payloads {
             remapped.insert(payload.anchor, next_anchor);
-            next_anchor += 1;
+            next_anchor = next_anchor
+                .checked_add(1)
+                .expect("compacted payload anchor counter overflow");
         }
         if let Some(retention) = retention.as_ref() {
             for subtree in retention.subtrees() {
                 for payload in &subtree.payloads {
                     remapped.insert(payload.anchor, next_anchor);
-                    next_anchor += 1;
+                    next_anchor = next_anchor
+                        .checked_add(1)
+                        .expect("compacted payload anchor counter overflow");
                 }
             }
         }
@@ -458,6 +465,8 @@ impl SlotTable {
         self.payload_locations.clear();
         self.payload_locations.shrink_to_fit();
         self.rebuild_payload_locations_for_group_range(GroupRange::new(0, self.groups.len()));
-        self.next_payload_anchor = total_payload_count + 1;
+        self.next_payload_anchor = total_payload_count
+            .checked_add(1)
+            .expect("next payload anchor counter overflow");
     }
 }

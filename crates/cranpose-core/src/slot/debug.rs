@@ -1,6 +1,49 @@
 use crate::{AnchorId, Key, ScopeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SlotTableLocalDebugStats {
+    pub group_count: usize,
+    pub group_capacity: usize,
+    pub group_record_size: usize,
+    pub group_heap_bytes: usize,
+    pub payload_count: usize,
+    pub payload_capacity: usize,
+    pub payload_location_count: usize,
+    pub payload_location_capacity: usize,
+    pub node_count: usize,
+    pub node_capacity: usize,
+    pub active_anchor_count: usize,
+    pub anchor_slot_count: usize,
+    pub anchor_sparse_count: usize,
+    pub detached_anchor_count: usize,
+    pub invalidated_anchor_count: usize,
+    pub free_anchor_count: usize,
+    pub anchor_capacity: usize,
+    pub anchor_heap_bytes: usize,
+    pub scope_index_count: usize,
+    pub scope_index_capacity: usize,
+    pub mutation: SlotTableMutationDebugStats,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SlotLifecycleDebugStats {
+    pub pending_drop_count: usize,
+    pub pending_drop_capacity: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SlotRetentionDebugStats {
+    pub retained_subtree_count: usize,
+    pub retained_group_count: usize,
+    pub retained_payload_count: usize,
+    pub retained_node_count: usize,
+    pub retained_scope_count: usize,
+    pub retained_anchor_count: usize,
+    pub retained_heap_bytes: usize,
+    pub retained_evictions_total: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SlotTableDebugStats {
     pub group_count: usize,
     pub group_capacity: usize,
@@ -33,6 +76,48 @@ pub struct SlotTableDebugStats {
     pub retained_heap_bytes: usize,
     pub retained_evictions_total: usize,
     pub mutation: SlotTableMutationDebugStats,
+}
+
+impl SlotTableDebugStats {
+    pub(crate) fn from_parts(
+        local: SlotTableLocalDebugStats,
+        lifecycle: SlotLifecycleDebugStats,
+        retention: SlotRetentionDebugStats,
+    ) -> Self {
+        Self {
+            group_count: local.group_count,
+            group_capacity: local.group_capacity,
+            group_record_size: local.group_record_size,
+            group_heap_bytes: local.group_heap_bytes,
+            payload_count: local.payload_count,
+            payload_capacity: local.payload_capacity,
+            payload_location_count: local.payload_location_count,
+            payload_location_capacity: local.payload_location_capacity,
+            node_count: local.node_count,
+            node_capacity: local.node_capacity,
+            pending_drop_count: lifecycle.pending_drop_count,
+            pending_drop_capacity: lifecycle.pending_drop_capacity,
+            active_anchor_count: local.active_anchor_count,
+            anchor_slot_count: local.anchor_slot_count,
+            anchor_sparse_count: local.anchor_sparse_count,
+            detached_anchor_count: local.detached_anchor_count,
+            invalidated_anchor_count: local.invalidated_anchor_count,
+            free_anchor_count: local.free_anchor_count,
+            anchor_capacity: local.anchor_capacity,
+            anchor_heap_bytes: local.anchor_heap_bytes,
+            scope_index_count: local.scope_index_count,
+            scope_index_capacity: local.scope_index_capacity,
+            retained_subtree_count: retention.retained_subtree_count,
+            retained_group_count: retention.retained_group_count,
+            retained_payload_count: retention.retained_payload_count,
+            retained_node_count: retention.retained_node_count,
+            retained_scope_count: retention.retained_scope_count,
+            retained_anchor_count: retention.retained_anchor_count,
+            retained_heap_bytes: retention.retained_heap_bytes,
+            retained_evictions_total: retention.retained_evictions_total,
+            mutation: local.mutation,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

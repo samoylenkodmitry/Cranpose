@@ -212,7 +212,7 @@ fn take_all_drops_reserves_only_payload_count() {
 }
 
 #[test]
-fn debug_stats_report_explicit_v2_table_counts() {
+fn debug_stats_report_explicit_v2_table_local_counts() {
     const GROUP_KEY: Key = 34;
 
     let table = composed_group_with_value_and_node_table(GROUP_KEY);
@@ -234,7 +234,6 @@ fn debug_stats_report_explicit_v2_table_counts() {
     assert_eq!(stats.invalidated_anchor_count, 0);
     assert_eq!(stats.free_anchor_count, 0);
     assert_eq!(stats.scope_index_count, 0);
-    assert_eq!(stats.pending_drop_count, 0);
     assert!(stats.group_capacity >= stats.group_count);
     assert!(stats.payload_capacity >= stats.payload_count);
     assert!(stats.payload_location_capacity >= stats.payload_location_count);
@@ -242,15 +241,6 @@ fn debug_stats_report_explicit_v2_table_counts() {
     assert!(stats.anchor_capacity >= stats.active_anchor_count);
     assert!(stats.anchor_heap_bytes > 0);
     assert!(stats.scope_index_capacity >= stats.scope_index_count);
-    assert!(stats.pending_drop_capacity >= stats.pending_drop_count);
-    assert_eq!(stats.retained_subtree_count, 0);
-    assert_eq!(stats.retained_group_count, 0);
-    assert_eq!(stats.retained_payload_count, 0);
-    assert_eq!(stats.retained_node_count, 0);
-    assert_eq!(stats.retained_scope_count, 0);
-    assert_eq!(stats.retained_anchor_count, 0);
-    assert_eq!(stats.retained_heap_bytes, 0);
-    assert_eq!(stats.retained_evictions_total, 0);
 }
 
 #[test]

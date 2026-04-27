@@ -1,4 +1,4 @@
-use super::{DetachedSubtree, SlotTable, SlotTableDebugStats};
+use super::{DetachedSubtree, SlotLifecycleDebugStats, SlotTable};
 use std::any::Any;
 
 pub(crate) struct DeferredDrop {
@@ -51,9 +51,11 @@ impl SlotLifecycleCoordinator {
         self.pending_drops.capacity()
     }
 
-    pub(crate) fn fill_debug_stats(&self, stats: &mut SlotTableDebugStats) {
-        stats.pending_drop_count = self.pending_drops_len();
-        stats.pending_drop_capacity = self.pending_drops_capacity();
+    pub(crate) fn debug_stats(&self) -> SlotLifecycleDebugStats {
+        SlotLifecycleDebugStats {
+            pending_drop_count: self.pending_drops_len(),
+            pending_drop_capacity: self.pending_drops_capacity(),
+        }
     }
 
     pub(crate) fn dispose_slot_table(&mut self, table: &mut SlotTable) {

@@ -1,6 +1,6 @@
 use super::{
     GroupRecord, SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup,
-    SlotDebugScope, SlotDebugSnapshot, SlotTable, SlotTableDebugStats,
+    SlotDebugScope, SlotDebugSnapshot, SlotTable, SlotTableLocalDebugStats,
 };
 use crate::{Key, ScopeId};
 use std::mem;
@@ -19,8 +19,8 @@ impl SlotTable {
             + self.scope_anchor_to_group.capacity() * mem::size_of::<(ScopeId, crate::AnchorId)>()
     }
 
-    pub fn debug_stats(&self) -> SlotTableDebugStats {
-        SlotTableDebugStats {
+    pub fn debug_stats(&self) -> SlotTableLocalDebugStats {
+        SlotTableLocalDebugStats {
             group_count: self.groups.len(),
             group_capacity: self.groups.capacity(),
             group_record_size: mem::size_of::<GroupRecord>(),
@@ -42,7 +42,6 @@ impl SlotTable {
             scope_index_count: self.scope_anchor_to_group.len(),
             scope_index_capacity: self.scope_anchor_to_group.capacity(),
             mutation: self.mutation_debug_stats,
-            ..SlotTableDebugStats::default()
         }
     }
 

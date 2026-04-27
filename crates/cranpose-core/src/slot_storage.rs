@@ -1,7 +1,7 @@
 //! Crate-private slot storage identifiers and group operation records used by
 //! [`crate::SlotTable`].
 
-use crate::{AnchorId, Key, NodeId, ScopeId};
+use crate::{slot::checked_usize_to_u32, AnchorId, Key, NodeId, ScopeId};
 
 /// Stable structural identity for a group among siblings.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -54,7 +54,7 @@ pub(crate) struct GroupId {
 impl GroupId {
     pub(crate) fn new(index: usize, generation: u32) -> Self {
         Self {
-            index: index as u32,
+            index: checked_usize_to_u32(index, "group id index"),
             generation,
         }
     }

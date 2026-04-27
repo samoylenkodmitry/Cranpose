@@ -100,12 +100,8 @@ impl DetachedSubtree {
         self.payloads.len()
     }
 
-    pub(crate) fn root_nodes(&self) -> Vec<NodeId> {
-        root_node_ids_from_records(&self.nodes)
-    }
-
-    pub(crate) fn root_nodes_iter(&self) -> std::vec::IntoIter<NodeId> {
-        self.root_nodes().into_iter()
+    pub(crate) fn collect_root_nodes_into(&self, root_nodes: &mut Vec<NodeId>) {
+        collect_root_node_ids_from_records_into(&self.nodes, root_nodes);
     }
 
     pub(crate) fn group_count(&self) -> usize {
@@ -174,14 +170,20 @@ impl PayloadRecord {
     }
 }
 
-pub(in crate::slot) fn root_node_ids_from_records(nodes: &[NodeRecord]) -> Vec<NodeId> {
-    let node_set = nodes.iter().map(|node| node.id).collect::<HashSet<_>>();
-    nodes
-        .iter()
-        .filter(|node| {
-            node.parent_id
-                .is_none_or(|parent_id| !node_set.contains(&parent_id))
-        })
-        .map(|node| node.id)
-        .collect()
+pub(in crate::slot) fn collect_root_node_ids_from_records_into(
+    nodes: &[NodeRecord],
+    root_nodes: &mut Vec<NodeId>,
+) {
+    root_nodes.clear();
+    root_nodes.reserve(nodes.len());
+
+    let mut node_set = HashSet::default();
+    node_set.reserve(nodes.len());
+    node_set.extend(nodes.iter().map(|node| node.id));
+
+    root_nodes.extend(nodes.iter().filter_map(|node| {
+        node.parent_id
+            .is_none_or(|parent_id| !node_set.contains(&parent_id))
+            .then_some(node.id)
+    }));
 }

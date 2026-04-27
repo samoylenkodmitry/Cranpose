@@ -1,4 +1,6 @@
-use super::super::{root_node_ids_from_records, NodeRecord, SlotTable, SlotWriteSession};
+use super::super::{
+    collect_root_node_ids_from_records_into, NodeRecord, SlotTable, SlotWriteSession,
+};
 use crate::{slot_storage::NodeRecordResult, AnchorId, NodeId};
 
 impl SlotTable {
@@ -14,7 +16,9 @@ impl SlotTable {
 
     pub(super) fn collect_subtree_root_node_ids(&self, group_anchor: AnchorId) -> Vec<NodeId> {
         let nodes = self.collect_subtree_node_records(group_anchor);
-        root_node_ids_from_records(&nodes)
+        let mut root_nodes = Vec::new();
+        collect_root_node_ids_from_records_into(&nodes, &mut root_nodes);
+        root_nodes
     }
 }
 

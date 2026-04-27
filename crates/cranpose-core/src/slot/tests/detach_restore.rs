@@ -288,7 +288,9 @@ fn removing_conditional_child_returns_detached_subtree() {
     assert_eq!(detached.group_count(), 1);
     assert_eq!(detached.node_count(), 1);
     assert_eq!(detached.node_ids_iter().collect::<Vec<_>>(), vec![41]);
-    assert_eq!(detached.root_nodes(), vec![41]);
+    let mut root_nodes = Vec::new();
+    detached.collect_root_nodes_into(&mut root_nodes);
+    assert_eq!(root_nodes, vec![41]);
     assert_eq!(
         detached.node_states().collect::<Vec<_>>(),
         vec![(41, super::NodeLifecycle::Active)]

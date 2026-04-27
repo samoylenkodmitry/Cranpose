@@ -281,10 +281,16 @@ fn retained_subtree_summary(
             node_count: subtree.node_count(),
             scope_count: subtree.scope_count(),
             anchor_count: subtree.anchor_count(),
-            root_nodes: subtree.root_nodes(),
+            root_nodes: collect_subtree_root_nodes(subtree),
             group_anchors: subtree.group_anchors().collect(),
         })
         .collect()
+}
+
+fn collect_subtree_root_nodes(subtree: &DetachedSubtree) -> Vec<NodeId> {
+    let mut root_nodes = Vec::new();
+    subtree.collect_root_nodes_into(&mut root_nodes);
+    root_nodes
 }
 
 fn model_failure_report(

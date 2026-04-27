@@ -1,4 +1,5 @@
 use super::{
+    checked_usize_to_i64,
     segments::{
         extract_subtree_segment, group_segment_len, group_segment_range_at, group_segment_start,
         group_segment_subrange_at, insert_group_segment_item, remove_group_segment_range,
@@ -217,7 +218,8 @@ impl SlotTable {
         let node_range = self.group_node_tail_range_at(group_index, node_cursor);
         let removed = self.remove_group_node_range(node_range);
         if !removed.is_empty() {
-            self.adjust_ancestor_node_counts(owner, -(removed.len() as i32));
+            let removed_len = checked_usize_to_i64(removed.len(), "removed node count");
+            self.adjust_ancestor_node_counts(owner, -removed_len);
         }
         removed
     }

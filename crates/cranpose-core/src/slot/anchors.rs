@@ -1,4 +1,6 @@
-use super::{dense_id_map::DenseIdMap, DetachedSubtree, GroupRecord, SlotTable};
+use super::{
+    checked_usize_to_u32, dense_id_map::DenseIdMap, DetachedSubtree, GroupRecord, SlotTable,
+};
 use crate::{
     collections::map::HashMap, retention::RetentionManager, AnchorId, RecomposeScope, ScopeId,
 };
@@ -47,7 +49,10 @@ impl AnchorRegistry {
             }
         } else {
             let anchor = AnchorId::new(self.next_anchor);
-            self.next_anchor += 1;
+            self.next_anchor = self
+                .next_anchor
+                .checked_add(1)
+                .expect("anchor counter overflow");
             anchor
         };
         let replaced = self.set_state(anchor, AnchorState::Invalidated);
@@ -102,7 +107,7 @@ impl AnchorRegistry {
             .filter_map(|(index, slot)| match slot.state {
                 AnchorState::Active(group_index) => Some((
                     AnchorId {
-                        id: index as u32,
+                        id: checked_usize_to_u32(index, "anchor state index"),
                         generation: slot.generation,
                     },
                     group_index,
@@ -291,16 +296,18 @@ impl SlotTable {
         }
 
         let mut remapped = HashMap::default();
-        let mut next_id = 1u32;
+        let mut next_id = 1usize;
         for group in &self.groups {
             remapped.insert(
                 group.anchor,
                 AnchorId {
-                    id: next_id,
+                    id: checked_usize_to_u32(next_id, "compacted anchor id"),
                     generation: group.anchor.generation,
                 },
             );
-            next_id += 1;
+            next_id = next_id
+                .checked_add(1)
+                .expect("compacted anchor id counter overflow");
         }
         if let Some(retention) = retention.as_ref() {
             for subtree in retention.subtrees() {
@@ -308,11 +315,13 @@ impl SlotTable {
                     remapped.insert(
                         anchor,
                         AnchorId {
-                            id: next_id,
+                            id: checked_usize_to_u32(next_id, "compacted anchor id"),
                             generation: anchor.generation,
                         },
                     );
-                    next_id += 1;
+                    next_id = next_id
+                        .checked_add(1)
+                        .expect("compacted anchor id counter overflow");
                 }
             }
         }
@@ -432,6 +441,8 @@ impl SlotTable {
             max_anchor_id = max_anchor_id.max(anchor.id as usize);
             self.anchors.mark_detached(anchor);
         }
-        self.anchors.next_anchor = max_anchor_id + 1;
+        self.anchors.next_anchor = max_anchor_id
+            .checked_add(1)
+            .expect("anchor counter overflow after namespace rebuild");
     }
 }

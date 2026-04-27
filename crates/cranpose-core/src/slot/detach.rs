@@ -1,4 +1,7 @@
-use super::{DetachedSubtree, GroupRecord, SlotTable, SlotWriteSessionState, SubtreeRange};
+use super::{
+    checked_u32_delta, CheckedU32Delta, DetachedSubtree, GroupRecord, SlotTable,
+    SlotWriteSessionState, SubtreeRange,
+};
 use crate::{
     remove_child_and_cleanup_now, slot_storage::GroupKey, AnchorId, Applier, NodeError, NodeId,
 };
@@ -34,8 +37,8 @@ impl SlotTable {
 
         self.adjust_ancestor_group_spans(
             root_parent_anchor,
-            -(root_subtree_len as i32),
-            -(root_subtree_node_count as i32),
+            -i64::from(root_subtree_len),
+            -i64::from(root_subtree_node_count),
         );
 
         let subtree = DetachedSubtree {
@@ -72,19 +75,23 @@ impl SlotTable {
         let restored_subtree_len = subtree
             .groups
             .first()
-            .map(|group| group.subtree_len as i32)
+            .map(|group| i64::from(group.subtree_len))
             .expect("detached subtree must contain a root group");
         let restored_subtree_node_count = subtree
             .groups
             .first()
-            .map(|group| group.subtree_node_count as i32)
+            .map(|group| i64::from(group.subtree_node_count))
             .expect("detached subtree must contain a root group");
-        debug_assert_eq!(
-            restored_subtree_len as usize, restored_group_count,
+        let restored_subtree_len_usize =
+            usize::try_from(restored_subtree_len).expect("restored subtree length must fit usize");
+        let restored_subtree_node_count_usize = usize::try_from(restored_subtree_node_count)
+            .expect("restored subtree node count must fit usize");
+        assert_eq!(
+            restored_subtree_len_usize, restored_group_count,
             "detached subtree root span must match the stored group slice"
         );
-        debug_assert_eq!(
-            restored_subtree_node_count as usize,
+        assert_eq!(
+            restored_subtree_node_count_usize,
             subtree.nodes.len(),
             "detached subtree root node count must match the stored node slice"
         );
@@ -99,17 +106,21 @@ impl SlotTable {
             .filter_map(|group| group.scope_id.map(|scope_id| (scope_id, group.anchor)))
             .collect::<Vec<_>>();
 
-        let depth_delta = if parent_anchor.is_valid() {
-            self.current_group(parent_anchor).depth + 1
+        let target_root_depth = if parent_anchor.is_valid() {
+            self.current_group(parent_anchor)
+                .depth
+                .checked_add(1)
+                .expect("restored subtree depth overflow")
         } else {
             0
-        } as i32
-            - subtree.groups[0].depth as i32;
+        };
+        let depth_delta = i64::from(target_root_depth) - i64::from(subtree.groups[0].depth);
 
         subtree.groups[0].key = key;
         subtree.groups[0].parent_anchor = parent_anchor;
+        let depth_delta = CheckedU32Delta::from_i64(depth_delta, "group depth");
         for group in &mut subtree.groups {
-            group.depth = ((group.depth as i32) + depth_delta) as u32;
+            group.depth = checked_u32_delta(group.depth, depth_delta, 0, "group depth");
         }
 
         subtree.mark_nodes_active();
@@ -167,7 +178,9 @@ pub(crate) fn dispose_detached_node_now(
 }
 
 pub(crate) fn dispose_detached_subtree_now(applier: &mut dyn Applier, subtree: &DetachedSubtree) {
-    for root in subtree.root_nodes() {
+    let mut root_nodes = Vec::new();
+    subtree.collect_root_nodes_into(&mut root_nodes);
+    for root in root_nodes {
         let _ = dispose_detached_node_now(applier, root);
     }
 }

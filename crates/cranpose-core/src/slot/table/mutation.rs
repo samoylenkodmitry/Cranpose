@@ -1,4 +1,4 @@
-use super::super::GroupRecord;
+use super::super::{checked_u32_delta, checked_usize_to_u32, CheckedU32Delta, GroupRecord};
 use super::SlotTable;
 use crate::{slot_storage::GroupKey, AnchorId};
 
@@ -19,37 +19,43 @@ impl SlotTable {
     pub(in crate::slot) fn adjust_ancestor_group_spans(
         &mut self,
         parent_anchor: AnchorId,
-        subtree_delta: i32,
-        node_delta: i32,
+        subtree_delta: i64,
+        node_delta: i64,
     ) {
+        let subtree_delta = CheckedU32Delta::from_i64(subtree_delta, "active group subtree span");
+        let node_delta = CheckedU32Delta::from_i64(node_delta, "active group subtree node count");
         let mut current = parent_anchor;
         while current.is_valid() {
             let group_index = self.current_group_index(current);
             let group = &mut self.groups[group_index];
-            let subtree_len = group.subtree_len as i32 + subtree_delta;
-            let subtree_nodes = group.subtree_node_count as i32 + node_delta;
-            debug_assert!(
-                subtree_len >= 1,
-                "active groups must keep a positive subtree span"
+            group.subtree_len = checked_u32_delta(
+                group.subtree_len,
+                subtree_delta,
+                1,
+                "active group subtree span",
             );
-            debug_assert!(
-                subtree_nodes >= 0,
-                "subtree node counts cannot become negative"
+            group.subtree_node_count = checked_u32_delta(
+                group.subtree_node_count,
+                node_delta,
+                0,
+                "active group subtree node count",
             );
-            group.subtree_len = subtree_len as u32;
-            group.subtree_node_count = subtree_nodes as u32;
             current = group.parent_anchor;
         }
     }
 
-    pub(in crate::slot) fn adjust_ancestor_node_counts(&mut self, owner: AnchorId, delta: i32) {
+    pub(in crate::slot) fn adjust_ancestor_node_counts(&mut self, owner: AnchorId, delta: i64) {
+        let delta = CheckedU32Delta::from_i64(delta, "active group subtree node count");
         let mut current = Some(owner);
         while let Some(anchor) = current {
             let group_index = self.current_group_index(anchor);
             let group = &mut self.groups[group_index];
-            let updated = group.subtree_node_count as i32 + delta;
-            debug_assert!(updated >= 0, "subtree node counts cannot become negative");
-            group.subtree_node_count = updated as u32;
+            group.subtree_node_count = checked_u32_delta(
+                group.subtree_node_count,
+                delta,
+                0,
+                "active group subtree node count",
+            );
             current = group
                 .parent_anchor
                 .is_valid()
@@ -64,7 +70,10 @@ impl SlotTable {
         key: GroupKey,
     ) -> AnchorId {
         let depth = if parent_anchor.is_valid() {
-            self.current_group(parent_anchor).depth + 1
+            self.current_group(parent_anchor)
+                .depth
+                .checked_add(1)
+                .expect("group depth overflow")
         } else {
             0
         };
@@ -73,12 +82,12 @@ impl SlotTable {
         let payload_start = if insert_index < self.groups.len() {
             self.groups[insert_index].payload_start
         } else {
-            self.payloads.len() as u32
+            checked_usize_to_u32(self.payloads.len(), "group payload start")
         };
         let node_start = if insert_index < self.groups.len() {
             self.groups[insert_index].node_start
         } else {
-            self.nodes.len() as u32
+            checked_usize_to_u32(self.nodes.len(), "group node start")
         };
         self.groups.insert(
             insert_index,

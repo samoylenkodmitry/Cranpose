@@ -69,7 +69,8 @@ pub use runtime::{
 };
 pub use slot::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
-    SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotTableMutationDebugStats,
+    SlotDebugSnapshot, SlotRetentionDebugStats, SlotTable, SlotTableDebugStats,
+    SlotTableLocalDebugStats, SlotTableMutationDebugStats,
 };
 #[doc(hidden)]
 pub use snapshot_state_observer::SnapshotStateObserver;
@@ -329,7 +330,7 @@ impl AnchorId {
 
     pub(crate) fn new(id: usize) -> Self {
         Self {
-            id: id as u32,
+            id: crate::slot::checked_usize_to_u32(id, "anchor id"),
             generation: 1,
         }
     }
@@ -3594,12 +3595,14 @@ impl SlotsHost {
 
     pub(crate) fn debug_stats(&self) -> SlotTableDebugStats {
         let inner = self.inner.borrow();
-        let mut stats = inner.table.debug_stats();
-        inner.lifecycle.fill_debug_stats(&mut stats);
-        if let Some(state) = inner.runtime_state.clone() {
-            state.fill_slot_debug_stats(self, &mut stats);
-        }
-        stats
+        let local = inner.table.debug_stats();
+        let lifecycle = inner.lifecycle.debug_stats();
+        let retention = inner
+            .runtime_state
+            .clone()
+            .map(|state| state.slot_retention_debug_stats(self))
+            .unwrap_or_default();
+        SlotTableDebugStats::from_parts(local, lifecycle, retention)
     }
 
     pub(crate) fn debug_snapshot(&self) -> slot::SlotDebugSnapshot {
