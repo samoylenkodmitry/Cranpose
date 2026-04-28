@@ -441,7 +441,7 @@ git diff
   slot: handle explicit node replacement
   ```
 
-* [ ] Add node replacement regression tests.
+* [x] Add node replacement regression tests.
 
   Done means: tests cover reused same node, inserted new node, replaced node id, replaced generation, retained detached node restore, and disposal of replaced nodes. Validation proves no replaced node remains active under the old identity.
 
