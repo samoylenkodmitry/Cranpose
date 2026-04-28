@@ -15,7 +15,7 @@ impl SlotTable {
             + self.payload_heap_bytes()
             + self.node_heap_bytes()
             + self.anchors.heap_bytes()
-            + self.payload_locations.capacity() * mem::size_of::<Option<(crate::AnchorId, usize)>>()
+            + self.payload_locations.heap_bytes()
             + self.scope_index.heap_bytes()
     }
 
