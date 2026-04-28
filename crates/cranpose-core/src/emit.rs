@@ -1,3 +1,4 @@
+use crate::slot_storage::NodeSlotUpdate;
 use crate::{
     debug_scope_label, Applier, ChildList, Command, CommandQueue, Composer, DirtyBubble,
     EmittedNode, MutableState, Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode,
@@ -62,11 +63,19 @@ impl Composer {
                 let recorded = self.with_slot_session_mut(|slots| {
                     slots.record_node_with_parent(id, slot_gen, parent_id)
                 });
-                debug_assert!(
-                    recorded.reused && recorded.id == id,
-                    "reused node recording must keep the same node identity"
-                );
-                self.core.last_node_reused.set(Some(recorded.reused));
+                match recorded {
+                    NodeSlotUpdate::Reused {
+                        id: recorded_id,
+                        generation,
+                    } => {
+                        debug_assert_eq!(recorded_id, id);
+                        debug_assert_eq!(generation, slot_gen);
+                    }
+                    NodeSlotUpdate::Inserted { .. } | NodeSlotUpdate::Replaced { .. } => {
+                        panic!("reused node recording must keep the same node identity");
+                    }
+                }
+                self.core.last_node_reused.set(Some(true));
                 return id;
             }
         }
@@ -129,11 +138,27 @@ impl Composer {
         let parent_id = self.recorded_node_parent(id);
         let recorded =
             self.with_slot_session_mut(|slots| slots.record_node_with_parent(id, gen, parent_id));
-        debug_assert!(
-            !recorded.reused && recorded.id == id,
-            "fresh or replacement node recording must report a non-reused node"
-        );
-        self.core.last_node_reused.set(Some(recorded.reused));
+        match recorded {
+            NodeSlotUpdate::Inserted {
+                id: recorded_id,
+                generation,
+            } => {
+                debug_assert_eq!(recorded_id, id);
+                debug_assert_eq!(generation, gen);
+            }
+            NodeSlotUpdate::Replaced {
+                new_id,
+                new_generation,
+                ..
+            } => {
+                debug_assert_eq!(new_id, id);
+                debug_assert_eq!(new_generation, gen);
+            }
+            NodeSlotUpdate::Reused { .. } => {
+                panic!("fresh or replacement node recording must not report normal reuse");
+            }
+        }
+        self.core.last_node_reused.set(Some(false));
         id
     }
 

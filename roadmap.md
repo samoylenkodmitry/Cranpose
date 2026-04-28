@@ -400,7 +400,7 @@ git diff
 
 ## Phase 6 — Make node replacement lifecycle explicit
 
-* [ ] Replace `NodeRecordResult` with `NodeSlotUpdate`.
+* [x] Replace `NodeRecordResult` with `NodeSlotUpdate`.
 
   Done means: the node API returns `Reused`, `Inserted`, or `Replaced`; a boolean `reused` result no longer exists.
 

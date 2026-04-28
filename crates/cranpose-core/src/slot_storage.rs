@@ -145,7 +145,19 @@ pub(crate) struct GroupStart<G> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct NodeRecordResult {
-    pub(crate) reused: bool,
-    pub(crate) id: NodeId,
+pub(crate) enum NodeSlotUpdate {
+    Reused {
+        id: NodeId,
+        generation: u32,
+    },
+    Inserted {
+        id: NodeId,
+        generation: u32,
+    },
+    Replaced {
+        old_id: NodeId,
+        old_generation: u32,
+        new_id: NodeId,
+        new_generation: u32,
+    },
 }

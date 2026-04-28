@@ -9,7 +9,7 @@ use crate::{
     retention::{RetainKey, RetentionManager},
     slot_storage::{
         ActiveGroupId, BeginGroupInput, GroupKey, GroupKeySeed, GroupStart, GroupStartKind,
-        PayloadAnchor, ValueSlotId,
+        NodeSlotUpdate, PayloadAnchor, ValueSlotId,
     },
     AnchorId, Applier, Key, MemoryApplier, Node, NodeId, ScopeId,
 };
@@ -393,8 +393,13 @@ fn exercise_slot_write_session_surface(
     let slot = slots.value_slot_with_kind(PayloadKind::Internal, || 7_i32);
 
     let recorded = slots.record_node_with_parent(55, 1, None);
-    assert!(!recorded.reused);
-    assert_eq!(recorded.id, 55);
+    assert_eq!(
+        recorded,
+        NodeSlotUpdate::Inserted {
+            id: 55,
+            generation: 1,
+        },
+    );
     assert_eq!(node_ids_in_current_subtree(slots), vec![55]);
 
     let result = slots.finish_group_body();

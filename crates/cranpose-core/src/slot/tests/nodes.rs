@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn record_node_result_is_false_when_replacing_existing_node_slot() {
+fn record_node_reports_explicit_replacement() {
     const GROUP_KEY: Key = 366;
 
     let mut harness = SlotHarness::new();
@@ -10,7 +10,13 @@ fn record_node_result_is_false_when_replacing_existing_node_slot() {
     harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
         let recorded = session.record_node_with_parent(11, 1, None);
-        assert!(!recorded.reused);
+        assert_eq!(
+            recorded,
+            NodeSlotUpdate::Inserted {
+                id: 11,
+                generation: 1,
+            },
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -22,11 +28,16 @@ fn record_node_result_is_false_when_replacing_existing_node_slot() {
         begin_unkeyed(session, GROUP_KEY, None);
         assert_eq!(session.current_node_record(), Some((11, 1)));
         let recorded = session.record_node_with_parent(12, 1, None);
-        assert!(
-            !recorded.reused,
-            "replacing the node at the current cursor must not report a reused node"
+        assert_eq!(
+            recorded,
+            NodeSlotUpdate::Replaced {
+                old_id: 11,
+                old_generation: 1,
+                new_id: 12,
+                new_generation: 1,
+            },
+            "replacing the node at the current cursor must report an explicit replacement",
         );
-        assert_eq!(recorded.id, 12);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();

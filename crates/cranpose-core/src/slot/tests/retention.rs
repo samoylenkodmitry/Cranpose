@@ -833,8 +833,13 @@ fn retained_detached_child_nodes_stay_live_across_restore() {
             "restored children must expose their retained node for explicit reuse"
         );
         let recorded = session.record_node_with_parent(child_id, child_generation, None);
-        assert!(recorded.reused);
-        assert_eq!(recorded.id, child_id);
+        assert_eq!(
+            recorded,
+            NodeSlotUpdate::Reused {
+                id: child_id,
+                generation: child_generation,
+            },
+        );
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
