@@ -169,11 +169,8 @@ pub(super) fn validate_payload_locations(table: &SlotTable) -> Result<(), SlotIn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slot::PayloadKind;
-    use crate::{
-        slot::{GroupKey, PayloadAnchor},
-        AnchorId,
-    };
+    use crate::slot::{GroupKey, PayloadAnchor, PayloadKind};
+    use crate::AnchorId;
     use std::any::TypeId;
 
     fn one_payload_table(owner: AnchorId, payload_anchor: usize) -> SlotTable {

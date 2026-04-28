@@ -1,10 +1,6 @@
+use super::super::{ActiveSubtreeRoot, GroupKey, SlotTable};
 use super::state::SlotWriteSessionState;
-use crate::{
-    collections::map::HashMap,
-    slot::GroupKey,
-    slot::{ActiveSubtreeRoot, SlotTable},
-    AnchorId,
-};
+use crate::{collections::map::HashMap, AnchorId};
 use smallvec::SmallVec;
 
 const DEFAULT_SIBLING_INDEX_THRESHOLD: usize = 16;

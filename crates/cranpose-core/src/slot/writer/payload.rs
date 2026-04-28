@@ -1,5 +1,5 @@
-use super::super::{PayloadKind, SlotWriteSession};
-use crate::{slot::ValueSlotId, Owned};
+use super::super::{PayloadKind, SlotWriteSession, ValueSlotId};
+use crate::Owned;
 
 impl SlotWriteSession<'_> {
     pub(crate) fn value_slot_with_kind<T: 'static>(

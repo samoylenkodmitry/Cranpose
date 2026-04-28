@@ -1,8 +1,5 @@
-use super::super::{AnchorState, NodeLifecycle, PayloadAnchorLifecycle};
-use crate::{
-    slot::{GroupKey, PayloadAnchor},
-    AnchorId, NodeId, ScopeId,
-};
+use super::super::{AnchorState, GroupKey, NodeLifecycle, PayloadAnchor, PayloadAnchorLifecycle};
+use crate::{AnchorId, NodeId, ScopeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SlotTreeContext {

@@ -517,7 +517,7 @@ git diff
   slot: move storage operation types into slot modules
   ```
 
-* [ ] Remove stale imports and wrapper surfaces from the old names.
+* [x] Remove stale imports and wrapper surfaces from the old names.
 
   Done means: there is no compatibility shim just to preserve internal old names; import paths are direct and idiomatic; grep for `slot_storage::`, `GroupId`, `NodeRecordResult`, `compact_*_namespace`, and `payload_locations` returns no stale semantic usage.
 

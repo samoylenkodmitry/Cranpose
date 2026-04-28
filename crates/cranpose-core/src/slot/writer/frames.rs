@@ -1,7 +1,7 @@
+use super::super::GroupKey;
 use super::siblings::SiblingIndex;
 use crate::{
     collections::map::{HashMap, HashSet},
-    slot::GroupKey,
     AnchorId, Key,
 };
 

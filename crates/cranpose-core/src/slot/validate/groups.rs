@@ -1,4 +1,6 @@
-use super::super::{checked_usize_to_u32, GroupRecord, NodeRecord, PayloadRecord, SlotTable};
+use super::super::{
+    checked_usize_to_u32, GroupKey, GroupRecord, NodeRecord, PayloadRecord, SlotTable,
+};
 use super::{
     anchors,
     nodes::{self, validate_group_nodes},
@@ -7,7 +9,6 @@ use super::{
 };
 use crate::{
     collections::map::{HashMap, HashSet},
-    slot::GroupKey,
     AnchorId,
 };
 

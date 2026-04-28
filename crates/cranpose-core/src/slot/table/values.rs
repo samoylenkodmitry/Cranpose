@@ -1,5 +1,5 @@
+use super::super::ValueSlotId;
 use super::SlotTable;
-use crate::slot::ValueSlotId;
 
 impl SlotTable {
     fn checked_value_slot(&self, slot: ValueSlotId) -> (usize, usize) {

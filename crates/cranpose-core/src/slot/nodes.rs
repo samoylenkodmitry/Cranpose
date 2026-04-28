@@ -5,9 +5,9 @@ use super::{
         group_segment_subrange_at, insert_group_segment_item, remove_group_segment_range,
         restore_subtree_segment, NodeSegment,
     },
-    GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, SlotTable,
+    GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
 };
-use crate::{slot::NodeSlotUpdate, AnchorId, NodeId};
+use crate::{AnchorId, NodeId};
 use std::mem;
 
 impl SlotTable {

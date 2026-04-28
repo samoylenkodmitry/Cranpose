@@ -1,11 +1,9 @@
 use super::super::{
-    ActiveSubtreeRoot, ChildCursor, DetachedChild, DetachedSubtree, SlotTable, SlotWriteSession,
+    ActiveGroupId, ActiveSubtreeRoot, BeginGroupInput, ChildCursor, DetachedChild, DetachedSubtree,
+    GroupKey, GroupKeySeed, GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
 };
 use super::SlotWriteSessionState;
-use crate::{
-    slot::{ActiveGroupId, BeginGroupInput, GroupKey, GroupKeySeed, GroupStart, GroupStartKind},
-    AnchorId, ScopeId,
-};
+use crate::{AnchorId, ScopeId};
 
 enum ActiveChildResolution {
     ReuseExpected { anchor: AnchorId },

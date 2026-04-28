@@ -1,10 +1,7 @@
 #[cfg(any(test, debug_assertions))]
 use super::AnchorState;
-use super::{ChildCursor, DirectChildRange, SlotTable, SubtreeRange};
-use crate::{
-    slot::{ActiveGroupId, GroupKey},
-    AnchorId, ScopeId,
-};
+use super::{ActiveGroupId, ChildCursor, DirectChildRange, GroupKey, SlotTable, SubtreeRange};
+use crate::{AnchorId, ScopeId};
 
 pub(super) struct GroupRecord {
     pub(super) key: GroupKey,

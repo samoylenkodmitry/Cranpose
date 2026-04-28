@@ -4,14 +4,10 @@ use super::{
         group_segment_subrange_at, insert_group_segment_item, remove_group_segment_range,
         restore_subtree_segment, PayloadSegment,
     },
-    DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadKind, PayloadRange,
-    PayloadRecord, SlotTable,
+    DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadAnchor, PayloadKind,
+    PayloadRange, PayloadRecord, SlotTable, ValueSlotId,
 };
-use crate::{
-    retention::RetentionManager,
-    slot::{PayloadAnchor, ValueSlotId},
-    AnchorId,
-};
+use crate::{retention::RetentionManager, AnchorId};
 use std::any::TypeId;
 use std::mem;
 

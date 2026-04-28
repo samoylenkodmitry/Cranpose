@@ -1,9 +1,9 @@
 use super::super::{
     checked_u32_delta, checked_usize_to_u32, ActiveSubtreeRoot, CheckedU32Delta, ChildCursor,
-    GroupRecord,
+    GroupKey, GroupRecord,
 };
 use super::SlotTable;
-use crate::{slot::GroupKey, AnchorId};
+use crate::AnchorId;
 
 impl SlotTable {
     fn allocate_group_anchor(&mut self) -> AnchorId {
