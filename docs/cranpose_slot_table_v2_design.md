@@ -44,8 +44,8 @@ The most important rule:
 This rewrite intentionally removes the old concepts:
 
 ```text
-Slot::Gap with group metadata
-restored_from_gap
+gap slots carrying group metadata
+gap-restoration flags
 last_start_was_gap
 has_gap_children
 stale group len as physical extent
@@ -77,7 +77,7 @@ Historical source-level observations:
 - `GroupFrame` stores physical `start` and `end`, and the source comments that those physical positions should eventually be phased out.
 - `SlotTable::start` includes fast paths, parent-forced recomposition, gap conversion, group-to-gap conversion, limited sibling scans, recursive gap scans, and extended rescue scans.
 - `trim_to_cursor` marks unreachable slots as gaps and intentionally keeps group length as physical extent rather than active subtree size.
-- `SlotStorage::begin_group` returned `StartGroup { restored_from_gap: bool }`; `Composer::with_group` checked that flag and forced recomposition.
+- `SlotStorage::begin_group` returned a gap-restoration boolean; `Composer::with_group` checked that flag and forced recomposition.
 - `SlotStorage` exposed cursor-repair methods such as `step_back` and `advance_after_node_read`.
 - `begin_recranpose_at_scope` starts from a `ScopeId`; the current slot table finds a group by scanning slots for a matching scope.
 - `SubcomposeState` already shows a cleaner lifecycle pattern: it owns active slots, reusable pools, slot compositions, precomposed nodes, and a reuse policy outside the main slot table.
@@ -116,7 +116,7 @@ Required correctness properties:
 
 ### 3.3 API goals
 
-- Replace `restored_from_gap: bool` with semantic `GroupStartKind`.
+- Replace the gap-restoration boolean with semantic `GroupStartKind`.
 - Replace `finalize_current_group() -> bool` with `finish_group_body() -> FinishGroupResult` returning detached children.
 - Remove `step_back` and `advance_after_node_read` from the storage trait.
 - Add explicit detach/restore operations.
@@ -131,7 +131,7 @@ This rewrite does not need to preserve the old slot table internals.
 
 Do not try to:
 
-- keep `Slot::Gap` semantics;
+- keep semantic gap-slot behavior;
 - keep old group length behavior;
 - preserve old rescue-scan logic;
 - preserve old experimental backend behavior;
@@ -200,7 +200,7 @@ crates/cranpose-core/src/
   slot_storage.rs              // semantic storage trait and handle types
   slot/
     mod.rs
-    types.rs                   // GroupId, ValueSlotId, GroupKey, flags, errors
+    types.rs                   // ActiveGroupId, ValueSlotId, GroupKey, flags, errors
     table.rs                   // SlotTable struct and high-level methods
     writer.rs                  // mutation/traversal state machine
     reader.rs                  // read-only traversal and debug dumps
@@ -238,7 +238,7 @@ Use generational handles to avoid stale index bugs.
 
 ```rust
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct GroupId {
+pub struct ActiveGroupId {
     index: u32,
     generation: u32,
 }
@@ -255,8 +255,8 @@ pub struct GroupAnchor {
 }
 ```
 
-`GroupId` is a transient active-table handle.  
-`GroupAnchor` is stable across moves and can be invalidated.  
+`ActiveGroupId` is a transient active-table handle.
+`AnchorId` is stable across moves and can be invalidated.
 `ValueSlotId` is anchor-based because composer-held value handles routinely outlive one active writer frame. Group-and-offset addressing is still useful as a transient internal concept while writing one group body, but it is not robust as the exposed handle shape.
 
 ### 7.2 SlotTable
@@ -282,7 +282,7 @@ Use a flat preorder group table with exact active sizes.
 ```rust
 pub struct GroupRecord {
     pub key: GroupKey,
-    pub parent: Option<GroupId>,
+    pub parent_anchor: AnchorId,
     pub depth: u32,
 
     // Exact count of active groups in this subtree, including self.
@@ -299,7 +299,7 @@ pub struct GroupRecord {
     // Aggregate node count in subtree, for skip and attach operations.
     pub subtree_node_count: u32,
 
-    pub anchor: GroupAnchor,
+    pub anchor: AnchorId,
     pub scope_id: Option<ScopeId>,
     pub flags: GroupFlags,
     pub generation: u32,
@@ -383,7 +383,7 @@ pub trait SlotStorage {
     fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T>;
 
     // Nodes
-    fn record_node(&mut self, id: NodeId, generation: u32) -> NodeRecordResult;
+    fn record_node(&mut self, id: NodeId, generation: u32) -> NodeSlotUpdate;
     fn nodes_in_current_group(&self) -> Vec<NodeId>;
 
     // Lifecycle/debug
@@ -466,7 +466,7 @@ pub struct WriterState {
 
 pub struct Frame {
     group_index: usize,
-    parent: Option<GroupId>,
+    parent_anchor: AnchorId,
     old_end: usize,
     next_child: usize,
     payload_start: usize,
@@ -484,7 +484,7 @@ The current frame says:
 ### 9.1 Begin group algorithm
 
 ```rust
-fn begin_group(&mut self, input: BeginGroupInput) -> GroupStart<GroupId> {
+fn begin_group(&mut self, input: BeginGroupInput) -> GroupStart<ActiveGroupId> {
     let parent = self.current_group();
     let expected = self.frame().next_child;
 
@@ -823,7 +823,7 @@ pub struct ScopeIndex {
 Active recomposition:
 
 ```rust
-fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<GroupId> {
+fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<ActiveGroupId> {
     self.group_for_scope(scope)
 }
 ```
@@ -858,9 +858,15 @@ pub enum NodeLifecycle {
 `record_node(id, generation)` records a node under the current group. It does not overwrite a slot and does not require `peek_node` / `step_back`. The generation comes from the applier-side stable-node arena and is part of stale-identity protection when node IDs are recycled.
 
 ```rust
-pub struct NodeRecordResult {
-    pub reused: bool,
-    pub id: NodeId,
+pub enum NodeSlotUpdate {
+    Reused { id: NodeId, generation: u32 },
+    Inserted { id: NodeId, generation: u32 },
+    Replaced {
+        old_id: NodeId,
+        old_generation: u32,
+        new_id: NodeId,
+        new_generation: u32,
+    },
 }
 ```
 
@@ -1042,13 +1048,13 @@ Validation should return structured errors:
 
 ```rust
 pub enum SlotInvariantError {
-    InvalidParent { group: GroupId },
-    BadSubtreeLen { group: GroupId, expected: u32, actual: u32 },
-    PayloadOutOfRange { group: GroupId },
+    InvalidParent { group: ActiveGroupId },
+    BadSubtreeLen { group: ActiveGroupId, expected: u32, actual: u32 },
+    PayloadOutOfRange { group: ActiveGroupId },
     ScopeIndexMismatch { scope: ScopeId },
-    AnchorMismatch { anchor: GroupAnchor },
+    AnchorMismatch { anchor: AnchorId },
     WriterFrameOutOfBounds,
-    DuplicateSiblingKey { parent: Option<GroupId>, key: GroupKey },
+    DuplicateSiblingKey { parent: Option<ActiveGroupId>, key: GroupKey },
 }
 ```
 
@@ -1154,9 +1160,9 @@ src/slot_storage.rs
 Implement:
 
 - `GroupKey`
-- `GroupId`
+- `ActiveGroupId`
 - `ValueSlotId`
-- `GroupAnchor`
+- `AnchorId`
 - `GroupStartKind`
 - `BeginGroupInput`
 - `GroupStart`
@@ -1303,7 +1309,7 @@ Required flow:
 14. pop scope;
 15. end group.
 
-Delete all use of `restored_from_gap`.
+Delete all gap-restoration flag usage.
 
 ### Phase 8 — update node/apply logic
 
@@ -1342,7 +1348,7 @@ Tests to pass:
 Delete or fully replace:
 
 ```text
-Slot::Gap
+semantic gap slots
 last_start_was_gap
 has_gap_children
 mark_range_as_gaps
@@ -1493,8 +1499,8 @@ fn dispose_detached_subtree_in_host(&self, host: &Rc<SlotsHost>, subtree: Detach
 
 The rewrite is successful when:
 
-1. There is no `Slot::Gap` equivalent carrying group metadata.
-2. There is no `restored_from_gap` API.
+1. There is no gap-slot equivalent carrying group metadata.
+2. There is no gap-restoration API.
 3. There are no rescue scan budgets.
 4. Group sizes are exact active subtree sizes.
 5. Scope lookup is indexed.

@@ -650,16 +650,16 @@ pub struct SlotTable {
     payloads: Vec<PayloadRecord>,
     nodes: Vec<NodeRecord>,
     anchors: AnchorRegistry,
-    payload_anchor_to_location: HashMap<usize, (AnchorId, usize)>,
-    scope_anchor_to_group: HashMap<ScopeId, AnchorId>,
+    payload_anchors: PayloadAnchorRegistry,
+    payload_anchor_index: PayloadAnchorIndex,
+    scope_index: ScopeIndex,
     next_group_generation: u32,
-    next_payload_anchor: usize,
 }
 ```
 
 **Key properties:**
 - **Exact active structure**: `subtree_len` always means the active preorder span.
-- **Stable addressing**: groups use anchors plus generational `GroupId`; values use anchor-based `ValueSlotId`.
+- **Stable addressing**: groups use stable `AnchorId` identities plus transient `ActiveGroupId` handles; values use anchor-based `ValueSlotId`.
 - **Indexed scopes**: active scopes map directly to group anchors.
 - **Explicit retention**: removed branches are detached from the table before any retain/dispose decision happens.
 
@@ -735,7 +735,7 @@ The slot table itself does not decide whether they are retained or disposed.
 Writers match groups only among siblings of the current parent:
 
 ```rust
-pub fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<GroupId> {
+pub fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<ActiveGroupId> {
     if let Some(restored) = input.restored {
         return restore_started_group(input.key, restored);
     }
@@ -982,7 +982,7 @@ merge:    ["a", "x", "b", "c", "y"]  (apply both ops) → CommitMerged
 The V2 writer only matches direct siblings under the current parent:
 
 ```rust
-pub fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<GroupId> {
+pub fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<ActiveGroupId> {
     if let Some(restored) = input.restored {
         return restore_started_group(input.key, restored);
     }

@@ -698,7 +698,7 @@ fn multiple_temporary_chains_dont_interfere() {
 /// Test that custom user-defined layout modifiers can work with the coordinator chain
 /// via the measurement proxy API.
 ///
-/// This test validates Phase 1 of the modifier system migration: generic extensibility.
+/// This test validates Phase 1 of the modifier system transition: generic extensibility.
 /// Custom layout modifiers can now provide their own measurement proxies, enabling them
 /// to participate in the layout process without being hardcoded into the coordinator.
 #[test]

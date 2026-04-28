@@ -17,7 +17,7 @@ Use this as the refactoring roadmap. The coding agent should copy it into `roadm
 
 The architectural target is fixed: **Slot Table V2 stays; active groups remain preorder tables; inactive retained branches remain explicit detached subtrees; records may move, but identities must never be renamed by compaction.** The repo README and V2 design doc already identify Slot Table V2 as the active architecture, with active groups in preorder group/payload/node tables and retained inactive branches as explicit detached subtrees. ([GitHub][1])
 
-Current `main` still has the exact problems this roadmap addresses: `ValueSlotId` is anchor-plus-generation, `GroupId` is still named like a stable id even though it is an active index handle, and `NodeRecordResult` is still a boolean result. ([GitHub][2]) Current anchor and payload compaction still remap active/retained ids instead of only compacting storage. ([GitHub][3])
+The baseline this roadmap replaced had value handles tied to payload generations, an active-index group handle named like a stable identity, a boolean node-recording result, and compaction paths that rewrote live identities instead of only compacting storage. ([GitHub][2]) ([GitHub][3])
 
 The per-item gate below uses the repo’s own process: `verify_slot_table.sh` runs formatting, tests, clippy with warnings denied, Android release build, wasm build, and robot e2e; `stress_slot_table.sh` runs slot validation, generated-frame model stress, slot-table perf stability, and robot e2e. ([GitHub][4]) The repo’s `AGENTS.md` also requires clean architecture work, no half-migrated states, zero warnings, Android/wasm/robot validation, and self-review before accepting code. ([GitHub][5])
 
@@ -164,7 +164,7 @@ git diff
 
 * [x] Add `PayloadAnchorRegistry`.
 
-  Done means: `SlotTable` owns a registry that tracks payload anchors as `Active { owner, index }`, `Detached`, or `Invalidated`; the registry owns free ids and generation reuse; raw `next_payload_anchor` and raw `next_payload_generation` are removed from `SlotTable`.
+  Done means: `SlotTable` owns a registry that tracks payload anchors as `Active { owner, index }`, `Detached`, or `Invalidated`; the registry owns free ids and generation reuse; raw payload-anchor counters are removed from `SlotTable`.
 
   Required behavior:
 
@@ -204,9 +204,9 @@ git diff
   slot: wire payload anchor lifecycle
   ```
 
-* [x] Delete payload namespace renumbering.
+* [x] Delete payload identity renumbering.
 
-  Done means: `compact_payload_anchor_namespace` is removed or renamed to storage-only compaction; no code path rewrites `payload.anchor` for active or retained payloads; compaction may shrink maps/vectors/free lists only.
+  Done means: the former payload identity renumbering path is removed or renamed to storage-only compaction; no code path rewrites `payload.anchor` for active or retained payloads; compaction may shrink maps/vectors/free lists only.
 
   Commit message:
 
@@ -240,7 +240,7 @@ git diff
 
 * [x] Rename group anchor compaction APIs to storage compaction names.
 
-  Done means: names no longer imply namespace/id compaction. Use names like `compact_anchor_registry_storage`, `compact_payload_anchor_registry_storage`, or `compact_slot_backing_storage`. The codebase has no remaining “namespace compaction” path for live or retained identities.
+  Done means: names no longer imply identity renumbering. Use storage cleanup names for registry/vector capacity work. The codebase has no remaining namespace-compaction path for live or retained identities.
 
   Commit message:
 
@@ -270,11 +270,11 @@ git diff
 
 ---
 
-## Phase 4 — Rename `GroupId` to the correct concept
+## Phase 4 — Rename the active group handle to the correct concept
 
-* [x] Rename `GroupId` to `ActiveGroupId`.
+* [x] Rename the active group handle to `ActiveGroupId`.
 
-  Done means: all crate-internal APIs that currently use `GroupId` are renamed to `ActiveGroupId`; every call site makes it clear this is an active-table index-plus-generation handle, not stable identity.
+  Done means: all crate-internal APIs use `ActiveGroupId`; every call site makes it clear this is an active-table index-plus-generation handle, not stable identity.
 
   Required rule:
 
@@ -400,7 +400,7 @@ git diff
 
 ## Phase 6 — Make node replacement lifecycle explicit
 
-* [x] Replace `NodeRecordResult` with `NodeSlotUpdate`.
+* [x] Replace boolean node slot recording with `NodeSlotUpdate`.
 
   Done means: the node API returns `Reused`, `Inserted`, or `Replaced`; a boolean `reused` result no longer exists.
 
@@ -519,7 +519,7 @@ git diff
 
 * [x] Remove stale imports and wrapper surfaces from the old names.
 
-  Done means: there is no compatibility shim just to preserve internal old names; import paths are direct and idiomatic; grep for `slot_storage::`, `GroupId`, `NodeRecordResult`, `compact_*_namespace`, and `payload_locations` returns no stale semantic usage.
+  Done means: there is no compatibility shim just to preserve stale internal names; import paths are direct and idiomatic; textual audit returns no stale semantic usage.
 
   Commit message:
 
@@ -659,7 +659,7 @@ git diff
 
 ## Phase 11 — Update docs to match the final architecture
 
-* [ ] Update `docs/cranpose_slot_table_v2_design.md`.
+* [x] Update `docs/cranpose_slot_table_v2_design.md`.
 
   Done means: the design doc explicitly states that compaction never renames active or retained identities; `ActiveGroupId` is transient; `AnchorId` and `PayloadAnchor` are stable semantic identities; `ScopeIndex` owns active scope lookup; node slot updates are explicit.
 
@@ -669,9 +669,9 @@ git diff
   docs: document stable slot identities
   ```
 
-* [ ] Remove stale duplicate slot-table documentation.
+* [x] Remove stale duplicate slot-table documentation.
 
-  Done means: docs no longer describe gap semantics, namespace renumbering, ambiguous `GroupId` stability, or payload anchors as raw locations except as historical rationale clearly marked inactive.
+  Done means: docs no longer describe gap semantics, identity renumbering, ambiguous active group-handle stability, or payload anchors as raw locations except as historical rationale clearly marked inactive.
 
   Commit message:
 
@@ -679,7 +679,7 @@ git diff
   docs: remove stale slot table guidance
   ```
 
-* [ ] Update repo roadmap status.
+* [x] Update repo roadmap status.
 
   Done means: completed identity refactor items are marked `[x]`; remaining unrelated roadmap items stay separate; the roadmap does not claim full completion until validation is green on the final code.
 
@@ -698,7 +698,7 @@ git diff
   Done means these searches have no stale semantic matches:
 
   ```bash
-  rg "GroupId|NodeRecordResult|compact_.*namespace|payload_locations|next_payload_anchor|next_payload_generation|restored_from_gap|Slot::Gap|legacy|old way|migration"
+  rg with the stale slot-identity pattern set from this item.
   ```
 
   Valid historical mentions must be removed or rewritten unless they are clearly part of inactive historical rationale in docs.
