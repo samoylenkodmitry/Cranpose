@@ -113,7 +113,7 @@ git diff
   slot: preserve active value slot identity during compaction
   ```
 
-* [ ] Add regression coverage proving retained payload anchors survive detach, retention, compaction, and restore.
+* [x] Add regression coverage proving retained payload anchors survive detach, retention, compaction, and restore.
 
   Done means: a retained subtree keeps remembered payload identity while inactive; compaction does not rename payload ids; restore reactivates the same payload anchors; stale handles fail only after semantic replacement or disposal, not after storage movement.
 

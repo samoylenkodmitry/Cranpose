@@ -570,6 +570,111 @@ fn compact_payload_namespace_preserves_active_value_slots() {
 }
 
 #[test]
+fn compact_payload_namespace_preserves_retained_value_slots() {
+    const PARENT_KEY: Key = 608;
+    const CHILD_STATIC_KEY: Key = 609;
+    const GROUP_COUNT: usize = 1_100;
+    const RETAINED_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    let (parent_anchor, retained_slot) = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let mut retained_slot = None;
+        for explicit_key in 0..GROUP_COUNT as Key {
+            let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
+            assert_eq!(child.kind, GroupStartKind::Inserted);
+            let slot =
+                session.value_slot_with_kind(PayloadKind::Internal, || (explicit_key as i32) * 10);
+            if explicit_key == RETAINED_EXPLICIT_KEY {
+                retained_slot = Some(slot);
+            }
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+        }
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        (
+            parent.anchor,
+            retained_slot.expect("target retained value slot must be captured"),
+        )
+    });
+    harness.finish_pass();
+    assert!(
+        retained_slot.anchor() > 1_024,
+        "test must exercise a sparse retained payload namespace"
+    );
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached_children = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+        let result = session.finish_group_body();
+        session.end_group();
+        result.detached_children
+    });
+    harness.finish_pass();
+
+    let mut retained = None;
+    for subtree in detached_children {
+        if subtree.root_key().explicit_key == Some(RETAINED_EXPLICIT_KEY) {
+            retained = Some(subtree);
+        } else {
+            harness.table.invalidate_detached_subtree_anchors(&subtree);
+            harness.lifecycle.queue_subtree_disposal(subtree);
+        }
+    }
+    harness.lifecycle.flush_pending_drops();
+    let retained = retained.expect("target child subtree must detach");
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: retained.root_key(),
+    };
+    let restore_key = retained.root_key();
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, retained);
+    assert_eq!(retention.validate(&harness.table), Ok(()));
+
+    let retained_identity = PayloadIdentity::from(retained_slot);
+    let snapshot_before = harness.identity_snapshot(Some(&retention), &[retained_slot]);
+    assert_eq!(
+        snapshot_before.retained_payload_anchors,
+        vec![retained_identity]
+    );
+    harness
+        .table
+        .compact_payload_anchor_namespace(Some(&mut retention));
+    assert_eq!(harness.table.validate(), Ok(()));
+    assert_eq!(retention.validate(&harness.table), Ok(()));
+    assert_eq!(
+        harness
+            .identity_snapshot(Some(&retention), &[retained_slot])
+            .retained_payload_anchors,
+        snapshot_before.retained_payload_anchors
+    );
+
+    let restored = retention
+        .take(retain_key)
+        .expect("retained subtree must restore");
+    harness
+        .table
+        .restore_subtree(1, parent_anchor, restore_key, restored);
+    assert_eq!(harness.table.validate(), Ok(()));
+    assert_eq!(
+        *harness.table.read_value::<i32>(retained_slot),
+        (RETAINED_EXPLICIT_KEY as i32) * 10
+    );
+    assert_eq!(
+        harness
+            .identity_snapshot(None, &[retained_slot])
+            .active_payload_anchors,
+        vec![retained_identity]
+    );
+}
+
+#[test]
 fn compact_payload_namespace_preserves_retained_payload_uniqueness() {
     const PARENT_KEY: Key = 610;
     const CHILD_KEY: Key = 611;
