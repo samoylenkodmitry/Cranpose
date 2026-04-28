@@ -93,7 +93,7 @@ git diff
   slot: preserve active group anchors during compaction
   ```
 
-* [ ] Add regression coverage proving retained group anchors survive storage compaction.
+* [x] Add regression coverage proving retained group anchors survive storage compaction.
 
   Done means: a test detaches and retains a subtree, records every retained group anchor, runs compaction with retention present, validates active and retained structures, restores the subtree, and proves the same anchors are restored.
 

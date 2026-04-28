@@ -388,6 +388,98 @@ fn compact_anchor_namespace_preserves_active_group_anchors() {
 }
 
 #[test]
+fn compact_anchor_namespace_preserves_retained_group_anchors() {
+    const PARENT_KEY: Key = 604;
+    const CHILD_STATIC_KEY: Key = 605;
+    const GROUP_COUNT: usize = 1_100;
+    const RETAINED_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    let parent_anchor = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        for explicit_key in 0..GROUP_COUNT as Key {
+            let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
+            assert_eq!(child.kind, GroupStartKind::Inserted);
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+        }
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        parent.anchor
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached_children = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+        let result = session.finish_group_body();
+        session.end_group();
+        result.detached_children
+    });
+    harness.finish_pass();
+
+    let mut retained = None;
+    for subtree in detached_children {
+        if subtree.root_key().explicit_key == Some(RETAINED_EXPLICIT_KEY) {
+            retained = Some(subtree);
+        } else {
+            harness.table.invalidate_detached_subtree_anchors(&subtree);
+            harness.lifecycle.queue_subtree_disposal(subtree);
+        }
+    }
+    harness.lifecycle.flush_pending_drops();
+    let retained = retained.expect("target child subtree must detach");
+    let retained_group_anchors = retained.group_anchors().collect::<Vec<_>>();
+    assert_eq!(retained_group_anchors.len(), 1);
+    assert!(
+        retained_group_anchors[0].id as usize > 1_024,
+        "test must exercise a sparse retained anchor namespace"
+    );
+
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: retained.root_key(),
+    };
+    let restore_key = retained.root_key();
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, retained);
+    assert_eq!(retention.validate(&harness.table), Ok(()));
+
+    let snapshot_before = harness.identity_snapshot(Some(&retention), &[]);
+    harness
+        .table
+        .compact_anchor_namespace(Some(&mut retention), |_| None);
+    assert_eq!(harness.table.validate(), Ok(()));
+    assert_eq!(retention.validate(&harness.table), Ok(()));
+
+    let snapshot_after = harness.identity_snapshot(Some(&retention), &[]);
+    assert_eq!(
+        snapshot_after.retained_group_anchors,
+        snapshot_before.retained_group_anchors
+    );
+
+    let restored = retention
+        .take(retain_key)
+        .expect("retained subtree must restore");
+    harness
+        .table
+        .restore_subtree(1, parent_anchor, restore_key, restored);
+    assert_eq!(harness.table.validate(), Ok(()));
+    assert_eq!(
+        harness.table.group_anchor_state(retained_group_anchors[0]),
+        Some(AnchorState::Active(1))
+    );
+    assert_eq!(
+        harness.identity_snapshot(None, &[]).active_group_anchors,
+        vec![parent_anchor, retained_group_anchors[0]]
+    );
+}
+
+#[test]
 fn node_tail_range_past_group_end_removes_nothing() {
     let mut table = composed_group_with_value_and_node_table(602);
     let node_count = table.group_node_len_at(0);
