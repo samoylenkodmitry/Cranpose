@@ -123,8 +123,8 @@ impl SlotWriteSessionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::slot::{BeginGroupInput, GroupKeySeed};
     use crate::slot::{SlotInvariantError, SlotLifecycleCoordinator, SlotTable};
-    use crate::slot_storage::{BeginGroupInput, GroupKeySeed};
 
     #[test]
     fn removed_payloads_trigger_compaction_hint_at_threshold() {

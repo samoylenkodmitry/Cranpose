@@ -1,7 +1,7 @@
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
 use super::{AnchorRegistry, GroupRecord, SlotTable};
-use crate::{collections::map::HashMap, slot_storage::ActiveGroupId, AnchorId, ScopeId};
+use crate::{collections::map::HashMap, slot::ActiveGroupId, AnchorId, ScopeId};
 use std::mem;
 
 #[derive(Default)]

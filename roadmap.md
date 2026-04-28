@@ -507,7 +507,7 @@ git diff
 
 ## Phase 8 — Clean module boundaries and names
 
-* [ ] Move handle and operation types out of misleading `slot_storage.rs`.
+* [x] Move handle and operation types out of misleading `slot_storage.rs`.
 
   Done means: `GroupKey`, `GroupKeySeed`, `ActiveGroupId`, `ValueSlotId`, `BeginGroupInput`, `GroupStart`, `GroupStartKind`, and `NodeSlotUpdate` live in a correctly named module such as `slot/types.rs` or `slot/ops.rs`. `slot_storage.rs` is deleted if it no longer represents a real storage abstraction.
 

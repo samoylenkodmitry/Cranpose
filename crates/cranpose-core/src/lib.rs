@@ -19,7 +19,6 @@ mod recompose;
 mod retention;
 pub mod runtime;
 mod slot;
-mod slot_storage;
 pub mod snapshot_double_index_heap;
 pub mod snapshot_id_set;
 pub mod snapshot_pinning;
@@ -3795,10 +3794,10 @@ fn hash_key<K: Hash>(key: &K) -> Key {
 pub(crate) fn explicit_group_key_seed<K: Hash>(
     key: &K,
     caller: &'static std::panic::Location<'static>,
-) -> slot_storage::GroupKeySeed {
+) -> slot::GroupKeySeed {
     let source_key = location_key(caller.file(), caller.line(), caller.column());
     let explicit_key = hash_key(key);
-    slot_storage::GroupKeySeed::keyed(source_key, explicit_key)
+    slot::GroupKeySeed::keyed(source_key, explicit_key)
 }
 
 #[cfg(test)]

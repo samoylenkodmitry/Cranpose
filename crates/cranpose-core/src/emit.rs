@@ -1,4 +1,4 @@
-use crate::slot_storage::NodeSlotUpdate;
+use crate::slot::NodeSlotUpdate;
 use crate::{
     debug_scope_label, Applier, ChildList, Command, CommandQueue, Composer, DirtyBubble,
     EmittedNode, MutableState, Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode,

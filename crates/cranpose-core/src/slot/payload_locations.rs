@@ -1,6 +1,6 @@
 use super::dense_id_map::DenseIdMap;
 use crate::collections::map::HashMap;
-use crate::{slot_storage::PayloadAnchor, AnchorId};
+use crate::{slot::PayloadAnchor, AnchorId};
 use std::mem;
 
 #[derive(Default)]

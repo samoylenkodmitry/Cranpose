@@ -3,7 +3,7 @@ use crate::collections::map::HashMap;
 use crate::slot::{AnchorState, NodeLifecycle, PayloadAnchorLifecycle, SlotInvariantError};
 #[cfg(any(test, debug_assertions))]
 use crate::SlotTable;
-use crate::{slot::DetachedSubtree, slot_storage::GroupKey, ScopeId};
+use crate::{slot::DetachedSubtree, slot::GroupKey, ScopeId};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

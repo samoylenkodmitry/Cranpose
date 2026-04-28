@@ -1,8 +1,8 @@
 use super::state::SlotWriteSessionState;
 use crate::{
     collections::map::HashMap,
+    slot::GroupKey,
     slot::{ActiveSubtreeRoot, SlotTable},
-    slot_storage::GroupKey,
     AnchorId,
 };
 use smallvec::SmallVec;

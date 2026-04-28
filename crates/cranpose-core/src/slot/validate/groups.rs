@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     collections::map::{HashMap, HashSet},
-    slot_storage::GroupKey,
+    slot::GroupKey,
     AnchorId,
 };
 
@@ -21,7 +21,7 @@ pub(super) struct SlotTreeView<'a> {
 pub(super) struct ActiveSlotTreeChecks<'a> {
     table: &'a SlotTable,
     sibling_keys: HashMap<(AnchorId, GroupKey), usize>,
-    payload_anchors: HashSet<crate::slot_storage::PayloadAnchor>,
+    payload_anchors: HashSet<crate::slot::PayloadAnchor>,
 }
 
 impl<'a> ActiveSlotTreeChecks<'a> {

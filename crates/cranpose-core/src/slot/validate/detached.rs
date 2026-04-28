@@ -4,15 +4,15 @@ use super::{
     groups::{validate_slot_tree, SlotTreeChecks, SlotTreeView},
     SlotInvariantError, SlotTreeContext,
 };
-use crate::{collections::map::HashSet, slot_storage::PayloadAnchor};
+use crate::{collections::map::HashSet, slot::PayloadAnchor};
 
 struct DetachedSlotTreeChecks {
-    root_key: crate::slot_storage::GroupKey,
+    root_key: crate::slot::GroupKey,
     payload_anchors: HashSet<PayloadAnchor>,
 }
 
 impl DetachedSlotTreeChecks {
-    fn new(root_key: crate::slot_storage::GroupKey) -> Self {
+    fn new(root_key: crate::slot::GroupKey) -> Self {
         Self {
             root_key,
             payload_anchors: HashSet::default(),

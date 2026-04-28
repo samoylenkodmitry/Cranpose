@@ -3,7 +3,7 @@ use super::SlotInvariantError;
 use super::{dense_id_map::DenseIdMap, DetachedSubtree, PayloadRecord, SlotTable};
 #[cfg(any(test, debug_assertions))]
 use crate::collections::map::HashSet;
-use crate::{slot_storage::PayloadAnchor, AnchorId};
+use crate::{slot::PayloadAnchor, AnchorId};
 use std::{cmp::Reverse, collections::BinaryHeap};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

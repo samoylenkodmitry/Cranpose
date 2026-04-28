@@ -2,7 +2,7 @@
 use super::AnchorState;
 use super::{ChildCursor, DirectChildRange, SlotTable, SubtreeRange};
 use crate::{
-    slot_storage::{ActiveGroupId, GroupKey},
+    slot::{ActiveGroupId, GroupKey},
     AnchorId, ScopeId,
 };
 

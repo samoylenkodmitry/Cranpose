@@ -1,7 +1,7 @@
 use crate::collections::map::{HashMap, HashSet};
 use crate::retention::{RetainKey, RetentionManager};
+use crate::slot::{BeginGroupInput, GroupStart, GroupStartKind, ValueSlotId};
 use crate::slot::{FinishGroupResult, PayloadKind};
-use crate::slot_storage::{BeginGroupInput, GroupStart, GroupStartKind, ValueSlotId};
 use crate::{
     composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
     ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey,
@@ -732,7 +732,7 @@ impl Composer {
 
     fn with_group_in_active_pass<R>(
         &self,
-        key: crate::slot_storage::GroupKeySeed,
+        key: crate::slot::GroupKeySeed,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
         struct GroupGuard {
@@ -830,7 +830,7 @@ impl Composer {
 
     pub(crate) fn with_group_seed<R>(
         &self,
-        key: crate::slot_storage::GroupKeySeed,
+        key: crate::slot::GroupKeySeed,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
         let host = self.active_slots_host();
@@ -845,7 +845,7 @@ impl Composer {
     }
 
     pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
-        self.with_group_seed(crate::slot_storage::GroupKeySeed::unkeyed(key), f)
+        self.with_group_seed(crate::slot::GroupKeySeed::unkeyed(key), f)
     }
 
     pub fn cranpose_with_reuse<R>(

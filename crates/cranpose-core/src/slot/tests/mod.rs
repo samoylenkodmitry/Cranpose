@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     retention::{RetainKey, RetentionManager},
-    slot_storage::{
+    slot::{
         ActiveGroupId, BeginGroupInput, GroupKey, GroupKeySeed, GroupStart, GroupStartKind,
         NodeSlotUpdate, PayloadAnchor, ValueSlotId,
     },

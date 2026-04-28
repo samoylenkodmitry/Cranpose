@@ -1,6 +1,6 @@
 use super::*;
 use crate as cranpose_core;
-use crate::slot_storage::ActiveGroupId;
+use crate::slot::ActiveGroupId;
 use crate::snapshot_v2::take_mutable_snapshot;
 #[cfg(test)]
 use crate::snapshot_v2::{reset_runtime_for_tests, TestRuntimeGuard};
@@ -159,9 +159,9 @@ pub(crate) fn begin_test_group(
 ) -> ActiveGroupId {
     with_test_slot_lifecycle(|lifecycle| {
         let mut session = slots.write_session(lifecycle, state);
-        let group_key = session.preview_group_key(crate::slot_storage::GroupKeySeed::unkeyed(key));
+        let group_key = session.preview_group_key(crate::slot::GroupKeySeed::unkeyed(key));
         session
-            .begin_group(crate::slot_storage::BeginGroupInput::new(group_key, None))
+            .begin_group(crate::slot::BeginGroupInput::new(group_key, None))
             .group
     })
 }

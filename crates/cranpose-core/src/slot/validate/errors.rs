@@ -1,6 +1,6 @@
 use super::super::{AnchorState, NodeLifecycle, PayloadAnchorLifecycle};
 use crate::{
-    slot_storage::{GroupKey, PayloadAnchor},
+    slot::{GroupKey, PayloadAnchor},
     AnchorId, NodeId, ScopeId,
 };
 

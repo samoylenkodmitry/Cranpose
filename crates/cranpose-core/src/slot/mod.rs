@@ -49,8 +49,9 @@ pub(crate) use table::SlotWriteSession;
 pub(in crate::slot) use types::collect_root_node_ids_from_records_into;
 pub(crate) use types::NodeLifecycle;
 pub(crate) use types::{
-    ActiveSubtreeRoot, ChildCursor, DetachedChild, DetachedSubtree, FinishGroupResult, PayloadKind,
-    SlotPassMode,
+    ActiveGroupId, ActiveSubtreeRoot, BeginGroupInput, ChildCursor, DetachedChild, DetachedSubtree,
+    FinishGroupResult, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, NodeSlotUpdate,
+    PayloadAnchor, PayloadKind, SlotPassMode, ValueSlotId,
 };
 use types::{NodeRecord, PayloadRecord};
 #[cfg(any(test, debug_assertions))]

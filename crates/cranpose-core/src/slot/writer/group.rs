@@ -3,9 +3,7 @@ use super::super::{
 };
 use super::SlotWriteSessionState;
 use crate::{
-    slot_storage::{
-        ActiveGroupId, BeginGroupInput, GroupKey, GroupKeySeed, GroupStart, GroupStartKind,
-    },
+    slot::{ActiveGroupId, BeginGroupInput, GroupKey, GroupKeySeed, GroupStart, GroupStartKind},
     AnchorId, ScopeId,
 };
 

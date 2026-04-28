@@ -3,7 +3,7 @@ use super::super::{
     GroupRecord,
 };
 use super::SlotTable;
-use crate::{slot_storage::GroupKey, AnchorId};
+use crate::{slot::GroupKey, AnchorId};
 
 impl SlotTable {
     fn allocate_group_anchor(&mut self) -> AnchorId {

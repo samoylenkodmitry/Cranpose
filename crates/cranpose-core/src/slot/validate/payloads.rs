@@ -171,7 +171,7 @@ mod tests {
     use super::*;
     use crate::slot::PayloadKind;
     use crate::{
-        slot_storage::{GroupKey, PayloadAnchor},
+        slot::{GroupKey, PayloadAnchor},
         AnchorId,
     };
     use std::any::TypeId;

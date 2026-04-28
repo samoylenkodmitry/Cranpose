@@ -1,7 +1,7 @@
 use super::state::SlotWriteSessionState;
 use crate::{
     collections::map::{HashMap, HashSet},
-    slot_storage::{GroupKey, GroupKeySeed},
+    slot::{GroupKey, GroupKeySeed},
     Key,
 };
 

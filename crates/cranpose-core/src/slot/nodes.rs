@@ -7,7 +7,7 @@ use super::{
     },
     GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, SlotTable,
 };
-use crate::{slot_storage::NodeSlotUpdate, AnchorId, NodeId};
+use crate::{slot::NodeSlotUpdate, AnchorId, NodeId};
 use std::mem;
 
 impl SlotTable {

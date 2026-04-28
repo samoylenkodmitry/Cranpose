@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     retention::RetentionManager,
-    slot_storage::{PayloadAnchor, ValueSlotId},
+    slot::{PayloadAnchor, ValueSlotId},
     AnchorId,
 };
 use std::any::TypeId;
