@@ -258,7 +258,7 @@ git diff
   slot: validate stable group anchors
   ```
 
-* [ ] Add retained-anchor restore validation.
+* [x] Add retained-anchor restore validation.
 
   Done means: restoring a retained subtree reactivates the same anchors; parent anchor changes only at the restored root; child parent anchors remain internally consistent; retained scopes regain the same group anchors.
 

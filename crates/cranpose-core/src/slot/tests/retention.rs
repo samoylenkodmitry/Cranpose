@@ -140,6 +140,116 @@ fn retention_marks_detached_nodes_and_reactivates_on_take() {
 }
 
 #[test]
+fn retained_anchor_restore_reactivates_same_anchor_tree_and_scopes() {
+    const PARENT_KEY: Key = 382;
+    const CHILD_KEY: Key = 383;
+    const GRANDCHILD_KEY: Key = 384;
+    const CHILD_SCOPE: ScopeId = 385;
+    const GRANDCHILD_SCOPE: ScopeId = 386;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (parent_anchor, child_anchor, grandchild_anchor) = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+
+        let child = begin_unkeyed(session, CHILD_KEY, None);
+        session.set_group_scope(child.group, CHILD_SCOPE);
+
+        let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
+        session.set_group_scope(grandchild.group, GRANDCHILD_SCOPE);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        (parent.anchor, child.anchor, grandchild.anchor)
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+        let result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(result.detached_children.len(), 1);
+        result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass();
+
+    assert_eq!(detached.groups[0].anchor, child_anchor);
+    assert_eq!(detached.groups[0].parent_anchor, AnchorId::INVALID);
+    assert_eq!(detached.groups[1].anchor, grandchild_anchor);
+    assert_eq!(detached.groups[1].parent_anchor, child_anchor);
+
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+    assert_eq!(retention.validate(&harness.table), Ok(()));
+
+    let restored = retention
+        .take(retain_key)
+        .expect("retained subtree must restore");
+    harness.begin_pass(SlotPassMode::Compose);
+    let (child_kind, child_scope, grandchild_kind, grandchild_scope) = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+
+        let child = begin_unkeyed(session, CHILD_KEY, Some(restored));
+        assert_eq!(child.anchor, child_anchor);
+
+        let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
+        assert_eq!(grandchild.anchor, grandchild_anchor);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        (
+            child.kind,
+            child.scope_id,
+            grandchild.kind,
+            grandchild.scope_id,
+        )
+    });
+    harness.finish_pass();
+
+    assert_eq!(child_kind, GroupStartKind::Restored);
+    assert_eq!(child_scope, Some(CHILD_SCOPE));
+    assert_eq!(grandchild_kind, GroupStartKind::Reused);
+    assert_eq!(grandchild_scope, Some(GRANDCHILD_SCOPE));
+    assert_eq!(harness.table.groups[1].parent_anchor, parent_anchor);
+    assert_eq!(harness.table.groups[2].parent_anchor, child_anchor);
+    assert_eq!(
+        harness.table.scope_index_anchor(CHILD_SCOPE),
+        Some(child_anchor)
+    );
+    assert_eq!(
+        harness.table.scope_index_anchor(GRANDCHILD_SCOPE),
+        Some(grandchild_anchor)
+    );
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
 fn retention_insert_rejects_duplicate_key_without_replacing_existing_subtree() {
     const PARENT_KEY: Key = 366;
     const CHILD_KEY: Key = 367;
