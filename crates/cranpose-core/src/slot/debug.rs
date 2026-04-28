@@ -155,6 +155,9 @@ pub struct SlotTableMutationDebugStats {
     pub payload_anchor_index_rebuild_group_max_span: usize,
     pub payload_anchor_index_rebuild_payload_count: usize,
     pub payload_anchor_index_rebuild_payload_max_span: usize,
+    pub payload_location_refresh_count: usize,
+    pub payload_location_refresh_payload_count: usize,
+    pub payload_location_refresh_max_span: usize,
     pub group_index_refresh_count: usize,
     pub group_index_refresh_group_count: usize,
     pub group_index_refresh_max_span: usize,
@@ -209,6 +212,15 @@ impl SlotTableMutationDebugStats {
             .group_index_refresh_group_count
             .saturating_add(group_span);
         self.group_index_refresh_max_span = self.group_index_refresh_max_span.max(group_span);
+    }
+
+    pub(crate) fn record_payload_location_refresh(&mut self, payload_span: usize) {
+        self.payload_location_refresh_count = self.payload_location_refresh_count.saturating_add(1);
+        self.payload_location_refresh_payload_count = self
+            .payload_location_refresh_payload_count
+            .saturating_add(payload_span);
+        self.payload_location_refresh_max_span =
+            self.payload_location_refresh_max_span.max(payload_span);
     }
 
     pub(crate) fn record_scope_index_rebuild(&mut self, scope_span: usize) {

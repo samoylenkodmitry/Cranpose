@@ -51,6 +51,81 @@ fn payload_records_store_semantic_payload_kinds() {
 }
 
 #[test]
+fn appended_value_slots_batch_payload_location_refresh() {
+    const GROUP_KEY: Key = 53;
+
+    let mut harness = SlotHarness::new();
+    let before = harness.table.debug_stats().mutation;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let slots = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let first = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        let remembered = session.remember(|| 20_i32);
+        let third = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        (first, remembered, third)
+    });
+    harness.finish_pass();
+
+    let after = harness.table.debug_stats();
+    assert_eq!(after.payload_anchor_index_count, 3);
+    assert_eq!(
+        after.mutation.payload_location_refresh_count - before.payload_location_refresh_count,
+        1
+    );
+    assert_eq!(
+        after.mutation.payload_location_refresh_payload_count
+            - before.payload_location_refresh_payload_count,
+        3
+    );
+    assert_eq!(after.mutation.payload_location_refresh_max_span, 3);
+    assert_eq!(*harness.table.read_value::<i32>(slots.0), 10);
+    assert_eq!(slots.1.with(|value| *value), 20);
+    assert_eq!(*harness.table.read_value::<i32>(slots.2), 30);
+}
+
+#[test]
+fn payload_tail_removal_does_not_refresh_empty_suffix() {
+    const GROUP_KEY: Key = 55;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let _first = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        let _second = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
+        let _third = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    let before = harness.table.debug_stats().mutation;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let _first = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    let after = harness.table.debug_stats().mutation;
+    assert_eq!(
+        after.payload_location_refresh_count - before.payload_location_refresh_count,
+        0
+    );
+    assert_eq!(harness.table.debug_stats().payload_anchor_index_count, 1);
+}
+
+#[test]
 fn payload_kind_updates_when_same_type_slot_changes_semantics() {
     const GROUP_KEY: Key = 54;
 

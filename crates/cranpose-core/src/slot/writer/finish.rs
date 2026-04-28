@@ -59,6 +59,7 @@ impl SlotTable {
                 state.note_removed_payloads(removed_payload_count);
             }
         }
+        self.flush_payload_location_refreshes(state);
 
         let mut direct_nodes = Vec::new();
         let removed = self.remove_group_node_tail_at_cursor(group_anchor, node_cursor);

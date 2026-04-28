@@ -625,7 +625,7 @@ git diff
   slot: batch group anchor index refresh
   ```
 
-* [ ] Batch payload active-location refreshes inside writer transactions.
+* [x] Batch payload active-location refreshes inside writer transactions.
 
   Done means: repeated payload insert/remove/move/restore operations record dirty owner/range information and refresh payload active locations once per affected group/range where possible. Payload identity remains stable.
 

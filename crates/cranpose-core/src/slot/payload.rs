@@ -5,11 +5,17 @@ use super::{
         restore_subtree_segment, PayloadSegment,
     },
     DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadAnchor, PayloadKind,
-    PayloadRange, PayloadRecord, SlotTable, ValueSlotId,
+    PayloadRange, PayloadRecord, SlotTable, SlotWriteSessionState, ValueSlotId,
 };
 use crate::{retention::RetentionManager, AnchorId};
 use std::any::TypeId;
 use std::mem;
+
+#[derive(Clone, Copy)]
+pub(in crate::slot) struct PayloadLocationRefresh {
+    pub(in crate::slot) owner: AnchorId,
+    pub(in crate::slot) start: usize,
+}
 
 fn replace_payload_record<T: 'static>(
     record: &mut PayloadRecord,
@@ -192,12 +198,13 @@ impl SlotTable {
         self.payloads.capacity()
     }
 
-    pub(super) fn insert_value_payload<T: 'static>(
+    fn insert_value_payload_internal<T: 'static>(
         &mut self,
         owner: AnchorId,
         insert_index: usize,
         kind: PayloadKind,
         value: T,
+        refresh_index: bool,
     ) -> PayloadAnchor {
         let owner_index = self.current_group_index(owner);
         let anchor = self.allocate_payload_anchor();
@@ -213,8 +220,23 @@ impl SlotTable {
                 value: Box::new(value),
             },
         );
-        self.refresh_group_payload_anchor_index(owner, insert_index);
+        if refresh_index {
+            self.refresh_group_payload_anchor_index(owner, insert_index);
+        } else {
+            self.set_group_payload_anchor_active_location(owner, insert_index);
+        }
         anchor
+    }
+
+    #[cfg(test)]
+    pub(super) fn insert_value_payload<T: 'static>(
+        &mut self,
+        owner: AnchorId,
+        insert_index: usize,
+        kind: PayloadKind,
+        value: T,
+    ) -> PayloadAnchor {
+        self.insert_value_payload_internal(owner, insert_index, kind, value, true)
     }
 
     pub(super) fn replace_payload_value<T: 'static>(
@@ -257,9 +279,14 @@ impl SlotTable {
         payload_index: usize,
         kind: PayloadKind,
         init: impl FnOnce() -> T,
-    ) -> (ValueSlotId, Option<DeferredDrop>) {
+    ) -> (
+        ValueSlotId,
+        Option<DeferredDrop>,
+        Option<PayloadLocationRefresh>,
+    ) {
         let group_index = self.current_group_index(owner);
         let payload_len = self.group_payload_len_at(group_index);
+        let mut location_refresh = None;
 
         let (anchor, deferred_drop) = if payload_index < payload_len {
             let anchor = self.payload_slot_identity_at(group_index, payload_index);
@@ -272,11 +299,16 @@ impl SlotTable {
                 (anchor, Some(DeferredDrop::payload(old_value)))
             }
         } else {
-            let anchor = self.insert_value_payload(owner, payload_index, kind, init());
+            let anchor =
+                self.insert_value_payload_internal(owner, payload_index, kind, init(), false);
+            location_refresh = Some(PayloadLocationRefresh {
+                owner,
+                start: payload_index,
+            });
             (anchor, None)
         };
 
-        (ValueSlotId::new(anchor), deferred_drop)
+        (ValueSlotId::new(anchor), deferred_drop, location_refresh)
     }
 
     pub(super) fn clear_payload_anchor_index_for_payloads(&mut self, payloads: &[PayloadRecord]) {
@@ -285,15 +317,43 @@ impl SlotTable {
         }
     }
 
-    fn refresh_group_payload_anchor_index(&mut self, owner: AnchorId, start: usize) {
+    fn set_group_payload_anchor_active_location(&mut self, owner: AnchorId, index: usize) {
         let group_index = self.current_group_index(owner);
         let range = self.group_payload_range_at(group_index);
+        let payload_anchor = self.payloads[range.start() + index].anchor;
+        self.payload_anchors
+            .set_active(payload_anchor, owner, index);
+    }
+
+    pub(in crate::slot) fn refresh_group_payload_anchor_index(
+        &mut self,
+        owner: AnchorId,
+        start: usize,
+    ) {
+        let group_index = self.current_group_index(owner);
+        let range = self.group_payload_range_at(group_index);
+        let payload_span = range.len().saturating_sub(start);
+        if payload_span == 0 {
+            return;
+        }
         for index in start..range.len() {
             let payload_anchor = self.payloads[range.start() + index].anchor;
             self.payload_anchor_index
                 .insert(payload_anchor, owner, index);
             self.payload_anchors
                 .set_active(payload_anchor, owner, index);
+        }
+        self.mutation_debug_stats
+            .record_payload_location_refresh(payload_span);
+    }
+
+    pub(in crate::slot) fn flush_payload_location_refreshes(
+        &mut self,
+        state: &mut SlotWriteSessionState,
+    ) {
+        let refreshes = state.drain_payload_location_refreshes().collect::<Vec<_>>();
+        for (owner, start) in refreshes {
+            self.refresh_group_payload_anchor_index(owner, start);
         }
     }
 

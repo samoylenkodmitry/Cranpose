@@ -9,6 +9,7 @@ use crate::{
 pub(crate) struct SlotWriteSessionState {
     pub(in crate::slot) root: RootFrame,
     pub(in crate::slot) group_stack: Vec<GroupFrame>,
+    payload_location_refreshes: HashMap<AnchorId, usize>,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
@@ -31,6 +32,7 @@ impl SlotWriteSessionState {
             sibling_index: None,
         };
         self.group_stack.clear();
+        self.payload_location_refreshes.clear();
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
         self.removed_group_count = 0;
@@ -42,6 +44,19 @@ impl SlotWriteSessionState {
     pub(in crate::slot) fn note_removed_payloads(&mut self, count: usize) {
         self.removed_payload_count += count;
         self.update_compaction_hint();
+    }
+
+    pub(in crate::slot) fn note_payload_location_refresh(&mut self, owner: AnchorId, start: usize) {
+        self.payload_location_refreshes
+            .entry(owner)
+            .and_modify(|current| *current = (*current).min(start))
+            .or_insert(start);
+    }
+
+    pub(in crate::slot) fn drain_payload_location_refreshes(
+        &mut self,
+    ) -> impl Iterator<Item = (AnchorId, usize)> + '_ {
+        self.payload_location_refreshes.drain()
     }
 
     pub(in crate::slot) fn note_removed_nodes(&mut self, count: usize) {
@@ -183,7 +198,7 @@ mod tests {
         state.group_stack[0].next_child_index = table.group_count() + 1;
 
         assert_eq!(
-            state.validate(&table),
+            state.validate(&mut table),
             Err(SlotInvariantError::WriterFrameOutOfBounds {
                 frame_index: 1,
                 group_anchor: table.group_anchor_at_index(0),
@@ -219,7 +234,7 @@ mod tests {
         state.group_stack[0].next_child_index = 2;
 
         assert_eq!(
-            state.validate(&table),
+            state.validate(&mut table),
             Err(SlotInvariantError::WriterFrameNotAtChildBoundary {
                 frame_index: 1,
                 group_anchor: root_anchor,
@@ -249,7 +264,7 @@ mod tests {
         assert_eq!(state.group_stack[0].payload_cursor, 1);
         assert_eq!(state.group_stack[0].old_node_len, 0);
         assert_eq!(state.group_stack[0].node_cursor, 1);
-        assert_eq!(state.validate(&table), Ok(()));
+        assert_eq!(state.validate(&mut table), Ok(()));
     }
 
     #[test]
@@ -284,7 +299,7 @@ mod tests {
         }
 
         assert_eq!(state.group_stack.len(), 1);
-        assert_eq!(state.validate(&table), Ok(()));
+        assert_eq!(state.validate(&mut table), Ok(()));
     }
 
     #[test]
@@ -313,6 +328,6 @@ mod tests {
 
         assert_eq!(state.group_stack[0].old_node_len, 1);
         assert_eq!(table.group_node_len_at(0), 0);
-        assert_eq!(state.validate(&table), Ok(()));
+        assert_eq!(state.validate(&mut table), Ok(()));
     }
 }

@@ -80,7 +80,7 @@ impl SlotHarness {
             .write_session(&mut self.lifecycle, &mut self.state);
         let result = f(&mut session);
         self.state
-            .validate(&self.table)
+            .validate(&mut self.table)
             .expect("slot writer state must stay within active table bounds");
         result
     }
