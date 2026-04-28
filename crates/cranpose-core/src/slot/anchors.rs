@@ -433,7 +433,6 @@ impl SlotTable {
             0,
             self.groups.len(),
         ));
-        self.recompute_scope_index();
     }
 }
 

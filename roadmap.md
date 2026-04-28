@@ -635,7 +635,7 @@ git diff
   slot: batch payload anchor location refresh
   ```
 
-* [ ] Batch scope index rebuilds and eliminate unnecessary full rebuilds.
+* [x] Batch scope index rebuilds and eliminate unnecessary full rebuilds.
 
   Done means: scope index updates are incremental for insert, detach, restore, dispose, and move. Full rebuild remains available for validation/debug recovery only, not normal mutation flow.
 

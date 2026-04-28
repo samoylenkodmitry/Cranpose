@@ -93,6 +93,7 @@ impl ScopeIndex {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn rebuild(&mut self, groups: &[GroupRecord]) {
         self.clear();
         for group in groups {

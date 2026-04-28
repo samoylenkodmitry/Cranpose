@@ -3,6 +3,7 @@ use super::SlotTable;
 use crate::{AnchorId, ScopeId};
 
 impl SlotTable {
+    #[cfg(test)]
     pub(in crate::slot) fn recompute_scope_index(&mut self) {
         let scope_count = self
             .groups

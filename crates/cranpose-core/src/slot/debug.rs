@@ -223,6 +223,7 @@ impl SlotTableMutationDebugStats {
             self.payload_location_refresh_max_span.max(payload_span);
     }
 
+    #[cfg(test)]
     pub(crate) fn record_scope_index_rebuild(&mut self, scope_span: usize) {
         self.scope_index_rebuild_count = self.scope_index_rebuild_count.saturating_add(1);
         self.scope_index_rebuild_scope_count = self
