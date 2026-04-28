@@ -571,7 +571,7 @@ git diff
   slot: model stable payload identities
   ```
 
-* [ ] Extend model tests for node lifecycle updates.
+* [x] Extend model tests for node lifecycle updates.
 
   Done means: generated operations randomly reuse, insert, replace, detach, restore, and dispose nodes; model state agrees with emitted node lifecycle and `NodeSlotUpdate`.
 

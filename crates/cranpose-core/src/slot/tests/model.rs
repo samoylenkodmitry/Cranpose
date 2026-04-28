@@ -35,6 +35,7 @@ impl ModelPayloadValue {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ModelNode {
     node_id: NodeId,
+    generation: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,7 +52,7 @@ impl ModelGroup {
         anchor: AnchorId,
         payload_slot: ValueSlotId,
         payload_value: ModelPayloadValue,
-        node_id: NodeId,
+        node: ModelNode,
     ) -> Self {
         Self {
             anchor,
@@ -59,7 +60,7 @@ impl ModelGroup {
                 slot: payload_slot,
                 value: payload_value,
             }],
-            nodes: vec![ModelNode { node_id }],
+            nodes: vec![node],
             scope_id: ModelState::scope_id_for(key),
         }
     }
@@ -71,10 +72,13 @@ impl ModelGroup {
     }
 
     fn node_id(&self) -> NodeId {
+        self.node().node_id
+    }
+
+    fn node(&self) -> &ModelNode {
         self.nodes
             .first()
             .expect("model groups carry one emitted node")
-            .node_id
     }
 }
 
@@ -91,6 +95,7 @@ struct ModelComposeOperation {
     drop_retained: HashSet<Key>,
     mutate_values: HashSet<Key>,
     replace_payload_types: HashSet<Key>,
+    replace_nodes: HashSet<Key>,
     compact_storage: bool,
 }
 
@@ -104,12 +109,13 @@ impl ModelOperation {
     fn compact(&self) -> String {
         match self {
             Self::Compose(operation) => format!(
-                "compose(order={}, retain={}, drop={}, mutate={}, replace={}, compact={})",
+                "compose(order={}, retain={}, drop={}, mutate={}, replace={}, nodes={}, compact={})",
                 model_key_list(&operation.order),
                 model_sorted_key_set(&operation.retain_detached),
                 model_sorted_key_set(&operation.drop_retained),
                 model_sorted_key_set(&operation.mutate_values),
                 model_sorted_key_set(&operation.replace_payload_types),
+                model_sorted_key_set(&operation.replace_nodes),
                 operation.compact_storage,
             ),
             Self::RecomposeSkip { key } => format!("skip(key={key})"),
@@ -492,6 +498,11 @@ fn generate_model_operation(
         .copied()
         .filter(|_| next_bool(seed))
         .collect::<HashSet<_>>();
+    let replace_nodes = order
+        .iter()
+        .copied()
+        .filter(|_| next_bool(seed))
+        .collect::<HashSet<_>>();
     let compact_storage = next_bool(seed) && next_bool(seed);
 
     ModelOperation::Compose(Box::new(ModelComposeOperation {
@@ -500,6 +511,7 @@ fn generate_model_operation(
         drop_retained,
         mutate_values,
         replace_payload_types,
+        replace_nodes,
         compact_storage,
     }))
 }
@@ -657,6 +669,16 @@ fn assert_model_matches_slot_table(
             expected.node_id(),
             "node identity must match the reference model for key {key}"
         );
+        assert_eq!(
+            harness
+                .table
+                .group_node_records_at(group.index)
+                .first()
+                .expect("model child node must exist")
+                .generation,
+            expected.node().generation,
+            "node generation must match the reference model for key {key}"
+        );
     }
 
     let active_anchors = snapshot
@@ -733,6 +755,14 @@ fn assert_model_matches_slot_table(
             expected.node_id(),
             "retained node identity must match the reference model for key {key}"
         );
+        assert_eq!(
+            detached_group_nodes(subtree, 0)
+                .first()
+                .expect("retained subtree node must exist")
+                .generation,
+            expected.node().generation,
+            "retained node generation must match the reference model for key {key}"
+        );
         for group in &subtree.groups {
             assert!(
                 !active_anchors.contains(&group.anchor),
@@ -778,6 +808,7 @@ fn apply_model_operation(
                 drop_retained,
                 mutate_values,
                 replace_payload_types,
+                replace_nodes,
                 compact_storage,
             } = *operation;
             let previous_active = model.active_groups.clone();
@@ -824,21 +855,20 @@ fn apply_model_operation(
                     }
 
                     let existing_child = existing_active.or(existing_retained);
-                    let (node_id, scope_id, previous_payload) =
+                    let (scope_id, previous_payload, previous_node) =
                         if let Some(child) = existing_child {
                             assert_eq!(
                                 child.anchor, started.anchor,
                                 "stable group anchor changed for key {key}"
                             );
-                            (child.node_id(), child.scope_id, Some(child.payload().clone()))
+                            (
+                                child.scope_id,
+                                Some(child.payload().clone()),
+                                Some(child.node().clone()),
+                            )
                         } else {
                             model.assert_group_anchor_not_retired(started.anchor);
-                            let node_id = {
-                                let node_id = next_node_id;
-                                next_node_id += 1;
-                                node_id
-                            };
-                            (node_id, ModelState::scope_id_for(key), None)
+                            (ModelState::scope_id_for(key), None, None)
                         };
 
                     next_retained.remove(&key);
@@ -877,12 +907,68 @@ fn apply_model_operation(
                         model.assert_group_anchor_not_retired(started.anchor);
                         model.assert_payload_anchor_not_retired(slot.anchor());
                     }
-                    session.record_node_with_parent(node_id, 1, None);
+                    let replacing_node = replace_nodes.contains(&key) && previous_node.is_some();
+                    let node = match &previous_node {
+                        Some(node) if replacing_node && key % 2 == 0 => ModelNode {
+                            node_id: node.node_id,
+                            generation: node
+                                .generation
+                                .checked_add(1)
+                                .expect("model node generation overflow"),
+                        },
+                        Some(_) if replacing_node => {
+                            let node_id = next_node_id;
+                            next_node_id += 1;
+                            ModelNode {
+                                node_id,
+                                generation: 1,
+                            }
+                        }
+                        Some(node) => node.clone(),
+                        None => {
+                            let node_id = next_node_id;
+                            next_node_id += 1;
+                            ModelNode {
+                                node_id,
+                                generation: 1,
+                            }
+                        }
+                    };
+                    let node_update =
+                        session.record_node_with_parent(node.node_id, node.generation, None);
+                    match previous_node {
+                        Some(previous_node) if replacing_node => assert_eq!(
+                            node_update,
+                            NodeSlotUpdate::Replaced {
+                                old_id: previous_node.node_id,
+                                old_generation: previous_node.generation,
+                                new_id: node.node_id,
+                                new_generation: node.generation,
+                            },
+                            "node replacement must report explicit lifecycle update for key {key}",
+                        ),
+                        Some(previous_node) => assert_eq!(
+                            node_update,
+                            NodeSlotUpdate::Reused {
+                                id: previous_node.node_id,
+                                generation: previous_node.generation,
+                            },
+                            "node reuse must report explicit lifecycle update for key {key}",
+                        ),
+                        None => assert_eq!(
+                            node_update,
+                            NodeSlotUpdate::Inserted {
+                                id: node.node_id,
+                                generation: node.generation,
+                            },
+                            "new model nodes must report explicit insertion for key {key}",
+                        ),
+                    };
                     if mutate_values.contains(&key) {
                         payload_value.increment();
                         write_model_payload_value(session.table, slot, &payload_value);
                     }
-                    let child = ModelGroup::new(key, started.anchor, slot, payload_value, node_id);
+                    let child = ModelGroup::new(key, started.anchor, slot, payload_value, node);
 
                     let child_result = session.finish_group_body();
                     assert!(child_result.detached_children.is_empty());
@@ -971,7 +1057,7 @@ fn model_compose_frame(
     retain_detached: &[Key],
     mutate_values: &[Key],
 ) -> ModelOperation {
-    model_compose_frame_with_options(order, retain_detached, &[], mutate_values, &[], false)
+    model_compose_frame_with_options(order, retain_detached, &[], mutate_values, &[], &[], false)
 }
 
 fn model_compose_frame_with_options(
@@ -980,6 +1066,7 @@ fn model_compose_frame_with_options(
     drop_retained: &[Key],
     mutate_values: &[Key],
     replace_payload_types: &[Key],
+    replace_nodes: &[Key],
     compact_storage: bool,
 ) -> ModelOperation {
     ModelOperation::Compose(Box::new(ModelComposeOperation {
@@ -988,6 +1075,7 @@ fn model_compose_frame_with_options(
         drop_retained: model_key_set(drop_retained),
         mutate_values: model_key_set(mutate_values),
         replace_payload_types: model_key_set(replace_payload_types),
+        replace_nodes: model_key_set(replace_nodes),
         compact_storage,
     }))
 }
@@ -1023,7 +1111,7 @@ fn model_operation_compact_format_is_deterministic() {
 
     assert_eq!(
         operation.compact(),
-        "compose(order=[3,1,2], retain=[4,6,8], drop=[], mutate=[5,7], replace=[], compact=false)"
+        "compose(order=[3,1,2], retain=[4,6,8], drop=[], mutate=[5,7], replace=[], nodes=[], compact=false)"
     );
     assert_eq!(
         ModelOperation::RecomposeSkip { key: 11 }.compact(),
@@ -1067,7 +1155,7 @@ fn deterministic_model_render_frames_match_slot_table() {
 fn scripted_model_render_frames_cover_slot_table_behaviors() {
     let script = [
         model_compose_frame(&[1, 2, 3], &[], &[1, 2]),
-        model_compose_frame_with_options(&[3, 2, 1], &[], &[], &[3], &[2], false),
+        model_compose_frame_with_options(&[3, 2, 1], &[], &[], &[3], &[2], &[3], false),
         ModelOperation::RecomposeSkip { key: 2 },
         model_compose_frame(&[3, 1], &[2], &[]),
         model_compose_frame(&[2, 3, 1], &[], &[2]),
@@ -1075,7 +1163,7 @@ fn scripted_model_render_frames_cover_slot_table_behaviors() {
         ModelOperation::RecomposeSkip { key: 10 },
         model_compose_frame(&[1, 2], &[], &[1]),
         model_compose_frame(&[], &[1, 2], &[]),
-        model_compose_frame_with_options(&[], &[], &[2], &[], &[], true),
+        model_compose_frame_with_options(&[], &[], &[2], &[], &[], &[], true),
         model_compose_frame(&[2, 1, 4], &[], &[4]),
     ];
 
