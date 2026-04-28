@@ -12,14 +12,16 @@ struct ModelNode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ModelGroup {
+    anchor: AnchorId,
     payloads: Vec<ModelPayload>,
     nodes: Vec<ModelNode>,
     scope_id: ScopeId,
 }
 
 impl ModelGroup {
-    fn new(key: Key, node_id: NodeId) -> Self {
+    fn new(key: Key, anchor: AnchorId, node_id: NodeId) -> Self {
         Self {
+            anchor,
             payloads: vec![ModelPayload {
                 value: (key as i32) * 10,
             }],
@@ -61,7 +63,9 @@ enum ModelOperation {
     Compose {
         order: Vec<Key>,
         retain_detached: HashSet<Key>,
+        drop_retained: HashSet<Key>,
         mutate_values: HashSet<Key>,
+        compact_storage: bool,
     },
     RecomposeSkip {
         key: Key,
@@ -74,12 +78,16 @@ impl ModelOperation {
             Self::Compose {
                 order,
                 retain_detached,
+                drop_retained,
                 mutate_values,
+                compact_storage,
             } => format!(
-                "compose(order={}, retain={}, mutate={})",
+                "compose(order={}, retain={}, drop={}, mutate={}, compact={})",
                 model_key_list(order),
                 model_sorted_key_set(retain_detached),
-                model_sorted_key_set(mutate_values)
+                model_sorted_key_set(drop_retained),
+                model_sorted_key_set(mutate_values),
+                compact_storage,
             ),
             Self::RecomposeSkip { key } => format!("skip(key={key})"),
         }
@@ -91,6 +99,7 @@ struct ModelState {
     active_roots: Vec<ModelRoot>,
     active_groups: BTreeMap<Key, ModelGroup>,
     retained_groups: BTreeMap<Key, ModelGroup>,
+    retired_group_generations: BTreeMap<u32, u32>,
     next_node_id: NodeId,
 }
 
@@ -107,6 +116,28 @@ impl ModelState {
 
     fn set_active_root(&mut self, key: Key, children: Vec<Key>) {
         self.active_roots = vec![ModelRoot { key, children }];
+    }
+
+    fn retire_group_anchor(&mut self, anchor: AnchorId) {
+        self.retired_group_generations
+            .entry(anchor.id)
+            .and_modify(|generation| *generation = (*generation).max(anchor.generation))
+            .or_insert(anchor.generation);
+    }
+
+    fn retire_group_anchors(&mut self, anchors: impl IntoIterator<Item = AnchorId>) {
+        for anchor in anchors {
+            self.retire_group_anchor(anchor);
+        }
+    }
+
+    fn assert_group_anchor_not_retired(&self, anchor: AnchorId) {
+        if let Some(retired_generation) = self.retired_group_generations.get(&anchor.id) {
+            assert!(
+                anchor.generation > *retired_generation,
+                "active or retained group anchor reused a retired generation: anchor={anchor:?} retired_generation={retired_generation}"
+            );
+        }
     }
 }
 
@@ -397,16 +428,25 @@ fn generate_model_operation(
         .copied()
         .filter(|key| !order_set.contains(key) && next_bool(seed))
         .collect::<HashSet<_>>();
+    let drop_retained = model
+        .retained_groups
+        .keys()
+        .copied()
+        .filter(|key| !order_set.contains(key) && next_bool(seed))
+        .collect::<HashSet<_>>();
     let mutate_values = order
         .iter()
         .copied()
         .filter(|_| next_bool(seed))
         .collect::<HashSet<_>>();
+    let compact_storage = next_bool(seed) && next_bool(seed);
 
     ModelOperation::Compose {
         order,
         retain_detached,
+        drop_retained,
         mutate_values,
+        compact_storage,
     }
 }
 
@@ -461,6 +501,16 @@ fn assert_model_matches_slot_table(
         assert_eq!(group.node_len, 1);
         assert_eq!(group.subtree_node_count, 1);
         assert_eq!(group.parent_anchor, root.anchor);
+        assert_eq!(
+            group.anchor, expected.anchor,
+            "active group anchor must match the reference model for key {key}"
+        );
+        model.assert_group_anchor_not_retired(group.anchor);
+        assert_eq!(
+            harness.table.group_anchor_state(group.anchor),
+            Some(AnchorState::Active(group.index)),
+            "active group anchor must resolve to the current table index for key {key}"
+        );
 
         let payload = harness
             .table
@@ -517,6 +567,16 @@ fn assert_model_matches_slot_table(
             .expect("retained subtree must contain a root group");
         assert_eq!(root_group.key.explicit_key, Some(key));
         assert_eq!(
+            root_group.anchor, expected.anchor,
+            "retained group anchor must match the reference model for key {key}"
+        );
+        model.assert_group_anchor_not_retired(root_group.anchor);
+        assert_eq!(
+            harness.table.group_anchor_state(root_group.anchor),
+            Some(AnchorState::Detached),
+            "retained group anchor must stay detached for key {key}"
+        );
+        assert_eq!(
             subtree.root_parent_anchor(),
             AnchorId::INVALID,
             "retained subtree roots must detach from the active parent chain"
@@ -557,6 +617,18 @@ fn assert_model_matches_slot_table(
     assert_eq!(harness.table.validate(), Ok(()));
 }
 
+fn dispose_model_subtree(
+    harness: &mut SlotHarness,
+    model: &mut ModelState,
+    subtree: DetachedSubtree,
+) {
+    let group_anchors = subtree.group_anchors().collect::<Vec<_>>();
+    model.retire_group_anchors(group_anchors);
+    harness.table.invalidate_detached_subtree_anchors(&subtree);
+    crate::slot::dispose_detached_subtree_now(&mut harness.applier, &subtree);
+    harness.lifecycle.queue_subtree_disposal(subtree);
+}
+
 fn apply_model_operation(
     harness: &mut SlotHarness,
     retained_subtrees: &mut BTreeMap<Key, DetachedSubtree>,
@@ -569,7 +641,9 @@ fn apply_model_operation(
         ModelOperation::Compose {
             order,
             retain_detached,
+            drop_retained,
             mutate_values,
+            compact_storage,
         } => {
             let previous_active = model.active_groups.clone();
             let previous_retained = model.retained_groups.clone();
@@ -577,6 +651,14 @@ fn apply_model_operation(
             let mut next_active = BTreeMap::<Key, ModelGroup>::new();
             let mut next_node_id = model.next_node_id;
             let mut carried_retained = std::mem::take(retained_subtrees);
+
+            for key in &drop_retained {
+                next_retained.remove(key);
+                if let Some(subtree) = carried_retained.remove(key) {
+                    dispose_model_subtree(harness, model, subtree);
+                }
+            }
+            harness.lifecycle.flush_pending_drops();
 
             harness.begin_pass(SlotPassMode::Compose);
             let detached_children = harness.session(|session| {
@@ -586,7 +668,7 @@ fn apply_model_operation(
                     let restored = carried_retained.remove(&key);
                     let started = begin_keyed(session, child_static_key, key, restored);
                     let existing_active = previous_active.get(&key).cloned();
-                    let existing_retained = previous_retained.get(&key).cloned();
+                    let existing_retained = next_retained.get(&key).cloned();
 
                     match (existing_active.is_some(), existing_retained.is_some()) {
                         (_, true) => assert_eq!(
@@ -606,14 +688,21 @@ fn apply_model_operation(
                         ),
                     }
 
-                    let mut child = existing_active.or(existing_retained).unwrap_or_else(|| {
+                    let mut child = if let Some(child) = existing_active.or(existing_retained) {
+                        assert_eq!(
+                            child.anchor, started.anchor,
+                            "stable group anchor changed for key {key}"
+                        );
+                        child
+                    } else {
+                        model.assert_group_anchor_not_retired(started.anchor);
                         let node_id = {
                             let node_id = next_node_id;
                             next_node_id += 1;
                             node_id
                         };
-                        ModelGroup::new(key, node_id)
-                    });
+                        ModelGroup::new(key, started.anchor, node_id)
+                    };
 
                     next_retained.remove(&key);
                     session.set_group_scope(started.group, child.scope_id);
@@ -649,14 +738,23 @@ fn apply_model_operation(
                 if retain_detached.contains(&key) {
                     next_retained.insert(key, expected_child);
                     carried_retained.insert(key, subtree);
+                } else {
+                    dispose_model_subtree(harness, model, subtree);
                 }
             }
+            harness.lifecycle.flush_pending_drops();
 
             model.set_active_root(parent_key, order);
             model.active_groups = next_active;
             model.retained_groups = next_retained;
             model.next_node_id = next_node_id;
             *retained_subtrees = carried_retained;
+
+            if compact_storage {
+                harness.table.compact_storage();
+                harness.lifecycle.compact_storage();
+                harness.table.debug_verify();
+            }
         }
         ModelOperation::RecomposeSkip { key } => {
             let before = harness.table.debug_snapshot();
@@ -703,10 +801,22 @@ fn model_compose_frame(
     retain_detached: &[Key],
     mutate_values: &[Key],
 ) -> ModelOperation {
+    model_compose_frame_with_options(order, retain_detached, &[], mutate_values, false)
+}
+
+fn model_compose_frame_with_options(
+    order: &[Key],
+    retain_detached: &[Key],
+    drop_retained: &[Key],
+    mutate_values: &[Key],
+    compact_storage: bool,
+) -> ModelOperation {
     ModelOperation::Compose {
         order: order.to_vec(),
         retain_detached: model_key_set(retain_detached),
+        drop_retained: model_key_set(drop_retained),
         mutate_values: model_key_set(mutate_values),
+        compact_storage,
     }
 }
 
@@ -741,7 +851,7 @@ fn model_operation_compact_format_is_deterministic() {
 
     assert_eq!(
         operation.compact(),
-        "compose(order=[3,1,2], retain=[4,6,8], mutate=[5,7])"
+        "compose(order=[3,1,2], retain=[4,6,8], drop=[], mutate=[5,7], compact=false)"
     );
     assert_eq!(
         ModelOperation::RecomposeSkip { key: 11 }.compact(),
@@ -793,6 +903,7 @@ fn scripted_model_render_frames_cover_slot_table_behaviors() {
         ModelOperation::RecomposeSkip { key: 10 },
         model_compose_frame(&[1, 2], &[], &[1]),
         model_compose_frame(&[], &[1, 2], &[]),
+        model_compose_frame_with_options(&[], &[], &[2], &[], true),
         model_compose_frame(&[2, 1, 4], &[], &[4]),
     ];
 

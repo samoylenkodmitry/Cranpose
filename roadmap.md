@@ -551,7 +551,7 @@ git diff
 
 ## Phase 9 — Expand deterministic model and stress coverage
 
-* [ ] Extend model tests for group anchor identity.
+* [x] Extend model tests for group anchor identity.
 
   Done means: generated operations randomly insert, move, detach, retain, restore, compact storage, and dispose groups while asserting anchor identity stability and generation reuse rules after every step.
 
