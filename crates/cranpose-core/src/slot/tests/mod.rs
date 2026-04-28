@@ -432,6 +432,7 @@ mod keyed_reorder;
 mod model;
 mod nodes;
 mod payloads;
+mod performance;
 mod retention;
 mod validation;
 mod writer_state;

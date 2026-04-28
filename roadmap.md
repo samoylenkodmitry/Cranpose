@@ -645,7 +645,7 @@ git diff
   slot: batch scope index maintenance
   ```
 
-* [ ] Add performance regression checks for reorder, detach, restore, and compaction.
+* [x] Add performance regression checks for reorder, detach, restore, and compaction.
 
   Done means: perf tests cover large keyed sibling reorder, deep insert/remove, retained restore, mass conditional removal, and storage compaction. The tests assert stability against accidental full-table rebuilds in hot paths.
 
