@@ -203,14 +203,14 @@ impl ComposerRuntimeState {
                 });
             }
             if compact_payloads {
-                table.compact_payload_anchor_namespace(Some(&mut *retained));
+                table.compact_payload_anchor_registry_storage(Some(&mut *retained));
             }
         } else {
             if compact_anchors {
                 table.compact_anchor_namespace(None, |scope_id| self.scope_for_id(scope_id));
             }
             if compact_payloads {
-                table.compact_payload_anchor_namespace(None);
+                table.compact_payload_anchor_registry_storage(None);
             }
         }
     }

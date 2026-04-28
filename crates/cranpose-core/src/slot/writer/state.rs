@@ -14,7 +14,7 @@ pub(crate) struct SlotWriteSessionState {
     pub(in crate::slot) removed_group_count: usize,
     pub(crate) request_compaction: bool,
     pub(crate) request_anchor_namespace_compaction: bool,
-    pub(crate) request_payload_namespace_compaction: bool,
+    pub(crate) request_payload_storage_compaction: bool,
 }
 
 impl SlotWriteSessionState {
@@ -36,7 +36,7 @@ impl SlotWriteSessionState {
         self.removed_group_count = 0;
         self.request_compaction = false;
         self.request_anchor_namespace_compaction = false;
-        self.request_payload_namespace_compaction = false;
+        self.request_payload_storage_compaction = false;
     }
 
     pub(in crate::slot) fn note_removed_payloads(&mut self, count: usize) {
@@ -71,7 +71,7 @@ impl SlotWriteSessionState {
         let group_pressure = self.removed_group_count >= Self::COMPACT_GROUP_THRESHOLD;
         self.request_compaction |= payload_pressure || node_pressure || group_pressure;
         self.request_anchor_namespace_compaction |= group_pressure;
-        self.request_payload_namespace_compaction |= payload_pressure;
+        self.request_payload_storage_compaction |= payload_pressure;
     }
 
     pub(in crate::slot) fn current_parent_anchor(&self) -> AnchorId {
@@ -132,11 +132,11 @@ mod tests {
 
         state.note_removed_payloads(SlotWriteSessionState::COMPACT_PAYLOAD_THRESHOLD - 1);
         assert!(!state.request_compaction);
-        assert!(!state.request_payload_namespace_compaction);
+        assert!(!state.request_payload_storage_compaction);
 
         state.note_removed_payloads(1);
         assert!(state.request_compaction);
-        assert!(state.request_payload_namespace_compaction);
+        assert!(state.request_payload_storage_compaction);
         assert!(!state.request_anchor_namespace_compaction);
     }
 
@@ -150,7 +150,7 @@ mod tests {
 
         assert!(state.request_compaction);
         assert!(state.request_anchor_namespace_compaction);
-        assert!(!state.request_payload_namespace_compaction);
+        assert!(!state.request_payload_storage_compaction);
     }
 
     #[test]
@@ -163,7 +163,7 @@ mod tests {
 
         assert!(state.request_compaction);
         assert!(!state.request_anchor_namespace_compaction);
-        assert!(!state.request_payload_namespace_compaction);
+        assert!(!state.request_payload_storage_compaction);
     }
 
     #[test]

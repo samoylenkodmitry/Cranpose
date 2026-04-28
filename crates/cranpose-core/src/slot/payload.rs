@@ -383,7 +383,7 @@ impl SlotTable {
         self.restore_payload_segment_for_groups(insert_group_index, groups, payloads);
     }
 
-    pub(crate) fn compact_payload_anchor_namespace(
+    pub(crate) fn compact_payload_anchor_registry_storage(
         &mut self,
         retention: Option<&mut RetentionManager>,
     ) {
@@ -417,9 +417,9 @@ impl SlotTable {
             )
             .max()
             .unwrap_or(0);
-        let sparse_namespace = max_payload_anchor > total_payload_count.max(256) * 4;
+        let sparse_payload_anchor_ids = max_payload_anchor > total_payload_count.max(256) * 4;
         let sparse_capacity = self.payload_locations.capacity() > total_payload_count.max(256) * 8;
-        if !sparse_namespace && !sparse_capacity {
+        if !sparse_payload_anchor_ids && !sparse_capacity {
             return;
         }
 

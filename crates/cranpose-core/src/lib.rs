@@ -3473,7 +3473,7 @@ pub struct SlotsHost {
 pub(crate) struct SlotPassOutcome {
     pub(crate) compacted: bool,
     pub(crate) compact_anchor_namespace: bool,
-    pub(crate) compact_payload_namespace: bool,
+    pub(crate) compact_payload_storage: bool,
 }
 
 #[derive(Default)]
@@ -3684,7 +3684,7 @@ impl SlotsHost {
             outcome: SlotPassOutcome {
                 compacted: active_pass.state.request_compaction,
                 compact_anchor_namespace: active_pass.state.request_anchor_namespace_compaction,
-                compact_payload_namespace: active_pass.state.request_payload_namespace_compaction,
+                compact_payload_storage: active_pass.state.request_payload_storage_compaction,
             },
             detached_root_children,
         }
@@ -3708,10 +3708,10 @@ impl SlotsHost {
                 self,
                 table,
                 outcome.compact_anchor_namespace,
-                outcome.compact_payload_namespace,
+                outcome.compact_payload_storage,
             );
-        } else if outcome.compact_payload_namespace {
-            table.compact_payload_anchor_namespace(None);
+        } else if outcome.compact_payload_storage {
+            table.compact_payload_anchor_registry_storage(None);
         }
         #[cfg(any(test, debug_assertions))]
         {

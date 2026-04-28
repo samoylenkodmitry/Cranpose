@@ -204,7 +204,7 @@ git diff
   slot: wire payload anchor lifecycle
   ```
 
-* [ ] Delete payload namespace renumbering.
+* [x] Delete payload namespace renumbering.
 
   Done means: `compact_payload_anchor_namespace` is removed or renamed to storage-only compaction; no code path rewrites `payload.anchor` for active or retained payloads; compaction may shrink maps/vectors/free lists only.
 

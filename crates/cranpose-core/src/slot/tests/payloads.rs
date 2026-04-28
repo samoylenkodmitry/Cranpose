@@ -253,7 +253,7 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.finish_pass();
     assert!(harness.table.groups.is_empty());
-    harness.table.compact_payload_anchor_namespace(None);
+    harness.table.compact_payload_anchor_registry_storage(None);
 
     harness.begin_pass(SlotPassMode::Compose);
     let new_slot = harness.session(|session| {

@@ -497,7 +497,7 @@ fn node_tail_range_past_group_end_removes_nothing() {
 }
 
 #[test]
-fn compact_payload_namespace_preserves_active_value_slots() {
+fn compact_payload_storage_preserves_active_value_slots() {
     const PARENT_KEY: Key = 606;
     const CHILD_STATIC_KEY: Key = 607;
     const GROUP_COUNT: usize = 1_100;
@@ -530,7 +530,7 @@ fn compact_payload_namespace_preserves_active_value_slots() {
     harness.finish_pass();
     assert!(
         retained_slot.anchor().id() > 1_024,
-        "test must exercise a sparse active payload namespace"
+        "test must exercise sparse active payload anchor storage"
     );
 
     harness.begin_pass(SlotPassMode::Compose);
@@ -558,7 +558,7 @@ fn compact_payload_namespace_preserves_active_value_slots() {
         KEPT_EXPLICIT_KEY as i32
     );
     let snapshot_before = harness.identity_snapshot(None, &[retained_slot]);
-    harness.table.compact_payload_anchor_namespace(None);
+    harness.table.compact_payload_anchor_registry_storage(None);
     assert_eq!(harness.table.validate(), Ok(()));
     assert_eq!(
         *harness.table.read_value::<i32>(retained_slot),
@@ -573,7 +573,7 @@ fn compact_payload_namespace_preserves_active_value_slots() {
 }
 
 #[test]
-fn compact_payload_namespace_preserves_retained_value_slots() {
+fn compact_payload_storage_preserves_retained_value_slots() {
     const PARENT_KEY: Key = 608;
     const CHILD_STATIC_KEY: Key = 609;
     const GROUP_COUNT: usize = 1_100;
@@ -607,7 +607,7 @@ fn compact_payload_namespace_preserves_retained_value_slots() {
     harness.finish_pass();
     assert!(
         retained_slot.anchor().id() > 1_024,
-        "test must exercise a sparse retained payload namespace"
+        "test must exercise sparse retained payload anchor storage"
     );
 
     harness.begin_pass(SlotPassMode::Compose);
@@ -648,7 +648,7 @@ fn compact_payload_namespace_preserves_retained_value_slots() {
     );
     harness
         .table
-        .compact_payload_anchor_namespace(Some(&mut retention));
+        .compact_payload_anchor_registry_storage(Some(&mut retention));
     assert_eq!(harness.table.validate(), Ok(()));
     assert_eq!(retention.validate(&harness.table), Ok(()));
     assert_eq!(
@@ -678,7 +678,7 @@ fn compact_payload_namespace_preserves_retained_value_slots() {
 }
 
 #[test]
-fn compact_payload_namespace_preserves_retained_payload_uniqueness() {
+fn compact_payload_storage_preserves_retained_payload_uniqueness() {
     const PARENT_KEY: Key = 610;
     const CHILD_KEY: Key = 611;
 
@@ -723,7 +723,7 @@ fn compact_payload_namespace_preserves_retained_payload_uniqueness() {
 
     harness
         .table
-        .compact_payload_anchor_namespace(Some(&mut retention));
+        .compact_payload_anchor_registry_storage(Some(&mut retention));
     let _ =
         harness
             .table
@@ -906,7 +906,7 @@ fn disposed_identities_reuse_only_after_generation_bump() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.finish_pass();
     assert!(harness.table.groups.is_empty());
-    harness.table.compact_payload_anchor_namespace(None);
+    harness.table.compact_payload_anchor_registry_storage(None);
 
     harness.begin_pass(SlotPassMode::Compose);
     let reused_payload_slot = harness.session(|session| {
