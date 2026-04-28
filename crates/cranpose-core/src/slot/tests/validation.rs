@@ -384,7 +384,7 @@ fn compact_anchor_namespace_preserves_active_group_anchors() {
     assert_eq!(harness.table.groups.len(), 1);
     assert!(
         retained_anchor.id as usize > 1_024,
-        "test must exercise a sparse active anchor namespace"
+        "test must exercise sparse active anchor storage"
     );
     let snapshot_before = harness.identity_snapshot(None, &[]);
     let group_keys_before = harness
@@ -413,6 +413,82 @@ fn compact_anchor_namespace_preserves_active_group_anchors() {
             .map(|group| (group.anchor, group.key))
             .collect::<Vec<_>>(),
         group_keys_before
+    );
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
+fn compact_anchor_namespace_preserves_active_cross_references() {
+    const PARENT_KEY: Key = 606;
+    const CHILD_STATIC_KEY: Key = 607;
+    const GROUP_COUNT: usize = 1_100;
+    const KEPT_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
+    const CHILD_SCOPE: ScopeId = 6_070;
+    const CHILD_NODE: NodeId = 6_071;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    let parent_anchor = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        for explicit_key in 0..GROUP_COUNT as Key {
+            let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
+            if explicit_key == KEPT_EXPLICIT_KEY {
+                session.set_group_scope(child.group, CHILD_SCOPE);
+                let _ = session.value_slot_with_kind(PayloadKind::Internal, || 1_i32);
+                session.record_node_with_parent(CHILD_NODE, 1, None);
+            }
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+        }
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        parent.anchor
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (child_anchor, detached_children) = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+        let child = begin_keyed(session, CHILD_STATIC_KEY, KEPT_EXPLICIT_KEY, None);
+        session.set_group_scope(child.group, CHILD_SCOPE);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 2_i32);
+        session.record_node_with_parent(CHILD_NODE, 1, None);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        let result = session.finish_group_body();
+        session.end_group();
+        (child.anchor, result.detached_children)
+    });
+    harness.finish_pass();
+    for subtree in detached_children {
+        harness.table.invalidate_detached_subtree_anchors(&subtree);
+        harness.lifecycle.queue_subtree_disposal(subtree);
+    }
+    harness.lifecycle.flush_pending_drops();
+
+    assert!(
+        child_anchor.id as usize > 1_024,
+        "test must exercise sparse active anchor storage"
+    );
+    harness.table.compact_anchor_namespace(None, |_| None);
+
+    assert_eq!(harness.table.groups[1].parent_anchor, parent_anchor);
+    assert_eq!(
+        harness.table.group_payload_record_at(1, 0).owner,
+        child_anchor
+    );
+    assert_eq!(harness.table.group_node_record_at(1, 0).owner, child_anchor);
+    assert_eq!(
+        harness.table.scope_index_anchor(CHILD_SCOPE),
+        Some(child_anchor)
+    );
+    assert_eq!(
+        harness.table.group_anchor_state(child_anchor),
+        Some(AnchorState::Active(1))
     );
     assert_eq!(harness.table.validate(), Ok(()));
 }
@@ -467,7 +543,7 @@ fn compact_anchor_namespace_preserves_retained_group_anchors() {
     assert_eq!(retained_group_anchors.len(), 1);
     assert!(
         retained_group_anchors[0].id as usize > 1_024,
-        "test must exercise a sparse retained anchor namespace"
+        "test must exercise sparse retained anchor storage"
     );
 
     let retain_key = RetainKey {

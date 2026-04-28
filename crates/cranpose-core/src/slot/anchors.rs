@@ -324,9 +324,9 @@ impl SlotTable {
             )
             .max()
             .unwrap_or(0);
-        let sparse_namespace = max_anchor_id > total_group_count.max(256) * 4;
+        let sparse_anchor_ids = max_anchor_id > total_group_count.max(256) * 4;
         let sparse_capacity = self.anchors.capacity() > total_group_count.max(256) * 8;
-        if !sparse_namespace && !sparse_capacity {
+        if !sparse_anchor_ids && !sparse_capacity {
             return;
         }
 

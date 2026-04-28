@@ -228,7 +228,7 @@ git diff
 
 ## Phase 3 — Make group anchors stable forever across storage compaction
 
-* [ ] Delete group anchor namespace renumbering.
+* [x] Delete group anchor namespace renumbering.
 
   Done means: `compact_anchor_namespace` no longer remaps `AnchorId`s in active groups, retained groups, payload owners, node owners, parent anchors, scope anchors, or `RecomposeScope`s. The operation becomes storage-only cleanup: shrink sparse backing storage, compact free-list capacity, and keep identities unchanged.
 
