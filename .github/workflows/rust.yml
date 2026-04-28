@@ -188,7 +188,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwayland-dev libxkbcommon-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev \
             libegl1 libgl1-mesa-dri mesa-vulkan-drivers \
             xvfb xauth xdotool imagemagick
