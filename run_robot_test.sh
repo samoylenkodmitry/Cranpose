@@ -32,6 +32,7 @@ else
 fi
 ROBOT_TEST_TIMEOUT_CAP_SECS="${CRANPOSE_ROBOT_TEST_TIMEOUT_CAP_SECS:-300}"
 ROBOT_TEST_ATTEMPTS="${CRANPOSE_ROBOT_TEST_ATTEMPTS:-2}"
+ROBOT_FAILURE_LOG_LINES="${CRANPOSE_ROBOT_FAILURE_LOG_LINES:-220}"
 SELECTED_EXAMPLES=()
 
 profile_output_dir() {
@@ -53,6 +54,10 @@ if [ -n "${CARGO_BUILD_TARGET:-}" ]; then
     EXAMPLE_BIN_DIR="target/$CARGO_BUILD_TARGET/$PROFILE_DIR/examples"
 else
     EXAMPLE_BIN_DIR="target/$PROFILE_DIR/examples"
+fi
+
+if ! [[ "$ROBOT_FAILURE_LOG_LINES" =~ ^[1-9][0-9]*$ ]]; then
+    ROBOT_FAILURE_LOG_LINES=220
 fi
 
 enable_local_tmpdir
@@ -355,6 +360,21 @@ export EXAMPLE_BIN_DIR
 export ROBOT_TEST_TIMEOUT_CAP_SECS
 export ROBOT_TEST_ATTEMPTS
 
+print_failure_excerpt() {
+    local example="$1"
+    local output_file="$RESULTS_DIR/$example.output"
+
+    echo "" | tee -a "$LOG_FILE"
+    echo "First failed test output ($example, first $ROBOT_FAILURE_LOG_LINES lines):" | tee -a "$LOG_FILE"
+    echo "--------------------------------------------------" | tee -a "$LOG_FILE"
+    if [ -s "$output_file" ]; then
+        head -n "$ROBOT_FAILURE_LOG_LINES" "$output_file" | tee -a "$LOG_FILE"
+    else
+        echo "No captured output for $example" | tee -a "$LOG_FILE"
+    fi
+    echo "--------------------------------------------------" | tee -a "$LOG_FILE"
+}
+
 # Run tests in parallel using xargs or GNU parallel
 STOPPED_EARLY=0
 if [ "$PARALLEL_JOBS" -gt 1 ]; then
@@ -460,6 +480,7 @@ else
     for test in "${FAILED_TESTS[@]}"; do
         echo "  - $test" | tee -a "$LOG_FILE"
     done
+    print_failure_excerpt "${FAILED_TESTS[0]}"
     echo "" | tee -a "$LOG_FILE"
     echo "See $LOG_FILE for full output" | tee -a "$LOG_FILE"
     if [ "$RETRYABLE_FAILURE" -eq 1 ] || [ "$STOPPED_EARLY" -eq 1 ]; then

@@ -190,7 +190,13 @@ jobs:
           sudo apt-get install -y \
             libwayland-dev libxkbcommon-dev \
             libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev \
+            libegl1 libgl1-mesa-dri mesa-vulkan-drivers \
             xvfb xauth xdotool imagemagick
 
       - name: Run sequential robot tests
+        env:
+          CARGO_BUILD_JOBS: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WGPU_BACKEND: vulkan
+          WINIT_UNIX_BACKEND: x11
         run: xvfb-run -a ./run_robot_test.sh --sequential
