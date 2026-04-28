@@ -48,7 +48,7 @@ struct ModelGroup {
 
 impl ModelGroup {
     fn new(
-        key: Key,
+        scope_id: ScopeId,
         anchor: AnchorId,
         payload_slot: ValueSlotId,
         payload_value: ModelPayloadValue,
@@ -61,7 +61,7 @@ impl ModelGroup {
                 value: payload_value,
             }],
             nodes: vec![node],
-            scope_id: ModelState::scope_id_for(key),
+            scope_id,
         }
     }
 
@@ -96,6 +96,7 @@ struct ModelComposeOperation {
     mutate_values: HashSet<Key>,
     replace_payload_types: HashSet<Key>,
     replace_nodes: HashSet<Key>,
+    replace_scopes: HashSet<Key>,
     compact_storage: bool,
 }
 
@@ -109,13 +110,14 @@ impl ModelOperation {
     fn compact(&self) -> String {
         match self {
             Self::Compose(operation) => format!(
-                "compose(order={}, retain={}, drop={}, mutate={}, replace={}, nodes={}, compact={})",
+                "compose(order={}, retain={}, drop={}, mutate={}, replace={}, nodes={}, scopes={}, compact={})",
                 model_key_list(&operation.order),
                 model_sorted_key_set(&operation.retain_detached),
                 model_sorted_key_set(&operation.drop_retained),
                 model_sorted_key_set(&operation.mutate_values),
                 model_sorted_key_set(&operation.replace_payload_types),
                 model_sorted_key_set(&operation.replace_nodes),
+                model_sorted_key_set(&operation.replace_scopes),
                 operation.compact_storage,
             ),
             Self::RecomposeSkip { key } => format!("skip(key={key})"),
@@ -136,6 +138,12 @@ struct ModelState {
 impl ModelState {
     fn scope_id_for(key: Key) -> ScopeId {
         10_000 + key as ScopeId
+    }
+
+    fn next_scope_id_after(scope_id: ScopeId) -> ScopeId {
+        scope_id
+            .checked_add(100_000)
+            .expect("model scope id overflow")
     }
 
     fn active_order(&self) -> &[Key] {
@@ -503,6 +511,11 @@ fn generate_model_operation(
         .copied()
         .filter(|_| next_bool(seed))
         .collect::<HashSet<_>>();
+    let replace_scopes = order
+        .iter()
+        .copied()
+        .filter(|_| next_bool(seed))
+        .collect::<HashSet<_>>();
     let compact_storage = next_bool(seed) && next_bool(seed);
 
     ModelOperation::Compose(Box::new(ModelComposeOperation {
@@ -512,6 +525,7 @@ fn generate_model_operation(
         mutate_values,
         replace_payload_types,
         replace_nodes,
+        replace_scopes,
         compact_storage,
     }))
 }
@@ -630,6 +644,11 @@ fn assert_model_matches_slot_table(
             Some(AnchorState::Active(group.index)),
             "active group anchor must resolve to the current table index for key {key}"
         );
+        assert_eq!(
+            harness.table.scope_index_anchor(expected.scope_id),
+            Some(group.anchor),
+            "active scope index must resolve the current group anchor for key {key}"
+        );
 
         let payload = harness
             .table
@@ -721,6 +740,11 @@ fn assert_model_matches_slot_table(
             "retained group anchor must stay detached for key {key}"
         );
         assert_eq!(
+            harness.table.scope_index_anchor(expected.scope_id),
+            None,
+            "retained scope must not resolve through the active scope index for key {key}"
+        );
+        assert_eq!(
             subtree.root_parent_anchor(),
             AnchorId::INVALID,
             "retained subtree roots must detach from the active parent chain"
@@ -809,6 +833,7 @@ fn apply_model_operation(
                 mutate_values,
                 replace_payload_types,
                 replace_nodes,
+                replace_scopes,
                 compact_storage,
             } = *operation;
             let previous_active = model.active_groups.clone();
@@ -872,6 +897,11 @@ fn apply_model_operation(
                         };
 
                     next_retained.remove(&key);
+                    let scope_id = if replace_scopes.contains(&key) {
+                        ModelState::next_scope_id_after(scope_id)
+                    } else {
+                        scope_id
+                    };
                     session.set_group_scope(started.group, scope_id);
 
                     let replacing_payload =
@@ -968,7 +998,7 @@ fn apply_model_operation(
                         payload_value.increment();
                         write_model_payload_value(session.table, slot, &payload_value);
                     }
-                    let child = ModelGroup::new(key, started.anchor, slot, payload_value, node);
+                    let child = ModelGroup::new(scope_id, started.anchor, slot, payload_value, node);
 
                     let child_result = session.finish_group_body();
                     assert!(child_result.detached_children.is_empty());
@@ -1014,10 +1044,15 @@ fn apply_model_operation(
         }
         ModelOperation::RecomposeSkip { key } => {
             let before = harness.table.debug_snapshot();
+            let scope_id = model
+                .active_groups
+                .get(&key)
+                .expect("recompose skip requires an active model group")
+                .scope_id;
             harness.begin_pass(SlotPassMode::Recompose);
             let group_index = harness.session(|session| {
                 let group = session
-                    .begin_recompose_at_scope(ModelState::scope_id_for(key))
+                    .begin_recompose_at_scope(scope_id)
                     .expect("active scopes must resolve through the scope index");
                 session.skip_group();
                 let result = session.finish_group_body();
@@ -1052,31 +1087,44 @@ fn model_key_set(keys: &[Key]) -> HashSet<Key> {
     keys.iter().copied().collect()
 }
 
+struct ModelComposeFrameSpec<'a> {
+    order: &'a [Key],
+    retain_detached: &'a [Key],
+    drop_retained: &'a [Key],
+    mutate_values: &'a [Key],
+    replace_payload_types: &'a [Key],
+    replace_nodes: &'a [Key],
+    replace_scopes: &'a [Key],
+    compact_storage: bool,
+}
+
 fn model_compose_frame(
     order: &[Key],
     retain_detached: &[Key],
     mutate_values: &[Key],
 ) -> ModelOperation {
-    model_compose_frame_with_options(order, retain_detached, &[], mutate_values, &[], &[], false)
+    model_compose_frame_with_options(ModelComposeFrameSpec {
+        order,
+        retain_detached,
+        drop_retained: &[],
+        mutate_values,
+        replace_payload_types: &[],
+        replace_nodes: &[],
+        replace_scopes: &[],
+        compact_storage: false,
+    })
 }
 
-fn model_compose_frame_with_options(
-    order: &[Key],
-    retain_detached: &[Key],
-    drop_retained: &[Key],
-    mutate_values: &[Key],
-    replace_payload_types: &[Key],
-    replace_nodes: &[Key],
-    compact_storage: bool,
-) -> ModelOperation {
+fn model_compose_frame_with_options(spec: ModelComposeFrameSpec<'_>) -> ModelOperation {
     ModelOperation::Compose(Box::new(ModelComposeOperation {
-        order: order.to_vec(),
-        retain_detached: model_key_set(retain_detached),
-        drop_retained: model_key_set(drop_retained),
-        mutate_values: model_key_set(mutate_values),
-        replace_payload_types: model_key_set(replace_payload_types),
-        replace_nodes: model_key_set(replace_nodes),
-        compact_storage,
+        order: spec.order.to_vec(),
+        retain_detached: model_key_set(spec.retain_detached),
+        drop_retained: model_key_set(spec.drop_retained),
+        mutate_values: model_key_set(spec.mutate_values),
+        replace_payload_types: model_key_set(spec.replace_payload_types),
+        replace_nodes: model_key_set(spec.replace_nodes),
+        replace_scopes: model_key_set(spec.replace_scopes),
+        compact_storage: spec.compact_storage,
     }))
 }
 
@@ -1111,7 +1159,7 @@ fn model_operation_compact_format_is_deterministic() {
 
     assert_eq!(
         operation.compact(),
-        "compose(order=[3,1,2], retain=[4,6,8], drop=[], mutate=[5,7], replace=[], nodes=[], compact=false)"
+        "compose(order=[3,1,2], retain=[4,6,8], drop=[], mutate=[5,7], replace=[], nodes=[], scopes=[], compact=false)"
     );
     assert_eq!(
         ModelOperation::RecomposeSkip { key: 11 }.compact(),
@@ -1155,7 +1203,16 @@ fn deterministic_model_render_frames_match_slot_table() {
 fn scripted_model_render_frames_cover_slot_table_behaviors() {
     let script = [
         model_compose_frame(&[1, 2, 3], &[], &[1, 2]),
-        model_compose_frame_with_options(&[3, 2, 1], &[], &[], &[3], &[2], &[3], false),
+        model_compose_frame_with_options(ModelComposeFrameSpec {
+            order: &[3, 2, 1],
+            retain_detached: &[],
+            drop_retained: &[],
+            mutate_values: &[3],
+            replace_payload_types: &[2],
+            replace_nodes: &[3],
+            replace_scopes: &[1],
+            compact_storage: false,
+        }),
         ModelOperation::RecomposeSkip { key: 2 },
         model_compose_frame(&[3, 1], &[2], &[]),
         model_compose_frame(&[2, 3, 1], &[], &[2]),
@@ -1163,7 +1220,16 @@ fn scripted_model_render_frames_cover_slot_table_behaviors() {
         ModelOperation::RecomposeSkip { key: 10 },
         model_compose_frame(&[1, 2], &[], &[1]),
         model_compose_frame(&[], &[1, 2], &[]),
-        model_compose_frame_with_options(&[], &[], &[2], &[], &[], &[], true),
+        model_compose_frame_with_options(ModelComposeFrameSpec {
+            order: &[],
+            retain_detached: &[],
+            drop_retained: &[2],
+            mutate_values: &[],
+            replace_payload_types: &[],
+            replace_nodes: &[],
+            replace_scopes: &[],
+            compact_storage: true,
+        }),
         model_compose_frame(&[2, 1, 4], &[], &[4]),
     ];
 

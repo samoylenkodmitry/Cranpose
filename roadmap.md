@@ -581,7 +581,7 @@ git diff
   slot: model node slot lifecycle
   ```
 
-* [ ] Extend model tests for scope index lifecycle.
+* [x] Extend model tests for scope index lifecycle.
 
   Done means: generated operations randomly assign scopes, detach scoped groups, invalidate retained inactive scopes, restore them, dispose them, and compact storage; active lookup matches model expectations.
 
