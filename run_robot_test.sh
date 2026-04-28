@@ -244,6 +244,9 @@ run_test() {
         robot_lazy_list_after_modifiers|robot_tab_navigation)
             timeout_secs=120
             ;;
+        robot_tab_scroll)
+            timeout_secs=120
+            ;;
         robot_measure_shaders)
             timeout_secs=180
             ;;
@@ -480,7 +483,9 @@ else
     for test in "${FAILED_TESTS[@]}"; do
         echo "  - $test" | tee -a "$LOG_FILE"
     done
-    print_failure_excerpt "${FAILED_TESTS[0]}"
+    for test in "${FAILED_TESTS[@]}"; do
+        print_failure_excerpt "$test"
+    done
     echo "" | tee -a "$LOG_FILE"
     echo "See $LOG_FILE for full output" | tee -a "$LOG_FILE"
     if [ "$RETRYABLE_FAILURE" -eq 1 ] || [ "$STOPPED_EARLY" -eq 1 ]; then

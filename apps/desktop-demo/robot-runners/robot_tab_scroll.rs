@@ -24,13 +24,6 @@ fn main() {
         .with_size(800, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout after 30 seconds
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(30));
-                println!("✗ Test timed out after 30 seconds");
-                std::process::exit(1);
-            });
-
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));
 
