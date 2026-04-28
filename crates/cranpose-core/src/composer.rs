@@ -183,7 +183,7 @@ impl ComposerRuntimeState {
         }
     }
 
-    pub(crate) fn compact_table_namespaces_for_host(
+    pub(crate) fn compact_table_identity_storage_for_host(
         &self,
         host: &SlotsHost,
         table: &mut SlotTable,
@@ -198,7 +198,7 @@ impl ComposerRuntimeState {
         let mut retention = self.retention_by_host.borrow_mut();
         if let Some(retained) = retention.get_mut(&host_key) {
             if compact_anchors {
-                table.compact_anchor_namespace(Some(&mut *retained), |scope_id| {
+                table.compact_anchor_registry_storage(Some(&mut *retained), |scope_id| {
                     self.scope_for_id(scope_id)
                 });
             }
@@ -207,7 +207,7 @@ impl ComposerRuntimeState {
             }
         } else {
             if compact_anchors {
-                table.compact_anchor_namespace(None, |scope_id| self.scope_for_id(scope_id));
+                table.compact_anchor_registry_storage(None, |scope_id| self.scope_for_id(scope_id));
             }
             if compact_payloads {
                 table.compact_payload_anchor_registry_storage(None);

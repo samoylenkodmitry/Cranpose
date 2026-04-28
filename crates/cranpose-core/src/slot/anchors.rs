@@ -290,7 +290,7 @@ impl SlotTable {
         }
     }
 
-    pub(crate) fn compact_anchor_namespace(
+    pub(crate) fn compact_anchor_registry_storage(
         &mut self,
         retention: Option<&mut RetentionManager>,
         _scope_for_id: impl FnMut(ScopeId) -> Option<RecomposeScope>,

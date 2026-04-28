@@ -352,7 +352,7 @@ fn compact_storage_discards_removed_payload_location_entries() {
 }
 
 #[test]
-fn compact_anchor_namespace_preserves_active_group_anchors() {
+fn compact_anchor_registry_storage_preserves_active_group_anchors() {
     const STATIC_KEY: Key = 603;
     const GROUP_COUNT: usize = 1_100;
     const RETAINED_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
@@ -394,7 +394,9 @@ fn compact_anchor_namespace_preserves_active_group_anchors() {
         .map(|group| (group.anchor, group.key))
         .collect::<Vec<_>>();
 
-    harness.table.compact_anchor_namespace(None, |_| None);
+    harness
+        .table
+        .compact_anchor_registry_storage(None, |_| None);
 
     let snapshot_after = harness.identity_snapshot(None, &[]);
     assert_eq!(
@@ -418,7 +420,7 @@ fn compact_anchor_namespace_preserves_active_group_anchors() {
 }
 
 #[test]
-fn compact_anchor_namespace_preserves_active_cross_references() {
+fn compact_anchor_registry_storage_preserves_active_cross_references() {
     const PARENT_KEY: Key = 606;
     const CHILD_STATIC_KEY: Key = 607;
     const GROUP_COUNT: usize = 1_100;
@@ -474,7 +476,9 @@ fn compact_anchor_namespace_preserves_active_cross_references() {
         child_anchor.id as usize > 1_024,
         "test must exercise sparse active anchor storage"
     );
-    harness.table.compact_anchor_namespace(None, |_| None);
+    harness
+        .table
+        .compact_anchor_registry_storage(None, |_| None);
 
     assert_eq!(harness.table.groups[1].parent_anchor, parent_anchor);
     assert_eq!(
@@ -494,7 +498,7 @@ fn compact_anchor_namespace_preserves_active_cross_references() {
 }
 
 #[test]
-fn compact_anchor_namespace_preserves_retained_group_anchors() {
+fn compact_anchor_registry_storage_preserves_retained_group_anchors() {
     const PARENT_KEY: Key = 604;
     const CHILD_STATIC_KEY: Key = 605;
     const GROUP_COUNT: usize = 1_100;
@@ -558,7 +562,7 @@ fn compact_anchor_namespace_preserves_retained_group_anchors() {
     let snapshot_before = harness.identity_snapshot(Some(&retention), &[]);
     harness
         .table
-        .compact_anchor_namespace(Some(&mut retention), |_| None);
+        .compact_anchor_registry_storage(Some(&mut retention), |_| None);
     assert_eq!(harness.table.validate(), Ok(()));
     assert_eq!(retention.validate(&harness.table), Ok(()));
 

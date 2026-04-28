@@ -3472,7 +3472,7 @@ pub struct SlotsHost {
 #[derive(Debug, Default)]
 pub(crate) struct SlotPassOutcome {
     pub(crate) compacted: bool,
-    pub(crate) compact_anchor_namespace: bool,
+    pub(crate) compact_anchor_registry_storage: bool,
     pub(crate) compact_payload_storage: bool,
 }
 
@@ -3683,7 +3683,9 @@ impl SlotsHost {
         FinishedSlotPass {
             outcome: SlotPassOutcome {
                 compacted: active_pass.state.request_compaction,
-                compact_anchor_namespace: active_pass.state.request_anchor_namespace_compaction,
+                compact_anchor_registry_storage: active_pass
+                    .state
+                    .request_anchor_storage_compaction,
                 compact_payload_storage: active_pass.state.request_payload_storage_compaction,
             },
             detached_root_children,
@@ -3704,14 +3706,19 @@ impl SlotsHost {
             lifecycle.compact_storage();
         }
         if let Some(state) = runtime_state.clone() {
-            state.compact_table_namespaces_for_host(
+            state.compact_table_identity_storage_for_host(
                 self,
                 table,
-                outcome.compact_anchor_namespace,
+                outcome.compact_anchor_registry_storage,
                 outcome.compact_payload_storage,
             );
-        } else if outcome.compact_payload_storage {
-            table.compact_payload_anchor_registry_storage(None);
+        } else {
+            if outcome.compact_anchor_registry_storage {
+                table.compact_anchor_registry_storage(None, |_| None);
+            }
+            if outcome.compact_payload_storage {
+                table.compact_payload_anchor_registry_storage(None);
+            }
         }
         #[cfg(any(test, debug_assertions))]
         {

@@ -230,7 +230,7 @@ git diff
 
 * [x] Delete group anchor namespace renumbering.
 
-  Done means: `compact_anchor_namespace` no longer remaps `AnchorId`s in active groups, retained groups, payload owners, node owners, parent anchors, scope anchors, or `RecomposeScope`s. The operation becomes storage-only cleanup: shrink sparse backing storage, compact free-list capacity, and keep identities unchanged.
+  Done means: `compact_anchor_registry_storage` no longer remaps `AnchorId`s in active groups, retained groups, payload owners, node owners, parent anchors, scope anchors, or `RecomposeScope`s. The operation becomes storage-only cleanup: shrink sparse backing storage, compact free-list capacity, and keep identities unchanged.
 
   Commit message:
 
@@ -238,7 +238,7 @@ git diff
   slot: remove group anchor renumbering
   ```
 
-* [ ] Rename group anchor compaction APIs to storage compaction names.
+* [x] Rename group anchor compaction APIs to storage compaction names.
 
   Done means: names no longer imply namespace/id compaction. Use names like `compact_anchor_registry_storage`, `compact_payload_anchor_registry_storage`, or `compact_slot_backing_storage`. The codebase has no remaining “namespace compaction” path for live or retained identities.
 

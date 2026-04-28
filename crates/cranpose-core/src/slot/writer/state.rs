@@ -13,7 +13,7 @@ pub(crate) struct SlotWriteSessionState {
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
     pub(crate) request_compaction: bool,
-    pub(crate) request_anchor_namespace_compaction: bool,
+    pub(crate) request_anchor_storage_compaction: bool,
     pub(crate) request_payload_storage_compaction: bool,
 }
 
@@ -35,7 +35,7 @@ impl SlotWriteSessionState {
         self.removed_node_count = 0;
         self.removed_group_count = 0;
         self.request_compaction = false;
-        self.request_anchor_namespace_compaction = false;
+        self.request_anchor_storage_compaction = false;
         self.request_payload_storage_compaction = false;
     }
 
@@ -70,7 +70,7 @@ impl SlotWriteSessionState {
         let node_pressure = self.removed_node_count >= Self::COMPACT_NODE_THRESHOLD;
         let group_pressure = self.removed_group_count >= Self::COMPACT_GROUP_THRESHOLD;
         self.request_compaction |= payload_pressure || node_pressure || group_pressure;
-        self.request_anchor_namespace_compaction |= group_pressure;
+        self.request_anchor_storage_compaction |= group_pressure;
         self.request_payload_storage_compaction |= payload_pressure;
     }
 
@@ -137,11 +137,11 @@ mod tests {
         state.note_removed_payloads(1);
         assert!(state.request_compaction);
         assert!(state.request_payload_storage_compaction);
-        assert!(!state.request_anchor_namespace_compaction);
+        assert!(!state.request_anchor_storage_compaction);
     }
 
     #[test]
-    fn group_removal_requests_anchor_namespace_compaction() {
+    fn group_removal_requests_anchor_storage_compaction() {
         let mut state = SlotWriteSessionState {
             removed_group_count: SlotWriteSessionState::COMPACT_GROUP_THRESHOLD,
             ..Default::default()
@@ -149,12 +149,12 @@ mod tests {
         state.update_compaction_hint();
 
         assert!(state.request_compaction);
-        assert!(state.request_anchor_namespace_compaction);
+        assert!(state.request_anchor_storage_compaction);
         assert!(!state.request_payload_storage_compaction);
     }
 
     #[test]
-    fn node_removal_compaction_does_not_request_namespace_scan() {
+    fn node_removal_compaction_does_not_request_storage_cleanup() {
         let mut state = SlotWriteSessionState {
             removed_node_count: SlotWriteSessionState::COMPACT_NODE_THRESHOLD,
             ..Default::default()
@@ -162,7 +162,7 @@ mod tests {
         state.update_compaction_hint();
 
         assert!(state.request_compaction);
-        assert!(!state.request_anchor_namespace_compaction);
+        assert!(!state.request_anchor_storage_compaction);
         assert!(!state.request_payload_storage_compaction);
     }
 
