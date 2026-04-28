@@ -26,7 +26,7 @@ Run the same-tree stability check before trusting a regression result:
 ./perf_slot_table_v2.sh --stability-check
 ```
 
-The stability check runs an unrecorded warmup pass, saves a temporary baseline,
+The stability check runs two unrecorded warmup passes, saves a temporary baseline,
 compares the same tree against it without an extra cooldown gap, and fails when
 the lower bound of the same-tree regression confidence interval exceeds the
 configured threshold. By default, keyed, conditional, and tab-switch benchmarks
@@ -83,7 +83,7 @@ Use the same machine, power profile, CPU set, sample size, warmup, and measureme
 - `CRANPOSE_SLOT_TABLE_WARMUP_TIME` or `--warmup-time` controls warmup seconds.
 - `CRANPOSE_SLOT_TABLE_MEASUREMENT_TIME` or `--measurement-time` controls measurement seconds.
 - `CRANPOSE_SLOT_TABLE_COOLDOWN_SECS` or `--cooldown-secs` controls the pause after saving a named baseline before comparison. The temporary same-tree stability comparison skips this pause because the warmup and baseline must be adjacent.
-- `CRANPOSE_SLOT_TABLE_STABILITY_WARMUP_RUNS` controls the number of unrecorded same-tree runs before the stability baseline. The default is `1` so CPU frequency and process-level warmup do not become the saved baseline.
+- `CRANPOSE_SLOT_TABLE_STABILITY_WARMUP_RUNS` controls the number of unrecorded same-tree runs before the stability baseline. The default is `2` so CPU frequency and process-level warmup do not become the saved baseline.
 - `CRANPOSE_SIBLING_INDEX_THRESHOLD` sets the compile-time sibling-index threshold for one benchmark run.
 
 Record the commit SHA, command line, benchmark filter, CPU set, sample size, warmup, measurement time, and stability-check result with any performance claim. Do not compare numbers from different machines or different script settings.
