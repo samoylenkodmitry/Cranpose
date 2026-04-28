@@ -58,12 +58,8 @@ impl SlotWriteSession<'_> {
     fn restore_started_group(&mut self, detached: DetachedChild) -> GroupStart<ActiveGroupId> {
         let parent_anchor = self.state.current_parent_anchor();
         let insert_index = self.state.current_child_cursor();
-        let anchor = self.table.restore_subtree(
-            insert_index,
-            parent_anchor,
-            detached.expected_key(),
-            detached.into_subtree(),
-        );
+        let cursor = ChildCursor::new(parent_anchor, insert_index);
+        let anchor = self.table.restore_subtree(cursor, detached);
         self.open_started_group(anchor, GroupStartKind::Restored)
     }
 

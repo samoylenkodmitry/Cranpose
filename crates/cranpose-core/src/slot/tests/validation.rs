@@ -576,9 +576,7 @@ fn compact_anchor_registry_storage_preserves_retained_group_anchors() {
     let restored = retention
         .take(retain_key)
         .expect("retained subtree must restore");
-    harness
-        .table
-        .restore_subtree(1, parent_anchor, restore_key, restored);
+    restore_detached_child(&mut harness.table, parent_anchor, 1, restore_key, restored);
     assert_eq!(harness.table.validate(), Ok(()));
     assert_eq!(
         harness.table.group_anchor_state(retained_group_anchors[0]),
@@ -769,9 +767,7 @@ fn compact_payload_storage_preserves_retained_value_slots() {
     let restored = retention
         .take(retain_key)
         .expect("retained subtree must restore");
-    harness
-        .table
-        .restore_subtree(1, parent_anchor, restore_key, restored);
+    restore_detached_child(&mut harness.table, parent_anchor, 1, restore_key, restored);
     assert_eq!(harness.table.validate(), Ok(()));
     assert_eq!(
         *harness.table.read_value::<i32>(retained_slot),
@@ -840,9 +836,7 @@ fn compact_payload_storage_preserves_retained_payload_uniqueness() {
     let restored = retention
         .take(retain_key)
         .expect("retained subtree must restore");
-    harness
-        .table
-        .restore_subtree(1, parent_anchor, restore_key, restored);
+    restore_detached_child(&mut harness.table, parent_anchor, 1, restore_key, restored);
 
     let payload_anchor_count = harness
         .table

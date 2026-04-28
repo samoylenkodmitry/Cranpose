@@ -93,6 +93,13 @@ impl PayloadAnchorRegistry {
         }
     }
 
+    pub(super) fn is_detached(&self, anchor: PayloadAnchor) -> bool {
+        let Some(slot) = self.slot(anchor) else {
+            return false;
+        };
+        slot.generation == anchor.generation() && matches!(slot.state, PayloadAnchorState::Detached)
+    }
+
     pub(super) fn active_len(&self) -> usize {
         self.active_count
     }

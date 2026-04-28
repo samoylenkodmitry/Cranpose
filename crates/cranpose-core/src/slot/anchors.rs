@@ -81,6 +81,10 @@ impl AnchorRegistry {
         }
     }
 
+    pub(super) fn is_detached(&self, anchor: AnchorId) -> bool {
+        matches!(self.state(anchor), Some(AnchorState::Detached))
+    }
+
     pub(super) fn active_len(&self) -> usize {
         self.active_count
     }

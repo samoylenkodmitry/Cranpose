@@ -209,10 +209,13 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
     );
 
     let insert_index = harness.table.current_group_index(child_c_anchor);
-    let restored_anchor =
-        harness
-            .table
-            .restore_subtree(insert_index, parent_anchor, detached.root_key(), detached);
+    let restored_anchor = restore_detached_child(
+        &mut harness.table,
+        parent_anchor,
+        insert_index,
+        detached.root_key(),
+        detached,
+    );
 
     assert_eq!(restored_anchor, child_b_anchor);
     assert_eq!(
@@ -250,9 +253,7 @@ fn restore_subtree_rejects_mismatched_root_key_without_mutating_table() {
     let wrong_key = GroupKey::new(CHILD_KEY + 1, None, 0);
 
     let restore = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        harness
-            .table
-            .restore_subtree(1, parent_anchor, wrong_key, detached);
+        restore_detached_child(&mut harness.table, parent_anchor, 1, wrong_key, detached);
     }));
     assert!(
         restore.is_err(),

@@ -366,7 +366,7 @@ git diff
   slot: type active subtree movement
   ```
 
-* [ ] Convert detached restore to typed cursor API.
+* [x] Convert detached restore to typed cursor API.
 
   Done means: `restore_subtree` or its replacement accepts `ChildCursor` and `DetachedChild`; it asserts root key match, cursor parent ownership, detached anchor state, retained payload state, and direct-child insertion boundary before mutation.
 

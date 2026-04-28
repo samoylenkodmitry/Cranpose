@@ -1,14 +1,30 @@
 use super::{
-    checked_u32_delta, CheckedU32Delta, DetachedSubtree, GroupRecord, SlotTable,
-    SlotWriteSessionState, SubtreeRange,
+    checked_u32_delta, CheckedU32Delta, ChildCursor, DetachedChild, DetachedSubtree, GroupRecord,
+    SlotTable, SlotWriteSessionState, SubtreeRange,
 };
-use crate::{
-    remove_child_and_cleanup_now, slot_storage::GroupKey, AnchorId, Applier, NodeError, NodeId,
-};
+use crate::{remove_child_and_cleanup_now, AnchorId, Applier, NodeError, NodeId};
 
 impl SlotTable {
     pub(in crate::slot) fn detach_range(&mut self, range: SubtreeRange) -> Vec<GroupRecord> {
         self.groups.drain(range.as_range()).collect::<Vec<_>>()
+    }
+
+    fn assert_detached_subtree_restore_ready(&self, subtree: &DetachedSubtree) {
+        subtree
+            .validate_detached()
+            .expect("detached subtree must validate before restore");
+        for group in &subtree.groups {
+            assert!(
+                self.anchors.is_detached(group.anchor),
+                "restored group anchors must be detached before restore"
+            );
+        }
+        for payload in &subtree.payloads {
+            assert!(
+                self.payload_anchors.is_detached(payload.anchor),
+                "restored payload anchors must be detached before restore"
+            );
+        }
     }
 
     pub(in crate::slot) fn detach_subtree(&mut self, anchor: AnchorId) -> DetachedSubtree {
@@ -57,20 +73,20 @@ impl SlotTable {
 
     pub(in crate::slot) fn restore_subtree(
         &mut self,
-        insert_index: usize,
-        parent_anchor: AnchorId,
-        key: GroupKey,
-        mut subtree: DetachedSubtree,
+        cursor: ChildCursor,
+        detached: DetachedChild,
     ) -> AnchorId {
+        self.assert_child_cursor_boundary(cursor);
+        let key = detached.expected_key();
+        let mut subtree = detached.into_subtree();
+        let insert_index = cursor.index();
+        let parent_anchor = cursor.parent();
         assert_eq!(
             subtree.root_key(),
             key,
             "restored subtree root key must match the requested group key",
         );
-        #[cfg(any(test, debug_assertions))]
-        subtree
-            .validate_detached()
-            .expect("detached subtree must validate before restore");
+        self.assert_detached_subtree_restore_ready(&subtree);
         let restored_group_count = subtree.groups.len();
         let restored_subtree_len = subtree
             .groups

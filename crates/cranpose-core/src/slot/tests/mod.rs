@@ -1,8 +1,8 @@
 use super::{
-    AnchorState, DetachedSubtree, GroupRange, GroupRecord, NodeLifecycle, NodeRecord, PayloadKind,
-    PayloadRecord, SlotDebugEntryKind, SlotInvariantError, SlotLifecycleCoordinator, SlotPassMode,
-    SlotRetentionDebugStats, SlotTable, SlotTableDebugStats, SlotTreeContext, SlotWriteSession,
-    SlotWriteSessionState,
+    AnchorState, ChildCursor, DetachedChild, DetachedSubtree, GroupRange, GroupRecord,
+    NodeLifecycle, NodeRecord, PayloadKind, PayloadRecord, SlotDebugEntryKind, SlotInvariantError,
+    SlotLifecycleCoordinator, SlotPassMode, SlotRetentionDebugStats, SlotTable,
+    SlotTableDebugStats, SlotTreeContext, SlotWriteSession, SlotWriteSessionState,
 };
 use crate::{
     retention::{RetainKey, RetentionManager},
@@ -272,6 +272,19 @@ fn detached_single_child(parent_key: Key, child_key: Key) -> (SlotHarness, Detac
     let (harness, detached, _) =
         detached_single_child_with_options(parent_key, child_key, None, false, false);
     (harness, detached)
+}
+
+fn restore_detached_child(
+    table: &mut SlotTable,
+    parent_anchor: AnchorId,
+    insert_index: usize,
+    key: GroupKey,
+    detached: DetachedSubtree,
+) -> AnchorId {
+    table.restore_subtree(
+        ChildCursor::new(parent_anchor, insert_index),
+        DetachedChild::new(key, detached),
+    )
 }
 
 fn detached_child_with_grandchild(
