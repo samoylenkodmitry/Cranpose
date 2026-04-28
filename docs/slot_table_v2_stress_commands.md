@@ -15,6 +15,10 @@ CRANPOSE_SLOT_MODEL_STRESS_FRAMES=10000 cargo test --release -p cranpose-core de
 ./run_robot_test.sh --sequential
 ```
 
+The suite has a hard 600-second wall-clock budget by default. Override it with
+`CRANPOSE_SLOT_STRESS_TIMEOUT_SECS`; set it to `0` only for an explicitly
+supervised long local investigation.
+
 `CRANPOSE_VALIDATE_SLOTS=1` enables slot and retained-subtree validation during debug composition passes. The model stress command extends the deterministic Slot Table V2 render-frame model test with the requested number of generated frames; every failure reports the seed, compact scenario script, active debug snapshot, retained-subtree summary, and failed invariant.
 
 Override the generated-frame count when needed:

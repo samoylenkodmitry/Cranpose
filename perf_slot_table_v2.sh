@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CARGO_RUNNER=("$SCRIPT_DIR/cargo-dev.sh")
+ORIGINAL_ARGS=("$@")
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/scripts/dev_build_common.sh"
 
@@ -40,7 +41,8 @@ else
 fi
 STABILITY_THRESHOLD_PCT="${CRANPOSE_SLOT_TABLE_STABILITY_THRESHOLD_PCT:-5}"
 STABILITY_WARMUP_RUNS="${CRANPOSE_SLOT_TABLE_STABILITY_WARMUP_RUNS:-2}"
-STABILITY_ATTEMPTS="${CRANPOSE_SLOT_TABLE_STABILITY_ATTEMPTS:-2}"
+STABILITY_ATTEMPTS="${CRANPOSE_SLOT_TABLE_STABILITY_ATTEMPTS:-4}"
+STABILITY_TIMEOUT_SECS="${CRANPOSE_SLOT_TABLE_STABILITY_TIMEOUT_SECS:-600}"
 PLOT="0"
 SIBLING_THRESHOLD_MATRIX="0"
 SIBLING_THRESHOLD_VALUES="${CRANPOSE_SIBLING_INDEX_THRESHOLDS:-4 8 16 32 64}"
@@ -183,6 +185,22 @@ run_stability_check() {
         echo "Stability check failed: same-tree regression confidence exceeded the configured threshold." >&2
         exit 1
     fi
+}
+
+enforce_stability_timeout_guard() {
+    if [[ "${CRANPOSE_SLOT_TABLE_STABILITY_TIMEOUT_GUARD:-0}" == "1" || "$STABILITY_TIMEOUT_SECS" == "0" ]]; then
+        return
+    fi
+    if ! [[ "$STABILITY_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "CRANPOSE_SLOT_TABLE_STABILITY_TIMEOUT_SECS must be 0 or a positive integer." >&2
+        exit 1
+    fi
+    if ! command -v timeout >/dev/null 2>&1; then
+        echo "timeout is required to enforce the slot-table stability budget." >&2
+        exit 1
+    fi
+    export CRANPOSE_SLOT_TABLE_STABILITY_TIMEOUT_GUARD=1
+    exec timeout --signal=KILL "${STABILITY_TIMEOUT_SECS}s" "$0" "${ORIGINAL_ARGS[@]}"
 }
 
 run_filtered_stability_check_with_retries() {
@@ -453,6 +471,10 @@ if [[ -n "$SAVE_BASELINE" && -n "$COMPARE_BASELINE" ]]; then
     exit 1
 fi
 
+if [[ "$STABILITY_CHECK" == "1" ]]; then
+    enforce_stability_timeout_guard
+fi
+
 echo "Running slot table perf baselines"
 echo "  filter=${FILTER:-<all>}"
 echo "  save_baseline=${SAVE_BASELINE:-<none>}"
@@ -465,6 +487,7 @@ echo "  cooldown_secs=${COOLDOWN_SECS}s"
 if [[ "$STABILITY_CHECK" == "1" ]]; then
     echo "  stability_warmup_runs=$STABILITY_WARMUP_RUNS"
     echo "  stability_attempts=$STABILITY_ATTEMPTS"
+    echo "  stability_timeout=${STABILITY_TIMEOUT_SECS}s"
 fi
 echo "  sibling_threshold=${CRANPOSE_SIBLING_INDEX_THRESHOLD:-<default>}"
 

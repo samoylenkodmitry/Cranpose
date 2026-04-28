@@ -3,6 +3,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CARGO_RUNNER=("$ROOT_DIR/cargo-dev.sh")
+STRESS_TIMEOUT_SECS="${CRANPOSE_SLOT_STRESS_TIMEOUT_SECS:-600}"
+
+if [[ "${CRANPOSE_SLOT_STRESS_TIMEOUT_GUARD:-0}" != "1" && "$STRESS_TIMEOUT_SECS" != "0" ]]; then
+    if ! [[ "$STRESS_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "CRANPOSE_SLOT_STRESS_TIMEOUT_SECS must be 0 or a positive integer." >&2
+        exit 1
+    fi
+    if ! command -v timeout >/dev/null 2>&1; then
+        echo "timeout is required to enforce the stress-suite wall-clock budget." >&2
+        exit 1
+    fi
+    export CRANPOSE_SLOT_STRESS_TIMEOUT_GUARD=1
+    exec timeout --signal=KILL "${STRESS_TIMEOUT_SECS}s" "$0" "$@"
+fi
 
 if [ ! -x "${CARGO_RUNNER[0]}" ]; then
     CARGO_RUNNER=(cargo)
@@ -16,6 +30,7 @@ MODEL_STRESS_FRAMES="${CRANPOSE_SLOT_MODEL_STRESS_FRAMES:-10000}"
 echo "Slot Table V2 stress suite"
 echo "root: $ROOT_DIR"
 echo "model stress frames: $MODEL_STRESS_FRAMES"
+echo "timeout: ${STRESS_TIMEOUT_SECS}s"
 
 run_logged \
     "slot validation workspace tests" \
