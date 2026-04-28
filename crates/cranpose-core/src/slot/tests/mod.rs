@@ -1,8 +1,9 @@
 use super::{
-    AnchorState, ChildCursor, DetachedChild, DetachedSubtree, GroupRange, GroupRecord,
-    NodeLifecycle, NodeRecord, PayloadKind, PayloadRecord, SlotDebugEntryKind, SlotInvariantError,
-    SlotLifecycleCoordinator, SlotPassMode, SlotRetentionDebugStats, SlotTable,
-    SlotTableDebugStats, SlotTreeContext, SlotWriteSession, SlotWriteSessionState,
+    ActiveSubtreeRoot, AnchorState, ChildCursor, DetachedChild, DetachedSubtree, GroupRange,
+    GroupRecord, NodeLifecycle, NodeRecord, PayloadAnchorLifecycle, PayloadKind, PayloadRecord,
+    SlotDebugEntryKind, SlotInvariantError, SlotLifecycleCoordinator, SlotPassMode,
+    SlotRetentionDebugStats, SlotTable, SlotTableDebugStats, SlotTreeContext, SlotWriteSession,
+    SlotWriteSessionState,
 };
 use crate::{
     retention::{RetainKey, RetentionManager},
@@ -420,6 +421,7 @@ fn shuffle<T>(values: &mut [T], seed: &mut u64) {
 }
 
 mod basic;
+mod cursor_invariants;
 mod detach_restore;
 mod keyed_reorder;
 mod model;

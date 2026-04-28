@@ -386,7 +386,7 @@ git diff
   slot: hide raw structural mutation helpers
   ```
 
-* [ ] Add invalid cursor tests.
+* [x] Add invalid cursor tests.
 
   Done means: tests cover cross-parent move rejection, restore key mismatch, restore at non-child boundary, moving grandchildren as siblings, restoring active anchors, and duplicate direct sibling keys.
 
