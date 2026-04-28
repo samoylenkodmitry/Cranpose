@@ -1,6 +1,7 @@
 use super::{
-    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadLocationRegistry, PayloadRecord,
-    SlotLifecycleCoordinator, SlotTableMutationDebugStats, SlotWriteSessionState,
+    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadAnchorRegistry,
+    PayloadLocationRegistry, PayloadRecord, SlotLifecycleCoordinator, SlotTableMutationDebugStats,
+    SlotWriteSessionState,
 };
 use crate::{collections::map::HashMap, AnchorId, ScopeId};
 use std::rc::Rc;
@@ -25,12 +26,11 @@ pub struct SlotTable {
     pub(super) payloads: Vec<PayloadRecord>,
     pub(super) nodes: Vec<NodeRecord>,
     pub(super) anchors: AnchorRegistry,
+    pub(super) payload_anchors: PayloadAnchorRegistry,
     pub(super) payload_locations: PayloadLocationRegistry,
     pub(super) scope_anchor_to_group: HashMap<ScopeId, AnchorId>,
     pub(super) mutation_debug_stats: SlotTableMutationDebugStats,
     next_group_generation: u32,
-    pub(super) next_payload_anchor: usize,
-    pub(super) next_payload_generation: u32,
 }
 
 impl SlotTable {
@@ -42,12 +42,11 @@ impl SlotTable {
             payloads: Vec::new(),
             nodes: Vec::new(),
             anchors: AnchorRegistry::new(),
+            payload_anchors: PayloadAnchorRegistry::new(),
             payload_locations: PayloadLocationRegistry::new(),
             scope_anchor_to_group: HashMap::default(),
             mutation_debug_stats: SlotTableMutationDebugStats::default(),
             next_group_generation: 1,
-            next_payload_anchor: 1,
-            next_payload_generation: 1,
         }
     }
 
@@ -80,6 +79,7 @@ impl SlotTable {
         self.payloads.shrink_to_fit();
         self.nodes.shrink_to_fit();
         self.anchors.shrink_to_fit();
+        self.payload_anchors.shrink_to_fit();
         self.payload_locations.shrink_to_fit();
         self.scope_anchor_to_group.shrink_to_fit();
     }
@@ -93,6 +93,7 @@ impl SlotTable {
         self.groups.clear();
         self.nodes.clear();
         self.anchors.clear();
+        self.payload_anchors.clear();
         self.payload_locations.clear();
         self.scope_anchor_to_group.clear();
         drops

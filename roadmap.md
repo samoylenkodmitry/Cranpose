@@ -162,7 +162,7 @@ git diff
   slot: introduce typed payload anchors
   ```
 
-* [ ] Add `PayloadAnchorRegistry`.
+* [x] Add `PayloadAnchorRegistry`.
 
   Done means: `SlotTable` owns a registry that tracks payload anchors as `Active { owner, index }`, `Detached`, or `Invalidated`; the registry owns free ids and generation reuse; raw `next_payload_anchor` and raw `next_payload_generation` are removed from `SlotTable`.
 

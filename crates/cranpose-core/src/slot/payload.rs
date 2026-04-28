@@ -113,21 +113,7 @@ impl SlotTable {
     }
 
     pub(super) fn allocate_payload_anchor(&mut self) -> PayloadAnchor {
-        let anchor_id = self.next_payload_anchor;
-        self.next_payload_anchor = self
-            .next_payload_anchor
-            .checked_add(1)
-            .expect("payload anchor counter overflow");
-        PayloadAnchor::new(anchor_id, self.allocate_payload_generation())
-    }
-
-    fn allocate_payload_generation(&mut self) -> u32 {
-        let generation = self.next_payload_generation;
-        self.next_payload_generation = self
-            .next_payload_generation
-            .checked_add(1)
-            .expect("payload generation counter overflow");
-        generation
+        self.payload_anchors.allocate()
     }
 
     pub(in crate::slot) fn group_payload_records_at(&self, group_index: usize) -> &[PayloadRecord] {
@@ -246,10 +232,13 @@ impl SlotTable {
         kind: PayloadKind,
         value: T,
     ) -> (PayloadAnchor, Box<dyn std::any::Any>) {
-        let generation = self.allocate_payload_generation();
+        let old_anchor = self.payload_anchor_at(group_index, payload_index);
+        let anchor = self
+            .payload_anchors
+            .bump_generation(old_anchor)
+            .expect("active payload anchor generation must bump");
         let record = self.group_payload_record_at_mut(group_index, payload_index);
-        record.anchor = record.anchor.with_generation(generation);
-        let anchor = record.anchor;
+        record.anchor = anchor;
         let old_value = replace_payload_record(record, kind, value);
         (anchor, old_value)
     }
@@ -294,6 +283,8 @@ impl SlotTable {
         for index in start..range.len() {
             let payload_anchor = self.payloads[range.start() + index].anchor;
             self.payload_locations.insert(payload_anchor, owner, index);
+            self.payload_anchors
+                .set_active(payload_anchor, owner, index);
         }
     }
 
@@ -307,6 +298,8 @@ impl SlotTable {
             for index in 0..range.len() {
                 let payload_anchor = self.payloads[range.start() + index].anchor;
                 self.payload_locations.insert(payload_anchor, owner, index);
+                self.payload_anchors
+                    .set_active(payload_anchor, owner, index);
             }
         }
         self.mutation_debug_stats
@@ -330,6 +323,7 @@ impl SlotTable {
         let start_offset = payload_range.start_offset();
         let removed = self.remove_group_payload_range(payload_range);
         self.clear_payload_locations_for_payloads(&removed);
+        self.invalidate_payload_anchors(&removed);
         self.refresh_group_payload_locations(owner, start_offset);
         removed
     }
@@ -359,6 +353,7 @@ impl SlotTable {
         let removed = self.extract_payload_segment_for_groups(removed_group_index, removed_groups);
         if clear_locations {
             self.clear_payload_locations_for_payloads(&removed);
+            self.mark_payload_anchors_detached(&removed);
         }
         removed
     }
@@ -405,7 +400,7 @@ impl SlotTable {
         if total_payload_count == 0 {
             self.payload_locations.clear();
             self.payload_locations.shrink_to_fit();
-            self.next_payload_anchor = 1;
+            self.payload_anchors.shrink_to_fit();
             return;
         }
 
@@ -430,11 +425,7 @@ impl SlotTable {
 
         self.payload_locations.clear();
         self.payload_locations.shrink_to_fit();
+        self.payload_anchors.shrink_to_fit();
         self.rebuild_payload_locations_for_group_range(GroupRange::new(0, self.groups.len()));
-        self.next_payload_anchor = self.next_payload_anchor.max(
-            max_payload_anchor
-                .checked_add(1)
-                .expect("next payload anchor counter overflow"),
-        );
     }
 }

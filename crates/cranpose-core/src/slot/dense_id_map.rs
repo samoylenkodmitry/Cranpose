@@ -21,6 +21,10 @@ impl<T> DenseIdMap<T> {
         self.entries.get(id).and_then(Option::as_ref)
     }
 
+    pub(super) fn get_mut(&mut self, id: usize) -> Option<&mut T> {
+        self.entries.get_mut(id).and_then(Option::as_mut)
+    }
+
     pub(super) fn insert(&mut self, id: usize, value: T) -> Option<T> {
         self.ensure_index(id);
         let entry = &mut self.entries[id];

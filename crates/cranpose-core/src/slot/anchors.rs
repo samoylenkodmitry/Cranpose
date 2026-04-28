@@ -284,6 +284,7 @@ impl SlotTable {
         for anchor in subtree.group_anchors() {
             removed |= self.anchors.invalidate_state(anchor);
         }
+        self.invalidate_detached_subtree_payload_anchors(subtree);
         if removed {
             self.anchors.maybe_shrink_sparse_storage();
         }
