@@ -615,7 +615,7 @@ git diff
   slot: instrument index refresh work
   ```
 
-* [ ] Batch group anchor active-index refreshes inside writer transactions.
+* [x] Batch group anchor active-index refreshes inside writer transactions.
 
   Done means: repeated structural mutations record dirty active group ranges and refresh anchor active indices once at the end of the safe mutation boundary where possible. Validation still passes after each operation in debug/test paths where invariants are checked.
 

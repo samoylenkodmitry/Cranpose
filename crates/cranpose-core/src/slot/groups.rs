@@ -86,11 +86,6 @@ impl SlotTable {
         SubtreeRange::from_root_len(group_index, self.group_subtree_len_at_index(group_index))
     }
 
-    #[inline(always)]
-    pub(in crate::slot) fn group_subtree_range(&self, anchor: AnchorId) -> SubtreeRange {
-        self.group_subtree_range_at_index(self.current_group_index(anchor))
-    }
-
     pub(in crate::slot) fn group_subtree_node_count_at_index(&self, group_index: usize) -> usize {
         self.groups[group_index].subtree_node_count as usize
     }
