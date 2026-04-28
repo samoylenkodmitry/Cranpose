@@ -20,7 +20,7 @@ impl SlotTable {
         );
         assert_eq!(
             self.payload_generation_at(group_index, payload_index),
-            slot.generation(),
+            slot.anchor().generation(),
             "value slot generation mismatch"
         );
         (group_index, payload_index)

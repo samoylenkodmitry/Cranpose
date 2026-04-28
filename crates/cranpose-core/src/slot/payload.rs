@@ -7,7 +7,11 @@ use super::{
     DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadKind, PayloadRange,
     PayloadRecord, SlotTable,
 };
-use crate::{retention::RetentionManager, slot_storage::ValueSlotId, AnchorId};
+use crate::{
+    retention::RetentionManager,
+    slot_storage::{PayloadAnchor, ValueSlotId},
+    AnchorId,
+};
 use std::any::TypeId;
 use std::mem;
 
@@ -108,13 +112,13 @@ impl SlotTable {
         );
     }
 
-    pub(super) fn allocate_payload_anchor(&mut self) -> usize {
-        let anchor = self.next_payload_anchor;
+    pub(super) fn allocate_payload_anchor(&mut self) -> PayloadAnchor {
+        let anchor_id = self.next_payload_anchor;
         self.next_payload_anchor = self
             .next_payload_anchor
             .checked_add(1)
             .expect("payload anchor counter overflow");
-        anchor
+        PayloadAnchor::new(anchor_id, self.allocate_payload_generation())
     }
 
     fn allocate_payload_generation(&mut self) -> u32 {
@@ -136,14 +140,19 @@ impl SlotTable {
             .owner
     }
 
-    pub(super) fn payload_anchor_at(&self, group_index: usize, payload_index: usize) -> usize {
+    pub(super) fn payload_anchor_at(
+        &self,
+        group_index: usize,
+        payload_index: usize,
+    ) -> PayloadAnchor {
         self.group_payload_record_at(group_index, payload_index)
             .anchor
     }
 
     pub(super) fn payload_generation_at(&self, group_index: usize, payload_index: usize) -> u32 {
         self.group_payload_record_at(group_index, payload_index)
-            .generation
+            .anchor
+            .generation()
     }
 
     fn payload_value_is<T: 'static>(&self, group_index: usize, payload_index: usize) -> bool {
@@ -162,11 +171,8 @@ impl SlotTable {
             .expect("payload index should resolve")
     }
 
-    fn payload_slot_identity_at(&self, group_index: usize, payload_index: usize) -> (usize, u32) {
-        (
-            self.payload_anchor_at(group_index, payload_index),
-            self.payload_generation_at(group_index, payload_index),
-        )
+    fn payload_slot_identity_at(&self, group_index: usize, payload_index: usize) -> PayloadAnchor {
+        self.payload_anchor_at(group_index, payload_index)
     }
 
     pub(in crate::slot) fn group_payload_record_at_mut(
@@ -198,17 +204,15 @@ impl SlotTable {
         insert_index: usize,
         kind: PayloadKind,
         value: T,
-    ) -> (usize, u32) {
+    ) -> PayloadAnchor {
         let owner_index = self.current_group_index(owner);
         let anchor = self.allocate_payload_anchor();
-        let generation = self.allocate_payload_generation();
         self.insert_group_payload(
             owner_index,
             insert_index,
             PayloadRecord {
                 owner,
                 anchor,
-                generation,
                 type_id: TypeId::of::<T>(),
                 type_name: std::any::type_name::<T>(),
                 kind,
@@ -216,7 +220,7 @@ impl SlotTable {
             },
         );
         self.refresh_group_payload_locations(owner, insert_index);
-        (anchor, generation)
+        anchor
     }
 
     pub(super) fn replace_payload_value<T: 'static>(
@@ -241,13 +245,13 @@ impl SlotTable {
         payload_index: usize,
         kind: PayloadKind,
         value: T,
-    ) -> (usize, u32, Box<dyn std::any::Any>) {
+    ) -> (PayloadAnchor, Box<dyn std::any::Any>) {
         let generation = self.allocate_payload_generation();
         let record = self.group_payload_record_at_mut(group_index, payload_index);
-        record.generation = generation;
+        record.anchor = record.anchor.with_generation(generation);
         let anchor = record.anchor;
         let old_value = replace_payload_record(record, kind, value);
-        (anchor, generation, old_value)
+        (anchor, old_value)
     }
 
     pub(super) fn use_value_payload_at_cursor<T: 'static>(
@@ -260,23 +264,22 @@ impl SlotTable {
         let group_index = self.current_group_index(owner);
         let payload_len = self.group_payload_len_at(group_index);
 
-        let (anchor, generation, deferred_drop) = if payload_index < payload_len {
-            let (anchor, generation) = self.payload_slot_identity_at(group_index, payload_index);
+        let (anchor, deferred_drop) = if payload_index < payload_len {
+            let anchor = self.payload_slot_identity_at(group_index, payload_index);
             if self.payload_value_is::<T>(group_index, payload_index) {
                 self.update_payload_kind(group_index, payload_index, kind);
-                (anchor, generation, None)
+                (anchor, None)
             } else {
-                let (anchor, generation, old_value) =
+                let (anchor, old_value) =
                     self.replace_payload_identity(group_index, payload_index, kind, init());
-                (anchor, generation, Some(DeferredDrop::payload(old_value)))
+                (anchor, Some(DeferredDrop::payload(old_value)))
             }
         } else {
-            let (anchor, generation) =
-                self.insert_value_payload(owner, payload_index, kind, init());
-            (anchor, generation, None)
+            let anchor = self.insert_value_payload(owner, payload_index, kind, init());
+            (anchor, None)
         };
 
-        (ValueSlotId::new(anchor, generation), deferred_drop)
+        (ValueSlotId::new(anchor), deferred_drop)
     }
 
     pub(super) fn clear_payload_locations_for_payloads(&mut self, payloads: &[PayloadRecord]) {
@@ -409,13 +412,13 @@ impl SlotTable {
         let max_payload_anchor = self
             .payloads
             .iter()
-            .map(|payload| payload.anchor)
+            .map(|payload| payload.anchor.id())
             .chain(
                 retention
                     .as_ref()
                     .into_iter()
                     .flat_map(|retention| retention.subtrees())
-                    .flat_map(|subtree| subtree.payloads.iter().map(|payload| payload.anchor)),
+                    .flat_map(|subtree| subtree.payloads.iter().map(|payload| payload.anchor.id())),
             )
             .max()
             .unwrap_or(0);

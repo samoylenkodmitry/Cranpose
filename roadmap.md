@@ -137,7 +137,7 @@ git diff
 
 ## Phase 2 — Replace payload-location semantics with a real payload anchor registry
 
-* [ ] Introduce `PayloadAnchor` as the semantic payload identity.
+* [x] Introduce `PayloadAnchor` as the semantic payload identity.
 
   Done means: `PayloadAnchor` is a typed generational handle, not a naked `usize`; `PayloadRecord` stores `PayloadAnchor`; `ValueSlotId` stores `PayloadAnchor`; callers cannot confuse payload anchor ids with table indices.
 

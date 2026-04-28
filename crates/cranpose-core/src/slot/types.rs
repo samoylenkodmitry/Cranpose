@@ -1,7 +1,10 @@
 use super::GroupRecord;
 use crate::collections::map::HashSet;
 use crate::slot::DeferredDrop;
-use crate::{slot_storage::GroupKey, AnchorId, NodeId, ScopeId};
+use crate::{
+    slot_storage::{GroupKey, PayloadAnchor},
+    AnchorId, NodeId, ScopeId,
+};
 use std::any::{Any, TypeId};
 use std::mem;
 
@@ -19,8 +22,7 @@ pub(crate) enum NodeLifecycle {
 
 pub(super) struct PayloadRecord {
     pub(super) owner: AnchorId,
-    pub(super) anchor: usize,
-    pub(super) generation: u32,
+    pub(super) anchor: PayloadAnchor,
     pub(super) type_id: TypeId,
     pub(super) type_name: &'static str,
     pub(super) kind: PayloadKind,

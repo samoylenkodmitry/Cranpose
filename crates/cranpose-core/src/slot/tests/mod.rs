@@ -7,7 +7,8 @@ use super::{
 use crate::{
     retention::{RetainKey, RetentionManager},
     slot_storage::{
-        BeginGroupInput, GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, ValueSlotId,
+        BeginGroupInput, GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind,
+        PayloadAnchor, ValueSlotId,
     },
     AnchorId, Applier, Key, MemoryApplier, Node, NodeId, ScopeId,
 };
@@ -28,8 +29,7 @@ struct SlotHarness {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct PayloadIdentity {
-    anchor: usize,
-    generation: u32,
+    anchor: PayloadAnchor,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -148,7 +148,6 @@ impl From<&PayloadRecord> for PayloadIdentity {
     fn from(record: &PayloadRecord) -> Self {
         Self {
             anchor: record.anchor,
-            generation: record.generation,
         }
     }
 }
@@ -157,7 +156,6 @@ impl From<ValueSlotId> for PayloadIdentity {
     fn from(slot: ValueSlotId) -> Self {
         Self {
             anchor: slot.anchor(),
-            generation: slot.generation(),
         }
     }
 }

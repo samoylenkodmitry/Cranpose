@@ -1,5 +1,5 @@
 use super::dense_id_map::DenseIdMap;
-use crate::AnchorId;
+use crate::{slot_storage::PayloadAnchor, AnchorId};
 
 #[derive(Default)]
 pub(super) struct PayloadLocationRegistry {
@@ -13,16 +13,16 @@ impl PayloadLocationRegistry {
         }
     }
 
-    pub(super) fn get(&self, payload_anchor: usize) -> Option<(AnchorId, usize)> {
-        self.locations.get(payload_anchor).copied()
+    pub(super) fn get(&self, payload_anchor: PayloadAnchor) -> Option<(AnchorId, usize)> {
+        self.locations.get(payload_anchor.id()).copied()
     }
 
-    pub(super) fn insert(&mut self, payload_anchor: usize, owner: AnchorId, index: usize) {
-        self.locations.insert(payload_anchor, (owner, index));
+    pub(super) fn insert(&mut self, payload_anchor: PayloadAnchor, owner: AnchorId, index: usize) {
+        self.locations.insert(payload_anchor.id(), (owner, index));
     }
 
-    pub(super) fn remove(&mut self, payload_anchor: usize) -> Option<(AnchorId, usize)> {
-        self.locations.remove(payload_anchor)
+    pub(super) fn remove(&mut self, payload_anchor: PayloadAnchor) -> Option<(AnchorId, usize)> {
+        self.locations.remove(payload_anchor.id())
     }
 
     #[cfg(any(test, debug_assertions))]

@@ -68,24 +68,50 @@ impl GroupId {
     }
 }
 
-/// Opaque handle to a value slot in the slot storage.
+/// Stable semantic identity for a payload record.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct ValueSlotId {
-    pub(crate) anchor: usize,
-    pub(crate) generation: u32,
+pub(crate) struct PayloadAnchor {
+    id: u32,
+    generation: u32,
 }
 
-impl ValueSlotId {
-    pub(crate) fn new(anchor: usize, generation: u32) -> Self {
-        Self { anchor, generation }
+impl PayloadAnchor {
+    pub(crate) fn new(id: usize, generation: u32) -> Self {
+        Self {
+            id: checked_usize_to_u32(id, "payload anchor id"),
+            generation,
+        }
     }
 
-    pub(crate) fn anchor(self) -> usize {
-        self.anchor
+    pub(crate) fn id(self) -> usize {
+        self.id as usize
     }
 
     pub(crate) fn generation(self) -> u32 {
         self.generation
+    }
+
+    pub(crate) fn with_generation(self, generation: u32) -> Self {
+        Self {
+            id: self.id,
+            generation,
+        }
+    }
+}
+
+/// Opaque handle to a value slot in the slot storage.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) struct ValueSlotId {
+    pub(crate) anchor: PayloadAnchor,
+}
+
+impl ValueSlotId {
+    pub(crate) fn new(anchor: PayloadAnchor) -> Self {
+        Self { anchor }
+    }
+
+    pub(crate) fn anchor(self) -> PayloadAnchor {
+        self.anchor
     }
 }
 

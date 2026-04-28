@@ -194,8 +194,11 @@ fn value_slot_type_replacement_advances_generation() {
     });
     harness.finish_pass();
 
-    assert_eq!(replacement_slot.anchor(), old_slot.anchor());
-    assert_ne!(replacement_slot.generation(), old_slot.generation());
+    assert_eq!(replacement_slot.anchor().id(), old_slot.anchor().id());
+    assert_ne!(
+        replacement_slot.anchor().generation(),
+        old_slot.anchor().generation()
+    );
     assert_eq!(*harness.table.read_value::<u32>(replacement_slot), 7);
 
     let stale_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -241,8 +244,11 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     });
     harness.finish_pass();
 
-    assert_eq!(new_slot.anchor(), old_slot.anchor());
-    assert_ne!(new_slot.generation(), old_slot.generation());
+    assert_eq!(new_slot.anchor().id(), old_slot.anchor().id());
+    assert_ne!(
+        new_slot.anchor().generation(),
+        old_slot.anchor().generation()
+    );
     assert_eq!(*harness.table.read_value::<i32>(new_slot), 77);
 
     let stale_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

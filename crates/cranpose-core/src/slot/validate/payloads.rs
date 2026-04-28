@@ -33,7 +33,11 @@ pub(super) fn validate_group_payloads(
 
     for (payload_index, payload) in view.payloads[payload_start..payload_end].iter().enumerate() {
         if payload.owner != group.anchor {
-            return Err(view.payload_owner_mismatch(payload.anchor, group.anchor, payload.owner));
+            return Err(view.payload_owner_mismatch(
+                payload.anchor.id(),
+                group.anchor,
+                payload.owner,
+            ));
         }
         checks.validate_payload(group_index, group, payload_index, payload)?;
     }
@@ -65,7 +69,7 @@ pub(super) fn validate_active_payload_location(
     }
 
     Err(SlotInvariantError::PayloadLocationMismatch {
-        payload_anchor: payload.anchor,
+        payload_anchor: payload.anchor.id(),
         expected: expected_location,
         actual,
     })
@@ -86,7 +90,7 @@ pub(super) fn validate_payload_locations(table: &SlotTable) -> Result<(), SlotIn
             .get(payload_index)
             .map(|payload| PayloadLocationRecord {
                 owner: payload.owner,
-                payload_anchor: payload.anchor,
+                payload_anchor: payload.anchor.id(),
             });
         if actual
             != Some(PayloadLocationRecord {
@@ -110,7 +114,10 @@ pub(super) fn validate_payload_locations(table: &SlotTable) -> Result<(), SlotIn
 mod tests {
     use super::*;
     use crate::slot::PayloadKind;
-    use crate::{slot_storage::GroupKey, AnchorId};
+    use crate::{
+        slot_storage::{GroupKey, PayloadAnchor},
+        AnchorId,
+    };
     use std::any::TypeId;
 
     fn one_payload_table(owner: AnchorId, payload_anchor: usize) -> SlotTable {
@@ -131,8 +138,7 @@ mod tests {
         });
         table.payloads.push(PayloadRecord {
             owner,
-            anchor: payload_anchor,
-            generation: 1,
+            anchor: PayloadAnchor::new(payload_anchor, 1),
             type_id: TypeId::of::<i32>(),
             type_name: std::any::type_name::<i32>(),
             kind: PayloadKind::Internal,
@@ -150,7 +156,7 @@ mod tests {
         let mut table = one_payload_table(owner, actual_payload_anchor);
         table
             .payload_locations
-            .insert(stale_payload_anchor, owner, 0);
+            .insert(PayloadAnchor::new(stale_payload_anchor, 1), owner, 0);
 
         assert_eq!(
             validate_payload_locations(&table),

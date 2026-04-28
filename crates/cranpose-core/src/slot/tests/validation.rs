@@ -177,7 +177,7 @@ fn validate_reports_payload_owner_mismatch_structurally() {
         table.validate(),
         Err(SlotInvariantError::PayloadOwnerMismatch {
             tree: SlotTreeContext::Active,
-            payload_anchor,
+            payload_anchor: payload_anchor.id(),
             expected: table.groups[0].anchor,
             actual: AnchorId::INVALID,
         })
@@ -221,12 +221,11 @@ fn validate_reports_payload_out_of_range_structurally() {
 fn validate_reports_payload_count_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(488);
     let owner = table.groups[0].anchor;
-    let extra_anchor = 10_001;
+    let extra_anchor = PayloadAnchor::new(10_001, 1);
 
     table.payloads.push(super::PayloadRecord {
         owner,
         anchor: extra_anchor,
-        generation: 1,
         type_id: TypeId::of::<i32>(),
         type_name: std::any::type_name::<i32>(),
         kind: super::PayloadKind::Internal,
@@ -248,12 +247,16 @@ fn validate_reports_payload_count_mismatch_structurally() {
 fn validate_reports_payload_location_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(482);
     let stale_payload_anchor = table.group_payload_record_at(0, 0).anchor;
-    table.group_payload_record_at_mut(0, 0).anchor = stale_payload_anchor + 1;
+    let mismatched_payload_anchor = PayloadAnchor::new(
+        stale_payload_anchor.id() + 1,
+        stale_payload_anchor.generation(),
+    );
+    table.group_payload_record_at_mut(0, 0).anchor = mismatched_payload_anchor;
 
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::PayloadLocationMismatch {
-            payload_anchor: stale_payload_anchor + 1,
+            payload_anchor: mismatched_payload_anchor.id(),
             expected: (table.groups[0].anchor, 0),
             actual: None,
         })
@@ -275,7 +278,7 @@ fn validate_reports_payload_location_stale_owner_structurally() {
     assert_eq!(
         table.validate(),
         Err(SlotInvariantError::PayloadLocationMismatch {
-            payload_anchor,
+            payload_anchor: payload_anchor.id(),
             expected: (new_anchor, 0),
             actual: Some((old_anchor, 0)),
         })
@@ -287,7 +290,7 @@ fn validate_reports_payload_anchor_count_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(483);
     table
         .payload_locations
-        .insert(999, table.groups[0].anchor, 0);
+        .insert(PayloadAnchor::new(999, 1), table.groups[0].anchor, 0);
 
     assert_eq!(
         table.validate(),
@@ -526,7 +529,7 @@ fn compact_payload_namespace_preserves_active_value_slots() {
     });
     harness.finish_pass();
     assert!(
-        retained_slot.anchor() > 1_024,
+        retained_slot.anchor().id() > 1_024,
         "test must exercise a sparse active payload namespace"
     );
 
@@ -603,7 +606,7 @@ fn compact_payload_namespace_preserves_retained_value_slots() {
     });
     harness.finish_pass();
     assert!(
-        retained_slot.anchor() > 1_024,
+        retained_slot.anchor().id() > 1_024,
         "test must exercise a sparse retained payload namespace"
     );
 
@@ -916,8 +919,11 @@ fn disposed_identities_reuse_only_after_generation_bump() {
     });
     harness.finish_pass();
 
-    assert_eq!(reused_payload_slot.anchor(), active_slot.anchor());
-    assert_ne!(reused_payload_slot.generation(), active_slot.generation());
+    assert_eq!(reused_payload_slot.anchor().id(), active_slot.anchor().id());
+    assert_ne!(
+        reused_payload_slot.anchor().generation(),
+        active_slot.anchor().generation()
+    );
     assert_eq!(*harness.table.read_value::<i32>(reused_payload_slot), 50);
 
     let stale_active_read = panic::catch_unwind(AssertUnwindSafe(|| {

@@ -425,7 +425,7 @@ fn detached_validate_rejects_payload_owner_outside_subtree() {
         detached.validate_detached(),
         Err(SlotInvariantError::PayloadOwnerMismatch {
             tree: SlotTreeContext::Detached { root_key },
-            payload_anchor,
+            payload_anchor: payload_anchor.id(),
             expected: expected_owner,
             actual: outside_anchor,
         })
