@@ -55,15 +55,15 @@ impl<T> DenseIdMap<T> {
         self.entries.capacity()
     }
 
-    pub(super) fn storage_len(&self) -> usize {
-        self.entries.len()
-    }
-
     pub(super) fn iter(&self) -> impl Iterator<Item = (usize, &T)> + '_ {
         self.entries
             .iter()
             .enumerate()
             .filter_map(|(id, entry)| entry.as_ref().map(|value| (id, value)))
+    }
+
+    pub(super) fn storage_len(&self) -> usize {
+        self.entries.len()
     }
 
     pub(super) fn shrink_to_fit(&mut self) {

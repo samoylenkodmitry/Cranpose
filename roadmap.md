@@ -81,7 +81,7 @@ git diff
 
 ## Phase 1 — Lock the correct identity contract in tests
 
-* [ ] Add regression coverage proving active group anchors survive storage compaction.
+* [x] Add regression coverage proving active group anchors survive storage compaction.
 
   Done means: a test creates active groups, records their `AnchorId`s, triggers the storage/namespace compaction path currently used by the runtime, validates the table, and asserts the same anchors still identify the same groups.
 

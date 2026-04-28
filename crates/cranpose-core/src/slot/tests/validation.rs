@@ -322,6 +322,72 @@ fn compact_storage_discards_removed_payload_location_entries() {
 }
 
 #[test]
+fn compact_anchor_namespace_preserves_active_group_anchors() {
+    const STATIC_KEY: Key = 603;
+    const GROUP_COUNT: usize = 1_100;
+    const RETAINED_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        for explicit_key in 0..GROUP_COUNT as Key {
+            let group = begin_keyed(session, STATIC_KEY, explicit_key, None);
+            assert_eq!(group.kind, GroupStartKind::Inserted);
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+        }
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let retained_anchor = harness.session(|session| {
+        let group = begin_keyed(session, STATIC_KEY, RETAINED_EXPLICIT_KEY, None);
+        assert_eq!(group.kind, GroupStartKind::Moved);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        group.anchor
+    });
+    harness.finish_pass();
+
+    assert_eq!(harness.table.groups.len(), 1);
+    assert!(
+        retained_anchor.id as usize > 1_024,
+        "test must exercise a sparse active anchor namespace"
+    );
+    let snapshot_before = harness.identity_snapshot(None, &[]);
+    let group_keys_before = harness
+        .table
+        .groups
+        .iter()
+        .map(|group| (group.anchor, group.key))
+        .collect::<Vec<_>>();
+
+    harness.table.compact_anchor_namespace(None, |_| None);
+
+    let snapshot_after = harness.identity_snapshot(None, &[]);
+    assert_eq!(
+        snapshot_after.active_group_anchors,
+        snapshot_before.active_group_anchors
+    );
+    assert_eq!(
+        harness.table.group_anchor_state(retained_anchor),
+        Some(AnchorState::Active(0))
+    );
+    assert_eq!(
+        harness
+            .table
+            .groups
+            .iter()
+            .map(|group| (group.anchor, group.key))
+            .collect::<Vec<_>>(),
+        group_keys_before
+    );
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
 fn node_tail_range_past_group_end_removes_nothing() {
     let mut table = composed_group_with_value_and_node_table(602);
     let node_count = table.group_node_len_at(0);
