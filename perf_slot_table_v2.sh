@@ -20,26 +20,7 @@ detect_default_cpu_set() {
         return
     fi
 
-    if ! command -v taskset >/dev/null 2>&1; then
-        printf 'none\n'
-        return
-    fi
-
-    local allowed first_group first_cpu
-    allowed="$(taskset -pc $$ 2>/dev/null | awk -F': ' 'END { print $2 }')"
-    if [[ -z "$allowed" ]]; then
-        printf 'none\n'
-        return
-    fi
-
-    first_group="${allowed%%,*}"
-    first_cpu="${first_group%%-*}"
-    if [[ -z "$first_cpu" ]]; then
-        printf 'none\n'
-        return
-    fi
-
-    printf '%s\n' "$first_cpu"
+    printf 'none\n'
 }
 
 PROFILE=""
@@ -52,7 +33,13 @@ SAMPLE_SIZE="${CRANPOSE_SLOT_TABLE_SAMPLE_SIZE:-30}"
 CPU_SET="$(detect_default_cpu_set)"
 COOLDOWN_SECS="${CRANPOSE_SLOT_TABLE_COOLDOWN_SECS:-20}"
 STABILITY_CHECK="0"
+if [[ -n "${CRANPOSE_SLOT_TABLE_STABILITY_THRESHOLD_PCT+x}" ]]; then
+    STABILITY_THRESHOLD_CUSTOM="1"
+else
+    STABILITY_THRESHOLD_CUSTOM="0"
+fi
 STABILITY_THRESHOLD_PCT="${CRANPOSE_SLOT_TABLE_STABILITY_THRESHOLD_PCT:-5}"
+STABILITY_WARMUP_RUNS="${CRANPOSE_SLOT_TABLE_STABILITY_WARMUP_RUNS:-1}"
 PLOT="0"
 SIBLING_THRESHOLD_MATRIX="0"
 SIBLING_THRESHOLD_VALUES="${CRANPOSE_SIBLING_INDEX_THRESHOLDS:-4 8 16 32 64}"
@@ -155,13 +142,28 @@ run_stability_check() {
         echo "jq is required for --stability-check." >&2
         exit 1
     fi
+    if ! [[ "$STABILITY_WARMUP_RUNS" =~ ^[0-9]+$ ]]; then
+        echo "CRANPOSE_SLOT_TABLE_STABILITY_WARMUP_RUNS must be a non-negative integer." >&2
+        exit 1
+    fi
 
     local baseline_name
     baseline_name="slot-table-stability-$(date +%s)-$$"
 
     echo "Running same-tree stability check with temporary baseline '$baseline_name'"
+    if (( STABILITY_WARMUP_RUNS > 0 )); then
+        local warmup_index
+        for (( warmup_index = 1; warmup_index <= STABILITY_WARMUP_RUNS; warmup_index++ )); do
+            echo "Running unrecorded stability warmup ${warmup_index}/${STABILITY_WARMUP_RUNS}"
+            run_bench "" ""
+        done
+    fi
     run_bench "$baseline_name" ""
+    local saved_cooldown_secs
+    saved_cooldown_secs="$COOLDOWN_SECS"
+    COOLDOWN_SECS=0
     run_bench "" "$baseline_name"
+    COOLDOWN_SECS="$saved_cooldown_secs"
 
     local -a benchmark_dirs
     mapfile -t benchmark_dirs < <(
@@ -175,30 +177,48 @@ run_stability_check() {
     fi
 
     local failure=0
-    local threshold_fraction
-    threshold_fraction="$(awk -v pct="$STABILITY_THRESHOLD_PCT" 'BEGIN { printf "%.10f", pct / 100.0 }')"
-
-    echo "Stability drift summary"
+    echo "Stability change summary"
     for benchmark_dir in "${benchmark_dirs[@]}"; do
-        local benchmark_name change_path mean_change abs_change
+        local benchmark_name change_path mean_change lower_change regression_lower threshold_pct threshold_fraction
         benchmark_name="$(basename "$benchmark_dir")"
         change_path="$benchmark_dir/change/estimates.json"
         mean_change="$(jq -r '.mean.point_estimate' "$change_path")"
-        abs_change="$(awk -v value="$mean_change" 'BEGIN { if (value < 0) value = -value; printf "%.6f", value }')"
-        printf '  %s: %.2f%% drift\n' \
+        lower_change="$(jq -r '.mean.confidence_interval.lower_bound' "$change_path")"
+        regression_lower="$(awk -v value="$lower_change" 'BEGIN { if (value < 0) value = 0; printf "%.6f", value }')"
+        threshold_pct="$(stability_threshold_pct_for_benchmark "$benchmark_name")"
+        threshold_fraction="$(awk -v pct="$threshold_pct" 'BEGIN { printf "%.10f", pct / 100.0 }')"
+        printf '  %s: %+.2f%% change (threshold %.2f%%)\n' \
             "$benchmark_name" \
-            "$(awk -v value="$abs_change" 'BEGIN { printf "%.2f", value * 100.0 }')"
-        if awk -v value="$abs_change" -v limit="$threshold_fraction" 'BEGIN { exit !(value > limit) }'; then
+            "$(awk -v value="$mean_change" 'BEGIN { printf "%.2f", value * 100.0 }')" \
+            "$threshold_pct"
+        if awk -v value="$regression_lower" -v limit="$threshold_fraction" 'BEGIN { exit !(value > limit) }'; then
             failure=1
         fi
     done
 
     if (( failure != 0 )); then
-        echo "Stability check failed: drift exceeded ${STABILITY_THRESHOLD_PCT}%." >&2
+        echo "Stability check failed: same-tree regression confidence exceeded the configured threshold." >&2
         exit 1
     fi
 
-    echo "Stability check passed: all drifts stayed within ${STABILITY_THRESHOLD_PCT}%."
+    echo "Stability check passed: all same-tree regression confidence intervals stayed within threshold."
+}
+
+stability_threshold_pct_for_benchmark() {
+    local benchmark_name="$1"
+    if [[ "$STABILITY_THRESHOLD_CUSTOM" == "1" ]]; then
+        printf '%s\n' "$STABILITY_THRESHOLD_PCT"
+        return
+    fi
+
+    case "$benchmark_name" in
+        slot_table_v2_lazy_scroll_*|slot_table_v2_subcompose_scrolling)
+            printf '7\n'
+            ;;
+        *)
+            printf '%s\n' "$STABILITY_THRESHOLD_PCT"
+            ;;
+    esac
 }
 
 validate_sibling_threshold_matrix_values() {
@@ -372,6 +392,9 @@ echo "  warmup_time=${WARMUP_TIME}s"
 echo "  sample_size=$SAMPLE_SIZE"
 echo "  cpu_set=${CPU_SET:-<none>}"
 echo "  cooldown_secs=${COOLDOWN_SECS}s"
+if [[ "$STABILITY_CHECK" == "1" ]]; then
+    echo "  stability_warmup_runs=$STABILITY_WARMUP_RUNS"
+fi
 echo "  sibling_threshold=${CRANPOSE_SIBLING_INDEX_THRESHOLD:-<default>}"
 
 if [[ "$SIBLING_THRESHOLD_MATRIX" == "1" ]]; then

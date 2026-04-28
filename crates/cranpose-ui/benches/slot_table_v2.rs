@@ -12,7 +12,7 @@ use cranpose_ui::{
     measure_layout, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier,
     Size, Text, TextStyle,
 };
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use std::cell::Cell;
 use std::hint::black_box;
 use std::rc::Rc;
@@ -23,11 +23,17 @@ const KEYED_REVERSE_SIZES: [usize; 5] = [16, 64, 256, 1_024, 4_096];
 const KEYED_ROTATE_ITEMS: usize = 1_024;
 const KEYED_SHUFFLE_ITEMS: usize = 1_024;
 const KEYED_SHUFFLE_ORDER_COUNT: usize = 64;
+const KEYED_REVERSE_BENCH_STEPS: usize = 2;
+const KEYED_ROTATE_BENCH_STEPS: usize = 16;
+const KEYED_SHUFFLE_BENCH_STEPS: usize = 16;
 const CONDITIONAL_TOGGLE_ITEMS: usize = 1_024;
+const CONDITIONAL_TOGGLE_BENCH_STEPS: usize = 2;
 const TAB_PAYLOAD_GROUP_SIZES: [usize; 3] = [16, 192, 1_024];
+const TAB_SWITCH_BENCH_STEPS: usize = 2;
 const SUBCOMPOSE_TOTAL_SLOTS: usize = 2_048;
 const SUBCOMPOSE_VISIBLE_SLOTS: usize = 48;
 const SUBCOMPOSE_SCROLL_STEP: usize = 12;
+const SUBCOMPOSE_SCROLL_BENCH_STEPS: usize = 16;
 const SUBCOMPOSE_CONTENT_TYPES: u64 = 6;
 const LAZY_LIST_TOTAL_ITEMS: usize = 2_048;
 const LAZY_LIST_START_INDEX: usize = 768;
@@ -40,6 +46,7 @@ const LAZY_LIST_ROOT_SIZE: Size = Size {
     height: 420.0,
 };
 const LAZY_LIST_SCROLL_PATTERN: [f32; 6] = [-220.0, -180.0, 96.0, 96.0, 104.0, 104.0];
+const LAZY_LIST_SCROLL_BENCH_STEPS: usize = LAZY_LIST_SCROLL_PATTERN.len();
 
 #[composable]
 fn KeyedItem(id: u64) {
@@ -495,13 +502,25 @@ fn shuffle_order(order: &mut [u64], state: &mut u64) {
     }
 }
 
+fn bench_stateful_steps<Step>(b: &mut Bencher<'_>, steps_per_iteration: usize, mut step: Step)
+where
+    Step: FnMut(),
+{
+    assert!(steps_per_iteration > 0);
+    b.iter(|| {
+        for _ in 0..steps_per_iteration {
+            step();
+        }
+    });
+}
+
 fn bench_keyed_reorder_matrix(c: &mut Criterion) {
     for item_count in KEYED_REVERSE_SIZES {
         let mut fixture = KeyedReorderFixture::new(item_count, KeyedOrderScenario::Reverse);
         fixture.render();
         let name = format!("slot_table_v2_keyed_reverse_{item_count}");
         c.bench_function(&name, |b| {
-            b.iter(|| fixture.step());
+            bench_stateful_steps(b, KEYED_REVERSE_BENCH_STEPS, || fixture.step());
         });
     }
 
@@ -509,7 +528,7 @@ fn bench_keyed_reorder_matrix(c: &mut Criterion) {
         KeyedReorderFixture::new(KEYED_ROTATE_ITEMS, KeyedOrderScenario::RotateFrontToBack);
     fixture.render();
     c.bench_function("slot_table_v2_keyed_rotate_front_to_back_1024", |b| {
-        b.iter(|| fixture.step());
+        bench_stateful_steps(b, KEYED_ROTATE_BENCH_STEPS, || fixture.step());
     });
 
     for seed in [1, 2] {
@@ -518,7 +537,7 @@ fn bench_keyed_reorder_matrix(c: &mut Criterion) {
         fixture.render();
         let name = format!("slot_table_v2_keyed_random_shuffle_1024_seed_{seed}");
         c.bench_function(&name, |b| {
-            b.iter(|| fixture.step());
+            bench_stateful_steps(b, KEYED_SHUFFLE_BENCH_STEPS, || fixture.step());
         });
     }
 }
@@ -533,7 +552,7 @@ fn bench_conditional_toggle_matrix(c: &mut Criterion) {
         fixture.render();
         let benchmark_name = format!("slot_table_v2_conditional_toggle_{name}_1024");
         c.bench_function(&benchmark_name, |b| {
-            b.iter(|| fixture.step());
+            bench_stateful_steps(b, CONDITIONAL_TOGGLE_BENCH_STEPS, || fixture.step());
         });
     }
 }
@@ -544,7 +563,7 @@ fn bench_tab_switching_matrix(c: &mut Criterion) {
         fixture.render();
         let name = format!("slot_table_v2_tab_switch_{groups}_payload_groups");
         c.bench_function(&name, |b| {
-            b.iter(|| fixture.step());
+            bench_stateful_steps(b, TAB_SWITCH_BENCH_STEPS, || fixture.step());
         });
     }
 }
@@ -554,7 +573,7 @@ fn bench_subcompose_scrolling(c: &mut Criterion) {
     fixture.step();
 
     c.bench_function("slot_table_v2_subcompose_scrolling", |b| {
-        b.iter(|| fixture.step());
+        bench_stateful_steps(b, SUBCOMPOSE_SCROLL_BENCH_STEPS, || fixture.step());
     });
 }
 
@@ -575,7 +594,7 @@ fn bench_lazy_list_matrix(c: &mut Criterion) {
     ] {
         let mut fixture = LazyListScrollFixture::new(scenario);
         c.bench_function(name, |b| {
-            b.iter(|| fixture.step());
+            bench_stateful_steps(b, LAZY_LIST_SCROLL_BENCH_STEPS, || fixture.step());
         });
     }
 }
