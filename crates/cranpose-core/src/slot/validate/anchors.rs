@@ -30,6 +30,30 @@ pub(super) fn validate_active_group_anchor_count(
     })
 }
 
+pub(super) fn validate_anchor_registry_integrity(
+    table: &SlotTable,
+) -> Result<(), SlotInvariantError> {
+    table.anchors.validate_integrity()
+}
+
+pub(super) fn validate_active_group_anchor_entries(
+    table: &SlotTable,
+) -> Result<(), SlotInvariantError> {
+    for (anchor, group_index) in table.anchors.active_entries() {
+        let actual = table.groups.get(group_index).map(|group| group.anchor);
+        if actual == Some(anchor) {
+            continue;
+        }
+        return Err(SlotInvariantError::AnchorTargetMismatch {
+            anchor,
+            expected_group_index: group_index,
+            actual,
+        });
+    }
+
+    Ok(())
+}
+
 pub(super) fn validate_detached_anchor_set(
     root_key: GroupKey,
     groups: &[GroupRecord],

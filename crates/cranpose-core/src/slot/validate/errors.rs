@@ -28,10 +28,21 @@ pub(crate) enum SlotInvariantError {
         expected: usize,
         actual: usize,
     },
+    AnchorRegistryInternalMismatch {
+        detail: &'static str,
+        anchor_id: Option<u32>,
+        expected: usize,
+        actual: usize,
+    },
     AnchorMismatch {
         anchor: AnchorId,
         expected: usize,
         actual: Option<AnchorState>,
+    },
+    AnchorTargetMismatch {
+        anchor: AnchorId,
+        expected_group_index: usize,
+        actual: Option<AnchorId>,
     },
     InvalidParent {
         tree: SlotTreeContext,

@@ -52,7 +52,9 @@ impl SlotTable {
             &mut checks,
         )?;
 
+        anchors::validate_anchor_registry_integrity(self)?;
         anchors::validate_active_group_anchor_count(self)?;
+        anchors::validate_active_group_anchor_entries(self)?;
         payloads::validate_payload_anchor_registry_integrity(self)?;
         payloads::validate_payload_anchor_registry_count(self)?;
         payloads::validate_payload_location_count(self)?;

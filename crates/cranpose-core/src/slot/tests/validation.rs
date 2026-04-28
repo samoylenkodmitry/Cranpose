@@ -124,7 +124,8 @@ fn validate_reports_anchor_mismatch_for_detached_anchor_structurally() {
 #[test]
 fn validate_reports_group_anchor_count_mismatch_structurally() {
     let mut table = composed_parent_child_table(480, 481, None);
-    table.anchors.set_active(AnchorId::new(2_000), 9);
+    let extra_anchor = table.anchors.allocate();
+    table.anchors.set_active(extra_anchor, 9);
 
     assert_eq!(
         table.validate(),

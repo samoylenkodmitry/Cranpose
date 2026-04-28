@@ -1,4 +1,8 @@
+#[cfg(any(test, debug_assertions))]
+use super::SlotInvariantError;
 use super::{dense_id_map::DenseIdMap, DetachedSubtree, GroupRecord, SlotTable};
+#[cfg(any(test, debug_assertions))]
+use crate::collections::map::HashSet;
 use crate::{
     collections::map::HashMap, retention::RetentionManager, AnchorId, RecomposeScope, ScopeId,
 };
@@ -127,6 +131,67 @@ impl AnchorRegistry {
             })
     }
 
+    #[cfg(any(test, debug_assertions))]
+    pub(super) fn validate_integrity(&self) -> Result<(), SlotInvariantError> {
+        let mut active_count = 0usize;
+        let mut detached_count = 0usize;
+
+        for (id, slot) in self.anchor_slots() {
+            if id == 0 || id as usize >= self.next_anchor {
+                return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                    detail: "registered anchor id must be allocated",
+                    anchor_id: Some(id),
+                    expected: self.next_anchor,
+                    actual: id as usize,
+                });
+            }
+            match slot.state {
+                AnchorState::Active(_) => active_count += 1,
+                AnchorState::Detached => detached_count += 1,
+                AnchorState::Invalidated => {}
+            }
+        }
+
+        self.validate_state_count("active", self.active_count, active_count)?;
+        self.validate_state_count("detached", self.detached_count, detached_count)?;
+
+        let mut free_ids = HashSet::default();
+        for Reverse(id) in self.free_ids.iter().copied() {
+            if !free_ids.insert(id) {
+                return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                    detail: "free anchor id must be unique",
+                    anchor_id: Some(id),
+                    expected: 1,
+                    actual: 2,
+                });
+            }
+            if matches!(
+                self.slot(id).map(|slot| slot.state),
+                Some(AnchorState::Active(_) | AnchorState::Detached)
+            ) {
+                return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                    detail: "free anchor id must not be active or detached",
+                    anchor_id: Some(id),
+                    expected: 0,
+                    actual: 1,
+                });
+            }
+        }
+
+        for &id in self.reused_generations.keys() {
+            if !free_ids.contains(&id) {
+                return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                    detail: "reused anchor generation must belong to a free id",
+                    anchor_id: Some(id),
+                    expected: 1,
+                    actual: 0,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     pub(super) fn capacity(&self) -> usize {
         self.dense_states.capacity() + self.sparse_states.capacity()
     }
@@ -210,6 +275,19 @@ impl AnchorRegistry {
         }
     }
 
+    #[cfg(any(test, debug_assertions))]
+    fn anchor_slots(&self) -> impl Iterator<Item = (u32, &AnchorSlot)> + '_ {
+        self.dense_states
+            .iter()
+            .map(|(id, slot)| {
+                (
+                    u32::try_from(id).expect("dense anchor state index must fit u32"),
+                    slot,
+                )
+            })
+            .chain(self.sparse_states.iter().map(|(&id, slot)| (id, slot)))
+    }
+
     fn insert_slot(&mut self, id: u32, generation: u32, state: AnchorState) -> Option<AnchorSlot> {
         let slot = AnchorSlot { generation, state };
         if Self::uses_dense_storage(id) {
@@ -270,6 +348,24 @@ impl AnchorRegistry {
         self.sparse_states.shrink_to_fit();
         self.free_ids.shrink_to_fit();
         self.reused_generations.shrink_to_fit();
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn validate_state_count(
+        &self,
+        detail: &'static str,
+        expected: usize,
+        actual: usize,
+    ) -> Result<(), SlotInvariantError> {
+        if expected == actual {
+            return Ok(());
+        }
+        Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+            detail,
+            anchor_id: None,
+            expected,
+            actual,
+        })
     }
 }
 
@@ -337,5 +433,48 @@ impl SlotTable {
             self.groups.len(),
         ));
         self.recompute_scope_index();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_integrity_rejects_free_active_anchor_id() {
+        let mut registry = AnchorRegistry::new();
+        let anchor = registry.allocate();
+        registry.set_active(anchor, 0);
+        registry.free_ids.push(Reverse(anchor.id));
+
+        assert_eq!(
+            registry.validate_integrity(),
+            Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                detail: "free anchor id must not be active or detached",
+                anchor_id: Some(anchor.id),
+                expected: 0,
+                actual: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn registry_integrity_rejects_reused_generation_without_free_id() {
+        let mut registry = AnchorRegistry::new();
+        let anchor = AnchorId {
+            id: 7,
+            generation: 2,
+        };
+        registry.reused_generations.insert(anchor.id, 3);
+
+        assert_eq!(
+            registry.validate_integrity(),
+            Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                detail: "reused anchor generation must belong to a free id",
+                anchor_id: Some(anchor.id),
+                expected: 1,
+                actual: 0,
+            })
+        );
     }
 }

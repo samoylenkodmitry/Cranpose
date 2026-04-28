@@ -248,7 +248,7 @@ git diff
   slot: rename compaction to storage cleanup
   ```
 
-* [ ] Strengthen group anchor validation.
+* [x] Strengthen group anchor validation.
 
   Done means: validation proves every active group has one active anchor entry, every retained group has detached anchor state, invalidated anchors are not referenced by active or retained records, parent anchors resolve correctly, and free ids cannot represent active or retained anchors.
 
