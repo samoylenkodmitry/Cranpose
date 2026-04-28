@@ -40,6 +40,7 @@ impl FreePayloadAnchorIdRange {
         self.end as usize - self.start as usize + 1
     }
 
+    #[cfg(any(test, debug_assertions))]
     fn contains(self, id: u32) -> bool {
         self.start <= id && id <= self.end
     }
@@ -165,6 +166,7 @@ impl PayloadAnchorRegistry {
             + self.reused_generations.capacity() * mem::size_of::<(u32, u32)>()
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(super) fn active_entries(
         &self,
     ) -> impl Iterator<Item = (PayloadAnchor, (AnchorId, usize))> + '_ {
@@ -351,6 +353,7 @@ impl PayloadAnchorRegistry {
         }
     }
 
+    #[cfg(any(test, debug_assertions))]
     fn anchor_slots(&self) -> impl Iterator<Item = (usize, &PayloadAnchorSlot)> + '_ {
         self.dense_states
             .iter()
@@ -447,6 +450,7 @@ impl PayloadAnchorRegistry {
         self.reused_generations.get(&id).copied().unwrap_or(2)
     }
 
+    #[cfg(any(test, debug_assertions))]
     fn contains_free_id(&self, id: u32) -> bool {
         self.free_ids
             .iter()

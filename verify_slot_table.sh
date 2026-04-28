@@ -3,6 +3,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CARGO_RUNNER=("$ROOT_DIR/cargo-dev.sh")
+VERIFY_TIMEOUT_SECS="${CRANPOSE_SLOT_VERIFY_TIMEOUT_SECS:-600}"
+
+if [[ "${CRANPOSE_SLOT_VERIFY_TIMEOUT_GUARD:-0}" != "1" && "$VERIFY_TIMEOUT_SECS" != "0" ]]; then
+    if ! [[ "$VERIFY_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "CRANPOSE_SLOT_VERIFY_TIMEOUT_SECS must be 0 or a positive integer." >&2
+        exit 1
+    fi
+    if ! command -v timeout >/dev/null 2>&1; then
+        echo "timeout is required to enforce the verification-suite wall-clock budget." >&2
+        exit 1
+    fi
+    export CRANPOSE_SLOT_VERIFY_TIMEOUT_GUARD=1
+    exec timeout --signal=KILL "${VERIFY_TIMEOUT_SECS}s" "$0" "$@"
+fi
 
 if [ ! -x "${CARGO_RUNNER[0]}" ]; then
     CARGO_RUNNER=(cargo)
@@ -36,6 +50,7 @@ echo "cargo build jobs: $CARGO_BUILD_JOBS"
 echo "rust test threads: $RUST_TEST_THREADS"
 echo "gradle max workers: $GRADLE_MAX_WORKERS"
 echo "robot jobs: 1"
+echo "timeout: ${VERIFY_TIMEOUT_SECS}s"
 
 run_logged "cargo fmt" "$ROOT_DIR/cargo_fmt.tmp" "$ROOT_DIR" "${CARGO_RUNNER[@]}" fmt
 scan_log "cargo fmt" "$ROOT_DIR/cargo_fmt.tmp" "$RUST_LOG_PATTERN"

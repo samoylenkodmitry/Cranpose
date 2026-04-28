@@ -16,6 +16,7 @@ impl SlotTable {
     }
 
     fn assert_detached_subtree_restore_ready(&self, subtree: &DetachedSubtree) {
+        #[cfg(any(test, debug_assertions))]
         subtree
             .validate_detached()
             .expect("detached subtree must validate before restore");

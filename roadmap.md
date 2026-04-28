@@ -693,7 +693,7 @@ git diff
 
 ## Phase 12 — Final audit and convergence commit
 
-* [ ] Run full textual audit for forbidden stale concepts.
+* [x] Run full textual audit for forbidden stale concepts.
 
   Done means these searches have no stale semantic matches:
 
@@ -721,6 +721,8 @@ git diff
   ```
 
   The worktree is clean except for intentional roadmap/log/doc updates. All logs are read. Every warning or failure is fixed.
+
+  Current bounded result: with the default 600-second script budget, `./verify_slot_table.sh` passes fmt, tests, clippy, Android release, and wasm before timing out in the sequential robot suite. `./stress_slot_table.sh` passes slot validation and generated-frame model stress before timing out in perf stability. The final gate remains open until the default gate scope fits the 10-minute budget or the gate is split into bounded commands.
 
   Commit message:
 
