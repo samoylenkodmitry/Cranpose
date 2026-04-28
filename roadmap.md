@@ -605,7 +605,7 @@ git diff
 
 ## Phase 10 — Batch index and location maintenance after identities are correct
 
-* [ ] Add mutation instrumentation for active index refreshes.
+* [x] Add mutation instrumentation for active index refreshes.
 
   Done means: stats report how many group anchor active-index refreshes, payload active-location refreshes, scope index rebuilds, and segment range updates happen per pass. This item does not optimize behavior yet.
 

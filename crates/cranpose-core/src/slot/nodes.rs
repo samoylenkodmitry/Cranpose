@@ -40,6 +40,7 @@ impl SlotTable {
     }
 
     fn insert_group_node(&mut self, group_index: usize, node_index: usize, node: NodeRecord) {
+        self.record_segment_range_update_from(group_index);
         insert_group_segment_item::<NodeSegment, _>(
             &mut self.groups,
             &mut self.nodes,
@@ -50,6 +51,9 @@ impl SlotTable {
     }
 
     fn remove_node_range(&mut self, node_range: GroupNodeRange) -> Vec<NodeRecord> {
+        if !node_range.is_empty() {
+            self.record_segment_range_update_from(node_range.group_index());
+        }
         remove_group_segment_range::<NodeSegment, _>(&mut self.groups, &mut self.nodes, node_range)
     }
 
@@ -58,6 +62,10 @@ impl SlotTable {
         removed_group_index: usize,
         removed_groups: &mut [GroupRecord],
     ) -> Vec<NodeRecord> {
+        if removed_groups.iter().any(|group| group.node_len > 0) {
+            let active_span = self.groups.len().saturating_sub(removed_group_index);
+            self.record_segment_range_update_span(active_span + removed_groups.len());
+        }
         extract_subtree_segment::<NodeSegment, _>(
             &mut self.groups,
             &mut self.nodes,
@@ -72,6 +80,10 @@ impl SlotTable {
         groups: &mut [GroupRecord],
         nodes: Vec<NodeRecord>,
     ) {
+        if !nodes.is_empty() {
+            let active_span = self.groups.len().saturating_sub(insert_group_index);
+            self.record_segment_range_update_span(active_span + groups.len());
+        }
         restore_subtree_segment::<NodeSegment, _>(
             &mut self.groups,
             &mut self.nodes,

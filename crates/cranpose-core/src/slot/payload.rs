@@ -60,6 +60,7 @@ impl SlotTable {
         payload_index: usize,
         payload: PayloadRecord,
     ) {
+        self.record_segment_range_update_from(group_index);
         insert_group_segment_item::<PayloadSegment, _>(
             &mut self.groups,
             &mut self.payloads,
@@ -73,6 +74,9 @@ impl SlotTable {
         &mut self,
         payload_range: GroupPayloadRange,
     ) -> Vec<PayloadRecord> {
+        if !payload_range.is_empty() {
+            self.record_segment_range_update_from(payload_range.group_index());
+        }
         remove_group_segment_range::<PayloadSegment, _>(
             &mut self.groups,
             &mut self.payloads,
@@ -85,6 +89,10 @@ impl SlotTable {
         removed_group_index: usize,
         removed_groups: &mut [GroupRecord],
     ) -> Vec<PayloadRecord> {
+        if removed_groups.iter().any(|group| group.payload_len > 0) {
+            let active_span = self.groups.len().saturating_sub(removed_group_index);
+            self.record_segment_range_update_span(active_span + removed_groups.len());
+        }
         extract_subtree_segment::<PayloadSegment, _>(
             &mut self.groups,
             &mut self.payloads,
@@ -99,6 +107,10 @@ impl SlotTable {
         groups: &mut [GroupRecord],
         payloads: Vec<PayloadRecord>,
     ) {
+        if !payloads.is_empty() {
+            let active_span = self.groups.len().saturating_sub(insert_group_index);
+            self.record_segment_range_update_span(active_span + groups.len());
+        }
         restore_subtree_segment::<PayloadSegment, _>(
             &mut self.groups,
             &mut self.payloads,

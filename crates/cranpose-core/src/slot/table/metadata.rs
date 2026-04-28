@@ -4,6 +4,13 @@ use crate::{AnchorId, ScopeId};
 
 impl SlotTable {
     pub(in crate::slot) fn recompute_scope_index(&mut self) {
+        let scope_count = self
+            .groups
+            .iter()
+            .filter(|group| group.scope_id.is_some())
+            .count();
+        self.mutation_debug_stats
+            .record_scope_index_rebuild(scope_count);
         self.scope_index.rebuild(&self.groups);
     }
 

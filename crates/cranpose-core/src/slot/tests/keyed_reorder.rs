@@ -196,6 +196,14 @@ fn debug_stats_report_subtree_move_work_spans() {
         3
     );
     assert_eq!(after.group_index_refresh_max_span, 3);
+    assert!(
+        after.segment_range_update_count > before.segment_range_update_count,
+        "subtree moves with payloads and nodes must report segment range maintenance"
+    );
+    assert!(
+        after.segment_range_update_group_count > before.segment_range_update_group_count,
+        "segment range maintenance must report affected group span"
+    );
 }
 
 #[test]
@@ -227,6 +235,37 @@ fn debug_stats_report_payload_anchor_index_rebuild_work_spans() {
         1
     );
     assert_eq!(after.payload_anchor_index_rebuild_payload_max_span, 1);
+}
+
+#[test]
+fn debug_stats_report_scope_index_rebuild_work_spans() {
+    const GROUP_KEY: Key = 4042;
+    const SCOPE_ID: ScopeId = 404_200;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        let group = begin_unkeyed(session, GROUP_KEY, None);
+        session.set_group_scope(group.group, SCOPE_ID);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    let before = harness.table.debug_stats().mutation;
+    harness.table.recompute_scope_index();
+    let after = harness.table.debug_stats().mutation;
+
+    assert_eq!(
+        after.scope_index_rebuild_count - before.scope_index_rebuild_count,
+        1
+    );
+    assert_eq!(
+        after.scope_index_rebuild_scope_count - before.scope_index_rebuild_scope_count,
+        1
+    );
+    assert_eq!(after.scope_index_rebuild_max_span, 1);
 }
 
 #[test]

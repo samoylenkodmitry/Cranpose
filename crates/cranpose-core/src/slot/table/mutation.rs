@@ -19,6 +19,17 @@ impl SlotTable {
         generation
     }
 
+    pub(in crate::slot) fn record_segment_range_update_from(&mut self, start: usize) {
+        let group_span = self.groups.len().saturating_sub(start);
+        self.mutation_debug_stats
+            .record_segment_range_update(group_span);
+    }
+
+    pub(in crate::slot) fn record_segment_range_update_span(&mut self, group_span: usize) {
+        self.mutation_debug_stats
+            .record_segment_range_update(group_span);
+    }
+
     pub(in crate::slot) fn adjust_ancestor_group_spans(
         &mut self,
         parent_anchor: AnchorId,
