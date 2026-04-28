@@ -455,7 +455,7 @@ git diff
 
 ## Phase 7 — Turn scope lookup into a real `ScopeIndex`
 
-* [ ] Replace `scope_anchor_to_group` with `ScopeIndex`.
+* [x] Replace `scope_anchor_to_group` with `ScopeIndex`.
 
   Done means: `SlotTable` owns `ScopeIndex`, not a raw `HashMap<ScopeId, AnchorId>` field. The name reflects the actual mapping.
 

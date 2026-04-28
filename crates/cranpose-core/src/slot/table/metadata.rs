@@ -4,10 +4,10 @@ use crate::{AnchorId, ScopeId};
 
 impl SlotTable {
     pub(in crate::slot) fn recompute_scope_index(&mut self) {
-        self.scope_anchor_to_group.clear();
+        self.scope_index.by_scope.clear();
         for group in &self.groups {
             if let Some(scope_id) = group.scope_id {
-                self.scope_anchor_to_group.insert(scope_id, group.anchor);
+                self.scope_index.by_scope.insert(scope_id, group.anchor);
             }
         }
     }
@@ -30,7 +30,7 @@ impl SlotTable {
     pub(in crate::slot) fn clear_scope_index_for_groups(&mut self, groups: &[GroupRecord]) {
         for group in groups {
             if let Some(scope_id) = group.scope_id {
-                self.scope_anchor_to_group.remove(&scope_id);
+                self.scope_index.by_scope.remove(&scope_id);
             }
         }
     }
@@ -40,13 +40,13 @@ impl SlotTable {
         entries: impl IntoIterator<Item = (ScopeId, AnchorId)>,
     ) {
         for (scope_id, group_anchor) in entries {
-            if let Some(existing_anchor) = self.scope_anchor_to_group.get(&scope_id).copied() {
+            if let Some(existing_anchor) = self.scope_index.by_scope.get(&scope_id).copied() {
                 assert_eq!(
                     existing_anchor, group_anchor,
                     "restored scope id must resolve to a single active group"
                 );
             }
-            self.scope_anchor_to_group.insert(scope_id, group_anchor);
+            self.scope_index.by_scope.insert(scope_id, group_anchor);
         }
     }
 }

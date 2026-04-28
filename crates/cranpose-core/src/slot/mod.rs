@@ -43,6 +43,7 @@ pub(in crate::slot) use ranges::{
     DirectChildRange, GroupNodeRange, GroupPayloadRange, GroupRange, NodeRange, PayloadRange,
     SubtreeRange,
 };
+pub(crate) use scope_index::ScopeIndex;
 pub use table::SlotTable;
 pub(crate) use table::SlotWriteSession;
 pub(in crate::slot) use types::collect_root_node_ids_from_records_into;

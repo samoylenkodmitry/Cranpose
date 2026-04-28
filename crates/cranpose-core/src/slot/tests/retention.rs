@@ -452,7 +452,8 @@ fn retention_validate_rejects_retained_scope_in_active_scope_index() {
     retention.insert(retain_key, detached);
     harness
         .table
-        .scope_anchor_to_group
+        .scope_index
+        .by_scope
         .insert(CHILD_SCOPE, retained_anchor);
 
     assert_eq!(

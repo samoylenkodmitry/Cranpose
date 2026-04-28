@@ -8,13 +8,13 @@ pub(super) fn validate_scope_index_count(table: &SlotTable) -> Result<(), SlotIn
         .filter(|group| group.scope_id.is_some())
         .count();
 
-    if table.scope_anchor_to_group.len() == scope_count {
+    if table.scope_index.by_scope.len() == scope_count {
         return Ok(());
     }
 
     Err(SlotInvariantError::ScopeIndexCountMismatch {
         expected: scope_count,
-        actual: table.scope_anchor_to_group.len(),
+        actual: table.scope_index.by_scope.len(),
     })
 }
 
@@ -26,7 +26,7 @@ pub(super) fn validate_active_group_scope(
         return Ok(());
     };
 
-    let actual = table.scope_anchor_to_group.get(&scope_id).copied();
+    let actual = table.scope_index.by_scope.get(&scope_id).copied();
     if actual == Some(group.anchor) {
         return Ok(());
     }
