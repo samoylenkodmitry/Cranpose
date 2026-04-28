@@ -123,7 +123,7 @@ git diff
   slot: preserve retained value slot identity
   ```
 
-* [ ] Add regression coverage proving disposed identities are reused only with bumped generation.
+* [x] Add regression coverage proving disposed identities are reused only with bumped generation.
 
   Done means: disposed group anchors and disposed payload anchors may reuse numeric ids only after generation bump; stale old handles fail cleanly; active or retained identities are never reused.
 

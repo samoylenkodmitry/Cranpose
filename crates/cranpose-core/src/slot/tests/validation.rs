@@ -745,6 +745,189 @@ fn compact_payload_namespace_preserves_retained_payload_uniqueness() {
 }
 
 #[test]
+fn disposed_identities_reuse_only_after_generation_bump() {
+    const PARENT_KEY: Key = 612;
+    const CHILD_STATIC_KEY: Key = 613;
+    const ACTIVE_KEY: Key = 1;
+    const RETAINED_KEY: Key = 2;
+    const DISPOSED_KEY: Key = 3;
+    const NEW_KEY: Key = 4;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    let (
+        parent_anchor,
+        active_anchor,
+        active_slot,
+        retained_anchor,
+        retained_slot,
+        disposed_anchor,
+        disposed_slot,
+    ) = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+
+        let active = begin_keyed(session, CHILD_STATIC_KEY, ACTIVE_KEY, None);
+        let active_slot = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let retained = begin_keyed(session, CHILD_STATIC_KEY, RETAINED_KEY, None);
+        let retained_slot = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let disposed = begin_keyed(session, CHILD_STATIC_KEY, DISPOSED_KEY, None);
+        let disposed_slot = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        (
+            parent.anchor,
+            active.anchor,
+            active_slot,
+            retained.anchor,
+            retained_slot,
+            disposed.anchor,
+            disposed_slot,
+        )
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached_children = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+
+        let active = begin_keyed(session, CHILD_STATIC_KEY, ACTIVE_KEY, None);
+        assert_eq!(active.anchor, active_anchor);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
+        assert_eq!(slot, active_slot);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        session.end_group();
+        result.detached_children
+    });
+    harness.finish_pass();
+
+    let mut retained = None;
+    for subtree in detached_children {
+        match subtree.root_key().explicit_key {
+            Some(RETAINED_KEY) => retained = Some(subtree),
+            Some(DISPOSED_KEY) => {
+                harness.table.invalidate_detached_subtree_anchors(&subtree);
+                harness.lifecycle.queue_subtree_disposal(subtree);
+            }
+            actual => panic!("unexpected detached child key: {actual:?}"),
+        }
+    }
+    harness.lifecycle.flush_pending_drops();
+
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: retained
+            .as_ref()
+            .expect("retained child must detach")
+            .root_key(),
+    };
+    let mut retention = RetentionManager::default();
+    retention.insert(
+        retain_key,
+        retained.expect("retained child must be captured"),
+    );
+    assert_eq!(
+        harness.table.anchor_state(retained_anchor),
+        Some(AnchorState::Detached)
+    );
+    assert_eq!(harness.table.anchor_state(disposed_anchor), None);
+
+    let disposed_read = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(disposed_slot);
+    }));
+    assert!(disposed_read.is_err());
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (new_anchor, new_slot) = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+
+        let active = begin_keyed(session, CHILD_STATIC_KEY, ACTIVE_KEY, None);
+        assert_eq!(active.anchor, active_anchor);
+        let active_slot_after = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
+        assert_eq!(active_slot_after, active_slot);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let new_child = begin_keyed(session, CHILD_STATIC_KEY, NEW_KEY, None);
+        assert_eq!(new_child.kind, GroupStartKind::Inserted);
+        let new_slot = session.value_slot_with_kind(PayloadKind::Internal, || 40_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        (new_child.anchor, new_slot)
+    });
+    harness.finish_pass();
+
+    assert_eq!(new_anchor.id, disposed_anchor.id);
+    assert_ne!(new_anchor.generation, disposed_anchor.generation);
+    assert_ne!(new_anchor.id, active_anchor.id);
+    assert_ne!(new_anchor.id, retained_anchor.id);
+    assert_eq!(
+        harness.table.anchor_state(new_anchor),
+        Some(AnchorState::Active(2))
+    );
+    assert_eq!(harness.table.anchor_state(disposed_anchor), None);
+    assert_ne!(new_slot.anchor(), active_slot.anchor());
+    assert_ne!(new_slot.anchor(), retained_slot.anchor());
+    assert_ne!(new_slot.anchor(), disposed_slot.anchor());
+
+    for subtree in retention.into_subtrees() {
+        harness.table.invalidate_detached_subtree_anchors(&subtree);
+        harness.lifecycle.queue_subtree_disposal(subtree);
+    }
+    harness.lifecycle.flush_pending_drops();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.finish_pass();
+    assert!(harness.table.groups.is_empty());
+    harness.table.compact_payload_anchor_namespace(None);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let reused_payload_slot = harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY + 1, None);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 50_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+
+    assert_eq!(reused_payload_slot.anchor(), active_slot.anchor());
+    assert_ne!(reused_payload_slot.generation(), active_slot.generation());
+    assert_eq!(*harness.table.read_value::<i32>(reused_payload_slot), 50);
+
+    let stale_active_read = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(active_slot);
+    }));
+    assert!(stale_active_read.is_err());
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
 fn validate_reports_node_owner_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(479);
     let node_id = table.group_node_record_at(0, 0).id;
