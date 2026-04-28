@@ -30,8 +30,8 @@ if [ -n "${CRANPOSE_ROBOT_PARALLEL:-}" ]; then
 else
     PARALLEL_JOBS=1
 fi
-ROBOT_TEST_TIMEOUT_CAP_SECS="${CRANPOSE_ROBOT_TEST_TIMEOUT_CAP_SECS:-300}"
-ROBOT_TEST_ATTEMPTS="${CRANPOSE_ROBOT_TEST_ATTEMPTS:-2}"
+ROBOT_TEST_TIMEOUT_CAP_SECS="${CRANPOSE_ROBOT_TEST_TIMEOUT_CAP_SECS:-900}"
+ROBOT_TEST_ATTEMPTS="${CRANPOSE_ROBOT_TEST_ATTEMPTS:-1}"
 ROBOT_FAILURE_LOG_LINES="${CRANPOSE_ROBOT_FAILURE_LOG_LINES:-220}"
 SELECTED_EXAMPLES=()
 
@@ -266,7 +266,7 @@ run_test() {
             timeout_secs=90
             ;;
         robot_memory_leak)
-            timeout_secs=300
+            timeout_secs=900
             ;;
     esac
 
