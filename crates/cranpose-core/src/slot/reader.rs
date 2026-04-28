@@ -15,6 +15,7 @@ impl SlotTable {
             + self.payload_heap_bytes()
             + self.node_heap_bytes()
             + self.anchors.heap_bytes()
+            + self.payload_anchors.heap_bytes()
             + self.payload_anchor_index.heap_bytes()
             + self.scope_index.heap_bytes()
     }
@@ -27,8 +28,15 @@ impl SlotTable {
             group_heap_bytes: self.group_heap_bytes(),
             payload_count: self.total_payload_count(),
             payload_capacity: self.payload_debug_capacity(),
-            payload_location_count: self.payload_anchor_index.len(),
-            payload_location_capacity: self.payload_anchor_index.capacity(),
+            active_payload_anchor_count: self.payload_anchors.active_len(),
+            payload_anchor_slot_count: self.payload_anchors.slot_len(),
+            detached_payload_anchor_count: self.payload_anchors.detached_len(),
+            invalidated_payload_anchor_count: self.payload_anchors.invalidated_len(),
+            free_payload_anchor_count: self.payload_anchors.free_len(),
+            payload_anchor_capacity: self.payload_anchors.capacity(),
+            payload_anchor_heap_bytes: self.payload_anchors.heap_bytes(),
+            payload_anchor_index_count: self.payload_anchor_index.len(),
+            payload_anchor_index_capacity: self.payload_anchor_index.capacity(),
             node_count: self.total_node_count(),
             node_capacity: self.node_debug_capacity(),
             active_anchor_count: self.anchors.active_len(),

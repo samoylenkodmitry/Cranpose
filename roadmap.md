@@ -537,7 +537,7 @@ git diff
   slot: rename payload location registry
   ```
 
-* [ ] Update debug snapshots and stats names.
+* [x] Update debug snapshots and stats names.
 
   Done means: debug output reports stable identities and storage capacities separately. It does not imply that id namespace size is the same as active table length. It distinguishes active, detached, invalidated, free, and storage capacity counts.
 

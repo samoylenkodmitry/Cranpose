@@ -301,7 +301,7 @@ impl SlotTable {
             }
         }
         self.mutation_debug_stats
-            .record_payload_location_rebuild(group_span, payload_span);
+            .record_payload_anchor_index_rebuild(group_span, payload_span);
     }
 
     pub(super) fn remove_payload_range(
