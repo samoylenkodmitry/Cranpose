@@ -1,7 +1,9 @@
 use super::super::{DetachedSubtree, SlotTable, SlotWriteSession};
 use super::SlotWriteSessionState;
 use crate::{
-    slot_storage::{BeginGroupInput, GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind},
+    slot_storage::{
+        ActiveGroupId, BeginGroupInput, GroupKey, GroupKeySeed, GroupStart, GroupStartKind,
+    },
     AnchorId, ScopeId,
 };
 
@@ -39,11 +41,11 @@ impl SlotWriteSession<'_> {
         &mut self,
         anchor: AnchorId,
         kind: GroupStartKind,
-    ) -> GroupStart<GroupId> {
+    ) -> GroupStart<ActiveGroupId> {
         let group_index = self.table.open_group_frame(self.state, anchor);
         let scope_id = self.table.group_scope_id_at_index(group_index);
         GroupStart {
-            group: self.table.group_id_at_index(group_index),
+            group: self.table.active_group_id_at_index(group_index),
             anchor,
             scope_id,
             kind,
@@ -55,7 +57,7 @@ impl SlotWriteSession<'_> {
         &mut self,
         key: GroupKey,
         restored: DetachedSubtree,
-    ) -> GroupStart<GroupId> {
+    ) -> GroupStart<ActiveGroupId> {
         let parent_anchor = self.state.current_parent_anchor();
         let insert_index = self.state.current_child_cursor();
         let anchor = self
@@ -122,9 +124,9 @@ impl SlotWriteSession<'_> {
         }
     }
 
-    pub(crate) fn begin_recompose_at_scope(&mut self, scope_id: ScopeId) -> Option<GroupId> {
-        let group = self.table.group_for_scope(scope_id)?;
-        let anchor = self.table.group_anchor(group);
+    pub(crate) fn begin_recompose_at_scope(&mut self, scope_id: ScopeId) -> Option<ActiveGroupId> {
+        let group = self.table.active_group_for_scope(scope_id)?;
+        let anchor = self.table.active_group_anchor(group);
         self.table.open_group_frame(self.state, anchor);
         Some(group)
     }
@@ -132,7 +134,7 @@ impl SlotWriteSession<'_> {
     pub(crate) fn begin_group(
         &mut self,
         input: BeginGroupInput<DetachedSubtree>,
-    ) -> GroupStart<GroupId> {
+    ) -> GroupStart<ActiveGroupId> {
         let BeginGroupInput { key, restored } = input;
         self.state.consume_group_key(key);
         let parent_anchor = self.state.current_parent_anchor();
@@ -172,8 +174,8 @@ impl SlotWriteSession<'_> {
         );
     }
 
-    pub(crate) fn set_group_scope(&mut self, group: GroupId, scope_id: ScopeId) {
-        self.table.assign_group_scope(group, scope_id);
+    pub(crate) fn set_group_scope(&mut self, group: ActiveGroupId, scope_id: ScopeId) {
+        self.table.assign_active_group_scope(group, scope_id);
     }
 
     pub(crate) fn end_recompose(&mut self) {

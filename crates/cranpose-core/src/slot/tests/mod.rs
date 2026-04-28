@@ -7,7 +7,7 @@ use super::{
 use crate::{
     retention::{RetainKey, RetentionManager},
     slot_storage::{
-        BeginGroupInput, GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind,
+        ActiveGroupId, BeginGroupInput, GroupKey, GroupKeySeed, GroupStart, GroupStartKind,
         PayloadAnchor, ValueSlotId,
     },
     AnchorId, Applier, Key, MemoryApplier, Node, NodeId, ScopeId,
@@ -177,7 +177,7 @@ fn begin_unkeyed(
     session: &mut SlotWriteSession<'_>,
     key: Key,
     restored: Option<DetachedSubtree>,
-) -> GroupStart<GroupId> {
+) -> GroupStart<ActiveGroupId> {
     let group_key = session.preview_group_key(GroupKeySeed::unkeyed(key));
     session.begin_group(BeginGroupInput::new(group_key, restored))
 }
@@ -187,7 +187,7 @@ fn begin_keyed(
     static_key: Key,
     explicit_key: Key,
     restored: Option<DetachedSubtree>,
-) -> GroupStart<GroupId> {
+) -> GroupStart<ActiveGroupId> {
     let group_key = session.preview_group_key(GroupKeySeed::keyed(static_key, explicit_key));
     session.begin_group(BeginGroupInput::new(group_key, restored))
 }
@@ -371,7 +371,7 @@ fn exercise_slot_write_session_surface(
     slots: &mut SlotWriteSession<'_>,
     group_key: GroupKey,
     scope_id: ScopeId,
-) -> (GroupId, ValueSlotId) {
+) -> (ActiveGroupId, ValueSlotId) {
     let started = slots.begin_group(BeginGroupInput::new(group_key, None));
     assert_eq!(started.kind, GroupStartKind::Inserted);
     slots.set_group_scope(started.group, scope_id);

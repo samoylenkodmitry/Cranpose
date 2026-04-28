@@ -272,7 +272,7 @@ git diff
 
 ## Phase 4 — Rename `GroupId` to the correct concept
 
-* [ ] Rename `GroupId` to `ActiveGroupId`.
+* [x] Rename `GroupId` to `ActiveGroupId`.
 
   Done means: all crate-internal APIs that currently use `GroupId` are renamed to `ActiveGroupId`; every call site makes it clear this is an active-table index-plus-generation handle, not stable identity.
 

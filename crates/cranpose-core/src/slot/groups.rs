@@ -2,7 +2,7 @@
 use super::AnchorState;
 use super::{DirectChildRange, SlotTable, SubtreeRange};
 use crate::{
-    slot_storage::{GroupId, GroupKey},
+    slot_storage::{ActiveGroupId, GroupKey},
     AnchorId, ScopeId,
 };
 
@@ -131,27 +131,27 @@ impl SlotTable {
             })
     }
 
-    pub(in crate::slot) fn checked_group_index(&self, group: GroupId) -> usize {
+    pub(in crate::slot) fn checked_active_group_index(&self, group: ActiveGroupId) -> usize {
         let group_index = group.index();
         let record = self
             .groups
             .get(group_index)
-            .expect("group handle index missing");
+            .expect("active group handle index missing");
         assert_eq!(
             record.generation,
             group.generation(),
-            "group handle generation mismatch"
+            "active group handle generation mismatch"
         );
         group_index
     }
 
-    pub(in crate::slot) fn group_id_at_index(&self, group_index: usize) -> GroupId {
+    pub(in crate::slot) fn active_group_id_at_index(&self, group_index: usize) -> ActiveGroupId {
         let record = self.groups.get(group_index).expect("group index missing");
-        GroupId::new(group_index, record.generation)
+        ActiveGroupId::new(group_index, record.generation)
     }
 
-    pub(in crate::slot) fn group_anchor(&self, group: GroupId) -> AnchorId {
-        let group_index = self.checked_group_index(group);
+    pub(in crate::slot) fn active_group_anchor(&self, group: ActiveGroupId) -> AnchorId {
+        let group_index = self.checked_active_group_index(group);
         self.groups[group_index].anchor
     }
 

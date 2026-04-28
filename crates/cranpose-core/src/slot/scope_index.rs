@@ -1,7 +1,7 @@
 use super::SlotTable;
 #[cfg(any(test, debug_assertions))]
 use crate::AnchorId;
-use crate::{slot_storage::GroupId, ScopeId};
+use crate::{slot_storage::ActiveGroupId, ScopeId};
 
 impl SlotTable {
     #[cfg(any(test, debug_assertions))]
@@ -9,15 +9,15 @@ impl SlotTable {
         self.scope_anchor_to_group.get(&scope_id).copied()
     }
 
-    pub(super) fn group_for_scope(&self, scope_id: ScopeId) -> Option<GroupId> {
+    pub(super) fn active_group_for_scope(&self, scope_id: ScopeId) -> Option<ActiveGroupId> {
         let anchor = self.scope_anchor_to_group.get(&scope_id).copied()?;
         let group_index = self.anchors.active_index(anchor)?;
         let group = &self.groups[group_index];
-        (group.scope_id == Some(scope_id)).then(|| self.group_id_at_index(group_index))
+        (group.scope_id == Some(scope_id)).then(|| self.active_group_id_at_index(group_index))
     }
 
-    pub(super) fn assign_group_scope(&mut self, group: GroupId, scope_id: ScopeId) {
-        let group_index = self.checked_group_index(group);
+    pub(super) fn assign_active_group_scope(&mut self, group: ActiveGroupId, scope_id: ScopeId) {
+        let group_index = self.checked_active_group_index(group);
         let group_anchor = self.groups[group_index].anchor;
         if let Some(existing_anchor) = self.scope_anchor_to_group.get(&scope_id).copied() {
             assert_eq!(

@@ -44,17 +44,17 @@ impl GroupKeySeed {
     }
 }
 
-/// Opaque handle to a group in the slot storage.
+/// Transient handle to a group in the active slot storage.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct GroupId {
+pub(crate) struct ActiveGroupId {
     pub(crate) index: u32,
     pub(crate) generation: u32,
 }
 
-impl GroupId {
+impl ActiveGroupId {
     pub(crate) fn new(index: usize, generation: u32) -> Self {
         Self {
-            index: checked_usize_to_u32(index, "group id index"),
+            index: checked_usize_to_u32(index, "active group id index"),
             generation,
         }
     }

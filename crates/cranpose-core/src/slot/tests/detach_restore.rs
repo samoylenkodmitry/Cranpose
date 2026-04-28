@@ -201,7 +201,10 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
         Some(AnchorState::Detached)
     );
     assert!(
-        harness.table.group_for_scope(CHILD_B_SCOPE).is_none(),
+        harness
+            .table
+            .active_group_for_scope(CHILD_B_SCOPE)
+            .is_none(),
         "detached scopes must leave the active scope index"
     );
 
@@ -222,9 +225,12 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
 
     let restored_group = harness
         .table
-        .group_for_scope(CHILD_B_SCOPE)
+        .active_group_for_scope(CHILD_B_SCOPE)
         .expect("restored child scope must become active again");
-    assert_eq!(harness.table.group_anchor(restored_group), child_b_anchor);
+    assert_eq!(
+        harness.table.active_group_anchor(restored_group),
+        child_b_anchor
+    );
     assert_eq!(*harness.table.read_value::<i32>(child_b_slot), 88);
     assert_eq!(harness.table.validate(), Ok(()));
 }
