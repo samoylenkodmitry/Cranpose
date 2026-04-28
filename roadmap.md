@@ -431,7 +431,7 @@ git diff
   slot: make node slot updates explicit
   ```
 
-* [ ] Wire `NodeSlotUpdate` into emitter lifecycle handling.
+* [x] Wire `NodeSlotUpdate` into emitter lifecycle handling.
 
   Done means: the emitter/applier path matches all three variants; replaced nodes are removed/detached through the same lifecycle path as other displaced nodes; wrong-type or wrong-generation reuse cannot silently look like normal reuse.
 
