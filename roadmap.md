@@ -302,7 +302,7 @@ git diff
   slot: keep active group ids transient
   ```
 
-* [ ] Add stale `ActiveGroupId` tests.
+* [x] Add stale `ActiveGroupId` tests.
 
   Done means: tests prove an `ActiveGroupId` fails after generation mismatch, movement, removal, or disposal when it no longer points to the same active record; stable lookup is always done through `AnchorId`.
 

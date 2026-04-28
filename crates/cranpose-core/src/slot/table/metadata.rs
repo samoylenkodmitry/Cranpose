@@ -17,6 +17,8 @@ impl SlotTable {
         self.mutation_debug_stats.record_group_index_refresh(span);
 
         for index in start..self.groups.len() {
+            let generation = self.allocate_group_generation();
+            self.groups[index].generation = generation;
             self.anchors.set_active(self.groups[index].anchor, index);
         }
     }

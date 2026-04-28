@@ -7,7 +7,7 @@ impl SlotTable {
         self.anchors.allocate()
     }
 
-    fn allocate_group_generation(&mut self) -> u32 {
+    pub(super) fn allocate_group_generation(&mut self) -> u32 {
         let generation = self.next_group_generation;
         self.next_group_generation = self
             .next_group_generation

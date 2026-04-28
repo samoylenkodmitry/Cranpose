@@ -322,3 +322,73 @@ fn stale_group_handle_does_not_alias_recreated_group() {
     });
     harness.finish_pass();
 }
+
+#[test]
+fn moved_group_invalidates_previous_active_group_id() {
+    const STATIC_KEY: Key = 613;
+    const FIRST_KEY: Key = 614;
+    const SECOND_KEY: Key = 615;
+    const SCOPE_ID: ScopeId = 616;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (first_anchor, second_anchor, stale_second_group) = harness.session(|session| {
+        let first = begin_keyed(session, STATIC_KEY, FIRST_KEY, None);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let second = begin_keyed(session, STATIC_KEY, SECOND_KEY, None);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        (first.anchor, second.anchor, second.group)
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        let moved_second = begin_keyed(session, STATIC_KEY, SECOND_KEY, None);
+        assert_eq!(moved_second.kind, GroupStartKind::Moved);
+        assert_eq!(moved_second.anchor, second_anchor);
+        assert_ne!(moved_second.group, stale_second_group);
+
+        let stale_assign = panic::catch_unwind(AssertUnwindSafe(|| {
+            session.set_group_scope(stale_second_group, SCOPE_ID);
+        }));
+        assert!(
+            stale_assign.is_err(),
+            "moved active group ids must not alias the group shifted into the previous index"
+        );
+
+        session.set_group_scope(moved_second.group, SCOPE_ID);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let shifted_first = begin_keyed(session, STATIC_KEY, FIRST_KEY, None);
+        assert_eq!(shifted_first.kind, GroupStartKind::Reused);
+        assert_eq!(shifted_first.anchor, first_anchor);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Recompose);
+    let resolved = harness.session(|session| {
+        let group = session
+            .begin_recompose_at_scope(SCOPE_ID)
+            .expect("stable scope lookup must resolve through the moved anchor");
+        assert_ne!(group, stale_second_group);
+        session.skip_group();
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_recompose();
+        group
+    });
+    harness.finish_pass();
+    assert_eq!(harness.table.active_group_anchor(resolved), second_anchor);
+}
