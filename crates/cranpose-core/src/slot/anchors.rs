@@ -428,8 +428,8 @@ impl SlotTable {
         }
 
         self.anchors.shrink_to_fit();
-        self.payload_locations.clear();
-        self.rebuild_payload_locations_for_group_range(super::GroupRange::new(
+        self.payload_anchor_index.clear();
+        self.rebuild_payload_anchor_index_for_group_range(super::GroupRange::new(
             0,
             self.groups.len(),
         ));

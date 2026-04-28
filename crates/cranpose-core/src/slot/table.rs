@@ -1,6 +1,6 @@
 use super::{
-    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadAnchorRegistry,
-    PayloadLocationRegistry, PayloadRecord, ScopeIndex, SlotLifecycleCoordinator,
+    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadAnchorIndex,
+    PayloadAnchorRegistry, PayloadRecord, ScopeIndex, SlotLifecycleCoordinator,
     SlotTableMutationDebugStats, SlotWriteSessionState,
 };
 use std::rc::Rc;
@@ -26,7 +26,7 @@ pub struct SlotTable {
     pub(super) nodes: Vec<NodeRecord>,
     pub(super) anchors: AnchorRegistry,
     pub(super) payload_anchors: PayloadAnchorRegistry,
-    pub(super) payload_locations: PayloadLocationRegistry,
+    pub(super) payload_anchor_index: PayloadAnchorIndex,
     pub(super) scope_index: ScopeIndex,
     pub(super) mutation_debug_stats: SlotTableMutationDebugStats,
     next_group_generation: u32,
@@ -42,7 +42,7 @@ impl SlotTable {
             nodes: Vec::new(),
             anchors: AnchorRegistry::new(),
             payload_anchors: PayloadAnchorRegistry::new(),
-            payload_locations: PayloadLocationRegistry::new(),
+            payload_anchor_index: PayloadAnchorIndex::new(),
             scope_index: ScopeIndex::new(),
             mutation_debug_stats: SlotTableMutationDebugStats::default(),
             next_group_generation: 1,
@@ -79,7 +79,7 @@ impl SlotTable {
         self.nodes.shrink_to_fit();
         self.anchors.shrink_to_fit();
         self.payload_anchors.shrink_to_fit();
-        self.payload_locations.shrink_to_fit();
+        self.payload_anchor_index.shrink_to_fit();
         self.scope_index.shrink_to_fit();
     }
 
@@ -93,7 +93,7 @@ impl SlotTable {
         self.nodes.clear();
         self.anchors.clear();
         self.payload_anchors.clear();
-        self.payload_locations.clear();
+        self.payload_anchor_index.clear();
         self.scope_index.clear();
         drops
     }

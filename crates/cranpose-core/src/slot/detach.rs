@@ -152,7 +152,7 @@ impl SlotTable {
             restored_subtree_node_count,
         );
         let restored_group_range = SubtreeRange::from_root_len(insert_index, restored_group_count);
-        self.rebuild_payload_locations_for_group_range(restored_group_range.as_group_range());
+        self.rebuild_payload_anchor_index_for_group_range(restored_group_range.as_group_range());
         #[cfg(any(test, debug_assertions))]
         self.debug_assert_valid_after("restore_subtree");
         root_anchor

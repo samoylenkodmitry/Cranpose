@@ -7,8 +7,8 @@ mod groups;
 mod lifecycle;
 mod nodes;
 mod payload;
+mod payload_anchor_index;
 mod payload_anchors;
-mod payload_locations;
 mod ranges;
 mod reader;
 mod scope_index;
@@ -35,10 +35,10 @@ pub use debug::{
 pub(crate) use detach::{dispose_detached_node_now, dispose_detached_subtree_now};
 use groups::GroupRecord;
 pub(crate) use lifecycle::{DeferredDrop, SlotLifecycleCoordinator};
+use payload_anchor_index::PayloadAnchorIndex;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use payload_anchors::PayloadAnchorLifecycle;
 pub(crate) use payload_anchors::PayloadAnchorRegistry;
-use payload_locations::PayloadLocationRegistry;
 pub(in crate::slot) use ranges::{
     DirectChildRange, GroupNodeRange, GroupPayloadRange, GroupRange, NodeRange, PayloadRange,
     SubtreeRange,

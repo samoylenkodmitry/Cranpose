@@ -11,7 +11,7 @@ impl SlotTable {
         debug_assert_eq!(
             self.payload_owner_at(group_index, payload_index),
             owner,
-            "payload location owner must match the payload record owner"
+            "payload anchor index owner must match the payload record owner"
         );
         assert_eq!(
             self.payload_anchor_at(group_index, payload_index),

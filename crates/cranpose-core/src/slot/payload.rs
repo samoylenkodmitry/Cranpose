@@ -201,7 +201,7 @@ impl SlotTable {
                 value: Box::new(value),
             },
         );
-        self.refresh_group_payload_locations(owner, insert_index);
+        self.refresh_group_payload_anchor_index(owner, insert_index);
         anchor
     }
 
@@ -267,24 +267,25 @@ impl SlotTable {
         (ValueSlotId::new(anchor), deferred_drop)
     }
 
-    pub(super) fn clear_payload_locations_for_payloads(&mut self, payloads: &[PayloadRecord]) {
+    pub(super) fn clear_payload_anchor_index_for_payloads(&mut self, payloads: &[PayloadRecord]) {
         for payload in payloads {
-            self.payload_locations.remove(payload.anchor);
+            self.payload_anchor_index.remove(payload.anchor);
         }
     }
 
-    fn refresh_group_payload_locations(&mut self, owner: AnchorId, start: usize) {
+    fn refresh_group_payload_anchor_index(&mut self, owner: AnchorId, start: usize) {
         let group_index = self.current_group_index(owner);
         let range = self.group_payload_range_at(group_index);
         for index in start..range.len() {
             let payload_anchor = self.payloads[range.start() + index].anchor;
-            self.payload_locations.insert(payload_anchor, owner, index);
+            self.payload_anchor_index
+                .insert(payload_anchor, owner, index);
             self.payload_anchors
                 .set_active(payload_anchor, owner, index);
         }
     }
 
-    pub(super) fn rebuild_payload_locations_for_group_range(&mut self, group_range: GroupRange) {
+    pub(super) fn rebuild_payload_anchor_index_for_group_range(&mut self, group_range: GroupRange) {
         let group_span = group_range.len();
         let mut payload_span = 0usize;
         for group_index in group_range.as_range() {
@@ -293,7 +294,8 @@ impl SlotTable {
             payload_span += range.len();
             for index in 0..range.len() {
                 let payload_anchor = self.payloads[range.start() + index].anchor;
-                self.payload_locations.insert(payload_anchor, owner, index);
+                self.payload_anchor_index
+                    .insert(payload_anchor, owner, index);
                 self.payload_anchors
                     .set_active(payload_anchor, owner, index);
             }
@@ -318,9 +320,9 @@ impl SlotTable {
         }
         let start_offset = payload_range.start_offset();
         let removed = self.remove_group_payload_range(payload_range);
-        self.clear_payload_locations_for_payloads(&removed);
+        self.clear_payload_anchor_index_for_payloads(&removed);
         self.invalidate_payload_anchors(&removed);
-        self.refresh_group_payload_locations(owner, start_offset);
+        self.refresh_group_payload_anchor_index(owner, start_offset);
         removed
     }
 
@@ -348,7 +350,7 @@ impl SlotTable {
     ) -> Vec<PayloadRecord> {
         let removed = self.extract_payload_segment_for_groups(removed_group_index, removed_groups);
         if clear_locations {
-            self.clear_payload_locations_for_payloads(&removed);
+            self.clear_payload_anchor_index_for_payloads(&removed);
             self.mark_payload_anchors_detached(&removed);
         }
         removed
@@ -394,8 +396,8 @@ impl SlotTable {
             .unwrap_or(0);
         let total_payload_count = self.payloads.len() + retained_payload_count;
         if total_payload_count == 0 {
-            self.payload_locations.clear();
-            self.payload_locations.shrink_to_fit();
+            self.payload_anchor_index.clear();
+            self.payload_anchor_index.shrink_to_fit();
             self.payload_anchors.shrink_to_fit();
             return;
         }
@@ -414,14 +416,15 @@ impl SlotTable {
             .max()
             .unwrap_or(0);
         let sparse_payload_anchor_ids = max_payload_anchor > total_payload_count.max(256) * 4;
-        let sparse_capacity = self.payload_locations.capacity() > total_payload_count.max(256) * 8;
+        let sparse_capacity =
+            self.payload_anchor_index.capacity() > total_payload_count.max(256) * 8;
         if !sparse_payload_anchor_ids && !sparse_capacity {
             return;
         }
 
-        self.payload_locations.clear();
-        self.payload_locations.shrink_to_fit();
+        self.payload_anchor_index.clear();
+        self.payload_anchor_index.shrink_to_fit();
         self.payload_anchors.shrink_to_fit();
-        self.rebuild_payload_locations_for_group_range(GroupRange::new(0, self.groups.len()));
+        self.rebuild_payload_anchor_index_for_group_range(GroupRange::new(0, self.groups.len()));
     }
 }

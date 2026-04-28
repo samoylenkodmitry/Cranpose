@@ -8,7 +8,7 @@ pub(crate) enum SlotTreeContext {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PayloadLocationRecord {
+pub(crate) struct PayloadAnchorIndexRecord {
     pub(crate) owner: AnchorId,
     pub(crate) payload_anchor: usize,
 }
@@ -111,11 +111,11 @@ pub(crate) enum SlotInvariantError {
         tree: SlotTreeContext,
         payload_anchor: PayloadAnchor,
     },
-    PayloadLocationTargetMismatch {
+    PayloadAnchorIndexTargetMismatch {
         payload_anchor: usize,
         expected_owner: AnchorId,
         expected_payload_index: usize,
-        actual: Option<PayloadLocationRecord>,
+        actual: Option<PayloadAnchorIndexRecord>,
     },
     PayloadAnchorRegistryMismatch {
         payload_anchor: PayloadAnchor,

@@ -527,7 +527,7 @@ git diff
   slot: remove stale storage naming
   ```
 
-* [ ] Rename payload-location modules to payload-anchor modules.
+* [x] Rename payload-location modules to payload-anchor modules.
 
   Done means: the old location-only concept is gone; module/file names reflect anchor lifecycle and resolution, not merely active table location lookup.
 

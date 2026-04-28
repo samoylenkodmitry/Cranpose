@@ -1,7 +1,7 @@
 use super::super::{GroupRecord, PayloadRecord, SlotTable};
 use super::{
     groups::{SlotTreeChecks, SlotTreeView},
-    PayloadAnchorRecord, PayloadLocationRecord, SlotInvariantError,
+    PayloadAnchorIndexRecord, PayloadAnchorRecord, SlotInvariantError,
 };
 
 pub(super) fn validate_group_payloads(
@@ -45,14 +45,16 @@ pub(super) fn validate_group_payloads(
     Ok(payload_end)
 }
 
-pub(super) fn validate_payload_location_count(table: &SlotTable) -> Result<(), SlotInvariantError> {
-    if table.payload_locations.len() == table.payloads.len() {
+pub(super) fn validate_payload_anchor_index_count(
+    table: &SlotTable,
+) -> Result<(), SlotInvariantError> {
+    if table.payload_anchor_index.len() == table.payloads.len() {
         return Ok(());
     }
 
     Err(SlotInvariantError::PayloadAnchorCountMismatch {
         expected: table.payloads.len(),
-        actual: table.payload_locations.len(),
+        actual: table.payload_anchor_index.len(),
     })
 }
 
@@ -131,10 +133,10 @@ pub(super) fn validate_payload_anchor_registry(
     Ok(())
 }
 
-pub(super) fn validate_payload_locations(table: &SlotTable) -> Result<(), SlotInvariantError> {
-    for (payload_anchor, (owner, payload_index)) in table.payload_locations.iter() {
+pub(super) fn validate_payload_anchor_index(table: &SlotTable) -> Result<(), SlotInvariantError> {
+    for (payload_anchor, (owner, payload_index)) in table.payload_anchor_index.iter() {
         let Some(group_index) = table.anchors.active_index(owner) else {
-            return Err(SlotInvariantError::PayloadLocationTargetMismatch {
+            return Err(SlotInvariantError::PayloadAnchorIndexTargetMismatch {
                 payload_anchor,
                 expected_owner: owner,
                 expected_payload_index: payload_index,
@@ -144,17 +146,17 @@ pub(super) fn validate_payload_locations(table: &SlotTable) -> Result<(), SlotIn
         let actual = table
             .group_payload_records_at(group_index)
             .get(payload_index)
-            .map(|payload| PayloadLocationRecord {
+            .map(|payload| PayloadAnchorIndexRecord {
                 owner: payload.owner,
                 payload_anchor: payload.anchor.id(),
             });
         if actual
-            != Some(PayloadLocationRecord {
+            != Some(PayloadAnchorIndexRecord {
                 owner,
                 payload_anchor,
             })
         {
-            return Err(SlotInvariantError::PayloadLocationTargetMismatch {
+            return Err(SlotInvariantError::PayloadAnchorIndexTargetMismatch {
                 payload_anchor,
                 expected_owner: owner,
                 expected_payload_index: payload_index,
@@ -202,22 +204,22 @@ mod tests {
     }
 
     #[test]
-    fn reverse_payload_location_validation_reports_actual_record() {
+    fn payload_anchor_index_validation_reports_actual_record() {
         let owner = AnchorId::new(1);
         let actual_payload_anchor = 10;
         let stale_payload_anchor = 11;
         let mut table = one_payload_table(owner, actual_payload_anchor);
         table
-            .payload_locations
+            .payload_anchor_index
             .insert(PayloadAnchor::new(stale_payload_anchor, 1), owner, 0);
 
         assert_eq!(
-            validate_payload_locations(&table),
-            Err(SlotInvariantError::PayloadLocationTargetMismatch {
+            validate_payload_anchor_index(&table),
+            Err(SlotInvariantError::PayloadAnchorIndexTargetMismatch {
                 payload_anchor: stale_payload_anchor,
                 expected_owner: owner,
                 expected_payload_index: 0,
-                actual: Some(PayloadLocationRecord {
+                actual: Some(PayloadAnchorIndexRecord {
                     owner,
                     payload_anchor: actual_payload_anchor,
                 }),

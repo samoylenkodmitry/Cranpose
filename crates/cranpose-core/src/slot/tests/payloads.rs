@@ -157,7 +157,7 @@ fn value_slots_resolve_through_payload_anchor_registry() {
     });
     harness.finish_pass();
 
-    harness.table.payload_locations.clear();
+    harness.table.payload_anchor_index.clear();
 
     assert_eq!(*harness.table.read_value::<i32>(slot), 5);
     harness.table.write_value(slot, 13_i32);

@@ -4,12 +4,12 @@ use crate::AnchorId;
 use std::mem;
 
 #[derive(Default)]
-pub(super) struct PayloadLocationRegistry {
+pub(super) struct PayloadAnchorIndex {
     dense_locations: DenseIdMap<(AnchorId, usize)>,
     sparse_locations: HashMap<usize, (AnchorId, usize)>,
 }
 
-impl PayloadLocationRegistry {
+impl PayloadAnchorIndex {
     const DENSE_STORAGE_ID_LIMIT: usize = 65_536;
 
     pub(super) fn new() -> Self {
@@ -93,18 +93,18 @@ mod tests {
 
     #[test]
     fn sparse_payload_anchor_ids_do_not_grow_dense_storage() {
-        let mut registry = PayloadLocationRegistry::new();
+        let mut index = PayloadAnchorIndex::new();
         let owner = AnchorId::new(1);
         let sparse_anchor = PayloadAnchor::new(2_500_000, 1);
 
-        registry.insert(sparse_anchor, owner, 0);
+        index.insert(sparse_anchor, owner, 0);
 
-        assert_eq!(registry.get(sparse_anchor), Some((owner, 0)));
-        assert_eq!(registry.len(), 1);
+        assert_eq!(index.get(sparse_anchor), Some((owner, 0)));
+        assert_eq!(index.len(), 1);
         assert!(
-            registry.capacity() < 128,
+            index.capacity() < 128,
             "sparse payload ids must not allocate dense storage: capacity={}",
-            registry.capacity()
+            index.capacity()
         );
     }
 }
