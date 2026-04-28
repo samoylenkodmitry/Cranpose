@@ -194,7 +194,7 @@ git diff
   slot: resolve value slots through payload anchors
   ```
 
-* [ ] Wire payload anchor lifecycle into detach, restore, and disposal.
+* [x] Wire payload anchor lifecycle into detach, restore, and disposal.
 
   Done means: detaching payloads marks anchors detached; restoring retained payloads marks them active with new owner/index locations; disposing detached subtrees invalidates payload anchors; removing payload tails invalidates removed anchors; replacing payload identity bumps generation and invalidates stale `ValueSlotId`s.
 

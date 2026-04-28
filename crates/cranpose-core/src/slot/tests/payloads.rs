@@ -281,3 +281,35 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
         "disposed value slot handles must fail cleanly instead of aliasing a new slot"
     );
 }
+
+#[test]
+fn removed_payload_tail_invalidates_value_slot_handle() {
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (first_slot, removed_slot) = harness.session(|session| {
+        begin_unkeyed(session, 19, None);
+        let first_slot = session.value_slot_with_kind(PayloadKind::Internal, || 1_i32);
+        let removed_slot = session.value_slot_with_kind(PayloadKind::Internal, || 2_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        (first_slot, removed_slot)
+    });
+    harness.finish_pass();
+
+    let owner = harness.table.groups[0].anchor;
+    let removed_range = harness.table.group_payload_subrange_at(0, 1, 2);
+    let removed = harness.table.remove_payload_range(owner, removed_range);
+    assert_eq!(removed.len(), 1);
+
+    assert_eq!(*harness.table.read_value::<i32>(first_slot), 1);
+    let removed_read = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(removed_slot);
+    }));
+    assert!(
+        removed_read.is_err(),
+        "removed payload tail handles must fail cleanly after invalidation"
+    );
+    assert_eq!(harness.table.validate(), Ok(()));
+}

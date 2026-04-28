@@ -59,6 +59,20 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
         Some(AnchorState::Detached),
         "detached child must remain addressable as detached until restored or disposed"
     );
+    let detached_child_read = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(child_slot);
+    }));
+    assert!(
+        detached_child_read.is_err(),
+        "detached child payload anchors must stop resolving while inactive"
+    );
+    let detached_grandchild_read = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(grandchild_slot);
+    }));
+    assert!(
+        detached_grandchild_read.is_err(),
+        "detached nested payload anchors must stop resolving while inactive"
+    );
     assert_eq!(detached.groups[0].parent_anchor, AnchorId::INVALID);
     assert_eq!(detached.groups[0].depth, 0);
     assert_eq!(detached.groups[1].parent_anchor, detached.groups[0].anchor);
