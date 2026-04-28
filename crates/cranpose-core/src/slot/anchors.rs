@@ -3,9 +3,7 @@ use super::SlotInvariantError;
 use super::{dense_id_map::DenseIdMap, DetachedSubtree, GroupRecord, SlotTable};
 #[cfg(any(test, debug_assertions))]
 use crate::collections::map::HashSet;
-use crate::{
-    collections::map::HashMap, retention::RetentionManager, AnchorId, RecomposeScope, ScopeId,
-};
+use crate::{collections::map::HashMap, retention::RetentionManager, AnchorId};
 use std::{cmp::Reverse, collections::BinaryHeap, mem};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -393,7 +391,6 @@ impl SlotTable {
     pub(crate) fn compact_anchor_registry_storage(
         &mut self,
         retention: Option<&mut RetentionManager>,
-        _scope_for_id: impl FnMut(ScopeId) -> Option<RecomposeScope>,
     ) {
         let retained_group_count = retention
             .as_ref()

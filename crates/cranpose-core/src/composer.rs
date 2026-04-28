@@ -198,16 +198,14 @@ impl ComposerRuntimeState {
         let mut retention = self.retention_by_host.borrow_mut();
         if let Some(retained) = retention.get_mut(&host_key) {
             if compact_anchors {
-                table.compact_anchor_registry_storage(Some(&mut *retained), |scope_id| {
-                    self.scope_for_id(scope_id)
-                });
+                table.compact_anchor_registry_storage(Some(&mut *retained));
             }
             if compact_payloads {
                 table.compact_payload_anchor_registry_storage(Some(&mut *retained));
             }
         } else {
             if compact_anchors {
-                table.compact_anchor_registry_storage(None, |scope_id| self.scope_for_id(scope_id));
+                table.compact_anchor_registry_storage(None);
             }
             if compact_payloads {
                 table.compact_payload_anchor_registry_storage(None);

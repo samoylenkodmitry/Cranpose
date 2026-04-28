@@ -3714,7 +3714,7 @@ impl SlotsHost {
             );
         } else {
             if outcome.compact_anchor_registry_storage {
-                table.compact_anchor_registry_storage(None, |_| None);
+                table.compact_anchor_registry_storage(None);
             }
             if outcome.compact_payload_storage {
                 table.compact_payload_anchor_registry_storage(None);

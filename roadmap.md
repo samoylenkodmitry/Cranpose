@@ -483,7 +483,7 @@ git diff
   slot: centralize scope index operations
   ```
 
-* [ ] Wire scope index to detach, restore, disposal, and compaction.
+* [x] Wire scope index to detach, restore, disposal, and compaction.
 
   Done means: active scopes are indexed; detached scopes are removed from active lookup but carried by `DetachedSubtree`; restored scopes re-enter the index; disposed scopes are unregistered/invalidated through the existing composer lifecycle.
 
