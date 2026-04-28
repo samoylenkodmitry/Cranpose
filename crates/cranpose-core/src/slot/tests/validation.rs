@@ -494,7 +494,83 @@ fn node_tail_range_past_group_end_removes_nothing() {
 }
 
 #[test]
-fn compact_payload_namespace_remaps_retained_subtree_payloads() {
+fn compact_payload_namespace_preserves_active_value_slots() {
+    const PARENT_KEY: Key = 606;
+    const CHILD_STATIC_KEY: Key = 607;
+    const GROUP_COUNT: usize = 1_100;
+    const KEPT_EXPLICIT_KEY: Key = (GROUP_COUNT - 1) as Key;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    let (parent_anchor, retained_slot) = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let mut retained_slot = None;
+        for explicit_key in 0..GROUP_COUNT as Key {
+            let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
+            assert_eq!(child.kind, GroupStartKind::Inserted);
+            let slot = session.value_slot_with_kind(PayloadKind::Internal, || explicit_key as i32);
+            if explicit_key == KEPT_EXPLICIT_KEY {
+                retained_slot = Some(slot);
+            }
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+        }
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        (
+            parent.anchor,
+            retained_slot.expect("target value slot must be captured"),
+        )
+    });
+    harness.finish_pass();
+    assert!(
+        retained_slot.anchor() > 1_024,
+        "test must exercise a sparse active payload namespace"
+    );
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let moved_slot = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+
+        let child = begin_keyed(session, CHILD_STATIC_KEY, KEPT_EXPLICIT_KEY, None);
+        assert_eq!(child.kind, GroupStartKind::Moved);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(result.detached_children.len(), GROUP_COUNT - 1);
+        slot
+    });
+    harness.finish_pass();
+
+    assert_eq!(moved_slot, retained_slot);
+    assert_eq!(
+        *harness.table.read_value::<i32>(retained_slot),
+        KEPT_EXPLICIT_KEY as i32
+    );
+    let snapshot_before = harness.identity_snapshot(None, &[retained_slot]);
+    harness.table.compact_payload_anchor_namespace(None);
+    assert_eq!(harness.table.validate(), Ok(()));
+    assert_eq!(
+        *harness.table.read_value::<i32>(retained_slot),
+        KEPT_EXPLICIT_KEY as i32
+    );
+    assert_eq!(
+        harness
+            .identity_snapshot(None, &[retained_slot])
+            .active_payload_anchors,
+        snapshot_before.active_payload_anchors
+    );
+}
+
+#[test]
+fn compact_payload_namespace_preserves_retained_payload_uniqueness() {
     const PARENT_KEY: Key = 610;
     const CHILD_KEY: Key = 611;
 

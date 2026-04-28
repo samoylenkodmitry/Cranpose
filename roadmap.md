@@ -103,7 +103,7 @@ git diff
   slot: preserve retained group anchors during compaction
   ```
 
-* [ ] Add regression coverage proving active `ValueSlotId`s survive storage compaction.
+* [x] Add regression coverage proving active `ValueSlotId`s survive storage compaction.
 
   Done means: a test obtains a `ValueSlotId`, reads the value, runs storage compaction, validates the table, and reads the same value through the same handle.
 

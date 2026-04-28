@@ -205,6 +205,7 @@ impl RetentionManager {
         self.groups.values().map(|retained| &retained.subtree)
     }
 
+    #[cfg(test)]
     pub(crate) fn subtrees_mut(&mut self) -> impl Iterator<Item = &mut DetachedSubtree> + '_ {
         self.groups
             .values_mut()

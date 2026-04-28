@@ -425,48 +425,13 @@ impl SlotTable {
             return;
         }
 
-        let mut remapped: crate::collections::map::HashMap<usize, usize> =
-            crate::collections::map::HashMap::default();
-        let mut next_anchor = 1usize;
-        for payload in &self.payloads {
-            remapped.insert(payload.anchor, next_anchor);
-            next_anchor = next_anchor
-                .checked_add(1)
-                .expect("compacted payload anchor counter overflow");
-        }
-        if let Some(retention) = retention.as_ref() {
-            for subtree in retention.subtrees() {
-                for payload in &subtree.payloads {
-                    remapped.insert(payload.anchor, next_anchor);
-                    next_anchor = next_anchor
-                        .checked_add(1)
-                        .expect("compacted payload anchor counter overflow");
-                }
-            }
-        }
-
-        for payload in &mut self.payloads {
-            payload.anchor = remapped
-                .get(&payload.anchor)
-                .copied()
-                .expect("active payload anchor must remap");
-        }
-        if let Some(retention) = retention {
-            for subtree in retention.subtrees_mut() {
-                for payload in &mut subtree.payloads {
-                    payload.anchor = remapped
-                        .get(&payload.anchor)
-                        .copied()
-                        .expect("retained payload anchor must remap");
-                }
-            }
-        }
-
         self.payload_locations.clear();
         self.payload_locations.shrink_to_fit();
         self.rebuild_payload_locations_for_group_range(GroupRange::new(0, self.groups.len()));
-        self.next_payload_anchor = total_payload_count
-            .checked_add(1)
-            .expect("next payload anchor counter overflow");
+        self.next_payload_anchor = self.next_payload_anchor.max(
+            max_payload_anchor
+                .checked_add(1)
+                .expect("next payload anchor counter overflow"),
+        );
     }
 }
