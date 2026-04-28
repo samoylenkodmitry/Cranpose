@@ -1,4 +1,6 @@
-use super::super::{checked_u32_delta, checked_usize_to_u32, CheckedU32Delta, GroupRecord};
+use super::super::{
+    checked_u32_delta, checked_usize_to_u32, CheckedU32Delta, ChildCursor, GroupRecord,
+};
 use super::SlotTable;
 use crate::{slot_storage::GroupKey, AnchorId};
 
@@ -65,10 +67,12 @@ impl SlotTable {
 
     pub(in crate::slot) fn insert_new_group(
         &mut self,
-        insert_index: usize,
-        parent_anchor: AnchorId,
+        cursor: ChildCursor,
         key: GroupKey,
     ) -> AnchorId {
+        self.assert_child_cursor_boundary(cursor);
+        let insert_index = cursor.index();
+        let parent_anchor = cursor.parent();
         let depth = if parent_anchor.is_valid() {
             self.current_group(parent_anchor)
                 .depth

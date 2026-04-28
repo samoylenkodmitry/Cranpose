@@ -1,6 +1,6 @@
 #[cfg(any(test, debug_assertions))]
 use super::AnchorState;
-use super::{DirectChildRange, SlotTable, SubtreeRange};
+use super::{ChildCursor, DirectChildRange, SlotTable, SubtreeRange};
 use crate::{
     slot_storage::{ActiveGroupId, GroupKey},
     AnchorId, ScopeId,
@@ -190,5 +190,23 @@ impl SlotTable {
         }
         let group = self.group_sibling_record_at_index_checked(child_index)?;
         (group.parent_anchor == parent_anchor).then_some(group)
+    }
+
+    pub(in crate::slot) fn assert_child_cursor_boundary(&self, cursor: ChildCursor) {
+        let siblings = self.direct_child_range(cursor.parent());
+        assert!(
+            siblings.start() <= cursor.index() && cursor.index() <= siblings.end(),
+            "child cursor must stay inside the parent child range"
+        );
+        if cursor.index() == siblings.end() {
+            return;
+        }
+
+        let group = self.group_sibling_record_at_index(cursor.index());
+        assert_eq!(
+            group.parent_anchor,
+            cursor.parent(),
+            "child cursor must point at a direct child boundary"
+        );
     }
 }

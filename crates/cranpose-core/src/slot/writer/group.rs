@@ -115,9 +115,7 @@ impl SlotWriteSession<'_> {
                 }
             }
             ActiveChildResolution::InsertNew => StartedGroup {
-                anchor: self
-                    .table
-                    .insert_new_group(cursor.index(), cursor.parent(), key),
+                anchor: self.table.insert_new_group(cursor, key),
                 kind: GroupStartKind::Inserted,
             },
         }

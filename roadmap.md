@@ -346,7 +346,7 @@ git diff
   slot: introduce typed child cursors
   ```
 
-* [ ] Convert group insertion to typed cursor API.
+* [x] Convert group insertion to typed cursor API.
 
   Done means: `insert_new_group` or its replacement accepts `ChildCursor`; it asserts the cursor is a direct-child boundary of the cursor parent; raw index insertion is private implementation detail only.
 
