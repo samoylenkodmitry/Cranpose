@@ -453,8 +453,7 @@ fn retention_validate_rejects_retained_scope_in_active_scope_index() {
     harness
         .table
         .scope_index
-        .by_scope
-        .insert(CHILD_SCOPE, retained_anchor);
+        .insert_for_test(CHILD_SCOPE, retained_anchor);
 
     assert_eq!(
         retention.validate(&harness.table),

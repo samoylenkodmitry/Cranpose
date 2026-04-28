@@ -80,7 +80,7 @@ impl SlotTable {
         self.anchors.shrink_to_fit();
         self.payload_anchors.shrink_to_fit();
         self.payload_locations.shrink_to_fit();
-        self.scope_index.by_scope.shrink_to_fit();
+        self.scope_index.shrink_to_fit();
     }
 
     pub(crate) fn take_all_drops(&mut self) -> Vec<DeferredDrop> {
@@ -94,7 +94,7 @@ impl SlotTable {
         self.anchors.clear();
         self.payload_anchors.clear();
         self.payload_locations.clear();
-        self.scope_index.by_scope.clear();
+        self.scope_index.clear();
         drops
     }
 }

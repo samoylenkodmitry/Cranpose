@@ -473,7 +473,7 @@ git diff
   slot: introduce scope index type
   ```
 
-* [ ] Move scope operations into `ScopeIndex`.
+* [x] Move scope operations into `ScopeIndex`.
 
   Done means: assign, remove, active lookup, restore entries, rebuild, shrink, heap/capacity stats, and validation are methods on `ScopeIndex`. Slot table code no longer manipulates the map directly.
 

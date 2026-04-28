@@ -16,7 +16,7 @@ impl SlotTable {
             + self.node_heap_bytes()
             + self.anchors.heap_bytes()
             + self.payload_locations.capacity() * mem::size_of::<Option<(crate::AnchorId, usize)>>()
-            + self.scope_index.by_scope.capacity() * mem::size_of::<(ScopeId, crate::AnchorId)>()
+            + self.scope_index.heap_bytes()
     }
 
     pub fn debug_stats(&self) -> SlotTableLocalDebugStats {
@@ -39,8 +39,8 @@ impl SlotTable {
             free_anchor_count: self.anchors.free_len(),
             anchor_capacity: self.anchors.capacity(),
             anchor_heap_bytes: self.anchors.heap_bytes(),
-            scope_index_count: self.scope_index.by_scope.len(),
-            scope_index_capacity: self.scope_index.by_scope.capacity(),
+            scope_index_count: self.scope_index.len(),
+            scope_index_capacity: self.scope_index.capacity(),
             mutation: self.mutation_debug_stats,
         }
     }
@@ -92,9 +92,8 @@ impl SlotTable {
 
         let mut scopes = self
             .scope_index
-            .by_scope
-            .iter()
-            .filter_map(|(&scope_id, &anchor)| {
+            .entries()
+            .filter_map(|(scope_id, anchor)| {
                 self.anchors
                     .active_index(anchor)
                     .map(|group_index| SlotDebugScope {
