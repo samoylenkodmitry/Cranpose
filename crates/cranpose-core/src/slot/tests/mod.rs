@@ -1,7 +1,8 @@
 use super::{
     AnchorState, DetachedSubtree, GroupRange, GroupRecord, NodeLifecycle, NodeRecord, PayloadKind,
     PayloadRecord, SlotDebugEntryKind, SlotInvariantError, SlotLifecycleCoordinator, SlotPassMode,
-    SlotTable, SlotTreeContext, SlotWriteSession, SlotWriteSessionState,
+    SlotRetentionDebugStats, SlotTable, SlotTableDebugStats, SlotTreeContext, SlotWriteSession,
+    SlotWriteSessionState,
 };
 use crate::{
     retention::{RetainKey, RetentionManager},
@@ -23,6 +24,23 @@ struct SlotHarness {
     lifecycle: SlotLifecycleCoordinator,
     state: SlotWriteSessionState,
     applier: MemoryApplier,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct PayloadIdentity {
+    anchor: usize,
+    generation: u32,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct SlotIdentitySnapshot {
+    active_group_anchors: Vec<AnchorId>,
+    retained_group_anchors: Vec<AnchorId>,
+    active_payload_anchors: Vec<PayloadIdentity>,
+    retained_payload_anchors: Vec<PayloadIdentity>,
+    value_slots: Vec<ValueSlotId>,
+    scope_ids: Vec<ScopeId>,
+    debug_stats: SlotTableDebugStats,
 }
 
 struct UnmountTrackingNode {
@@ -79,6 +97,81 @@ impl SlotHarness {
         }
         self.lifecycle.flush_pending_drops();
         self.table.debug_verify();
+    }
+
+    fn identity_snapshot(
+        &self,
+        retention: Option<&RetentionManager>,
+        value_slots: &[ValueSlotId],
+    ) -> SlotIdentitySnapshot {
+        let mut scope_ids = self
+            .table
+            .groups
+            .iter()
+            .filter_map(|group| group.scope_id)
+            .collect::<Vec<_>>();
+        let mut retained_group_anchors = Vec::new();
+        let mut retained_payload_anchors = Vec::new();
+        let retention_stats = if let Some(retention) = retention {
+            for subtree in retention.subtrees() {
+                retained_group_anchors.extend(subtree.groups.iter().map(|group| group.anchor));
+                retained_payload_anchors.extend(subtree.payloads.iter().map(PayloadIdentity::from));
+                scope_ids.extend(subtree.scope_ids_iter());
+            }
+            retention.debug_stats()
+        } else {
+            Default::default()
+        };
+
+        SlotIdentitySnapshot {
+            active_group_anchors: self.table.groups.iter().map(|group| group.anchor).collect(),
+            retained_group_anchors,
+            active_payload_anchors: self
+                .table
+                .payloads
+                .iter()
+                .map(PayloadIdentity::from)
+                .collect(),
+            retained_payload_anchors,
+            value_slots: value_slots.to_vec(),
+            scope_ids,
+            debug_stats: SlotTableDebugStats::from_parts(
+                self.table.debug_stats(),
+                self.lifecycle.debug_stats(),
+                slot_retention_stats(retention_stats),
+            ),
+        }
+    }
+}
+
+impl From<&PayloadRecord> for PayloadIdentity {
+    fn from(record: &PayloadRecord) -> Self {
+        Self {
+            anchor: record.anchor,
+            generation: record.generation,
+        }
+    }
+}
+
+impl From<ValueSlotId> for PayloadIdentity {
+    fn from(slot: ValueSlotId) -> Self {
+        Self {
+            anchor: slot.anchor(),
+            generation: slot.generation(),
+        }
+    }
+}
+
+fn slot_retention_stats(stats: crate::retention::RetentionDebugStats) -> SlotRetentionDebugStats {
+    SlotRetentionDebugStats {
+        retained_subtree_count: stats.subtree_count,
+        retained_group_count: stats.group_count,
+        retained_payload_count: stats.payload_count,
+        retained_node_count: stats.node_count,
+        retained_scope_count: stats.scope_count,
+        retained_anchor_count: stats.anchor_count,
+        retained_heap_bytes: stats.heap_bytes,
+        retained_evictions_total: stats.evictions_total,
     }
 }
 

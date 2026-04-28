@@ -1,6 +1,93 @@
 use super::*;
 
 #[test]
+fn identity_snapshot_captures_active_and_retained_identities() {
+    const PARENT_KEY: Key = 362;
+    const CHILD_KEY: Key = 363;
+    const CHILD_SCOPE: ScopeId = 21;
+
+    let mut harness = SlotHarness::new();
+    let mut child_slot = None;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let child = begin_unkeyed(session, CHILD_KEY, None);
+        session.set_group_scope(child.group, CHILD_SCOPE);
+        child_slot = Some(session.value_slot_with_kind(PayloadKind::Internal, || 17_i32));
+        let child_result = session.finish_group_body();
+        assert!(child_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    let child_slot = child_slot.expect("child payload slot must be captured");
+    let active_snapshot = harness.identity_snapshot(None, &[child_slot]);
+    assert_eq!(active_snapshot.value_slots, vec![child_slot]);
+    assert_eq!(active_snapshot.active_group_anchors.len(), 2);
+    assert!(active_snapshot.retained_group_anchors.is_empty());
+    assert_eq!(
+        active_snapshot.active_payload_anchors,
+        vec![PayloadIdentity::from(child_slot)]
+    );
+    assert!(active_snapshot.scope_ids.contains(&CHILD_SCOPE));
+    assert_eq!(active_snapshot.debug_stats.group_count, 2);
+    assert_eq!(active_snapshot.debug_stats.payload_count, 1);
+    assert_eq!(active_snapshot.debug_stats.retained_payload_count, 0);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+        let parent_result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(parent_result.detached_children.len(), 1);
+        parent_result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass();
+
+    let retained_group_anchors = detached
+        .groups
+        .iter()
+        .map(|group| group.anchor)
+        .collect::<Vec<_>>();
+    let retained_payload_anchors = detached
+        .payloads
+        .iter()
+        .map(PayloadIdentity::from)
+        .collect::<Vec<_>>();
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+
+    let retained_snapshot = harness.identity_snapshot(Some(&retention), &[child_slot]);
+    assert_eq!(retained_snapshot.value_slots, vec![child_slot]);
+    assert_eq!(
+        retained_snapshot.retained_group_anchors,
+        retained_group_anchors
+    );
+    assert_eq!(
+        retained_snapshot.retained_payload_anchors,
+        retained_payload_anchors
+    );
+    assert_eq!(
+        retained_snapshot.retained_payload_anchors,
+        vec![PayloadIdentity::from(child_slot)]
+    );
+    assert!(retained_snapshot.scope_ids.contains(&CHILD_SCOPE));
+    assert_eq!(retained_snapshot.debug_stats.retained_group_count, 1);
+    assert_eq!(retained_snapshot.debug_stats.retained_payload_count, 1);
+    assert_eq!(retained_snapshot.debug_stats.retained_scope_count, 1);
+}
+
+#[test]
 fn retention_marks_detached_nodes_and_reactivates_on_take() {
     const PARENT_KEY: Key = 364;
     const CHILD_KEY: Key = 365;

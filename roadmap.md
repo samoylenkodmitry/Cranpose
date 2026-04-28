@@ -67,7 +67,7 @@ git diff
   slot: add identity refactor roadmap
   ```
 
-* [ ] Add a small test-only identity inspection harness.
+* [x] Add a small test-only identity inspection harness.
 
   Done means: tests can capture active group anchors, retained group anchors, active payload anchors, retained payload anchors, `ValueSlotId`s, scope ids, and slot debug stats without weakening production visibility. The helpers live under `#[cfg(test)]` or existing slot test modules. They do not introduce production-only dead code.
 
