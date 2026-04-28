@@ -234,7 +234,7 @@ impl SlotTreeChecks for ActiveSlotTreeChecks<'_> {
         payload_index: usize,
         payload: &PayloadRecord,
     ) -> Result<(), SlotInvariantError> {
-        payloads::validate_active_payload_location(self.table, group, payload_index, payload)
+        payloads::validate_active_payload_anchor(self.table, group, payload_index, payload)
     }
 
     fn after_payloads(

@@ -1,5 +1,8 @@
 use super::super::{AnchorState, NodeLifecycle};
-use crate::{slot_storage::GroupKey, AnchorId, NodeId, ScopeId};
+use crate::{
+    slot_storage::{GroupKey, PayloadAnchor},
+    AnchorId, NodeId, ScopeId,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SlotTreeContext {
@@ -11,6 +14,12 @@ pub(crate) enum SlotTreeContext {
 pub(crate) struct PayloadLocationRecord {
     pub(crate) owner: AnchorId,
     pub(crate) payload_anchor: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PayloadAnchorRecord {
+    pub(crate) owner: AnchorId,
+    pub(crate) payload_anchor: PayloadAnchor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +79,10 @@ pub(crate) enum SlotInvariantError {
         expected: usize,
         actual: usize,
     },
+    PayloadAnchorRegistryCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
     ScopeIndexCountMismatch {
         expected: usize,
         actual: usize,
@@ -80,16 +93,22 @@ pub(crate) enum SlotInvariantError {
         expected: AnchorId,
         actual: AnchorId,
     },
-    PayloadLocationMismatch {
-        payload_anchor: usize,
-        expected: (AnchorId, usize),
-        actual: Option<(AnchorId, usize)>,
-    },
     PayloadLocationTargetMismatch {
         payload_anchor: usize,
         expected_owner: AnchorId,
         expected_payload_index: usize,
         actual: Option<PayloadLocationRecord>,
+    },
+    PayloadAnchorRegistryMismatch {
+        payload_anchor: PayloadAnchor,
+        expected: (AnchorId, usize),
+        actual: Option<(AnchorId, usize)>,
+    },
+    PayloadAnchorRegistryTargetMismatch {
+        payload_anchor: PayloadAnchor,
+        expected_owner: AnchorId,
+        expected_payload_index: usize,
+        actual: Option<PayloadAnchorRecord>,
     },
     NodeStartMismatch {
         tree: SlotTreeContext,

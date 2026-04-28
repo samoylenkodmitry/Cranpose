@@ -244,7 +244,7 @@ fn validate_reports_payload_count_mismatch_structurally() {
 }
 
 #[test]
-fn validate_reports_payload_location_mismatch_structurally() {
+fn validate_reports_payload_anchor_registry_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(482);
     let stale_payload_anchor = table.group_payload_record_at(0, 0).anchor;
     let mismatched_payload_anchor = PayloadAnchor::new(
@@ -255,8 +255,8 @@ fn validate_reports_payload_location_mismatch_structurally() {
 
     assert_eq!(
         table.validate(),
-        Err(SlotInvariantError::PayloadLocationMismatch {
-            payload_anchor: mismatched_payload_anchor.id(),
+        Err(SlotInvariantError::PayloadAnchorRegistryMismatch {
+            payload_anchor: mismatched_payload_anchor,
             expected: (table.groups[0].anchor, 0),
             actual: None,
         })
@@ -264,7 +264,7 @@ fn validate_reports_payload_location_mismatch_structurally() {
 }
 
 #[test]
-fn validate_reports_payload_location_stale_owner_structurally() {
+fn validate_reports_payload_anchor_registry_stale_owner_structurally() {
     let mut table = composed_group_with_value_and_node_table(491);
     let old_anchor = table.groups[0].anchor;
     let new_anchor = AnchorId::new(1_001);
@@ -277,8 +277,8 @@ fn validate_reports_payload_location_stale_owner_structurally() {
 
     assert_eq!(
         table.validate(),
-        Err(SlotInvariantError::PayloadLocationMismatch {
-            payload_anchor: payload_anchor.id(),
+        Err(SlotInvariantError::PayloadAnchorRegistryMismatch {
+            payload_anchor,
             expected: (new_anchor, 0),
             actual: Some((old_anchor, 0)),
         })

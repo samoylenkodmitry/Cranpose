@@ -184,7 +184,7 @@ git diff
   slot: add payload anchor registry
   ```
 
-* [ ] Replace `PayloadLocationRegistry` resolution with `PayloadAnchorRegistry` resolution.
+* [x] Replace `PayloadLocationRegistry` resolution with `PayloadAnchorRegistry` resolution.
 
   Done means: `read_value`, `read_value_mut`, and `write_value` resolve `ValueSlotId` through the payload anchor registry; detached and invalidated payload handles fail cleanly; validation checks every active payload record has exactly one active registry entry and every active registry entry points back to the correct record.
 

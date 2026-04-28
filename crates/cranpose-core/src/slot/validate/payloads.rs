@@ -1,7 +1,7 @@
 use super::super::{GroupRecord, PayloadRecord, SlotTable};
 use super::{
     groups::{SlotTreeChecks, SlotTreeView},
-    PayloadLocationRecord, SlotInvariantError,
+    PayloadAnchorRecord, PayloadLocationRecord, SlotInvariantError,
 };
 
 pub(super) fn validate_group_payloads(
@@ -56,23 +56,73 @@ pub(super) fn validate_payload_location_count(table: &SlotTable) -> Result<(), S
     })
 }
 
-pub(super) fn validate_active_payload_location(
+pub(super) fn validate_active_payload_anchor(
     table: &SlotTable,
     group: &GroupRecord,
     payload_index: usize,
     payload: &PayloadRecord,
 ) -> Result<(), SlotInvariantError> {
     let expected_location = (group.anchor, payload_index);
-    let actual = table.payload_locations.get(payload.anchor);
+    let actual = table.payload_anchors.active_location(payload.anchor);
     if actual == Some(expected_location) {
         return Ok(());
     }
 
-    Err(SlotInvariantError::PayloadLocationMismatch {
-        payload_anchor: payload.anchor.id(),
+    Err(SlotInvariantError::PayloadAnchorRegistryMismatch {
+        payload_anchor: payload.anchor,
         expected: expected_location,
         actual,
     })
+}
+
+pub(super) fn validate_payload_anchor_registry_count(
+    table: &SlotTable,
+) -> Result<(), SlotInvariantError> {
+    if table.payload_anchors.active_len() == table.payloads.len() {
+        return Ok(());
+    }
+
+    Err(SlotInvariantError::PayloadAnchorRegistryCountMismatch {
+        expected: table.payloads.len(),
+        actual: table.payload_anchors.active_len(),
+    })
+}
+
+pub(super) fn validate_payload_anchor_registry(
+    table: &SlotTable,
+) -> Result<(), SlotInvariantError> {
+    for (payload_anchor, (owner, payload_index)) in table.payload_anchors.active_entries() {
+        let Some(group_index) = table.anchors.active_index(owner) else {
+            return Err(SlotInvariantError::PayloadAnchorRegistryTargetMismatch {
+                payload_anchor,
+                expected_owner: owner,
+                expected_payload_index: payload_index,
+                actual: None,
+            });
+        };
+        let actual = table
+            .group_payload_records_at(group_index)
+            .get(payload_index)
+            .map(|payload| PayloadAnchorRecord {
+                owner: payload.owner,
+                payload_anchor: payload.anchor,
+            });
+        if actual
+            != Some(PayloadAnchorRecord {
+                owner,
+                payload_anchor,
+            })
+        {
+            return Err(SlotInvariantError::PayloadAnchorRegistryTargetMismatch {
+                payload_anchor,
+                expected_owner: owner,
+                expected_payload_index: payload_index,
+                actual,
+            });
+        }
+    }
+
+    Ok(())
 }
 
 pub(super) fn validate_payload_locations(table: &SlotTable) -> Result<(), SlotInvariantError> {
@@ -165,6 +215,30 @@ mod tests {
                 expected_owner: owner,
                 expected_payload_index: 0,
                 actual: Some(PayloadLocationRecord {
+                    owner,
+                    payload_anchor: actual_payload_anchor,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn reverse_payload_anchor_registry_validation_reports_actual_record() {
+        let owner = AnchorId::new(1);
+        let actual_payload_anchor = PayloadAnchor::new(10, 1);
+        let stale_payload_anchor = PayloadAnchor::new(11, 1);
+        let mut table = one_payload_table(owner, actual_payload_anchor.id());
+        table
+            .payload_anchors
+            .set_active(stale_payload_anchor, owner, 0);
+
+        assert_eq!(
+            validate_payload_anchor_registry(&table),
+            Err(SlotInvariantError::PayloadAnchorRegistryTargetMismatch {
+                payload_anchor: stale_payload_anchor,
+                expected_owner: owner,
+                expected_payload_index: 0,
+                actual: Some(PayloadAnchorRecord {
                     owner,
                     payload_anchor: actual_payload_anchor,
                 }),

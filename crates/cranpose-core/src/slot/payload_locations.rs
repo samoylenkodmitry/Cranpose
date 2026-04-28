@@ -13,6 +13,7 @@ impl PayloadLocationRegistry {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn get(&self, payload_anchor: PayloadAnchor) -> Option<(AnchorId, usize)> {
         self.locations.get(payload_anchor.id()).copied()
     }

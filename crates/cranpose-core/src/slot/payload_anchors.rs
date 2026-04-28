@@ -70,6 +70,34 @@ impl PayloadAnchorRegistry {
         self.set_state(anchor, PayloadAnchorState::Detached);
     }
 
+    pub(super) fn active_location(&self, anchor: PayloadAnchor) -> Option<(AnchorId, usize)> {
+        let slot = self.slot(anchor)?;
+        if slot.generation != anchor.generation() {
+            return None;
+        }
+        match slot.state {
+            PayloadAnchorState::Active { owner, index } => Some((owner, index)),
+            PayloadAnchorState::Detached | PayloadAnchorState::Invalidated => None,
+        }
+    }
+
+    pub(super) fn active_len(&self) -> usize {
+        self.active_count
+    }
+
+    pub(super) fn active_entries(
+        &self,
+    ) -> impl Iterator<Item = (PayloadAnchor, (AnchorId, usize))> + '_ {
+        self.states
+            .iter()
+            .filter_map(|(id, slot)| match slot.state {
+                PayloadAnchorState::Active { owner, index } => {
+                    Some((PayloadAnchor::new(id, slot.generation), (owner, index)))
+                }
+                PayloadAnchorState::Detached | PayloadAnchorState::Invalidated => None,
+            })
+    }
+
     pub(super) fn bump_generation(&mut self, anchor: PayloadAnchor) -> Option<PayloadAnchor> {
         let slot = self.states.get_mut(anchor.id())?;
         if slot.generation != anchor.generation() {
@@ -122,17 +150,6 @@ impl PayloadAnchorRegistry {
 
     fn slot(&self, anchor: PayloadAnchor) -> Option<&PayloadAnchorSlot> {
         self.states.get(anchor.id())
-    }
-
-    fn active_location(&self, anchor: PayloadAnchor) -> Option<(AnchorId, usize)> {
-        let slot = self.slot(anchor)?;
-        if slot.generation != anchor.generation() {
-            return None;
-        }
-        match slot.state {
-            PayloadAnchorState::Active { owner, index } => Some((owner, index)),
-            PayloadAnchorState::Detached | PayloadAnchorState::Invalidated => None,
-        }
     }
 
     fn set_state(

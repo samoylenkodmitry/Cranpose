@@ -4,8 +4,8 @@ use crate::slot_storage::ValueSlotId;
 impl SlotTable {
     fn checked_value_slot(&self, slot: ValueSlotId) -> (usize, usize) {
         let (owner, payload_index) = self
-            .payload_locations
-            .get(slot.anchor())
+            .payload_anchors
+            .active_location(slot.anchor())
             .expect("value slot anchor should resolve");
         let group_index = self.current_group_index(owner);
         debug_assert_eq!(
