@@ -1,5 +1,10 @@
 use super::state::SlotWriteSessionState;
-use crate::{collections::map::HashMap, slot::SlotTable, slot_storage::GroupKey, AnchorId};
+use crate::{
+    collections::map::HashMap,
+    slot::{ActiveSubtreeRoot, SlotTable},
+    slot_storage::GroupKey,
+    AnchorId,
+};
 use smallvec::SmallVec;
 
 const DEFAULT_SIBLING_INDEX_THRESHOLD: usize = 16;
@@ -80,7 +85,7 @@ impl SiblingIndex {
         parent_anchor: AnchorId,
         key: GroupKey,
         search_start: usize,
-    ) -> Option<usize> {
+    ) -> Option<ActiveSubtreeRoot> {
         let siblings = table.direct_child_range(parent_anchor);
         self.by_key.get(&key).and_then(|anchors| {
             anchors
@@ -92,9 +97,10 @@ impl SiblingIndex {
                         && siblings.contains_index(index)
                         && group.parent_anchor == parent_anchor
                         && group.key == key)
-                        .then_some(index)
+                        .then_some((*anchor, index))
                 })
-                .min()
+                .min_by_key(|(_, index)| *index)
+                .map(|(anchor, _)| ActiveSubtreeRoot::new(anchor))
         })
     }
 }
@@ -114,7 +120,7 @@ impl SlotWriteSessionState {
         parent_anchor: AnchorId,
         key: GroupKey,
         search_start: usize,
-    ) -> Option<usize> {
+    ) -> Option<ActiveSubtreeRoot> {
         if let Some(sibling_index) = self.current_sibling_index().as_ref() {
             return sibling_index.find(table, parent_anchor, key, search_start);
         }
@@ -137,7 +143,7 @@ impl SlotWriteSessionState {
                 "later sibling scans must stay on direct children"
             );
             if group.key == key {
-                return Some(index);
+                return Some(ActiveSubtreeRoot::new(group.anchor));
             }
             direct_children_seen += 1;
             index += group.subtree_len;

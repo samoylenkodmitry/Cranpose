@@ -376,7 +376,7 @@ git diff
   slot: type detached subtree restore
   ```
 
-* [ ] Hide raw structural helpers.
+* [x] Hide raw structural helpers.
 
   Done means: raw `usize` mutation helpers are private to the smallest module scope; writer code uses semantic cursor operations; tests use semantic helpers unless explicitly testing corruption/validation.
 

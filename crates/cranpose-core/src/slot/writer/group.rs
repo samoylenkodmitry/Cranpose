@@ -69,10 +69,7 @@ impl SlotWriteSession<'_> {
         cursor: ChildCursor,
         key: GroupKey,
     ) -> ActiveChildResolution {
-        let Some(expected_group) = self
-            .table
-            .direct_child_sibling_record_at(cursor.parent(), cursor.index())
-        else {
+        let Some(expected_group) = self.table.direct_child_sibling_record_at_cursor(cursor) else {
             return ActiveChildResolution::InsertNew;
         };
 
@@ -85,9 +82,7 @@ impl SlotWriteSession<'_> {
         let search_start = cursor.index() + expected_group.subtree_len;
         self.state
             .find_later_sibling(self.table, cursor.parent(), key, search_start)
-            .map(|found_index| ActiveChildResolution::MoveLaterSibling {
-                root: ActiveSubtreeRoot::new(self.table.group_anchor_at_index(found_index)),
-            })
+            .map(|root| ActiveChildResolution::MoveLaterSibling { root })
             .unwrap_or(ActiveChildResolution::InsertNew)
     }
 

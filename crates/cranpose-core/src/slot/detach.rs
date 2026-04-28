@@ -5,7 +5,7 @@ use super::{
 use crate::{remove_child_and_cleanup_now, AnchorId, Applier, NodeError, NodeId};
 
 impl SlotTable {
-    pub(in crate::slot) fn detach_range(&mut self, range: SubtreeRange) -> Vec<GroupRecord> {
+    fn detach_range(&mut self, range: SubtreeRange) -> Vec<GroupRecord> {
         self.groups.drain(range.as_range()).collect::<Vec<_>>()
     }
 
@@ -167,8 +167,9 @@ impl SlotTable {
         }
 
         let next_child_index = state.root.next_child_index;
+        let cursor = ChildCursor::new(AnchorId::INVALID, next_child_index);
         let mut detached = Vec::new();
-        while let Some(anchor) = self.direct_child_anchor_at(AnchorId::INVALID, next_child_index) {
+        while let Some(anchor) = self.direct_child_anchor_at_cursor(cursor) {
             detached.push(self.detach_subtree(anchor));
         }
         detached

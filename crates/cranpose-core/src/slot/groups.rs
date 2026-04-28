@@ -53,6 +53,7 @@ impl SlotTable {
         &self.groups[self.current_group_index(anchor)]
     }
 
+    #[cfg(test)]
     #[inline(always)]
     pub(in crate::slot) fn group_anchor_at_index(&self, group_index: usize) -> AnchorId {
         self.groups[group_index].anchor
@@ -168,16 +169,22 @@ impl SlotTable {
         }
     }
 
-    pub(in crate::slot) fn direct_child_anchor_at(
+    pub(in crate::slot) fn direct_child_anchor_at_cursor(
         &self,
-        parent_anchor: AnchorId,
-        child_index: usize,
+        cursor: ChildCursor,
     ) -> Option<AnchorId> {
-        self.direct_child_sibling_record_at(parent_anchor, child_index)
+        self.direct_child_sibling_record_at_cursor(cursor)
             .map(|group| group.anchor)
     }
 
-    pub(in crate::slot) fn direct_child_sibling_record_at(
+    pub(in crate::slot) fn direct_child_sibling_record_at_cursor(
+        &self,
+        cursor: ChildCursor,
+    ) -> Option<GroupSiblingRecord> {
+        self.direct_child_sibling_record_at(cursor.parent(), cursor.index())
+    }
+
+    fn direct_child_sibling_record_at(
         &self,
         parent_anchor: AnchorId,
         child_index: usize,
