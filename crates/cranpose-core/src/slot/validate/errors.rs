@@ -1,4 +1,4 @@
-use super::super::{AnchorState, NodeLifecycle};
+use super::super::{AnchorState, NodeLifecycle, PayloadAnchorLifecycle};
 use crate::{
     slot_storage::{GroupKey, PayloadAnchor},
     AnchorId, NodeId, ScopeId,
@@ -83,6 +83,12 @@ pub(crate) enum SlotInvariantError {
         expected: usize,
         actual: usize,
     },
+    PayloadAnchorRegistryInternalMismatch {
+        detail: &'static str,
+        payload_anchor_id: Option<usize>,
+        expected: usize,
+        actual: usize,
+    },
     ScopeIndexCountMismatch {
         expected: usize,
         actual: usize,
@@ -92,6 +98,10 @@ pub(crate) enum SlotInvariantError {
         payload_anchor: usize,
         expected: AnchorId,
         actual: AnchorId,
+    },
+    DuplicatePayloadAnchor {
+        tree: SlotTreeContext,
+        payload_anchor: PayloadAnchor,
     },
     PayloadLocationTargetMismatch {
         payload_anchor: usize,
@@ -180,6 +190,17 @@ pub(crate) enum SlotInvariantError {
         root_key: GroupKey,
         node_id: NodeId,
         actual: NodeLifecycle,
+    },
+    RetainedPayloadAnchorStillActive {
+        root_key: GroupKey,
+        payload_anchor: PayloadAnchor,
+        active_owner: AnchorId,
+        active_index: usize,
+    },
+    RetainedPayloadAnchorStateMismatch {
+        root_key: GroupKey,
+        payload_anchor: PayloadAnchor,
+        actual: Option<PayloadAnchorLifecycle>,
     },
     DetachedSubtreeEmpty,
     DetachedDuplicateAnchor {

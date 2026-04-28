@@ -255,6 +255,73 @@ fn retention_validate_rejects_non_detached_retained_anchor() {
 }
 
 #[test]
+fn retention_validate_rejects_active_retained_payload_anchor() {
+    const PARENT_KEY: Key = 378;
+    const CHILD_KEY: Key = 379;
+
+    let (mut harness, detached, _) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, true, false);
+    let payload = detached
+        .payloads
+        .first()
+        .expect("detached subtree must contain a payload");
+    let retained_payload_anchor = payload.anchor;
+    let retained_payload_owner = payload.owner;
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+    harness
+        .table
+        .payload_anchors
+        .set_active(retained_payload_anchor, retained_payload_owner, 0);
+
+    assert_eq!(
+        retention.validate(&harness.table),
+        Err(SlotInvariantError::RetainedPayloadAnchorStillActive {
+            root_key: retain_key.key,
+            payload_anchor: retained_payload_anchor,
+            active_owner: retained_payload_owner,
+            active_index: 0,
+        })
+    );
+}
+
+#[test]
+fn retention_validate_rejects_non_detached_retained_payload_anchor() {
+    const PARENT_KEY: Key = 380;
+    const CHILD_KEY: Key = 381;
+
+    let (mut harness, detached, _) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, true, false);
+    let retained_payload_anchor = detached
+        .payloads
+        .first()
+        .expect("detached subtree must contain a payload")
+        .anchor;
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+    harness.table.payload_anchors.clear();
+
+    assert_eq!(
+        retention.validate(&harness.table),
+        Err(SlotInvariantError::RetainedPayloadAnchorStateMismatch {
+            root_key: retain_key.key,
+            payload_anchor: retained_payload_anchor,
+            actual: None,
+        })
+    );
+}
+
+#[test]
 fn retention_validate_rejects_retained_scope_in_active_scope_index() {
     const PARENT_KEY: Key = 376;
     const CHILD_KEY: Key = 377;

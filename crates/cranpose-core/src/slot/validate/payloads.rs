@@ -88,6 +88,12 @@ pub(super) fn validate_payload_anchor_registry_count(
     })
 }
 
+pub(super) fn validate_payload_anchor_registry_integrity(
+    table: &SlotTable,
+) -> Result<(), SlotInvariantError> {
+    table.payload_anchors.validate_integrity()
+}
+
 pub(super) fn validate_payload_anchor_registry(
     table: &SlotTable,
 ) -> Result<(), SlotInvariantError> {

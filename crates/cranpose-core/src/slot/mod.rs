@@ -35,6 +35,8 @@ pub use debug::{
 pub(crate) use detach::{dispose_detached_node_now, dispose_detached_subtree_now};
 use groups::GroupRecord;
 pub(crate) use lifecycle::{DeferredDrop, SlotLifecycleCoordinator};
+#[cfg(any(test, debug_assertions))]
+pub(crate) use payload_anchors::PayloadAnchorLifecycle;
 pub(crate) use payload_anchors::PayloadAnchorRegistry;
 use payload_locations::PayloadLocationRegistry;
 pub(in crate::slot) use ranges::{

@@ -1,10 +1,22 @@
+#[cfg(any(test, debug_assertions))]
+use super::SlotInvariantError;
 use super::{dense_id_map::DenseIdMap, DetachedSubtree, PayloadRecord, SlotTable};
+#[cfg(any(test, debug_assertions))]
+use crate::collections::map::HashSet;
 use crate::{slot_storage::PayloadAnchor, AnchorId};
 use std::{cmp::Reverse, collections::BinaryHeap};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PayloadAnchorState {
     Active { owner: AnchorId, index: usize },
+    Detached,
+    Invalidated,
+}
+
+#[cfg(any(test, debug_assertions))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PayloadAnchorLifecycle {
+    Active,
     Detached,
     Invalidated,
 }
@@ -96,6 +108,91 @@ impl PayloadAnchorRegistry {
                 }
                 PayloadAnchorState::Detached | PayloadAnchorState::Invalidated => None,
             })
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub(super) fn state_kind(&self, anchor: PayloadAnchor) -> Option<PayloadAnchorLifecycle> {
+        let slot = self.slot(anchor)?;
+        if slot.generation != anchor.generation() {
+            return None;
+        }
+        Some(match slot.state {
+            PayloadAnchorState::Active { .. } => PayloadAnchorLifecycle::Active,
+            PayloadAnchorState::Detached => PayloadAnchorLifecycle::Detached,
+            PayloadAnchorState::Invalidated => PayloadAnchorLifecycle::Invalidated,
+        })
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub(super) fn validate_integrity(&self) -> Result<(), SlotInvariantError> {
+        let mut active_count = 0usize;
+        let mut detached_count = 0usize;
+        let mut invalidated_count = 0usize;
+        let mut invalidated_ids = HashSet::default();
+
+        for (id, slot) in self.states.iter() {
+            if id == 0 || id >= self.next_id {
+                return Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
+                    detail: "registered payload anchor id must be allocated",
+                    payload_anchor_id: Some(id),
+                    expected: self.next_id,
+                    actual: id,
+                });
+            }
+            match slot.state {
+                PayloadAnchorState::Active { .. } => active_count += 1,
+                PayloadAnchorState::Detached => detached_count += 1,
+                PayloadAnchorState::Invalidated => {
+                    invalidated_count += 1;
+                    invalidated_ids.insert(id);
+                }
+            }
+        }
+
+        self.validate_state_count("active", self.active_count, active_count)?;
+        self.validate_state_count("detached", self.detached_count, detached_count)?;
+        self.validate_state_count("invalidated", self.invalidated_count, invalidated_count)?;
+
+        let mut free_ids = HashSet::default();
+        for Reverse(id) in self.free_ids.iter().copied() {
+            if !free_ids.insert(id as usize) {
+                return Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
+                    detail: "free payload anchor id must be unique",
+                    payload_anchor_id: Some(id as usize),
+                    expected: 1,
+                    actual: 2,
+                });
+            }
+            let Some(slot) = self.states.get(id as usize) else {
+                return Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
+                    detail: "free payload anchor id must have registry state",
+                    payload_anchor_id: Some(id as usize),
+                    expected: 1,
+                    actual: 0,
+                });
+            };
+            if slot.state != PayloadAnchorState::Invalidated {
+                return Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
+                    detail: "free payload anchor id must be invalidated",
+                    payload_anchor_id: Some(id as usize),
+                    expected: 1,
+                    actual: 0,
+                });
+            }
+        }
+
+        for invalidated_id in invalidated_ids {
+            if !free_ids.contains(&invalidated_id) {
+                return Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
+                    detail: "invalidated payload anchor id must be reusable",
+                    payload_anchor_id: Some(invalidated_id),
+                    expected: 1,
+                    actual: 0,
+                });
+            }
+        }
+
+        Ok(())
     }
 
     pub(super) fn bump_generation(&mut self, anchor: PayloadAnchor) -> Option<PayloadAnchor> {
@@ -202,9 +299,43 @@ impl PayloadAnchorRegistry {
         let id = u32::try_from(anchor.id()).expect("payload anchor id must fit u32");
         self.free_ids.push(Reverse(id));
     }
+
+    #[cfg(any(test, debug_assertions))]
+    fn validate_state_count(
+        &self,
+        detail: &'static str,
+        expected: usize,
+        actual: usize,
+    ) -> Result<(), SlotInvariantError> {
+        if expected == actual {
+            return Ok(());
+        }
+        Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
+            detail,
+            payload_anchor_id: None,
+            expected,
+            actual,
+        })
+    }
 }
 
 impl SlotTable {
+    #[cfg(any(test, debug_assertions))]
+    pub(crate) fn payload_anchor_lifecycle(
+        &self,
+        anchor: PayloadAnchor,
+    ) -> Option<PayloadAnchorLifecycle> {
+        self.payload_anchors.state_kind(anchor)
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub(crate) fn payload_anchor_active_location(
+        &self,
+        anchor: PayloadAnchor,
+    ) -> Option<(AnchorId, usize)> {
+        self.payload_anchors.active_location(anchor)
+    }
+
     pub(crate) fn invalidate_detached_subtree_payload_anchors(
         &mut self,
         subtree: &DetachedSubtree,
@@ -226,5 +357,47 @@ impl SlotTable {
         if removed {
             self.payload_anchors.shrink_to_fit();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_integrity_rejects_free_id_without_invalidated_state() {
+        let mut registry = PayloadAnchorRegistry::new();
+        let anchor = registry.allocate();
+        registry
+            .free_ids
+            .push(Reverse(u32::try_from(anchor.id()).unwrap()));
+
+        assert_eq!(
+            registry.validate_integrity(),
+            Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
+                detail: "free payload anchor id must be invalidated",
+                payload_anchor_id: Some(anchor.id()),
+                expected: 1,
+                actual: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn registry_integrity_rejects_invalidated_id_missing_from_free_list() {
+        let mut registry = PayloadAnchorRegistry::new();
+        let anchor = registry.allocate();
+        assert!(registry.invalidate(anchor));
+        registry.free_ids.clear();
+
+        assert_eq!(
+            registry.validate_integrity(),
+            Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
+                detail: "invalidated payload anchor id must be reusable",
+                payload_anchor_id: Some(anchor.id()),
+                expected: 1,
+                actual: 0,
+            })
+        );
     }
 }

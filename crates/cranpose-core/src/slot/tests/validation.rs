@@ -185,6 +185,33 @@ fn validate_reports_payload_owner_mismatch_structurally() {
 }
 
 #[test]
+fn validate_reports_duplicate_payload_anchor_structurally() {
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, 492, None);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 1_i32);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 2_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    let duplicate_anchor = harness.table.group_payload_record_at(0, 0).anchor;
+    harness.table.group_payload_record_at_mut(0, 1).anchor = duplicate_anchor;
+
+    assert_eq!(
+        harness.table.validate(),
+        Err(SlotInvariantError::DuplicatePayloadAnchor {
+            tree: SlotTreeContext::Active,
+            payload_anchor: duplicate_anchor,
+        })
+    );
+}
+
+#[test]
 fn validate_reports_payload_start_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(481);
     table.groups[0].payload_start = 1;

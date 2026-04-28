@@ -53,6 +53,7 @@ impl SlotTable {
         )?;
 
         anchors::validate_active_group_anchor_count(self)?;
+        payloads::validate_payload_anchor_registry_integrity(self)?;
         payloads::validate_payload_anchor_registry_count(self)?;
         payloads::validate_payload_location_count(self)?;
         scopes::validate_scope_index_count(self)?;

@@ -21,6 +21,7 @@ pub(super) struct SlotTreeView<'a> {
 pub(super) struct ActiveSlotTreeChecks<'a> {
     table: &'a SlotTable,
     sibling_keys: HashMap<(AnchorId, GroupKey), usize>,
+    payload_anchors: HashSet<crate::slot_storage::PayloadAnchor>,
 }
 
 impl<'a> ActiveSlotTreeChecks<'a> {
@@ -28,6 +29,7 @@ impl<'a> ActiveSlotTreeChecks<'a> {
         Self {
             table,
             sibling_keys: HashMap::default(),
+            payload_anchors: HashSet::default(),
         }
     }
 }
@@ -234,6 +236,12 @@ impl SlotTreeChecks for ActiveSlotTreeChecks<'_> {
         payload_index: usize,
         payload: &PayloadRecord,
     ) -> Result<(), SlotInvariantError> {
+        if !self.payload_anchors.insert(payload.anchor) {
+            return Err(SlotInvariantError::DuplicatePayloadAnchor {
+                tree: SlotTreeContext::Active,
+                payload_anchor: payload.anchor,
+            });
+        }
         payloads::validate_active_payload_anchor(self.table, group, payload_index, payload)
     }
 

@@ -214,7 +214,7 @@ git diff
   slot: remove payload anchor renumbering
   ```
 
-* [ ] Strengthen payload validation.
+* [x] Strengthen payload validation.
 
   Done means: `validate()` verifies active payload anchors, detached payload anchors in retained subtrees, invalidated/free ids, generation mismatches, duplicate payload anchors, stale active locations, and retained payload identity consistency.
 
