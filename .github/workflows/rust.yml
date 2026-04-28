@@ -191,6 +191,7 @@ jobs:
             libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev \
             libegl1 libgl1-mesa-dri mesa-vulkan-drivers \
+            python3-pil \
             xvfb xauth xdotool imagemagick
 
       - name: Run sequential robot tests
