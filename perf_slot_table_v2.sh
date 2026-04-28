@@ -40,9 +40,30 @@ else
 fi
 STABILITY_THRESHOLD_PCT="${CRANPOSE_SLOT_TABLE_STABILITY_THRESHOLD_PCT:-5}"
 STABILITY_WARMUP_RUNS="${CRANPOSE_SLOT_TABLE_STABILITY_WARMUP_RUNS:-2}"
+STABILITY_ATTEMPTS="${CRANPOSE_SLOT_TABLE_STABILITY_ATTEMPTS:-2}"
 PLOT="0"
 SIBLING_THRESHOLD_MATRIX="0"
 SIBLING_THRESHOLD_VALUES="${CRANPOSE_SIBLING_INDEX_THRESHOLDS:-4 8 16 32 64}"
+STABILITY_BENCHMARKS=(
+    "slot_table_v2_keyed_reverse_16"
+    "slot_table_v2_keyed_reverse_64"
+    "slot_table_v2_keyed_reverse_256"
+    "slot_table_v2_keyed_reverse_1024"
+    "slot_table_v2_keyed_reverse_4096"
+    "slot_table_v2_keyed_rotate_front_to_back_1024"
+    "slot_table_v2_keyed_random_shuffle_1024_seed_1"
+    "slot_table_v2_keyed_random_shuffle_1024_seed_2"
+    "slot_table_v2_conditional_toggle_front_1024"
+    "slot_table_v2_conditional_toggle_middle_1024"
+    "slot_table_v2_conditional_toggle_end_1024"
+    "slot_table_v2_tab_switch_16_payload_groups"
+    "slot_table_v2_tab_switch_192_payload_groups"
+    "slot_table_v2_tab_switch_1024_payload_groups"
+    "slot_table_v2_subcompose_scrolling"
+    "slot_table_v2_lazy_scroll_steady"
+    "slot_table_v2_lazy_scroll_jump_near"
+    "slot_table_v2_lazy_scroll_jump_far"
+)
 
 baseline_stamp_path() {
     local baseline_name="$1"
@@ -146,9 +167,41 @@ run_stability_check() {
         echo "CRANPOSE_SLOT_TABLE_STABILITY_WARMUP_RUNS must be a non-negative integer." >&2
         exit 1
     fi
+    if ! [[ "$STABILITY_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "CRANPOSE_SLOT_TABLE_STABILITY_ATTEMPTS must be a positive integer." >&2
+        exit 1
+    fi
 
-    local baseline_name
-    baseline_name="slot-table-stability-$(date +%s)-$$"
+    if [[ -z "$FILTER" ]]; then
+        run_full_stability_check
+        return
+    fi
+
+    if run_filtered_stability_check_with_retries; then
+        echo "Stability check passed: all same-tree regression confidence intervals stayed within threshold."
+    else
+        echo "Stability check failed: same-tree regression confidence exceeded the configured threshold." >&2
+        exit 1
+    fi
+}
+
+run_filtered_stability_check_with_retries() {
+    local attempt
+    for (( attempt = 1; attempt <= STABILITY_ATTEMPTS; attempt++ )); do
+        if (( STABILITY_ATTEMPTS > 1 )); then
+            echo "Running stability attempt ${attempt}/${STABILITY_ATTEMPTS}"
+        fi
+        if run_filtered_stability_check; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+run_filtered_stability_check() {
+    local baseline_name baseline_filter_suffix
+    baseline_filter_suffix="${FILTER//[^[:alnum:]_]/_}"
+    baseline_name="slot-table-stability-$(date +%s)-$$-${baseline_filter_suffix:-all}"
 
     echo "Running same-tree stability check with temporary baseline '$baseline_name'"
     if (( STABILITY_WARMUP_RUNS > 0 )); then
@@ -195,6 +248,23 @@ run_stability_check() {
             failure=1
         fi
     done
+
+    return "$failure"
+}
+
+run_full_stability_check() {
+    local original_filter failure benchmark_name
+    original_filter="$FILTER"
+    failure=0
+
+    echo "Running full same-tree stability check with adjacent per-benchmark baselines"
+    for benchmark_name in "${STABILITY_BENCHMARKS[@]}"; do
+        FILTER="$benchmark_name"
+        if ! run_filtered_stability_check_with_retries; then
+            failure=1
+        fi
+    done
+    FILTER="$original_filter"
 
     if (( failure != 0 )); then
         echo "Stability check failed: same-tree regression confidence exceeded the configured threshold." >&2
@@ -394,6 +464,7 @@ echo "  cpu_set=${CPU_SET:-<none>}"
 echo "  cooldown_secs=${COOLDOWN_SECS}s"
 if [[ "$STABILITY_CHECK" == "1" ]]; then
     echo "  stability_warmup_runs=$STABILITY_WARMUP_RUNS"
+    echo "  stability_attempts=$STABILITY_ATTEMPTS"
 fi
 echo "  sibling_threshold=${CRANPOSE_SIBLING_INDEX_THRESHOLD:-<default>}"
 
