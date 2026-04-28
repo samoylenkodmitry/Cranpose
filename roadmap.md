@@ -561,7 +561,7 @@ git diff
   slot: model stable group identities
   ```
 
-* [ ] Extend model tests for payload anchor identity.
+* [x] Extend model tests for payload anchor identity.
 
   Done means: generated operations randomly create remembered values, replace payload types, detach/retain/restore payloads, compact storage, dispose subtrees, and assert `ValueSlotId` behavior after every step.
 
