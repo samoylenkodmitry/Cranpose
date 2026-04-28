@@ -316,7 +316,7 @@ git diff
 
 ## Phase 5 — Replace raw structural mutation indices with typed cursors
 
-* [ ] Introduce `ChildCursor`, `ActiveSubtreeRoot`, and `DetachedChild`.
+* [x] Introduce `ChildCursor`, `ActiveSubtreeRoot`, and `DetachedChild`.
 
   Done means: structural mutation entry points stop accepting naked `(usize, AnchorId, GroupKey, DetachedSubtree)` combinations where possible. The cursor carries parent anchor and child insertion boundary together.
 

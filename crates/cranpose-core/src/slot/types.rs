@@ -59,10 +59,67 @@ pub(super) struct NodeRecord {
     pub(super) lifecycle: NodeLifecycle,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ChildCursor {
+    parent: AnchorId,
+    index: usize,
+}
+
+impl ChildCursor {
+    pub(crate) fn new(parent: AnchorId, index: usize) -> Self {
+        Self { parent, index }
+    }
+
+    pub(crate) fn parent(self) -> AnchorId {
+        self.parent
+    }
+
+    pub(crate) fn index(self) -> usize {
+        self.index
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ActiveSubtreeRoot {
+    anchor: AnchorId,
+}
+
+impl ActiveSubtreeRoot {
+    pub(crate) fn new(anchor: AnchorId) -> Self {
+        Self { anchor }
+    }
+
+    pub(crate) fn anchor(self) -> AnchorId {
+        self.anchor
+    }
+}
+
 pub(crate) struct DetachedSubtree {
     pub(super) groups: Vec<GroupRecord>,
     pub(super) payloads: Vec<PayloadRecord>,
     pub(super) nodes: Vec<NodeRecord>,
+}
+
+pub(crate) struct DetachedChild {
+    expected_key: GroupKey,
+    subtree: DetachedSubtree,
+}
+
+impl DetachedChild {
+    pub(crate) fn new(expected_key: GroupKey, subtree: DetachedSubtree) -> Self {
+        Self {
+            expected_key,
+            subtree,
+        }
+    }
+
+    pub(crate) fn expected_key(&self) -> GroupKey {
+        self.expected_key
+    }
+
+    pub(crate) fn into_subtree(self) -> DetachedSubtree {
+        self.subtree
+    }
 }
 
 impl DetachedSubtree {
