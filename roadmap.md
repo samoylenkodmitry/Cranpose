@@ -356,7 +356,7 @@ git diff
   slot: type new group insertion cursor
   ```
 
-* [ ] Convert subtree movement to typed cursor API.
+* [x] Convert subtree movement to typed cursor API.
 
   Done means: `move_subtree` or its replacement accepts `ActiveSubtreeRoot` and `ChildCursor`; it asserts the moved root is a later direct sibling of the same parent; it cannot move a parent into its child, a child across parents, or a retained subtree through active movement.
 

@@ -108,7 +108,7 @@ impl SlotWriteSession<'_> {
                 kind: GroupStartKind::Reused,
             },
             ActiveChildResolution::MoveLaterSibling { root } => {
-                self.table.move_subtree(root.anchor(), cursor.index());
+                self.table.move_subtree(root, cursor);
                 StartedGroup {
                     anchor: root.anchor(),
                     kind: GroupStartKind::Moved,

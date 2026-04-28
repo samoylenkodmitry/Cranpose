@@ -1,5 +1,6 @@
 use super::super::{
-    checked_u32_delta, checked_usize_to_u32, CheckedU32Delta, ChildCursor, GroupRecord,
+    checked_u32_delta, checked_usize_to_u32, ActiveSubtreeRoot, CheckedU32Delta, ChildCursor,
+    GroupRecord,
 };
 use super::SlotTable;
 use crate::{slot_storage::GroupKey, AnchorId};
@@ -115,12 +116,27 @@ impl SlotTable {
         anchor
     }
 
-    pub(in crate::slot) fn move_subtree(&mut self, anchor: AnchorId, insert_index: usize) {
+    pub(in crate::slot) fn move_subtree(&mut self, root: ActiveSubtreeRoot, cursor: ChildCursor) {
+        self.assert_child_cursor_boundary(cursor);
+        let anchor = root.anchor();
         let from_index = self.current_group_index(anchor);
+        let moving_groups = self.group_subtree_range_at_index(from_index);
+        let insert_index = cursor.index();
         if from_index == insert_index {
             return;
         }
-        let moving_groups = self.group_subtree_range_at_index(from_index);
+
+        let moving_root = self.group_sibling_record_at_index(from_index);
+        assert_eq!(
+            moving_root.parent_anchor,
+            cursor.parent(),
+            "moved subtree root must be a direct child of the cursor parent"
+        );
+        assert!(
+            insert_index < from_index,
+            "moved subtree root must be a later direct sibling of the child cursor"
+        );
+
         let mut moved = self
             .groups
             .drain(moving_groups.as_range())
