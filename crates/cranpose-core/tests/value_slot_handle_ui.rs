@@ -32,18 +32,12 @@ impl Drop for TempCrate {
 fn run_compile_fail_case(test_name: &str, fixture: &str, expected_fragments: &[&str]) {
     let temp = TempCrate::new(test_name);
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = crate_root
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root");
     let source_path = crate_root.join("tests/ui").join(fixture);
     let source = fs::read_to_string(&source_path).expect("read compile-fail fixture");
     let wrapped_source = format!("pub use cranpose_core::*;\n{source}");
     let temp_source_path = temp.dir.join("case.rs");
     fs::write(&temp_source_path, wrapped_source).expect("write wrapped compile-fail source");
-    let target_root =
-        workspace_root.join(env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()));
-    let deps_dir = resolve_deps_dir(&target_root);
+    let deps_dir = resolve_deps_dir();
     let core_artifact = find_artifact(&deps_dir, "libcranpose_core-", &["rlib"]);
     let macros_artifact = find_artifact(
         &deps_dir,
@@ -111,17 +105,18 @@ fn find_artifact(dir: &Path, prefix: &str, extensions: &[&str]) -> PathBuf {
         .unwrap_or_else(|| panic!("missing artifact `{prefix}*` in `{}`", dir.display()))
 }
 
-fn resolve_deps_dir(target_root: &Path) -> PathBuf {
-    for profile in ["debug", "release"] {
-        let deps_dir = target_root.join(profile).join("deps");
-        if deps_dir.is_dir() {
-            return deps_dir;
-        }
-    }
-    panic!(
-        "missing compiled dependency directory under `{}`",
-        target_root.display()
+fn resolve_deps_dir() -> PathBuf {
+    let current_exe = env::current_exe().expect("resolve current test executable");
+    let deps_dir = current_exe
+        .parent()
+        .expect("current test executable has a parent directory")
+        .to_path_buf();
+    assert!(
+        deps_dir.file_name().and_then(|name| name.to_str()) == Some("deps"),
+        "test executable `{}` is not in a Cargo deps directory",
+        current_exe.display()
     );
+    deps_dir
 }
 
 #[test]

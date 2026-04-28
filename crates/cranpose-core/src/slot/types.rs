@@ -177,7 +177,7 @@ pub(in crate::slot) fn collect_root_node_ids_from_records_into(
     root_nodes.clear();
     root_nodes.reserve(nodes.len());
 
-    let mut node_set = HashSet::default();
+    let mut node_set: HashSet<NodeId> = HashSet::default();
     node_set.reserve(nodes.len());
     node_set.extend(nodes.iter().map(|node| node.id));
 
