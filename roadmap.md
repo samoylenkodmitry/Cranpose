@@ -591,7 +591,7 @@ git diff
   slot: model scope index lifecycle
   ```
 
-* [ ] Run a high-frame deterministic stress profile and commit any required threshold/test updates.
+* [x] Run a high-frame deterministic stress profile and commit any required threshold/test updates.
 
   Done means: `CRANPOSE_SLOT_MODEL_STRESS_FRAMES` is raised for local stress validation; failures are fixed at the root; no perf threshold is loosened without evidence in the commit message.
 
