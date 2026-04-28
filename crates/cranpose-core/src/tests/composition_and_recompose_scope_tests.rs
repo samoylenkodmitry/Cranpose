@@ -1177,6 +1177,88 @@ fn retained_scope_stays_inactive_until_restored() {
 }
 
 #[test]
+fn restored_retained_scope_processes_forced_recompose() {
+    thread_local! {
+        static CAPTURED_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    const BRANCH_KEY: Key = 0x5C0_9E1;
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+    CAPTURED_SCOPE.with(|slot| slot.replace(None));
+    INVOCATIONS.with(|count| count.set(0));
+
+    #[composable]
+    fn root(show_branch: MutableState<bool>) {
+        if show_branch.value() {
+            with_current_composer(|composer| {
+                composer.cranpose_with_reuse(BRANCH_KEY, RecomposeOptions::default(), |composer| {
+                    INVOCATIONS.with(|count| count.set(count.get() + 1));
+                    let scope = composer
+                        .current_recranpose_scope()
+                        .expect("retained branch scope available");
+                    CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
+                });
+            });
+        }
+    }
+
+    composition
+        .render(root_key, || root(show_branch))
+        .expect("initial composition");
+    assert_composition_valid(&composition);
+    assert_eq!(INVOCATIONS.with(|count| count.get()), 1);
+
+    let initial_scope = CAPTURED_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("initial retained scope");
+    assert!(initial_scope.is_active());
+
+    show_branch.set_value(false);
+    composition
+        .render(root_key, || root(show_branch))
+        .expect("hide retained branch");
+    assert_composition_valid(&composition);
+    assert!(!initial_scope.is_active());
+    assert_eq!(composition.debug_slot_snapshot().retained_scope_count, 1);
+
+    show_branch.set_value(true);
+    composition
+        .render(root_key, || root(show_branch))
+        .expect("restore retained branch");
+    assert_composition_valid(&composition);
+
+    let restored_scope = CAPTURED_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("restored retained scope");
+    assert_eq!(restored_scope.id(), initial_scope.id());
+    assert!(restored_scope.is_active());
+    assert_eq!(composition.debug_slot_snapshot().retained_scope_count, 0);
+
+    let invocations_after_restore = INVOCATIONS.with(|count| count.get());
+    restored_scope.force_recompose();
+    restored_scope.invalidate();
+    let recomposed = composition
+        .process_invalid_scopes()
+        .expect("forced recomposition after restore");
+    assert_composition_valid(&composition);
+
+    assert!(
+        recomposed,
+        "restored retained scope must resolve through ScopeIndex for forced recomposition",
+    );
+    assert_eq!(
+        INVOCATIONS.with(|count| count.get()),
+        invocations_after_restore + 1,
+        "forced recomposition must execute the restored retained scope",
+    );
+}
+
+#[test]
 fn changing_root_key_does_not_leak_root_scopes() {
     let mut composition = test_composition();
 

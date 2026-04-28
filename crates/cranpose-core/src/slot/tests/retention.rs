@@ -250,6 +250,183 @@ fn retained_anchor_restore_reactivates_same_anchor_tree_and_scopes() {
 }
 
 #[test]
+fn scope_index_lifecycle_survives_retain_restore_dispose_and_compaction() {
+    const PARENT_KEY: Key = 390;
+    const CHILD_STATIC_KEY: Key = 391;
+    const CHILD_COUNT: usize = 1_100;
+    const RETAINED_EXPLICIT_KEY: Key = (CHILD_COUNT - 1) as Key;
+    const CHILD_SCOPE: ScopeId = 392;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (parent_anchor, retained_anchor) = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let mut retained_anchor = None;
+        for explicit_key in 0..CHILD_COUNT as Key {
+            let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
+            if explicit_key == RETAINED_EXPLICIT_KEY {
+                session.set_group_scope(child.group, CHILD_SCOPE);
+                retained_anchor = Some(child.anchor);
+            }
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+        }
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        (
+            parent.anchor,
+            retained_anchor.expect("retained child anchor must be captured"),
+        )
+    });
+    harness.finish_pass();
+
+    assert_eq!(
+        harness.table.scope_index_anchor(CHILD_SCOPE),
+        Some(retained_anchor),
+        "active scoped child must be indexed by scope id",
+    );
+    assert!(
+        retained_anchor.id as usize > 1_024,
+        "test must exercise sparse retained scope-anchor storage"
+    );
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached_children = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+        let result = session.finish_group_body();
+        session.end_group();
+        result.detached_children
+    });
+    harness.finish_pass();
+
+    assert_eq!(
+        harness.table.scope_index_anchor(CHILD_SCOPE),
+        None,
+        "detached scopes must leave the active scope index",
+    );
+
+    let mut retained = None;
+    for subtree in detached_children {
+        if subtree.root_key().explicit_key == Some(RETAINED_EXPLICIT_KEY) {
+            retained = Some(subtree);
+        } else {
+            harness.table.invalidate_detached_subtree_anchors(&subtree);
+            harness.lifecycle.queue_subtree_disposal(subtree);
+        }
+    }
+    harness.lifecycle.flush_pending_drops();
+
+    let retained = retained.expect("target retained subtree must detach");
+    assert_eq!(retained.groups[0].anchor, retained_anchor);
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: retained.root_key(),
+    };
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, retained);
+    assert_eq!(retention.validate(&harness.table), Ok(()));
+
+    let snapshot_before = harness.identity_snapshot(Some(&retention), &[]);
+    assert_eq!(
+        snapshot_before.retained_group_anchors,
+        vec![retained_anchor]
+    );
+    assert!(snapshot_before.scope_ids.contains(&CHILD_SCOPE));
+
+    harness
+        .table
+        .compact_anchor_registry_storage(Some(&mut retention));
+    assert_eq!(
+        harness.table.scope_index_anchor(CHILD_SCOPE),
+        None,
+        "retained scopes must stay out of the active scope index after compaction",
+    );
+    assert_eq!(
+        harness
+            .identity_snapshot(Some(&retention), &[])
+            .retained_group_anchors,
+        snapshot_before.retained_group_anchors,
+        "retained scope compaction must not rename group anchors",
+    );
+
+    let restored = retention
+        .take(retain_key)
+        .expect("retained subtree must restore");
+    harness.begin_pass(SlotPassMode::Compose);
+    let (restored_kind, restored_anchor, restored_scope) = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+        let child = begin_keyed(
+            session,
+            CHILD_STATIC_KEY,
+            RETAINED_EXPLICIT_KEY,
+            Some(restored),
+        );
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        (child.kind, child.anchor, child.scope_id)
+    });
+    harness.finish_pass();
+
+    assert_eq!(restored_kind, GroupStartKind::Restored);
+    assert_eq!(restored_anchor, retained_anchor);
+    assert_eq!(restored_scope, Some(CHILD_SCOPE));
+    assert_eq!(
+        harness.table.scope_index_anchor(CHILD_SCOPE),
+        Some(retained_anchor),
+        "restored scopes must re-enter the active scope index",
+    );
+
+    harness.begin_pass(SlotPassMode::Recompose);
+    harness.session(|session| {
+        let group = session
+            .begin_recompose_at_scope(CHILD_SCOPE)
+            .expect("restored scope must resolve through the active scope index");
+        assert_eq!(session.table.active_group_anchor(group), retained_anchor);
+        session.skip_group();
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_recompose();
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let disposed = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+        let result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(result.detached_children.len(), 1);
+        result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass();
+
+    harness.table.invalidate_detached_subtree_anchors(&disposed);
+    harness.lifecycle.queue_subtree_disposal(disposed);
+    harness.lifecycle.flush_pending_drops();
+
+    assert_eq!(
+        harness.table.scope_index_anchor(CHILD_SCOPE),
+        None,
+        "disposed scopes must not remain indexed",
+    );
+    assert_eq!(
+        harness.table.anchor_state(retained_anchor),
+        None,
+        "disposed scope anchors must be invalidated"
+    );
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
 fn retention_insert_rejects_duplicate_key_without_replacing_existing_subtree() {
     const PARENT_KEY: Key = 366;
     const CHILD_KEY: Key = 367;

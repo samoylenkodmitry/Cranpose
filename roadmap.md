@@ -493,7 +493,7 @@ git diff
   slot: wire scope index lifecycle
   ```
 
-* [ ] Add scope identity regression tests.
+* [x] Add scope identity regression tests.
 
   Done means: tests cover active lookup, detach, retained inactive invalidation, restore, forced recomposition after restore, disposal, and storage compaction without scope anchor renaming.
 
