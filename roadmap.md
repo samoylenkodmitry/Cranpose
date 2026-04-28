@@ -292,7 +292,7 @@ git diff
   slot: rename group id to active group id
   ```
 
-* [ ] Audit and remove any stored `ActiveGroupId` outside active writer/reader operations.
+* [x] Audit and remove any stored `ActiveGroupId` outside active writer/reader operations.
 
   Done means: no scope, retention record, detached subtree, composer runtime state, debug-retained state, or node/payload owner stores `ActiveGroupId`. They store `AnchorId` or semantic ids only.
 
