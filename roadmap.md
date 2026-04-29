@@ -1,0 +1,465 @@
+Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x]` **only after** implementation, self-review, validation, and commit are complete.
+
+# Slot Table Hardening Roadmap
+
+## Agent operating protocol
+
+* [ ] Create a working branch from `main`.
+
+    * [ ] Implement only one roadmap item or tightly related group per commit.
+    * [ ] Self-review the diff before validating.
+    * [ ] Run formatting and tests.
+    * [ ] Commit with a focused message.
+    * [ ] Mark the checklist item `[x]` only after the commit lands.
+
+* [ ] Use this validation baseline for every implementation commit:
+
+    * [ ] `cargo fmt --all --check`
+    * [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+    * [ ] `cargo test --workspace --all-features`
+    * [ ] Targeted slot-table tests when relevant:
+
+        * [ ] `cargo test -p cranpose-core slot::`
+        * [ ] `cargo test -p cranpose-core retention`
+        * [ ] `cargo test -p cranpose-core recompose`
+        * [ ] `cargo test -p cranpose-core subcompose`
+
+---
+
+# Phase 1 — Make slot identity misuse fail early
+
+## 1. Add debug storage identity to value slots
+
+* [ ] Implement debug-only storage identity on `ValueSlotId`.
+
+    * [ ] Add `#[cfg(any(test, debug_assertions))] storage_id: usize` to `ValueSlotId`.
+    * [ ] Update `ValueSlotId::new(...)` or create `ValueSlotId::new_for_table(...)`.
+    * [ ] Thread `SlotTable::storage_id()` into value-slot creation.
+    * [ ] In `SlotTable::checked_value_slot`, assert that the slot belongs to the current table in debug/test builds.
+    * [ ] Keep release layout minimal if desired.
+
+* [ ] Add tests.
+
+    * [ ] Same-table value slot read/write still succeeds.
+    * [ ] Cross-table value-slot access panics or reports a clear invariant failure in debug/test.
+    * [ ] Detached/restored retained value slot still resolves through the correct table.
+    * [ ] Type mismatch behavior remains unchanged.
+
+* [ ] Self-review.
+
+    * [ ] Confirm no public API break unless intentional.
+    * [ ] Confirm `ValueSlotHandle<'pass>` still compiles cleanly.
+    * [ ] Confirm no accidental clone/copy layout issue.
+
+* [ ] Validate and commit.
+
+    * [ ] Run full validation baseline.
+    * [ ] Commit: `slot: guard value slots with debug storage identity`
+    * [ ] Mark this item `[x]`.
+
+---
+
+# Phase 2 — Document lifecycle invariants
+
+## 2. Add authoritative slot lifecycle contract
+
+* [ ] Add a lifecycle contract document or module comment.
+
+    * [ ] Location option: `docs/SLOT_TABLE_LIFECYCLE.md`.
+    * [ ] Location option: module-level comments in `crates/cranpose-core/src/slot/lifecycle.rs`.
+    * [ ] Include active group lifecycle:
+
+        * [ ] `Active -> Detached`
+        * [ ] `Detached -> Restored`
+        * [ ] `Detached -> Disposed`
+        * [ ] `Disposed -> Invalidated`
+    * [ ] Include node lifecycle:
+
+        * [ ] `Active`
+        * [ ] `RetainedDetached`
+        * [ ] `Disposed/removed from applier`
+    * [ ] Include payload lifecycle:
+
+        * [ ] Active payload.
+        * [ ] Detached retained payload.
+        * [ ] Deferred drop.
+        * [ ] Final disposal.
+    * [ ] Include scope lifecycle:
+
+        * [ ] Active scope.
+        * [ ] Inactive retained scope.
+        * [ ] Restored invalid scope.
+        * [ ] Removed/disposed scope.
+
+* [ ] Cross-link code comments.
+
+    * [ ] `slot/detach.rs`
+    * [ ] `slot/lifecycle.rs`
+    * [ ] `retention.rs`
+    * [ ] `composer.rs`
+
+* [ ] Self-review.
+
+    * [ ] Confirm the doc describes current behavior, not aspirational behavior.
+    * [ ] Confirm every lifecycle transition has a corresponding code path.
+    * [ ] Confirm terminology matches code names.
+
+* [ ] Validate and commit.
+
+    * [ ] Run formatting/tests if comments/docs only still touch Rust comments.
+    * [ ] Commit: `docs: define slot table lifecycle invariants`
+    * [ ] Mark this item `[x]`.
+
+---
+
+# Phase 3 — Harden payload-anchor refresh invariants
+
+## 3. Make deferred payload-location refresh explicit
+
+* [ ] Add explicit pending-refresh diagnostics.
+
+    * [ ] Add a debug/test-only flag or helper on `SlotWriteSessionState`.
+    * [ ] Track whether `payload_location_refreshes` is non-empty.
+    * [ ] Add a small helper like `has_pending_payload_location_refreshes()`.
+
+* [ ] Assert safe access boundaries.
+
+    * [ ] Before direct value read/write from writer-sensitive paths, assert refreshes have been flushed where required.
+    * [ ] Keep intentional pre-flush operations documented.
+    * [ ] Ensure `begin_group`, `begin_recompose_at_scope`, `finish_group_body`, `finalize_pass`, and writer validation remain flush points.
+
+* [ ] Add tests.
+
+    * [ ] Insert multiple payloads into the same group and verify coalesced refresh start is minimal.
+    * [ ] Verify value reads after flush resolve correct payload anchors.
+    * [ ] Verify finishing a group flushes pending refreshes.
+    * [ ] Verify validation flushes or catches pending invalid state deterministically.
+
+* [ ] Self-review.
+
+    * [ ] Confirm no extra refresh work on hot path beyond intended debug checks.
+    * [ ] Confirm mutation debug stats still make sense.
+    * [ ] Confirm no borrow checker workaround creates hidden mutable aliasing risk.
+
+* [ ] Validate and commit.
+
+    * [ ] Run full validation baseline.
+    * [ ] Commit: `slot: make deferred payload anchor refresh explicit`
+    * [ ] Mark this item `[x]`.
+
+---
+
+# Phase 4 — Centralize structural mutation recipes
+
+## 4. Add mutation operation checklists
+
+* [ ] Add internal comments or helper structs documenting mutation order.
+
+    * [ ] `detach_subtree`
+    * [ ] `restore_subtree`
+    * [ ] `move_subtree`
+    * [ ] payload insertion/removal
+    * [ ] node insertion/removal
+
+* [ ] Introduce a lightweight mutation guard in debug/test builds.
+
+    * [ ] Optional: `SlotMutationGuard`.
+    * [ ] On drop, run `debug_assert_valid_after(operation)` when diagnostics are enabled.
+    * [ ] Avoid using guard where validation would recursively borrow or cause large overhead.
+
+* [ ] Reduce duplicated mutation sequencing.
+
+    * [ ] Identify repeated patterns:
+
+        * [ ] segment extraction/restoration
+        * [ ] active-index refresh
+        * [ ] payload-location refresh
+        * [ ] scope-index update
+        * [ ] ancestor span update
+    * [ ] Extract helper only where it improves clarity.
+    * [ ] Do not over-abstract the current readable flow.
+
+* [ ] Add tests.
+
+    * [ ] Move later sibling to earlier cursor.
+    * [ ] Detach middle subtree with payloads and nodes.
+    * [ ] Restore retained subtree with scopes, payloads, and nodes.
+    * [ ] Remove tail payloads/nodes during recomposition.
+    * [ ] Root-level detach during pass finalization.
+
+* [ ] Self-review.
+
+    * [ ] Confirm helpers preserve exact operation ordering.
+    * [ ] Confirm validation still catches intentionally corrupted fixtures.
+    * [ ] Confirm no production-only behavior depends on debug guard.
+
+* [ ] Validate and commit.
+
+    * [ ] Run full validation baseline.
+    * [ ] Commit: `slot: document and guard structural mutation recipes`
+    * [ ] Mark this item `[x]`.
+
+---
+
+# Phase 5 — Strengthen anchor-registry test matrix
+
+## 5. Add shared anchor registry behavior coverage
+
+* [ ] Add tests for `AnchorRegistry`.
+
+    * [ ] Allocate active anchor.
+    * [ ] Mark detached.
+    * [ ] Invalidate detached.
+    * [ ] Reuse ID with bumped generation.
+    * [ ] Reject stale generation.
+    * [ ] Preserve dense hot-path capacity.
+    * [ ] Handle sparse IDs without dense explosion.
+    * [ ] Validate active count, detached count, invalidated/free count.
+
+* [ ] Add tests for `PayloadAnchorRegistry`.
+
+    * [ ] Allocate payload anchor.
+    * [ ] Set active location.
+    * [ ] Mark detached.
+    * [ ] Invalidate and reuse with bumped generation.
+    * [ ] Coalesce invalidated payload anchor ranges.
+    * [ ] Reject stale generation.
+    * [ ] Preserve dense hot-path capacity.
+    * [ ] Handle sparse IDs.
+    * [ ] Validate active/detached/free counts.
+
+* [ ] Add retained-subtree compaction tests.
+
+    * [ ] Group anchor compaction with retained subtrees.
+    * [ ] Payload anchor compaction with retained subtrees.
+    * [ ] Ensure retained anchors are not invalidated or reused prematurely.
+
+* [ ] Self-review.
+
+    * [ ] Confirm tests cover both registries without forcing identical implementations.
+    * [ ] Confirm generation semantics are explicit.
+    * [ ] Confirm stale handles cannot resolve after invalidation.
+
+* [ ] Validate and commit.
+
+    * [ ] Run full validation baseline.
+    * [ ] Commit: `slot: expand anchor registry invariant coverage`
+    * [ ] Mark this item `[x]`.
+
+---
+
+# Phase 6 — Clarify `move_subtree` semantics
+
+## 6. Rename or document later-sibling-only move
+
+* [ ] Decide whether to rename.
+
+    * [ ] Option A: rename `move_subtree` to `move_later_sibling_subtree_to_cursor`.
+    * [ ] Option B: keep name and add a clear doc comment.
+    * [ ] Prefer rename if call sites are few and internal-only.
+
+* [ ] Update assertions and messages.
+
+    * [ ] State that the root must be a direct child of the cursor parent.
+    * [ ] State that only moving a later direct sibling earlier is supported.
+    * [ ] State that this is writer-driven keyed sibling reordering, not a general tree move.
+
+* [ ] Add tests.
+
+    * [ ] Moving later sibling before earlier sibling succeeds.
+    * [ ] Moving same cursor is no-op.
+    * [ ] Moving across parents fails.
+    * [ ] Moving an earlier sibling later fails or is unsupported by explicit assertion.
+    * [ ] Moving a grandchild as if it were a sibling fails.
+
+* [ ] Self-review.
+
+    * [ ] Confirm public/internal API impact is acceptable.
+    * [ ] Confirm error messages match actual constraints.
+    * [ ] Confirm keyed reorder behavior remains unchanged.
+
+* [ ] Validate and commit.
+
+    * [ ] Run full validation baseline.
+    * [ ] Commit: `slot: clarify keyed sibling move constraints`
+    * [ ] Mark this item `[x]`.
+
+---
+
+# Phase 7 — Retention and applier integration hardening
+
+## 7. Add retained-node lifecycle integration tests
+
+* [ ] Add tests for retaining inactive groups.
+
+    * [ ] Compose group with remembered payload and emitted node.
+    * [ ] Remove group with `RetainWhenInactive`.
+    * [ ] Verify subtree is retained.
+    * [ ] Verify node lifecycle is `RetainedDetached`.
+    * [ ] Verify payload is not dropped.
+    * [ ] Verify scope is inactive but still registered.
+
+* [ ] Add restore tests.
+
+    * [ ] Restore retained group by same parent scope and group key.
+    * [ ] Verify node lifecycle returns to active.
+    * [ ] Verify remembered payload is reused.
+    * [ ] Verify restored invalid scope forces recomposition.
+    * [ ] Verify active scope index is restored.
+
+* [ ] Add eviction tests.
+
+    * [ ] Set max retained subtree count.
+    * [ ] Retain more groups than budget.
+    * [ ] Verify eviction disposes nodes.
+    * [ ] Verify payload drops are queued/flushed.
+    * [ ] Verify anchors are invalidated.
+    * [ ] Verify scopes are removed or deactivated correctly.
+
+* [ ] Add host reset tests.
+
+    * [ ] Retain subtree in subcompose/secondary host.
+    * [ ] Reset host.
+    * [ ] Verify retained subtrees are disposed before host ownership is cleared.
+    * [ ] Verify scope registry has no stale host references.
+
+* [ ] Self-review.
+
+    * [ ] Confirm tests exercise composer, retention, slot table, and applier together.
+    * [ ] Confirm no test only validates internal counters while missing user-visible behavior.
+    * [ ] Confirm retained nodes are not accidentally removed from applier.
+
+* [ ] Validate and commit.
+
+    * [ ] Run full validation baseline.
+    * [ ] Commit: `retention: test retained subtree node and scope lifecycle`
+    * [ ] Mark this item `[x]`.
+
+---
+
+# Phase 8 — Scope index robustness
+
+## 8. Strengthen scope index behavior
+
+* [ ] Add tests for scope assignment.
+
+    * [ ] New group gets scope.
+    * [ ] Existing group keeps scope across reuse.
+    * [ ] Moved group keeps scope.
+    * [ ] Detached group scope is removed from active index.
+    * [ ] Restored group scope is restored to active index.
+    * [ ] Disposed group scope is removed from runtime registry.
+
+* [ ] Add duplicate scope tests.
+
+    * [ ] Assigning the same scope to a different active group should fail.
+    * [ ] Restoring a subtree whose scope conflicts with an active group should fail.
+
+* [ ] Add recomposition entry tests.
+
+    * [ ] `begin_recompose_at_scope` finds active scoped group.
+    * [ ] `begin_recompose_at_scope` returns `None` for detached retained scope.
+    * [ ] Restored invalid scope can later recompose normally.
+
+* [ ] Self-review.
+
+    * [ ] Confirm slot table only indexes active scopes.
+    * [ ] Confirm detached scope routing remains composer/runtime-state responsibility.
+    * [ ] Confirm no active-scope scan was reintroduced.
+
+* [ ] Validate and commit.
+
+    * [ ] Run full validation baseline.
+    * [ ] Commit: `slot: harden active scope index invariants`
+    * [ ] Mark this item `[x]`.
+
+---
+
+# Phase 9 — Performance regression coverage
+
+## 9. Add slot table performance regression tests
+
+* [ ] Add large keyed sibling reorder scenario.
+
+    * [ ] Compose many keyed siblings.
+    * [ ] Reverse or rotate order.
+    * [ ] Verify sibling index path works.
+    * [ ] Verify mutation stats do not show pathological unexpected refreshes.
+
+* [ ] Add large detach/restore scenario.
+
+    * [ ] Large subtree with groups, payloads, nodes, and scopes.
+    * [ ] Detach and retain.
+    * [ ] Restore.
+    * [ ] Validate exact group spans and payload/node ranges.
+
+* [ ] Add repeated tail removal scenario.
+
+    * [ ] Compose many payloads/nodes.
+    * [ ] Recompose with shorter tails repeatedly.
+    * [ ] Verify compaction hints trigger at thresholds.
+    * [ ] Verify storage compaction does not invalidate retained identities.
+
+* [ ] Add optional ignored benchmark-style tests.
+
+    * [ ] Mark as `#[ignore]` if too slow for normal CI.
+    * [ ] Keep deterministic and not timing-sensitive unless behind a benchmark feature.
+
+* [ ] Self-review.
+
+    * [ ] Confirm tests detect structural regressions, not machine-specific timing.
+    * [ ] Confirm mutation debug stats are asserted only where stable.
+    * [ ] Confirm large cases remain reasonable in CI.
+
+* [ ] Validate and commit.
+
+    * [ ] Run full validation baseline.
+    * [ ] Commit: `slot: add structural performance regression coverage`
+    * [ ] Mark this item `[x]`.
+
+---
+
+# Phase 10 — Final validation and cleanup
+
+## 10. Run full project validation
+
+* [ ] Run full workspace validation.
+
+    * [ ] `cargo fmt --all --check`
+    * [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+    * [ ] `cargo test --workspace --all-features`
+    * [ ] Any project-specific CI commands from README or workflows.
+
+* [ ] Run diagnostics-enabled tests.
+
+    * [ ] Enable slot validation diagnostics if supported.
+    * [ ] Run targeted slot, retention, and recompose tests.
+    * [ ] Confirm debug assertions pass.
+
+* [ ] Review final diff.
+
+    * [ ] Check public API changes.
+    * [ ] Check docs match implementation.
+    * [ ] Check commit history is focused.
+    * [ ] Check no temporary debug prints or ignored failing tests remain.
+    * [ ] Check no broad unrelated refactors slipped in.
+
+* [ ] Commit final cleanup if needed.
+
+    * [ ] Commit: `slot: finalize slot table hardening roadmap`
+    * [ ] Mark this item `[x]`.
+
+---
+
+# Completion criteria
+
+* [ ] Every roadmap item is marked `[x]`.
+* [ ] Every `[x]` item has a corresponding commit.
+* [ ] Full workspace validation passes.
+* [ ] Slot table lifecycle docs exist and match implementation.
+* [ ] Cross-table value-slot misuse is guarded.
+* [ ] Payload-anchor refresh invariants are explicit.
+* [ ] Structural mutation operations are documented or guarded.
+* [ ] Anchor registries have stale-handle and reuse coverage.
+* [ ] Retention, restore, eviction, and host reset are covered by integration tests.
+* [ ] No active-scope scanning or semantic gap behavior has been reintroduced.
