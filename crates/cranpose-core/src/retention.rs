@@ -1,9 +1,9 @@
 use crate::collections::map::HashMap;
 #[cfg(any(test, debug_assertions))]
-use crate::slot::{AnchorState, NodeLifecycle, SlotInvariantError};
+use crate::slot::{AnchorState, NodeLifecycle, PayloadAnchorLifecycle, SlotInvariantError};
 #[cfg(any(test, debug_assertions))]
 use crate::SlotTable;
-use crate::{slot::DetachedSubtree, slot_storage::GroupKey, ScopeId};
+use crate::{slot::DetachedSubtree, slot::GroupKey, ScopeId};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -205,6 +205,7 @@ impl RetentionManager {
         self.groups.values().map(|retained| &retained.subtree)
     }
 
+    #[cfg(test)]
     pub(crate) fn subtrees_mut(&mut self) -> impl Iterator<Item = &mut DetachedSubtree> + '_ {
         self.groups
             .values_mut()
@@ -259,6 +260,30 @@ impl RetentionManager {
                         scope_id,
                         active_anchor,
                     });
+                }
+            }
+
+            for payload_anchor in subtree.payload_anchors() {
+                match table.payload_anchor_lifecycle(payload_anchor) {
+                    Some(PayloadAnchorLifecycle::Detached) => {}
+                    Some(PayloadAnchorLifecycle::Active) => {
+                        let (active_owner, active_index) = table
+                            .payload_anchor_active_location(payload_anchor)
+                            .expect("active retained payload anchor must expose its location");
+                        return Err(SlotInvariantError::RetainedPayloadAnchorStillActive {
+                            root_key: subtree.root_key(),
+                            payload_anchor,
+                            active_owner,
+                            active_index,
+                        });
+                    }
+                    actual => {
+                        return Err(SlotInvariantError::RetainedPayloadAnchorStateMismatch {
+                            root_key: subtree.root_key(),
+                            payload_anchor,
+                            actual,
+                        });
+                    }
                 }
             }
 

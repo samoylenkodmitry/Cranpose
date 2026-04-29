@@ -19,7 +19,6 @@ mod recompose;
 mod retention;
 pub mod runtime;
 mod slot;
-mod slot_storage;
 pub mod snapshot_double_index_heap;
 pub mod snapshot_id_set;
 pub mod snapshot_pinning;
@@ -3472,8 +3471,8 @@ pub struct SlotsHost {
 #[derive(Debug, Default)]
 pub(crate) struct SlotPassOutcome {
     pub(crate) compacted: bool,
-    pub(crate) compact_anchor_namespace: bool,
-    pub(crate) compact_payload_namespace: bool,
+    pub(crate) compact_anchor_registry_storage: bool,
+    pub(crate) compact_payload_storage: bool,
 }
 
 #[derive(Default)]
@@ -3683,8 +3682,10 @@ impl SlotsHost {
         FinishedSlotPass {
             outcome: SlotPassOutcome {
                 compacted: active_pass.state.request_compaction,
-                compact_anchor_namespace: active_pass.state.request_anchor_namespace_compaction,
-                compact_payload_namespace: active_pass.state.request_payload_namespace_compaction,
+                compact_anchor_registry_storage: active_pass
+                    .state
+                    .request_anchor_storage_compaction,
+                compact_payload_storage: active_pass.state.request_payload_storage_compaction,
             },
             detached_root_children,
         }
@@ -3704,14 +3705,19 @@ impl SlotsHost {
             lifecycle.compact_storage();
         }
         if let Some(state) = runtime_state.clone() {
-            state.compact_table_namespaces_for_host(
+            state.compact_table_identity_storage_for_host(
                 self,
                 table,
-                outcome.compact_anchor_namespace,
-                outcome.compact_payload_namespace,
+                outcome.compact_anchor_registry_storage,
+                outcome.compact_payload_storage,
             );
-        } else if outcome.compact_payload_namespace {
-            table.compact_payload_anchor_namespace(None);
+        } else {
+            if outcome.compact_anchor_registry_storage {
+                table.compact_anchor_registry_storage(None);
+            }
+            if outcome.compact_payload_storage {
+                table.compact_payload_anchor_registry_storage(None);
+            }
         }
         #[cfg(any(test, debug_assertions))]
         {
@@ -3788,10 +3794,10 @@ fn hash_key<K: Hash>(key: &K) -> Key {
 pub(crate) fn explicit_group_key_seed<K: Hash>(
     key: &K,
     caller: &'static std::panic::Location<'static>,
-) -> slot_storage::GroupKeySeed {
+) -> slot::GroupKeySeed {
     let source_key = location_key(caller.file(), caller.line(), caller.column());
     let explicit_key = hash_key(key);
-    slot_storage::GroupKeySeed::keyed(source_key, explicit_key)
+    slot::GroupKeySeed::keyed(source_key, explicit_key)
 }
 
 #[cfg(test)]

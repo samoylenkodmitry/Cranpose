@@ -220,7 +220,10 @@ fn debug_stats_report_explicit_v2_table_local_counts() {
 
     assert_eq!(stats.group_count, 1);
     assert_eq!(stats.payload_count, 1);
-    assert_eq!(stats.payload_location_count, 1);
+    assert_eq!(stats.active_payload_anchor_count, 1);
+    assert_eq!(stats.payload_anchor_slot_count, 1);
+    assert_eq!(stats.detached_payload_anchor_count, 0);
+    assert_eq!(stats.invalidated_payload_anchor_count, 0);
     assert_eq!(stats.node_count, 1);
     assert_eq!(stats.active_anchor_count, 1);
     assert_eq!(stats.group_record_size, mem::size_of::<GroupRecord>());
@@ -236,7 +239,8 @@ fn debug_stats_report_explicit_v2_table_local_counts() {
     assert_eq!(stats.scope_index_count, 0);
     assert!(stats.group_capacity >= stats.group_count);
     assert!(stats.payload_capacity >= stats.payload_count);
-    assert!(stats.payload_location_capacity >= stats.payload_location_count);
+    assert!(stats.payload_anchor_capacity >= stats.active_payload_anchor_count);
+    assert!(stats.payload_anchor_heap_bytes > 0);
     assert!(stats.node_capacity >= stats.node_count);
     assert!(stats.anchor_capacity >= stats.active_anchor_count);
     assert!(stats.anchor_heap_bytes > 0);

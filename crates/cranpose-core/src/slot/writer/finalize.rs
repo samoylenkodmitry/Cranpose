@@ -18,6 +18,7 @@ impl SlotWriteSession<'_> {
             }
             self.end_group();
         }
+        self.flush_payload_location_refreshes();
 
         let root_detached = self.table.root_finish_result(self.state);
         self.state.note_detached_subtrees(&root_detached);

@@ -15,8 +15,8 @@ impl SlotTable {
             + self.payload_heap_bytes()
             + self.node_heap_bytes()
             + self.anchors.heap_bytes()
-            + self.payload_locations.capacity() * mem::size_of::<Option<(crate::AnchorId, usize)>>()
-            + self.scope_anchor_to_group.capacity() * mem::size_of::<(ScopeId, crate::AnchorId)>()
+            + self.payload_anchors.heap_bytes()
+            + self.scope_index.heap_bytes()
     }
 
     pub fn debug_stats(&self) -> SlotTableLocalDebugStats {
@@ -27,8 +27,12 @@ impl SlotTable {
             group_heap_bytes: self.group_heap_bytes(),
             payload_count: self.total_payload_count(),
             payload_capacity: self.payload_debug_capacity(),
-            payload_location_count: self.payload_locations.len(),
-            payload_location_capacity: self.payload_locations.capacity(),
+            active_payload_anchor_count: self.payload_anchors.active_len(),
+            payload_anchor_slot_count: self.payload_anchors.slot_len(),
+            detached_payload_anchor_count: self.payload_anchors.detached_len(),
+            invalidated_payload_anchor_count: self.payload_anchors.invalidated_len(),
+            payload_anchor_capacity: self.payload_anchors.capacity(),
+            payload_anchor_heap_bytes: self.payload_anchors.heap_bytes(),
             node_count: self.total_node_count(),
             node_capacity: self.node_debug_capacity(),
             active_anchor_count: self.anchors.active_len(),
@@ -39,8 +43,8 @@ impl SlotTable {
             free_anchor_count: self.anchors.free_len(),
             anchor_capacity: self.anchors.capacity(),
             anchor_heap_bytes: self.anchors.heap_bytes(),
-            scope_index_count: self.scope_anchor_to_group.len(),
-            scope_index_capacity: self.scope_anchor_to_group.capacity(),
+            scope_index_count: self.scope_index.len(),
+            scope_index_capacity: self.scope_index.capacity(),
             mutation: self.mutation_debug_stats,
         }
     }
@@ -91,9 +95,9 @@ impl SlotTable {
         anchors.sort_by_key(|entry| entry.group_index);
 
         let mut scopes = self
-            .scope_anchor_to_group
-            .iter()
-            .filter_map(|(&scope_id, &anchor)| {
+            .scope_index
+            .entries()
+            .filter_map(|(scope_id, anchor)| {
                 self.anchors
                     .active_index(anchor)
                     .map(|group_index| SlotDebugScope {

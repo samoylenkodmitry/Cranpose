@@ -51,6 +51,81 @@ fn payload_records_store_semantic_payload_kinds() {
 }
 
 #[test]
+fn appended_value_slots_batch_payload_location_refresh() {
+    const GROUP_KEY: Key = 53;
+
+    let mut harness = SlotHarness::new();
+    let before = harness.table.debug_stats().mutation;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let slots = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let first = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        let remembered = session.remember(|| 20_i32);
+        let third = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        (first, remembered, third)
+    });
+    harness.finish_pass();
+
+    let after = harness.table.debug_stats();
+    assert_eq!(after.active_payload_anchor_count, 3);
+    assert_eq!(
+        after.mutation.payload_location_refresh_count - before.payload_location_refresh_count,
+        1
+    );
+    assert_eq!(
+        after.mutation.payload_location_refresh_payload_count
+            - before.payload_location_refresh_payload_count,
+        3
+    );
+    assert_eq!(after.mutation.payload_location_refresh_max_span, 3);
+    assert_eq!(*harness.table.read_value::<i32>(slots.0), 10);
+    assert_eq!(slots.1.with(|value| *value), 20);
+    assert_eq!(*harness.table.read_value::<i32>(slots.2), 30);
+}
+
+#[test]
+fn payload_tail_removal_does_not_refresh_empty_suffix() {
+    const GROUP_KEY: Key = 55;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let _first = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        let _second = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
+        let _third = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    let before = harness.table.debug_stats().mutation;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let _first = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    let after = harness.table.debug_stats().mutation;
+    assert_eq!(
+        after.payload_location_refresh_count - before.payload_location_refresh_count,
+        0
+    );
+    assert_eq!(harness.table.debug_stats().active_payload_anchor_count, 1);
+}
+
+#[test]
 fn payload_kind_updates_when_same_type_slot_changes_semantics() {
     const GROUP_KEY: Key = 54;
 
@@ -194,8 +269,11 @@ fn value_slot_type_replacement_advances_generation() {
     });
     harness.finish_pass();
 
-    assert_eq!(replacement_slot.anchor(), old_slot.anchor());
-    assert_ne!(replacement_slot.generation(), old_slot.generation());
+    assert_eq!(replacement_slot.anchor().id(), old_slot.anchor().id());
+    assert_ne!(
+        replacement_slot.anchor().generation(),
+        old_slot.anchor().generation()
+    );
     assert_eq!(*harness.table.read_value::<u32>(replacement_slot), 7);
 
     let stale_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -228,7 +306,7 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.finish_pass();
     assert!(harness.table.groups.is_empty());
-    harness.table.compact_payload_anchor_namespace(None);
+    harness.table.compact_payload_anchor_registry_storage(None);
 
     harness.begin_pass(SlotPassMode::Compose);
     let new_slot = harness.session(|session| {
@@ -241,8 +319,11 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     });
     harness.finish_pass();
 
-    assert_eq!(new_slot.anchor(), old_slot.anchor());
-    assert_ne!(new_slot.generation(), old_slot.generation());
+    assert_eq!(new_slot.anchor().id(), old_slot.anchor().id());
+    assert_ne!(
+        new_slot.anchor().generation(),
+        old_slot.anchor().generation()
+    );
     assert_eq!(*harness.table.read_value::<i32>(new_slot), 77);
 
     let stale_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -252,4 +333,36 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
         stale_read.is_err(),
         "disposed value slot handles must fail cleanly instead of aliasing a new slot"
     );
+}
+
+#[test]
+fn removed_payload_tail_invalidates_value_slot_handle() {
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (first_slot, removed_slot) = harness.session(|session| {
+        begin_unkeyed(session, 19, None);
+        let first_slot = session.value_slot_with_kind(PayloadKind::Internal, || 1_i32);
+        let removed_slot = session.value_slot_with_kind(PayloadKind::Internal, || 2_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        (first_slot, removed_slot)
+    });
+    harness.finish_pass();
+
+    let owner = harness.table.groups[0].anchor;
+    let removed_range = harness.table.group_payload_subrange_at(0, 1, 2);
+    let removed = harness.table.remove_payload_range(owner, removed_range);
+    assert_eq!(removed.len(), 1);
+
+    assert_eq!(*harness.table.read_value::<i32>(first_slot), 1);
+    let removed_read = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(removed_slot);
+    }));
+    assert!(
+        removed_read.is_err(),
+        "removed payload tail handles must fail cleanly after invalidation"
+    );
+    assert_eq!(harness.table.validate(), Ok(()));
 }

@@ -1,7 +1,7 @@
+use super::super::{DetachedSubtree, SlotPassMode};
 use super::frames::{GroupFrame, RootFrame};
 use crate::{
     collections::map::{HashMap, HashSet},
-    slot::{DetachedSubtree, SlotPassMode},
     AnchorId,
 };
 
@@ -9,12 +9,13 @@ use crate::{
 pub(crate) struct SlotWriteSessionState {
     pub(in crate::slot) root: RootFrame,
     pub(in crate::slot) group_stack: Vec<GroupFrame>,
+    payload_location_refreshes: HashMap<AnchorId, usize>,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
     pub(crate) request_compaction: bool,
-    pub(crate) request_anchor_namespace_compaction: bool,
-    pub(crate) request_payload_namespace_compaction: bool,
+    pub(crate) request_anchor_storage_compaction: bool,
+    pub(crate) request_payload_storage_compaction: bool,
 }
 
 impl SlotWriteSessionState {
@@ -31,17 +32,31 @@ impl SlotWriteSessionState {
             sibling_index: None,
         };
         self.group_stack.clear();
+        self.payload_location_refreshes.clear();
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
         self.removed_group_count = 0;
         self.request_compaction = false;
-        self.request_anchor_namespace_compaction = false;
-        self.request_payload_namespace_compaction = false;
+        self.request_anchor_storage_compaction = false;
+        self.request_payload_storage_compaction = false;
     }
 
     pub(in crate::slot) fn note_removed_payloads(&mut self, count: usize) {
         self.removed_payload_count += count;
         self.update_compaction_hint();
+    }
+
+    pub(in crate::slot) fn note_payload_location_refresh(&mut self, owner: AnchorId, start: usize) {
+        self.payload_location_refreshes
+            .entry(owner)
+            .and_modify(|current| *current = (*current).min(start))
+            .or_insert(start);
+    }
+
+    pub(in crate::slot) fn drain_payload_location_refreshes(
+        &mut self,
+    ) -> impl Iterator<Item = (AnchorId, usize)> + '_ {
+        self.payload_location_refreshes.drain()
     }
 
     pub(in crate::slot) fn note_removed_nodes(&mut self, count: usize) {
@@ -70,8 +85,8 @@ impl SlotWriteSessionState {
         let node_pressure = self.removed_node_count >= Self::COMPACT_NODE_THRESHOLD;
         let group_pressure = self.removed_group_count >= Self::COMPACT_GROUP_THRESHOLD;
         self.request_compaction |= payload_pressure || node_pressure || group_pressure;
-        self.request_anchor_namespace_compaction |= group_pressure;
-        self.request_payload_namespace_compaction |= payload_pressure;
+        self.request_anchor_storage_compaction |= group_pressure;
+        self.request_payload_storage_compaction |= payload_pressure;
     }
 
     pub(in crate::slot) fn current_parent_anchor(&self) -> AnchorId {
@@ -123,8 +138,9 @@ impl SlotWriteSessionState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slot::{SlotInvariantError, SlotLifecycleCoordinator, SlotTable};
-    use crate::slot_storage::{BeginGroupInput, GroupKeySeed};
+    use crate::slot::{
+        BeginGroupInput, GroupKeySeed, SlotInvariantError, SlotLifecycleCoordinator, SlotTable,
+    };
 
     #[test]
     fn removed_payloads_trigger_compaction_hint_at_threshold() {
@@ -132,16 +148,16 @@ mod tests {
 
         state.note_removed_payloads(SlotWriteSessionState::COMPACT_PAYLOAD_THRESHOLD - 1);
         assert!(!state.request_compaction);
-        assert!(!state.request_payload_namespace_compaction);
+        assert!(!state.request_payload_storage_compaction);
 
         state.note_removed_payloads(1);
         assert!(state.request_compaction);
-        assert!(state.request_payload_namespace_compaction);
-        assert!(!state.request_anchor_namespace_compaction);
+        assert!(state.request_payload_storage_compaction);
+        assert!(!state.request_anchor_storage_compaction);
     }
 
     #[test]
-    fn group_removal_requests_anchor_namespace_compaction() {
+    fn group_removal_requests_anchor_storage_compaction() {
         let mut state = SlotWriteSessionState {
             removed_group_count: SlotWriteSessionState::COMPACT_GROUP_THRESHOLD,
             ..Default::default()
@@ -149,12 +165,12 @@ mod tests {
         state.update_compaction_hint();
 
         assert!(state.request_compaction);
-        assert!(state.request_anchor_namespace_compaction);
-        assert!(!state.request_payload_namespace_compaction);
+        assert!(state.request_anchor_storage_compaction);
+        assert!(!state.request_payload_storage_compaction);
     }
 
     #[test]
-    fn node_removal_compaction_does_not_request_namespace_scan() {
+    fn node_removal_compaction_does_not_request_storage_cleanup() {
         let mut state = SlotWriteSessionState {
             removed_node_count: SlotWriteSessionState::COMPACT_NODE_THRESHOLD,
             ..Default::default()
@@ -162,8 +178,8 @@ mod tests {
         state.update_compaction_hint();
 
         assert!(state.request_compaction);
-        assert!(!state.request_anchor_namespace_compaction);
-        assert!(!state.request_payload_namespace_compaction);
+        assert!(!state.request_anchor_storage_compaction);
+        assert!(!state.request_payload_storage_compaction);
     }
 
     #[test]
@@ -182,7 +198,7 @@ mod tests {
         state.group_stack[0].next_child_index = table.group_count() + 1;
 
         assert_eq!(
-            state.validate(&table),
+            state.validate(&mut table),
             Err(SlotInvariantError::WriterFrameOutOfBounds {
                 frame_index: 1,
                 group_anchor: table.group_anchor_at_index(0),
@@ -218,7 +234,7 @@ mod tests {
         state.group_stack[0].next_child_index = 2;
 
         assert_eq!(
-            state.validate(&table),
+            state.validate(&mut table),
             Err(SlotInvariantError::WriterFrameNotAtChildBoundary {
                 frame_index: 1,
                 group_anchor: root_anchor,
@@ -248,7 +264,7 @@ mod tests {
         assert_eq!(state.group_stack[0].payload_cursor, 1);
         assert_eq!(state.group_stack[0].old_node_len, 0);
         assert_eq!(state.group_stack[0].node_cursor, 1);
-        assert_eq!(state.validate(&table), Ok(()));
+        assert_eq!(state.validate(&mut table), Ok(()));
     }
 
     #[test]
@@ -283,7 +299,7 @@ mod tests {
         }
 
         assert_eq!(state.group_stack.len(), 1);
-        assert_eq!(state.validate(&table), Ok(()));
+        assert_eq!(state.validate(&mut table), Ok(()));
     }
 
     #[test]
@@ -312,6 +328,6 @@ mod tests {
 
         assert_eq!(state.group_stack[0].old_node_len, 1);
         assert_eq!(table.group_node_len_at(0), 0);
-        assert_eq!(state.validate(&table), Ok(()));
+        assert_eq!(state.validate(&mut table), Ok(()));
     }
 }

@@ -166,25 +166,26 @@ fn debug_stats_report_subtree_move_work_spans() {
     assert_eq!(after.moved_node_count - before.moved_node_count, 2);
     assert_eq!(after.moved_node_max_span, 2);
     assert_eq!(
-        after.payload_location_rebuild_count - before.payload_location_rebuild_count,
+        after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
         0
     );
     assert_eq!(
-        after.payload_location_rebuild_group_count - before.payload_location_rebuild_group_count,
+        after.payload_location_range_refresh_group_count
+            - before.payload_location_range_refresh_group_count,
         0
     );
     assert_eq!(
-        after.payload_location_rebuild_group_max_span,
-        before.payload_location_rebuild_group_max_span
+        after.payload_location_range_refresh_group_max_span,
+        before.payload_location_range_refresh_group_max_span
     );
     assert_eq!(
-        after.payload_location_rebuild_payload_count
-            - before.payload_location_rebuild_payload_count,
+        after.payload_location_range_refresh_payload_count
+            - before.payload_location_range_refresh_payload_count,
         0
     );
     assert_eq!(
-        after.payload_location_rebuild_payload_max_span,
-        before.payload_location_rebuild_payload_max_span
+        after.payload_location_range_refresh_payload_max_span,
+        before.payload_location_range_refresh_payload_max_span
     );
     assert_eq!(
         after.group_index_refresh_count - before.group_index_refresh_count,
@@ -195,36 +196,162 @@ fn debug_stats_report_subtree_move_work_spans() {
         3
     );
     assert_eq!(after.group_index_refresh_max_span, 3);
+    assert!(
+        after.segment_range_update_count > before.segment_range_update_count,
+        "subtree moves with payloads and nodes must report segment range maintenance"
+    );
+    assert!(
+        after.segment_range_update_group_count > before.segment_range_update_group_count,
+        "segment range maintenance must report affected group span"
+    );
 }
 
 #[test]
-fn debug_stats_report_payload_location_rebuild_work_spans() {
-    const GROUP_KEY: Key = 4041;
+fn detaching_unvisited_siblings_batches_group_index_refresh() {
+    const ROOT_KEY: Key = 4041;
+    const PARENT_KEY: Key = 4042;
+    const CHILD_KEY: Key = 4043;
+    const TRAILING_KEY: Key = 4044;
+    const CHILD_COUNT: Key = 3;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let trailing_anchor = harness.session(|session| {
+        begin_unkeyed(session, ROOT_KEY, None);
+
+        begin_unkeyed(session, PARENT_KEY, None);
+        for explicit_key in 0..CHILD_COUNT {
+            begin_keyed(session, CHILD_KEY, explicit_key, None);
+            let child_result = session.finish_group_body();
+            assert!(child_result.detached_children.is_empty());
+            session.end_group();
+        }
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        let trailing = begin_unkeyed(session, TRAILING_KEY, None);
+        let trailing_result = session.finish_group_body();
+        assert!(trailing_result.detached_children.is_empty());
+        session.end_group();
+
+        let root_result = session.finish_group_body();
+        assert!(root_result.detached_children.is_empty());
+        session.end_group();
+
+        trailing.anchor
+    });
+    harness.finish_pass();
+
+    let before = harness.table.debug_stats().mutation;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (detached_children, trailing_kind, refreshed_trailing_anchor) =
+        harness.session(|session| {
+            begin_unkeyed(session, ROOT_KEY, None);
+
+            begin_unkeyed(session, PARENT_KEY, None);
+            let parent_result = session.finish_group_body();
+            session.end_group();
+
+            let trailing = begin_unkeyed(session, TRAILING_KEY, None);
+            let trailing_result = session.finish_group_body();
+            assert!(trailing_result.detached_children.is_empty());
+            session.end_group();
+
+            let root_result = session.finish_group_body();
+            assert!(root_result.detached_children.is_empty());
+            session.end_group();
+
+            (
+                parent_result.detached_children,
+                trailing.kind,
+                trailing.anchor,
+            )
+        });
+    harness.finish_pass();
+    assert_eq!(detached_children.len(), CHILD_COUNT as usize);
+    for subtree in detached_children {
+        harness.table.invalidate_detached_subtree_anchors(&subtree);
+        harness.lifecycle.queue_subtree_disposal(subtree);
+    }
+    harness.lifecycle.flush_pending_drops();
+
+    let after = harness.table.debug_stats().mutation;
+    assert_eq!(trailing_kind, GroupStartKind::Reused);
+    assert_eq!(refreshed_trailing_anchor, trailing_anchor);
+    assert_eq!(harness.table.current_group_index(trailing_anchor), 2);
+    assert_eq!(
+        after.group_index_refresh_count - before.group_index_refresh_count,
+        1
+    );
+    assert_eq!(
+        after.group_index_refresh_group_count - before.group_index_refresh_group_count,
+        1
+    );
+}
+
+#[test]
+fn debug_stats_report_payload_location_range_refresh_work_spans() {
+    const GROUP_KEY: Key = 4051;
 
     let mut table = composed_group_with_value_and_node_table(GROUP_KEY);
     let before = table.debug_stats().mutation;
 
-    table.rebuild_payload_locations_for_group_range(GroupRange::new(
+    table.refresh_payload_locations_for_group_range(GroupRange::new(
         0,
         table.debug_stats().group_count,
     ));
 
     let after = table.debug_stats().mutation;
     assert_eq!(
-        after.payload_location_rebuild_count - before.payload_location_rebuild_count,
+        after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
         1
     );
     assert_eq!(
-        after.payload_location_rebuild_group_count - before.payload_location_rebuild_group_count,
+        after.payload_location_range_refresh_group_count
+            - before.payload_location_range_refresh_group_count,
         1
     );
-    assert_eq!(after.payload_location_rebuild_group_max_span, 1);
+    assert_eq!(after.payload_location_range_refresh_group_max_span, 1);
     assert_eq!(
-        after.payload_location_rebuild_payload_count
-            - before.payload_location_rebuild_payload_count,
+        after.payload_location_range_refresh_payload_count
+            - before.payload_location_range_refresh_payload_count,
         1
     );
-    assert_eq!(after.payload_location_rebuild_payload_max_span, 1);
+    assert_eq!(after.payload_location_range_refresh_payload_max_span, 1);
+}
+
+#[test]
+fn debug_stats_report_scope_index_rebuild_work_spans() {
+    const GROUP_KEY: Key = 4052;
+    const SCOPE_ID: ScopeId = 405_200;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        let group = begin_unkeyed(session, GROUP_KEY, None);
+        session.set_group_scope(group.group, SCOPE_ID);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    let before = harness.table.debug_stats().mutation;
+    harness.table.recompute_scope_index();
+    let after = harness.table.debug_stats().mutation;
+
+    assert_eq!(
+        after.scope_index_rebuild_count - before.scope_index_rebuild_count,
+        1
+    );
+    assert_eq!(
+        after.scope_index_rebuild_scope_count - before.scope_index_rebuild_scope_count,
+        1
+    );
+    assert_eq!(after.scope_index_rebuild_max_span, 1);
 }
 
 #[test]

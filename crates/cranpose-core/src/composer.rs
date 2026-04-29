@@ -1,7 +1,7 @@
 use crate::collections::map::{HashMap, HashSet};
 use crate::retention::{RetainKey, RetentionManager};
+use crate::slot::{BeginGroupInput, GroupStart, GroupStartKind, ValueSlotId};
 use crate::slot::{FinishGroupResult, PayloadKind};
-use crate::slot_storage::{BeginGroupInput, GroupStart, GroupStartKind, ValueSlotId};
 use crate::{
     composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
     ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey,
@@ -183,7 +183,7 @@ impl ComposerRuntimeState {
         }
     }
 
-    pub(crate) fn compact_table_namespaces_for_host(
+    pub(crate) fn compact_table_identity_storage_for_host(
         &self,
         host: &SlotsHost,
         table: &mut SlotTable,
@@ -198,19 +198,17 @@ impl ComposerRuntimeState {
         let mut retention = self.retention_by_host.borrow_mut();
         if let Some(retained) = retention.get_mut(&host_key) {
             if compact_anchors {
-                table.compact_anchor_namespace(Some(&mut *retained), |scope_id| {
-                    self.scope_for_id(scope_id)
-                });
+                table.compact_anchor_registry_storage(Some(&mut *retained));
             }
             if compact_payloads {
-                table.compact_payload_anchor_namespace(Some(&mut *retained));
+                table.compact_payload_anchor_registry_storage(Some(&mut *retained));
             }
         } else {
             if compact_anchors {
-                table.compact_anchor_namespace(None, |scope_id| self.scope_for_id(scope_id));
+                table.compact_anchor_registry_storage(None);
             }
             if compact_payloads {
-                table.compact_payload_anchor_namespace(None);
+                table.compact_payload_anchor_registry_storage(None);
             }
         }
     }
@@ -734,7 +732,7 @@ impl Composer {
 
     fn with_group_in_active_pass<R>(
         &self,
-        key: crate::slot_storage::GroupKeySeed,
+        key: crate::slot::GroupKeySeed,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
         struct GroupGuard {
@@ -832,7 +830,7 @@ impl Composer {
 
     pub(crate) fn with_group_seed<R>(
         &self,
-        key: crate::slot_storage::GroupKeySeed,
+        key: crate::slot::GroupKeySeed,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
         let host = self.active_slots_host();
@@ -847,7 +845,7 @@ impl Composer {
     }
 
     pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
-        self.with_group_seed(crate::slot_storage::GroupKeySeed::unkeyed(key), f)
+        self.with_group_seed(crate::slot::GroupKeySeed::unkeyed(key), f)
     }
 
     pub fn cranpose_with_reuse<R>(

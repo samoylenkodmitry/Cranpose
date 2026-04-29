@@ -59,6 +59,20 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
         Some(AnchorState::Detached),
         "detached child must remain addressable as detached until restored or disposed"
     );
+    let detached_child_read = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(child_slot);
+    }));
+    assert!(
+        detached_child_read.is_err(),
+        "detached child payload anchors must stop resolving while inactive"
+    );
+    let detached_grandchild_read = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(grandchild_slot);
+    }));
+    assert!(
+        detached_grandchild_read.is_err(),
+        "detached nested payload anchors must stop resolving while inactive"
+    );
     assert_eq!(detached.groups[0].parent_anchor, AnchorId::INVALID);
     assert_eq!(detached.groups[0].depth, 0);
     assert_eq!(detached.groups[1].parent_anchor, detached.groups[0].anchor);
@@ -187,15 +201,21 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
         Some(AnchorState::Detached)
     );
     assert!(
-        harness.table.group_for_scope(CHILD_B_SCOPE).is_none(),
+        harness
+            .table
+            .active_group_for_scope(CHILD_B_SCOPE)
+            .is_none(),
         "detached scopes must leave the active scope index"
     );
 
     let insert_index = harness.table.current_group_index(child_c_anchor);
-    let restored_anchor =
-        harness
-            .table
-            .restore_subtree(insert_index, parent_anchor, detached.root_key(), detached);
+    let restored_anchor = restore_detached_child(
+        &mut harness.table,
+        parent_anchor,
+        insert_index,
+        detached.root_key(),
+        detached,
+    );
 
     assert_eq!(restored_anchor, child_b_anchor);
     assert_eq!(
@@ -208,9 +228,12 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
 
     let restored_group = harness
         .table
-        .group_for_scope(CHILD_B_SCOPE)
+        .active_group_for_scope(CHILD_B_SCOPE)
         .expect("restored child scope must become active again");
-    assert_eq!(harness.table.group_anchor(restored_group), child_b_anchor);
+    assert_eq!(
+        harness.table.active_group_anchor(restored_group),
+        child_b_anchor
+    );
     assert_eq!(*harness.table.read_value::<i32>(child_b_slot), 88);
     assert_eq!(harness.table.validate(), Ok(()));
 }
@@ -230,9 +253,7 @@ fn restore_subtree_rejects_mismatched_root_key_without_mutating_table() {
     let wrong_key = GroupKey::new(CHILD_KEY + 1, None, 0);
 
     let restore = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        harness
-            .table
-            .restore_subtree(1, parent_anchor, wrong_key, detached);
+        restore_detached_child(&mut harness.table, parent_anchor, 1, wrong_key, detached);
     }));
     assert!(
         restore.is_err(),

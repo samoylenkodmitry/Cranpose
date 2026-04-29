@@ -4,12 +4,18 @@ use super::{
         group_segment_subrange_at, insert_group_segment_item, remove_group_segment_range,
         restore_subtree_segment, PayloadSegment,
     },
-    DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadKind, PayloadRange,
-    PayloadRecord, SlotTable,
+    DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadAnchor, PayloadKind,
+    PayloadRange, PayloadRecord, SlotTable, SlotWriteSessionState, ValueSlotId,
 };
-use crate::{retention::RetentionManager, slot_storage::ValueSlotId, AnchorId};
+use crate::{retention::RetentionManager, AnchorId};
 use std::any::TypeId;
 use std::mem;
+
+#[derive(Clone, Copy)]
+pub(in crate::slot) struct PayloadLocationRefresh {
+    pub(in crate::slot) owner: AnchorId,
+    pub(in crate::slot) start: usize,
+}
 
 fn replace_payload_record<T: 'static>(
     record: &mut PayloadRecord,
@@ -60,6 +66,7 @@ impl SlotTable {
         payload_index: usize,
         payload: PayloadRecord,
     ) {
+        self.record_segment_range_update_from(group_index);
         insert_group_segment_item::<PayloadSegment, _>(
             &mut self.groups,
             &mut self.payloads,
@@ -73,6 +80,9 @@ impl SlotTable {
         &mut self,
         payload_range: GroupPayloadRange,
     ) -> Vec<PayloadRecord> {
+        if !payload_range.is_empty() {
+            self.record_segment_range_update_from(payload_range.group_index());
+        }
         remove_group_segment_range::<PayloadSegment, _>(
             &mut self.groups,
             &mut self.payloads,
@@ -85,6 +95,10 @@ impl SlotTable {
         removed_group_index: usize,
         removed_groups: &mut [GroupRecord],
     ) -> Vec<PayloadRecord> {
+        if removed_groups.iter().any(|group| group.payload_len > 0) {
+            let active_span = self.groups.len().saturating_sub(removed_group_index);
+            self.record_segment_range_update_span(active_span + removed_groups.len());
+        }
         extract_subtree_segment::<PayloadSegment, _>(
             &mut self.groups,
             &mut self.payloads,
@@ -99,6 +113,10 @@ impl SlotTable {
         groups: &mut [GroupRecord],
         payloads: Vec<PayloadRecord>,
     ) {
+        if !payloads.is_empty() {
+            let active_span = self.groups.len().saturating_sub(insert_group_index);
+            self.record_segment_range_update_span(active_span + groups.len());
+        }
         restore_subtree_segment::<PayloadSegment, _>(
             &mut self.groups,
             &mut self.payloads,
@@ -108,22 +126,8 @@ impl SlotTable {
         );
     }
 
-    pub(super) fn allocate_payload_anchor(&mut self) -> usize {
-        let anchor = self.next_payload_anchor;
-        self.next_payload_anchor = self
-            .next_payload_anchor
-            .checked_add(1)
-            .expect("payload anchor counter overflow");
-        anchor
-    }
-
-    fn allocate_payload_generation(&mut self) -> u32 {
-        let generation = self.next_payload_generation;
-        self.next_payload_generation = self
-            .next_payload_generation
-            .checked_add(1)
-            .expect("payload generation counter overflow");
-        generation
+    pub(super) fn allocate_payload_anchor(&mut self) -> PayloadAnchor {
+        self.payload_anchors.allocate()
     }
 
     pub(in crate::slot) fn group_payload_records_at(&self, group_index: usize) -> &[PayloadRecord] {
@@ -136,14 +140,19 @@ impl SlotTable {
             .owner
     }
 
-    pub(super) fn payload_anchor_at(&self, group_index: usize, payload_index: usize) -> usize {
+    pub(super) fn payload_anchor_at(
+        &self,
+        group_index: usize,
+        payload_index: usize,
+    ) -> PayloadAnchor {
         self.group_payload_record_at(group_index, payload_index)
             .anchor
     }
 
     pub(super) fn payload_generation_at(&self, group_index: usize, payload_index: usize) -> u32 {
         self.group_payload_record_at(group_index, payload_index)
-            .generation
+            .anchor
+            .generation()
     }
 
     fn payload_value_is<T: 'static>(&self, group_index: usize, payload_index: usize) -> bool {
@@ -162,11 +171,8 @@ impl SlotTable {
             .expect("payload index should resolve")
     }
 
-    fn payload_slot_identity_at(&self, group_index: usize, payload_index: usize) -> (usize, u32) {
-        (
-            self.payload_anchor_at(group_index, payload_index),
-            self.payload_generation_at(group_index, payload_index),
-        )
+    fn payload_slot_identity_at(&self, group_index: usize, payload_index: usize) -> PayloadAnchor {
+        self.payload_anchor_at(group_index, payload_index)
     }
 
     pub(in crate::slot) fn group_payload_record_at_mut(
@@ -192,31 +198,45 @@ impl SlotTable {
         self.payloads.capacity()
     }
 
-    pub(super) fn insert_value_payload<T: 'static>(
+    fn insert_value_payload_internal<T: 'static>(
         &mut self,
         owner: AnchorId,
         insert_index: usize,
         kind: PayloadKind,
         value: T,
-    ) -> (usize, u32) {
+        refresh_index: bool,
+    ) -> PayloadAnchor {
         let owner_index = self.current_group_index(owner);
         let anchor = self.allocate_payload_anchor();
-        let generation = self.allocate_payload_generation();
         self.insert_group_payload(
             owner_index,
             insert_index,
             PayloadRecord {
                 owner,
                 anchor,
-                generation,
                 type_id: TypeId::of::<T>(),
                 type_name: std::any::type_name::<T>(),
                 kind,
                 value: Box::new(value),
             },
         );
-        self.refresh_group_payload_locations(owner, insert_index);
-        (anchor, generation)
+        if refresh_index {
+            self.refresh_group_payload_anchor_locations(owner, insert_index);
+        } else {
+            self.set_group_payload_anchor_active_location(owner, insert_index);
+        }
+        anchor
+    }
+
+    #[cfg(test)]
+    pub(super) fn insert_value_payload<T: 'static>(
+        &mut self,
+        owner: AnchorId,
+        insert_index: usize,
+        kind: PayloadKind,
+        value: T,
+    ) -> PayloadAnchor {
+        self.insert_value_payload_internal(owner, insert_index, kind, value, true)
     }
 
     pub(super) fn replace_payload_value<T: 'static>(
@@ -241,13 +261,16 @@ impl SlotTable {
         payload_index: usize,
         kind: PayloadKind,
         value: T,
-    ) -> (usize, u32, Box<dyn std::any::Any>) {
-        let generation = self.allocate_payload_generation();
+    ) -> (PayloadAnchor, Box<dyn std::any::Any>) {
+        let old_anchor = self.payload_anchor_at(group_index, payload_index);
+        let anchor = self
+            .payload_anchors
+            .bump_generation(old_anchor)
+            .expect("active payload anchor generation must bump");
         let record = self.group_payload_record_at_mut(group_index, payload_index);
-        record.generation = generation;
-        let anchor = record.anchor;
+        record.anchor = anchor;
         let old_value = replace_payload_record(record, kind, value);
-        (anchor, generation, old_value)
+        (anchor, old_value)
     }
 
     pub(super) fn use_value_payload_at_cursor<T: 'static>(
@@ -256,45 +279,77 @@ impl SlotTable {
         payload_index: usize,
         kind: PayloadKind,
         init: impl FnOnce() -> T,
-    ) -> (ValueSlotId, Option<DeferredDrop>) {
+    ) -> (
+        ValueSlotId,
+        Option<DeferredDrop>,
+        Option<PayloadLocationRefresh>,
+    ) {
         let group_index = self.current_group_index(owner);
         let payload_len = self.group_payload_len_at(group_index);
+        let mut location_refresh = None;
 
-        let (anchor, generation, deferred_drop) = if payload_index < payload_len {
-            let (anchor, generation) = self.payload_slot_identity_at(group_index, payload_index);
+        let (anchor, deferred_drop) = if payload_index < payload_len {
+            let anchor = self.payload_slot_identity_at(group_index, payload_index);
             if self.payload_value_is::<T>(group_index, payload_index) {
                 self.update_payload_kind(group_index, payload_index, kind);
-                (anchor, generation, None)
+                (anchor, None)
             } else {
-                let (anchor, generation, old_value) =
+                let (anchor, old_value) =
                     self.replace_payload_identity(group_index, payload_index, kind, init());
-                (anchor, generation, Some(DeferredDrop::payload(old_value)))
+                (anchor, Some(DeferredDrop::payload(old_value)))
             }
         } else {
-            let (anchor, generation) =
-                self.insert_value_payload(owner, payload_index, kind, init());
-            (anchor, generation, None)
+            let anchor =
+                self.insert_value_payload_internal(owner, payload_index, kind, init(), false);
+            location_refresh = Some(PayloadLocationRefresh {
+                owner,
+                start: payload_index,
+            });
+            (anchor, None)
         };
 
-        (ValueSlotId::new(anchor, generation), deferred_drop)
+        (ValueSlotId::new(anchor), deferred_drop, location_refresh)
     }
 
-    pub(super) fn clear_payload_locations_for_payloads(&mut self, payloads: &[PayloadRecord]) {
-        for payload in payloads {
-            self.payload_locations.remove(payload.anchor);
-        }
-    }
-
-    fn refresh_group_payload_locations(&mut self, owner: AnchorId, start: usize) {
+    fn set_group_payload_anchor_active_location(&mut self, owner: AnchorId, index: usize) {
         let group_index = self.current_group_index(owner);
         let range = self.group_payload_range_at(group_index);
+        let payload_anchor = self.payloads[range.start() + index].anchor;
+        self.payload_anchors
+            .set_active(payload_anchor, owner, index);
+    }
+
+    pub(in crate::slot) fn refresh_group_payload_anchor_locations(
+        &mut self,
+        owner: AnchorId,
+        start: usize,
+    ) {
+        let group_index = self.current_group_index(owner);
+        let range = self.group_payload_range_at(group_index);
+        let payload_span = range.len().saturating_sub(start);
+        if payload_span == 0 {
+            return;
+        }
         for index in start..range.len() {
             let payload_anchor = self.payloads[range.start() + index].anchor;
-            self.payload_locations.insert(payload_anchor, owner, index);
+            self.payload_anchors
+                .set_active(payload_anchor, owner, index);
+        }
+        self.mutation_debug_stats
+            .record_payload_location_refresh(payload_span);
+    }
+
+    pub(in crate::slot) fn flush_payload_location_refreshes(
+        &mut self,
+        state: &mut SlotWriteSessionState,
+    ) {
+        let refreshes = state.drain_payload_location_refreshes().collect::<Vec<_>>();
+        for (owner, start) in refreshes {
+            self.refresh_group_payload_anchor_locations(owner, start);
         }
     }
 
-    pub(super) fn rebuild_payload_locations_for_group_range(&mut self, group_range: GroupRange) {
+    pub(super) fn refresh_payload_locations_for_group_range(&mut self, group_range: GroupRange) {
         let group_span = group_range.len();
         let mut payload_span = 0usize;
         for group_index in group_range.as_range() {
@@ -303,11 +358,12 @@ impl SlotTable {
             payload_span += range.len();
             for index in 0..range.len() {
                 let payload_anchor = self.payloads[range.start() + index].anchor;
-                self.payload_locations.insert(payload_anchor, owner, index);
+                self.payload_anchors
+                    .set_active(payload_anchor, owner, index);
             }
         }
         self.mutation_debug_stats
-            .record_payload_location_rebuild(group_span, payload_span);
+            .record_payload_location_range_refresh(group_span, payload_span);
     }
 
     pub(super) fn remove_payload_range(
@@ -326,8 +382,8 @@ impl SlotTable {
         }
         let start_offset = payload_range.start_offset();
         let removed = self.remove_group_payload_range(payload_range);
-        self.clear_payload_locations_for_payloads(&removed);
-        self.refresh_group_payload_locations(owner, start_offset);
+        self.invalidate_payload_anchors(&removed);
+        self.refresh_group_payload_anchor_locations(owner, start_offset);
         removed
     }
 
@@ -355,7 +411,7 @@ impl SlotTable {
     ) -> Vec<PayloadRecord> {
         let removed = self.extract_payload_segment_for_groups(removed_group_index, removed_groups);
         if clear_locations {
-            self.clear_payload_locations_for_payloads(&removed);
+            self.mark_payload_anchors_detached(&removed);
         }
         removed
     }
@@ -385,7 +441,7 @@ impl SlotTable {
         self.restore_payload_segment_for_groups(insert_group_index, groups, payloads);
     }
 
-    pub(crate) fn compact_payload_anchor_namespace(
+    pub(crate) fn compact_payload_anchor_registry_storage(
         &mut self,
         retention: Option<&mut RetentionManager>,
     ) {
@@ -400,73 +456,30 @@ impl SlotTable {
             .unwrap_or(0);
         let total_payload_count = self.payloads.len() + retained_payload_count;
         if total_payload_count == 0 {
-            self.payload_locations.clear();
-            self.payload_locations.shrink_to_fit();
-            self.next_payload_anchor = 1;
+            self.payload_anchors.shrink_to_fit();
             return;
         }
 
         let max_payload_anchor = self
             .payloads
             .iter()
-            .map(|payload| payload.anchor)
+            .map(|payload| payload.anchor.id())
             .chain(
                 retention
                     .as_ref()
                     .into_iter()
                     .flat_map(|retention| retention.subtrees())
-                    .flat_map(|subtree| subtree.payloads.iter().map(|payload| payload.anchor)),
+                    .flat_map(|subtree| subtree.payloads.iter().map(|payload| payload.anchor.id())),
             )
             .max()
             .unwrap_or(0);
-        let sparse_namespace = max_payload_anchor > total_payload_count.max(256) * 4;
-        let sparse_capacity = self.payload_locations.capacity() > total_payload_count.max(256) * 8;
-        if !sparse_namespace && !sparse_capacity {
+        let sparse_payload_anchor_ids = max_payload_anchor > total_payload_count.max(256) * 4;
+        let sparse_capacity = self.payload_anchors.capacity() > total_payload_count.max(256) * 8;
+        if !sparse_payload_anchor_ids && !sparse_capacity {
             return;
         }
 
-        let mut remapped: crate::collections::map::HashMap<usize, usize> =
-            crate::collections::map::HashMap::default();
-        let mut next_anchor = 1usize;
-        for payload in &self.payloads {
-            remapped.insert(payload.anchor, next_anchor);
-            next_anchor = next_anchor
-                .checked_add(1)
-                .expect("compacted payload anchor counter overflow");
-        }
-        if let Some(retention) = retention.as_ref() {
-            for subtree in retention.subtrees() {
-                for payload in &subtree.payloads {
-                    remapped.insert(payload.anchor, next_anchor);
-                    next_anchor = next_anchor
-                        .checked_add(1)
-                        .expect("compacted payload anchor counter overflow");
-                }
-            }
-        }
-
-        for payload in &mut self.payloads {
-            payload.anchor = remapped
-                .get(&payload.anchor)
-                .copied()
-                .expect("active payload anchor must remap");
-        }
-        if let Some(retention) = retention {
-            for subtree in retention.subtrees_mut() {
-                for payload in &mut subtree.payloads {
-                    payload.anchor = remapped
-                        .get(&payload.anchor)
-                        .copied()
-                        .expect("retained payload anchor must remap");
-                }
-            }
-        }
-
-        self.payload_locations.clear();
-        self.payload_locations.shrink_to_fit();
-        self.rebuild_payload_locations_for_group_range(GroupRange::new(0, self.groups.len()));
-        self.next_payload_anchor = total_payload_count
-            .checked_add(1)
-            .expect("next payload anchor counter overflow");
+        self.payload_anchors.shrink_to_fit();
+        self.refresh_payload_locations_for_group_range(GroupRange::new(0, self.groups.len()));
     }
 }

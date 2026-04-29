@@ -255,7 +255,7 @@ fn log_runtime_stats(robot: &cranpose::Robot, phase: &str) {
     match robot.get_runtime_leak_debug_stats() {
         Ok(stats) => {
             eprintln!(
-                "[runtime:{phase}] nodes={}/{} live_heap_mb={:.1} recycled_heap_mb={:.1} slot_heap_mb={:.1} retained_slot_heap_mb={:.1} groups={}/{} payloads={}/{} payload_locations={}/{} slot_nodes={}/{} pending_drops={}/{} anchors_active={}/{} anchor_slots={} anchor_sparse={} anchors_detached={} anchors_invalidated={} anchors_free={} anchor_heap_kb={} retained_subtrees={} retained_groups={} retained_payloads={} retained_nodes={} retained_scopes={} retained_anchors={} scope_index={}/{} scopes={}/{} commands={}/{} observer_states={}/{}",
+                "[runtime:{phase}] nodes={}/{} live_heap_mb={:.1} recycled_heap_mb={:.1} slot_heap_mb={:.1} retained_slot_heap_mb={:.1} groups={}/{} payloads={}/{} payload_anchors_active={}/{} payload_anchor_slots={} payload_anchors_detached={} payload_anchors_invalidated={} payload_anchor_heap_kb={} slot_nodes={}/{} pending_drops={}/{} anchors_active={}/{} anchor_slots={} anchor_sparse={} anchors_detached={} anchors_invalidated={} anchors_free={} anchor_heap_kb={} retained_subtrees={} retained_groups={} retained_payloads={} retained_nodes={} retained_scopes={} retained_anchors={} scope_index={}/{} scopes={}/{} commands={}/{} observer_states={}/{}",
                 stats.applier_stats.nodes_len,
                 stats.applier_stats.nodes_cap,
                 stats.live_node_heap_bytes as f64 / (1024.0 * 1024.0),
@@ -266,8 +266,12 @@ fn log_runtime_stats(robot: &cranpose::Robot, phase: &str) {
                 stats.slot_stats.group_capacity,
                 stats.slot_stats.payload_count,
                 stats.slot_stats.payload_capacity,
-                stats.slot_stats.payload_location_count,
-                stats.slot_stats.payload_location_capacity,
+                stats.slot_stats.active_payload_anchor_count,
+                stats.slot_stats.payload_anchor_capacity,
+                stats.slot_stats.payload_anchor_slot_count,
+                stats.slot_stats.detached_payload_anchor_count,
+                stats.slot_stats.invalidated_payload_anchor_count,
+                stats.slot_stats.payload_anchor_heap_bytes / 1024,
                 stats.slot_stats.node_count,
                 stats.slot_stats.node_capacity,
                 stats.slot_stats.pending_drop_count,

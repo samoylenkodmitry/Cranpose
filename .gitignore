@@ -24,6 +24,8 @@ crates/*/Cargo.lock
 
 # Generated test artifacts
 robot_test_summary.txt
+verify_robot_summary_shard_*.txt
+stress_robot_summary_shard_*.txt
 docs/screenshots/text_scroll_exact_external/
 docs/screenshots/text_scroll_exact_external_old_*/
 

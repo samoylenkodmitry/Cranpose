@@ -1,6 +1,6 @@
-use super::super::{AnchorState, GroupRecord, SlotTable};
+use super::super::{AnchorState, GroupKey, GroupRecord, SlotTable};
 use super::SlotInvariantError;
-use crate::{collections::map::HashSet, slot_storage::GroupKey, AnchorId};
+use crate::{collections::map::HashSet, AnchorId};
 
 pub(super) fn validate_active_group_anchor(
     table: &SlotTable,
@@ -28,6 +28,30 @@ pub(super) fn validate_active_group_anchor_count(
         expected: table.groups.len(),
         actual: table.anchors.active_len(),
     })
+}
+
+pub(super) fn validate_anchor_registry_integrity(
+    table: &SlotTable,
+) -> Result<(), SlotInvariantError> {
+    table.anchors.validate_integrity()
+}
+
+pub(super) fn validate_active_group_anchor_entries(
+    table: &SlotTable,
+) -> Result<(), SlotInvariantError> {
+    for (anchor, group_index) in table.anchors.active_entries() {
+        let actual = table.groups.get(group_index).map(|group| group.anchor);
+        if actual == Some(anchor) {
+            continue;
+        }
+        return Err(SlotInvariantError::AnchorTargetMismatch {
+            anchor,
+            expected_group_index: group_index,
+            actual,
+        });
+    }
+
+    Ok(())
 }
 
 pub(super) fn validate_detached_anchor_set(

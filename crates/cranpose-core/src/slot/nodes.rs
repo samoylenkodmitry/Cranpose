@@ -5,15 +5,10 @@ use super::{
         group_segment_subrange_at, insert_group_segment_item, remove_group_segment_range,
         restore_subtree_segment, NodeSegment,
     },
-    GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, SlotTable,
+    GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
 };
-use crate::{slot_storage::NodeRecordResult, AnchorId, NodeId};
+use crate::{AnchorId, NodeId};
 use std::mem;
-
-pub(super) struct GroupNodeRecordResult {
-    pub(super) reused_slot: bool,
-    pub(super) reused_node: bool,
-}
 
 impl SlotTable {
     fn group_node_start_at(&self, group_index: usize) -> usize {
@@ -45,6 +40,7 @@ impl SlotTable {
     }
 
     fn insert_group_node(&mut self, group_index: usize, node_index: usize, node: NodeRecord) {
+        self.record_segment_range_update_from(group_index);
         insert_group_segment_item::<NodeSegment, _>(
             &mut self.groups,
             &mut self.nodes,
@@ -55,6 +51,9 @@ impl SlotTable {
     }
 
     fn remove_node_range(&mut self, node_range: GroupNodeRange) -> Vec<NodeRecord> {
+        if !node_range.is_empty() {
+            self.record_segment_range_update_from(node_range.group_index());
+        }
         remove_group_segment_range::<NodeSegment, _>(&mut self.groups, &mut self.nodes, node_range)
     }
 
@@ -63,6 +62,10 @@ impl SlotTable {
         removed_group_index: usize,
         removed_groups: &mut [GroupRecord],
     ) -> Vec<NodeRecord> {
+        if removed_groups.iter().any(|group| group.node_len > 0) {
+            let active_span = self.groups.len().saturating_sub(removed_group_index);
+            self.record_segment_range_update_span(active_span + removed_groups.len());
+        }
         extract_subtree_segment::<NodeSegment, _>(
             &mut self.groups,
             &mut self.nodes,
@@ -77,6 +80,10 @@ impl SlotTable {
         groups: &mut [GroupRecord],
         nodes: Vec<NodeRecord>,
     ) {
+        if !nodes.is_empty() {
+            let active_span = self.groups.len().saturating_sub(insert_group_index);
+            self.record_segment_range_update_span(active_span + groups.len());
+        }
         restore_subtree_segment::<NodeSegment, _>(
             &mut self.groups,
             &mut self.nodes,
@@ -132,7 +139,7 @@ impl SlotTable {
         id: NodeId,
         parent_id: Option<NodeId>,
         generation: u32,
-    ) -> GroupNodeRecordResult {
+    ) -> NodeSlotUpdate {
         if node_index < self.group_node_len_at(group_index) {
             let existing = *self.group_node_record_at(group_index, node_index);
             *self.group_node_record_at_mut(group_index, node_index) = NodeRecord {
@@ -142,9 +149,15 @@ impl SlotTable {
                 generation,
                 lifecycle: NodeLifecycle::Active,
             };
-            GroupNodeRecordResult {
-                reused_slot: true,
-                reused_node: existing.id == id && existing.generation == generation,
+            if existing.id == id && existing.generation == generation {
+                NodeSlotUpdate::Reused { id, generation }
+            } else {
+                NodeSlotUpdate::Replaced {
+                    old_id: existing.id,
+                    old_generation: existing.generation,
+                    new_id: id,
+                    new_generation: generation,
+                }
             }
         } else {
             self.insert_group_node(
@@ -158,10 +171,7 @@ impl SlotTable {
                     lifecycle: NodeLifecycle::Active,
                 },
             );
-            GroupNodeRecordResult {
-                reused_slot: false,
-                reused_node: false,
-            }
+            NodeSlotUpdate::Inserted { id, generation }
         }
     }
 
@@ -172,18 +182,15 @@ impl SlotTable {
         id: NodeId,
         parent_id: Option<NodeId>,
         generation: u32,
-    ) -> NodeRecordResult {
+    ) -> NodeSlotUpdate {
         let group_index = self.current_group_index(owner);
-        let recorded =
+        let update =
             self.record_group_node(group_index, node_index, owner, id, parent_id, generation);
-        if !recorded.reused_slot {
+        if matches!(update, NodeSlotUpdate::Inserted { .. }) {
             self.adjust_ancestor_node_counts(owner, 1);
         }
 
-        NodeRecordResult {
-            reused: recorded.reused_node,
-            id,
-        }
+        update
     }
 
     pub(super) fn node_identity_at_cursor(

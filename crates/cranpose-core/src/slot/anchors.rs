@@ -1,9 +1,9 @@
-use super::{
-    checked_usize_to_u32, dense_id_map::DenseIdMap, DetachedSubtree, GroupRecord, SlotTable,
-};
-use crate::{
-    collections::map::HashMap, retention::RetentionManager, AnchorId, RecomposeScope, ScopeId,
-};
+#[cfg(any(test, debug_assertions))]
+use super::SlotInvariantError;
+use super::{dense_id_map::DenseIdMap, DetachedSubtree, GroupRecord, SlotTable};
+#[cfg(any(test, debug_assertions))]
+use crate::collections::map::HashSet;
+use crate::{collections::map::HashMap, retention::RetentionManager, AnchorId};
 use std::{cmp::Reverse, collections::BinaryHeap, mem};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,7 +21,8 @@ struct AnchorSlot {
 
 #[derive(Default)]
 pub(crate) struct AnchorRegistry {
-    states: DenseIdMap<AnchorSlot>,
+    dense_states: DenseIdMap<AnchorSlot>,
+    sparse_states: HashMap<u32, AnchorSlot>,
     free_ids: BinaryHeap<Reverse<u32>>,
     reused_generations: HashMap<u32, u32>,
     next_anchor: usize,
@@ -30,9 +31,12 @@ pub(crate) struct AnchorRegistry {
 }
 
 impl AnchorRegistry {
+    const DENSE_STORAGE_ID_LIMIT: usize = 65_536;
+
     pub(super) fn new() -> Self {
         Self {
-            states: DenseIdMap::new(),
+            dense_states: DenseIdMap::new(),
+            sparse_states: HashMap::default(),
             free_ids: BinaryHeap::new(),
             reused_generations: HashMap::default(),
             next_anchor: 1,
@@ -61,8 +65,10 @@ impl AnchorRegistry {
     }
 
     pub(super) fn state(&self, anchor: AnchorId) -> Option<AnchorState> {
-        let index = Self::anchor_index(anchor)?;
-        let slot = self.states.get(index)?;
+        if !anchor.is_valid() {
+            return None;
+        }
+        let slot = self.slot(anchor.id)?;
         (slot.generation == anchor.generation).then_some(slot.state)
     }
 
@@ -73,19 +79,23 @@ impl AnchorRegistry {
         }
     }
 
+    pub(super) fn is_detached(&self, anchor: AnchorId) -> bool {
+        matches!(self.state(anchor), Some(AnchorState::Detached))
+    }
+
     pub(super) fn active_len(&self) -> usize {
         self.active_count
     }
 
     pub(super) fn slot_len(&self) -> usize {
-        self.states.len()
+        self.dense_states.len() + self.sparse_states.len()
     }
 
     pub(super) fn sparse_slot_len(&self) -> usize {
-        let reserved_zero_slot = usize::from(self.states.storage_len() > 0);
-        self.states
+        let reserved_zero_slot = usize::from(self.dense_states.storage_len() > 0);
+        self.dense_states
             .storage_len()
-            .saturating_sub(self.states.len() + reserved_zero_slot)
+            .saturating_sub(self.dense_states.len() + reserved_zero_slot)
     }
 
     pub(super) fn detached_len(&self) -> usize {
@@ -102,12 +112,19 @@ impl AnchorRegistry {
     }
 
     pub(super) fn active_entries(&self) -> impl Iterator<Item = (AnchorId, usize)> + '_ {
-        self.states
+        self.dense_states
             .iter()
-            .filter_map(|(index, slot)| match slot.state {
+            .map(|(id, slot)| {
+                (
+                    u32::try_from(id).expect("dense anchor state index must fit u32"),
+                    slot,
+                )
+            })
+            .chain(self.sparse_states.iter().map(|(&id, slot)| (id, slot)))
+            .filter_map(|(id, slot)| match slot.state {
                 AnchorState::Active(group_index) => Some((
                     AnchorId {
-                        id: checked_usize_to_u32(index, "anchor state index"),
+                        id,
                         generation: slot.generation,
                     },
                     group_index,
@@ -116,12 +133,74 @@ impl AnchorRegistry {
             })
     }
 
+    #[cfg(any(test, debug_assertions))]
+    pub(super) fn validate_integrity(&self) -> Result<(), SlotInvariantError> {
+        let mut active_count = 0usize;
+        let mut detached_count = 0usize;
+
+        for (id, slot) in self.anchor_slots() {
+            if id == 0 || id as usize >= self.next_anchor {
+                return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                    detail: "registered anchor id must be allocated",
+                    anchor_id: Some(id),
+                    expected: self.next_anchor,
+                    actual: id as usize,
+                });
+            }
+            match slot.state {
+                AnchorState::Active(_) => active_count += 1,
+                AnchorState::Detached => detached_count += 1,
+                AnchorState::Invalidated => {}
+            }
+        }
+
+        self.validate_state_count("active", self.active_count, active_count)?;
+        self.validate_state_count("detached", self.detached_count, detached_count)?;
+
+        let mut free_ids: HashSet<u32> = HashSet::default();
+        for Reverse(id) in self.free_ids.iter().copied() {
+            if !free_ids.insert(id) {
+                return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                    detail: "free anchor id must be unique",
+                    anchor_id: Some(id),
+                    expected: 1,
+                    actual: 2,
+                });
+            }
+            if matches!(
+                self.slot(id).map(|slot| slot.state),
+                Some(AnchorState::Active(_) | AnchorState::Detached)
+            ) {
+                return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                    detail: "free anchor id must not be active or detached",
+                    anchor_id: Some(id),
+                    expected: 0,
+                    actual: 1,
+                });
+            }
+        }
+
+        for &id in self.reused_generations.keys() {
+            if !free_ids.contains(&id) {
+                return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                    detail: "reused anchor generation must belong to a free id",
+                    anchor_id: Some(id),
+                    expected: 1,
+                    actual: 0,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     pub(super) fn capacity(&self) -> usize {
-        self.states.capacity()
+        self.dense_states.capacity() + self.sparse_states.capacity()
     }
 
     pub(super) fn heap_bytes(&self) -> usize {
-        self.states.capacity() * mem::size_of::<Option<AnchorSlot>>()
+        self.dense_states.capacity() * mem::size_of::<Option<AnchorSlot>>()
+            + self.sparse_states.capacity() * mem::size_of::<(u32, AnchorSlot)>()
             + self.free_ids.capacity() * mem::size_of::<Reverse<u32>>()
             + self.reused_generations.capacity() * mem::size_of::<(u32, u32)>()
     }
@@ -143,7 +222,8 @@ impl AnchorRegistry {
     }
 
     pub(super) fn clear(&mut self) {
-        self.states.clear();
+        self.dense_states.clear();
+        self.sparse_states.clear();
         self.free_ids.clear();
         self.reused_generations.clear();
         self.next_anchor = 1;
@@ -152,50 +232,83 @@ impl AnchorRegistry {
     }
 
     pub(super) fn shrink_to_fit(&mut self) {
-        self.states.shrink_to_fit();
+        self.dense_states.shrink_to_fit();
+        self.sparse_states.shrink_to_fit();
         self.free_ids.shrink_to_fit();
         self.reused_generations.shrink_to_fit();
     }
 
     fn invalidate_state(&mut self, anchor: AnchorId) -> bool {
-        let Some(index) = Self::anchor_index(anchor) else {
+        if !anchor.is_valid() {
             return false;
-        };
-        let Some(slot) = self.states.get(index) else {
+        }
+        let Some(slot) = self.slot(anchor.id) else {
             return false;
         };
         if slot.generation != anchor.generation {
             return false;
         }
-        let removed = self
-            .states
-            .remove(index)
-            .expect("validated anchor state must remove");
+        let removed = self.remove_slot(anchor.id);
+        let removed = removed.expect("validated anchor state must remove");
         self.adjust_state_counts(Some(removed.state), None);
         self.enqueue_reuse(anchor);
         true
     }
 
     fn set_state(&mut self, anchor: AnchorId, state: AnchorState) -> Option<AnchorState> {
-        let index = Self::anchor_index(anchor)?;
-        if let Some(slot) = self.states.get(index) {
+        if !anchor.is_valid() {
+            return None;
+        }
+        if let Some(slot) = self.slot(anchor.id) {
             if slot.generation != anchor.generation {
                 return None;
             }
         }
-        let previous = self.states.insert(
-            index,
-            AnchorSlot {
-                generation: anchor.generation,
-                state,
-            },
-        );
+        let previous = self.insert_slot(anchor.id, anchor.generation, state);
         self.adjust_state_counts(previous.map(|slot| slot.state), Some(state));
         previous.map(|slot| slot.state)
     }
 
-    fn anchor_index(anchor: AnchorId) -> Option<usize> {
-        anchor.is_valid().then_some(anchor.id as usize)
+    fn slot(&self, id: u32) -> Option<&AnchorSlot> {
+        if Self::uses_dense_storage(id) {
+            self.dense_states.get(id as usize)
+        } else {
+            self.sparse_states.get(&id)
+        }
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn anchor_slots(&self) -> impl Iterator<Item = (u32, &AnchorSlot)> + '_ {
+        self.dense_states
+            .iter()
+            .map(|(id, slot)| {
+                (
+                    u32::try_from(id).expect("dense anchor state index must fit u32"),
+                    slot,
+                )
+            })
+            .chain(self.sparse_states.iter().map(|(&id, slot)| (id, slot)))
+    }
+
+    fn insert_slot(&mut self, id: u32, generation: u32, state: AnchorState) -> Option<AnchorSlot> {
+        let slot = AnchorSlot { generation, state };
+        if Self::uses_dense_storage(id) {
+            self.dense_states.insert(id as usize, slot)
+        } else {
+            self.sparse_states.insert(id, slot)
+        }
+    }
+
+    fn remove_slot(&mut self, id: u32) -> Option<AnchorSlot> {
+        if Self::uses_dense_storage(id) {
+            self.dense_states.remove(id as usize)
+        } else {
+            self.sparse_states.remove(&id)
+        }
+    }
+
+    fn uses_dense_storage(id: u32) -> bool {
+        id as usize <= Self::DENSE_STORAGE_ID_LIMIT
     }
 
     fn adjust_state_counts(&mut self, previous: Option<AnchorState>, next: Option<AnchorState>) {
@@ -227,15 +340,34 @@ impl AnchorRegistry {
     }
 
     fn maybe_shrink_sparse_storage(&mut self) {
-        if self.states.capacity() <= 4096 {
+        if self.capacity() <= Self::DENSE_STORAGE_ID_LIMIT {
             return;
         }
-        if self.states.len().saturating_mul(4) >= self.states.capacity() {
+        if self.slot_len().saturating_mul(4) >= self.capacity() {
             return;
         }
-        self.states.shrink_to_fit();
+        self.dense_states.shrink_to_fit();
+        self.sparse_states.shrink_to_fit();
         self.free_ids.shrink_to_fit();
         self.reused_generations.shrink_to_fit();
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn validate_state_count(
+        &self,
+        detail: &'static str,
+        expected: usize,
+        actual: usize,
+    ) -> Result<(), SlotInvariantError> {
+        if expected == actual {
+            return Ok(());
+        }
+        Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+            detail,
+            anchor_id: None,
+            expected,
+            actual,
+        })
     }
 }
 
@@ -250,15 +382,15 @@ impl SlotTable {
         for anchor in subtree.group_anchors() {
             removed |= self.anchors.invalidate_state(anchor);
         }
+        self.invalidate_detached_subtree_payload_anchors(subtree);
         if removed {
             self.anchors.maybe_shrink_sparse_storage();
         }
     }
 
-    pub(crate) fn compact_anchor_namespace(
+    pub(crate) fn compact_anchor_registry_storage(
         &mut self,
         retention: Option<&mut RetentionManager>,
-        mut scope_for_id: impl FnMut(ScopeId) -> Option<RecomposeScope>,
     ) {
         let retained_group_count = retention
             .as_ref()
@@ -289,160 +421,55 @@ impl SlotTable {
             )
             .max()
             .unwrap_or(0);
-        let sparse_namespace = max_anchor_id > total_group_count.max(256) * 4;
+        let sparse_anchor_ids = max_anchor_id > total_group_count.max(256) * 4;
         let sparse_capacity = self.anchors.capacity() > total_group_count.max(256) * 8;
-        if !sparse_namespace && !sparse_capacity {
+        if !sparse_anchor_ids && !sparse_capacity {
             return;
         }
 
-        let mut remapped = HashMap::default();
-        let mut next_id = 1usize;
-        for group in &self.groups {
-            remapped.insert(
-                group.anchor,
-                AnchorId {
-                    id: checked_usize_to_u32(next_id, "compacted anchor id"),
-                    generation: group.anchor.generation,
-                },
-            );
-            next_id = next_id
-                .checked_add(1)
-                .expect("compacted anchor id counter overflow");
-        }
-        if let Some(retention) = retention.as_ref() {
-            for subtree in retention.subtrees() {
-                for anchor in subtree.group_anchors() {
-                    remapped.insert(
-                        anchor,
-                        AnchorId {
-                            id: checked_usize_to_u32(next_id, "compacted anchor id"),
-                            generation: anchor.generation,
-                        },
-                    );
-                    next_id = next_id
-                        .checked_add(1)
-                        .expect("compacted anchor id counter overflow");
-                }
-            }
-        }
-
-        self.remap_active_group_anchors(&remapped, &mut scope_for_id);
-        let detached_anchors = if let Some(retention) = retention {
-            for subtree in retention.subtrees_mut() {
-                self.remap_detached_group_anchors(subtree, &remapped, &mut scope_for_id);
-            }
-            retention
-                .subtrees()
-                .flat_map(DetachedSubtree::group_anchors)
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-
-        self.payload_locations.clear();
-        self.rebuild_payload_locations_for_group_range(super::GroupRange::new(
-            0,
-            self.groups.len(),
-        ));
-        self.recompute_scope_index();
-        self.rebuild_anchor_registry(detached_anchors);
-    }
-
-    fn remap_active_group_anchors(
-        &mut self,
-        remapped: &HashMap<AnchorId, AnchorId>,
-        scope_for_id: &mut impl FnMut(ScopeId) -> Option<RecomposeScope>,
-    ) {
-        for group in &mut self.groups {
-            let old_anchor = group.anchor;
-            let new_anchor = remapped
-                .get(&old_anchor)
-                .copied()
-                .expect("active group anchor must remap");
-            group.anchor = new_anchor;
-            if group.parent_anchor.is_valid() {
-                group.parent_anchor = remapped
-                    .get(&group.parent_anchor)
-                    .copied()
-                    .expect("active parent anchor must remap");
-            }
-            if let Some(scope_id) = group.scope_id {
-                if let Some(scope) = scope_for_id(scope_id) {
-                    scope.set_group_anchor(new_anchor);
-                }
-            }
-        }
-        for payload in &mut self.payloads {
-            payload.owner = remapped
-                .get(&payload.owner)
-                .copied()
-                .expect("active payload owner must remap");
-        }
-        for node in &mut self.nodes {
-            node.owner = remapped
-                .get(&node.owner)
-                .copied()
-                .expect("active node owner must remap");
-        }
-    }
-
-    fn remap_detached_group_anchors(
-        &self,
-        subtree: &mut DetachedSubtree,
-        remapped: &HashMap<AnchorId, AnchorId>,
-        scope_for_id: &mut impl FnMut(ScopeId) -> Option<RecomposeScope>,
-    ) {
-        for group in &mut subtree.groups {
-            let old_anchor = group.anchor;
-            let new_anchor = remapped
-                .get(&old_anchor)
-                .copied()
-                .expect("detached group anchor must remap");
-            group.anchor = new_anchor;
-            if group.parent_anchor.is_valid() {
-                group.parent_anchor = remapped
-                    .get(&group.parent_anchor)
-                    .copied()
-                    .expect("detached parent anchor must remap");
-            }
-            if let Some(scope_id) = group.scope_id {
-                if let Some(scope) = scope_for_id(scope_id) {
-                    scope.set_group_anchor(new_anchor);
-                }
-            }
-        }
-        for payload in &mut subtree.payloads {
-            payload.owner = remapped
-                .get(&payload.owner)
-                .copied()
-                .expect("detached payload owner must remap");
-        }
-        for node in &mut subtree.nodes {
-            node.owner = remapped
-                .get(&node.owner)
-                .copied()
-                .expect("detached node owner must remap");
-        }
-    }
-
-    fn rebuild_anchor_registry(&mut self, detached_anchors: Vec<AnchorId>) {
-        self.anchors.clear();
         self.anchors.shrink_to_fit();
-        for (index, group) in self.groups.iter().enumerate() {
-            self.anchors.set_active(group.anchor, index);
-        }
-        let mut max_anchor_id = self
-            .groups
-            .iter()
-            .map(|group| group.anchor.id as usize)
-            .max()
-            .unwrap_or(0);
-        for anchor in detached_anchors {
-            max_anchor_id = max_anchor_id.max(anchor.id as usize);
-            self.anchors.mark_detached(anchor);
-        }
-        self.anchors.next_anchor = max_anchor_id
-            .checked_add(1)
-            .expect("anchor counter overflow after namespace rebuild");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_integrity_rejects_free_active_anchor_id() {
+        let mut registry = AnchorRegistry::new();
+        let anchor = registry.allocate();
+        registry.set_active(anchor, 0);
+        registry.free_ids.push(Reverse(anchor.id));
+
+        assert_eq!(
+            registry.validate_integrity(),
+            Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                detail: "free anchor id must not be active or detached",
+                anchor_id: Some(anchor.id),
+                expected: 0,
+                actual: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn registry_integrity_rejects_reused_generation_without_free_id() {
+        let mut registry = AnchorRegistry::new();
+        let anchor = AnchorId {
+            id: 7,
+            generation: 2,
+        };
+        registry.reused_generations.insert(anchor.id, 3);
+
+        assert_eq!(
+            registry.validate_integrity(),
+            Err(SlotInvariantError::AnchorRegistryInternalMismatch {
+                detail: "reused anchor generation must belong to a free id",
+                anchor_id: Some(anchor.id),
+                expected: 1,
+                actual: 0,
+            })
+        );
     }
 }

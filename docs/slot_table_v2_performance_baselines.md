@@ -1,11 +1,13 @@
 # Slot Table V2 Performance Baselines
 
-Slot Table V2 performance baselines are captured with `./perf_slot_table_v2.sh`. The script runs the `cranpose-ui` Criterion bench target `slot_table_v2`, applies stable local build defaults, pins to a CPU when `taskset` is available, and writes Criterion artifacts under `target/criterion/`.
+Slot Table V2 performance baselines are captured with `./perf_slot_table_v2.sh`. The script runs the `cranpose-ui` Criterion bench target `slot_table_v2`, applies stable local build defaults, and writes Criterion artifacts under `target/criterion/`.
 
 Run the full verification gate before saving a baseline:
 
 ```bash
-./verify_slot_table.sh
+./verify_slot_table.sh --core
+./verify_slot_table.sh --robot-build
+./verify_slot_table.sh --robot-shard N/16
 ```
 
 Save the reference baseline from the branch or commit that represents the comparison target:
@@ -23,10 +25,29 @@ Compare the candidate branch against that saved baseline:
 Run the same-tree stability check before trusting a regression result:
 
 ```bash
-./perf_slot_table_v2.sh --stability-check
+./stress_slot_table.sh --perf-shard N/18
 ```
 
-The stability check saves a temporary baseline, compares the same tree against it, and fails when benchmark drift exceeds `CRANPOSE_SLOT_TABLE_STABILITY_THRESHOLD_PCT` or `--stability-threshold-pct`. Treat an unstable host as a measurement failure, not as evidence about Slot Table V2.
+The stability check runs two unrecorded warmup passes, saves a temporary baseline,
+compares the same tree against it without an extra cooldown gap, and fails when
+the lower bound of the same-tree regression confidence interval exceeds the
+configured threshold. A full-matrix stability check records and compares each
+benchmark with its own adjacent temporary baseline so host phase shifts between
+benchmark families do not become a false regression. Each same-tree comparison
+gets four attempts by default; one stable attempt is enough to pass because a
+single unstable same-tree pair is host noise, not a source regression. By
+default, keyed, conditional, and tab-switch benchmarks use the 5% stability
+threshold; lazy-list and subcompose benchmarks use their 7% documented timing
+budget.
+`CRANPOSE_SLOT_TABLE_STABILITY_THRESHOLD_PCT` or `--stability-threshold-pct`
+replaces those per-family defaults with one explicit threshold. The summary
+reports signed point estimates so large same-tree improvements remain visible as
+host or benchmark warmup evidence. Treat an unstable host as a measurement
+failure, not as evidence about Slot Table V2.
+
+The stability check has a hard 600-second wall-clock budget by default. Override
+it with `CRANPOSE_SLOT_TABLE_STABILITY_TIMEOUT_SECS`; set it to `0` only for an
+explicitly supervised long local investigation.
 
 Use filters for focused investigations:
 
@@ -69,11 +90,14 @@ CRANPOSE_SIBLING_INDEX_THRESHOLD=8 ./perf_slot_table_v2.sh --filter keyed_revers
 
 Use the same machine, power profile, CPU set, sample size, warmup, and measurement time for both baseline and candidate runs. The script defaults are intentionally conservative for local comparison:
 
-- `CRANPOSE_SLOT_TABLE_CPU_SET` or `--cpu-set` chooses the CPU affinity. Use `none` only when pinning is unavailable.
+- `CRANPOSE_SLOT_TABLE_CPU_SET` or `--cpu-set` chooses the CPU affinity. The default is `none`; pin only after proving the selected CPU is stable for same-tree runs.
 - `CRANPOSE_SLOT_TABLE_SAMPLE_SIZE` or `--sample-size` controls Criterion samples.
 - `CRANPOSE_SLOT_TABLE_WARMUP_TIME` or `--warmup-time` controls warmup seconds.
 - `CRANPOSE_SLOT_TABLE_MEASUREMENT_TIME` or `--measurement-time` controls measurement seconds.
-- `CRANPOSE_SLOT_TABLE_COOLDOWN_SECS` or `--cooldown-secs` controls the pause after saving a baseline before comparison.
+- `CRANPOSE_SLOT_TABLE_COOLDOWN_SECS` or `--cooldown-secs` controls the pause after saving a named baseline before comparison. The temporary same-tree stability comparison skips this pause because the warmup and baseline must be adjacent.
+- `CRANPOSE_SLOT_TABLE_STABILITY_WARMUP_RUNS` controls the number of unrecorded same-tree runs before the stability baseline. The default is `2` so CPU frequency and process-level warmup do not become the saved baseline.
+- `CRANPOSE_SLOT_TABLE_STABILITY_ATTEMPTS` controls same-tree retry attempts per benchmark. The default is `4`.
+- `CRANPOSE_SLOT_TABLE_STABILITY_TIMEOUT_SECS` controls the same-tree stability wall-clock budget. The default is `600`; `0` disables the guard for an explicitly supervised long run.
 - `CRANPOSE_SIBLING_INDEX_THRESHOLD` sets the compile-time sibling-index threshold for one benchmark run.
 
 Record the commit SHA, command line, benchmark filter, CPU set, sample size, warmup, measurement time, and stability-check result with any performance claim. Do not compare numbers from different machines or different script settings.
@@ -90,7 +114,10 @@ adding more retained buffers.
 
 ## Regression Budgets
 
-Apply these budgets only after the same-tree stability check passes on the host used for the comparison. If stability drift exceeds the threshold, rerun on a quieter machine before accepting or rejecting a candidate.
+Apply these budgets only after the same-tree stability check passes on the host
+used for the comparison. If same-tree movement is large enough to make the
+candidate result ambiguous, rerun on a quieter machine before accepting or
+rejecting the candidate.
 
 | Benchmark or counter family | Allowed regression | Required interpretation |
 | --- | ---: | --- |

@@ -1,3 +1,4 @@
+use crate::slot::NodeSlotUpdate;
 use crate::{
     debug_scope_label, Applier, ChildList, Command, CommandQueue, Composer, DirtyBubble,
     EmittedNode, MutableState, Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode,
@@ -9,6 +10,23 @@ impl Composer {
     fn recorded_node_parent(&self, id: NodeId) -> Option<NodeId> {
         let mut applier = self.borrow_applier();
         applier.get_mut(id).ok().and_then(|node| node.parent())
+    }
+
+    fn queue_replaced_slot_node_removal(&self, old_id: NodeId, old_generation: u32) {
+        let current_generation = self.borrow_applier().node_generation(old_id);
+        if current_generation != old_generation {
+            log::trace!(
+                target: "cranpose::compose::emit",
+                "skipping stale replacement cleanup for node #{old_id} (slot_generation={old_generation} current_generation={current_generation})",
+            );
+            return;
+        }
+
+        log::trace!(
+            target: "cranpose::compose::emit",
+            "removing replaced node #{old_id} (generation={old_generation})",
+        );
+        self.commands_mut().push(Command::RemoveNode { id: old_id });
     }
 
     pub fn use_state<T: Clone + 'static>(&self, init: impl FnOnce() -> T) -> MutableState<T> {
@@ -62,34 +80,20 @@ impl Composer {
                 let recorded = self.with_slot_session_mut(|slots| {
                     slots.record_node_with_parent(id, slot_gen, parent_id)
                 });
-                debug_assert!(
-                    recorded.reused && recorded.id == id,
-                    "reused node recording must keep the same node identity"
-                );
-                self.core.last_node_reused.set(Some(recorded.reused));
+                match recorded {
+                    NodeSlotUpdate::Reused {
+                        id: recorded_id,
+                        generation,
+                    } => {
+                        debug_assert_eq!(recorded_id, id);
+                        debug_assert_eq!(generation, slot_gen);
+                    }
+                    NodeSlotUpdate::Inserted { .. } | NodeSlotUpdate::Replaced { .. } => {
+                        panic!("reused node recording must keep the same node identity");
+                    }
+                }
+                self.core.last_node_reused.set(Some(true));
                 return id;
-            }
-        }
-
-        // If there was a mismatched node in this slot (wrong type or stale generation),
-        // schedule its removal before creating a new one.
-        if let Some(old_id) = existing_id {
-            if !gen_matches {
-                // Stale generation: the slot points to a recycled index.
-                // Don't remove the node — it belongs to a different composition context.
-                log::trace!(
-                    target: "cranpose::compose::emit",
-                    "stale generation for node #{old_id} (current={})",
-                    self.borrow_applier().node_generation(old_id)
-                );
-            } else if !type_matches {
-                // Same generation but wrong type: genuinely needs replacement.
-                log::trace!(
-                    target: "cranpose::compose::emit",
-                    "replacing node #{old_id} with new {}",
-                    std::any::type_name::<N>()
-                );
-                self.commands_mut().push(Command::RemoveNode { id: old_id });
             }
         }
 
@@ -129,11 +133,29 @@ impl Composer {
         let parent_id = self.recorded_node_parent(id);
         let recorded =
             self.with_slot_session_mut(|slots| slots.record_node_with_parent(id, gen, parent_id));
-        debug_assert!(
-            !recorded.reused && recorded.id == id,
-            "fresh or replacement node recording must report a non-reused node"
-        );
-        self.core.last_node_reused.set(Some(recorded.reused));
+        match recorded {
+            NodeSlotUpdate::Inserted {
+                id: recorded_id,
+                generation,
+            } => {
+                debug_assert_eq!(recorded_id, id);
+                debug_assert_eq!(generation, gen);
+            }
+            NodeSlotUpdate::Replaced {
+                old_id,
+                old_generation,
+                new_id,
+                new_generation,
+            } => {
+                debug_assert_eq!(new_id, id);
+                debug_assert_eq!(new_generation, gen);
+                self.queue_replaced_slot_node_removal(old_id, old_generation);
+            }
+            NodeSlotUpdate::Reused { .. } => {
+                panic!("fresh or replacement node recording must not report normal reuse");
+            }
+        }
+        self.core.last_node_reused.set(Some(false));
         id
     }
 

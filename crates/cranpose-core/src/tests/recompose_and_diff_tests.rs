@@ -698,7 +698,7 @@ fn composable_skips_when_inputs_unchanged() {
 }
 
 #[test]
-fn unit_return_composable_skips_without_return_slot_storage() {
+fn unit_return_composable_skips_without_return_value_slot() {
     thread_local! {
         static UNIT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }

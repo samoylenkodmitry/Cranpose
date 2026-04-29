@@ -1,10 +1,7 @@
 #[cfg(any(test, debug_assertions))]
 use super::AnchorState;
-use super::{DirectChildRange, SlotTable, SubtreeRange};
-use crate::{
-    slot_storage::{GroupId, GroupKey},
-    AnchorId, ScopeId,
-};
+use super::{ActiveGroupId, ChildCursor, DirectChildRange, GroupKey, SlotTable, SubtreeRange};
+use crate::{AnchorId, ScopeId};
 
 pub(super) struct GroupRecord {
     pub(super) key: GroupKey,
@@ -53,6 +50,7 @@ impl SlotTable {
         &self.groups[self.current_group_index(anchor)]
     }
 
+    #[cfg(test)]
     #[inline(always)]
     pub(in crate::slot) fn group_anchor_at_index(&self, group_index: usize) -> AnchorId {
         self.groups[group_index].anchor
@@ -86,11 +84,6 @@ impl SlotTable {
     #[inline(always)]
     pub(in crate::slot) fn group_subtree_range_at_index(&self, group_index: usize) -> SubtreeRange {
         SubtreeRange::from_root_len(group_index, self.group_subtree_len_at_index(group_index))
-    }
-
-    #[inline(always)]
-    pub(in crate::slot) fn group_subtree_range(&self, anchor: AnchorId) -> SubtreeRange {
-        self.group_subtree_range_at_index(self.current_group_index(anchor))
     }
 
     pub(in crate::slot) fn group_subtree_node_count_at_index(&self, group_index: usize) -> usize {
@@ -131,27 +124,27 @@ impl SlotTable {
             })
     }
 
-    pub(in crate::slot) fn checked_group_index(&self, group: GroupId) -> usize {
+    pub(in crate::slot) fn checked_active_group_index(&self, group: ActiveGroupId) -> usize {
         let group_index = group.index();
         let record = self
             .groups
             .get(group_index)
-            .expect("group handle index missing");
+            .expect("active group handle index missing");
         assert_eq!(
             record.generation,
             group.generation(),
-            "group handle generation mismatch"
+            "active group handle generation mismatch"
         );
         group_index
     }
 
-    pub(in crate::slot) fn group_id_at_index(&self, group_index: usize) -> GroupId {
+    pub(in crate::slot) fn active_group_id_at_index(&self, group_index: usize) -> ActiveGroupId {
         let record = self.groups.get(group_index).expect("group index missing");
-        GroupId::new(group_index, record.generation)
+        ActiveGroupId::new(group_index, record.generation)
     }
 
-    pub(in crate::slot) fn group_anchor(&self, group: GroupId) -> AnchorId {
-        let group_index = self.checked_group_index(group);
+    pub(in crate::slot) fn active_group_anchor(&self, group: ActiveGroupId) -> AnchorId {
+        let group_index = self.checked_active_group_index(group);
         self.groups[group_index].anchor
     }
 
@@ -168,16 +161,22 @@ impl SlotTable {
         }
     }
 
-    pub(in crate::slot) fn direct_child_anchor_at(
+    pub(in crate::slot) fn direct_child_anchor_at_cursor(
         &self,
-        parent_anchor: AnchorId,
-        child_index: usize,
+        cursor: ChildCursor,
     ) -> Option<AnchorId> {
-        self.direct_child_sibling_record_at(parent_anchor, child_index)
+        self.direct_child_sibling_record_at_cursor(cursor)
             .map(|group| group.anchor)
     }
 
-    pub(in crate::slot) fn direct_child_sibling_record_at(
+    pub(in crate::slot) fn direct_child_sibling_record_at_cursor(
+        &self,
+        cursor: ChildCursor,
+    ) -> Option<GroupSiblingRecord> {
+        self.direct_child_sibling_record_at(cursor.parent(), cursor.index())
+    }
+
+    fn direct_child_sibling_record_at(
         &self,
         parent_anchor: AnchorId,
         child_index: usize,
@@ -190,5 +189,23 @@ impl SlotTable {
         }
         let group = self.group_sibling_record_at_index_checked(child_index)?;
         (group.parent_anchor == parent_anchor).then_some(group)
+    }
+
+    pub(in crate::slot) fn assert_child_cursor_boundary(&self, cursor: ChildCursor) {
+        let siblings = self.direct_child_range(cursor.parent());
+        assert!(
+            siblings.start() <= cursor.index() && cursor.index() <= siblings.end(),
+            "child cursor must stay inside the parent child range"
+        );
+        if cursor.index() == siblings.end() {
+            return;
+        }
+
+        let group = self.group_sibling_record_at_index(cursor.index());
+        assert_eq!(
+            group.parent_anchor,
+            cursor.parent(),
+            "child cursor must point at a direct child boundary"
+        );
     }
 }

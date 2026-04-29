@@ -4,15 +4,19 @@
 # Runs all robot tests in headless mode
 # Usage: ./run_robot_test.sh [--parallel N] [--sequential]
 #        ./run_robot_test.sh [--example robot_name]
+#        ./run_robot_test.sh [--shard INDEX/TOTAL]
 # 
 # Options:
 #   --parallel N    Run N tests in parallel
 #   --sequential    Run tests one at a time (default)
 #   --example NAME  Run only the named robot example (repeatable)
+#   --shard N/M     Run the deterministic shard N of M
+#   --build-only    Build matching robot examples and exit
+#   --skip-build    Reuse existing robot example binaries
 #   --help          Show this help message
 
-LOG_FILE="robot_test.log"
-SUMMARY_FILE="robot_test_summary.txt"
+LOG_FILE="${CRANPOSE_ROBOT_LOG_FILE:-robot_test.log}"
+SUMMARY_FILE="${CRANPOSE_ROBOT_SUMMARY_FILE:-robot_test_summary.txt}"
 ROBOT_DIR="apps/desktop-demo/robot-runners"
 ROBOT_PROFILE="${CRANPOSE_ROBOT_PROFILE:-robot}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +38,10 @@ ROBOT_TEST_TIMEOUT_CAP_SECS="${CRANPOSE_ROBOT_TEST_TIMEOUT_CAP_SECS:-900}"
 ROBOT_TEST_ATTEMPTS="${CRANPOSE_ROBOT_TEST_ATTEMPTS:-1}"
 ROBOT_FAILURE_LOG_LINES="${CRANPOSE_ROBOT_FAILURE_LOG_LINES:-220}"
 SELECTED_EXAMPLES=()
+SHARD_INDEX=""
+SHARD_COUNT=""
+BUILD_ONLY=0
+SKIP_BUILD=0
 
 profile_output_dir() {
     case "$1" in
@@ -64,6 +72,18 @@ enable_local_tmpdir
 enable_local_sccache
 enable_local_cargo_job_limit
 
+parse_shard_spec() {
+    local spec="$1"
+    if [[ "$spec" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]]; then
+        SHARD_INDEX="${BASH_REMATCH[1]}"
+        SHARD_COUNT="${BASH_REMATCH[2]}"
+        return
+    fi
+
+    echo "Invalid shard '$spec'. Expected INDEX/TOTAL, for example 1/8."
+    exit 1
+}
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -79,13 +99,36 @@ while [[ $# -gt 0 ]]; do
             SELECTED_EXAMPLES+=("$2")
             shift 2
             ;;
+        --shard)
+            parse_shard_spec "$2"
+            shift 2
+            ;;
+        --shard-index)
+            SHARD_INDEX="$2"
+            shift 2
+            ;;
+        --shard-count)
+            SHARD_COUNT="$2"
+            shift 2
+            ;;
+        --build-only)
+            BUILD_ONLY=1
+            shift
+            ;;
+        --skip-build)
+            SKIP_BUILD=1
+            shift
+            ;;
         --help)
-            echo "Usage: $0 [--parallel N] [--sequential] [--example robot_name]"
+            echo "Usage: $0 [--parallel N] [--sequential] [--example robot_name] [--shard INDEX/TOTAL] [--build-only] [--skip-build]"
             echo ""
             echo "Options:"
             echo "  --parallel N    Run N tests in parallel"
             echo "  --sequential    Run tests one at a time (default)"
             echo "  --example NAME  Run only the named robot example (repeatable)"
+            echo "  --shard N/M     Run the deterministic shard N of M"
+            echo "  --build-only    Build matching robot examples and exit"
+            echo "  --skip-build    Reuse existing robot example binaries"
             echo "  --help          Show this help message"
             exit 0
             ;;
@@ -95,6 +138,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [ "$BUILD_ONLY" = "1" ] && [ "$SKIP_BUILD" = "1" ]; then
+    echo "--build-only and --skip-build cannot be used together"
+    exit 1
+fi
+
+mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$SUMMARY_FILE")"
 
 # Clean previous logs
 rm -f "$LOG_FILE" "$SUMMARY_FILE"
@@ -140,28 +190,67 @@ if [ ${#SELECTED_EXAMPLES[@]} -gt 0 ]; then
     EXAMPLES=("${FILTERED_EXAMPLES[@]}")
 fi
 
+if [ -n "$SHARD_INDEX" ] || [ -n "$SHARD_COUNT" ]; then
+    if ! [[ "$SHARD_INDEX" =~ ^[1-9][0-9]*$ ]] || ! [[ "$SHARD_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Shard index and count must be positive integers"
+        exit 1
+    fi
+    if [ "$SHARD_INDEX" -gt "$SHARD_COUNT" ]; then
+        echo "Shard index must be less than or equal to shard count"
+        exit 1
+    fi
+
+    SHARDED_EXAMPLES=()
+    for example_index in "${!EXAMPLES[@]}"; do
+        if [ $((example_index % SHARD_COUNT + 1)) -eq "$SHARD_INDEX" ]; then
+            SHARDED_EXAMPLES+=("${EXAMPLES[$example_index]}")
+        fi
+    done
+    if [ ${#SHARDED_EXAMPLES[@]} -eq 0 ]; then
+        echo "Shard $SHARD_INDEX/$SHARD_COUNT has no robot examples"
+        exit 1
+    fi
+    EXAMPLES=("${SHARDED_EXAMPLES[@]}")
+fi
+
 BUILD_ARGS=(--profile "$ROBOT_PROFILE" --package desktop-app --features robot-app)
 if [ ${#EXAMPLES[@]} -eq 1 ]; then
     BUILD_ARGS+=(--example "${EXAMPLES[0]}")
+elif [ ${#SELECTED_EXAMPLES[@]} -gt 0 ] || [ -n "$SHARD_INDEX" ]; then
+    for example in "${EXAMPLES[@]}"; do
+        BUILD_ARGS+=(--example "$example")
+    done
 else
     BUILD_ARGS+=(--examples)
 fi
 
-echo "Building desktop-app examples with profile '$ROBOT_PROFILE'..."
-if ! wait_for_host_capacity "robot build"; then
-    echo "Host was not ready for robot build." | tee -a "$LOG_FILE"
-    exit 1
-fi
-"${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
+if [ "$SKIP_BUILD" = "1" ]; then
+    echo "Skipping robot example build; reusing profile '$ROBOT_PROFILE' binaries." | tee -a "$LOG_FILE"
+else
+    echo "Building desktop-app examples with profile '$ROBOT_PROFILE'..."
+    if ! wait_for_host_capacity "robot build"; then
+        echo "Host was not ready for robot build." | tee -a "$LOG_FILE"
+        exit 1
+    fi
+    "${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
 
-if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Build failed!" | tee -a "$LOG_FILE"
-    exit 1
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        echo "Build failed!" | tee -a "$LOG_FILE"
+        exit 1
+    fi
+fi
+
+if [ "$BUILD_ONLY" = "1" ]; then
+    echo "Build-only robot gate completed for ${#EXAMPLES[@]} examples." | tee -a "$LOG_FILE"
+    exit 0
 fi
 
 echo "============================================" | tee -a "$LOG_FILE"
 echo "Running Robot Test Suite" | tee -a "$LOG_FILE"
 echo "Found ${#EXAMPLES[@]} robot tests" | tee -a "$LOG_FILE"
+if [ -n "$SHARD_INDEX" ]; then
+    echo "Shard: $SHARD_INDEX/$SHARD_COUNT" | tee -a "$LOG_FILE"
+fi
 if [ "$PARALLEL_JOBS" -gt 1 ]; then
     echo "Running $PARALLEL_JOBS tests in parallel (headless mode)" | tee -a "$LOG_FILE"
 else
@@ -252,6 +341,9 @@ run_test() {
             ;;
         robot_shader_backdrop_drag)
             timeout_secs=300
+            ;;
+        robot_shader_rect)
+            timeout_secs=180
             ;;
         robot_shadow_fields)
             timeout_secs=180

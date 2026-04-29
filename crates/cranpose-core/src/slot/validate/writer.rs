@@ -1,4 +1,4 @@
-use super::super::{SlotTable, SlotWriteSessionState};
+use super::super::{ChildCursor, SlotTable, SlotWriteSessionState};
 use super::SlotInvariantError;
 use crate::AnchorId;
 
@@ -50,7 +50,7 @@ fn validate_child_boundary(
 ) -> Result<(), SlotInvariantError> {
     let child_range = table.direct_child_range(expected_parent);
     if table
-        .direct_child_anchor_at(expected_parent, next_child_index)
+        .direct_child_anchor_at_cursor(ChildCursor::new(expected_parent, next_child_index))
         .is_some()
         || next_child_index == child_range.end()
     {
@@ -70,7 +70,8 @@ fn validate_child_boundary(
 }
 
 impl SlotWriteSessionState {
-    pub(crate) fn validate(&self, table: &SlotTable) -> Result<(), SlotInvariantError> {
+    pub(crate) fn validate(&mut self, table: &mut SlotTable) -> Result<(), SlotInvariantError> {
+        table.flush_payload_location_refreshes(self);
         table.validate()?;
 
         validate_cursor(
@@ -173,8 +174,8 @@ impl SlotWriteSessionState {
     }
 
     pub(in crate::slot) fn debug_assert_valid_after(
-        &self,
-        table: &SlotTable,
+        &mut self,
+        table: &mut SlotTable,
         operation: &'static str,
     ) {
         if let Err(err) = self.validate(table) {

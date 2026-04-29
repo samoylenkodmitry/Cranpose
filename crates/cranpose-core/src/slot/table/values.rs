@@ -1,17 +1,17 @@
+use super::super::ValueSlotId;
 use super::SlotTable;
-use crate::slot_storage::ValueSlotId;
 
 impl SlotTable {
     fn checked_value_slot(&self, slot: ValueSlotId) -> (usize, usize) {
         let (owner, payload_index) = self
-            .payload_locations
-            .get(slot.anchor())
+            .payload_anchors
+            .active_location(slot.anchor())
             .expect("value slot anchor should resolve");
         let group_index = self.current_group_index(owner);
         debug_assert_eq!(
             self.payload_owner_at(group_index, payload_index),
             owner,
-            "payload location owner must match the payload record owner"
+            "payload anchor index owner must match the payload record owner"
         );
         assert_eq!(
             self.payload_anchor_at(group_index, payload_index),
@@ -20,7 +20,7 @@ impl SlotTable {
         );
         assert_eq!(
             self.payload_generation_at(group_index, payload_index),
-            slot.generation(),
+            slot.anchor().generation(),
             "value slot generation mismatch"
         );
         (group_index, payload_index)

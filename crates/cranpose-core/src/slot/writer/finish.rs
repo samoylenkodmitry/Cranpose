@@ -1,5 +1,6 @@
 use super::super::{
-    DetachedSubtree, FinishGroupResult, SlotLifecycleCoordinator, SlotTable, SlotWriteSession,
+    ChildCursor, DetachedSubtree, FinishGroupResult, SlotLifecycleCoordinator, SlotTable,
+    SlotWriteSession,
 };
 use super::SlotWriteSessionState;
 
@@ -15,10 +16,8 @@ impl SlotTable {
                 .expect("detach_unvisited_children requires an active group");
             (frame.group_anchor, frame.next_child_index)
         };
-        let mut detached_children = Vec::new();
-        while let Some(anchor) = self.direct_child_anchor_at(parent_anchor, next_child_index) {
-            detached_children.push(self.detach_subtree(anchor));
-        }
+        let cursor = ChildCursor::new(parent_anchor, next_child_index);
+        let detached_children = self.detach_subtrees_at_cursor(cursor);
         state.note_detached_subtrees(&detached_children);
         detached_children
     }
@@ -60,6 +59,7 @@ impl SlotTable {
                 state.note_removed_payloads(removed_payload_count);
             }
         }
+        self.flush_payload_location_refreshes(state);
 
         let mut direct_nodes = Vec::new();
         let removed = self.remove_group_node_tail_at_cursor(group_anchor, node_cursor);

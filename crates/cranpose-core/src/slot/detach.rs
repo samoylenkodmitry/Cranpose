@@ -1,22 +1,48 @@
 use super::{
-    checked_u32_delta, CheckedU32Delta, DetachedSubtree, GroupRecord, SlotTable,
-    SlotWriteSessionState, SubtreeRange,
+    checked_u32_delta, CheckedU32Delta, ChildCursor, DetachedChild, DetachedSubtree, GroupRecord,
+    SlotTable, SlotWriteSessionState, SubtreeRange,
 };
-use crate::{
-    remove_child_and_cleanup_now, slot_storage::GroupKey, AnchorId, Applier, NodeError, NodeId,
-};
+use crate::{remove_child_and_cleanup_now, AnchorId, Applier, NodeError, NodeId};
 
 impl SlotTable {
-    pub(in crate::slot) fn detach_range(&mut self, range: SubtreeRange) -> Vec<GroupRecord> {
+    fn flush_group_index_refresh_from(&mut self, start: Option<usize>) {
+        if let Some(start) = start {
+            self.refresh_group_indexes_from(start);
+        }
+    }
+
+    fn detach_range(&mut self, range: SubtreeRange) -> Vec<GroupRecord> {
         self.groups.drain(range.as_range()).collect::<Vec<_>>()
     }
 
-    pub(in crate::slot) fn detach_subtree(&mut self, anchor: AnchorId) -> DetachedSubtree {
-        let root_index = self.current_group_index(anchor);
+    fn assert_detached_subtree_restore_ready(&self, subtree: &DetachedSubtree) {
+        #[cfg(any(test, debug_assertions))]
+        subtree
+            .validate_detached()
+            .expect("detached subtree must validate before restore");
+        for group in &subtree.groups {
+            assert!(
+                self.anchors.is_detached(group.anchor),
+                "restored group anchors must be detached before restore"
+            );
+        }
+        for payload in &subtree.payloads {
+            assert!(
+                self.payload_anchors.is_detached(payload.anchor),
+                "restored payload anchors must be detached before restore"
+            );
+        }
+    }
+
+    fn detach_subtree_at_index_internal(
+        &mut self,
+        root_index: usize,
+        refresh_indexes: bool,
+    ) -> DetachedSubtree {
         let root_parent_anchor = self.groups[root_index].parent_anchor;
         let root_subtree_len = self.groups[root_index].subtree_len;
         let root_subtree_node_count = self.groups[root_index].subtree_node_count;
-        let removed_group_range = self.group_subtree_range(anchor);
+        let removed_group_range = self.group_subtree_range_at_index(root_index);
         let mut removed_groups = self.detach_range(removed_group_range);
         let detached_root_depth = removed_groups
             .first()
@@ -33,7 +59,9 @@ impl SlotTable {
         let removed_nodes = self.detach_nodes_for_groups(root_index, &mut removed_groups);
         self.clear_group_indexes(&removed_groups);
         self.clear_scope_index_for_groups(&removed_groups);
-        self.refresh_group_indexes_from(root_index);
+        if refresh_indexes {
+            self.refresh_group_indexes_from(root_index);
+        }
 
         self.adjust_ancestor_group_spans(
             root_parent_anchor,
@@ -47,7 +75,9 @@ impl SlotTable {
             nodes: removed_nodes,
         };
         #[cfg(any(test, debug_assertions))]
-        self.debug_assert_valid_after("detach_subtree");
+        if refresh_indexes {
+            self.debug_assert_valid_after("detach_subtree");
+        }
         #[cfg(any(test, debug_assertions))]
         subtree
             .validate_detached()
@@ -55,22 +85,40 @@ impl SlotTable {
         subtree
     }
 
+    pub(in crate::slot) fn detach_subtrees_at_cursor(
+        &mut self,
+        cursor: ChildCursor,
+    ) -> Vec<DetachedSubtree> {
+        let mut detached = Vec::new();
+        let mut dirty_start = None;
+        while self.direct_child_anchor_at_cursor(cursor).is_some() {
+            dirty_start.get_or_insert(cursor.index());
+            detached.push(self.detach_subtree_at_index_internal(cursor.index(), false));
+        }
+        self.flush_group_index_refresh_from(dirty_start);
+        #[cfg(any(test, debug_assertions))]
+        if !detached.is_empty() {
+            self.debug_assert_valid_after("detach_subtrees_at_cursor");
+        }
+        detached
+    }
+
     pub(in crate::slot) fn restore_subtree(
         &mut self,
-        insert_index: usize,
-        parent_anchor: AnchorId,
-        key: GroupKey,
-        mut subtree: DetachedSubtree,
+        cursor: ChildCursor,
+        detached: DetachedChild,
     ) -> AnchorId {
+        self.assert_child_cursor_boundary(cursor);
+        let key = detached.expected_key();
+        let mut subtree = detached.into_subtree();
+        let insert_index = cursor.index();
+        let parent_anchor = cursor.parent();
         assert_eq!(
             subtree.root_key(),
             key,
             "restored subtree root key must match the requested group key",
         );
-        #[cfg(any(test, debug_assertions))]
-        subtree
-            .validate_detached()
-            .expect("detached subtree must validate before restore");
+        self.assert_detached_subtree_restore_ready(&subtree);
         let restored_group_count = subtree.groups.len();
         let restored_subtree_len = subtree
             .groups
@@ -136,7 +184,7 @@ impl SlotTable {
             restored_subtree_node_count,
         );
         let restored_group_range = SubtreeRange::from_root_len(insert_index, restored_group_count);
-        self.rebuild_payload_locations_for_group_range(restored_group_range.as_group_range());
+        self.refresh_payload_locations_for_group_range(restored_group_range.as_group_range());
         #[cfg(any(test, debug_assertions))]
         self.debug_assert_valid_after("restore_subtree");
         root_anchor
@@ -151,11 +199,8 @@ impl SlotTable {
         }
 
         let next_child_index = state.root.next_child_index;
-        let mut detached = Vec::new();
-        while let Some(anchor) = self.direct_child_anchor_at(AnchorId::INVALID, next_child_index) {
-            detached.push(self.detach_subtree(anchor));
-        }
-        detached
+        let cursor = ChildCursor::new(AnchorId::INVALID, next_child_index);
+        self.detach_subtrees_at_cursor(cursor)
     }
 }
 

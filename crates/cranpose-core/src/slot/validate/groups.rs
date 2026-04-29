@@ -1,4 +1,6 @@
-use super::super::{checked_usize_to_u32, GroupRecord, NodeRecord, PayloadRecord, SlotTable};
+use super::super::{
+    checked_usize_to_u32, GroupKey, GroupRecord, NodeRecord, PayloadRecord, SlotTable,
+};
 use super::{
     anchors,
     nodes::{self, validate_group_nodes},
@@ -7,7 +9,6 @@ use super::{
 };
 use crate::{
     collections::map::{HashMap, HashSet},
-    slot_storage::GroupKey,
     AnchorId,
 };
 
@@ -21,6 +22,7 @@ pub(super) struct SlotTreeView<'a> {
 pub(super) struct ActiveSlotTreeChecks<'a> {
     table: &'a SlotTable,
     sibling_keys: HashMap<(AnchorId, GroupKey), usize>,
+    payload_anchors: HashSet<crate::slot::PayloadAnchor>,
 }
 
 impl<'a> ActiveSlotTreeChecks<'a> {
@@ -28,6 +30,7 @@ impl<'a> ActiveSlotTreeChecks<'a> {
         Self {
             table,
             sibling_keys: HashMap::default(),
+            payload_anchors: HashSet::default(),
         }
     }
 }
@@ -234,7 +237,13 @@ impl SlotTreeChecks for ActiveSlotTreeChecks<'_> {
         payload_index: usize,
         payload: &PayloadRecord,
     ) -> Result<(), SlotInvariantError> {
-        payloads::validate_active_payload_location(self.table, group, payload_index, payload)
+        if !self.payload_anchors.insert(payload.anchor) {
+            return Err(SlotInvariantError::DuplicatePayloadAnchor {
+                tree: SlotTreeContext::Active,
+                payload_anchor: payload.anchor,
+            });
+        }
+        payloads::validate_active_payload_anchor(self.table, group, payload_index, payload)
     }
 
     fn after_payloads(

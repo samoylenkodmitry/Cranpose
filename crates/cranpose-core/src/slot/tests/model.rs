@@ -2,51 +2,83 @@ use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ModelPayload {
-    value: i32,
+    slot: ValueSlotId,
+    value: ModelPayloadValue,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ModelPayloadValue {
+    I32(i32),
+    U32(u32),
+}
+
+impl ModelPayloadValue {
+    fn initial(key: Key) -> Self {
+        Self::I32((key as i32) * 10)
+    }
+
+    fn replacement(&self, key: Key) -> Self {
+        match self {
+            Self::I32(_) => Self::U32((key as u32) * 100),
+            Self::U32(_) => Self::I32((key as i32) * 10),
+        }
+    }
+
+    fn increment(&mut self) {
+        match self {
+            Self::I32(value) => *value += 1,
+            Self::U32(value) => *value += 1,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ModelNode {
     node_id: NodeId,
+    generation: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ModelGroup {
+    anchor: AnchorId,
     payloads: Vec<ModelPayload>,
     nodes: Vec<ModelNode>,
     scope_id: ScopeId,
 }
 
 impl ModelGroup {
-    fn new(key: Key, node_id: NodeId) -> Self {
+    fn new(
+        scope_id: ScopeId,
+        anchor: AnchorId,
+        payload_slot: ValueSlotId,
+        payload_value: ModelPayloadValue,
+        node: ModelNode,
+    ) -> Self {
         Self {
+            anchor,
             payloads: vec![ModelPayload {
-                value: (key as i32) * 10,
+                slot: payload_slot,
+                value: payload_value,
             }],
-            nodes: vec![ModelNode { node_id }],
-            scope_id: ModelState::scope_id_for(key),
+            nodes: vec![node],
+            scope_id,
         }
     }
 
-    fn remembered_value(&self) -> i32 {
+    fn payload(&self) -> &ModelPayload {
         self.payloads
             .first()
             .expect("model groups carry one remembered payload")
-            .value
-    }
-
-    fn increment_remembered_value(&mut self) {
-        self.payloads
-            .first_mut()
-            .expect("model groups carry one remembered payload")
-            .value += 1;
     }
 
     fn node_id(&self) -> NodeId {
+        self.node().node_id
+    }
+
+    fn node(&self) -> &ModelNode {
         self.nodes
             .first()
             .expect("model groups carry one emitted node")
-            .node_id
     }
 }
 
@@ -57,29 +89,36 @@ struct ModelRoot {
 }
 
 #[derive(Clone, Debug)]
+struct ModelComposeOperation {
+    order: Vec<Key>,
+    retain_detached: HashSet<Key>,
+    drop_retained: HashSet<Key>,
+    mutate_values: HashSet<Key>,
+    replace_payload_types: HashSet<Key>,
+    replace_nodes: HashSet<Key>,
+    replace_scopes: HashSet<Key>,
+    compact_storage: bool,
+}
+
+#[derive(Clone, Debug)]
 enum ModelOperation {
-    Compose {
-        order: Vec<Key>,
-        retain_detached: HashSet<Key>,
-        mutate_values: HashSet<Key>,
-    },
-    RecomposeSkip {
-        key: Key,
-    },
+    Compose(Box<ModelComposeOperation>),
+    RecomposeSkip { key: Key },
 }
 
 impl ModelOperation {
     fn compact(&self) -> String {
         match self {
-            Self::Compose {
-                order,
-                retain_detached,
-                mutate_values,
-            } => format!(
-                "compose(order={}, retain={}, mutate={})",
-                model_key_list(order),
-                model_sorted_key_set(retain_detached),
-                model_sorted_key_set(mutate_values)
+            Self::Compose(operation) => format!(
+                "compose(order={}, retain={}, drop={}, mutate={}, replace={}, nodes={}, scopes={}, compact={})",
+                model_key_list(&operation.order),
+                model_sorted_key_set(&operation.retain_detached),
+                model_sorted_key_set(&operation.drop_retained),
+                model_sorted_key_set(&operation.mutate_values),
+                model_sorted_key_set(&operation.replace_payload_types),
+                model_sorted_key_set(&operation.replace_nodes),
+                model_sorted_key_set(&operation.replace_scopes),
+                operation.compact_storage,
             ),
             Self::RecomposeSkip { key } => format!("skip(key={key})"),
         }
@@ -91,12 +130,20 @@ struct ModelState {
     active_roots: Vec<ModelRoot>,
     active_groups: BTreeMap<Key, ModelGroup>,
     retained_groups: BTreeMap<Key, ModelGroup>,
+    retired_group_generations: BTreeMap<u32, u32>,
+    retired_payload_generations: BTreeMap<u32, u32>,
     next_node_id: NodeId,
 }
 
 impl ModelState {
     fn scope_id_for(key: Key) -> ScopeId {
         10_000 + key as ScopeId
+    }
+
+    fn next_scope_id_after(scope_id: ScopeId) -> ScopeId {
+        scope_id
+            .checked_add(100_000)
+            .expect("model scope id overflow")
     }
 
     fn active_order(&self) -> &[Key] {
@@ -107,6 +154,52 @@ impl ModelState {
 
     fn set_active_root(&mut self, key: Key, children: Vec<Key>) {
         self.active_roots = vec![ModelRoot { key, children }];
+    }
+
+    fn retire_group_anchor(&mut self, anchor: AnchorId) {
+        self.retired_group_generations
+            .entry(anchor.id)
+            .and_modify(|generation| *generation = (*generation).max(anchor.generation))
+            .or_insert(anchor.generation);
+    }
+
+    fn retire_group_anchors(&mut self, anchors: impl IntoIterator<Item = AnchorId>) {
+        for anchor in anchors {
+            self.retire_group_anchor(anchor);
+        }
+    }
+
+    fn assert_group_anchor_not_retired(&self, anchor: AnchorId) {
+        if let Some(retired_generation) = self.retired_group_generations.get(&anchor.id) {
+            assert!(
+                anchor.generation > *retired_generation,
+                "active or retained group anchor reused a retired generation: anchor={anchor:?} retired_generation={retired_generation}"
+            );
+        }
+    }
+
+    fn retire_payload_anchor(&mut self, anchor: PayloadAnchor) {
+        let id = u32::try_from(anchor.id()).expect("payload anchor id must fit u32");
+        self.retired_payload_generations
+            .entry(id)
+            .and_modify(|generation| *generation = (*generation).max(anchor.generation()))
+            .or_insert(anchor.generation());
+    }
+
+    fn retire_payload_anchors(&mut self, anchors: impl IntoIterator<Item = PayloadAnchor>) {
+        for anchor in anchors {
+            self.retire_payload_anchor(anchor);
+        }
+    }
+
+    fn assert_payload_anchor_not_retired(&self, anchor: PayloadAnchor) {
+        let id = u32::try_from(anchor.id()).expect("payload anchor id must fit u32");
+        if let Some(retired_generation) = self.retired_payload_generations.get(&id) {
+            assert!(
+                anchor.generation() > *retired_generation,
+                "active or retained payload anchor reused a retired generation: anchor={anchor:?} retired_generation={retired_generation}"
+            );
+        }
     }
 }
 
@@ -397,16 +490,96 @@ fn generate_model_operation(
         .copied()
         .filter(|key| !order_set.contains(key) && next_bool(seed))
         .collect::<HashSet<_>>();
+    let drop_retained = model
+        .retained_groups
+        .keys()
+        .copied()
+        .filter(|key| !order_set.contains(key) && next_bool(seed))
+        .collect::<HashSet<_>>();
     let mutate_values = order
         .iter()
         .copied()
         .filter(|_| next_bool(seed))
         .collect::<HashSet<_>>();
+    let replace_payload_types = order
+        .iter()
+        .copied()
+        .filter(|_| next_bool(seed))
+        .collect::<HashSet<_>>();
+    let replace_nodes = order
+        .iter()
+        .copied()
+        .filter(|_| next_bool(seed))
+        .collect::<HashSet<_>>();
+    let replace_scopes = order
+        .iter()
+        .copied()
+        .filter(|_| next_bool(seed))
+        .collect::<HashSet<_>>();
+    let compact_storage = next_bool(seed) && next_bool(seed);
 
-    ModelOperation::Compose {
+    ModelOperation::Compose(Box::new(ModelComposeOperation {
         order,
         retain_detached,
+        drop_retained,
         mutate_values,
+        replace_payload_types,
+        replace_nodes,
+        replace_scopes,
+        compact_storage,
+    }))
+}
+
+fn use_model_payload_slot(
+    session: &mut SlotWriteSession<'_>,
+    value: &ModelPayloadValue,
+) -> ValueSlotId {
+    match value {
+        ModelPayloadValue::I32(value) => {
+            session.value_slot_with_kind(PayloadKind::Internal, || *value)
+        }
+        ModelPayloadValue::U32(value) => {
+            session.value_slot_with_kind(PayloadKind::Internal, || *value)
+        }
+    }
+}
+
+fn write_model_payload_value(table: &mut SlotTable, slot: ValueSlotId, value: &ModelPayloadValue) {
+    match value {
+        ModelPayloadValue::I32(value) => table.write_value(slot, *value),
+        ModelPayloadValue::U32(value) => table.write_value(slot, *value),
+    }
+}
+
+fn assert_active_payload_value(table: &SlotTable, slot: ValueSlotId, expected: &ModelPayloadValue) {
+    match expected {
+        ModelPayloadValue::I32(value) => assert_eq!(*table.read_value::<i32>(slot), *value),
+        ModelPayloadValue::U32(value) => assert_eq!(*table.read_value::<u32>(slot), *value),
+    }
+}
+
+fn assert_payload_record_value(record: &PayloadRecord, expected: &ModelPayloadValue) {
+    match expected {
+        ModelPayloadValue::I32(value) => {
+            assert_eq!(record.type_id, TypeId::of::<i32>());
+            assert_eq!(
+                *record
+                    .value
+                    .downcast_ref::<i32>()
+                    .expect("model payload must be i32"),
+                *value
+            );
+        }
+        ModelPayloadValue::U32(value) => {
+            assert_eq!(record.type_id, TypeId::of::<u32>());
+            assert_eq!(
+                *record
+                    .value
+                    .downcast_ref::<u32>()
+                    .expect("model payload must be u32"),
+                *value
+            );
+        }
     }
 }
 
@@ -461,20 +634,50 @@ fn assert_model_matches_slot_table(
         assert_eq!(group.node_len, 1);
         assert_eq!(group.subtree_node_count, 1);
         assert_eq!(group.parent_anchor, root.anchor);
+        assert_eq!(
+            group.anchor, expected.anchor,
+            "active group anchor must match the reference model for key {key}"
+        );
+        model.assert_group_anchor_not_retired(group.anchor);
+        assert_eq!(
+            harness.table.group_anchor_state(group.anchor),
+            Some(AnchorState::Active(group.index)),
+            "active group anchor must resolve to the current table index for key {key}"
+        );
+        assert_eq!(
+            harness.table.scope_index_anchor(expected.scope_id),
+            Some(group.anchor),
+            "active scope index must resolve the current group anchor for key {key}"
+        );
 
         let payload = harness
             .table
             .group_payload_records_at(group.index)
             .first()
-            .expect("model child payload must exist")
-            .value
-            .downcast_ref::<i32>()
-            .expect("model child payload must be i32");
+            .expect("model child payload must exist");
+        let expected_payload = expected.payload();
         assert_eq!(
-            *payload,
-            expected.remembered_value(),
-            "remembered values must match the reference model for key {key}"
+            payload.anchor,
+            expected_payload.slot.anchor(),
+            "active payload anchor must match the reference model for key {key}"
         );
+        model.assert_payload_anchor_not_retired(payload.anchor);
+        assert_eq!(
+            harness.table.payload_anchor_lifecycle(payload.anchor),
+            Some(PayloadAnchorLifecycle::Active),
+            "active payload anchor must stay active for key {key}"
+        );
+        assert_eq!(
+            harness.table.payload_anchor_active_location(payload.anchor),
+            Some((group.anchor, 0)),
+            "active payload anchor must resolve to the current owner and payload index for key {key}"
+        );
+        assert_active_payload_value(
+            &harness.table,
+            expected_payload.slot,
+            &expected_payload.value,
+        );
+        assert_payload_record_value(payload, &expected_payload.value);
         assert_eq!(
             harness
                 .table
@@ -484,6 +687,16 @@ fn assert_model_matches_slot_table(
                 .id,
             expected.node_id(),
             "node identity must match the reference model for key {key}"
+        );
+        assert_eq!(
+            harness
+                .table
+                .group_node_records_at(group.index)
+                .first()
+                .expect("model child node must exist")
+                .generation,
+            expected.node().generation,
+            "node generation must match the reference model for key {key}"
         );
     }
 
@@ -517,6 +730,21 @@ fn assert_model_matches_slot_table(
             .expect("retained subtree must contain a root group");
         assert_eq!(root_group.key.explicit_key, Some(key));
         assert_eq!(
+            root_group.anchor, expected.anchor,
+            "retained group anchor must match the reference model for key {key}"
+        );
+        model.assert_group_anchor_not_retired(root_group.anchor);
+        assert_eq!(
+            harness.table.group_anchor_state(root_group.anchor),
+            Some(AnchorState::Detached),
+            "retained group anchor must stay detached for key {key}"
+        );
+        assert_eq!(
+            harness.table.scope_index_anchor(expected.scope_id),
+            None,
+            "retained scope must not resolve through the active scope index for key {key}"
+        );
+        assert_eq!(
             subtree.root_parent_anchor(),
             AnchorId::INVALID,
             "retained subtree roots must detach from the active parent chain"
@@ -529,15 +757,20 @@ fn assert_model_matches_slot_table(
         }
         let payload = detached_group_payloads(subtree, 0)
             .first()
-            .expect("retained subtree payload must exist")
-            .value
-            .downcast_ref::<i32>()
-            .expect("retained subtree payload must be i32");
+            .expect("retained subtree payload must exist");
+        let expected_payload = expected.payload();
         assert_eq!(
-            *payload,
-            expected.remembered_value(),
-            "retained values must match the reference model for key {key}"
+            payload.anchor,
+            expected_payload.slot.anchor(),
+            "retained payload anchor must match the reference model for key {key}"
         );
+        model.assert_payload_anchor_not_retired(payload.anchor);
+        assert_eq!(
+            harness.table.payload_anchor_lifecycle(payload.anchor),
+            Some(PayloadAnchorLifecycle::Detached),
+            "retained payload anchor must stay detached for key {key}"
+        );
+        assert_payload_record_value(payload, &expected_payload.value);
         assert_eq!(
             detached_group_nodes(subtree, 0)
                 .first()
@@ -545,6 +778,14 @@ fn assert_model_matches_slot_table(
                 .id,
             expected.node_id(),
             "retained node identity must match the reference model for key {key}"
+        );
+        assert_eq!(
+            detached_group_nodes(subtree, 0)
+                .first()
+                .expect("retained subtree node must exist")
+                .generation,
+            expected.node().generation,
+            "retained node generation must match the reference model for key {key}"
         );
         for group in &subtree.groups {
             assert!(
@@ -557,6 +798,24 @@ fn assert_model_matches_slot_table(
     assert_eq!(harness.table.validate(), Ok(()));
 }
 
+fn dispose_model_subtree(
+    harness: &mut SlotHarness,
+    model: &mut ModelState,
+    subtree: DetachedSubtree,
+) {
+    let group_anchors = subtree.group_anchors().collect::<Vec<_>>();
+    let payload_anchors = subtree
+        .payloads
+        .iter()
+        .map(|payload| payload.anchor)
+        .collect::<Vec<_>>();
+    model.retire_group_anchors(group_anchors);
+    model.retire_payload_anchors(payload_anchors);
+    harness.table.invalidate_detached_subtree_anchors(&subtree);
+    crate::slot::dispose_detached_subtree_now(&mut harness.applier, &subtree);
+    harness.lifecycle.queue_subtree_disposal(subtree);
+}
+
 fn apply_model_operation(
     harness: &mut SlotHarness,
     retained_subtrees: &mut BTreeMap<Key, DetachedSubtree>,
@@ -566,17 +825,31 @@ fn apply_model_operation(
     child_static_key: Key,
 ) {
     match operation {
-        ModelOperation::Compose {
-            order,
-            retain_detached,
-            mutate_values,
-        } => {
+        ModelOperation::Compose(operation) => {
+            let ModelComposeOperation {
+                order,
+                retain_detached,
+                drop_retained,
+                mutate_values,
+                replace_payload_types,
+                replace_nodes,
+                replace_scopes,
+                compact_storage,
+            } = *operation;
             let previous_active = model.active_groups.clone();
             let previous_retained = model.retained_groups.clone();
             let mut next_retained = previous_retained.clone();
             let mut next_active = BTreeMap::<Key, ModelGroup>::new();
             let mut next_node_id = model.next_node_id;
             let mut carried_retained = std::mem::take(retained_subtrees);
+
+            for key in &drop_retained {
+                next_retained.remove(key);
+                if let Some(subtree) = carried_retained.remove(key) {
+                    dispose_model_subtree(harness, model, subtree);
+                }
+            }
+            harness.lifecycle.flush_pending_drops();
 
             harness.begin_pass(SlotPassMode::Compose);
             let detached_children = harness.session(|session| {
@@ -586,7 +859,7 @@ fn apply_model_operation(
                     let restored = carried_retained.remove(&key);
                     let started = begin_keyed(session, child_static_key, key, restored);
                     let existing_active = previous_active.get(&key).cloned();
-                    let existing_retained = previous_retained.get(&key).cloned();
+                    let existing_retained = next_retained.get(&key).cloned();
 
                     match (existing_active.is_some(), existing_retained.is_some()) {
                         (_, true) => assert_eq!(
@@ -606,24 +879,126 @@ fn apply_model_operation(
                         ),
                     }
 
-                    let mut child = existing_active.or(existing_retained).unwrap_or_else(|| {
-                        let node_id = {
-                            let node_id = next_node_id;
-                            next_node_id += 1;
-                            node_id
+                    let existing_child = existing_active.or(existing_retained);
+                    let (scope_id, previous_payload, previous_node) =
+                        if let Some(child) = existing_child {
+                            assert_eq!(
+                                child.anchor, started.anchor,
+                                "stable group anchor changed for key {key}"
+                            );
+                            (
+                                child.scope_id,
+                                Some(child.payload().clone()),
+                                Some(child.node().clone()),
+                            )
+                        } else {
+                            model.assert_group_anchor_not_retired(started.anchor);
+                            (ModelState::scope_id_for(key), None, None)
                         };
-                        ModelGroup::new(key, node_id)
-                    });
 
                     next_retained.remove(&key);
-                    session.set_group_scope(started.group, child.scope_id);
-                    let slot =
-                        session.value_slot_with_kind(PayloadKind::Internal, || (key as i32) * 10);
-                    session.record_node_with_parent(child.node_id(), 1, None);
-                    if mutate_values.contains(&key) {
-                        child.increment_remembered_value();
-                        session.table.write_value(slot, child.remembered_value());
+                    let scope_id = if replace_scopes.contains(&key) {
+                        ModelState::next_scope_id_after(scope_id)
+                    } else {
+                        scope_id
+                    };
+                    session.set_group_scope(started.group, scope_id);
+
+                    let replacing_payload =
+                        replace_payload_types.contains(&key) && previous_payload.is_some();
+                    let mut payload_value = match &previous_payload {
+                        Some(payload) if replacing_payload => payload.value.replacement(key),
+                        Some(payload) => payload.value.clone(),
+                        None => {
+                            let initial_payload = ModelPayloadValue::initial(key);
+                            if replace_payload_types.contains(&key) {
+                                initial_payload.replacement(key)
+                            } else {
+                                initial_payload
+                            }
+                        }
+                    };
+                    let slot = use_model_payload_slot(session, &payload_value);
+                    if let Some(previous_payload) = previous_payload {
+                        if replacing_payload {
+                            model.retire_payload_anchor(previous_payload.slot.anchor());
+                            model.assert_payload_anchor_not_retired(slot.anchor());
+                            assert_ne!(
+                                slot, previous_payload.slot,
+                                "payload type replacement must bump the value-slot generation for key {key}"
+                            );
+                        } else {
+                            assert_eq!(
+                                slot, previous_payload.slot,
+                                "stable payload slot changed without type replacement for key {key}"
+                            );
+                        }
+                    } else {
+                        model.assert_group_anchor_not_retired(started.anchor);
+                        model.assert_payload_anchor_not_retired(slot.anchor());
                     }
+                    let replacing_node = replace_nodes.contains(&key) && previous_node.is_some();
+                    let node = match &previous_node {
+                        Some(node) if replacing_node && key % 2 == 0 => ModelNode {
+                            node_id: node.node_id,
+                            generation: node
+                                .generation
+                                .checked_add(1)
+                                .expect("model node generation overflow"),
+                        },
+                        Some(_) if replacing_node => {
+                            let node_id = next_node_id;
+                            next_node_id += 1;
+                            ModelNode {
+                                node_id,
+                                generation: 1,
+                            }
+                        }
+                        Some(node) => node.clone(),
+                        None => {
+                            let node_id = next_node_id;
+                            next_node_id += 1;
+                            ModelNode {
+                                node_id,
+                                generation: 1,
+                            }
+                        }
+                    };
+                    let node_update =
+                        session.record_node_with_parent(node.node_id, node.generation, None);
+                    match previous_node {
+                        Some(previous_node) if replacing_node => assert_eq!(
+                            node_update,
+                            NodeSlotUpdate::Replaced {
+                                old_id: previous_node.node_id,
+                                old_generation: previous_node.generation,
+                                new_id: node.node_id,
+                                new_generation: node.generation,
+                            },
+                            "node replacement must report explicit lifecycle update for key {key}",
+                        ),
+                        Some(previous_node) => assert_eq!(
+                            node_update,
+                            NodeSlotUpdate::Reused {
+                                id: previous_node.node_id,
+                                generation: previous_node.generation,
+                            },
+                            "node reuse must report explicit lifecycle update for key {key}",
+                        ),
+                        None => assert_eq!(
+                            node_update,
+                            NodeSlotUpdate::Inserted {
+                                id: node.node_id,
+                                generation: node.generation,
+                            },
+                            "new model nodes must report explicit insertion for key {key}",
+                        ),
+                    };
+                    if mutate_values.contains(&key) {
+                        payload_value.increment();
+                        write_model_payload_value(session.table, slot, &payload_value);
+                    }
+                    let child = ModelGroup::new(scope_id, started.anchor, slot, payload_value, node);
 
                     let child_result = session.finish_group_body();
                     assert!(child_result.detached_children.is_empty());
@@ -649,21 +1024,35 @@ fn apply_model_operation(
                 if retain_detached.contains(&key) {
                     next_retained.insert(key, expected_child);
                     carried_retained.insert(key, subtree);
+                } else {
+                    dispose_model_subtree(harness, model, subtree);
                 }
             }
+            harness.lifecycle.flush_pending_drops();
 
             model.set_active_root(parent_key, order);
             model.active_groups = next_active;
             model.retained_groups = next_retained;
             model.next_node_id = next_node_id;
             *retained_subtrees = carried_retained;
+
+            if compact_storage {
+                harness.table.compact_storage();
+                harness.lifecycle.compact_storage();
+                harness.table.debug_verify();
+            }
         }
         ModelOperation::RecomposeSkip { key } => {
             let before = harness.table.debug_snapshot();
+            let scope_id = model
+                .active_groups
+                .get(&key)
+                .expect("recompose skip requires an active model group")
+                .scope_id;
             harness.begin_pass(SlotPassMode::Recompose);
             let group_index = harness.session(|session| {
                 let group = session
-                    .begin_recompose_at_scope(ModelState::scope_id_for(key))
+                    .begin_recompose_at_scope(scope_id)
                     .expect("active scopes must resolve through the scope index");
                 session.skip_group();
                 let result = session.finish_group_body();
@@ -698,16 +1087,45 @@ fn model_key_set(keys: &[Key]) -> HashSet<Key> {
     keys.iter().copied().collect()
 }
 
+struct ModelComposeFrameSpec<'a> {
+    order: &'a [Key],
+    retain_detached: &'a [Key],
+    drop_retained: &'a [Key],
+    mutate_values: &'a [Key],
+    replace_payload_types: &'a [Key],
+    replace_nodes: &'a [Key],
+    replace_scopes: &'a [Key],
+    compact_storage: bool,
+}
+
 fn model_compose_frame(
     order: &[Key],
     retain_detached: &[Key],
     mutate_values: &[Key],
 ) -> ModelOperation {
-    ModelOperation::Compose {
-        order: order.to_vec(),
-        retain_detached: model_key_set(retain_detached),
-        mutate_values: model_key_set(mutate_values),
-    }
+    model_compose_frame_with_options(ModelComposeFrameSpec {
+        order,
+        retain_detached,
+        drop_retained: &[],
+        mutate_values,
+        replace_payload_types: &[],
+        replace_nodes: &[],
+        replace_scopes: &[],
+        compact_storage: false,
+    })
+}
+
+fn model_compose_frame_with_options(spec: ModelComposeFrameSpec<'_>) -> ModelOperation {
+    ModelOperation::Compose(Box::new(ModelComposeOperation {
+        order: spec.order.to_vec(),
+        retain_detached: model_key_set(spec.retain_detached),
+        drop_retained: model_key_set(spec.drop_retained),
+        mutate_values: model_key_set(spec.mutate_values),
+        replace_payload_types: model_key_set(spec.replace_payload_types),
+        replace_nodes: model_key_set(spec.replace_nodes),
+        replace_scopes: model_key_set(spec.replace_scopes),
+        compact_storage: spec.compact_storage,
+    }))
 }
 
 fn run_model_script(parent_key: Key, child_static_key: Key, script: &[ModelOperation]) {
@@ -741,7 +1159,7 @@ fn model_operation_compact_format_is_deterministic() {
 
     assert_eq!(
         operation.compact(),
-        "compose(order=[3,1,2], retain=[4,6,8], mutate=[5,7])"
+        "compose(order=[3,1,2], retain=[4,6,8], drop=[], mutate=[5,7], replace=[], nodes=[], scopes=[], compact=false)"
     );
     assert_eq!(
         ModelOperation::RecomposeSkip { key: 11 }.compact(),
@@ -785,7 +1203,16 @@ fn deterministic_model_render_frames_match_slot_table() {
 fn scripted_model_render_frames_cover_slot_table_behaviors() {
     let script = [
         model_compose_frame(&[1, 2, 3], &[], &[1, 2]),
-        model_compose_frame(&[3, 2, 1], &[], &[3]),
+        model_compose_frame_with_options(ModelComposeFrameSpec {
+            order: &[3, 2, 1],
+            retain_detached: &[],
+            drop_retained: &[],
+            mutate_values: &[3],
+            replace_payload_types: &[2],
+            replace_nodes: &[3],
+            replace_scopes: &[1],
+            compact_storage: false,
+        }),
         ModelOperation::RecomposeSkip { key: 2 },
         model_compose_frame(&[3, 1], &[2], &[]),
         model_compose_frame(&[2, 3, 1], &[], &[2]),
@@ -793,6 +1220,16 @@ fn scripted_model_render_frames_cover_slot_table_behaviors() {
         ModelOperation::RecomposeSkip { key: 10 },
         model_compose_frame(&[1, 2], &[], &[1]),
         model_compose_frame(&[], &[1, 2], &[]),
+        model_compose_frame_with_options(ModelComposeFrameSpec {
+            order: &[],
+            retain_detached: &[],
+            drop_retained: &[2],
+            mutate_values: &[],
+            replace_payload_types: &[],
+            replace_nodes: &[],
+            replace_scopes: &[],
+            compact_storage: true,
+        }),
         model_compose_frame(&[2, 1, 4], &[], &[4]),
     ];
 

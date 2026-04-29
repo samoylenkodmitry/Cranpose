@@ -395,6 +395,75 @@ fn queued_sync_children_preserves_child_reparented_later_in_same_apply() {
 }
 
 #[test]
+fn emitted_node_replacement_removes_displaced_node() {
+    const GROUP_KEY: Key = 58_001;
+
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let unmounts = Rc::new(Cell::new(0));
+
+    let first_id = {
+        let (composer, slots_host, applier_host) =
+            setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        let (id, _) = composer.with_slot_host_pass(
+            Rc::clone(&slots_host),
+            crate::slot::SlotPassMode::Compose,
+            |composer| {
+                composer.with_group(GROUP_KEY, |composer| {
+                    composer.emit_node(|| UnmountTrackingNode::new(Rc::clone(&unmounts)))
+                })
+            },
+        );
+        let commands = composer.take_commands();
+        drop(composer);
+        teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+        commands
+            .apply(&mut applier)
+            .expect("initial node mount should apply");
+        id
+    };
+    assert!(applier.get_mut(first_id).is_ok());
+
+    let second_id = {
+        let (composer, slots_host, applier_host) =
+            setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        let (id, _) = composer.with_slot_host_pass(
+            Rc::clone(&slots_host),
+            crate::slot::SlotPassMode::Compose,
+            |composer| {
+                composer.with_group(GROUP_KEY, |composer| {
+                    composer.emit_node(TestDummyNode::default)
+                })
+            },
+        );
+        let commands = composer.take_commands();
+        drop(composer);
+        teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+        commands
+            .apply(&mut applier)
+            .expect("replacement commands should apply");
+        id
+    };
+
+    assert_ne!(first_id, second_id);
+    assert!(
+        matches!(applier.get_mut(first_id), Err(NodeError::Missing { .. })),
+        "replaced node must be removed from the applier",
+    );
+    assert!(
+        applier.get_mut(second_id).is_ok(),
+        "replacement node must remain active",
+    );
+    assert_eq!(
+        unmounts.get(),
+        1,
+        "replaced nodes must run the same unmount lifecycle as removed nodes",
+    );
+    assert_eq!(slots.debug_snapshot().active_node_count, 1);
+}
+
+#[test]
 fn cold_recycled_nodes_are_not_reused_in_same_frame() {
     #[derive(Default)]
     struct RecyclableTestNode;

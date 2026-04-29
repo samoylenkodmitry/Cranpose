@@ -1,19 +1,33 @@
-use super::super::{checked_u32_delta, checked_usize_to_u32, CheckedU32Delta, GroupRecord};
+use super::super::{
+    checked_u32_delta, checked_usize_to_u32, ActiveSubtreeRoot, CheckedU32Delta, ChildCursor,
+    GroupKey, GroupRecord,
+};
 use super::SlotTable;
-use crate::{slot_storage::GroupKey, AnchorId};
+use crate::AnchorId;
 
 impl SlotTable {
     fn allocate_group_anchor(&mut self) -> AnchorId {
         self.anchors.allocate()
     }
 
-    fn allocate_group_generation(&mut self) -> u32 {
+    pub(super) fn allocate_group_generation(&mut self) -> u32 {
         let generation = self.next_group_generation;
         self.next_group_generation = self
             .next_group_generation
             .checked_add(1)
             .expect("group generation counter overflow");
         generation
+    }
+
+    pub(in crate::slot) fn record_segment_range_update_from(&mut self, start: usize) {
+        let group_span = self.groups.len().saturating_sub(start);
+        self.mutation_debug_stats
+            .record_segment_range_update(group_span);
+    }
+
+    pub(in crate::slot) fn record_segment_range_update_span(&mut self, group_span: usize) {
+        self.mutation_debug_stats
+            .record_segment_range_update(group_span);
     }
 
     pub(in crate::slot) fn adjust_ancestor_group_spans(
@@ -65,10 +79,12 @@ impl SlotTable {
 
     pub(in crate::slot) fn insert_new_group(
         &mut self,
-        insert_index: usize,
-        parent_anchor: AnchorId,
+        cursor: ChildCursor,
         key: GroupKey,
     ) -> AnchorId {
+        self.assert_child_cursor_boundary(cursor);
+        let insert_index = cursor.index();
+        let parent_anchor = cursor.parent();
         let depth = if parent_anchor.is_valid() {
             self.current_group(parent_anchor)
                 .depth
@@ -111,12 +127,27 @@ impl SlotTable {
         anchor
     }
 
-    pub(in crate::slot) fn move_subtree(&mut self, anchor: AnchorId, insert_index: usize) {
+    pub(in crate::slot) fn move_subtree(&mut self, root: ActiveSubtreeRoot, cursor: ChildCursor) {
+        self.assert_child_cursor_boundary(cursor);
+        let anchor = root.anchor();
         let from_index = self.current_group_index(anchor);
+        let moving_groups = self.group_subtree_range_at_index(from_index);
+        let insert_index = cursor.index();
         if from_index == insert_index {
             return;
         }
-        let moving_groups = self.group_subtree_range_at_index(from_index);
+
+        let moving_root = self.group_sibling_record_at_index(from_index);
+        assert_eq!(
+            moving_root.parent_anchor,
+            cursor.parent(),
+            "moved subtree root must be a direct child of the cursor parent"
+        );
+        assert!(
+            insert_index < from_index,
+            "moved subtree root must be a later direct sibling of the child cursor"
+        );
+
         let mut moved = self
             .groups
             .drain(moving_groups.as_range())

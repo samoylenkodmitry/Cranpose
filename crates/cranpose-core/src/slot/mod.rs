@@ -7,7 +7,7 @@ mod groups;
 mod lifecycle;
 mod nodes;
 mod payload;
-mod payload_locations;
+mod payload_anchors;
 mod ranges;
 mod reader;
 mod scope_index;
@@ -34,16 +34,23 @@ pub use debug::{
 pub(crate) use detach::{dispose_detached_node_now, dispose_detached_subtree_now};
 use groups::GroupRecord;
 pub(crate) use lifecycle::{DeferredDrop, SlotLifecycleCoordinator};
-use payload_locations::PayloadLocationRegistry;
+#[cfg(any(test, debug_assertions))]
+pub(crate) use payload_anchors::PayloadAnchorLifecycle;
+pub(crate) use payload_anchors::PayloadAnchorRegistry;
 pub(in crate::slot) use ranges::{
     DirectChildRange, GroupNodeRange, GroupPayloadRange, GroupRange, NodeRange, PayloadRange,
     SubtreeRange,
 };
+pub(crate) use scope_index::ScopeIndex;
 pub use table::SlotTable;
 pub(crate) use table::SlotWriteSession;
 pub(in crate::slot) use types::collect_root_node_ids_from_records_into;
 pub(crate) use types::NodeLifecycle;
-pub(crate) use types::{DetachedSubtree, FinishGroupResult, PayloadKind, SlotPassMode};
+pub(crate) use types::{
+    ActiveGroupId, ActiveSubtreeRoot, BeginGroupInput, ChildCursor, DetachedChild, DetachedSubtree,
+    FinishGroupResult, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, NodeSlotUpdate,
+    PayloadAnchor, PayloadKind, SlotPassMode, ValueSlotId,
+};
 use types::{NodeRecord, PayloadRecord};
 #[cfg(any(test, debug_assertions))]
 pub(crate) use validate::SlotInvariantError;

@@ -1,12 +1,15 @@
 use super::{
-    AnchorState, DetachedSubtree, GroupRange, GroupRecord, NodeLifecycle, NodeRecord, PayloadKind,
-    PayloadRecord, SlotDebugEntryKind, SlotInvariantError, SlotLifecycleCoordinator, SlotPassMode,
-    SlotTable, SlotTreeContext, SlotWriteSession, SlotWriteSessionState,
+    ActiveSubtreeRoot, AnchorState, ChildCursor, DetachedChild, DetachedSubtree, GroupRange,
+    GroupRecord, NodeLifecycle, NodeRecord, PayloadAnchorLifecycle, PayloadKind, PayloadRecord,
+    SlotDebugEntryKind, SlotInvariantError, SlotLifecycleCoordinator, SlotPassMode,
+    SlotRetentionDebugStats, SlotTable, SlotTableDebugStats, SlotTreeContext, SlotWriteSession,
+    SlotWriteSessionState,
 };
 use crate::{
     retention::{RetainKey, RetentionManager},
-    slot_storage::{
-        BeginGroupInput, GroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, ValueSlotId,
+    slot::{
+        ActiveGroupId, BeginGroupInput, GroupKey, GroupKeySeed, GroupStart, GroupStartKind,
+        NodeSlotUpdate, PayloadAnchor, ValueSlotId,
     },
     AnchorId, Applier, Key, MemoryApplier, Node, NodeId, ScopeId,
 };
@@ -23,6 +26,22 @@ struct SlotHarness {
     lifecycle: SlotLifecycleCoordinator,
     state: SlotWriteSessionState,
     applier: MemoryApplier,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct PayloadIdentity {
+    anchor: PayloadAnchor,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct SlotIdentitySnapshot {
+    active_group_anchors: Vec<AnchorId>,
+    retained_group_anchors: Vec<AnchorId>,
+    active_payload_anchors: Vec<PayloadIdentity>,
+    retained_payload_anchors: Vec<PayloadIdentity>,
+    value_slots: Vec<ValueSlotId>,
+    scope_ids: Vec<ScopeId>,
+    debug_stats: SlotTableDebugStats,
 }
 
 struct UnmountTrackingNode {
@@ -61,7 +80,7 @@ impl SlotHarness {
             .write_session(&mut self.lifecycle, &mut self.state);
         let result = f(&mut session);
         self.state
-            .validate(&self.table)
+            .validate(&mut self.table)
             .expect("slot writer state must stay within active table bounds");
         result
     }
@@ -80,13 +99,86 @@ impl SlotHarness {
         self.lifecycle.flush_pending_drops();
         self.table.debug_verify();
     }
+
+    fn identity_snapshot(
+        &self,
+        retention: Option<&RetentionManager>,
+        value_slots: &[ValueSlotId],
+    ) -> SlotIdentitySnapshot {
+        let mut scope_ids = self
+            .table
+            .groups
+            .iter()
+            .filter_map(|group| group.scope_id)
+            .collect::<Vec<_>>();
+        let mut retained_group_anchors = Vec::new();
+        let mut retained_payload_anchors = Vec::new();
+        let retention_stats = if let Some(retention) = retention {
+            for subtree in retention.subtrees() {
+                retained_group_anchors.extend(subtree.groups.iter().map(|group| group.anchor));
+                retained_payload_anchors.extend(subtree.payloads.iter().map(PayloadIdentity::from));
+                scope_ids.extend(subtree.scope_ids_iter());
+            }
+            retention.debug_stats()
+        } else {
+            Default::default()
+        };
+
+        SlotIdentitySnapshot {
+            active_group_anchors: self.table.groups.iter().map(|group| group.anchor).collect(),
+            retained_group_anchors,
+            active_payload_anchors: self
+                .table
+                .payloads
+                .iter()
+                .map(PayloadIdentity::from)
+                .collect(),
+            retained_payload_anchors,
+            value_slots: value_slots.to_vec(),
+            scope_ids,
+            debug_stats: SlotTableDebugStats::from_parts(
+                self.table.debug_stats(),
+                self.lifecycle.debug_stats(),
+                slot_retention_stats(retention_stats),
+            ),
+        }
+    }
+}
+
+impl From<&PayloadRecord> for PayloadIdentity {
+    fn from(record: &PayloadRecord) -> Self {
+        Self {
+            anchor: record.anchor,
+        }
+    }
+}
+
+impl From<ValueSlotId> for PayloadIdentity {
+    fn from(slot: ValueSlotId) -> Self {
+        Self {
+            anchor: slot.anchor(),
+        }
+    }
+}
+
+fn slot_retention_stats(stats: crate::retention::RetentionDebugStats) -> SlotRetentionDebugStats {
+    SlotRetentionDebugStats {
+        retained_subtree_count: stats.subtree_count,
+        retained_group_count: stats.group_count,
+        retained_payload_count: stats.payload_count,
+        retained_node_count: stats.node_count,
+        retained_scope_count: stats.scope_count,
+        retained_anchor_count: stats.anchor_count,
+        retained_heap_bytes: stats.heap_bytes,
+        retained_evictions_total: stats.evictions_total,
+    }
 }
 
 fn begin_unkeyed(
     session: &mut SlotWriteSession<'_>,
     key: Key,
     restored: Option<DetachedSubtree>,
-) -> GroupStart<GroupId> {
+) -> GroupStart<ActiveGroupId> {
     let group_key = session.preview_group_key(GroupKeySeed::unkeyed(key));
     session.begin_group(BeginGroupInput::new(group_key, restored))
 }
@@ -96,7 +188,7 @@ fn begin_keyed(
     static_key: Key,
     explicit_key: Key,
     restored: Option<DetachedSubtree>,
-) -> GroupStart<GroupId> {
+) -> GroupStart<ActiveGroupId> {
     let group_key = session.preview_group_key(GroupKeySeed::keyed(static_key, explicit_key));
     session.begin_group(BeginGroupInput::new(group_key, restored))
 }
@@ -181,6 +273,19 @@ fn detached_single_child(parent_key: Key, child_key: Key) -> (SlotHarness, Detac
     let (harness, detached, _) =
         detached_single_child_with_options(parent_key, child_key, None, false, false);
     (harness, detached)
+}
+
+fn restore_detached_child(
+    table: &mut SlotTable,
+    parent_anchor: AnchorId,
+    insert_index: usize,
+    key: GroupKey,
+    detached: DetachedSubtree,
+) -> AnchorId {
+    table.restore_subtree(
+        ChildCursor::new(parent_anchor, insert_index),
+        DetachedChild::new(key, detached),
+    )
 }
 
 fn detached_child_with_grandchild(
@@ -280,7 +385,7 @@ fn exercise_slot_write_session_surface(
     slots: &mut SlotWriteSession<'_>,
     group_key: GroupKey,
     scope_id: ScopeId,
-) -> (GroupId, ValueSlotId) {
+) -> (ActiveGroupId, ValueSlotId) {
     let started = slots.begin_group(BeginGroupInput::new(group_key, None));
     assert_eq!(started.kind, GroupStartKind::Inserted);
     slots.set_group_scope(started.group, scope_id);
@@ -288,8 +393,13 @@ fn exercise_slot_write_session_surface(
     let slot = slots.value_slot_with_kind(PayloadKind::Internal, || 7_i32);
 
     let recorded = slots.record_node_with_parent(55, 1, None);
-    assert!(!recorded.reused);
-    assert_eq!(recorded.id, 55);
+    assert_eq!(
+        recorded,
+        NodeSlotUpdate::Inserted {
+            id: 55,
+            generation: 1,
+        },
+    );
     assert_eq!(node_ids_in_current_subtree(slots), vec![55]);
 
     let result = slots.finish_group_body();
@@ -316,11 +426,13 @@ fn shuffle<T>(values: &mut [T], seed: &mut u64) {
 }
 
 mod basic;
+mod cursor_invariants;
 mod detach_restore;
 mod keyed_reorder;
 mod model;
 mod nodes;
 mod payloads;
+mod performance;
 mod retention;
 mod validation;
 mod writer_state;

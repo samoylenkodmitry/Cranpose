@@ -21,6 +21,10 @@ impl<T> DenseIdMap<T> {
         self.entries.get(id).and_then(Option::as_ref)
     }
 
+    pub(super) fn get_mut(&mut self, id: usize) -> Option<&mut T> {
+        self.entries.get_mut(id).and_then(Option::as_mut)
+    }
+
     pub(super) fn insert(&mut self, id: usize, value: T) -> Option<T> {
         self.ensure_index(id);
         let entry = &mut self.entries[id];
@@ -55,15 +59,15 @@ impl<T> DenseIdMap<T> {
         self.entries.capacity()
     }
 
-    pub(super) fn storage_len(&self) -> usize {
-        self.entries.len()
-    }
-
     pub(super) fn iter(&self) -> impl Iterator<Item = (usize, &T)> + '_ {
         self.entries
             .iter()
             .enumerate()
             .filter_map(|(id, entry)| entry.as_ref().map(|value| (id, value)))
+    }
+
+    pub(super) fn storage_len(&self) -> usize {
+        self.entries.len()
     }
 
     pub(super) fn shrink_to_fit(&mut self) {
