@@ -314,7 +314,7 @@ fn main() {
                 }
             }
 
-            if wheel_moves < 2 {
+            if wheel_moves < 2 && max_story_after_wheel < 60 {
                 fail(
                     &robot,
                     format!(

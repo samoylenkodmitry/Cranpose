@@ -342,6 +342,9 @@ run_test() {
         robot_shader_backdrop_drag)
             timeout_secs=300
             ;;
+        robot_shader_rect)
+            timeout_secs=180
+            ;;
         robot_shadow_fields)
             timeout_secs=180
             ;;

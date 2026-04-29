@@ -166,26 +166,26 @@ fn debug_stats_report_subtree_move_work_spans() {
     assert_eq!(after.moved_node_count - before.moved_node_count, 2);
     assert_eq!(after.moved_node_max_span, 2);
     assert_eq!(
-        after.payload_anchor_index_rebuild_count - before.payload_anchor_index_rebuild_count,
+        after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
         0
     );
     assert_eq!(
-        after.payload_anchor_index_rebuild_group_count
-            - before.payload_anchor_index_rebuild_group_count,
+        after.payload_location_range_refresh_group_count
+            - before.payload_location_range_refresh_group_count,
         0
     );
     assert_eq!(
-        after.payload_anchor_index_rebuild_group_max_span,
-        before.payload_anchor_index_rebuild_group_max_span
+        after.payload_location_range_refresh_group_max_span,
+        before.payload_location_range_refresh_group_max_span
     );
     assert_eq!(
-        after.payload_anchor_index_rebuild_payload_count
-            - before.payload_anchor_index_rebuild_payload_count,
+        after.payload_location_range_refresh_payload_count
+            - before.payload_location_range_refresh_payload_count,
         0
     );
     assert_eq!(
-        after.payload_anchor_index_rebuild_payload_max_span,
-        before.payload_anchor_index_rebuild_payload_max_span
+        after.payload_location_range_refresh_payload_max_span,
+        before.payload_location_range_refresh_payload_max_span
     );
     assert_eq!(
         after.group_index_refresh_count - before.group_index_refresh_count,
@@ -293,34 +293,34 @@ fn detaching_unvisited_siblings_batches_group_index_refresh() {
 }
 
 #[test]
-fn debug_stats_report_payload_anchor_index_rebuild_work_spans() {
+fn debug_stats_report_payload_location_range_refresh_work_spans() {
     const GROUP_KEY: Key = 4051;
 
     let mut table = composed_group_with_value_and_node_table(GROUP_KEY);
     let before = table.debug_stats().mutation;
 
-    table.rebuild_payload_anchor_index_for_group_range(GroupRange::new(
+    table.refresh_payload_locations_for_group_range(GroupRange::new(
         0,
         table.debug_stats().group_count,
     ));
 
     let after = table.debug_stats().mutation;
     assert_eq!(
-        after.payload_anchor_index_rebuild_count - before.payload_anchor_index_rebuild_count,
+        after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
         1
     );
     assert_eq!(
-        after.payload_anchor_index_rebuild_group_count
-            - before.payload_anchor_index_rebuild_group_count,
+        after.payload_location_range_refresh_group_count
+            - before.payload_location_range_refresh_group_count,
         1
     );
-    assert_eq!(after.payload_anchor_index_rebuild_group_max_span, 1);
+    assert_eq!(after.payload_location_range_refresh_group_max_span, 1);
     assert_eq!(
-        after.payload_anchor_index_rebuild_payload_count
-            - before.payload_anchor_index_rebuild_payload_count,
+        after.payload_location_range_refresh_payload_count
+            - before.payload_location_range_refresh_payload_count,
         1
     );
-    assert_eq!(after.payload_anchor_index_rebuild_payload_max_span, 1);
+    assert_eq!(after.payload_location_range_refresh_payload_max_span, 1);
 }
 
 #[test]

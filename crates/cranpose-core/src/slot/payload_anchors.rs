@@ -151,10 +151,6 @@ impl PayloadAnchorRegistry {
         self.free_count
     }
 
-    pub(super) fn free_len(&self) -> usize {
-        self.free_count
-    }
-
     pub(super) fn capacity(&self) -> usize {
         self.dense_states.capacity() + self.sparse_states.capacity()
     }
@@ -599,13 +595,13 @@ mod tests {
         registry.shrink_to_fit();
 
         assert_eq!(registry.slot_len(), 0);
-        assert_eq!(registry.free_len(), anchors.len());
+        assert_eq!(registry.invalidated_len(), anchors.len());
         assert_eq!(registry.free_ids.len(), 1);
         assert_eq!(registry.validate_integrity(), Ok(()));
 
         let reused = registry.allocate();
         assert_eq!(reused, anchors[0].with_generation(2));
-        assert_eq!(registry.free_len(), anchors.len() - 1);
+        assert_eq!(registry.invalidated_len(), anchors.len() - 1);
         assert_eq!(
             registry.state_kind(anchors[1]),
             Some(PayloadAnchorLifecycle::Invalidated)

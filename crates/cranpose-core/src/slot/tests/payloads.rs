@@ -71,7 +71,7 @@ fn appended_value_slots_batch_payload_location_refresh() {
     harness.finish_pass();
 
     let after = harness.table.debug_stats();
-    assert_eq!(after.payload_anchor_index_count, 3);
+    assert_eq!(after.active_payload_anchor_count, 3);
     assert_eq!(
         after.mutation.payload_location_refresh_count - before.payload_location_refresh_count,
         1
@@ -122,7 +122,7 @@ fn payload_tail_removal_does_not_refresh_empty_suffix() {
         after.payload_location_refresh_count - before.payload_location_refresh_count,
         0
     );
-    assert_eq!(harness.table.debug_stats().payload_anchor_index_count, 1);
+    assert_eq!(harness.table.debug_stats().active_payload_anchor_count, 1);
 }
 
 #[test]
@@ -215,28 +215,6 @@ fn read_value_mut_updates_existing_slot_in_place() {
     *harness.table.read_value_mut::<i32>(slot) = 77;
 
     assert_eq!(*harness.table.read_value::<i32>(slot), 77);
-}
-
-#[test]
-fn value_slots_resolve_through_payload_anchor_registry() {
-    let mut harness = SlotHarness::new();
-
-    harness.begin_pass(SlotPassMode::Compose);
-    let slot = harness.session(|session| {
-        begin_unkeyed(session, 18, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 5_i32);
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-        slot
-    });
-    harness.finish_pass();
-
-    harness.table.payload_anchor_index.clear();
-
-    assert_eq!(*harness.table.read_value::<i32>(slot), 5);
-    harness.table.write_value(slot, 13_i32);
-    assert_eq!(*harness.table.read_value::<i32>(slot), 13);
 }
 
 #[test]

@@ -259,7 +259,7 @@ fn validate_reports_payload_count_mismatch_structurally() {
         kind: super::PayloadKind::Internal,
         value: Box::new(0_i32),
     });
-    table.payload_anchor_index.insert(extra_anchor, owner, 1);
+    table.payload_anchors.set_active(extra_anchor, owner, 1);
 
     assert_eq!(
         table.validate(),
@@ -314,15 +314,16 @@ fn validate_reports_payload_anchor_registry_stale_owner_structurally() {
 }
 
 #[test]
-fn validate_reports_payload_anchor_count_mismatch_structurally() {
+fn validate_reports_payload_anchor_registry_count_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(483);
+    let extra_anchor = table.payload_anchors.allocate();
     table
-        .payload_anchor_index
-        .insert(PayloadAnchor::new(999, 1), table.groups[0].anchor, 0);
+        .payload_anchors
+        .set_active(extra_anchor, table.groups[0].anchor, 0);
 
     assert_eq!(
         table.validate(),
-        Err(SlotInvariantError::PayloadAnchorCountMismatch {
+        Err(SlotInvariantError::PayloadAnchorRegistryCountMismatch {
             expected: 1,
             actual: 2,
         })
@@ -330,7 +331,7 @@ fn validate_reports_payload_anchor_count_mismatch_structurally() {
 }
 
 #[test]
-fn compact_storage_discards_removed_payload_anchor_index_entries() {
+fn compact_storage_preserves_removed_payload_anchor_registry_integrity() {
     let mut table = composed_group_with_value_and_node_table(601);
     let owner = table.groups[0].anchor;
     let payload_anchor = table.group_payload_record_at(0, 0).anchor;
@@ -338,17 +339,11 @@ fn compact_storage_discards_removed_payload_anchor_index_entries() {
     let payload_range = table.group_payload_subrange_at(0, 0, 1);
     let removed = table.remove_payload_range(owner, payload_range);
     assert_eq!(removed.len(), 1);
-    assert_eq!(table.payload_anchor_index.get(payload_anchor), None);
+    assert_eq!(table.payload_anchors.active_location(payload_anchor), None);
 
-    let capacity_before = table.payload_anchor_index.capacity();
     table.compact_storage();
-    let capacity_after = table.payload_anchor_index.capacity();
 
-    assert_eq!(table.payload_anchor_index.len(), 0);
-    assert!(
-        capacity_after < capacity_before,
-        "compaction must drop removed payload anchor-index entries: before={capacity_before} after={capacity_after}",
-    );
+    assert_eq!(table.payload_anchors.active_len(), 0);
     assert_eq!(table.validate(), Ok(()));
 }
 

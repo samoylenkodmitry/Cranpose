@@ -12,11 +12,8 @@ pub struct SlotTableLocalDebugStats {
     pub payload_anchor_slot_count: usize,
     pub detached_payload_anchor_count: usize,
     pub invalidated_payload_anchor_count: usize,
-    pub free_payload_anchor_count: usize,
     pub payload_anchor_capacity: usize,
     pub payload_anchor_heap_bytes: usize,
-    pub payload_anchor_index_count: usize,
-    pub payload_anchor_index_capacity: usize,
     pub node_count: usize,
     pub node_capacity: usize,
     pub active_anchor_count: usize,
@@ -62,11 +59,8 @@ pub struct SlotTableDebugStats {
     pub payload_anchor_slot_count: usize,
     pub detached_payload_anchor_count: usize,
     pub invalidated_payload_anchor_count: usize,
-    pub free_payload_anchor_count: usize,
     pub payload_anchor_capacity: usize,
     pub payload_anchor_heap_bytes: usize,
-    pub payload_anchor_index_count: usize,
-    pub payload_anchor_index_capacity: usize,
     pub node_count: usize,
     pub node_capacity: usize,
     pub pending_drop_count: usize,
@@ -109,11 +103,8 @@ impl SlotTableDebugStats {
             payload_anchor_slot_count: local.payload_anchor_slot_count,
             detached_payload_anchor_count: local.detached_payload_anchor_count,
             invalidated_payload_anchor_count: local.invalidated_payload_anchor_count,
-            free_payload_anchor_count: local.free_payload_anchor_count,
             payload_anchor_capacity: local.payload_anchor_capacity,
             payload_anchor_heap_bytes: local.payload_anchor_heap_bytes,
-            payload_anchor_index_count: local.payload_anchor_index_count,
-            payload_anchor_index_capacity: local.payload_anchor_index_capacity,
             node_count: local.node_count,
             node_capacity: local.node_capacity,
             pending_drop_count: lifecycle.pending_drop_count,
@@ -150,11 +141,11 @@ pub struct SlotTableMutationDebugStats {
     pub moved_payload_max_span: usize,
     pub moved_node_count: usize,
     pub moved_node_max_span: usize,
-    pub payload_anchor_index_rebuild_count: usize,
-    pub payload_anchor_index_rebuild_group_count: usize,
-    pub payload_anchor_index_rebuild_group_max_span: usize,
-    pub payload_anchor_index_rebuild_payload_count: usize,
-    pub payload_anchor_index_rebuild_payload_max_span: usize,
+    pub payload_location_range_refresh_count: usize,
+    pub payload_location_range_refresh_group_count: usize,
+    pub payload_location_range_refresh_group_max_span: usize,
+    pub payload_location_range_refresh_payload_count: usize,
+    pub payload_location_range_refresh_payload_max_span: usize,
     pub payload_location_refresh_count: usize,
     pub payload_location_refresh_payload_count: usize,
     pub payload_location_refresh_max_span: usize,
@@ -185,24 +176,24 @@ impl SlotTableMutationDebugStats {
         self.moved_node_max_span = self.moved_node_max_span.max(node_span);
     }
 
-    pub(crate) fn record_payload_anchor_index_rebuild(
+    pub(crate) fn record_payload_location_range_refresh(
         &mut self,
         group_span: usize,
         payload_span: usize,
     ) {
-        self.payload_anchor_index_rebuild_count =
-            self.payload_anchor_index_rebuild_count.saturating_add(1);
-        self.payload_anchor_index_rebuild_group_count = self
-            .payload_anchor_index_rebuild_group_count
+        self.payload_location_range_refresh_count =
+            self.payload_location_range_refresh_count.saturating_add(1);
+        self.payload_location_range_refresh_group_count = self
+            .payload_location_range_refresh_group_count
             .saturating_add(group_span);
-        self.payload_anchor_index_rebuild_group_max_span = self
-            .payload_anchor_index_rebuild_group_max_span
+        self.payload_location_range_refresh_group_max_span = self
+            .payload_location_range_refresh_group_max_span
             .max(group_span);
-        self.payload_anchor_index_rebuild_payload_count = self
-            .payload_anchor_index_rebuild_payload_count
+        self.payload_location_range_refresh_payload_count = self
+            .payload_location_range_refresh_payload_count
             .saturating_add(payload_span);
-        self.payload_anchor_index_rebuild_payload_max_span = self
-            .payload_anchor_index_rebuild_payload_max_span
+        self.payload_location_range_refresh_payload_max_span = self
+            .payload_location_range_refresh_payload_max_span
             .max(payload_span);
     }
 

@@ -18,9 +18,7 @@ mod writer;
 #[cfg(any(test, debug_assertions))]
 use super::SlotTable;
 #[cfg(any(test, debug_assertions))]
-pub(crate) use errors::{
-    PayloadAnchorIndexRecord, PayloadAnchorRecord, SlotInvariantError, SlotTreeContext,
-};
+pub(crate) use errors::{PayloadAnchorRecord, SlotInvariantError, SlotTreeContext};
 #[cfg(any(test, debug_assertions))]
 use groups::{validate_slot_tree, ActiveSlotTreeChecks, SlotTreeView};
 
@@ -57,10 +55,8 @@ impl SlotTable {
         anchors::validate_active_group_anchor_entries(self)?;
         payloads::validate_payload_anchor_registry_integrity(self)?;
         payloads::validate_payload_anchor_registry_count(self)?;
-        payloads::validate_payload_anchor_index_count(self)?;
         scopes::validate_scope_index_count(self)?;
         payloads::validate_payload_anchor_registry(self)?;
-        payloads::validate_payload_anchor_index(self)?;
 
         Ok(())
     }

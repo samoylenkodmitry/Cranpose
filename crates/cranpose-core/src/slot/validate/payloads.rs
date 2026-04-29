@@ -1,7 +1,7 @@
 use super::super::{GroupRecord, PayloadRecord, SlotTable};
 use super::{
     groups::{SlotTreeChecks, SlotTreeView},
-    PayloadAnchorIndexRecord, PayloadAnchorRecord, SlotInvariantError,
+    PayloadAnchorRecord, SlotInvariantError,
 };
 
 pub(super) fn validate_group_payloads(
@@ -43,19 +43,6 @@ pub(super) fn validate_group_payloads(
     }
 
     Ok(payload_end)
-}
-
-pub(super) fn validate_payload_anchor_index_count(
-    table: &SlotTable,
-) -> Result<(), SlotInvariantError> {
-    if table.payload_anchor_index.len() == table.payloads.len() {
-        return Ok(());
-    }
-
-    Err(SlotInvariantError::PayloadAnchorCountMismatch {
-        expected: table.payloads.len(),
-        actual: table.payload_anchor_index.len(),
-    })
 }
 
 pub(super) fn validate_active_payload_anchor(
@@ -133,41 +120,6 @@ pub(super) fn validate_payload_anchor_registry(
     Ok(())
 }
 
-pub(super) fn validate_payload_anchor_index(table: &SlotTable) -> Result<(), SlotInvariantError> {
-    for (payload_anchor, (owner, payload_index)) in table.payload_anchor_index.iter() {
-        let Some(group_index) = table.anchors.active_index(owner) else {
-            return Err(SlotInvariantError::PayloadAnchorIndexTargetMismatch {
-                payload_anchor,
-                expected_owner: owner,
-                expected_payload_index: payload_index,
-                actual: None,
-            });
-        };
-        let actual = table
-            .group_payload_records_at(group_index)
-            .get(payload_index)
-            .map(|payload| PayloadAnchorIndexRecord {
-                owner: payload.owner,
-                payload_anchor: payload.anchor.id(),
-            });
-        if actual
-            != Some(PayloadAnchorIndexRecord {
-                owner,
-                payload_anchor,
-            })
-        {
-            return Err(SlotInvariantError::PayloadAnchorIndexTargetMismatch {
-                payload_anchor,
-                expected_owner: owner,
-                expected_payload_index: payload_index,
-                actual,
-            });
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,30 +153,6 @@ mod tests {
         });
         table.anchors.set_active(owner, 0);
         table
-    }
-
-    #[test]
-    fn payload_anchor_index_validation_reports_actual_record() {
-        let owner = AnchorId::new(1);
-        let actual_payload_anchor = 10;
-        let stale_payload_anchor = 11;
-        let mut table = one_payload_table(owner, actual_payload_anchor);
-        table
-            .payload_anchor_index
-            .insert(PayloadAnchor::new(stale_payload_anchor, 1), owner, 0);
-
-        assert_eq!(
-            validate_payload_anchor_index(&table),
-            Err(SlotInvariantError::PayloadAnchorIndexTargetMismatch {
-                payload_anchor: stale_payload_anchor,
-                expected_owner: owner,
-                expected_payload_index: 0,
-                actual: Some(PayloadAnchorIndexRecord {
-                    owner,
-                    payload_anchor: actual_payload_anchor,
-                }),
-            })
-        );
     }
 
     #[test]

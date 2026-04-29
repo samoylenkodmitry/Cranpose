@@ -48,7 +48,7 @@ fn perf_large_keyed_reorder_avoids_identity_rebuilds() {
 
     let after = harness.table.debug_stats().mutation;
     assert_eq!(
-        after.payload_anchor_index_rebuild_count - before.payload_anchor_index_rebuild_count,
+        after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
         0
     );
     assert_eq!(
@@ -103,8 +103,8 @@ fn perf_deep_insert_remove_avoids_full_identity_rebuilds() {
 
     let after_insert = harness.table.debug_stats().mutation;
     assert_eq!(
-        after_insert.payload_anchor_index_rebuild_count
-            - before_insert.payload_anchor_index_rebuild_count,
+        after_insert.payload_location_range_refresh_count
+            - before_insert.payload_location_range_refresh_count,
         0
     );
     assert_eq!(
@@ -130,8 +130,8 @@ fn perf_deep_insert_remove_avoids_full_identity_rebuilds() {
         1
     );
     assert_eq!(
-        after_remove.payload_anchor_index_rebuild_count
-            - before_remove.payload_anchor_index_rebuild_count,
+        after_remove.payload_location_range_refresh_count
+            - before_remove.payload_location_range_refresh_count,
         0
     );
     assert_eq!(
@@ -178,12 +178,12 @@ fn perf_retained_restore_refreshes_only_restored_payload_range() {
 
     let after = harness.table.debug_stats().mutation;
     assert_eq!(
-        after.payload_anchor_index_rebuild_count - before.payload_anchor_index_rebuild_count,
+        after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
         1
     );
     assert_eq!(
-        after.payload_anchor_index_rebuild_payload_count
-            - before.payload_anchor_index_rebuild_payload_count,
+        after.payload_location_range_refresh_payload_count
+            - before.payload_location_range_refresh_payload_count,
         1
     );
     assert_eq!(
@@ -256,7 +256,7 @@ fn perf_mass_conditional_removal_batches_anchor_refresh() {
         0
     );
     assert_eq!(
-        after.payload_anchor_index_rebuild_count - before.payload_anchor_index_rebuild_count,
+        after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
         0
     );
 }
@@ -323,8 +323,8 @@ fn perf_storage_compaction_does_not_rebuild_scope_index() {
         0
     );
     assert_eq!(
-        after.payload_anchor_index_rebuild_count - before.payload_anchor_index_rebuild_count,
-        1
+        after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
+        0
     );
     assert_eq!(
         harness.table.scope_index_anchor(CHILD_SCOPE),

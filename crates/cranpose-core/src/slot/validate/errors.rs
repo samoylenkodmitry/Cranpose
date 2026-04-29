@@ -8,12 +8,6 @@ pub(crate) enum SlotTreeContext {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PayloadAnchorIndexRecord {
-    pub(crate) owner: AnchorId,
-    pub(crate) payload_anchor: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PayloadAnchorRecord {
     pub(crate) owner: AnchorId,
     pub(crate) payload_anchor: PayloadAnchor,
@@ -83,10 +77,6 @@ pub(crate) enum SlotInvariantError {
         expected: usize,
         actual: usize,
     },
-    PayloadAnchorCountMismatch {
-        expected: usize,
-        actual: usize,
-    },
     PayloadAnchorRegistryCountMismatch {
         expected: usize,
         actual: usize,
@@ -110,12 +100,6 @@ pub(crate) enum SlotInvariantError {
     DuplicatePayloadAnchor {
         tree: SlotTreeContext,
         payload_anchor: PayloadAnchor,
-    },
-    PayloadAnchorIndexTargetMismatch {
-        payload_anchor: usize,
-        expected_owner: AnchorId,
-        expected_payload_index: usize,
-        actual: Option<PayloadAnchorIndexRecord>,
     },
     PayloadAnchorRegistryMismatch {
         payload_anchor: PayloadAnchor,

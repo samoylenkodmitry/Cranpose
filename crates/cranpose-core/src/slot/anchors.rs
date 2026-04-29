@@ -157,7 +157,7 @@ impl AnchorRegistry {
         self.validate_state_count("active", self.active_count, active_count)?;
         self.validate_state_count("detached", self.detached_count, detached_count)?;
 
-        let mut free_ids = HashSet::default();
+        let mut free_ids: HashSet<u32> = HashSet::default();
         for Reverse(id) in self.free_ids.iter().copied() {
             if !free_ids.insert(id) {
                 return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
@@ -428,11 +428,6 @@ impl SlotTable {
         }
 
         self.anchors.shrink_to_fit();
-        self.payload_anchor_index.clear();
-        self.rebuild_payload_anchor_index_for_group_range(super::GroupRange::new(
-            0,
-            self.groups.len(),
-        ));
     }
 }
 

@@ -642,7 +642,7 @@ crates/cranpose-core/src/
 
 #### SlotTable
 
-The active table stores groups, payloads, nodes, anchors, and indexes separately:
+The active table stores groups, payloads, nodes, stable identity registries, and scope lookup separately:
 
 ```rust
 pub struct SlotTable {
@@ -651,7 +651,6 @@ pub struct SlotTable {
     nodes: Vec<NodeRecord>,
     anchors: AnchorRegistry,
     payload_anchors: PayloadAnchorRegistry,
-    payload_anchor_index: PayloadAnchorIndex,
     scope_index: ScopeIndex,
     next_group_generation: u32,
 }
