@@ -622,18 +622,21 @@ The design source of truth is `docs/cranpose_slot_table_v2_design.md`.
 
 ```
 crates/cranpose-core/src/
-├── slot_storage.rs                - Semantic slot-table trait and public handle types
 ├── retention.rs                   - Detached-subtree retention bookkeeping
 └── slot/
+    ├── types.rs                   - Semantic handles, cursors, and operation result types
     ├── table.rs                   - SlotTable and write-session entry points
     ├── writer.rs                  - begin/finish/end/skip group traversal
+    ├── table/                     - SlotTable metadata, mutation, and value helpers
+    ├── writer/                    - Writer state-machine helper modules
     ├── groups.rs                  - GroupRecord helpers and child traversal
-    ├── payload.rs                 - Payload storage and value-slot addressing
+    ├── payload.rs                 - Payload storage and value-slot records
+    ├── payload_anchors.rs         - Stable value-slot identity registry
     ├── nodes.rs                   - Node record storage and subtree extraction
     ├── anchors.rs                 - AnchorRegistry and anchor state tracking
     ├── scope_index.rs             - ScopeId -> active group lookup
     ├── detach.rs                  - DetachedSubtree extraction and restore
-    ├── validate.rs                - Structural invariant checking
+    ├── validate/                  - Structural invariant checking
     ├── debug.rs / reader.rs       - Debug snapshots and textual dumps
     └── lifecycle.rs               - Deferred payload disposal
 ```
@@ -1141,7 +1144,7 @@ snapshot.set_read_observer(Box::new(|obj| {
 
 ### Strategy Pattern
 
-**Used in:** MutationPolicy, SlotStorage trait
+**Used in:** MutationPolicy, slot write sessions
 
 **Pattern:**
 ```rust

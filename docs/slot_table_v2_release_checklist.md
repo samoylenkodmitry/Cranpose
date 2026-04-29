@@ -7,7 +7,7 @@ Complete this checklist on the release candidate commit. Do not reuse results fr
 - [ ] `docs/cranpose_slot_table_v2_design.md` is the only active slot-table design specification.
 - [ ] `docs/slot_table_v2_invariants.md` matches the current validator and retained-state behavior.
 - [ ] No README or docs page describes gap-table storage as current Slot Table V2 behavior.
-- [ ] `roadmap.md` has no unchecked required Slot Table V2 item that is needed for this release.
+- [ ] No active review roadmap has an unchecked release-blocking Slot Table V2 item.
 
 ## Verification
 

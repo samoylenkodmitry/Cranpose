@@ -329,6 +329,16 @@ impl PayloadAnchorRegistry {
         self.reused_generations.shrink_to_fit();
     }
 
+    fn maybe_shrink_sparse_storage(&mut self) {
+        if self.capacity() <= Self::DENSE_STORAGE_ID_LIMIT {
+            return;
+        }
+        if self.slot_len().saturating_mul(4) >= self.capacity() {
+            return;
+        }
+        self.shrink_to_fit();
+    }
+
     fn slot(&self, anchor: PayloadAnchor) -> Option<&PayloadAnchorSlot> {
         self.slot_by_id(anchor.id())
     }
@@ -538,7 +548,7 @@ impl SlotTable {
             removed |= self.payload_anchors.invalidate(payload.anchor);
         }
         if removed {
-            self.payload_anchors.shrink_to_fit();
+            self.payload_anchors.maybe_shrink_sparse_storage();
         }
     }
 }
@@ -606,6 +616,43 @@ mod tests {
             registry.state_kind(anchors[1]),
             Some(PayloadAnchorLifecycle::Invalidated)
         );
+    }
+
+    #[test]
+    fn payload_anchor_disposal_keeps_dense_storage_for_hot_path_reuse() {
+        let mut table = SlotTable::new();
+        let owner = table.anchors.allocate();
+        table.anchors.set_active(owner, 0);
+
+        let mut payloads = Vec::new();
+        for value in 0..32_i32 {
+            let anchor = table.payload_anchors.allocate();
+            table
+                .payload_anchors
+                .set_active(anchor, owner, value as usize);
+            payloads.push(PayloadRecord {
+                owner,
+                anchor,
+                type_id: std::any::TypeId::of::<i32>(),
+                type_name: std::any::type_name::<i32>(),
+                kind: crate::slot::PayloadKind::Internal,
+                value: Box::new(value),
+            });
+        }
+
+        let dense_capacity_before = table.payload_anchors.dense_states.capacity();
+        assert!(dense_capacity_before >= payloads.len());
+
+        table.invalidate_payload_anchors(&payloads);
+
+        assert_eq!(table.payload_anchors.active_len(), 0);
+        assert_eq!(table.payload_anchors.invalidated_len(), payloads.len());
+        assert_eq!(
+            table.payload_anchors.dense_states.capacity(),
+            dense_capacity_before,
+            "payload disposal must not compact dense anchor storage on the mutation hot path"
+        );
+        assert_eq!(table.payload_anchors.validate_integrity(), Ok(()));
     }
 
     #[test]

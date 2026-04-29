@@ -1,8 +1,8 @@
 # Cranpose Slot Table V2 — Full Rearchitecture Design Doc
 
-Status: active implementation target  
+Status: active implementation
 Target crate: `crates/cranpose-core`  
-Primary files affected: `slot_storage.rs`, `lib.rs`, `subcompose.rs`, `retention.rs`, `slot/*`, tests  
+Primary files affected: `lib.rs`, `subcompose.rs`, `retention.rs`, `slot/*`, tests
 Principle: keep one slot-table architecture; do not preserve obsolete gap-based surfaces or wrapper modules.
 
 ---
@@ -24,8 +24,8 @@ The new architecture is:
 Composer
   owns semantic lifecycle, recomposition scopes, retention decisions, node attach/detach policy
 
-SlotStorage V2 trait
-  exposes structural storage operations, not storage hacks
+SlotTable V2 write/read APIs
+  expose structural storage operations, not storage hacks
 
 SlotTable V2
   owns active tree storage, payload storage, anchors, scope lookup, structural moves
@@ -193,40 +193,40 @@ Long term, `with_key` should combine source-location key + user key instead of r
 
 ## 6. Target module layout
 
-Replace the current slot table files with this layout:
+The current slot table implementation uses this layout:
 
 ```text
 crates/cranpose-core/src/
-  slot_storage.rs              // semantic storage trait and handle types
+  retention.rs                 // Composer-owned detached-subtree retention manager
   slot/
     mod.rs
-    types.rs                   // ActiveGroupId, ValueSlotId, GroupKey, flags, errors
+    types.rs                   // semantic handles, cursors, and operation result types
     table.rs                   // SlotTable struct and high-level methods
     writer.rs                  // mutation/traversal state machine
+    table/                     // SlotTable metadata, mutation, and value helpers
+    writer/                    // writer state-machine helper modules
     reader.rs                  // read-only traversal and debug dumps
     groups.rs                  // GroupRecord and group-table helpers
-    payload.rs                 // PayloadRecord, PayloadTable
+    payload.rs                 // PayloadRecord storage
+    payload_anchors.rs         // PayloadAnchorRegistry and value-slot resolution
     nodes.rs                   // node ranges / node identity helpers
     anchors.rs                 // AnchorRegistry
-    scope_index.rs             // ScopeId -> GroupAnchor map
+    scope_index.rs             // ScopeId -> AnchorId map
     detach.rs                  // DetachedSubtree and detach/restore helpers
-    validate.rs                // invariant checking
+    validate/                  // invariant checking
     lifecycle.rs               // deferred drop coordination
     debug.rs                   // public debug snapshot structs
-  retention.rs                 // Composer-owned retention manager
 ```
 
-Update `lib.rs` to re-export `SlotTable`, handle types, and public debug APIs from the new modules. The semantic `SlotStorage` trait can stay internal until there is a real second backend or external integration that needs it.
+`lib.rs` re-exports `SlotTable`, handle types, and public debug APIs from the active modules. There is no active alternate slot-table backend.
 
-During the rewrite, remove or temporarily disable these old/experimental backends:
+These old/experimental backends are not part of the active architecture:
 
 ```text
 chunked_slot_storage.rs
 hierarchical_slot_storage.rs
 split_slot_storage.rs
 ```
-
-Coding-agent instruction: do not preserve their internals. Either delete them or turn them into thin wrappers around `SlotTable` until V2 passes tests.
 
 ---
 
@@ -245,13 +245,13 @@ pub struct ActiveGroupId {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ValueSlotId {
-    anchor: u32,
-    generation: u32,
+    anchor: PayloadAnchor,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct GroupAnchor {
+pub struct AnchorId {
     id: u32,
+    generation: u32,
 }
 ```
 
@@ -316,7 +316,7 @@ pub struct PayloadTable {
 }
 
 pub struct PayloadRecord {
-    pub owner: GroupAnchor,
+    pub owner: AnchorId,
     pub anchor: PayloadAnchor,
     pub type_id: TypeId,
     pub kind: PayloadKind,
@@ -345,7 +345,7 @@ pub struct NodeTable {
 }
 
 pub struct NodeRecord {
-    pub owner: GroupAnchor,
+    pub owner: AnchorId,
     pub node_id: NodeId,
     pub generation: u32,
 }
@@ -355,31 +355,28 @@ Each group owns a range of directly emitted node records. The group also stores 
 
 ---
 
-## 8. SlotStorage V2 trait
+## 8. Slot write-session API
 
-Replace the trait with semantic operations.
+The writer/session surface exposes semantic operations directly on `SlotTable` sessions.
 
 ```rust
-pub trait SlotStorage {
-    type Group: Copy + Eq;
-    type ValueSlot: Copy + Eq;
-
+impl SlotWriteSession<'_> {
     // Groups
-    fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<Self::Group>;
+    fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<ActiveGroupId>;
     fn finish_group_body(&mut self) -> FinishGroupResult;
     fn end_group(&mut self);
     fn skip_group(&mut self);
 
     // Scopes
-    fn set_group_scope(&mut self, group: Self::Group, scope: ScopeId);
-    fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<Self::Group>;
+    fn set_group_scope(&mut self, group: ActiveGroupId, scope: ScopeId);
+    fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<ActiveGroupId>;
     fn end_recompose(&mut self);
 
     // Values
-    fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Self::ValueSlot;
-    fn read_value<T: 'static>(&self, slot: Self::ValueSlot) -> &T;
-    fn read_value_mut<T: 'static>(&mut self, slot: Self::ValueSlot) -> &mut T;
-    fn write_value<T: 'static>(&mut self, slot: Self::ValueSlot, value: T);
+    fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> ValueSlotId;
+    fn read_value<T: 'static>(&self, slot: ValueSlotId) -> &T;
+    fn read_value_mut<T: 'static>(&mut self, slot: ValueSlotId) -> &mut T;
+    fn write_value<T: 'static>(&mut self, slot: ValueSlotId, value: T);
     fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T>;
 
     // Nodes
@@ -394,7 +391,7 @@ pub trait SlotStorage {
 
 Explicit detach/restore stays as concrete slot-table behavior instead of trait surface: `finish_group_body()` yields detached children, and `begin_group(BeginGroupInput { restored: Some(subtree), .. })` restores at the current cursor.
 
-Remove these methods from the trait:
+These cursor-repair methods are not part of the active API:
 
 ```rust
 peek_node
@@ -404,7 +401,7 @@ finalize_current_group -> bool
 flush as anchor-rebuild workaround
 ```
 
-If `flush` remains for compatibility, it should be a no-op or should only apply queued structural edits, not repair dirty anchors from hacks.
+Writer finalization only applies queued structural maintenance; it is not a repair path for stale identities.
 
 ### 8.1 BeginGroupInput
 
@@ -422,7 +419,7 @@ The composer passes `restored`. The slot table does not search dormant storage t
 ```rust
 pub struct GroupStart<G> {
     pub group: G,
-    pub anchor: GroupAnchor,
+    pub anchor: AnchorId,
     pub kind: GroupStartKind,
     pub scope_id: Option<ScopeId>,
 }
@@ -816,7 +813,7 @@ Use a real active-scope index inside `SlotTable`:
 
 ```rust
 pub struct ScopeIndex {
-    active: HashMap<ScopeId, GroupAnchor>,
+    active: HashMap<ScopeId, AnchorId>,
 }
 ```
 
@@ -1138,262 +1135,24 @@ Use `proptest` if acceptable; otherwise write deterministic random tests with a 
 
 ---
 
-## 18. Coding-agent implementation plan
+## 18. Implementation status
 
-### Phase 0 — prepare branch and safety net
+Slot Table V2 is the active implementation. The implementation has converged on stable semantic identities:
 
-1. Create a rewrite branch.
-2. Run current tests to get baseline failures/pass count.
-3. Keep this file as the single active slot-table design source.
-4. Add a failing placeholder test: `slot_v2_empty_table_validates`.
+- `ActiveGroupId` is a transient active-table handle.
+- `AnchorId` is the stable group identity.
+- `PayloadAnchor` is the stable value-slot identity behind `ValueSlotId`.
+- `ScopeIndex` owns active scope lookup.
+- `DetachedSubtree` owns inactive retained branch state.
+- `NodeSlotUpdate` makes node reuse, insertion, and replacement explicit.
 
-### Phase 1 — define V2 types
-
-Create:
-
-```text
-src/slot/mod.rs
-src/slot/types.rs
-src/slot_storage.rs
-```
-
-Implement:
-
-- `GroupKey`
-- `ActiveGroupId`
-- `ValueSlotId`
-- `AnchorId`
-- `GroupStartKind`
-- `BeginGroupInput`
-- `GroupStart`
-- `FinishGroupResult`
-- `DetachedSubtree`
-- `SlotInvariantError`
-- V2 `SlotStorage` trait
-
-Do not implement old trait compatibility.
-
-### Phase 2 — implement core tables
-
-Create:
-
-```text
-src/slot/table.rs
-src/slot/groups.rs
-src/slot/payload.rs
-src/slot/nodes.rs
-src/slot/anchors.rs
-src/slot/scope_index.rs
-src/slot/validate.rs
-```
-
-Implement minimal operations:
-
-- `SlotTable::new`
-- insert root/child groups
-- value slots
-- node records
-- exact `subtree_len`
-- validation
-
-Tests to pass:
-
-- empty table validates;
-- simple group/value/node composition validates.
-
-### Phase 3 — implement writer traversal
-
-Create `src/slot/writer.rs`.
-
-Implement:
-
-- writer stack;
-- `begin_group` insert/reuse;
-- `end_group`;
-- `finish_group_body` without retention;
-- `skip_group`.
-
-Tests to pass:
-
-- identical recomposition reuses values;
-- skipping advances exactly;
-- removing a child returns a detached subtree.
-
-### Phase 4 — implement sibling moves
-
-Implement:
-
-- parent-bounded direct-child scan;
-- lazy `SiblingIndex` for larger sibling ranges;
-- `move_subtree` using `Vec::splice` or drain/insert;
-- anchor repair.
-
-Tests to pass:
-
-- keyed sibling reorder preserves state;
-- nested children are not searched/moved as siblings;
-- anchors survive moves.
-
-### Phase 5 — implement detach/restore
-
-Implement:
-
-- `detach_subtree`;
-- `detach_range`;
-- restore through `begin_group(BeginGroupInput { restored: Some(subtree), .. })`;
-- payload extraction/insertion;
-- node extraction/insertion;
-- scope active/detached index updates;
-- anchor active/detached/invalidated states.
-
-Tests to pass:
-
-- conditional removal returns valid detached subtree;
-- restore recreates exact active subtree;
-- nested restore preserves payloads;
-- disposed subtree drops payloads and invalidates anchors.
-
-### Phase 6 — composer runtime state and retention manager
-
-Create `src/retention.rs`.
-
-Implement:
-
-- `RetentionMode`;
-- `RetainKey`;
-- `RetainedGroup`;
-- `RetentionManager`;
-- `ComposerRuntimeState`;
-- per-host retained subtree pools keyed by `SlotsHost::storage_key()`.
-
-Update runtime-owned state:
-
-- `ComposerCore.shared_state`;
-- `SlotsHost.runtime_state`;
-- `SlotTable.runtime_state`;
-- `RecomposeScope.slots_storage_key`;
-- `RecomposeScope.slots_runtime_state`;
-- `pending_scope_options` to include retention mode.
-
-Update recomposition entry:
-
-- resolve hosts through `scope.slots_runtime_state()` and `scope.slots_storage_key()`;
-- group invalid scopes by resolved host;
-- construct each pass with `Composer::new_with_shared_state(...)`.
-
-Tests to pass:
-
-- default conditional branch disposes state;
-- retain mode preserves remembered state;
-- invalid retained scope recomposes when restored.
-
-### Phase 7 — update Composer::with_group
-
-Rewrite `with_group` around V2 semantics.
-
-Required flow:
-
-1. compute group key;
-2. compute retain key;
-3. resolve the active `SlotsHost`;
-4. take retained subtree from `shared_state.take_retained(&host, key)` if present;
-5. call `begin_group` with optional restored subtree;
-6. obtain/create remembered `RecomposeScope`;
-7. register new scope IDs in `shared_state`;
-8. bind the scope to the active host;
-9. apply `force_recompose`, `force_reuse`, and `Restored` behavior;
-10. run body under observer;
-11. call `finish_group_body`;
-12. dispose direct detached nodes;
-13. retain or dispose detached child subtrees;
-14. pop scope;
-15. end group.
-
-Delete all gap-restoration flag usage.
-
-### Phase 8 — update node/apply logic
-
-Update parent diff/removal logic:
-
-- retained nodes are detached with `DetachChild`, not removed from applier;
-- disposed nodes are removed;
-- deferred cleanup preserves detached retained nodes by `(NodeId, generation)`;
-- restored retained nodes can be reattached by existing parent attach / insert / sync logic.
-
-Tests to pass:
-
-- retained tab nodes are not recreated;
-- disposed conditional node is removed;
-- moving keyed nodes reorders rather than destroys.
-
-### Phase 9 — update subcompose
-
-Keep the architectural idea already present in `SubcomposeState`: per-slot compositions and policy-owned reuse.
-
-Update:
-
-- `slot_compositions` to use V2 `SlotTable`;
-- active/reusable slot registration to mark V2 retention if necessary;
-- cleanup to dispose compositions not active/reusable.
-
-Tests to pass:
-
-- subcompose basic;
-- lazy list scroll reuse;
-- content-type-compatible reuse;
-- precompose activation.
-
-### Phase 10 — remove old implementation
-
-Delete or fully replace:
-
-```text
-semantic gap slots
-last_start_was_gap
-has_gap_children
-mark_range_as_gaps
-trim_to_cursor old behavior
-SEARCH_BUDGET
-EXTENDED_SEARCH_BUDGET
-SHRINK_MIN_DROP
-SHRINK_RATIO
-force_gap_here
-ensure_gap_at_local
-find_right_gap_run
-step_back
-advance_after_node_read
-```
-
-Search the repo for these names and remove them.
-
-### Phase 11 — documentation and debug tools
-
-Add:
-
-- `SlotTable::debug_snapshot()`;
-- `SlotDebugSnapshot` with active groups, retained counts, anchors, scopes;
-- `COMPOSE_DEBUG_SLOT_TABLE=1` dump path;
-- docs explaining retention vs disposal.
-
-### Phase 12 — performance pass
-
-Only after correctness tests pass:
-
-- reduce unnecessary `Vec` cloning;
-- use `SmallVec` for small node/payload lists;
-- lazily build sibling index;
-- benchmark keyed list reorder;
-- benchmark tab switching;
-- benchmark subcompose scrolling;
-- consider chunked group storage if large `Vec::splice` appears hot.
-
-Do not reintroduce semantic gaps for performance.
+Forward work should use the release checklist and a dedicated review roadmap for concrete findings. Do not add alternate slot-table backends, compatibility wrapper modules, or feature-flagged half-states.
 
 ---
 
 ## 19. Example API sketches
 
-### 19.1 SlotStorage usage from composer
+### 19.1 Slot session usage from composer
 
 ```rust
 let host = self.active_slots_host();
