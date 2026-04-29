@@ -43,6 +43,8 @@ STABILITY_THRESHOLD_PCT="${CRANPOSE_SLOT_TABLE_STABILITY_THRESHOLD_PCT:-5}"
 STABILITY_WARMUP_RUNS="${CRANPOSE_SLOT_TABLE_STABILITY_WARMUP_RUNS:-2}"
 STABILITY_ATTEMPTS="${CRANPOSE_SLOT_TABLE_STABILITY_ATTEMPTS:-4}"
 STABILITY_TIMEOUT_SECS="${CRANPOSE_SLOT_TABLE_STABILITY_TIMEOUT_SECS:-600}"
+STABILITY_SHARD_INDEX=""
+STABILITY_SHARD_COUNT=""
 PLOT="0"
 SIBLING_THRESHOLD_MATRIX="0"
 SIBLING_THRESHOLD_VALUES="${CRANPOSE_SIBLING_INDEX_THRESHOLDS:-4 8 16 32 64}"
@@ -272,11 +274,30 @@ run_filtered_stability_check() {
 
 run_full_stability_check() {
     local original_filter failure benchmark_name
+    local -a benchmark_names
     original_filter="$FILTER"
     failure=0
+    benchmark_names=("${STABILITY_BENCHMARKS[@]}")
+
+    if [[ -n "$STABILITY_SHARD_INDEX" || -n "$STABILITY_SHARD_COUNT" ]]; then
+        validate_stability_shard
+        benchmark_names=()
+        for benchmark_index in "${!STABILITY_BENCHMARKS[@]}"; do
+            if (( benchmark_index % STABILITY_SHARD_COUNT + 1 == STABILITY_SHARD_INDEX )); then
+                benchmark_names+=("${STABILITY_BENCHMARKS[$benchmark_index]}")
+            fi
+        done
+        if [[ ${#benchmark_names[@]} -eq 0 ]]; then
+            echo "Stability shard ${STABILITY_SHARD_INDEX}/${STABILITY_SHARD_COUNT} has no benchmarks." >&2
+            exit 1
+        fi
+    fi
 
     echo "Running full same-tree stability check with adjacent per-benchmark baselines"
-    for benchmark_name in "${STABILITY_BENCHMARKS[@]}"; do
+    if [[ -n "$STABILITY_SHARD_INDEX" ]]; then
+        echo "Stability shard ${STABILITY_SHARD_INDEX}/${STABILITY_SHARD_COUNT}: ${#benchmark_names[@]} benchmark(s)"
+    fi
+    for benchmark_name in "${benchmark_names[@]}"; do
         FILTER="$benchmark_name"
         if ! run_filtered_stability_check_with_retries; then
             failure=1
@@ -290,6 +311,29 @@ run_full_stability_check() {
     fi
 
     echo "Stability check passed: all same-tree regression confidence intervals stayed within threshold."
+}
+
+parse_stability_shard_spec() {
+    local spec="$1"
+    if [[ "$spec" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]]; then
+        STABILITY_SHARD_INDEX="${BASH_REMATCH[1]}"
+        STABILITY_SHARD_COUNT="${BASH_REMATCH[2]}"
+        return
+    fi
+
+    echo "Invalid stability shard '$spec'. Expected INDEX/TOTAL, for example 1/18." >&2
+    exit 1
+}
+
+validate_stability_shard() {
+    if ! [[ "$STABILITY_SHARD_INDEX" =~ ^[1-9][0-9]*$ ]] || ! [[ "$STABILITY_SHARD_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Stability shard index and count must be positive integers." >&2
+        exit 1
+    fi
+    if (( STABILITY_SHARD_INDEX > STABILITY_SHARD_COUNT )); then
+        echo "Stability shard index must be less than or equal to shard count." >&2
+        exit 1
+    fi
 }
 
 stability_threshold_pct_for_benchmark() {
@@ -353,7 +397,7 @@ run_sibling_threshold_matrix() {
 
 usage() {
     cat <<EOF
-Usage: $0 [--profile NAME] [--filter NAME] [--save-baseline NAME] [--baseline NAME] [--measurement-time SECS] [--warmup-time SECS] [--sample-size N] [--cpu-set LIST|none] [--cooldown-secs SECS] [--stability-check] [--stability-threshold-pct N] [--sibling-threshold-matrix] [--plot]
+Usage: $0 [--profile NAME] [--filter NAME] [--save-baseline NAME] [--baseline NAME] [--measurement-time SECS] [--warmup-time SECS] [--sample-size N] [--cpu-set LIST|none] [--cooldown-secs SECS] [--stability-check] [--stability-shard INDEX/TOTAL] [--stability-threshold-pct N] [--sibling-threshold-matrix] [--plot]
 
 Runs the slot-table Criterion benchmark suite with stable defaults.
 
@@ -432,6 +476,10 @@ while [[ $# -gt 0 ]]; do
             STABILITY_CHECK="1"
             shift
             ;;
+        --stability-shard)
+            parse_stability_shard_spec "$2"
+            shift 2
+            ;;
         --stability-threshold-pct)
             STABILITY_THRESHOLD_PCT="$2"
             shift 2
@@ -458,6 +506,16 @@ done
 
 if [[ "$STABILITY_CHECK" == "1" && ( -n "$SAVE_BASELINE" || -n "$COMPARE_BASELINE" ) ]]; then
     echo "--stability-check cannot be combined with --save-baseline or --baseline." >&2
+    exit 1
+fi
+
+if [[ "$STABILITY_CHECK" != "1" && ( -n "$STABILITY_SHARD_INDEX" || -n "$STABILITY_SHARD_COUNT" ) ]]; then
+    echo "--stability-shard requires --stability-check." >&2
+    exit 1
+fi
+
+if [[ -n "$FILTER" && ( -n "$STABILITY_SHARD_INDEX" || -n "$STABILITY_SHARD_COUNT" ) ]]; then
+    echo "--stability-shard cannot be combined with --filter." >&2
     exit 1
 fi
 
@@ -488,6 +546,7 @@ if [[ "$STABILITY_CHECK" == "1" ]]; then
     echo "  stability_warmup_runs=$STABILITY_WARMUP_RUNS"
     echo "  stability_attempts=$STABILITY_ATTEMPTS"
     echo "  stability_timeout=${STABILITY_TIMEOUT_SECS}s"
+    echo "  stability_shard=${STABILITY_SHARD_INDEX:-<none>}${STABILITY_SHARD_INDEX:+/$STABILITY_SHARD_COUNT}"
 fi
 echo "  sibling_threshold=${CRANPOSE_SIBLING_INDEX_THRESHOLD:-<default>}"
 

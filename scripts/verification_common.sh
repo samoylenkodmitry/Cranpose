@@ -145,7 +145,11 @@ verify_robot_summary() {
     fi
 
     local summary_file="$root_dir/robot_test_summary.txt"
+    verify_robot_summary_file "$summary_file"
+}
 
+verify_robot_summary_file() {
+    local summary_file="$1"
     if [ ! -f "$summary_file" ]; then
         echo "missing robot summary: $summary_file" >&2
         exit 1

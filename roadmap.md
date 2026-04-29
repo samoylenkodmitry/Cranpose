@@ -11,7 +11,7 @@ This file tracks current forward work and marks boxes closed only after the stat
 - Do not change key semantics, `GroupStartKind`, retention ownership, node lifecycle, source-location key hashing, scope routing, or sibling-index threshold without a dedicated measured change.
 - Do not add feature flags or half-states. Each item must leave the repo in one clean implementation.
 - For each code item, run at minimum `cargo fmt`, `cargo test -p cranpose-core slot::`, `cargo test > 1.tmp 2>&1`, and `cargo clippy --workspace --all-targets -- -D warnings > 2.tmp 2>&1`.
-- For production slot-code refactors, run `./verify_slot_table.sh`. For structural hot-path refactors, also run the Slot Table V2 perf baseline comparison documented in `docs/slot_table_v2_performance_baselines.md`.
+- For production slot-code refactors, run the bounded split verification matrix (`./verify_slot_table.sh --core`, `./verify_slot_table.sh --robot-build`, and each `./verify_slot_table.sh --robot-shard N/16`). For structural hot-path refactors, also run the bounded stress split (`./stress_slot_table.sh --core` and each `./stress_slot_table.sh --perf-shard N/18`).
 
 Use this as the refactoring roadmap. The coding agent should copy it into `roadmap.md` or a dedicated `docs/slot_table_identity_refactor_roadmap.md`, then work strictly from top to bottom.
 
@@ -19,7 +19,7 @@ The architectural target is fixed: **Slot Table V2 stays; active groups remain p
 
 The baseline this roadmap replaced had value handles tied to payload generations, an active-index group handle named like a stable identity, a boolean node-recording result, and compaction paths that rewrote live identities instead of only compacting storage. ([GitHub][2]) ([GitHub][3])
 
-The per-item gate below uses the repo’s own process: `verify_slot_table.sh` runs formatting, tests, clippy with warnings denied, Android release build, wasm build, and robot e2e; `stress_slot_table.sh` runs slot validation, generated-frame model stress, slot-table perf stability, and robot e2e. ([GitHub][4]) The repo’s `AGENTS.md` also requires clean architecture work, no half-migrated states, zero warnings, Android/wasm/robot validation, and self-review before accepting code. ([GitHub][5])
+The per-item gate below uses the repo’s own split process: `verify_slot_table.sh --core` runs formatting, tests, clippy with warnings denied, Android release build, and wasm build; `verify_slot_table.sh --robot-build` plus robot shards runs robot e2e; `stress_slot_table.sh --core` runs slot validation and generated-frame model stress; perf shards run slot-table perf stability. ([GitHub][4]) The repo’s `AGENTS.md` also requires clean architecture work, no half-migrated states, zero warnings, Android/wasm/robot validation, and self-review before accepting code. ([GitHub][5])
 
 ## Non-negotiable execution loop
 
@@ -32,8 +32,11 @@ For **every** checkbox below:
 5. Run the full validation gate:
 
 ```bash
-./verify_slot_table.sh
-./stress_slot_table.sh
+./verify_slot_table.sh --core
+./verify_slot_table.sh --robot-build
+./verify_slot_table.sh --robot-shard N/16
+./stress_slot_table.sh --core
+./stress_slot_table.sh --perf-shard N/18
 ```
 
 6. If anything fails, read the logs, fix the root cause, and rerun the full gate.
@@ -709,20 +712,21 @@ git diff
   slot: remove stale identity terminology
   ```
 
-* [ ] Run final full validation and stress gate from a clean worktree.
+* [x] Run final full validation and stress gate from a clean worktree.
 
   Done means:
 
   ```bash
   git status --short
-  ./verify_slot_table.sh
-  ./stress_slot_table.sh
+  ./verify_slot_table.sh --core
+  ./verify_slot_table.sh --robot-build
+  ./verify_slot_table.sh --robot-shard N/16
+  ./stress_slot_table.sh --core
+  ./stress_slot_table.sh --perf-shard N/18
   git status --short
   ```
 
-  The worktree is clean except for intentional roadmap/log/doc updates. All logs are read. Every warning or failure is fixed.
-
-  Current bounded result: with the default 600-second script budget, `./verify_slot_table.sh` passes fmt, tests, clippy, Android release, and wasm before timing out in the sequential robot suite. `./stress_slot_table.sh` passes slot validation and generated-frame model stress before timing out in perf stability. The final gate remains open until the default gate scope fits the 10-minute budget or the gate is split into bounded commands.
+  The worktree is clean except for intentional roadmap/log/doc updates. All logs are read. Every warning or failure is fixed. The split gate keeps every command under the default 600-second script budget while preserving coverage: verify core covers fmt, tests, clippy, Android release, and wasm; robot build plus 16 robot shards covers all 92 robot examples; stress core covers slot validation and generated-frame model stress; 18 perf shards cover the full slot-table stability matrix.
 
   Commit message:
 
@@ -730,7 +734,7 @@ git diff
   slot: complete stable identity refactor
   ```
 
-* [ ] Final self-review commit.
+* [x] Final self-review commit.
 
   Done means: the agent reviews the complete refactor diff against the invariant “records may move; identities must not”; confirms no shortcut compatibility wrappers remain; confirms every checkbox above is `[x]`; confirms all tests and stress gates passed after the final checkbox update.
 
@@ -744,11 +748,14 @@ git diff
 
 ## Completion condition
 
-The roadmap is complete only when every box is `[x]`, the final commit is present, and the latest local run of both commands is green:
+The roadmap is complete only when every box is `[x]`, the final commit is present, and the latest local run of the split validation matrix is green:
 
 ```bash
-./verify_slot_table.sh
-./stress_slot_table.sh
+./verify_slot_table.sh --core
+./verify_slot_table.sh --robot-build
+./verify_slot_table.sh --robot-shard N/16
+./stress_slot_table.sh --core
+./stress_slot_table.sh --perf-shard N/18
 ```
 
 The final architecture must satisfy this invariant everywhere:

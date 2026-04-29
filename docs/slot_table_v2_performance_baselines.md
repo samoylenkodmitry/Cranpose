@@ -5,7 +5,9 @@ Slot Table V2 performance baselines are captured with `./perf_slot_table_v2.sh`.
 Run the full verification gate before saving a baseline:
 
 ```bash
-./verify_slot_table.sh
+./verify_slot_table.sh --core
+./verify_slot_table.sh --robot-build
+./verify_slot_table.sh --robot-shard N/16
 ```
 
 Save the reference baseline from the branch or commit that represents the comparison target:
@@ -23,7 +25,7 @@ Compare the candidate branch against that saved baseline:
 Run the same-tree stability check before trusting a regression result:
 
 ```bash
-./perf_slot_table_v2.sh --stability-check
+./stress_slot_table.sh --perf-shard N/18
 ```
 
 The stability check runs two unrecorded warmup passes, saves a temporary baseline,
