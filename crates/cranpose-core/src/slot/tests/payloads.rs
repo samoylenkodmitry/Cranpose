@@ -1,5 +1,19 @@
 use super::*;
 
+fn compose_single_i32_value_slot(harness: &mut SlotHarness, key: Key, value: i32) -> ValueSlotId {
+    harness.begin_pass(SlotPassMode::Compose);
+    let slot = harness.session(|session| {
+        begin_unkeyed(session, key, None);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || value);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+    slot
+}
+
 #[test]
 fn payload_records_store_semantic_payload_kinds() {
     let mut harness = SlotHarness::new();
@@ -215,6 +229,50 @@ fn read_value_mut_updates_existing_slot_in_place() {
     *harness.table.read_value_mut::<i32>(slot) = 77;
 
     assert_eq!(*harness.table.read_value::<i32>(slot), 77);
+}
+
+#[test]
+fn same_table_value_slot_read_write_respects_storage_identity() {
+    let mut harness = SlotHarness::new();
+
+    let slot = compose_single_i32_value_slot(&mut harness, 17, 21);
+
+    assert_eq!(*harness.table.read_value::<i32>(slot), 21);
+    harness.table.write_value(slot, 34_i32);
+    assert_eq!(*harness.table.read_value::<i32>(slot), 34);
+}
+
+#[test]
+#[should_panic(expected = "value slot belongs to a different slot table")]
+fn cross_table_value_slot_read_panics_before_anchor_resolution() {
+    let mut first = SlotHarness::new();
+    let first_slot = compose_single_i32_value_slot(&mut first, 18, 55);
+
+    let mut second = SlotHarness::new();
+    let second_slot = compose_single_i32_value_slot(&mut second, 20, 89);
+
+    assert_eq!(first_slot.anchor(), second_slot.anchor());
+    let _ = second.table.read_value::<i32>(first_slot);
+}
+
+#[test]
+fn cross_table_value_slot_write_does_not_alias_matching_anchor() {
+    let mut first = SlotHarness::new();
+    let first_slot = compose_single_i32_value_slot(&mut first, 21, 55);
+
+    let mut second = SlotHarness::new();
+    let second_slot = compose_single_i32_value_slot(&mut second, 22, 89);
+
+    assert_eq!(first_slot.anchor(), second_slot.anchor());
+    let cross_table_write = panic::catch_unwind(AssertUnwindSafe(|| {
+        second.table.write_value(first_slot, 144_i32);
+    }));
+    assert!(
+        cross_table_write.is_err(),
+        "cross-table value-slot writes must fail before touching matching anchors"
+    );
+    assert_eq!(*first.table.read_value::<i32>(first_slot), 55);
+    assert_eq!(*second.table.read_value::<i32>(second_slot), 89);
 }
 
 #[test]

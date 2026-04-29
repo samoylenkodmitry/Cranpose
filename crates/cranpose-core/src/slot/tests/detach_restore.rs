@@ -121,6 +121,10 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
     assert_eq!(restored_child_scope, Some(CHILD_SCOPE));
     assert_eq!(grandchild_kind, GroupStartKind::Reused);
     assert_eq!(restored_grandchild_scope, Some(GRANDCHILD_SCOPE));
+    assert_eq!(restored_child_slot, child_slot);
+    assert_eq!(restored_grandchild_slot, grandchild_slot);
+    assert_eq!(*harness.table.read_value::<i32>(child_slot), 71);
+    assert_eq!(*harness.table.read_value::<i32>(grandchild_slot), 111);
     assert_eq!(*harness.table.read_value::<i32>(restored_child_slot), 71);
     assert_eq!(
         *harness.table.read_value::<i32>(restored_grandchild_slot),

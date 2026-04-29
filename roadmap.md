@@ -30,32 +30,32 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## 1. Add debug storage identity to value slots
 
-* [ ] Implement debug-only storage identity on `ValueSlotId`.
+* [x] Implement debug-only storage identity on `ValueSlotId`.
 
-    * [ ] Add `#[cfg(any(test, debug_assertions))] storage_id: usize` to `ValueSlotId`.
-    * [ ] Update `ValueSlotId::new(...)` or create `ValueSlotId::new_for_table(...)`.
-    * [ ] Thread `SlotTable::storage_id()` into value-slot creation.
-    * [ ] In `SlotTable::checked_value_slot`, assert that the slot belongs to the current table in debug/test builds.
-    * [ ] Keep release layout minimal if desired.
+    * [x] Add `#[cfg(any(test, debug_assertions))] storage_id: usize` to `ValueSlotId`.
+    * [x] Update `ValueSlotId::new(...)` or create `ValueSlotId::new_for_table(...)`.
+    * [x] Thread `SlotTable::storage_id()` into value-slot creation.
+    * [x] In `SlotTable::checked_value_slot`, assert that the slot belongs to the current table in debug/test builds.
+    * [x] Keep release layout minimal if desired.
 
-* [ ] Add tests.
+* [x] Add tests.
 
-    * [ ] Same-table value slot read/write still succeeds.
-    * [ ] Cross-table value-slot access panics or reports a clear invariant failure in debug/test.
-    * [ ] Detached/restored retained value slot still resolves through the correct table.
-    * [ ] Type mismatch behavior remains unchanged.
+    * [x] Same-table value slot read/write still succeeds.
+    * [x] Cross-table value-slot access panics or reports a clear invariant failure in debug/test.
+    * [x] Detached/restored retained value slot still resolves through the correct table.
+    * [x] Type mismatch behavior remains unchanged.
 
-* [ ] Self-review.
+* [x] Self-review.
 
-    * [ ] Confirm no public API break unless intentional.
-    * [ ] Confirm `ValueSlotHandle<'pass>` still compiles cleanly.
-    * [ ] Confirm no accidental clone/copy layout issue.
+    * [x] Confirm no public API break unless intentional.
+    * [x] Confirm `ValueSlotHandle<'pass>` still compiles cleanly.
+    * [x] Confirm no accidental clone/copy layout issue.
 
-* [ ] Validate and commit.
+* [x] Validate and commit.
 
-    * [ ] Run full validation baseline.
-    * [ ] Commit: `slot: guard value slots with debug storage identity`
-    * [ ] Mark this item `[x]`.
+    * [x] Run full validation baseline.
+    * [x] Commit: `slot: guard value slots with debug storage identity`
+    * [x] Mark this item `[x]`.
 
 ---
 

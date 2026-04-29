@@ -308,7 +308,11 @@ impl SlotTable {
             (anchor, None)
         };
 
-        (ValueSlotId::new(anchor), deferred_drop, location_refresh)
+        (
+            ValueSlotId::new_for_table(anchor, self.storage_id()),
+            deferred_drop,
+            location_refresh,
+        )
     }
 
     fn set_group_payload_anchor_active_location(&mut self, owner: AnchorId, index: usize) {
