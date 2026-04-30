@@ -5,6 +5,9 @@ use super::{
 use crate::{remove_child_and_cleanup_now, AnchorId, Applier, NodeError, NodeId};
 
 impl SlotTable {
+    // Keep detach and restore ordering aligned with docs/SLOT_TABLE_LIFECYCLE.md.
+    // Indexes, scopes, payload locations, and ancestor spans are deliberately
+    // updated in separate steps so validation can pinpoint broken transitions.
     fn flush_group_index_refresh_from(&mut self, start: Option<usize>) {
         if let Some(start) = start {
             self.refresh_group_indexes_from(start);

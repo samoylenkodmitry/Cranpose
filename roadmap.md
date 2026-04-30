@@ -63,52 +63,52 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## 2. Add authoritative slot lifecycle contract
 
-* [ ] Add a lifecycle contract document or module comment.
+* [x] Add a lifecycle contract document or module comment.
 
-    * [ ] Location option: `docs/SLOT_TABLE_LIFECYCLE.md`.
-    * [ ] Location option: module-level comments in `crates/cranpose-core/src/slot/lifecycle.rs`.
-    * [ ] Include active group lifecycle:
+    * [x] Location option: `docs/SLOT_TABLE_LIFECYCLE.md`.
+    * [x] Location option: module-level comments in `crates/cranpose-core/src/slot/lifecycle.rs`.
+    * [x] Include active group lifecycle:
 
-        * [ ] `Active -> Detached`
-        * [ ] `Detached -> Restored`
-        * [ ] `Detached -> Disposed`
-        * [ ] `Disposed -> Invalidated`
-    * [ ] Include node lifecycle:
+        * [x] `Active -> Detached`
+        * [x] `Detached -> Restored`
+        * [x] `Detached -> Disposed`
+        * [x] `Disposed -> Invalidated`
+    * [x] Include node lifecycle:
 
-        * [ ] `Active`
-        * [ ] `RetainedDetached`
-        * [ ] `Disposed/removed from applier`
-    * [ ] Include payload lifecycle:
+        * [x] `Active`
+        * [x] `RetainedDetached`
+        * [x] `Disposed/removed from applier`
+    * [x] Include payload lifecycle:
 
-        * [ ] Active payload.
-        * [ ] Detached retained payload.
-        * [ ] Deferred drop.
-        * [ ] Final disposal.
-    * [ ] Include scope lifecycle:
+        * [x] Active payload.
+        * [x] Detached retained payload.
+        * [x] Deferred drop.
+        * [x] Final disposal.
+    * [x] Include scope lifecycle:
 
-        * [ ] Active scope.
-        * [ ] Inactive retained scope.
-        * [ ] Restored invalid scope.
-        * [ ] Removed/disposed scope.
+        * [x] Active scope.
+        * [x] Inactive retained scope.
+        * [x] Restored invalid scope.
+        * [x] Removed/disposed scope.
 
-* [ ] Cross-link code comments.
+* [x] Cross-link code comments.
 
-    * [ ] `slot/detach.rs`
-    * [ ] `slot/lifecycle.rs`
-    * [ ] `retention.rs`
-    * [ ] `composer.rs`
+    * [x] `slot/detach.rs`
+    * [x] `slot/lifecycle.rs`
+    * [x] `retention.rs`
+    * [x] `composer.rs`
 
-* [ ] Self-review.
+* [x] Self-review.
 
-    * [ ] Confirm the doc describes current behavior, not aspirational behavior.
-    * [ ] Confirm every lifecycle transition has a corresponding code path.
-    * [ ] Confirm terminology matches code names.
+    * [x] Confirm the doc describes current behavior, not aspirational behavior.
+    * [x] Confirm every lifecycle transition has a corresponding code path.
+    * [x] Confirm terminology matches code names.
 
-* [ ] Validate and commit.
+* [x] Validate and commit.
 
-    * [ ] Run formatting/tests if comments/docs only still touch Rust comments.
-    * [ ] Commit: `docs: define slot table lifecycle invariants`
-    * [ ] Mark this item `[x]`.
+    * [x] Run formatting/tests if comments/docs only still touch Rust comments.
+    * [x] Commit: `docs: define slot table lifecycle invariants`
+    * [x] Mark this item `[x]`.
 
 ---
 

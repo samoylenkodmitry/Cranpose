@@ -1,6 +1,8 @@
 use super::{DetachedSubtree, SlotLifecycleDebugStats, SlotTable};
 use std::any::Any;
 
+/// Coordinates deferred payload disposal for the slot lifecycle described in
+/// `docs/SLOT_TABLE_LIFECYCLE.md`.
 pub(crate) struct DeferredDrop {
     value: Box<dyn Any>,
 }

@@ -914,6 +914,9 @@ impl Composer {
         parent_scope: Option<ScopeId>,
         subtree: crate::slot::DetachedSubtree,
     ) {
+        // Retention and disposal must preserve the slot lifecycle contract in
+        // docs/SLOT_TABLE_LIFECYCLE.md across the slot table, applier, and scope
+        // registry.
         let mut root_nodes = Vec::new();
         subtree.collect_root_nodes_into(&mut root_nodes);
         self.debug_assert_detached_subtree_metadata(&subtree, &root_nodes);

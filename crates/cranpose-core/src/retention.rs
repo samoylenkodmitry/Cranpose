@@ -6,6 +6,9 @@ use crate::SlotTable;
 use crate::{slot::DetachedSubtree, slot::GroupKey, ScopeId};
 use std::cmp::Ordering;
 
+// Retained subtrees follow docs/SLOT_TABLE_LIFECYCLE.md: anchors stay detached,
+// scopes stay out of the active scope index, and nodes use RetainedDetached until
+// the subtree is restored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RetentionMode {
     #[default]
