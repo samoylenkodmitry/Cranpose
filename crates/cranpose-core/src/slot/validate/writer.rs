@@ -72,6 +72,8 @@ fn validate_child_boundary(
 impl SlotWriteSessionState {
     pub(crate) fn validate(&mut self, table: &mut SlotTable) -> Result<(), SlotInvariantError> {
         table.flush_payload_location_refreshes(self);
+        #[cfg(any(test, debug_assertions))]
+        self.debug_assert_no_pending_payload_location_refreshes("writer validation");
         table.validate()?;
 
         validate_cursor(

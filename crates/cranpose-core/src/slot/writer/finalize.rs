@@ -19,6 +19,9 @@ impl SlotWriteSession<'_> {
             self.end_group();
         }
         self.flush_payload_location_refreshes();
+        #[cfg(any(test, debug_assertions))]
+        self.state
+            .debug_assert_no_pending_payload_location_refreshes("finalize_pass");
 
         let root_detached = self.table.root_finish_result(self.state);
         self.state.note_detached_subtrees(&root_detached);

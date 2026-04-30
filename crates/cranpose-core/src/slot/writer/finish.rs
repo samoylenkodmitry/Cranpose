@@ -60,6 +60,8 @@ impl SlotTable {
             }
         }
         self.flush_payload_location_refreshes(state);
+        #[cfg(any(test, debug_assertions))]
+        state.debug_assert_no_pending_payload_location_refreshes("finish_group_body");
 
         let mut direct_nodes = Vec::new();
         let removed = self.remove_group_node_tail_at_cursor(group_anchor, node_cursor);

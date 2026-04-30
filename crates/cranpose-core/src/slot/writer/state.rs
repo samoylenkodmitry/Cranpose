@@ -53,6 +53,30 @@ impl SlotWriteSessionState {
             .or_insert(start);
     }
 
+    #[cfg(any(test, debug_assertions))]
+    pub(in crate::slot) fn has_pending_payload_location_refreshes(&self) -> bool {
+        !self.payload_location_refreshes.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(in crate::slot) fn pending_payload_location_refresh_start(
+        &self,
+        owner: AnchorId,
+    ) -> Option<usize> {
+        self.payload_location_refreshes.get(&owner).copied()
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub(in crate::slot) fn debug_assert_no_pending_payload_location_refreshes(
+        &self,
+        operation: &'static str,
+    ) {
+        debug_assert!(
+            !self.has_pending_payload_location_refreshes(),
+            "payload location refreshes must be flushed after {operation}"
+        );
+    }
+
     pub(in crate::slot) fn drain_payload_location_refreshes(
         &mut self,
     ) -> impl Iterator<Item = (AnchorId, usize)> + '_ {

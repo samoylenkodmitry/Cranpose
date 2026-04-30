@@ -116,36 +116,36 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## 3. Make deferred payload-location refresh explicit
 
-* [ ] Add explicit pending-refresh diagnostics.
+* [x] Add explicit pending-refresh diagnostics.
 
-    * [ ] Add a debug/test-only flag or helper on `SlotWriteSessionState`.
-    * [ ] Track whether `payload_location_refreshes` is non-empty.
-    * [ ] Add a small helper like `has_pending_payload_location_refreshes()`.
+    * [x] Add a debug/test-only flag or helper on `SlotWriteSessionState`.
+    * [x] Track whether `payload_location_refreshes` is non-empty.
+    * [x] Add a small helper like `has_pending_payload_location_refreshes()`.
 
-* [ ] Assert safe access boundaries.
+* [x] Assert safe access boundaries.
 
-    * [ ] Before direct value read/write from writer-sensitive paths, assert refreshes have been flushed where required.
-    * [ ] Keep intentional pre-flush operations documented.
-    * [ ] Ensure `begin_group`, `begin_recompose_at_scope`, `finish_group_body`, `finalize_pass`, and writer validation remain flush points.
+    * [x] Before direct value read/write from writer-sensitive paths, assert refreshes have been flushed where required.
+    * [x] Keep intentional pre-flush operations documented.
+    * [x] Ensure `begin_group`, `begin_recompose_at_scope`, `finish_group_body`, `finalize_pass`, and writer validation remain flush points.
 
-* [ ] Add tests.
+* [x] Add tests.
 
-    * [ ] Insert multiple payloads into the same group and verify coalesced refresh start is minimal.
-    * [ ] Verify value reads after flush resolve correct payload anchors.
-    * [ ] Verify finishing a group flushes pending refreshes.
-    * [ ] Verify validation flushes or catches pending invalid state deterministically.
+    * [x] Insert multiple payloads into the same group and verify coalesced refresh start is minimal.
+    * [x] Verify value reads after flush resolve correct payload anchors.
+    * [x] Verify finishing a group flushes pending refreshes.
+    * [x] Verify validation flushes or catches pending invalid state deterministically.
 
-* [ ] Self-review.
+* [x] Self-review.
 
-    * [ ] Confirm no extra refresh work on hot path beyond intended debug checks.
-    * [ ] Confirm mutation debug stats still make sense.
-    * [ ] Confirm no borrow checker workaround creates hidden mutable aliasing risk.
+    * [x] Confirm no extra refresh work on hot path beyond intended debug checks.
+    * [x] Confirm mutation debug stats still make sense.
+    * [x] Confirm no borrow checker workaround creates hidden mutable aliasing risk.
 
-* [ ] Validate and commit.
+* [x] Validate and commit.
 
-    * [ ] Run full validation baseline.
-    * [ ] Commit: `slot: make deferred payload anchor refresh explicit`
-    * [ ] Mark this item `[x]`.
+    * [x] Run full validation baseline.
+    * [x] Commit: `slot: make deferred payload anchor refresh explicit`
+    * [x] Mark this item `[x]`.
 
 ---
 

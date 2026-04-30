@@ -102,6 +102,90 @@ fn appended_value_slots_batch_payload_location_refresh() {
 }
 
 #[test]
+fn pending_payload_location_refreshes_coalesce_to_lowest_start() {
+    const GROUP_KEY: Key = 56;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let _first = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (first, second, third) = harness.session(|session| {
+        let group = begin_unkeyed(session, GROUP_KEY, None);
+        let first = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        assert!(
+            !session.state.has_pending_payload_location_refreshes(),
+            "reusing an existing payload must not request a location refresh"
+        );
+
+        let second = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
+        assert_eq!(
+            session
+                .state
+                .pending_payload_location_refresh_start(group.anchor),
+            Some(1)
+        );
+
+        let third = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        assert_eq!(
+            session
+                .state
+                .pending_payload_location_refresh_start(group.anchor),
+            Some(1),
+            "multiple payload inserts in one group must coalesce to the lowest dirty index"
+        );
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        assert!(
+            !session.state.has_pending_payload_location_refreshes(),
+            "finish_group_body must flush deferred payload location refreshes"
+        );
+        assert_eq!(*session.table.read_value::<i32>(first), 10);
+        assert_eq!(*session.table.read_value::<i32>(second), 20);
+        assert_eq!(*session.table.read_value::<i32>(third), 30);
+        session.end_group();
+        (first, second, third)
+    });
+    harness.finish_pass();
+
+    assert_eq!(*harness.table.read_value::<i32>(first), 10);
+    assert_eq!(*harness.table.read_value::<i32>(second), 20);
+    assert_eq!(*harness.table.read_value::<i32>(third), 30);
+}
+
+#[test]
+fn writer_validation_flushes_pending_payload_location_refreshes() {
+    const GROUP_KEY: Key = 57;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    let slot = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 42_i32);
+        assert!(
+            session.state.has_pending_payload_location_refreshes(),
+            "appending a payload should defer the range refresh until a writer boundary"
+        );
+        slot
+    });
+    assert!(
+        !harness.state.has_pending_payload_location_refreshes(),
+        "writer validation must flush deferred payload location refreshes"
+    );
+    harness.finish_pass();
+
+    assert_eq!(*harness.table.read_value::<i32>(slot), 42);
+}
+
+#[test]
 fn payload_tail_removal_does_not_refresh_empty_suffix() {
     const GROUP_KEY: Key = 55;
 

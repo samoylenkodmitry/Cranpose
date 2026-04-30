@@ -351,6 +351,8 @@ impl SlotTable {
         for (owner, start) in refreshes {
             self.refresh_group_payload_anchor_locations(owner, start);
         }
+        #[cfg(any(test, debug_assertions))]
+        state.debug_assert_no_pending_payload_location_refreshes("slot table payload flush");
     }
 
     pub(super) fn refresh_payload_locations_for_group_range(&mut self, group_range: GroupRange) {

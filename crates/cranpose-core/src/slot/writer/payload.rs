@@ -4,6 +4,9 @@ use crate::Owned;
 impl SlotWriteSession<'_> {
     pub(in crate::slot) fn flush_payload_location_refreshes(&mut self) {
         self.table.flush_payload_location_refreshes(self.state);
+        #[cfg(any(test, debug_assertions))]
+        self.state
+            .debug_assert_no_pending_payload_location_refreshes("payload location flush");
     }
 
     pub(crate) fn value_slot_with_kind<T: 'static>(
@@ -47,6 +50,15 @@ impl SlotWriteSession<'_> {
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
         let slot = self.value_slot_with_kind(kind, || Owned::new(init()));
+        // The current payload anchor is activated before the coalesced range
+        // refresh is flushed, so remember can read the value it just requested.
+        #[cfg(any(test, debug_assertions))]
+        debug_assert!(
+            self.table
+                .payload_anchor_active_location(slot.anchor())
+                .is_some(),
+            "remember must only read a value slot with an active payload anchor"
+        );
         self.table.read_value::<Owned<T>>(slot).clone()
     }
 }

@@ -110,6 +110,9 @@ impl SlotWriteSession<'_> {
 
     pub(crate) fn begin_recompose_at_scope(&mut self, scope_id: ScopeId) -> Option<ActiveGroupId> {
         self.flush_payload_location_refreshes();
+        #[cfg(any(test, debug_assertions))]
+        self.state
+            .debug_assert_no_pending_payload_location_refreshes("begin_recompose_at_scope");
         let group = self.table.active_group_for_scope(scope_id)?;
         let anchor = self.table.active_group_anchor(group);
         self.table.open_group_frame(self.state, anchor);
@@ -123,6 +126,9 @@ impl SlotWriteSession<'_> {
         let BeginGroupInput { key, restored } = input;
         self.state.consume_group_key(key);
         self.flush_payload_location_refreshes();
+        #[cfg(any(test, debug_assertions))]
+        self.state
+            .debug_assert_no_pending_payload_location_refreshes("begin_group");
         let parent_anchor = self.state.current_parent_anchor();
         let insert_index = self.state.current_child_cursor();
 
