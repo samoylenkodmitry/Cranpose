@@ -1165,7 +1165,7 @@ fn validate_reports_scope_index_stale_anchor_structurally() {
 
     let mut table = composed_parent_child_table(492, 493, Some(SCOPE_ID));
     let old_anchor = table.groups[1].anchor;
-    let new_anchor = AnchorId::new(1_002);
+    let new_anchor = table.anchors.allocate();
 
     table.groups[1].anchor = new_anchor;
     table.anchors.mark_detached(old_anchor);
