@@ -50,6 +50,22 @@ fn slots_storage_key(host: &Rc<SlotsHost>) -> usize {
     host.storage_key()
 }
 
+fn bind_slots_host_to_runtime_state(state: &Rc<ComposerRuntimeState>, host: &Rc<SlotsHost>) {
+    if let Some(bound_state) = host.runtime_state() {
+        if Rc::ptr_eq(&bound_state, state) {
+            state.bind_slots_host(host);
+            return;
+        }
+        drop(bound_state);
+        if host.rebind_orphaned_runtime_state(state) {
+            state.bind_slots_host(host);
+            return;
+        }
+        panic!("slot host already belongs to a different composer runtime state");
+    }
+    state.bind_slots_host(host);
+}
+
 pub(crate) struct ComposerRuntimeState {
     scope_registry: RefCell<HashMap<ScopeId, RecomposeScope>>,
     retention_by_host: RefCell<HashMap<usize, RetentionManager>>,
@@ -81,6 +97,14 @@ impl ComposerRuntimeState {
 
     pub(crate) fn bind_applier_host(&self, applier: &Rc<dyn ApplierHost>) {
         *self.applier_host.borrow_mut() = Some(Rc::downgrade(applier));
+    }
+
+    pub(crate) fn has_live_applier_host(&self) -> bool {
+        self.applier_host
+            .borrow()
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .is_some()
     }
 
     pub(crate) fn bind_slots_host(self: &Rc<Self>, host: &Rc<SlotsHost>) {
@@ -419,9 +443,8 @@ impl Composer {
         observer: SnapshotStateObserver,
         root: Option<NodeId>,
     ) -> Self {
-        let shared_state = slots.runtime_state().unwrap_or(shared_state);
         shared_state.bind_applier_host(&applier);
-        shared_state.bind_slots_host(&slots);
+        bind_slots_host_to_runtime_state(&shared_state, &slots);
         let core = Rc::new(ComposerCore::new(
             shared_state,
             slots,
@@ -512,16 +535,7 @@ impl Composer {
         mode: crate::slot::SlotPassMode,
         f: impl FnOnce(&Composer) -> R,
     ) -> (R, SlotPassOutcome) {
-        match slots.runtime_state() {
-            Some(state) => {
-                assert!(
-                    Rc::ptr_eq(&state, &self.core.shared_state),
-                    "slot host already belongs to a different composer runtime state"
-                );
-                state.bind_slots_host(&slots);
-            }
-            None => self.core.shared_state.bind_slots_host(&slots),
-        }
+        bind_slots_host_to_runtime_state(&self.core.shared_state, &slots);
         slots.begin_pass(mode);
         self.core.slot_hosts.borrow_mut().push(Rc::clone(&slots));
 
@@ -791,15 +805,15 @@ impl Composer {
                 } = slots.begin_group(BeginGroupInput::new(reserved_key, restored));
                 (group, anchor, scope_id, kind)
             });
-        let scope_ref = if let Some(scope_id) = start_scope_id {
-            self.scope_for_id(scope_id)
-                .expect("group scope id must resolve through composer registry")
-        } else {
-            let scope = RecomposeScope::new(self.runtime_handle());
-            self.register_scope(&scope);
-            self.with_slot_session_mut(|slots| slots.set_group_scope(group, scope.id()));
-            scope
-        };
+        let scope_ref =
+            if let Some(scope) = start_scope_id.and_then(|scope_id| self.scope_for_id(scope_id)) {
+                scope
+            } else {
+                let scope = RecomposeScope::new(self.runtime_handle());
+                self.register_scope(&scope);
+                self.with_slot_session_mut(|slots| slots.set_group_scope(group, scope.id()));
+                scope
+            };
 
         scope_ref.reactivate();
         scope_ref.set_group_anchor(group_anchor);

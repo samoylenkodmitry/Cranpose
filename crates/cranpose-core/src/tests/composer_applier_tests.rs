@@ -9,6 +9,50 @@ fn slots_host_into_table_requires_unique_host_reference() {
     let _ = slots_host.into_table();
 }
 
+#[test]
+fn slots_host_into_table_does_not_transfer_runtime_state_through_slot_table() {
+    let state = Rc::new(crate::composer::ComposerRuntimeState::default());
+    let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    state.bind_slots_host(&slots_host);
+
+    let storage_key = slots_host.storage_key();
+    assert!(
+        state.host_for_storage_key(storage_key).is_some(),
+        "bound host must be registered before transfer"
+    );
+
+    let table = slots_host.into_table();
+    assert!(
+        state.host_for_storage_key(storage_key).is_none(),
+        "transfer must clear runtime ownership for the original host"
+    );
+
+    let rebound_host = SlotsHost::new(table);
+    assert!(
+        rebound_host.runtime_state().is_none(),
+        "slot storage must not smuggle composer runtime ownership into a new host"
+    );
+}
+
+#[test]
+#[should_panic(expected = "slot host already belongs to a different composer runtime state")]
+fn composer_new_with_shared_state_rejects_mismatched_bound_host() {
+    let owner_state = Rc::new(crate::composer::ComposerRuntimeState::default());
+    let other_state = Rc::new(crate::composer::ComposerRuntimeState::default());
+    let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    let owner_applier: Rc<dyn ApplierHost> =
+        Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
+    owner_state.bind_applier_host(&owner_applier);
+    owner_state.bind_slots_host(&slots_host);
+
+    let (handle, _runtime) = runtime_handle();
+    let applier = Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+
+    let _ =
+        Composer::new_with_shared_state(other_state, slots_host, applier, handle, observer, None);
+}
+
 /// Test that emit_node rejects reuse when the parent's previous children list
 /// didn't contain the candidate node. This prevents nodes from "teleporting"
 /// between parents.

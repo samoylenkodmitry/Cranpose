@@ -3515,13 +3515,12 @@ impl SlotsHost {
 
     pub fn new(storage: SlotTable) -> Self {
         let storage_key = storage.storage_id();
-        let runtime_state = storage.runtime_state();
         Self {
             storage_key: Cell::new(storage_key),
             inner: RefCell::new(SlotsHostInner {
                 table: storage,
                 lifecycle: slot::SlotLifecycleCoordinator::default(),
-                runtime_state,
+                runtime_state: None,
                 active_pass: None,
             }),
         }
@@ -3530,7 +3529,56 @@ impl SlotsHost {
     pub(crate) fn bind_runtime_state(&self, state: &Rc<crate::composer::ComposerRuntimeState>) {
         let mut inner = self.inner.borrow_mut();
         inner.runtime_state = Some(Rc::clone(state));
-        inner.table.bind_runtime_state(state);
+    }
+
+    pub(crate) fn rebind_orphaned_runtime_state(
+        &self,
+        state: &Rc<crate::composer::ComposerRuntimeState>,
+    ) -> bool {
+        let inner = self.inner.borrow();
+        assert!(
+            inner.active_pass.is_none(),
+            "cannot rebind SlotsHost during an active pass"
+        );
+        let Some(bound_state) = inner.runtime_state.as_ref() else {
+            drop(inner);
+            self.bind_runtime_state(state);
+            return true;
+        };
+        if Rc::ptr_eq(bound_state, state) {
+            return true;
+        }
+        if bound_state.has_live_applier_host() {
+            return false;
+        }
+        drop(inner);
+
+        let mut inner = self.inner.borrow_mut();
+        let Some(bound_state) = inner.runtime_state.as_ref() else {
+            inner.runtime_state = Some(Rc::clone(state));
+            return true;
+        };
+        if Rc::ptr_eq(bound_state, state) {
+            return true;
+        }
+        if bound_state.has_live_applier_host() {
+            return false;
+        }
+
+        let previous_state = Rc::clone(bound_state);
+        let mut lifecycle = std::mem::take(&mut inner.lifecycle);
+        lifecycle.flush_pending_drops();
+        let host_key = self.storage_key();
+        previous_state.dispose_retained_subtrees_for_host(
+            host_key,
+            &mut inner.table,
+            &mut lifecycle,
+        );
+        previous_state.clear_host(self);
+        lifecycle.flush_pending_drops();
+        inner.runtime_state = Some(Rc::clone(state));
+        inner.lifecycle = lifecycle;
+        true
     }
 
     pub(crate) fn runtime_state(&self) -> Option<Rc<crate::composer::ComposerRuntimeState>> {
@@ -3562,10 +3610,18 @@ impl SlotsHost {
         );
         drop(inner);
         let mut inner = self.inner.borrow_mut();
-        inner.lifecycle.flush_pending_drops();
+        let mut lifecycle = std::mem::take(&mut inner.lifecycle);
+        lifecycle.flush_pending_drops();
+        if let Some(state) = inner.runtime_state.clone() {
+            let host_key = self.storage_key();
+            state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle);
+            state.clear_host(self);
+            lifecycle.flush_pending_drops();
+        }
         let taken = std::mem::take(&mut inner.table);
         self.storage_key.set(inner.table.storage_id());
-        inner.runtime_state = inner.table.runtime_state();
+        inner.runtime_state = None;
+        inner.lifecycle = lifecycle;
         taken
     }
 
@@ -3587,7 +3643,7 @@ impl SlotsHost {
         lifecycle.dispose_slot_table(&mut inner.table);
         inner.table = SlotTable::default();
         self.storage_key.set(inner.table.storage_id());
-        inner.runtime_state = inner.table.runtime_state();
+        inner.runtime_state = None;
         inner.lifecycle = slot::SlotLifecycleCoordinator::default();
     }
 

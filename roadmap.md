@@ -6,6 +6,6 @@
 - [x] Remove or wire production scope-index rebuild metrics.
 - [x] Add production-safe local invariants for critical slot and retention identity paths, with exhaustive validation remaining debug/test-only.
 - [x] Make retained subtree restore transactional.
-- [ ] Collapse runtime-state ownership to a single source of truth across `SlotTable`, `SlotsHost`, and `ComposerRuntimeState`.
+- [x] Collapse runtime-state ownership to a single source of truth across `SlotTable`, `SlotsHost`, and `ComposerRuntimeState`.
 - [ ] Normalize anchor lifecycle debug stats semantics for group and payload registries.
 - [ ] Sync active slot-table design docs with implementation.

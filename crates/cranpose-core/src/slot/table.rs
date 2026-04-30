@@ -2,7 +2,6 @@ use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadAnchorRegistry, PayloadRecord,
     ScopeIndex, SlotLifecycleCoordinator, SlotTableMutationDebugStats, SlotWriteSessionState,
 };
-use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod metadata;
@@ -22,7 +21,6 @@ pub(crate) struct SlotWriteSession<'a> {
 
 pub struct SlotTable {
     storage_id: usize,
-    runtime_state: Option<Rc<crate::composer::ComposerRuntimeState>>,
     pub(super) groups: Vec<GroupRecord>,
     pub(super) payloads: Vec<PayloadRecord>,
     pub(super) nodes: Vec<NodeRecord>,
@@ -37,7 +35,6 @@ impl SlotTable {
     pub fn new() -> Self {
         Self {
             storage_id: NEXT_SLOT_STORAGE_ID.fetch_add(1, Ordering::Relaxed),
-            runtime_state: None,
             groups: Vec::new(),
             payloads: Vec::new(),
             nodes: Vec::new(),
@@ -63,14 +60,6 @@ impl SlotTable {
 
     pub(crate) fn storage_id(&self) -> usize {
         self.storage_id
-    }
-
-    pub(crate) fn runtime_state(&self) -> Option<Rc<crate::composer::ComposerRuntimeState>> {
-        self.runtime_state.clone()
-    }
-
-    pub(crate) fn bind_runtime_state(&mut self, state: &Rc<crate::composer::ComposerRuntimeState>) {
-        self.runtime_state = Some(Rc::clone(state));
     }
 
     pub(crate) fn compact_storage(&mut self) {
