@@ -150,7 +150,8 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
     assert_eq!(snapshot.active_payload_count, 2);
     assert_eq!(snapshot.active_node_count, 1);
     assert_eq!(snapshot.active_scope_count, 2);
-    assert_eq!(snapshot.scope_registry_count, 2);
+    assert_eq!(snapshot.scope_index_count, 2);
+    assert_eq!(snapshot.runtime_scope_registry_count, None);
     assert_eq!(snapshot.retained_subtree_count, 0);
 
     let root = snapshot

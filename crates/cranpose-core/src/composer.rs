@@ -195,7 +195,7 @@ impl ComposerRuntimeState {
         snapshot: &mut crate::SlotDebugSnapshot,
     ) {
         let retention = self.retention_debug_stats(host.storage_key());
-        snapshot.scope_registry_count = self.scope_registry_len();
+        snapshot.runtime_scope_registry_count = Some(self.scope_registry_len());
         snapshot.retained_subtree_count = retention.subtree_count;
         snapshot.retained_group_count = retention.group_count;
         snapshot.retained_payload_count = retention.payload_count;

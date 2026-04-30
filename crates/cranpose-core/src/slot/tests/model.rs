@@ -597,7 +597,8 @@ fn assert_model_matches_slot_table(
     assert_eq!(snapshot.active_payload_count, active_order.len());
     assert_eq!(snapshot.active_node_count, active_order.len());
     assert_eq!(snapshot.active_scope_count, active_order.len());
-    assert_eq!(snapshot.scope_registry_count, active_order.len());
+    assert_eq!(snapshot.scope_index_count, active_order.len());
+    assert_eq!(snapshot.runtime_scope_registry_count, None);
 
     let root = snapshot
         .active_groups

@@ -1313,21 +1313,30 @@ fn changing_root_key_does_not_leak_root_scopes() {
 
     composition.render(11, || {}).expect("initial root render");
     assert_eq!(
-        composition.debug_slot_snapshot().scope_registry_count,
+        composition
+            .debug_slot_snapshot()
+            .runtime_scope_registry_count
+            .expect("composition snapshot should include runtime scope registry count"),
         1,
         "initial render should register exactly one root scope"
     );
 
     composition.render(22, || {}).expect("second root render");
     assert_eq!(
-        composition.debug_slot_snapshot().scope_registry_count,
+        composition
+            .debug_slot_snapshot()
+            .runtime_scope_registry_count
+            .expect("composition snapshot should include runtime scope registry count"),
         1,
         "changing the root key must dispose the previous root scope instead of leaking it",
     );
 
     composition.render(33, || {}).expect("third root render");
     assert_eq!(
-        composition.debug_slot_snapshot().scope_registry_count,
+        composition
+            .debug_slot_snapshot()
+            .runtime_scope_registry_count
+            .expect("composition snapshot should include runtime scope registry count"),
         1,
         "repeated root-key churn must keep the scope registry bounded",
     );
@@ -1584,7 +1593,10 @@ fn retained_branch_preserves_node_payload_and_scope_lifecycle_until_restore() {
         .expect("initial retained payload");
     first_slot.replace(41);
     let first_node = emitted_node.get().expect("initial retained node");
-    let active_scope_count = composition.debug_slot_snapshot().scope_registry_count;
+    let active_scope_count = composition
+        .debug_slot_snapshot()
+        .runtime_scope_registry_count
+        .expect("composition snapshot should include runtime scope registry count");
     let active_scope_index_count = composition.debug_slot_table_stats().scope_index_count;
     assert_eq!(branch_invocations.get(), 1);
 
@@ -1607,7 +1619,12 @@ fn retained_branch_preserves_node_payload_and_scope_lifecycle_until_restore() {
     assert_eq!(hidden_snapshot.retained_subtree_count, 1);
     assert_eq!(hidden_snapshot.retained_scope_count, 1);
     assert_eq!(hidden_snapshot.retained_payload_count, 2);
-    assert_eq!(hidden_snapshot.scope_registry_count, active_scope_count);
+    assert_eq!(
+        hidden_snapshot
+            .runtime_scope_registry_count
+            .expect("composition snapshot should include runtime scope registry count"),
+        active_scope_count
+    );
     assert_eq!(hidden_stats.retained_payload_count, 2);
     assert_eq!(hidden_stats.retained_node_count, 1);
 
