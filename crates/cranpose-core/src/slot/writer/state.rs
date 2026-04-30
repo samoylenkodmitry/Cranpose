@@ -53,10 +53,12 @@ impl SlotWriteSessionState {
             .or_insert(start);
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(in crate::slot) fn has_pending_payload_location_refreshes(&self) -> bool {
         !self.payload_location_refreshes.is_empty()
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(in crate::slot) fn pending_payload_location_refresh_count(&self) -> usize {
         self.payload_location_refreshes.len()
     }
