@@ -249,7 +249,7 @@ fn validate_reports_payload_out_of_range_structurally() {
 fn validate_reports_payload_count_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(488);
     let owner = table.groups[0].anchor;
-    let extra_anchor = PayloadAnchor::new(10_001, 1);
+    let extra_anchor = table.payload_anchors.allocate();
 
     table.payloads.push(super::PayloadRecord {
         owner,

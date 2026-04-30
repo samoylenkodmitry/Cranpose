@@ -214,4 +214,7 @@ pub(crate) enum SlotInvariantError {
         expected_parent: AnchorId,
         actual_parent: AnchorId,
     },
+    WriterPendingPayloadLocationRefreshes {
+        count: usize,
+    },
 }

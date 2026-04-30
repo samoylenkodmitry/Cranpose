@@ -755,6 +755,9 @@ mod tests {
         let anchor = PayloadAnchor::new(2_500_000, 1);
         registry.next_id = anchor.id() + 1;
 
+        assert!(registry
+            .set_state(anchor, PayloadAnchorState::Detached)
+            .is_none());
         registry.set_active(anchor, AnchorId::new(1), 0);
 
         assert_eq!(

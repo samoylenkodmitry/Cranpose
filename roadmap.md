@@ -1,5 +1,5 @@
 [x] Harden anchor and payload-anchor lifecycle writes so stale generations cannot silently no-op in release builds.
-[ ] Make slot writer validation pure by separating pending payload-location flushing from invariant checks.
+[x] Make slot writer validation pure by separating pending payload-location flushing from invariant checks.
 [ ] Remove the disconnected `RecomposeScope` group-anchor mirror and route scope identity through the slot table only.
 [ ] Propagate immediate detached-node disposal errors instead of discarding cleanup failures.
 [ ] Promote detached subtree root-node metadata from debug-only checks to validated runtime invariants.

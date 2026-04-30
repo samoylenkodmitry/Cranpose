@@ -79,8 +79,9 @@ impl SlotHarness {
             .table
             .write_session(&mut self.lifecycle, &mut self.state);
         let result = f(&mut session);
+        self.state.flush_payload_location_refreshes(&mut self.table);
         self.state
-            .validate(&mut self.table)
+            .validate(&self.table)
             .expect("slot writer state must stay within active table bounds");
         result
     }

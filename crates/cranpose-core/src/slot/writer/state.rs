@@ -1,4 +1,4 @@
-use super::super::{DetachedSubtree, SlotPassMode};
+use super::super::{DetachedSubtree, SlotPassMode, SlotTable};
 use super::frames::{GroupFrame, RootFrame};
 use crate::{
     collections::map::{HashMap, HashSet},
@@ -53,9 +53,18 @@ impl SlotWriteSessionState {
             .or_insert(start);
     }
 
-    #[cfg(any(test, debug_assertions))]
     pub(in crate::slot) fn has_pending_payload_location_refreshes(&self) -> bool {
         !self.payload_location_refreshes.is_empty()
+    }
+
+    pub(in crate::slot) fn pending_payload_location_refresh_count(&self) -> usize {
+        self.payload_location_refreshes.len()
+    }
+
+    pub(crate) fn flush_payload_location_refreshes(&mut self, table: &mut SlotTable) {
+        table.flush_payload_location_refreshes(self);
+        #[cfg(any(test, debug_assertions))]
+        self.debug_assert_no_pending_payload_location_refreshes("writer payload refresh flush");
     }
 
     #[cfg(test)]
@@ -222,7 +231,7 @@ mod tests {
         state.group_stack[0].next_child_index = table.group_count() + 1;
 
         assert_eq!(
-            state.validate(&mut table),
+            state.validate(&table),
             Err(SlotInvariantError::WriterFrameOutOfBounds {
                 frame_index: 1,
                 group_anchor: table.group_anchor_at_index(0),
@@ -258,7 +267,7 @@ mod tests {
         state.group_stack[0].next_child_index = 2;
 
         assert_eq!(
-            state.validate(&mut table),
+            state.validate(&table),
             Err(SlotInvariantError::WriterFrameNotAtChildBoundary {
                 frame_index: 1,
                 group_anchor: root_anchor,
@@ -288,7 +297,8 @@ mod tests {
         assert_eq!(state.group_stack[0].payload_cursor, 1);
         assert_eq!(state.group_stack[0].old_node_len, 0);
         assert_eq!(state.group_stack[0].node_cursor, 1);
-        assert_eq!(state.validate(&mut table), Ok(()));
+        state.flush_payload_location_refreshes(&mut table);
+        assert_eq!(state.validate(&table), Ok(()));
     }
 
     #[test]
@@ -323,7 +333,8 @@ mod tests {
         }
 
         assert_eq!(state.group_stack.len(), 1);
-        assert_eq!(state.validate(&mut table), Ok(()));
+        state.flush_payload_location_refreshes(&mut table);
+        assert_eq!(state.validate(&table), Ok(()));
     }
 
     #[test]
@@ -352,6 +363,7 @@ mod tests {
 
         assert_eq!(state.group_stack[0].old_node_len, 1);
         assert_eq!(table.group_node_len_at(0), 0);
-        assert_eq!(state.validate(&mut table), Ok(()));
+        state.flush_payload_location_refreshes(&mut table);
+        assert_eq!(state.validate(&table), Ok(()));
     }
 }

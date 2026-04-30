@@ -70,10 +70,12 @@ fn validate_child_boundary(
 }
 
 impl SlotWriteSessionState {
-    pub(crate) fn validate(&mut self, table: &mut SlotTable) -> Result<(), SlotInvariantError> {
-        table.flush_payload_location_refreshes(self);
-        #[cfg(any(test, debug_assertions))]
-        self.debug_assert_no_pending_payload_location_refreshes("writer validation");
+    pub(crate) fn validate(&self, table: &SlotTable) -> Result<(), SlotInvariantError> {
+        if self.has_pending_payload_location_refreshes() {
+            return Err(SlotInvariantError::WriterPendingPayloadLocationRefreshes {
+                count: self.pending_payload_location_refresh_count(),
+            });
+        }
         table.validate()?;
 
         validate_cursor(
@@ -176,8 +178,8 @@ impl SlotWriteSessionState {
     }
 
     pub(in crate::slot) fn debug_assert_valid_after(
-        &mut self,
-        table: &mut SlotTable,
+        &self,
+        table: &SlotTable,
         operation: &'static str,
     ) {
         if let Err(err) = self.validate(table) {
