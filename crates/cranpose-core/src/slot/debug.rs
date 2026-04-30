@@ -248,6 +248,7 @@ pub struct SlotDebugSnapshot {
     pub scope_registry_count: usize,
     pub retained_subtree_count: usize,
     pub retained_group_count: usize,
+    pub retained_payload_count: usize,
     pub retained_node_count: usize,
     pub retained_scope_count: usize,
 }

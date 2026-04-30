@@ -1046,6 +1046,7 @@ fn retained_scope_stays_inactive_until_restored() {
     let initial_stats = composition.debug_slot_table_stats();
     assert_eq!(initial_snapshot.retained_subtree_count, 0);
     assert_eq!(initial_snapshot.retained_scope_count, 0);
+    assert_eq!(initial_snapshot.retained_payload_count, 0);
     assert_eq!(initial_stats.retained_subtree_count, 0);
     assert_eq!(initial_stats.retained_group_count, 0);
     assert_eq!(initial_stats.retained_payload_count, 0);
@@ -1464,6 +1465,7 @@ fn retained_conditional_branch_restores_remembered_state() {
     );
     let hidden_snapshot = composition.debug_slot_snapshot();
     assert_eq!(hidden_snapshot.retained_subtree_count, 1);
+    assert_eq!(hidden_snapshot.retained_payload_count, 1);
     assert_eq!(
         composition.debug_slot_table_stats().retained_payload_count,
         1
@@ -1567,6 +1569,7 @@ fn retained_branch_preserves_node_payload_and_scope_lifecycle_until_restore() {
     let hidden_stats = composition.debug_slot_table_stats();
     assert_eq!(hidden_snapshot.retained_subtree_count, 1);
     assert_eq!(hidden_snapshot.retained_scope_count, 1);
+    assert_eq!(hidden_snapshot.retained_payload_count, 2);
     assert_eq!(hidden_snapshot.scope_registry_count, active_scope_count);
     assert_eq!(hidden_stats.retained_payload_count, 2);
     assert_eq!(hidden_stats.retained_node_count, 1);

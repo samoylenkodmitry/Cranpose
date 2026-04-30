@@ -198,6 +198,7 @@ impl ComposerRuntimeState {
         snapshot.scope_registry_count = self.scope_registry_len();
         snapshot.retained_subtree_count = retention.subtree_count;
         snapshot.retained_group_count = retention.group_count;
+        snapshot.retained_payload_count = retention.payload_count;
         snapshot.retained_node_count = retention.node_count;
         snapshot.retained_scope_count = retention.scope_count;
     }

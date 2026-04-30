@@ -92,10 +92,7 @@ impl AnchorRegistry {
     }
 
     pub(super) fn sparse_slot_len(&self) -> usize {
-        let reserved_zero_slot = usize::from(self.dense_states.storage_len() > 0);
-        self.dense_states
-            .storage_len()
-            .saturating_sub(self.dense_states.len() + reserved_zero_slot)
+        self.sparse_states.len()
     }
 
     pub(super) fn detached_len(&self) -> usize {

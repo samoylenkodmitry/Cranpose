@@ -66,10 +66,6 @@ impl<T> DenseIdMap<T> {
             .filter_map(|(id, entry)| entry.as_ref().map(|value| (id, value)))
     }
 
-    pub(super) fn storage_len(&self) -> usize {
-        self.entries.len()
-    }
-
     pub(super) fn shrink_to_fit(&mut self) {
         self.trim_trailing_empty();
         self.entries.shrink_to_fit();

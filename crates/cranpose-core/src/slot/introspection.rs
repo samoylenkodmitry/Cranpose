@@ -120,6 +120,7 @@ impl SlotTable {
             scopes,
             retained_subtree_count: 0,
             retained_group_count: 0,
+            retained_payload_count: 0,
             retained_node_count: 0,
             retained_scope_count: 0,
         }
