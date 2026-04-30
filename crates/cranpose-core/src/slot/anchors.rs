@@ -1,6 +1,9 @@
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
-use super::{dense_id_map::DenseIdMap, DetachedSubtree, GroupRecord, SlotTable};
+use super::{
+    generational_registry::{GenerationalRegistryStorage, RegistryState},
+    DetachedSubtree, GroupRecord, SlotTable,
+};
 #[cfg(any(test, debug_assertions))]
 use crate::collections::map::HashSet;
 use crate::{collections::map::HashMap, retention::RetentionManager, AnchorId};
@@ -13,35 +16,31 @@ pub(crate) enum AnchorState {
     Invalidated,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct AnchorSlot {
-    generation: u32,
-    state: AnchorState,
+impl RegistryState for AnchorState {
+    fn is_active(self) -> bool {
+        matches!(self, Self::Active(_))
+    }
+
+    fn is_detached(self) -> bool {
+        matches!(self, Self::Detached)
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct AnchorRegistry {
-    dense_states: DenseIdMap<AnchorSlot>,
-    sparse_states: HashMap<u32, AnchorSlot>,
+    storage: GenerationalRegistryStorage<AnchorState>,
     free_ids: BinaryHeap<Reverse<u32>>,
     reused_generations: HashMap<u32, u32>,
     next_anchor: usize,
-    active_count: usize,
-    detached_count: usize,
 }
 
 impl AnchorRegistry {
-    const DENSE_STORAGE_ID_LIMIT: usize = 65_536;
-
     pub(super) fn new() -> Self {
         Self {
-            dense_states: DenseIdMap::new(),
-            sparse_states: HashMap::default(),
+            storage: GenerationalRegistryStorage::new(),
             free_ids: BinaryHeap::new(),
             reused_generations: HashMap::default(),
             next_anchor: 1,
-            active_count: 0,
-            detached_count: 0,
         }
     }
 
@@ -68,7 +67,7 @@ impl AnchorRegistry {
         if !anchor.is_valid() {
             return None;
         }
-        let slot = self.slot(anchor.id)?;
+        let slot = self.storage.slot(anchor.id as usize)?;
         (slot.generation == anchor.generation).then_some(slot.state)
     }
 
@@ -84,24 +83,23 @@ impl AnchorRegistry {
     }
 
     pub(super) fn active_len(&self) -> usize {
-        self.active_count
+        self.storage.active_len()
     }
 
     pub(super) fn slot_len(&self) -> usize {
-        self.dense_states.len() + self.sparse_states.len()
+        self.storage.slot_len()
     }
 
     pub(super) fn sparse_slot_len(&self) -> usize {
-        self.sparse_states.len()
+        self.storage.sparse_slot_len()
     }
 
     pub(super) fn detached_len(&self) -> usize {
-        self.detached_count
+        self.storage.detached_len()
     }
 
     pub(super) fn invalidated_len(&self) -> usize {
-        self.slot_len()
-            .saturating_sub(self.active_count + self.detached_count)
+        self.storage.invalidated_len()
     }
 
     pub(super) fn free_len(&self) -> usize {
@@ -109,19 +107,12 @@ impl AnchorRegistry {
     }
 
     pub(super) fn active_entries(&self) -> impl Iterator<Item = (AnchorId, usize)> + '_ {
-        self.dense_states
-            .iter()
-            .map(|(id, slot)| {
-                (
-                    u32::try_from(id).expect("dense anchor state index must fit u32"),
-                    slot,
-                )
-            })
-            .chain(self.sparse_states.iter().map(|(&id, slot)| (id, slot)))
+        self.storage
+            .slots()
             .filter_map(|(id, slot)| match slot.state {
                 AnchorState::Active(group_index) => Some((
                     AnchorId {
-                        id,
+                        id: u32::try_from(id).expect("anchor id must fit u32"),
                         generation: slot.generation,
                     },
                     group_index,
@@ -135,13 +126,13 @@ impl AnchorRegistry {
         let mut active_count = 0usize;
         let mut detached_count = 0usize;
 
-        for (id, slot) in self.anchor_slots() {
-            if id == 0 || id as usize >= self.next_anchor {
+        for (id, slot) in self.storage.slots() {
+            if id == 0 || id >= self.next_anchor {
                 return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
                     detail: "registered anchor id must be allocated",
-                    anchor_id: Some(id),
+                    anchor_id: Some(u32::try_from(id).expect("anchor id must fit u32")),
                     expected: self.next_anchor,
-                    actual: id as usize,
+                    actual: id,
                 });
             }
             match slot.state {
@@ -151,8 +142,8 @@ impl AnchorRegistry {
             }
         }
 
-        self.validate_state_count("active", self.active_count, active_count)?;
-        self.validate_state_count("detached", self.detached_count, detached_count)?;
+        self.validate_state_count("active", self.storage.active_len(), active_count)?;
+        self.validate_state_count("detached", self.storage.detached_len(), detached_count)?;
 
         let mut free_ids: HashSet<u32> = HashSet::default();
         for Reverse(id) in self.free_ids.iter().copied() {
@@ -165,7 +156,7 @@ impl AnchorRegistry {
                 });
             }
             if matches!(
-                self.slot(id).map(|slot| slot.state),
+                self.storage.slot(id as usize).map(|slot| slot.state),
                 Some(AnchorState::Active(_) | AnchorState::Detached)
             ) {
                 return Err(SlotInvariantError::AnchorRegistryInternalMismatch {
@@ -192,12 +183,11 @@ impl AnchorRegistry {
     }
 
     pub(super) fn capacity(&self) -> usize {
-        self.dense_states.capacity() + self.sparse_states.capacity()
+        self.storage.capacity()
     }
 
     pub(super) fn heap_bytes(&self) -> usize {
-        self.dense_states.capacity() * mem::size_of::<Option<AnchorSlot>>()
-            + self.sparse_states.capacity() * mem::size_of::<(u32, AnchorSlot)>()
+        self.storage.heap_bytes()
             + self.free_ids.capacity() * mem::size_of::<Reverse<u32>>()
             + self.reused_generations.capacity() * mem::size_of::<(u32, u32)>()
     }
@@ -229,18 +219,14 @@ impl AnchorRegistry {
     }
 
     pub(super) fn clear(&mut self) {
-        self.dense_states.clear();
-        self.sparse_states.clear();
+        self.storage.clear();
         self.free_ids.clear();
         self.reused_generations.clear();
         self.next_anchor = 1;
-        self.active_count = 0;
-        self.detached_count = 0;
     }
 
     pub(super) fn shrink_to_fit(&mut self) {
-        self.dense_states.shrink_to_fit();
-        self.sparse_states.shrink_to_fit();
+        self.storage.shrink_to_fit();
         self.free_ids.shrink_to_fit();
         self.reused_generations.shrink_to_fit();
     }
@@ -249,15 +235,16 @@ impl AnchorRegistry {
         if !anchor.is_valid() {
             return false;
         }
-        let Some(slot) = self.slot(anchor.id) else {
+        let Some(slot) = self.storage.slot(anchor.id as usize) else {
             return false;
         };
         if slot.generation != anchor.generation {
             return false;
         }
-        let removed = self.remove_slot(anchor.id);
-        let removed = removed.expect("validated anchor state must remove");
-        self.adjust_state_counts(Some(removed.state), None);
+        assert!(
+            self.storage.remove_state(anchor.id as usize).is_some(),
+            "validated anchor state must remove"
+        );
         self.enqueue_reuse(anchor);
         true
     }
@@ -266,71 +253,8 @@ impl AnchorRegistry {
         if !anchor.is_valid() {
             return None;
         }
-        if let Some(slot) = self.slot(anchor.id) {
-            if slot.generation != anchor.generation {
-                return None;
-            }
-        }
-        let previous = self.insert_slot(anchor.id, anchor.generation, state);
-        self.adjust_state_counts(previous.map(|slot| slot.state), Some(state));
-        previous.map(|slot| slot.state)
-    }
-
-    fn slot(&self, id: u32) -> Option<&AnchorSlot> {
-        if Self::uses_dense_storage(id) {
-            self.dense_states.get(id as usize)
-        } else {
-            self.sparse_states.get(&id)
-        }
-    }
-
-    #[cfg(any(test, debug_assertions))]
-    fn anchor_slots(&self) -> impl Iterator<Item = (u32, &AnchorSlot)> + '_ {
-        self.dense_states
-            .iter()
-            .map(|(id, slot)| {
-                (
-                    u32::try_from(id).expect("dense anchor state index must fit u32"),
-                    slot,
-                )
-            })
-            .chain(self.sparse_states.iter().map(|(&id, slot)| (id, slot)))
-    }
-
-    fn insert_slot(&mut self, id: u32, generation: u32, state: AnchorState) -> Option<AnchorSlot> {
-        let slot = AnchorSlot { generation, state };
-        if Self::uses_dense_storage(id) {
-            self.dense_states.insert(id as usize, slot)
-        } else {
-            self.sparse_states.insert(id, slot)
-        }
-    }
-
-    fn remove_slot(&mut self, id: u32) -> Option<AnchorSlot> {
-        if Self::uses_dense_storage(id) {
-            self.dense_states.remove(id as usize)
-        } else {
-            self.sparse_states.remove(&id)
-        }
-    }
-
-    fn uses_dense_storage(id: u32) -> bool {
-        id as usize <= Self::DENSE_STORAGE_ID_LIMIT
-    }
-
-    fn adjust_state_counts(&mut self, previous: Option<AnchorState>, next: Option<AnchorState>) {
-        if matches!(previous, Some(AnchorState::Active(_))) {
-            self.active_count -= 1;
-        }
-        if matches!(previous, Some(AnchorState::Detached)) {
-            self.detached_count -= 1;
-        }
-        if matches!(next, Some(AnchorState::Active(_))) {
-            self.active_count += 1;
-        }
-        if matches!(next, Some(AnchorState::Detached)) {
-            self.detached_count += 1;
-        }
+        self.storage
+            .set_state(anchor.id as usize, anchor.generation, state)
     }
 
     fn enqueue_reuse(&mut self, anchor: AnchorId) {
@@ -347,16 +271,10 @@ impl AnchorRegistry {
     }
 
     fn maybe_shrink_sparse_storage(&mut self) {
-        if self.capacity() <= Self::DENSE_STORAGE_ID_LIMIT {
-            return;
+        if self.storage.maybe_shrink_sparse_storage() {
+            self.free_ids.shrink_to_fit();
+            self.reused_generations.shrink_to_fit();
         }
-        if self.slot_len().saturating_mul(4) >= self.capacity() {
-            return;
-        }
-        self.dense_states.shrink_to_fit();
-        self.sparse_states.shrink_to_fit();
-        self.free_ids.shrink_to_fit();
-        self.reused_generations.shrink_to_fit();
     }
 
     #[cfg(any(test, debug_assertions))]
@@ -518,7 +436,7 @@ mod tests {
                 anchor
             })
             .collect::<Vec<_>>();
-        let dense_capacity_before = registry.dense_states.capacity();
+        let dense_capacity_before = registry.storage.dense_capacity();
         assert!(dense_capacity_before >= anchors.len());
 
         for anchor in &anchors {
@@ -531,7 +449,7 @@ mod tests {
         assert_eq!(registry.invalidated_len(), 0);
         assert_eq!(registry.free_len(), anchors.len());
         assert_eq!(
-            registry.dense_states.capacity(),
+            registry.storage.dense_capacity(),
             dense_capacity_before,
             "group anchor disposal must not compact dense storage on the mutation hot path"
         );

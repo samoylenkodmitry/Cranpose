@@ -1,6 +1,9 @@
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
-use super::{dense_id_map::DenseIdMap, DetachedSubtree, PayloadAnchor, PayloadRecord, SlotTable};
+use super::{
+    generational_registry::{GenerationalRegistryStorage, RegistryState},
+    DetachedSubtree, PayloadAnchor, PayloadRecord, SlotTable,
+};
 use crate::collections::map::HashMap;
 use crate::AnchorId;
 use std::{cmp::Reverse, collections::BinaryHeap, mem};
@@ -11,18 +14,22 @@ enum PayloadAnchorState {
     Detached,
 }
 
+impl RegistryState for PayloadAnchorState {
+    fn is_active(self) -> bool {
+        matches!(self, Self::Active { .. })
+    }
+
+    fn is_detached(self) -> bool {
+        matches!(self, Self::Detached)
+    }
+}
+
 #[cfg(any(test, debug_assertions))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PayloadAnchorLifecycle {
     Active,
     Detached,
     Invalidated,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PayloadAnchorSlot {
-    generation: u32,
-    state: PayloadAnchorState,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -63,28 +70,20 @@ impl FreePayloadAnchorIdRange {
 
 #[derive(Default)]
 pub(crate) struct PayloadAnchorRegistry {
-    dense_states: DenseIdMap<PayloadAnchorSlot>,
-    sparse_states: HashMap<usize, PayloadAnchorSlot>,
+    storage: GenerationalRegistryStorage<PayloadAnchorState>,
     free_ids: BinaryHeap<Reverse<FreePayloadAnchorIdRange>>,
     reused_generations: HashMap<u32, u32>,
     next_id: usize,
-    active_count: usize,
-    detached_count: usize,
     free_count: usize,
 }
 
 impl PayloadAnchorRegistry {
-    const DENSE_STORAGE_ID_LIMIT: usize = 65_536;
-
     pub(super) fn new() -> Self {
         Self {
-            dense_states: DenseIdMap::new(),
-            sparse_states: HashMap::default(),
+            storage: GenerationalRegistryStorage::new(),
             free_ids: BinaryHeap::new(),
             reused_generations: HashMap::default(),
             next_id: 1,
-            active_count: 0,
-            detached_count: 0,
             free_count: 0,
         }
     }
@@ -128,7 +127,7 @@ impl PayloadAnchorRegistry {
     }
 
     pub(super) fn active_location(&self, anchor: PayloadAnchor) -> Option<(AnchorId, usize)> {
-        let slot = self.slot(anchor)?;
+        let slot = self.storage.slot(anchor.id())?;
         if slot.generation != anchor.generation() {
             return None;
         }
@@ -139,27 +138,26 @@ impl PayloadAnchorRegistry {
     }
 
     pub(super) fn is_detached(&self, anchor: PayloadAnchor) -> bool {
-        let Some(slot) = self.slot(anchor) else {
+        let Some(slot) = self.storage.slot(anchor.id()) else {
             return false;
         };
         slot.generation == anchor.generation() && matches!(slot.state, PayloadAnchorState::Detached)
     }
 
     pub(super) fn active_len(&self) -> usize {
-        self.active_count
+        self.storage.active_len()
     }
 
     pub(super) fn slot_len(&self) -> usize {
-        self.dense_states.len() + self.sparse_states.len()
+        self.storage.slot_len()
     }
 
     pub(super) fn detached_len(&self) -> usize {
-        self.detached_count
+        self.storage.detached_len()
     }
 
     pub(super) fn invalidated_len(&self) -> usize {
-        self.slot_len()
-            .saturating_sub(self.active_count + self.detached_count)
+        self.storage.invalidated_len()
     }
 
     pub(super) fn free_len(&self) -> usize {
@@ -167,12 +165,11 @@ impl PayloadAnchorRegistry {
     }
 
     pub(super) fn capacity(&self) -> usize {
-        self.dense_states.capacity() + self.sparse_states.capacity()
+        self.storage.capacity()
     }
 
     pub(super) fn heap_bytes(&self) -> usize {
-        self.dense_states.capacity() * mem::size_of::<Option<PayloadAnchorSlot>>()
-            + self.sparse_states.capacity() * mem::size_of::<(usize, PayloadAnchorSlot)>()
+        self.storage.heap_bytes()
             + self.free_ids.capacity() * mem::size_of::<Reverse<FreePayloadAnchorIdRange>>()
             + self.reused_generations.capacity() * mem::size_of::<(u32, u32)>()
     }
@@ -181,7 +178,8 @@ impl PayloadAnchorRegistry {
     pub(super) fn active_entries(
         &self,
     ) -> impl Iterator<Item = (PayloadAnchor, (AnchorId, usize))> + '_ {
-        self.anchor_slots()
+        self.storage
+            .slots()
             .filter_map(|(id, slot)| match slot.state {
                 PayloadAnchorState::Active { owner, index } => {
                     Some((PayloadAnchor::new(id, slot.generation), (owner, index)))
@@ -192,7 +190,7 @@ impl PayloadAnchorRegistry {
 
     #[cfg(any(test, debug_assertions))]
     pub(super) fn state_kind(&self, anchor: PayloadAnchor) -> Option<PayloadAnchorLifecycle> {
-        if let Some(slot) = self.slot(anchor) {
+        if let Some(slot) = self.storage.slot(anchor.id()) {
             if slot.generation != anchor.generation() {
                 return None;
             }
@@ -211,7 +209,7 @@ impl PayloadAnchorRegistry {
     pub(super) fn validate_integrity(&self) -> Result<(), SlotInvariantError> {
         let mut active_count = 0usize;
         let mut detached_count = 0usize;
-        for (id, slot) in self.anchor_slots() {
+        for (id, slot) in self.storage.slots() {
             if id == 0 || id >= self.next_id {
                 return Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
                     detail: "registered payload anchor id must be allocated",
@@ -226,8 +224,8 @@ impl PayloadAnchorRegistry {
             }
         }
 
-        self.validate_state_count("active", self.active_count, active_count)?;
-        self.validate_state_count("detached", self.detached_count, detached_count)?;
+        self.validate_state_count("active", self.storage.active_len(), active_count)?;
+        self.validate_state_count("detached", self.storage.detached_len(), detached_count)?;
 
         let mut free_ranges = self
             .free_ids
@@ -268,7 +266,7 @@ impl PayloadAnchorRegistry {
         }
         self.validate_state_count("free", self.free_count, free_count)?;
 
-        for (id, _) in self.anchor_slots() {
+        for (id, _) in self.storage.slots() {
             let id = u32::try_from(id).expect("payload anchor id must fit u32");
             if self.contains_free_id(id) {
                 return Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
@@ -295,7 +293,7 @@ impl PayloadAnchorRegistry {
     }
 
     pub(super) fn bump_generation(&mut self, anchor: PayloadAnchor) -> Option<PayloadAnchor> {
-        let slot = self.slot_mut(anchor)?;
+        let slot = self.storage.slot_mut(anchor.id())?;
         if slot.generation != anchor.generation() {
             return None;
         }
@@ -308,7 +306,7 @@ impl PayloadAnchorRegistry {
     }
 
     pub(super) fn invalidate(&mut self, anchor: PayloadAnchor) -> bool {
-        let Some(slot) = self.slot(anchor) else {
+        let Some(slot) = self.storage.slot(anchor.id()) else {
             return false;
         };
         if slot.generation != anchor.generation() {
@@ -318,95 +316,35 @@ impl PayloadAnchorRegistry {
             .generation()
             .checked_add(1)
             .expect("payload anchor generation counter overflow");
-        let removed = self.remove_slot(anchor.id());
-        let removed = removed.expect("validated payload anchor state must remove");
-        self.adjust_state_counts(Some(removed.state), None);
+        assert!(
+            self.storage.remove_state(anchor.id()).is_some(),
+            "validated payload anchor state must remove"
+        );
         self.enqueue_reuse(anchor, next_generation);
         true
     }
 
     pub(super) fn clear(&mut self) {
-        self.dense_states.clear();
-        self.sparse_states.clear();
+        self.storage.clear();
         self.free_ids.clear();
         self.reused_generations.clear();
         self.next_id = 1;
-        self.active_count = 0;
-        self.detached_count = 0;
         self.free_count = 0;
     }
 
     pub(super) fn shrink_to_fit(&mut self) {
         self.coalesce_free_id_ranges();
-        self.dense_states.shrink_to_fit();
-        self.sparse_states.shrink_to_fit();
+        self.storage.shrink_to_fit();
         self.free_ids.shrink_to_fit();
         self.reused_generations.shrink_to_fit();
     }
 
     fn maybe_shrink_sparse_storage(&mut self) {
-        if self.capacity() <= Self::DENSE_STORAGE_ID_LIMIT {
-            return;
+        if self.storage.maybe_shrink_sparse_storage() {
+            self.coalesce_free_id_ranges();
+            self.free_ids.shrink_to_fit();
+            self.reused_generations.shrink_to_fit();
         }
-        if self.slot_len().saturating_mul(4) >= self.capacity() {
-            return;
-        }
-        self.shrink_to_fit();
-    }
-
-    fn slot(&self, anchor: PayloadAnchor) -> Option<&PayloadAnchorSlot> {
-        self.slot_by_id(anchor.id())
-    }
-
-    fn slot_mut(&mut self, anchor: PayloadAnchor) -> Option<&mut PayloadAnchorSlot> {
-        if Self::uses_dense_storage(anchor.id()) {
-            self.dense_states.get_mut(anchor.id())
-        } else {
-            self.sparse_states.get_mut(&anchor.id())
-        }
-    }
-
-    fn slot_by_id(&self, id: usize) -> Option<&PayloadAnchorSlot> {
-        if Self::uses_dense_storage(id) {
-            self.dense_states.get(id)
-        } else {
-            self.sparse_states.get(&id)
-        }
-    }
-
-    #[cfg(any(test, debug_assertions))]
-    fn anchor_slots(&self) -> impl Iterator<Item = (usize, &PayloadAnchorSlot)> + '_ {
-        self.dense_states
-            .iter()
-            .chain(self.sparse_states.iter().map(|(&id, slot)| (id, slot)))
-    }
-
-    fn insert_slot(
-        &mut self,
-        anchor: PayloadAnchor,
-        state: PayloadAnchorState,
-    ) -> Option<PayloadAnchorSlot> {
-        let slot = PayloadAnchorSlot {
-            generation: anchor.generation(),
-            state,
-        };
-        if Self::uses_dense_storage(anchor.id()) {
-            self.dense_states.insert(anchor.id(), slot)
-        } else {
-            self.sparse_states.insert(anchor.id(), slot)
-        }
-    }
-
-    fn remove_slot(&mut self, id: usize) -> Option<PayloadAnchorSlot> {
-        if Self::uses_dense_storage(id) {
-            self.dense_states.remove(id)
-        } else {
-            self.sparse_states.remove(&id)
-        }
-    }
-
-    fn uses_dense_storage(id: usize) -> bool {
-        id <= Self::DENSE_STORAGE_ID_LIMIT
     }
 
     fn set_state(
@@ -414,33 +352,8 @@ impl PayloadAnchorRegistry {
         anchor: PayloadAnchor,
         state: PayloadAnchorState,
     ) -> Option<PayloadAnchorState> {
-        if let Some(slot) = self.slot(anchor) {
-            if slot.generation != anchor.generation() {
-                return None;
-            }
-        }
-        let previous = self.insert_slot(anchor, state);
-        self.adjust_state_counts(previous.map(|slot| slot.state), Some(state));
-        previous.map(|slot| slot.state)
-    }
-
-    fn adjust_state_counts(
-        &mut self,
-        previous: Option<PayloadAnchorState>,
-        next: Option<PayloadAnchorState>,
-    ) {
-        if matches!(previous, Some(PayloadAnchorState::Active { .. })) {
-            self.active_count -= 1;
-        }
-        if matches!(previous, Some(PayloadAnchorState::Detached)) {
-            self.detached_count -= 1;
-        }
-        if matches!(next, Some(PayloadAnchorState::Active { .. })) {
-            self.active_count += 1;
-        }
-        if matches!(next, Some(PayloadAnchorState::Detached)) {
-            self.detached_count += 1;
-        }
+        self.storage
+            .set_state(anchor.id(), anchor.generation(), state)
     }
 
     fn enqueue_reuse(&mut self, anchor: PayloadAnchor, next_generation: u32) {
@@ -733,7 +646,7 @@ mod tests {
             });
         }
 
-        let dense_capacity_before = table.payload_anchors.dense_states.capacity();
+        let dense_capacity_before = table.payload_anchors.storage.dense_capacity();
         assert!(dense_capacity_before >= payloads.len());
 
         table.invalidate_payload_anchors(&payloads);
@@ -742,7 +655,7 @@ mod tests {
         assert_eq!(table.payload_anchors.invalidated_len(), 0);
         assert_eq!(table.payload_anchors.free_len(), payloads.len());
         assert_eq!(
-            table.payload_anchors.dense_states.capacity(),
+            table.payload_anchors.storage.dense_capacity(),
             dense_capacity_before,
             "payload disposal must not compact dense anchor storage on the mutation hot path"
         );

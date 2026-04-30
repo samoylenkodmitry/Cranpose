@@ -3,6 +3,7 @@ mod checked;
 mod debug;
 mod dense_id_map;
 mod detach;
+mod generational_registry;
 mod groups;
 mod introspection;
 mod lifecycle;
