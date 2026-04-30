@@ -263,9 +263,9 @@ impl ComposerRuntimeState {
         host_key: usize,
         table: &mut SlotTable,
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
-    ) {
+    ) -> Result<(), NodeError> {
         let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key) else {
-            return;
+            return Ok(());
         };
         let applier_host = self
             .applier_host
@@ -280,11 +280,12 @@ impl ComposerRuntimeState {
             }
             if let Some(applier_host) = applier_host.as_ref() {
                 let mut applier = applier_host.borrow_dyn();
-                crate::slot::dispose_detached_subtree_now(&mut *applier, &subtree);
+                crate::slot::dispose_detached_subtree_now(&mut *applier, &subtree)?;
             }
             table.invalidate_detached_subtree_anchors(&subtree);
             lifecycle.queue_subtree_disposal(subtree);
         }
+        Ok(())
     }
 
     pub(crate) fn host_retention_is_empty(&self, host: &SlotsHost) -> bool {
@@ -547,7 +548,9 @@ impl Composer {
             fn drop(&mut self) {
                 let finished = {
                     let mut applier = self.core.applier.borrow_dyn();
-                    self.host.finish_pass(&mut *applier)
+                    self.host
+                        .finish_pass(&mut *applier)
+                        .expect("slot pass finalization must dispose detached nodes")
                 };
                 let composer = Composer::from_core(Rc::clone(&self.core));
                 composer.handle_detached_children_in_host(

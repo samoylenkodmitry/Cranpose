@@ -3486,11 +3486,13 @@ impl Drop for SlotsHost {
         let storage_key = self.storage_key.get();
         let inner = self.inner.get_mut();
         if let Some(state) = inner.runtime_state.clone() {
-            state.dispose_retained_subtrees_for_host(
-                storage_key,
-                &mut inner.table,
-                &mut inner.lifecycle,
-            );
+            state
+                .dispose_retained_subtrees_for_host(
+                    storage_key,
+                    &mut inner.table,
+                    &mut inner.lifecycle,
+                )
+                .expect("retained subtree disposal must succeed while dropping slots host");
             state.clear_host_storage_key(storage_key);
         }
         inner.lifecycle.dispose_slot_table(&mut inner.table);
@@ -3558,11 +3560,9 @@ impl SlotsHost {
         let mut lifecycle = std::mem::take(&mut inner.lifecycle);
         lifecycle.flush_pending_drops();
         let host_key = self.storage_key();
-        previous_state.dispose_retained_subtrees_for_host(
-            host_key,
-            &mut inner.table,
-            &mut lifecycle,
-        );
+        previous_state
+            .dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
+            .expect("retained subtree disposal must succeed before rebinding slots host");
         previous_state.clear_host(self);
         lifecycle.flush_pending_drops();
         inner.runtime_state = Some(Rc::clone(state));
@@ -3603,7 +3603,9 @@ impl SlotsHost {
         lifecycle.flush_pending_drops();
         if let Some(state) = inner.runtime_state.clone() {
             let host_key = self.storage_key();
-            state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle);
+            state
+                .dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
+                .expect("retained subtree disposal must succeed before transferring slot table");
             state.clear_host(self);
             lifecycle.flush_pending_drops();
         }
@@ -3626,7 +3628,9 @@ impl SlotsHost {
         let mut lifecycle = std::mem::take(&mut inner.lifecycle);
         if let Some(state) = runtime_state {
             let host_key = self.storage_key();
-            state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle);
+            state
+                .dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
+                .expect("retained subtree disposal must succeed before resetting slots host");
             state.clear_host(self);
         }
         lifecycle.dispose_slot_table(&mut inner.table);
@@ -3701,7 +3705,10 @@ impl SlotsHost {
         f(table, lifecycle)
     }
 
-    pub(crate) fn finish_pass(&self, applier: &mut dyn Applier) -> FinishedSlotPass {
+    pub(crate) fn finish_pass(
+        &self,
+        applier: &mut dyn Applier,
+    ) -> Result<FinishedSlotPass, NodeError> {
         let mut inner = self.inner.borrow_mut();
         let SlotsHostInner {
             table,
@@ -3710,7 +3717,7 @@ impl SlotsHost {
             ..
         } = &mut *inner;
         let Some(mut active_pass) = active_pass_slot.take() else {
-            return FinishedSlotPass::default();
+            return Ok(FinishedSlotPass::default());
         };
 
         active_pass.state.flush_payload_location_refreshes(table);
@@ -3722,10 +3729,10 @@ impl SlotsHost {
 
         let detached_root_children = {
             let mut session = table.write_session(lifecycle, &mut active_pass.state);
-            session.finalize_pass(applier)
+            session.finalize_pass(applier)?
         };
 
-        FinishedSlotPass {
+        Ok(FinishedSlotPass {
             outcome: SlotPassOutcome {
                 compacted: active_pass.state.request_compaction,
                 compact_anchor_registry_storage: active_pass
@@ -3734,7 +3741,7 @@ impl SlotsHost {
                 compact_payload_storage: active_pass.state.request_payload_storage_compaction,
             },
             detached_root_children,
-        }
+        })
     }
 
     pub(crate) fn complete_pass_cleanup(&self, outcome: &SlotPassOutcome) {

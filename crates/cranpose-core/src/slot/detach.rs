@@ -258,10 +258,14 @@ pub(crate) fn dispose_detached_node_now(
     }
 }
 
-pub(crate) fn dispose_detached_subtree_now(applier: &mut dyn Applier, subtree: &DetachedSubtree) {
+pub(crate) fn dispose_detached_subtree_now(
+    applier: &mut dyn Applier,
+    subtree: &DetachedSubtree,
+) -> Result<(), NodeError> {
     let mut root_nodes = Vec::new();
     subtree.collect_root_nodes_into(&mut root_nodes);
     for root in root_nodes {
-        let _ = dispose_detached_node_now(applier, root);
+        dispose_detached_node_now(applier, root)?;
     }
+    Ok(())
 }

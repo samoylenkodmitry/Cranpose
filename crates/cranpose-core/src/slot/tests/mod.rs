@@ -91,7 +91,9 @@ impl SlotHarness {
             let mut session = self
                 .table
                 .write_session(&mut self.lifecycle, &mut self.state);
-            session.finalize_pass(&mut self.applier)
+            session
+                .finalize_pass(&mut self.applier)
+                .expect("test slot pass finalization should dispose detached nodes")
         };
         for subtree in detached_root_children {
             self.table.invalidate_detached_subtree_anchors(&subtree);

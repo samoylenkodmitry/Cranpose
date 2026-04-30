@@ -812,7 +812,8 @@ fn dispose_model_subtree(
     model.retire_group_anchors(group_anchors);
     model.retire_payload_anchors(payload_anchors);
     harness.table.invalidate_detached_subtree_anchors(&subtree);
-    crate::slot::dispose_detached_subtree_now(&mut harness.applier, &subtree);
+    crate::slot::dispose_detached_subtree_now(&mut harness.applier, &subtree)
+        .expect("model subtree disposal should remove detached nodes");
     harness.lifecycle.queue_subtree_disposal(subtree);
 }
 

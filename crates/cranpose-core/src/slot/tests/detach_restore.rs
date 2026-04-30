@@ -1,4 +1,71 @@
 use super::*;
+use crate::NodeError;
+
+struct RemoveFailingApplier;
+
+impl Applier for RemoveFailingApplier {
+    fn create(&mut self, _node: Box<dyn Node>) -> NodeId {
+        unreachable!("disposal propagation test does not create nodes")
+    }
+
+    fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
+        Err(NodeError::Missing { id })
+    }
+
+    fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
+        Err(NodeError::MissingContext {
+            id,
+            reason: "forced remove failure",
+        })
+    }
+
+    fn node_generation(&self, _id: NodeId) -> u32 {
+        0
+    }
+
+    fn insert_with_id(&mut self, _id: NodeId, _node: Box<dyn Node>) -> Result<(), NodeError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn immediate_detached_subtree_disposal_propagates_remove_failure() {
+    const NODE_ID: NodeId = 77;
+    let owner = AnchorId::new(1);
+    let subtree = DetachedSubtree {
+        groups: vec![GroupRecord {
+            key: GroupKey::new(900, None, 0),
+            parent_anchor: AnchorId::INVALID,
+            depth: 0,
+            subtree_len: 1,
+            payload_start: 0,
+            payload_len: 0,
+            node_start: 0,
+            node_len: 1,
+            subtree_node_count: 1,
+            generation: 0,
+            anchor: owner,
+            scope_id: None,
+        }],
+        payloads: Vec::new(),
+        nodes: vec![NodeRecord {
+            owner,
+            id: NODE_ID,
+            parent_id: None,
+            generation: 0,
+            lifecycle: NodeLifecycle::RetainedDetached,
+        }],
+    };
+    let mut applier = RemoveFailingApplier;
+
+    assert_eq!(
+        crate::slot::dispose_detached_subtree_now(&mut applier, &subtree),
+        Err(NodeError::MissingContext {
+            id: NODE_ID,
+            reason: "forced remove failure",
+        })
+    );
+}
 
 #[test]
 fn detach_restore_preserves_nested_payloads_and_scopes() {

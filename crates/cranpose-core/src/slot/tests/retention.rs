@@ -1011,7 +1011,9 @@ fn finalize_pass_returns_root_level_detached_subtree_for_caller_cleanup() {
         let mut session = harness
             .table
             .write_session(&mut harness.lifecycle, &mut harness.state);
-        session.finalize_pass(&mut harness.applier)
+        session
+            .finalize_pass(&mut harness.applier)
+            .expect("test slot pass finalization should dispose detached nodes")
     };
 
     assert_eq!(detached_root_children.len(), 1);

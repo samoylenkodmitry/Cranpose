@@ -2,19 +2,22 @@ use super::super::{
     detach::{dispose_detached_node_now, dispose_detached_subtree_now},
     DetachedSubtree, SlotWriteSession,
 };
-use crate::Applier;
+use crate::{Applier, NodeError};
 
 impl SlotWriteSession<'_> {
-    pub(crate) fn finalize_pass(&mut self, applier: &mut dyn Applier) -> Vec<DetachedSubtree> {
+    pub(crate) fn finalize_pass(
+        &mut self,
+        applier: &mut dyn Applier,
+    ) -> Result<Vec<DetachedSubtree>, NodeError> {
         while !self.state.group_stack.is_empty() {
             let result = self.finish_group_body();
             for subtree in result.detached_children {
                 self.table.invalidate_detached_subtree_anchors(&subtree);
-                dispose_detached_subtree_now(applier, &subtree);
+                dispose_detached_subtree_now(applier, &subtree)?;
                 self.lifecycle.queue_subtree_disposal(subtree);
             }
             for node_id in result.direct_nodes {
-                let _ = dispose_detached_node_now(applier, node_id);
+                dispose_detached_node_now(applier, node_id)?;
             }
             self.end_group();
         }
@@ -28,6 +31,6 @@ impl SlotWriteSession<'_> {
         #[cfg(any(test, debug_assertions))]
         self.state
             .debug_assert_valid_after(self.table, "finalize_pass");
-        root_detached
+        Ok(root_detached)
     }
 }
