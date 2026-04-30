@@ -3706,6 +3706,10 @@ impl SlotsHost {
         self.inner.borrow().active_pass.is_some()
     }
 
+    pub(crate) fn abandon_active_pass(&self) {
+        self.inner.borrow_mut().active_pass = None;
+    }
+
     pub(crate) fn with_write_session<R>(
         &self,
         f: impl FnOnce(&mut slot::SlotWriteSession<'_>) -> R,

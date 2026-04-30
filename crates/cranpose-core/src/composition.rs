@@ -205,16 +205,16 @@ impl<A: Applier + 'static> Composition<A> {
             );
             self.observer.begin_frame();
             let (root, commands, side_effects, compact_applier) = composer.install(|composer| {
-                let (_, outcome) = composer.with_slot_host_pass(
+                let (_, outcome) = composer.try_with_slot_host_pass(
                     Rc::clone(&self.slots),
                     crate::slot::SlotPassMode::Compose,
                     |composer| composer.with_group(key, |_| content()),
-                );
+                )?;
                 let root = composer.root();
                 let commands = composer.take_commands();
                 let side_effects = composer.take_side_effects();
-                (root, commands, side_effects, outcome.compacted)
-            });
+                Ok((root, commands, side_effects, outcome.compacted))
+            })?;
             self.record_pass_stats(&commands, &side_effects);
             self.apply_commands_and_updates_for_host(
                 &Rc::clone(&self.slots),
@@ -430,7 +430,7 @@ impl<A: Applier + 'static> Composition<A> {
                     self.observer.begin_frame();
                     let (root, commands, side_effects, requested_root_render, compact_applier) =
                         composer.install(|composer| {
-                            let (_, outcome) = composer.with_slot_host_pass(
+                            let (_, outcome) = composer.try_with_slot_host_pass(
                                 Rc::clone(host),
                                 crate::slot::SlotPassMode::Recompose,
                                 |composer| {
@@ -438,19 +438,19 @@ impl<A: Applier + 'static> Composition<A> {
                                         composer.recranpose_group(scope);
                                     }
                                 },
-                            );
+                            )?;
                             let root = composer.root();
                             let commands = composer.take_commands();
                             let side_effects = composer.take_side_effects();
                             let requested_root_render = composer.take_root_render_request();
-                            (
+                            Ok((
                                 root,
                                 commands,
                                 side_effects,
                                 requested_root_render,
                                 outcome.compacted,
-                            )
-                        });
+                            ))
+                        })?;
                     self.record_pass_stats(&commands, &side_effects);
                     self.apply_commands_and_updates_for_host(host, &runtime_handle, commands)?;
                     if compact_applier {

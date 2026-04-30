@@ -53,6 +53,52 @@ fn composer_new_with_shared_state_rejects_mismatched_bound_host() {
         Composer::new_with_shared_state(other_state, slots_host, applier, handle, observer, None);
 }
 
+#[test]
+fn slot_pass_finalization_error_returns_from_try_pass() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+
+    let node_id = {
+        let (composer, slots_host, applier_host) =
+            setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        let (node_id, _) = composer
+            .try_with_slot_host_pass(
+                Rc::clone(&slots_host),
+                crate::slot::SlotPassMode::Compose,
+                |composer| {
+                    composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                        composer.emit_node(TestDummyNode::default)
+                    })
+                },
+            )
+            .expect("initial slot pass should finalize");
+        let commands = composer.take_commands();
+        drop(composer);
+        teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+        commands
+            .apply(&mut applier)
+            .expect("initial node mount should apply");
+        node_id
+    };
+
+    applier
+        .remove(node_id)
+        .expect("test setup should remove the mounted node");
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    let result = composer.try_with_slot_host_pass(
+        Rc::clone(&slots_host),
+        crate::slot::SlotPassMode::Compose,
+        |_| {},
+    );
+
+    assert!(matches!(result, Err(NodeError::Missing { id }) if id == node_id));
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
 /// Test that emit_node rejects reuse when the parent's previous children list
 /// didn't contain the candidate node. This prevents nodes from "teleporting"
 /// between parents.

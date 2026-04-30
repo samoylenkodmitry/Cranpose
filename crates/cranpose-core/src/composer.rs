@@ -558,12 +558,12 @@ impl Composer {
         self.active_slots_host().with_write_session(f)
     }
 
-    pub(crate) fn with_slot_host_pass<R>(
+    pub(crate) fn try_with_slot_host_pass<R>(
         &self,
         slots: Rc<SlotsHost>,
         mode: crate::slot::SlotPassMode,
         f: impl FnOnce(&Composer) -> R,
-    ) -> (R, SlotPassOutcome) {
+    ) -> Result<(R, SlotPassOutcome), NodeError> {
         bind_slots_host_to_runtime_state(&self.core.shared_state, &slots);
         slots.begin_pass(mode);
         self.core.slot_hosts.borrow_mut().push(Rc::clone(&slots));
@@ -571,24 +571,16 @@ impl Composer {
         struct Guard {
             core: Rc<ComposerCore>,
             host: Rc<SlotsHost>,
-            outcome: Rc<RefCell<Option<SlotPassOutcome>>>,
+            active: bool,
         }
-        impl Drop for Guard {
-            fn drop(&mut self) {
-                let finished = {
-                    let mut applier = self.core.applier.borrow_dyn();
-                    self.host
-                        .finish_pass(&mut *applier)
-                        .expect("slot pass finalization must dispose detached nodes")
-                };
-                let composer = Composer::from_core(Rc::clone(&self.core));
-                composer.handle_detached_children_in_host(
-                    &self.host,
-                    None,
-                    finished.detached_root_children,
-                );
-                composer.evict_retained_subtrees_for_host(&self.host);
-                self.host.complete_pass_cleanup(&finished.outcome);
+        impl Guard {
+            fn close(&mut self) {
+                if !self.active {
+                    return;
+                }
+                if self.host.has_active_pass() {
+                    self.host.abandon_active_pass();
+                }
                 let host = self
                     .core
                     .slot_hosts
@@ -596,23 +588,39 @@ impl Composer {
                     .pop()
                     .expect("slot host underflow");
                 debug_assert!(Rc::ptr_eq(&host, &self.host));
-
-                *self.outcome.borrow_mut() = Some(finished.outcome);
+                self.active = false;
             }
         }
-        let outcome = Rc::new(RefCell::new(None));
-        let guard = Guard {
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                self.close();
+            }
+        }
+        let mut guard = Guard {
             core: self.clone_core(),
             host: Rc::clone(&slots),
-            outcome: Rc::clone(&outcome),
+            active: true,
         };
         let result = f(self);
-        drop(guard);
-        let outcome = outcome
-            .borrow_mut()
-            .take()
-            .expect("slot pass should produce an outcome");
-        (result, outcome)
+        let finished = {
+            let mut applier = self.core.applier.borrow_dyn();
+            slots.finish_pass(&mut *applier)
+        }?;
+        self.handle_detached_children_in_host(&slots, None, finished.detached_root_children)?;
+        self.evict_retained_subtrees_for_host(&slots)?;
+        slots.complete_pass_cleanup(&finished.outcome);
+        guard.close();
+        Ok((result, finished.outcome))
+    }
+
+    pub(crate) fn with_slot_host_pass<R>(
+        &self,
+        slots: Rc<SlotsHost>,
+        mode: crate::slot::SlotPassMode,
+        f: impl FnOnce(&Composer) -> R,
+    ) -> (R, SlotPassOutcome) {
+        self.try_with_slot_host_pass(slots, mode, f)
+            .expect("slot pass finalization must dispose detached nodes")
     }
 
     pub(crate) fn with_slot_override<R>(
@@ -952,23 +960,18 @@ impl Composer {
         &self,
         subtree: &crate::slot::DetachedSubtree,
         context: &'static str,
-    ) -> Vec<(NodeId, Option<NodeId>)> {
+    ) -> Result<Vec<(NodeId, Option<NodeId>)>, NodeError> {
         let mut root_nodes = Vec::new();
         subtree.collect_root_nodes_checked_into(&mut root_nodes, context);
         let mut roots = Vec::with_capacity(root_nodes.len());
         for root in root_nodes {
             let parent_id = {
                 let mut applier = self.borrow_applier();
-                applier
-                    .get_mut(root)
-                    .unwrap_or_else(|err| {
-                        panic!("{context}: detached subtree root node {root} missing: {err}")
-                    })
-                    .parent()
+                applier.get_mut(root)?.parent()
             };
             roots.push((root, parent_id));
         }
-        roots
+        Ok(roots)
     }
 
     fn retain_detached_subtree_in_host(
@@ -976,11 +979,11 @@ impl Composer {
         slots_host: &Rc<SlotsHost>,
         parent_scope: Option<ScopeId>,
         subtree: crate::slot::DetachedSubtree,
-    ) {
+    ) -> Result<(), NodeError> {
         // Retention and disposal must preserve the slot lifecycle contract in
         // docs/SLOT_TABLE_LIFECYCLE.md across the slot table, applier, and scope
         // registry.
-        let root_detaches = self.detached_root_parent_commands(&subtree, "retention");
+        let root_detaches = self.detached_root_parent_commands(&subtree, "retention")?;
         self.deactivate_scope_ids(subtree.scope_ids_iter());
         for (root, parent_id) in root_detaches {
             if let Some(parent_id) = parent_id {
@@ -999,24 +1002,29 @@ impl Composer {
             subtree,
         );
         for subtree in evicted {
-            self.dispose_detached_subtree_in_host(slots_host, subtree);
+            self.dispose_detached_subtree_in_host(slots_host, subtree)?;
         }
+        Ok(())
     }
 
-    fn evict_retained_subtrees_for_host(&self, slots_host: &Rc<SlotsHost>) {
+    fn evict_retained_subtrees_for_host(
+        &self,
+        slots_host: &Rc<SlotsHost>,
+    ) -> Result<(), NodeError> {
         let evicted = self.core.shared_state.advance_retention_pass(slots_host);
         for subtree in evicted {
-            self.dispose_detached_subtree_in_host(slots_host, subtree);
+            self.dispose_detached_subtree_in_host(slots_host, subtree)?;
         }
+        Ok(())
     }
 
     fn dispose_detached_subtree_in_host(
         &self,
         slots_host: &Rc<SlotsHost>,
         subtree: crate::slot::DetachedSubtree,
-    ) {
+    ) -> Result<(), NodeError> {
         let root_nodes = self
-            .detached_root_parent_commands(&subtree, "disposal")
+            .detached_root_parent_commands(&subtree, "disposal")?
             .into_iter()
             .map(|(root, _)| root);
         self.dispose_scope_ids(subtree.scope_ids_iter());
@@ -1025,6 +1033,7 @@ impl Composer {
             table.invalidate_detached_subtree_anchors(&subtree);
             lifecycle.queue_subtree_disposal(subtree);
         });
+        Ok(())
     }
 
     fn handle_detached_children_in_host(
@@ -1032,7 +1041,7 @@ impl Composer {
         slots_host: &Rc<SlotsHost>,
         parent_scope: Option<ScopeId>,
         detached: Vec<crate::slot::DetachedSubtree>,
-    ) {
+    ) -> Result<(), NodeError> {
         for subtree in detached {
             let retention_mode = subtree
                 .root_scope_id()
@@ -1041,13 +1050,14 @@ impl Composer {
                 .unwrap_or_default();
             match retention_mode {
                 RetentionMode::DisposeWhenInactive => {
-                    self.dispose_detached_subtree_in_host(slots_host, subtree)
+                    self.dispose_detached_subtree_in_host(slots_host, subtree)?
                 }
                 RetentionMode::RetainWhenInactive => {
-                    self.retain_detached_subtree_in_host(slots_host, parent_scope, subtree)
+                    self.retain_detached_subtree_in_host(slots_host, parent_scope, subtree)?
                 }
             }
         }
+        Ok(())
     }
 
     fn handle_detached_children(
@@ -1056,7 +1066,8 @@ impl Composer {
         detached: Vec<crate::slot::DetachedSubtree>,
     ) {
         let host = self.active_slots_host();
-        self.handle_detached_children_in_host(&host, parent_scope, detached);
+        self.handle_detached_children_in_host(&host, parent_scope, detached)
+            .expect("detached subtree root nodes must be present while closing a group");
     }
 
     fn handle_finished_group_result(
@@ -1308,15 +1319,15 @@ impl Composer {
         *core.local_stack.borrow_mut() = locals;
         let composer = Composer::from_core(core);
         let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
-            let (output, outcome) = composer.with_slot_host_pass(
+            let (output, outcome) = composer.try_with_slot_host_pass(
                 Rc::clone(slots),
                 crate::slot::SlotPassMode::Compose,
                 |composer| f(composer),
-            );
+            )?;
             let commands = composer.take_commands();
             let side_effects = composer.take_side_effects();
-            (output, commands, side_effects, outcome.compacted)
-        });
+            Ok((output, commands, side_effects, outcome.compacted))
+        })?;
         {
             let mut applier = self.borrow_applier();
             commands.apply(&mut *applier)?;
@@ -1381,7 +1392,7 @@ impl Composer {
         };
         let root_group_key = crate::location_key(file!(), line!(), column!());
         let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
-            let (output, outcome) = composer.with_slot_host_pass(
+            let (output, outcome) = composer.try_with_slot_host_pass(
                 Rc::clone(slots),
                 crate::slot::SlotPassMode::Compose,
                 |composer| {
@@ -1391,11 +1402,11 @@ impl Composer {
                     }
                     output
                 },
-            );
+            )?;
             let commands = composer.take_commands();
             let side_effects = composer.take_side_effects();
-            (output, commands, side_effects, outcome.compacted)
-        });
+            Ok((output, commands, side_effects, outcome.compacted))
+        })?;
         let frame = {
             let mut stack = guard.core.subcompose_stack.borrow_mut();
             let frame = stack.pop().expect("subcompose stack underflow");
