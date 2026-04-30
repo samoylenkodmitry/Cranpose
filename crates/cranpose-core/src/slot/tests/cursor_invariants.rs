@@ -4,6 +4,131 @@ fn active_group_anchors(table: &SlotTable) -> Vec<AnchorId> {
     table.groups.iter().map(|group| group.anchor).collect()
 }
 
+fn panic_message(payload: &(dyn Any + Send)) -> &str {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        message
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.as_str()
+    } else {
+        ""
+    }
+}
+
+fn composed_parent_with_two_children(
+    parent_key: Key,
+    first_child_key: Key,
+    second_child_key: Key,
+) -> (SlotHarness, AnchorId, AnchorId, AnchorId) {
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    let (parent_anchor, first_anchor, second_anchor) = harness.session(|session| {
+        let parent = begin_unkeyed(session, parent_key, None);
+
+        let first = begin_unkeyed(session, first_child_key, None);
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        let second = begin_unkeyed(session, second_child_key, None);
+        let second_result = session.finish_group_body();
+        assert!(second_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        (parent.anchor, first.anchor, second.anchor)
+    });
+    harness.finish_pass();
+    (harness, parent_anchor, first_anchor, second_anchor)
+}
+
+#[test]
+fn keyed_sibling_move_later_child_to_earlier_cursor_succeeds() {
+    const PARENT_KEY: Key = 10_031;
+    const FIRST_CHILD_KEY: Key = 10_032;
+    const SECOND_CHILD_KEY: Key = 10_033;
+
+    let (mut harness, parent_anchor, first_anchor, second_anchor) =
+        composed_parent_with_two_children(PARENT_KEY, FIRST_CHILD_KEY, SECOND_CHILD_KEY);
+
+    let cursor = ChildCursor::new(
+        parent_anchor,
+        harness.table.current_group_index(first_anchor),
+    );
+    harness
+        .table
+        .move_later_sibling_subtree_to_cursor(ActiveSubtreeRoot::new(second_anchor), cursor);
+
+    assert_eq!(
+        active_group_anchors(&harness.table),
+        vec![parent_anchor, second_anchor, first_anchor]
+    );
+    assert_eq!(
+        harness.table.group_anchor_state(second_anchor),
+        Some(AnchorState::Active(1))
+    );
+    assert_eq!(
+        harness.table.group_anchor_state(first_anchor),
+        Some(AnchorState::Active(2))
+    );
+    harness.table.debug_verify();
+}
+
+#[test]
+fn keyed_sibling_move_same_cursor_is_no_op() {
+    const PARENT_KEY: Key = 10_041;
+    const FIRST_CHILD_KEY: Key = 10_042;
+    const SECOND_CHILD_KEY: Key = 10_043;
+
+    let (mut harness, parent_anchor, first_anchor, _) =
+        composed_parent_with_two_children(PARENT_KEY, FIRST_CHILD_KEY, SECOND_CHILD_KEY);
+    let before = active_group_anchors(&harness.table);
+
+    let cursor = ChildCursor::new(
+        parent_anchor,
+        harness.table.current_group_index(first_anchor),
+    );
+    harness
+        .table
+        .move_later_sibling_subtree_to_cursor(ActiveSubtreeRoot::new(first_anchor), cursor);
+
+    assert_eq!(active_group_anchors(&harness.table), before);
+    harness.table.debug_verify();
+}
+
+#[test]
+fn keyed_sibling_move_rejects_earlier_sibling_to_later_cursor() {
+    const PARENT_KEY: Key = 10_051;
+    const FIRST_CHILD_KEY: Key = 10_052;
+    const SECOND_CHILD_KEY: Key = 10_053;
+
+    let (mut harness, parent_anchor, first_anchor, second_anchor) =
+        composed_parent_with_two_children(PARENT_KEY, FIRST_CHILD_KEY, SECOND_CHILD_KEY);
+    let before = active_group_anchors(&harness.table);
+    let cursor = ChildCursor::new(
+        parent_anchor,
+        harness.table.current_group_index(second_anchor),
+    );
+
+    let move_result = panic::catch_unwind(AssertUnwindSafe(|| {
+        harness
+            .table
+            .move_later_sibling_subtree_to_cursor(ActiveSubtreeRoot::new(first_anchor), cursor);
+    }));
+
+    let panic = move_result.expect_err("earlier sibling move must panic");
+    assert!(
+        panic_message(panic.as_ref())
+            .contains("only moves a later direct sibling to an earlier child cursor"),
+        "unexpected panic message: {}",
+        panic_message(panic.as_ref())
+    );
+    assert_eq!(active_group_anchors(&harness.table), before);
+    harness.table.debug_verify();
+}
+
 #[test]
 fn child_cursor_rejects_cross_parent_active_move() {
     const PARENT_A_KEY: Key = 10_001;
@@ -44,12 +169,14 @@ fn child_cursor_rejects_cross_parent_active_move() {
     let move_result = panic::catch_unwind(AssertUnwindSafe(|| {
         harness
             .table
-            .move_subtree(ActiveSubtreeRoot::new(child_b_anchor), cursor);
+            .move_later_sibling_subtree_to_cursor(ActiveSubtreeRoot::new(child_b_anchor), cursor);
     }));
 
+    let panic = move_result.expect_err("cross-parent move must panic");
     assert!(
-        move_result.is_err(),
-        "active subtree movement must reject direct children from a different parent",
+        panic_message(panic.as_ref()).contains("direct child of the cursor parent"),
+        "unexpected panic message: {}",
+        panic_message(panic.as_ref())
     );
     assert_eq!(active_group_anchors(&harness.table), before);
     harness.table.debug_verify();
@@ -86,14 +213,17 @@ fn child_cursor_rejects_grandchild_as_direct_sibling_move() {
         harness.table.current_group_index(child_anchor),
     );
     let move_result = panic::catch_unwind(AssertUnwindSafe(|| {
-        harness
-            .table
-            .move_subtree(ActiveSubtreeRoot::new(grandchild_anchor), cursor);
+        harness.table.move_later_sibling_subtree_to_cursor(
+            ActiveSubtreeRoot::new(grandchild_anchor),
+            cursor,
+        );
     }));
 
+    let panic = move_result.expect_err("grandchild move must panic");
     assert!(
-        move_result.is_err(),
-        "active subtree movement must reject grandchildren as direct siblings",
+        panic_message(panic.as_ref()).contains("direct child of the cursor parent"),
+        "unexpected panic message: {}",
+        panic_message(panic.as_ref())
     );
     assert_eq!(active_group_anchors(&harness.table), before);
     harness.table.debug_verify();

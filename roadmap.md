@@ -252,37 +252,37 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## 6. Rename or document later-sibling-only move
 
-* [ ] Decide whether to rename.
+* [x] Decide whether to rename.
 
-    * [ ] Option A: rename `move_subtree` to `move_later_sibling_subtree_to_cursor`.
-    * [ ] Option B: keep name and add a clear doc comment.
-    * [ ] Prefer rename if call sites are few and internal-only.
+    * [x] Option A: rename `move_subtree` to `move_later_sibling_subtree_to_cursor`.
+    * [x] Option B evaluated; the renamed internal primitive carries the clear contract doc comment.
+    * [x] Prefer rename if call sites are few and internal-only.
 
-* [ ] Update assertions and messages.
+* [x] Update assertions and messages.
 
-    * [ ] State that the root must be a direct child of the cursor parent.
-    * [ ] State that only moving a later direct sibling earlier is supported.
-    * [ ] State that this is writer-driven keyed sibling reordering, not a general tree move.
+    * [x] State that the root must be a direct child of the cursor parent.
+    * [x] State that only moving a later direct sibling earlier is supported.
+    * [x] State that this is writer-driven keyed sibling reordering, not a general tree move.
 
-* [ ] Add tests.
+* [x] Add tests.
 
-    * [ ] Moving later sibling before earlier sibling succeeds.
-    * [ ] Moving same cursor is no-op.
-    * [ ] Moving across parents fails.
-    * [ ] Moving an earlier sibling later fails or is unsupported by explicit assertion.
-    * [ ] Moving a grandchild as if it were a sibling fails.
+    * [x] Moving later sibling before earlier sibling succeeds.
+    * [x] Moving same cursor is no-op.
+    * [x] Moving across parents fails.
+    * [x] Moving an earlier sibling later fails or is unsupported by explicit assertion.
+    * [x] Moving a grandchild as if it were a sibling fails.
 
-* [ ] Self-review.
+* [x] Self-review.
 
-    * [ ] Confirm public/internal API impact is acceptable.
-    * [ ] Confirm error messages match actual constraints.
-    * [ ] Confirm keyed reorder behavior remains unchanged.
+    * [x] Confirm public/internal API impact is acceptable.
+    * [x] Confirm error messages match actual constraints.
+    * [x] Confirm keyed reorder behavior remains unchanged.
 
-* [ ] Validate and commit.
+* [x] Validate and commit.
 
-    * [ ] Run full validation baseline.
-    * [ ] Commit: `slot: clarify keyed sibling move constraints`
-    * [ ] Mark this item `[x]`.
+    * [x] Run full validation baseline.
+    * [x] Commit: `slot: clarify keyed sibling move constraints`
+    * [x] Mark this item `[x]`.
 
 ---
 

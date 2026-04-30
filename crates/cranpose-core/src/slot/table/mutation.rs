@@ -152,7 +152,17 @@ impl SlotTable {
         anchor
     }
 
-    pub(in crate::slot) fn move_subtree(&mut self, root: ActiveSubtreeRoot, cursor: ChildCursor) {
+    /// Moves a later direct child subtree to an earlier cursor under the same parent.
+    ///
+    /// This is the writer's keyed sibling reorder primitive. It is not a general
+    /// tree move: `root` must identify a direct child of `cursor.parent()`, and
+    /// `cursor.index()` must be before the root's current index. Passing the
+    /// root's current cursor is a no-op.
+    pub(in crate::slot) fn move_later_sibling_subtree_to_cursor(
+        &mut self,
+        root: ActiveSubtreeRoot,
+        cursor: ChildCursor,
+    ) {
         self.assert_child_cursor_boundary(cursor);
         let anchor = root.anchor();
         let from_index = self.current_group_index(anchor);
@@ -166,11 +176,12 @@ impl SlotTable {
         assert_eq!(
             moving_root.parent_anchor,
             cursor.parent(),
-            "moved subtree root must be a direct child of the cursor parent"
+            "keyed sibling move root must be a direct child of the cursor parent; \
+             cross-parent and general tree moves are unsupported"
         );
         assert!(
             insert_index < from_index,
-            "moved subtree root must be a later direct sibling of the child cursor"
+            "keyed sibling move only moves a later direct sibling to an earlier child cursor"
         );
 
         // Move recipe:
@@ -201,6 +212,6 @@ impl SlotTable {
         );
         self.refresh_group_indexes_from(from_index.min(adjusted_index));
         #[cfg(any(test, debug_assertions))]
-        let _guard = SlotMutationGuard::new(self, "move_subtree");
+        let _guard = SlotMutationGuard::new(self, "move_later_sibling_subtree_to_cursor");
     }
 }
