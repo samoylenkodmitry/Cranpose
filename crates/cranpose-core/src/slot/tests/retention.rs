@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn failed_retention_restore_validation_keeps_subtree_available() {
+    let (_, detached, _) = detached_single_child_with_options(340, 341, None, false, true);
+    let key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+    let mut retention = RetentionManager::default();
+    retention.insert(key, detached);
+    for subtree in retention.subtrees_mut() {
+        subtree.mark_nodes_active();
+    }
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = retention.take(key);
+    }));
+
+    assert!(
+        panic.is_err(),
+        "invalid retained node lifecycle must reject restore"
+    );
+    assert_eq!(
+        retention.debug_stats().subtree_count,
+        1,
+        "failed restore validation must not remove retained state"
+    );
+}
+
+#[test]
 fn identity_snapshot_captures_active_and_retained_identities() {
     const PARENT_KEY: Key = 362;
     const CHILD_KEY: Key = 363;

@@ -3486,14 +3486,22 @@ impl Drop for SlotsHost {
         let storage_key = self.storage_key.get();
         let inner = self.inner.get_mut();
         if let Some(state) = inner.runtime_state.clone() {
-            state
-                .dispose_retained_subtrees_for_host(
+            if let Err(err) = state.dispose_retained_subtrees_for_host(
+                storage_key,
+                &mut inner.table,
+                &mut inner.lifecycle,
+            ) {
+                log::error!(
+                    "retained subtree disposal failed while dropping SlotsHost {storage_key}: {err}"
+                );
+                state.abandon_retained_subtrees_for_host(
                     storage_key,
                     &mut inner.table,
                     &mut inner.lifecycle,
-                )
-                .expect("retained subtree disposal must succeed while dropping slots host");
-            state.clear_host_storage_key(storage_key);
+                );
+            } else {
+                state.clear_host_storage_key(storage_key);
+            }
         }
         inner.lifecycle.dispose_slot_table(&mut inner.table);
     }
@@ -3560,9 +3568,13 @@ impl SlotsHost {
         let mut lifecycle = std::mem::take(&mut inner.lifecycle);
         lifecycle.flush_pending_drops();
         let host_key = self.storage_key();
-        previous_state
+        if previous_state
             .dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
-            .expect("retained subtree disposal must succeed before rebinding slots host");
+            .is_err()
+        {
+            inner.lifecycle = lifecycle;
+            return false;
+        }
         previous_state.clear_host(self);
         lifecycle.flush_pending_drops();
         inner.runtime_state = Some(Rc::clone(state));
@@ -3582,7 +3594,7 @@ impl SlotsHost {
         RefMut::map(self.inner.borrow_mut(), |inner| &mut inner.table)
     }
 
-    pub fn into_table(self: Rc<Self>) -> SlotTable {
+    pub fn into_table(self: Rc<Self>) -> Result<SlotTable, NodeError> {
         assert_eq!(
             Rc::strong_count(&self),
             1,
@@ -3591,7 +3603,7 @@ impl SlotsHost {
         self.take_table_for_transfer()
     }
 
-    fn take_table_for_transfer(&self) -> SlotTable {
+    fn take_table_for_transfer(&self) -> Result<SlotTable, NodeError> {
         let inner = self.inner.borrow();
         assert!(
             inner.active_pass.is_none(),
@@ -3603,9 +3615,7 @@ impl SlotsHost {
         lifecycle.flush_pending_drops();
         if let Some(state) = inner.runtime_state.clone() {
             let host_key = self.storage_key();
-            state
-                .dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
-                .expect("retained subtree disposal must succeed before transferring slot table");
+            state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)?;
             state.clear_host(self);
             lifecycle.flush_pending_drops();
         }
@@ -3613,10 +3623,10 @@ impl SlotsHost {
         self.storage_key.set(inner.table.storage_id());
         inner.runtime_state = None;
         inner.lifecycle = lifecycle;
-        taken
+        Ok(taken)
     }
 
-    pub fn reset(&self) {
+    pub fn reset(&self) -> Result<(), NodeError> {
         let inner = self.inner.borrow();
         assert!(
             inner.active_pass.is_none(),
@@ -3628,10 +3638,30 @@ impl SlotsHost {
         let mut lifecycle = std::mem::take(&mut inner.lifecycle);
         if let Some(state) = runtime_state {
             let host_key = self.storage_key();
-            state
-                .dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
-                .expect("retained subtree disposal must succeed before resetting slots host");
+            state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)?;
             state.clear_host(self);
+        }
+        lifecycle.dispose_slot_table(&mut inner.table);
+        inner.table = SlotTable::default();
+        self.storage_key.set(inner.table.storage_id());
+        inner.runtime_state = None;
+        inner.lifecycle = slot::SlotLifecycleCoordinator::default();
+        Ok(())
+    }
+
+    pub(crate) fn abandon_after_apply_failure(&self) {
+        let inner = self.inner.borrow();
+        assert!(
+            inner.active_pass.is_none(),
+            "cannot abandon SlotsHost during an active pass"
+        );
+        let runtime_state = inner.runtime_state.clone();
+        drop(inner);
+        let mut inner = self.inner.borrow_mut();
+        let mut lifecycle = std::mem::take(&mut inner.lifecycle);
+        if let Some(state) = runtime_state {
+            let host_key = self.storage_key();
+            state.abandon_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle);
         }
         lifecycle.dispose_slot_table(&mut inner.table);
         inner.table = SlotTable::default();

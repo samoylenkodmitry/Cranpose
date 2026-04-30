@@ -205,7 +205,7 @@ crates/cranpose-core/src/
     writer.rs                  // mutation/traversal state machine
     table/                     // SlotTable metadata, mutation, and value helpers
     writer/                    // writer state-machine helper modules
-    reader.rs                  // read-only traversal and debug dumps
+    introspection.rs           // read-only stats, snapshots, and debug dumps
     groups.rs                  // GroupRecord and group-table helpers
     payload.rs                 // PayloadRecord storage
     payload_anchors.rs         // PayloadAnchorRegistry and value-slot resolution
@@ -303,22 +303,17 @@ pub struct GroupRecord {
     // Aggregate node count in subtree, for skip and attach operations.
     pub subtree_node_count: u32,
 
+    pub generation: u32,
     pub anchor: AnchorId,
     pub scope_id: Option<ScopeId>,
-    pub flags: GroupFlags,
-    pub generation: u32,
 }
 ```
 
 `subtree_len` must always mean exact active group count. It must never mean “physical extent including old gaps.”
 
-### 7.4 PayloadTable
+### 7.4 Payload storage
 
 ```rust
-pub struct PayloadTable {
-    records: Vec<PayloadRecord>,
-}
-
 pub struct PayloadRecord {
     pub owner: AnchorId,
     pub anchor: PayloadAnchor,
@@ -336,22 +331,20 @@ pub enum PayloadKind {
 }
 ```
 
-Remembered state stays in storage. Lifecycle restore is not storage-owned; the composer chooses whether a detached subtree survives.
+Payload records live in `SlotTable::payloads`. Remembered state stays in storage. Lifecycle restore is not storage-owned; the composer chooses whether a detached subtree survives.
 Recomposition scopes are group metadata, not payload records.
 
-### 7.5 NodeTable
+### 7.5 Node storage
 
 Nodes are no longer full slots in the same sequence as groups and remembered values.
 
 ```rust
-pub struct NodeTable {
-    records: Vec<NodeRecord>,
-}
-
 pub struct NodeRecord {
     pub owner: AnchorId,
     pub node_id: NodeId,
+    pub parent_id: Option<NodeId>,
     pub generation: u32,
+    pub lifecycle: NodeLifecycle,
 }
 ```
 
@@ -366,7 +359,13 @@ The writer/session surface exposes semantic operations directly on `SlotTable` s
 ```rust
 impl SlotWriteSession<'_> {
     // Groups
-    fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<ActiveGroupId>;
+    fn preview_group_key(&self, seed: GroupKeySeed) -> GroupKey;
+    fn begin_group(
+        &mut self,
+        key: GroupKey,
+        restored: Option<DetachedSubtree>,
+    ) -> GroupStart<ActiveGroupId>;
+    fn assert_retained_restore_ready(&mut self, key: GroupKey, subtree: &DetachedSubtree);
     fn finish_group_body(&mut self) -> FinishGroupResult;
     fn end_group(&mut self);
     fn skip_group(&mut self);
@@ -377,22 +376,30 @@ impl SlotWriteSession<'_> {
     fn end_recompose(&mut self);
 
     // Values
-    fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> ValueSlotId;
-    fn read_value<T: 'static>(&self, slot: ValueSlotId) -> &T;
-    fn read_value_mut<T: 'static>(&mut self, slot: ValueSlotId) -> &mut T;
+    fn value_slot_with_kind<T: 'static>(
+        &mut self,
+        kind: PayloadKind,
+        init: impl FnOnce() -> T,
+    ) -> ValueSlotId;
     fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T>;
+    fn remember_with_kind<T: 'static>(
+        &mut self,
+        kind: PayloadKind,
+        init: impl FnOnce() -> T,
+    ) -> Owned<T>;
 
     // Nodes
-    fn record_node(&mut self, id: NodeId, generation: u32) -> NodeSlotUpdate;
-    fn nodes_in_current_group(&self) -> Vec<NodeId>;
-
-    // Lifecycle/debug
-    fn validate(&self) -> Result<(), SlotInvariantError>;
-    fn debug_snapshot(&self) -> SlotDebugSnapshot;
+    fn record_node_with_parent(
+        &mut self,
+        id: NodeId,
+        generation: u32,
+        parent_id: Option<NodeId>,
+    ) -> NodeSlotUpdate;
+    fn current_node_record(&self) -> Option<(NodeId, u32)>;
 }
 ```
 
-Explicit detach/restore stays as concrete slot-table behavior instead of trait surface: `finish_group_body()` yields detached children, and `begin_group(BeginGroupInput { restored: Some(subtree), .. })` restores at the current cursor.
+`SlotTable` owns value-slot reads, mutable reads, validation, and debug snapshots. Explicit detach/restore stays as concrete slot-table behavior instead of trait surface: `finish_group_body()` yields detached children, and `begin_group(key, Some(subtree))` restores at the current cursor.
 
 These cursor-repair methods are not part of the active API:
 
@@ -401,27 +408,21 @@ peek_node
 advance_after_node_read
 step_back
 finalize_current_group -> bool
-flush as anchor-rebuild workaround
+flush-based anchor rebuild
 ```
 
 Writer finalization only applies queued structural maintenance; it is not a repair path for stale identities.
 
-### 8.1 BeginGroupInput
+### 8.1 Begin-group inputs
 
-```rust
-pub struct BeginGroupInput {
-    pub key: GroupKey,
-    pub restored: Option<DetachedSubtree>,
-}
-```
-
-The composer passes `restored`. The slot table does not search dormant storage to decide restoration.
+The current writer passes `key: GroupKey` and `restored: Option<DetachedSubtree>` directly to `begin_group`. The composer supplies `restored`; the slot table does not search dormant storage to decide restoration.
 
 ### 8.2 GroupStart
 
 ```rust
 pub struct GroupStart<G> {
     pub group: G,
+    #[cfg(test)]
     pub anchor: AnchorId,
     pub kind: GroupStartKind,
     pub scope_id: Option<ScopeId>,
@@ -442,9 +443,9 @@ pub enum GroupStartKind {
 ```rust
 pub struct FinishGroupResult {
     pub detached_children: Vec<DetachedSubtree>,
-    pub structure_changed: bool,
     pub direct_nodes: Vec<NodeId>,
-    pub subtree_nodes: Vec<NodeId>,
+    pub root_nodes: Vec<NodeId>,
+    pub was_skipped: bool,
 }
 ```
 
@@ -484,17 +485,21 @@ The current frame says:
 ### 9.1 Begin group algorithm
 
 ```rust
-fn begin_group(&mut self, input: BeginGroupInput) -> GroupStart<ActiveGroupId> {
+fn begin_group(
+    &mut self,
+    key: GroupKey,
+    restored: Option<DetachedSubtree>,
+) -> GroupStart<ActiveGroupId> {
     let parent = self.current_group();
     let expected = self.frame().next_child;
 
-    if let Some(restored) = input.restored {
+    if let Some(restored) = restored {
         let group = self.insert_detached_at(expected, restored);
         self.open_frame(group, GroupStartKind::Restored);
         return GroupStart::restored(group);
     }
 
-    if self.group_at(expected).matches_parent_and_key(parent, input.key) {
+    if self.group_at(expected).matches_parent_and_key(parent, key) {
         let group = self.group_id_at(expected);
         self.open_frame(group, GroupStartKind::Reused);
         return GroupStart::reused(group);
@@ -595,7 +600,7 @@ fn detach_subtree(&mut self, root_index: usize) -> DetachedSubtree {
 
 ### 10.3 Restore operation
 
-Restore is initiated by composer retention lookup plus `begin_group(BeginGroupInput { restored: Some(subtree), .. })`. The composer preflights the target cursor, expected root key, detached anchors, node lifecycle, root spans, and scope-index availability before the retained subtree is removed from retention. `SlotTable::restore_subtree` repeats the local preflight before mutating active storage, then reparents the restored root, inserts groups/payloads/nodes at the current cursor, marks anchors and scopes active again, marks retained nodes active, and returns `GroupStartKind::Restored`.
+Restore is initiated by composer retention lookup plus `begin_group(key, Some(subtree))`. The composer preflights the target cursor, expected root key, detached anchors, node lifecycle, root spans, and scope-index availability before the retained subtree is removed from retention. `SlotTable::restore_subtree` repeats the local preflight before mutating active storage, then reparents the restored root, inserts groups/payloads/nodes at the current cursor, marks anchors and scopes active again, marks retained nodes active, and returns `GroupStartKind::Restored`.
 
 Storage restores bytes/records. Composer reactivates scopes and reattaches nodes.
 
@@ -666,7 +671,7 @@ Rules:
 - retained diagnostics must report retained subtree/group/payload/node/scope/anchor counts, estimated retained heap bytes, and cumulative eviction count;
 - live hosts are resolved through `live_hosts` during recomposition;
 - `SlotsHost` owns the runtime-state binding for a table and `ComposerRuntimeState` owns live-host registration; `SlotTable` never carries a runtime-state pointer;
-- `SlotsHost::into_table()` and `SlotsHost::reset()` drain retained subtrees and clear host ownership before storage is transferred or replaced;
+- `SlotsHost::into_table()` and `SlotsHost::reset()` report retained cleanup failures; only successful cleanup clears host ownership before storage is transferred or replaced;
 - a host whose previous runtime owner is gone may be rebound to a new runtime state; a host with a live applier owner rejects mismatched runtime binding;
 - every `RecomposeScope` stores both `slots_storage_key` and a weak `slots_runtime_state`, which is the data needed to route invalid scopes back to the correct host.
 
@@ -746,7 +751,7 @@ pub fn with_group_seed<R>(&self, key: GroupKeySeed, f: impl FnOnce(&Composer) ->
         kind,
         ..
     } = self.with_slot_session_mut(|slots| {
-        slots.begin_group(BeginGroupInput::new(reserved_key, restored))
+        slots.begin_group(reserved_key, restored)
     });
 
     let scope = if let Some(scope) = scope_id.and_then(|scope_id| self.scope_for_id(scope_id)) {
@@ -1040,9 +1045,9 @@ Required checks:
 3. `subtree_len` exactly spans descendants in preorder.
 4. Sibling groups are contiguous inside parent range.
 5. No child range overlaps another child range.
-6. Payload ranges are within `PayloadTable`.
+6. Payload ranges are within `SlotTable::payloads`.
 7. Payload owner anchors resolve to active groups.
-8. Node ranges are within `NodeTable`.
+8. Node ranges are within `SlotTable::nodes`.
 9. Node owner anchors resolve to active groups.
 10. Scope index maps every active `scope_id` to the correct group anchor.
 11. Anchor registry resolves active anchors and rejects invalidated anchors.
@@ -1156,7 +1161,7 @@ Slot Table V2 is the active implementation. The implementation has converged on 
 - `DetachedSubtree` owns inactive retained branch state.
 - `NodeSlotUpdate` makes node reuse, insertion, and replacement explicit.
 
-Forward work should use the release checklist and a dedicated review roadmap for concrete findings. Do not add alternate slot-table backends, compatibility wrapper modules, or feature-flagged half-states.
+Forward work should use the release checklist and a dedicated review roadmap for concrete findings. Do not add alternate slot-table backends, adapter wrapper modules, or feature-flagged half-states.
 
 ---
 
@@ -1181,7 +1186,7 @@ let restored = self.core.shared_state.take_retained(
 );
 
 let start = self.with_slot_session_mut(|slots| {
-    slots.begin_group(BeginGroupInput::new(reserved_key, restored))
+    slots.begin_group(reserved_key, restored)
 });
 
 match start.kind {

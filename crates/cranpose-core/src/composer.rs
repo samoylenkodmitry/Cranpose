@@ -265,28 +265,56 @@ impl ComposerRuntimeState {
         table: &mut SlotTable,
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
     ) -> Result<(), NodeError> {
-        let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key) else {
-            return Ok(());
-        };
         let applier_host = self
             .applier_host
             .borrow()
             .as_ref()
             .and_then(std::rc::Weak::upgrade);
+        if let Some(applier_host) = applier_host.as_ref() {
+            let retention_by_host = self.retention_by_host.borrow();
+            let Some(retention) = retention_by_host.get(&host_key) else {
+                return Ok(());
+            };
+            let mut applier = applier_host.borrow_dyn();
+            for subtree in retention.subtrees() {
+                crate::slot::dispose_detached_subtree_now(&mut *applier, subtree)?;
+            }
+        }
+        let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key) else {
+            return Ok(());
+        };
         for subtree in retention.into_subtrees() {
             for scope_id in subtree.scope_ids() {
                 if let Some(scope) = self.remove_scope(scope_id) {
                     scope.deactivate();
                 }
             }
-            if let Some(applier_host) = applier_host.as_ref() {
-                let mut applier = applier_host.borrow_dyn();
-                crate::slot::dispose_detached_subtree_now(&mut *applier, &subtree)?;
-            }
             table.invalidate_detached_subtree_anchors(&subtree);
             lifecycle.queue_subtree_disposal(subtree);
         }
         Ok(())
+    }
+
+    pub(crate) fn abandon_retained_subtrees_for_host(
+        &self,
+        host_key: usize,
+        table: &mut SlotTable,
+        lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
+    ) {
+        let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key) else {
+            self.clear_host_storage_key(host_key);
+            return;
+        };
+        for subtree in retention.into_subtrees() {
+            for scope_id in subtree.scope_ids() {
+                if let Some(scope) = self.remove_scope(scope_id) {
+                    scope.deactivate();
+                }
+            }
+            table.invalidate_detached_subtree_anchors(&subtree);
+            lifecycle.queue_subtree_disposal(subtree);
+        }
+        self.clear_host_storage_key(host_key);
     }
 
     pub(crate) fn host_retention_is_empty(&self, host: &SlotsHost) -> bool {
@@ -502,7 +530,7 @@ impl Composer {
         observer.observe_reads(scope_clone, move |scope_ref| scope_ref.invalidate(), block)
     }
 
-    fn active_slots_host(&self) -> Rc<SlotsHost> {
+    pub(crate) fn active_slots_host(&self) -> Rc<SlotsHost> {
         self.core
             .slot_hosts
             .borrow()
@@ -920,6 +948,29 @@ impl Composer {
         }
     }
 
+    fn detached_root_parent_commands(
+        &self,
+        subtree: &crate::slot::DetachedSubtree,
+        context: &'static str,
+    ) -> Vec<(NodeId, Option<NodeId>)> {
+        let mut root_nodes = Vec::new();
+        subtree.collect_root_nodes_checked_into(&mut root_nodes, context);
+        let mut roots = Vec::with_capacity(root_nodes.len());
+        for root in root_nodes {
+            let parent_id = {
+                let mut applier = self.borrow_applier();
+                applier
+                    .get_mut(root)
+                    .unwrap_or_else(|err| {
+                        panic!("{context}: detached subtree root node {root} missing: {err}")
+                    })
+                    .parent()
+            };
+            roots.push((root, parent_id));
+        }
+        roots
+    }
+
     fn retain_detached_subtree_in_host(
         &self,
         slots_host: &Rc<SlotsHost>,
@@ -929,14 +980,9 @@ impl Composer {
         // Retention and disposal must preserve the slot lifecycle contract in
         // docs/SLOT_TABLE_LIFECYCLE.md across the slot table, applier, and scope
         // registry.
-        let mut root_nodes = Vec::new();
-        subtree.collect_root_nodes_checked_into(&mut root_nodes, "retention");
+        let root_detaches = self.detached_root_parent_commands(&subtree, "retention");
         self.deactivate_scope_ids(subtree.scope_ids_iter());
-        for root in root_nodes {
-            let parent_id = {
-                let mut applier = self.borrow_applier();
-                applier.get_mut(root).ok().and_then(|node| node.parent())
-            };
+        for (root, parent_id) in root_detaches {
             if let Some(parent_id) = parent_id {
                 self.commands_mut().push(Command::DetachChild {
                     parent_id,
@@ -969,8 +1015,10 @@ impl Composer {
         slots_host: &Rc<SlotsHost>,
         subtree: crate::slot::DetachedSubtree,
     ) {
-        let mut root_nodes = Vec::new();
-        subtree.collect_root_nodes_checked_into(&mut root_nodes, "disposal");
+        let root_nodes = self
+            .detached_root_parent_commands(&subtree, "disposal")
+            .into_iter()
+            .map(|(root, _)| root);
         self.dispose_scope_ids(subtree.scope_ids_iter());
         self.dispose_detached_nodes(root_nodes);
         slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {

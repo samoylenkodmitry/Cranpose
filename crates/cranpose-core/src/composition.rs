@@ -154,6 +154,40 @@ impl<A: Applier + 'static> Composition<A> {
         }
     }
 
+    fn abandon_host_after_apply_failure(&mut self, host: &Rc<SlotsHost>) {
+        host.abandon_after_apply_failure();
+        if Rc::ptr_eq(host, &self.slots) {
+            self.root = None;
+        }
+        self.root_render_requested = true;
+        self.finalize_runtime_state();
+    }
+
+    fn apply_commands_and_updates_for_host(
+        &mut self,
+        host: &Rc<SlotsHost>,
+        runtime_handle: &RuntimeHandle,
+        commands: CommandQueue,
+    ) -> Result<(), NodeError> {
+        let result = {
+            let mut applier = self.applier.borrow_dyn();
+            let mut result = commands.apply(&mut *applier);
+            if result.is_ok() {
+                for update in runtime_handle.take_updates() {
+                    if let Err(err) = update.apply(&mut *applier) {
+                        result = Err(err);
+                        break;
+                    }
+                }
+            }
+            result
+        };
+        if result.is_err() {
+            self.abandon_host_after_apply_failure(host);
+        }
+        result
+    }
+
     fn render_root_pass(&mut self, key: Key, content: &mut dyn FnMut()) -> Result<(), NodeError> {
         self.root_key = Some(key);
         self.root_render_requested = false;
@@ -182,13 +216,11 @@ impl<A: Applier + 'static> Composition<A> {
                 (root, commands, side_effects, outcome.compacted)
             });
             self.record_pass_stats(&commands, &side_effects);
-            {
-                let mut applier = self.applier.borrow_dyn();
-                commands.apply(&mut *applier)?;
-                for update in runtime_handle.take_updates() {
-                    update.apply(&mut *applier)?;
-                }
-            }
+            self.apply_commands_and_updates_for_host(
+                &Rc::clone(&self.slots),
+                &runtime_handle,
+                commands,
+            )?;
             if compact_applier {
                 self.applier.compact();
                 self.applier.borrow_dyn().clear_recycled_nodes();
@@ -420,13 +452,7 @@ impl<A: Applier + 'static> Composition<A> {
                             )
                         });
                     self.record_pass_stats(&commands, &side_effects);
-                    {
-                        let mut applier = self.applier.borrow_dyn();
-                        commands.apply(&mut *applier)?;
-                        for update in runtime_handle.take_updates() {
-                            update.apply(&mut *applier)?;
-                        }
-                    }
+                    self.apply_commands_and_updates_for_host(host, &runtime_handle, commands)?;
                     if compact_applier {
                         self.applier.compact();
                         self.applier.borrow_dyn().clear_recycled_nodes();

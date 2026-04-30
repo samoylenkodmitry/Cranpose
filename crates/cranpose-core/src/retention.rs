@@ -146,9 +146,7 @@ impl RetentionManager {
     }
 
     pub(crate) fn take(&mut self, key: RetainKey) -> Option<DetachedSubtree> {
-        let restored_order = self.tick_operation();
-        let retained = self.groups.remove(&key)?;
-        self.restored_at_by_key.insert(key, restored_order);
+        let retained = self.groups.get(&key)?;
         retained
             .subtree
             .assert_root_key(key.key, "retention restore");
@@ -158,6 +156,12 @@ impl RetentionManager {
         retained
             .subtree
             .assert_node_lifecycle(NodeLifecycle::RetainedDetached, "retention restore");
+        let restored_order = self.tick_operation();
+        let retained = self
+            .groups
+            .remove(&key)
+            .expect("validated retained subtree key must still exist");
+        self.restored_at_by_key.insert(key, restored_order);
         Some(retained.subtree)
     }
 

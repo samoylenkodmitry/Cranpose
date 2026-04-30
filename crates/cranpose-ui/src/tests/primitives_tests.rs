@@ -59,7 +59,9 @@ fn restore_measure_composer(
     slots_host: Rc<SlotsHost>,
     applier_host: Rc<ConcreteApplierHost<MemoryApplier>>,
 ) {
-    *slots = slots_host.into_table();
+    *slots = slots_host
+        .into_table()
+        .expect("restore primitive test slots");
     *applier = Rc::try_unwrap(applier_host)
         .unwrap_or_else(|_| panic!("applier host still has outstanding references"))
         .into_inner();

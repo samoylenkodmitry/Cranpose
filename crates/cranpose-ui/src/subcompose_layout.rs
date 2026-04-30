@@ -1050,7 +1050,11 @@ impl SubcomposeLayoutNodeInner {
         // from per-item slot scopes. When a widget updates the data captured by
         // the measure lambda through shared cells, the next layout pass must not
         // reuse the previous root measure group wholesale.
-        self.slots.reset();
+        if let Err(err) = self.slots.reset() {
+            log::error!(
+                "failed to reset root measurement slots after measure policy update: {err}"
+            );
+        }
     }
 
     /// Updates the modifier and collects invalidations without dispatching them.

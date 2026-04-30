@@ -433,13 +433,26 @@ impl Composer {
     pub fn apply_pending_commands(&self) -> Result<(), NodeError> {
         let commands = self.take_commands();
         let runtime_handle = self.runtime_handle();
-        {
+        let result = {
             let mut applier = self.borrow_applier();
-            commands.apply(&mut *applier)?;
-            for update in runtime_handle.take_updates() {
-                update.apply(&mut *applier)?;
+            let mut result = commands.apply(&mut *applier);
+            if result.is_ok() {
+                for update in runtime_handle.take_updates() {
+                    if let Err(err) = update.apply(&mut *applier) {
+                        result = Err(err);
+                        break;
+                    }
+                }
+            }
+            result
+        };
+        if result.is_err() {
+            let host = self.active_slots_host();
+            if !host.has_active_pass() {
+                host.abandon_after_apply_failure();
             }
         }
+        result?;
         runtime_handle.drain_ui();
         Ok(())
     }

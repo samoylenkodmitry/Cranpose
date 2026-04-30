@@ -21,7 +21,7 @@ fn slots_host_into_table_does_not_transfer_runtime_state_through_slot_table() {
         "bound host must be registered before transfer"
     );
 
-    let table = slots_host.into_table();
+    let table = slots_host.into_table().expect("slots host transfer");
     assert!(
         state.host_for_storage_key(storage_key).is_none(),
         "transfer must clear runtime ownership for the original host"

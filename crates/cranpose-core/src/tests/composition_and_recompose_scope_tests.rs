@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn failed_apply_abandons_root_slot_state() {
+    let mut composition = test_composition();
+    let root_key = location_key(file!(), line!(), column!());
+    let child_key = location_key(file!(), line!(), column!());
+
+    let result = composition.render(root_key, || {
+        with_current_composer(|composer| {
+            composer.with_group(child_key, |composer| {
+                let _remembered = composer.remember(|| 17_i32);
+                composer.commands_mut().push(Command::callback(|_| {
+                    Err(NodeError::MissingContext {
+                        id: 77,
+                        reason: "forced apply failure",
+                    })
+                }));
+            });
+        });
+    });
+
+    assert_eq!(
+        result,
+        Err(NodeError::MissingContext {
+            id: 77,
+            reason: "forced apply failure",
+        })
+    );
+    let snapshot = composition.debug_slot_snapshot();
+    assert!(
+        snapshot.active_groups.is_empty(),
+        "failed apply must not leave committed active slot groups: {snapshot:#?}",
+    );
+    assert_eq!(snapshot.retained_subtree_count, 0);
+    assert!(composition.root().is_none());
+    assert!(composition.take_root_render_request());
+}
+
+#[test]
 fn composition_local_provider_scopes_values() {
     thread_local! {
         static CHILD_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
@@ -1923,7 +1960,7 @@ fn secondary_host_reset_disposes_retained_subtrees_before_clearing_ownership() {
         "retained secondary-host node must stay live before reset"
     );
 
-    secondary_host.reset();
+    secondary_host.reset().expect("secondary host reset");
 
     assert_eq!(payload_drops.get(), 1);
     assert_eq!(node_unmounts.get(), 1);
@@ -1949,6 +1986,137 @@ fn secondary_host_reset_disposes_retained_subtrees_before_clearing_ownership() {
 
     drop(composer);
     drop(secondary_host);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+struct FailingRetainedDisposalApplier {
+    fail_id: NodeId,
+    inner: MemoryApplier,
+}
+
+impl Applier for FailingRetainedDisposalApplier {
+    fn create(&mut self, node: Box<dyn Node>) -> NodeId {
+        self.inner.create(node)
+    }
+
+    fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
+        if id == self.fail_id {
+            Err(NodeError::TypeMismatch {
+                id,
+                expected: "retained disposal failure",
+            })
+        } else {
+            self.inner.get_mut(id)
+        }
+    }
+
+    fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
+        if id == self.fail_id {
+            Err(NodeError::TypeMismatch {
+                id,
+                expected: "retained disposal failure",
+            })
+        } else {
+            self.inner.remove(id)
+        }
+    }
+
+    fn node_generation(&self, id: NodeId) -> u32 {
+        self.inner.node_generation(id)
+    }
+
+    fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {
+        self.inner.insert_with_id(id, node)
+    }
+}
+
+#[test]
+fn failed_secondary_host_reset_keeps_retained_state_owned() {
+    const BRANCH_KEY: Key = 0x5EC1;
+
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = MemoryApplier::new();
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    composer.enter_phase(Phase::Measure);
+
+    let secondary_host = Rc::new(SlotsHost::new(SlotTable::default()));
+    let emitted_node = Rc::new(Cell::new(None::<NodeId>));
+
+    let subcompose = |show_branch: bool| {
+        let emitted_node = Rc::clone(&emitted_node);
+        composer
+            .subcompose_slot(&secondary_host, None, |composer| {
+                emitted_node.set(None);
+                if show_branch {
+                    composer.cranpose_with_reuse(
+                        BRANCH_KEY,
+                        RecomposeOptions::default(),
+                        |composer| {
+                            let node_id = composer.emit_node(TrackingChild::default);
+                            emitted_node.set(Some(node_id));
+                        },
+                    );
+                }
+            })
+            .expect("subcompose retained branch");
+    };
+
+    subcompose(true);
+    let retained_node = emitted_node
+        .get()
+        .expect("secondary host retained node must be emitted");
+    let retained_host_key = secondary_host.storage_key();
+    subcompose(false);
+    assert_eq!(secondary_host.debug_stats().retained_subtree_count, 1);
+
+    let failing_host: Rc<dyn ApplierHost> =
+        Rc::new(ConcreteApplierHost::new(FailingRetainedDisposalApplier {
+            fail_id: retained_node,
+            inner: MemoryApplier::new(),
+        }));
+    composer.core.shared_state.bind_applier_host(&failing_host);
+
+    assert_eq!(
+        secondary_host.reset(),
+        Err(NodeError::TypeMismatch {
+            id: retained_node,
+            expected: "retained disposal failure",
+        })
+    );
+    assert_eq!(
+        secondary_host.debug_stats().retained_subtree_count,
+        1,
+        "failed retained disposal must keep subtree state available for retry"
+    );
+    assert!(
+        composer
+            .core
+            .shared_state
+            .host_for_storage_key(retained_host_key)
+            .is_some(),
+        "failed retained disposal must not clear live host ownership"
+    );
+
+    let original_host: Rc<dyn ApplierHost> = applier_host.clone();
+    composer.core.shared_state.bind_applier_host(&original_host);
+    secondary_host.reset().expect("secondary host reset retry");
+
+    assert_eq!(secondary_host.debug_stats().retained_subtree_count, 0);
+    assert!(
+        composer
+            .core
+            .shared_state
+            .host_for_storage_key(retained_host_key)
+            .is_none(),
+        "successful retry must clear live host ownership"
+    );
+
+    drop(composer);
+    drop(secondary_host);
+    drop(original_host);
+    drop(failing_host);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
 

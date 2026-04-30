@@ -1181,7 +1181,7 @@ impl LayoutBuilderState {
             &measure_error,
         )?;
         drop(composer);
-        slots_guard.restore(slots_host.into_table());
+        slots_guard.restore(slots_host.into_table()?);
 
         if let Some(err) = measure_error.borrow_mut().take() {
             return Err(err);
