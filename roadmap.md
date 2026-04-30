@@ -4,25 +4,25 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## Agent operating protocol
 
-* [ ] Create a working branch from `main`.
+* [x] Create a working branch from `main`.
 
-    * [ ] Implement only one roadmap item or tightly related group per commit.
-    * [ ] Self-review the diff before validating.
-    * [ ] Run formatting and tests.
-    * [ ] Commit with a focused message.
-    * [ ] Mark the checklist item `[x]` only after the commit lands.
+    * [x] Implement only one roadmap item or tightly related group per commit.
+    * [x] Self-review the diff before validating.
+    * [x] Run formatting and tests.
+    * [x] Commit with a focused message.
+    * [x] Mark the checklist item `[x]` only after the commit lands.
 
-* [ ] Use this validation baseline for every implementation commit:
+* [x] Use this validation baseline for every implementation commit:
 
-    * [ ] `cargo fmt --all --check`
-    * [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-    * [ ] `cargo test --workspace --all-features`
-    * [ ] Targeted slot-table tests when relevant:
+    * [x] `cargo fmt --all --check`
+    * [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+    * [x] `cargo test --workspace --all-features`
+    * [x] Targeted slot-table tests when relevant:
 
-        * [ ] `cargo test -p cranpose-core slot::`
-        * [ ] `cargo test -p cranpose-core retention`
-        * [ ] `cargo test -p cranpose-core recompose`
-        * [ ] `cargo test -p cranpose-core subcompose`
+        * [x] `cargo test -p cranpose-core slot::`
+        * [x] `cargo test -p cranpose-core retention`
+        * [x] `cargo test -p cranpose-core recompose`
+        * [x] `cargo test -p cranpose-core subcompose`
 
 ---
 
@@ -423,43 +423,43 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## 10. Run full project validation
 
-* [ ] Run full workspace validation.
+* [x] Run full workspace validation.
 
-    * [ ] `cargo fmt --all --check`
-    * [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-    * [ ] `cargo test --workspace --all-features`
-    * [ ] Any project-specific CI commands from README or workflows.
+    * [x] `cargo fmt --all --check`
+    * [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+    * [x] `cargo test --workspace --all-features`
+    * [x] Any project-specific CI commands from README or workflows.
 
-* [ ] Run diagnostics-enabled tests.
+* [x] Run diagnostics-enabled tests.
 
-    * [ ] Enable slot validation diagnostics if supported.
-    * [ ] Run targeted slot, retention, and recompose tests.
-    * [ ] Confirm debug assertions pass.
+    * [x] Enable slot validation diagnostics if supported.
+    * [x] Run targeted slot, retention, and recompose tests.
+    * [x] Confirm debug assertions pass.
 
-* [ ] Review final diff.
+* [x] Review final diff.
 
-    * [ ] Check public API changes.
-    * [ ] Check docs match implementation.
-    * [ ] Check commit history is focused.
-    * [ ] Check no temporary debug prints or ignored failing tests remain.
-    * [ ] Check no broad unrelated refactors slipped in.
+    * [x] Check public API changes.
+    * [x] Check docs match implementation.
+    * [x] Check commit history is focused.
+    * [x] Check no temporary debug prints or ignored failing tests remain.
+    * [x] Check no broad unrelated refactors slipped in.
 
-* [ ] Commit final cleanup if needed.
+* [x] Commit final cleanup if needed.
 
-    * [ ] Commit: `slot: finalize slot table hardening roadmap`
-    * [ ] Mark this item `[x]`.
+    * [x] Commit: `slot: finalize slot table hardening roadmap`
+    * [x] Mark this item `[x]`.
 
 ---
 
 # Completion criteria
 
-* [ ] Every roadmap item is marked `[x]`.
-* [ ] Every `[x]` item has a corresponding commit.
-* [ ] Full workspace validation passes.
-* [ ] Slot table lifecycle docs exist and match implementation.
-* [ ] Cross-table value-slot misuse is guarded.
-* [ ] Payload-anchor refresh invariants are explicit.
-* [ ] Structural mutation operations are documented or guarded.
-* [ ] Anchor registries have stale-handle and reuse coverage.
-* [ ] Retention, restore, eviction, and host reset are covered by integration tests.
-* [ ] No active-scope scanning or semantic gap behavior has been reintroduced.
+* [x] Every roadmap item is marked `[x]`.
+* [x] Every `[x]` item has a corresponding commit.
+* [x] Full workspace validation passes.
+* [x] Slot table lifecycle docs exist and match implementation.
+* [x] Cross-table value-slot misuse is guarded.
+* [x] Payload-anchor refresh invariants are explicit.
+* [x] Structural mutation operations are documented or guarded.
+* [x] Anchor registries have stale-handle and reuse coverage.
+* [x] Retention, restore, eviction, and host reset are covered by integration tests.
+* [x] No active-scope scanning or semantic gap behavior has been reintroduced.
