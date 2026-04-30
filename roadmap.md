@@ -153,51 +153,51 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## 4. Add mutation operation checklists
 
-* [ ] Add internal comments or helper structs documenting mutation order.
+* [x] Add internal comments or helper structs documenting mutation order.
 
-    * [ ] `detach_subtree`
-    * [ ] `restore_subtree`
-    * [ ] `move_subtree`
-    * [ ] payload insertion/removal
-    * [ ] node insertion/removal
+    * [x] `detach_subtree`
+    * [x] `restore_subtree`
+    * [x] `move_subtree`
+    * [x] payload insertion/removal
+    * [x] node insertion/removal
 
-* [ ] Introduce a lightweight mutation guard in debug/test builds.
+* [x] Introduce a lightweight mutation guard in debug/test builds.
 
-    * [ ] Optional: `SlotMutationGuard`.
-    * [ ] On drop, run `debug_assert_valid_after(operation)` when diagnostics are enabled.
-    * [ ] Avoid using guard where validation would recursively borrow or cause large overhead.
+    * [x] Optional: `SlotMutationGuard`.
+    * [x] On drop, run `debug_assert_valid_after(operation)` when diagnostics are enabled.
+    * [x] Avoid using guard where validation would recursively borrow or cause large overhead.
 
-* [ ] Reduce duplicated mutation sequencing.
+* [x] Reduce duplicated mutation sequencing.
 
-    * [ ] Identify repeated patterns:
+    * [x] Identify repeated patterns:
 
-        * [ ] segment extraction/restoration
-        * [ ] active-index refresh
-        * [ ] payload-location refresh
-        * [ ] scope-index update
-        * [ ] ancestor span update
-    * [ ] Extract helper only where it improves clarity.
-    * [ ] Do not over-abstract the current readable flow.
+        * [x] segment extraction/restoration
+        * [x] active-index refresh
+        * [x] payload-location refresh
+        * [x] scope-index update
+        * [x] ancestor span update
+    * [x] Extract helper only where it improves clarity.
+    * [x] Do not over-abstract the current readable flow.
 
-* [ ] Add tests.
+* [x] Add tests.
 
-    * [ ] Move later sibling to earlier cursor.
-    * [ ] Detach middle subtree with payloads and nodes.
-    * [ ] Restore retained subtree with scopes, payloads, and nodes.
-    * [ ] Remove tail payloads/nodes during recomposition.
-    * [ ] Root-level detach during pass finalization.
+    * [x] Move later sibling to earlier cursor.
+    * [x] Detach middle subtree with payloads and nodes.
+    * [x] Restore retained subtree with scopes, payloads, and nodes.
+    * [x] Remove tail payloads/nodes during recomposition.
+    * [x] Root-level detach during pass finalization.
 
-* [ ] Self-review.
+* [x] Self-review.
 
-    * [ ] Confirm helpers preserve exact operation ordering.
-    * [ ] Confirm validation still catches intentionally corrupted fixtures.
-    * [ ] Confirm no production-only behavior depends on debug guard.
+    * [x] Confirm helpers preserve exact operation ordering.
+    * [x] Confirm validation still catches intentionally corrupted fixtures.
+    * [x] Confirm no production-only behavior depends on debug guard.
 
-* [ ] Validate and commit.
+* [x] Validate and commit.
 
-    * [ ] Run full validation baseline.
-    * [ ] Commit: `slot: document and guard structural mutation recipes`
-    * [ ] Mark this item `[x]`.
+    * [x] Run full validation baseline.
+    * [x] Commit: `slot: document and guard structural mutation recipes`
+    * [x] Mark this item `[x]`.
 
 ---
 

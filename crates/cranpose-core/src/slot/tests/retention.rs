@@ -948,6 +948,53 @@ fn finalize_pass_disposes_removed_child_nodes() {
 }
 
 #[test]
+fn finalize_pass_returns_root_level_detached_subtree_for_caller_cleanup() {
+    const ROOT_KEY: Key = 358;
+    const ROOT_NODE: NodeId = 359;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let root_slot = harness.session(|session| {
+        begin_unkeyed(session, ROOT_KEY, None);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 73_i32);
+        session.record_node_with_parent(ROOT_NODE, 1, None);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached_root_children = {
+        let mut session = harness
+            .table
+            .write_session(&mut harness.lifecycle, &mut harness.state);
+        session.finalize_pass(&mut harness.applier)
+    };
+
+    assert_eq!(detached_root_children.len(), 1);
+    let subtree = detached_root_children.into_iter().next().unwrap();
+    assert_eq!(subtree.root_key().static_key, ROOT_KEY);
+    assert_eq!(subtree.payload_count(), 1);
+    assert_eq!(subtree.node_ids_iter().collect::<Vec<_>>(), vec![ROOT_NODE]);
+    assert!(harness.table.groups.is_empty());
+
+    harness.table.invalidate_detached_subtree_anchors(&subtree);
+    harness.lifecycle.queue_subtree_disposal(subtree);
+    harness.lifecycle.flush_pending_drops();
+    assert_eq!(harness.table.validate(), Ok(()));
+    let removed_read = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(root_slot);
+    }));
+    assert!(
+        removed_read.is_err(),
+        "root-level finalization cleanup must invalidate removed payload handles"
+    );
+}
+
+#[test]
 fn retained_detached_child_nodes_stay_live_across_restore() {
     const PARENT_KEY: Key = 362;
     const CHILD_KEY: Key = 363;

@@ -508,3 +508,61 @@ fn removed_payload_tail_invalidates_value_slot_handle() {
     );
     assert_eq!(harness.table.validate(), Ok(()));
 }
+
+#[test]
+fn recomposition_removes_tail_payloads_and_nodes_together() {
+    const GROUP_KEY: Key = 59;
+    const FIRST_NODE: NodeId = 590;
+    const SECOND_NODE: NodeId = 591;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (first_slot, removed_slot) = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let first_slot = session.value_slot_with_kind(PayloadKind::Internal, || 1_i32);
+        let removed_slot = session.value_slot_with_kind(PayloadKind::Internal, || 2_i32);
+        session.record_node_with_parent(FIRST_NODE, 1, None);
+        session.record_node_with_parent(SECOND_NODE, 1, None);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        assert!(result.direct_nodes.is_empty());
+        session.end_group();
+        (first_slot, removed_slot)
+    });
+    harness.finish_pass();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let direct_nodes = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let first_slot_after = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        assert_eq!(first_slot_after, first_slot);
+        let recorded = session.record_node_with_parent(FIRST_NODE, 1, None);
+        assert_eq!(
+            recorded,
+            NodeSlotUpdate::Reused {
+                id: FIRST_NODE,
+                generation: 1,
+            },
+        );
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        result.direct_nodes
+    });
+    harness.finish_pass();
+
+    assert_eq!(direct_nodes, vec![SECOND_NODE]);
+    assert_eq!(harness.table.group_payload_len_at(0), 1);
+    assert_eq!(harness.table.group_node_len_at(0), 1);
+    assert_eq!(*harness.table.read_value::<i32>(first_slot), 1);
+    let removed_read = panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = harness.table.read_value::<i32>(removed_slot);
+    }));
+    assert!(
+        removed_read.is_err(),
+        "tail payload removal must invalidate the removed value slot"
+    );
+    assert_eq!(harness.table.group_node_record_at(0, 0).id, FIRST_NODE);
+    assert_eq!(harness.table.validate(), Ok(()));
+}

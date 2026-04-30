@@ -66,6 +66,8 @@ impl SlotTable {
         payload_index: usize,
         payload: PayloadRecord,
     ) {
+        // Payload insertion/removal updates segment starts before touching the
+        // payload vector so every following group keeps a coherent range.
         self.record_segment_range_update_from(group_index);
         insert_group_segment_item::<PayloadSegment, _>(
             &mut self.groups,
@@ -80,6 +82,8 @@ impl SlotTable {
         &mut self,
         payload_range: GroupPayloadRange,
     ) -> Vec<PayloadRecord> {
+        // Removed payloads are invalidated by the caller after the segment is
+        // extracted, then surviving anchors are refreshed from the removed start.
         if !payload_range.is_empty() {
             self.record_segment_range_update_from(payload_range.group_index());
         }

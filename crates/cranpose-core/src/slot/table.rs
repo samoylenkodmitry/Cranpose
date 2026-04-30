@@ -9,6 +9,9 @@ mod metadata;
 mod mutation;
 mod values;
 
+#[cfg(any(test, debug_assertions))]
+pub(in crate::slot) use mutation::SlotMutationGuard;
+
 static NEXT_SLOT_STORAGE_ID: AtomicUsize = AtomicUsize::new(1);
 
 pub(crate) struct SlotWriteSession<'a> {

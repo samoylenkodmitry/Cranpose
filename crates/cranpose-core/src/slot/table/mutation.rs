@@ -5,6 +5,28 @@ use super::super::{
 use super::SlotTable;
 use crate::AnchorId;
 
+#[cfg(any(test, debug_assertions))]
+pub(in crate::slot) struct SlotMutationGuard<'a> {
+    table: &'a SlotTable,
+    operation: &'static str,
+}
+
+#[cfg(any(test, debug_assertions))]
+impl<'a> SlotMutationGuard<'a> {
+    pub(in crate::slot) fn new(table: &'a SlotTable, operation: &'static str) -> Self {
+        Self { table, operation }
+    }
+}
+
+#[cfg(any(test, debug_assertions))]
+impl Drop for SlotMutationGuard<'_> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            self.table.debug_assert_valid_after(self.operation);
+        }
+    }
+}
+
 impl SlotTable {
     fn allocate_group_anchor(&mut self) -> AnchorId {
         self.anchors.allocate()
@@ -82,6 +104,9 @@ impl SlotTable {
         cursor: ChildCursor,
         key: GroupKey,
     ) -> AnchorId {
+        // Group insertion recipe:
+        // allocate identity, insert the group record, refresh active indexes from
+        // the insertion point, then update ancestor spans.
         self.assert_child_cursor_boundary(cursor);
         let insert_index = cursor.index();
         let parent_anchor = cursor.parent();
@@ -148,6 +173,10 @@ impl SlotTable {
             "moved subtree root must be a later direct sibling of the child cursor"
         );
 
+        // Move recipe:
+        // extract group, payload, and node segments from the later sibling;
+        // restore payload and node segments at the earlier cursor; splice groups;
+        // record movement stats; refresh active indexes over the affected suffix.
         let mut moved = self
             .groups
             .drain(moving_groups.as_range())
@@ -172,6 +201,6 @@ impl SlotTable {
         );
         self.refresh_group_indexes_from(from_index.min(adjusted_index));
         #[cfg(any(test, debug_assertions))]
-        self.debug_assert_valid_after("move_subtree");
+        let _guard = SlotMutationGuard::new(self, "move_subtree");
     }
 }

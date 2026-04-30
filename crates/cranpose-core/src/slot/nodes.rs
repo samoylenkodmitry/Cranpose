@@ -40,6 +40,8 @@ impl SlotTable {
     }
 
     fn insert_group_node(&mut self, group_index: usize, node_index: usize, node: NodeRecord) {
+        // Node insertion/removal uses the same segment recipe as payloads, with
+        // ancestor node counts adjusted by the public cursor-level operations.
         self.record_segment_range_update_from(group_index);
         insert_group_segment_item::<NodeSegment, _>(
             &mut self.groups,
@@ -51,6 +53,8 @@ impl SlotTable {
     }
 
     fn remove_node_range(&mut self, node_range: GroupNodeRange) -> Vec<NodeRecord> {
+        // The caller owns lifecycle side effects for removed node records after
+        // this function restores coherent node segment ranges.
         if !node_range.is_empty() {
             self.record_segment_range_update_from(node_range.group_index());
         }

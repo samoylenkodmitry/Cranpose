@@ -1,3 +1,5 @@
+#[cfg(any(test, debug_assertions))]
+use super::table::SlotMutationGuard;
 use super::{
     checked_u32_delta, CheckedU32Delta, ChildCursor, DetachedChild, DetachedSubtree, GroupRecord,
     SlotTable, SlotWriteSessionState, SubtreeRange,
@@ -42,6 +44,10 @@ impl SlotTable {
         root_index: usize,
         refresh_indexes: bool,
     ) -> DetachedSubtree {
+        // Detach recipe:
+        // drain the group segment, normalize detached depths and root parent,
+        // extract payload and node segments, clear active indexes, refresh the
+        // active suffix when requested, then shrink ancestor spans.
         let root_parent_anchor = self.groups[root_index].parent_anchor;
         let root_subtree_len = self.groups[root_index].subtree_len;
         let root_subtree_node_count = self.groups[root_index].subtree_node_count;
@@ -78,9 +84,7 @@ impl SlotTable {
             nodes: removed_nodes,
         };
         #[cfg(any(test, debug_assertions))]
-        if refresh_indexes {
-            self.debug_assert_valid_after("detach_subtree");
-        }
+        let _guard = refresh_indexes.then(|| SlotMutationGuard::new(self, "detach_subtree"));
         #[cfg(any(test, debug_assertions))]
         subtree
             .validate_detached()
@@ -157,6 +161,10 @@ impl SlotTable {
             .filter_map(|group| group.scope_id.map(|scope_id| (scope_id, group.anchor)))
             .collect::<Vec<_>>();
 
+        // Restore recipe:
+        // retarget root parent/depth, mark nodes active, restore payload and
+        // node segments, splice groups, refresh active indexes, restore scopes,
+        // update ancestor spans, then refresh payload anchor locations.
         let target_root_depth = if parent_anchor.is_valid() {
             self.current_group(parent_anchor)
                 .depth
@@ -189,7 +197,7 @@ impl SlotTable {
         let restored_group_range = SubtreeRange::from_root_len(insert_index, restored_group_count);
         self.refresh_payload_locations_for_group_range(restored_group_range.as_group_range());
         #[cfg(any(test, debug_assertions))]
-        self.debug_assert_valid_after("restore_subtree");
+        let _guard = SlotMutationGuard::new(self, "restore_subtree");
         root_anchor
     }
 
