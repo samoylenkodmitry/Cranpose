@@ -1,7 +1,0 @@
-- [x] Make slot/retention/applier lifecycle transitions atomic enough that a failed applier apply cannot leave the slot table and runtime retention state ahead of the concrete node tree.
-- [x] Rework retained-subtree insertion so root nodes are proven detachable before nodes are marked `RetainedDetached`.
-- [x] Validate retained-subtree restore invariants before removing a subtree from the retention map.
-- [x] Remove panicking retained cleanup from normal ownership transitions and `Drop`; explicit transitions should report errors and destructors should be best-effort.
-- [x] Bring the active Slot Table V2 design doc back in sync with the implementation.
-- [x] Move the ignored massive keyed-reorder stress case out of normal unit tests or remove it.
-- [x] Clean ignored root/build temp artifacts that do not belong in the working tree.
