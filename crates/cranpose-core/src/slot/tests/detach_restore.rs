@@ -68,6 +68,40 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
 }
 
 #[test]
+#[should_panic(expected = "detached subtree nodes must expose root metadata during test")]
+fn detached_subtree_root_node_metadata_is_checked_at_runtime() {
+    const NODE_ID: NodeId = 88;
+    let owner = AnchorId::new(1);
+    let subtree = DetachedSubtree {
+        groups: vec![GroupRecord {
+            key: GroupKey::new(901, None, 0),
+            parent_anchor: AnchorId::INVALID,
+            depth: 0,
+            subtree_len: 1,
+            payload_start: 0,
+            payload_len: 0,
+            node_start: 0,
+            node_len: 1,
+            subtree_node_count: 1,
+            generation: 0,
+            anchor: owner,
+            scope_id: None,
+        }],
+        payloads: Vec::new(),
+        nodes: vec![NodeRecord {
+            owner,
+            id: NODE_ID,
+            parent_id: Some(NODE_ID),
+            generation: 0,
+            lifecycle: NodeLifecycle::RetainedDetached,
+        }],
+    };
+    let mut root_nodes = Vec::new();
+
+    subtree.collect_root_nodes_checked_into(&mut root_nodes, "test");
+}
+
+#[test]
 fn detach_restore_preserves_nested_payloads_and_scopes() {
     const PARENT_KEY: Key = 100;
     const CHILD_KEY: Key = 200;

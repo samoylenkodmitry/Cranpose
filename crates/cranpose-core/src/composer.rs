@@ -903,24 +903,6 @@ impl Composer {
         }
     }
 
-    fn debug_assert_detached_subtree_metadata(
-        &self,
-        subtree: &crate::slot::DetachedSubtree,
-        root_nodes: &[NodeId],
-    ) {
-        debug_assert!(
-            subtree.node_count() == 0 || !root_nodes.is_empty(),
-            "detached subtree nodes must expose root metadata",
-        );
-        debug_assert!(
-            {
-                let node_ids = subtree.node_ids_iter().collect::<HashSet<_>>();
-                root_nodes.iter().all(|id| node_ids.contains(id))
-            },
-            "detached subtree root ids must belong to the subtree node set",
-        );
-    }
-
     fn deactivate_scope_ids(&self, scope_ids: impl IntoIterator<Item = ScopeId>) {
         for scope_id in scope_ids {
             if let Some(scope) = self.scope_for_id(scope_id) {
@@ -947,8 +929,7 @@ impl Composer {
         // docs/SLOT_TABLE_LIFECYCLE.md across the slot table, applier, and scope
         // registry.
         let mut root_nodes = Vec::new();
-        subtree.collect_root_nodes_into(&mut root_nodes);
-        self.debug_assert_detached_subtree_metadata(&subtree, &root_nodes);
+        subtree.collect_root_nodes_checked_into(&mut root_nodes, "retention");
         self.deactivate_scope_ids(subtree.scope_ids_iter());
         for root in root_nodes {
             let parent_id = {
@@ -988,8 +969,7 @@ impl Composer {
         subtree: crate::slot::DetachedSubtree,
     ) {
         let mut root_nodes = Vec::new();
-        subtree.collect_root_nodes_into(&mut root_nodes);
-        self.debug_assert_detached_subtree_metadata(&subtree, &root_nodes);
+        subtree.collect_root_nodes_checked_into(&mut root_nodes, "disposal");
         self.dispose_scope_ids(subtree.scope_ids_iter());
         self.dispose_detached_nodes(root_nodes);
         slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {

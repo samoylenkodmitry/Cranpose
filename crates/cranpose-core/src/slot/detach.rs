@@ -263,7 +263,7 @@ pub(crate) fn dispose_detached_subtree_now(
     subtree: &DetachedSubtree,
 ) -> Result<(), NodeError> {
     let mut root_nodes = Vec::new();
-    subtree.collect_root_nodes_into(&mut root_nodes);
+    subtree.collect_root_nodes_checked_into(&mut root_nodes, "immediate disposal");
     for root in root_nodes {
         dispose_detached_node_now(applier, root)?;
     }

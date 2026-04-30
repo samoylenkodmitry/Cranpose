@@ -328,6 +328,23 @@ impl DetachedSubtree {
         collect_root_node_ids_from_records_into(&self.nodes, root_nodes);
     }
 
+    pub(crate) fn collect_root_nodes_checked_into(
+        &self,
+        root_nodes: &mut Vec<NodeId>,
+        context: &'static str,
+    ) {
+        self.collect_root_nodes_into(root_nodes);
+        assert!(
+            self.node_count() == 0 || !root_nodes.is_empty(),
+            "detached subtree nodes must expose root metadata during {context}",
+        );
+        let node_ids = self.node_ids_iter().collect::<HashSet<_>>();
+        assert!(
+            root_nodes.iter().all(|id| node_ids.contains(id)),
+            "detached subtree root ids must belong to the subtree node set during {context}",
+        );
+    }
+
     pub(crate) fn group_count(&self) -> usize {
         self.groups.len()
     }
