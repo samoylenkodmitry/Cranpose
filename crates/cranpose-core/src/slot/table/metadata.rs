@@ -5,7 +5,7 @@ use crate::{AnchorId, ScopeId};
 impl SlotTable {
     pub(in crate::slot) fn refresh_group_indexes_from(&mut self, start: usize) {
         let span = self.groups.len().saturating_sub(start);
-        self.mutation_debug_stats.record_group_index_refresh(span);
+        self.diagnostics.record_group_index_refresh(span);
 
         for index in start..self.groups.len() {
             let generation = self.allocate_group_generation();

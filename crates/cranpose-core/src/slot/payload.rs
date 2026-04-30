@@ -344,7 +344,7 @@ impl SlotTable {
             self.payload_anchors
                 .set_active(payload_anchor, owner, index);
         }
-        self.mutation_debug_stats
+        self.diagnostics
             .record_payload_location_refresh(payload_span);
     }
 
@@ -373,7 +373,7 @@ impl SlotTable {
                     .set_active(payload_anchor, owner, index);
             }
         }
-        self.mutation_debug_stats
+        self.diagnostics
             .record_payload_location_range_refresh(group_span, payload_span);
     }
 

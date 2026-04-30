@@ -1,6 +1,7 @@
+use super::debug::SlotTableDiagnostics;
 use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadAnchorRegistry, PayloadRecord,
-    ScopeIndex, SlotLifecycleCoordinator, SlotTableMutationDebugStats, SlotWriteSessionState,
+    ScopeIndex, SlotLifecycleCoordinator, SlotWriteSessionState,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -24,7 +25,7 @@ pub struct SlotTable {
     pub(super) anchors: AnchorRegistry,
     pub(super) payload_anchors: PayloadAnchorRegistry,
     pub(super) scope_index: ScopeIndex,
-    pub(super) mutation_debug_stats: SlotTableMutationDebugStats,
+    pub(super) diagnostics: SlotTableDiagnostics,
     next_group_generation: u32,
 }
 
@@ -38,7 +39,7 @@ impl SlotTable {
             anchors: AnchorRegistry::new(),
             payload_anchors: PayloadAnchorRegistry::new(),
             scope_index: ScopeIndex::new(),
-            mutation_debug_stats: SlotTableMutationDebugStats::default(),
+            diagnostics: SlotTableDiagnostics::default(),
             next_group_generation: 1,
         }
     }

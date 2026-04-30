@@ -160,6 +160,48 @@ pub struct SlotTableMutationDebugStats {
     pub segment_range_update_max_span: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SlotTableDiagnostics {
+    mutation: SlotTableMutationDebugStats,
+}
+
+impl SlotTableDiagnostics {
+    pub(crate) fn mutation(&self) -> SlotTableMutationDebugStats {
+        self.mutation
+    }
+
+    pub(crate) fn record_subtree_move(
+        &mut self,
+        group_span: usize,
+        payload_span: usize,
+        node_span: usize,
+    ) {
+        self.mutation
+            .record_subtree_move(group_span, payload_span, node_span);
+    }
+
+    pub(crate) fn record_payload_location_range_refresh(
+        &mut self,
+        group_span: usize,
+        payload_span: usize,
+    ) {
+        self.mutation
+            .record_payload_location_range_refresh(group_span, payload_span);
+    }
+
+    pub(crate) fn record_group_index_refresh(&mut self, group_span: usize) {
+        self.mutation.record_group_index_refresh(group_span);
+    }
+
+    pub(crate) fn record_payload_location_refresh(&mut self, payload_span: usize) {
+        self.mutation.record_payload_location_refresh(payload_span);
+    }
+
+    pub(crate) fn record_segment_range_update(&mut self, group_span: usize) {
+        self.mutation.record_segment_range_update(group_span);
+    }
+}
+
 impl SlotTableMutationDebugStats {
     pub(crate) fn record_subtree_move(
         &mut self,

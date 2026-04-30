@@ -46,7 +46,7 @@ impl SlotTable {
             anchor_heap_bytes: self.anchors.heap_bytes(),
             scope_index_count: self.scope_index.len(),
             scope_index_capacity: self.scope_index.capacity(),
-            mutation: self.mutation_debug_stats,
+            mutation: self.diagnostics.mutation(),
         }
     }
 

@@ -21,13 +21,11 @@ impl SlotTable {
 
     pub(in crate::slot) fn record_segment_range_update_from(&mut self, start: usize) {
         let group_span = self.groups.len().saturating_sub(start);
-        self.mutation_debug_stats
-            .record_segment_range_update(group_span);
+        self.diagnostics.record_segment_range_update(group_span);
     }
 
     pub(in crate::slot) fn record_segment_range_update_span(&mut self, group_span: usize) {
-        self.mutation_debug_stats
-            .record_segment_range_update(group_span);
+        self.diagnostics.record_segment_range_update(group_span);
     }
 
     pub(in crate::slot) fn adjust_ancestor_group_spans(
@@ -183,7 +181,7 @@ impl SlotTable {
         self.restore_payloads_for_groups(adjusted_index, &mut moved, moved_payloads);
         self.restore_nodes_for_groups(adjusted_index, &mut moved, moved_nodes);
         self.groups.splice(adjusted_index..adjusted_index, moved);
-        self.mutation_debug_stats.record_subtree_move(
+        self.diagnostics.record_subtree_move(
             moved_group_count,
             moved_payload_count,
             moved_node_count,
