@@ -1,6 +1,6 @@
 - [x] Extract shared generational registry storage for group and payload anchors.
 - [x] Make slot host pass finalization explicitly fallible instead of panicking from `Drop`.
-- [ ] Wire cheap slot invariant checks in release-critical cleanup paths.
+- [x] Wire cheap slot invariant checks in release-critical cleanup paths.
 - [ ] Split raw slot table scope counts from runtime scope registry counts in debug snapshots.
 - [ ] Move slot mutation counters behind explicit diagnostics ownership.
 - [ ] Document the sibling index threshold as build-time configuration.

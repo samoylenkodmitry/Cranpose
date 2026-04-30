@@ -15,12 +15,31 @@ mod scopes;
 #[cfg(any(test, debug_assertions))]
 mod writer;
 
-#[cfg(any(test, debug_assertions))]
 use super::SlotTable;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use errors::{PayloadAnchorRecord, SlotInvariantError, SlotTreeContext};
 #[cfg(any(test, debug_assertions))]
 use groups::{validate_slot_tree, ActiveSlotTreeChecks, SlotTreeView};
+
+impl SlotTable {
+    #[track_caller]
+    pub(crate) fn assert_fast_integrity(&self, context: &'static str) {
+        assert_eq!(
+            self.anchors.active_len(),
+            self.groups.len(),
+            "slot table active group anchor count mismatch after {context}"
+        );
+        assert_eq!(
+            self.payload_anchors.active_len(),
+            self.payloads.len(),
+            "slot table active payload anchor count mismatch after {context}"
+        );
+        assert!(
+            self.scope_index.len() <= self.groups.len(),
+            "slot table scope index has more entries than active groups after {context}"
+        );
+    }
+}
 
 #[cfg(any(test, debug_assertions))]
 impl SlotTable {

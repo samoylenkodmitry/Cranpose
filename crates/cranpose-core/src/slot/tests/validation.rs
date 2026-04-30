@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn fast_integrity_rejects_active_anchor_count_mismatch() {
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, 461, None);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    harness.table.assert_fast_integrity("clean test table");
+    harness.table.groups.clear();
+
+    let mismatch = panic::catch_unwind(AssertUnwindSafe(|| {
+        harness.table.assert_fast_integrity("corrupted test table");
+    }));
+    assert!(
+        mismatch.is_err(),
+        "fast slot integrity checks must run outside debug-only validation"
+    );
+}
+
+#[test]
 fn validate_reports_duplicate_sibling_key_structurally() {
     const PARENT_KEY: Key = 462;
     const STATIC_KEY: Key = 463;

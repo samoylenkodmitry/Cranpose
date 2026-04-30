@@ -3806,6 +3806,7 @@ impl SlotsHost {
                 table.compact_payload_anchor_registry_storage(None);
             }
         }
+        table.assert_fast_integrity("slot pass cleanup");
         #[cfg(any(test, debug_assertions))]
         {
             table.debug_verify();
