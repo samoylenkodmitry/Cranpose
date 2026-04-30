@@ -569,6 +569,11 @@ fn compact_anchor_registry_storage_preserves_retained_group_anchors() {
         snapshot_after.retained_group_anchors,
         snapshot_before.retained_group_anchors
     );
+    assert_eq!(
+        harness.table.anchor_state(retained_group_anchors[0]),
+        Some(AnchorState::Detached),
+        "compaction must keep retained group anchors detached until restore"
+    );
 
     let restored = retention
         .take(retain_key)
@@ -760,6 +765,13 @@ fn compact_payload_storage_preserves_retained_value_slots() {
             .retained_payload_anchors,
         snapshot_before.retained_payload_anchors
     );
+    assert_eq!(
+        harness
+            .table
+            .payload_anchor_lifecycle(retained_slot.anchor()),
+        Some(PayloadAnchorLifecycle::Detached),
+        "compaction must keep retained payload anchors detached until restore"
+    );
 
     let restored = retention
         .take(retain_key)
@@ -819,16 +831,27 @@ fn compact_payload_storage_preserves_retained_payload_uniqueness() {
         key: detached.root_key(),
     };
     let restore_key = detached.root_key();
+    let retained_payload_anchor = detached.payloads[0].anchor;
     let mut retention = RetentionManager::default();
     retention.insert(retain_key, detached);
 
     harness
         .table
         .compact_payload_anchor_registry_storage(Some(&mut retention));
-    let _ =
+    assert_eq!(
+        harness
+            .table
+            .payload_anchor_lifecycle(retained_payload_anchor),
+        Some(PayloadAnchorLifecycle::Detached)
+    );
+    let inserted_payload_anchor =
         harness
             .table
             .insert_value_payload(parent_anchor, 0, super::PayloadKind::Internal, 30_i32);
+    assert_ne!(
+        inserted_payload_anchor, retained_payload_anchor,
+        "active insertion must not reuse a retained detached payload anchor"
+    );
 
     let restored = retention
         .take(retain_key)

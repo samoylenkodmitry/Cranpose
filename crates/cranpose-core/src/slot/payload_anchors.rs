@@ -558,6 +558,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn payload_anchor_registry_lifecycle_reuses_invalidated_id_with_generation_bump() {
+        let mut registry = PayloadAnchorRegistry::new();
+        let owner = AnchorId::new(10);
+        let stale_anchor = registry.allocate();
+
+        assert_eq!(
+            registry.state_kind(stale_anchor),
+            Some(PayloadAnchorLifecycle::Detached)
+        );
+        assert_eq!(registry.active_len(), 0);
+        assert_eq!(registry.detached_len(), 1);
+        assert_eq!(registry.invalidated_len(), 0);
+
+        registry.set_active(stale_anchor, owner, 3);
+        assert_eq!(registry.active_location(stale_anchor), Some((owner, 3)));
+        assert_eq!(
+            registry.state_kind(stale_anchor),
+            Some(PayloadAnchorLifecycle::Active)
+        );
+        assert_eq!(registry.active_len(), 1);
+        assert_eq!(registry.detached_len(), 0);
+
+        registry.mark_detached(stale_anchor);
+        assert!(registry.is_detached(stale_anchor));
+        assert_eq!(registry.active_location(stale_anchor), None);
+        assert_eq!(registry.active_len(), 0);
+        assert_eq!(registry.detached_len(), 1);
+
+        assert!(registry.invalidate(stale_anchor));
+        assert_eq!(
+            registry.state_kind(stale_anchor),
+            Some(PayloadAnchorLifecycle::Invalidated)
+        );
+        assert_eq!(registry.active_location(stale_anchor), None);
+        assert_eq!(registry.active_len(), 0);
+        assert_eq!(registry.detached_len(), 0);
+        assert_eq!(registry.invalidated_len(), 1);
+        assert_eq!(registry.validate_integrity(), Ok(()));
+
+        let reused_anchor = registry.allocate();
+        assert_eq!(reused_anchor.id(), stale_anchor.id());
+        assert_eq!(reused_anchor.generation(), stale_anchor.generation() + 1);
+        assert_eq!(registry.state_kind(stale_anchor), None);
+        assert_eq!(
+            registry.state_kind(reused_anchor),
+            Some(PayloadAnchorLifecycle::Detached)
+        );
+        assert_eq!(registry.invalidated_len(), 0);
+
+        let stale_set_active = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registry.set_active(stale_anchor, owner, 99);
+        }));
+        assert!(
+            stale_set_active.is_err(),
+            "stale generation must be rejected before it can reactivate a reused payload anchor id"
+        );
+        assert_eq!(
+            registry.state_kind(reused_anchor),
+            Some(PayloadAnchorLifecycle::Detached),
+            "stale generation rejection must preserve the reused payload anchor state"
+        );
+
+        registry.set_active(reused_anchor, owner, 5);
+        assert_eq!(registry.active_location(reused_anchor), Some((owner, 5)));
+        assert_eq!(registry.active_location(stale_anchor), None);
+        assert_eq!(registry.active_len(), 1);
+        assert_eq!(registry.detached_len(), 0);
+        assert_eq!(registry.invalidated_len(), 0);
+        assert_eq!(registry.validate_integrity(), Ok(()));
+    }
+
+    #[test]
     fn registry_integrity_rejects_free_active_payload_anchor_id() {
         let mut registry = PayloadAnchorRegistry::new();
         let anchor = registry.allocate();

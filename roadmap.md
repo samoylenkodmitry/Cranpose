@@ -205,46 +205,46 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## 5. Add shared anchor registry behavior coverage
 
-* [ ] Add tests for `AnchorRegistry`.
+* [x] Add tests for `AnchorRegistry`.
 
-    * [ ] Allocate active anchor.
-    * [ ] Mark detached.
-    * [ ] Invalidate detached.
-    * [ ] Reuse ID with bumped generation.
-    * [ ] Reject stale generation.
-    * [ ] Preserve dense hot-path capacity.
-    * [ ] Handle sparse IDs without dense explosion.
-    * [ ] Validate active count, detached count, invalidated/free count.
+    * [x] Allocate active anchor.
+    * [x] Mark detached.
+    * [x] Invalidate detached.
+    * [x] Reuse ID with bumped generation.
+    * [x] Reject stale generation.
+    * [x] Preserve dense hot-path capacity.
+    * [x] Handle sparse IDs without dense explosion.
+    * [x] Validate active count, detached count, invalidated/free count.
 
-* [ ] Add tests for `PayloadAnchorRegistry`.
+* [x] Add tests for `PayloadAnchorRegistry`.
 
-    * [ ] Allocate payload anchor.
-    * [ ] Set active location.
-    * [ ] Mark detached.
-    * [ ] Invalidate and reuse with bumped generation.
-    * [ ] Coalesce invalidated payload anchor ranges.
-    * [ ] Reject stale generation.
-    * [ ] Preserve dense hot-path capacity.
-    * [ ] Handle sparse IDs.
-    * [ ] Validate active/detached/free counts.
+    * [x] Allocate payload anchor.
+    * [x] Set active location.
+    * [x] Mark detached.
+    * [x] Invalidate and reuse with bumped generation.
+    * [x] Coalesce invalidated payload anchor ranges.
+    * [x] Reject stale generation.
+    * [x] Preserve dense hot-path capacity.
+    * [x] Handle sparse IDs.
+    * [x] Validate active/detached/free counts.
 
-* [ ] Add retained-subtree compaction tests.
+* [x] Add retained-subtree compaction tests.
 
-    * [ ] Group anchor compaction with retained subtrees.
-    * [ ] Payload anchor compaction with retained subtrees.
-    * [ ] Ensure retained anchors are not invalidated or reused prematurely.
+    * [x] Group anchor compaction with retained subtrees.
+    * [x] Payload anchor compaction with retained subtrees.
+    * [x] Ensure retained anchors are not invalidated or reused prematurely.
 
-* [ ] Self-review.
+* [x] Self-review.
 
-    * [ ] Confirm tests cover both registries without forcing identical implementations.
-    * [ ] Confirm generation semantics are explicit.
-    * [ ] Confirm stale handles cannot resolve after invalidation.
+    * [x] Confirm tests cover both registries without forcing identical implementations.
+    * [x] Confirm generation semantics are explicit.
+    * [x] Confirm stale handles cannot resolve after invalidation.
 
-* [ ] Validate and commit.
+* [x] Validate and commit.
 
-    * [ ] Run full validation baseline.
-    * [ ] Commit: `slot: expand anchor registry invariant coverage`
-    * [ ] Mark this item `[x]`.
+    * [x] Run full validation baseline.
+    * [x] Commit: `slot: expand anchor registry invariant coverage`
+    * [x] Mark this item `[x]`.
 
 ---
 
