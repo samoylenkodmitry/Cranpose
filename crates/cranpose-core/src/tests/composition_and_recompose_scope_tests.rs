@@ -1479,6 +1479,109 @@ fn retained_conditional_branch_restores_remembered_state() {
 }
 
 #[test]
+fn retained_branch_preserves_node_payload_and_scope_lifecycle_until_restore() {
+    const BRANCH_KEY: Key = 0xCA1;
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+    let remembered = Rc::new(RefCell::new(None::<Owned<i32>>));
+    let emitted_node = Rc::new(Cell::new(None::<NodeId>));
+    let payload_drops = Rc::new(Cell::new(0));
+    let node_unmounts = Rc::new(Cell::new(0));
+    let branch_invocations = Rc::new(Cell::new(0));
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let remembered = Rc::clone(&remembered);
+        let emitted_node = Rc::clone(&emitted_node);
+        let payload_drops = Rc::clone(&payload_drops);
+        let node_unmounts = Rc::clone(&node_unmounts);
+        let branch_invocations = Rc::clone(&branch_invocations);
+        composition
+            .render(root_key, || {
+                remembered.replace(None);
+                emitted_node.set(None);
+                if show_branch.value() {
+                    with_current_composer(|composer| {
+                        composer.cranpose_with_reuse(
+                            BRANCH_KEY,
+                            RecomposeOptions::default(),
+                            |composer| {
+                                branch_invocations.set(branch_invocations.get() + 1);
+                                let slot = composer.remember(|| 7_i32);
+                                remembered.replace(Some(slot));
+                                let _drop_payload = composer.remember(|| {
+                                    ReentrantDropState::new(1, Rc::clone(&payload_drops), false)
+                                });
+                                let node_id = composer.emit_node(|| {
+                                    UnmountTrackingNode::new(Rc::clone(&node_unmounts))
+                                });
+                                emitted_node.set(Some(node_id));
+                            },
+                        );
+                    });
+                }
+            })
+            .expect("render retained branch lifecycle");
+        assert_composition_valid(composition);
+    };
+
+    render(&mut composition);
+    let first_slot = remembered
+        .borrow()
+        .clone()
+        .expect("initial retained payload");
+    first_slot.replace(41);
+    let first_node = emitted_node.get().expect("initial retained node");
+    let active_scope_count = composition.debug_slot_snapshot().scope_registry_count;
+    let active_scope_index_count = composition.debug_slot_table_stats().scope_index_count;
+    assert_eq!(branch_invocations.get(), 1);
+
+    show_branch.set_value(false);
+    render(&mut composition);
+
+    assert!(
+        remembered.borrow().is_none(),
+        "inactive retained branch must not expose an active payload handle"
+    );
+    assert_eq!(emitted_node.get(), None);
+    assert_eq!(payload_drops.get(), 0, "retained payload must not drop");
+    assert_eq!(node_unmounts.get(), 0, "retained node must not unmount");
+    assert!(
+        composition.applier_mut().get_mut(first_node).is_ok(),
+        "retained detached node must stay live in the applier"
+    );
+    let hidden_snapshot = composition.debug_slot_snapshot();
+    let hidden_stats = composition.debug_slot_table_stats();
+    assert_eq!(hidden_snapshot.retained_subtree_count, 1);
+    assert_eq!(hidden_snapshot.retained_scope_count, 1);
+    assert_eq!(hidden_snapshot.scope_registry_count, active_scope_count);
+    assert_eq!(hidden_stats.retained_payload_count, 2);
+    assert_eq!(hidden_stats.retained_node_count, 1);
+
+    show_branch.set_value(true);
+    render(&mut composition);
+
+    let restored_slot = remembered
+        .borrow()
+        .clone()
+        .expect("restored retained payload");
+    assert_eq!(restored_slot.with(|value| *value), 41);
+    assert_eq!(emitted_node.get(), Some(first_node));
+    assert_eq!(payload_drops.get(), 0);
+    assert_eq!(node_unmounts.get(), 0);
+    assert_eq!(branch_invocations.get(), 2);
+    assert_eq!(
+        composition.debug_slot_table_stats().scope_index_count,
+        active_scope_index_count,
+        "restored retained scope must re-enter the active scope index"
+    );
+    assert_eq!(composition.debug_slot_snapshot().retained_subtree_count, 0);
+    assert_composition_valid(&composition);
+}
+
+#[test]
 fn retention_budget_evicts_least_recently_detached_subtree() {
     let mut composition = test_composition();
     composition.set_retention_policy(RetentionPolicy {
@@ -1576,6 +1679,263 @@ fn retention_budget_evicts_least_recently_detached_subtree() {
         10,
         "the oldest retained subtree should be evicted instead of restoring stale remembered state",
     );
+}
+
+#[test]
+fn retention_budget_eviction_disposes_nodes_payloads_anchors_and_scopes() {
+    const FIRST_KEY: Key = 0xE71;
+    const SECOND_KEY: Key = 0xE72;
+
+    let mut composition = test_composition();
+    composition.set_retention_policy(RetentionPolicy {
+        budget: RetentionBudget {
+            max_retained_subtrees: Some(1),
+            ..Default::default()
+        },
+        eviction: RetentionEvictionPolicy::LeastRecentlyDetached,
+    });
+    let runtime = composition.runtime_handle();
+    let show_first = MutableState::with_runtime(true, runtime.clone());
+    let show_second = MutableState::with_runtime(true, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+    let first_slot = Rc::new(RefCell::new(None::<Owned<i32>>));
+    let second_slot = Rc::new(RefCell::new(None::<Owned<i32>>));
+    let first_node = Rc::new(Cell::new(None::<NodeId>));
+    let second_node = Rc::new(Cell::new(None::<NodeId>));
+    let first_payload_drops = Rc::new(Cell::new(0));
+    let second_payload_drops = Rc::new(Cell::new(0));
+    let first_node_unmounts = Rc::new(Cell::new(0));
+    let second_node_unmounts = Rc::new(Cell::new(0));
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let first_slot = Rc::clone(&first_slot);
+        let second_slot = Rc::clone(&second_slot);
+        let first_node = Rc::clone(&first_node);
+        let second_node = Rc::clone(&second_node);
+        let first_payload_drops = Rc::clone(&first_payload_drops);
+        let second_payload_drops = Rc::clone(&second_payload_drops);
+        let first_node_unmounts = Rc::clone(&first_node_unmounts);
+        let second_node_unmounts = Rc::clone(&second_node_unmounts);
+        composition
+            .render(root_key, || {
+                first_slot.replace(None);
+                second_slot.replace(None);
+                first_node.set(None);
+                second_node.set(None);
+                with_current_composer(|composer| {
+                    if show_first.value() {
+                        composer.cranpose_with_reuse(
+                            FIRST_KEY,
+                            RecomposeOptions::default(),
+                            |composer| {
+                                first_slot.replace(Some(composer.remember(|| 10_i32)));
+                                let _drop_payload = composer.remember(|| {
+                                    ReentrantDropState::new(
+                                        1,
+                                        Rc::clone(&first_payload_drops),
+                                        false,
+                                    )
+                                });
+                                first_node.set(Some(composer.emit_node(|| {
+                                    UnmountTrackingNode::new(Rc::clone(&first_node_unmounts))
+                                })));
+                            },
+                        );
+                    }
+                    if show_second.value() {
+                        composer.cranpose_with_reuse(
+                            SECOND_KEY,
+                            RecomposeOptions::default(),
+                            |composer| {
+                                second_slot.replace(Some(composer.remember(|| 20_i32)));
+                                let _drop_payload = composer.remember(|| {
+                                    ReentrantDropState::new(
+                                        2,
+                                        Rc::clone(&second_payload_drops),
+                                        false,
+                                    )
+                                });
+                                second_node.set(Some(composer.emit_node(|| {
+                                    UnmountTrackingNode::new(Rc::clone(&second_node_unmounts))
+                                })));
+                            },
+                        );
+                    }
+                });
+            })
+            .expect("render retained eviction branches");
+        assert_composition_valid(composition);
+    };
+
+    render(&mut composition);
+    let first_initial_slot = first_slot
+        .borrow()
+        .clone()
+        .expect("initial first retained slot");
+    let second_initial_slot = second_slot
+        .borrow()
+        .clone()
+        .expect("initial second retained slot");
+    first_initial_slot.replace(101);
+    second_initial_slot.replace(202);
+    let first_initial_node = first_node.get().expect("initial first retained node");
+    let second_initial_node = second_node.get().expect("initial second retained node");
+
+    show_first.set_value(false);
+    show_second.set_value(false);
+    render(&mut composition);
+
+    let hidden_stats = composition.debug_slot_table_stats();
+    assert_eq!(hidden_stats.retained_subtree_count, 1);
+    assert_eq!(hidden_stats.retained_node_count, 1);
+    assert_eq!(hidden_stats.retained_scope_count, 1);
+    assert_eq!(hidden_stats.retained_evictions_total, 1);
+    assert!(
+        hidden_stats.free_anchor_count > 0,
+        "evicted group anchors must be invalidated for reuse"
+    );
+    assert!(
+        hidden_stats.invalidated_payload_anchor_count > 0,
+        "evicted payload anchors must be invalidated for reuse"
+    );
+    assert_eq!(first_payload_drops.get(), 1);
+    assert_eq!(first_node_unmounts.get(), 1);
+    assert_eq!(second_payload_drops.get(), 0);
+    assert_eq!(second_node_unmounts.get(), 0);
+    assert!(
+        composition
+            .applier_mut()
+            .get_mut(first_initial_node)
+            .is_err(),
+        "evicted retained node must be removed from the applier"
+    );
+    assert!(
+        composition
+            .applier_mut()
+            .get_mut(second_initial_node)
+            .is_ok(),
+        "the retained subtree still inside the budget must keep its node live"
+    );
+
+    show_first.set_value(true);
+    render(&mut composition);
+    let recreated_first_slot = first_slot
+        .borrow()
+        .clone()
+        .expect("first branch after eviction");
+    assert_eq!(
+        recreated_first_slot.with(|value| *value),
+        10,
+        "evicted payload state must not be restored"
+    );
+    assert_ne!(
+        first_node.get(),
+        Some(first_initial_node),
+        "evicted node identity must not be reused as a retained node"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[test]
+fn secondary_host_reset_disposes_retained_subtrees_before_clearing_ownership() {
+    const BRANCH_KEY: Key = 0x5EC0;
+
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = MemoryApplier::new();
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    composer.enter_phase(Phase::Measure);
+
+    let secondary_host = Rc::new(SlotsHost::new(SlotTable::default()));
+    let emitted_node = Rc::new(Cell::new(None::<NodeId>));
+    let payload_drops = Rc::new(Cell::new(0));
+    let node_unmounts = Rc::new(Cell::new(0));
+
+    let subcompose = |show_branch: bool| {
+        let emitted_node = Rc::clone(&emitted_node);
+        let payload_drops = Rc::clone(&payload_drops);
+        let node_unmounts = Rc::clone(&node_unmounts);
+        composer
+            .subcompose_slot(&secondary_host, None, |composer| {
+                emitted_node.set(None);
+                if show_branch {
+                    composer.cranpose_with_reuse(
+                        BRANCH_KEY,
+                        RecomposeOptions::default(),
+                        |composer| {
+                            let _payload = composer.remember(|| {
+                                ReentrantDropState::new(7, Rc::clone(&payload_drops), false)
+                            });
+                            let node_id = composer
+                                .emit_node(|| UnmountTrackingNode::new(Rc::clone(&node_unmounts)));
+                            emitted_node.set(Some(node_id));
+                        },
+                    );
+                }
+            })
+            .expect("subcompose retained branch");
+        secondary_host
+            .runtime_state()
+            .expect("secondary host must bind to composer runtime")
+            .validate_host_retention(&secondary_host, &secondary_host.borrow())
+            .expect("secondary host retention must validate");
+    };
+
+    subcompose(true);
+    let retained_node = emitted_node
+        .get()
+        .expect("secondary host retained node must be emitted");
+    let retained_host_key = secondary_host.storage_key();
+    assert!(
+        composer
+            .core
+            .shared_state
+            .host_for_storage_key(retained_host_key)
+            .is_some(),
+        "secondary host must be registered before reset"
+    );
+
+    subcompose(false);
+    let retained_stats = secondary_host.debug_stats();
+    assert_eq!(retained_stats.retained_subtree_count, 1);
+    assert_eq!(retained_stats.retained_payload_count, 1);
+    assert_eq!(retained_stats.retained_node_count, 1);
+    assert_eq!(retained_stats.retained_scope_count, 1);
+    assert_eq!(payload_drops.get(), 0);
+    assert_eq!(node_unmounts.get(), 0);
+    assert!(
+        applier_host.borrow_typed().get_mut(retained_node).is_ok(),
+        "retained secondary-host node must stay live before reset"
+    );
+
+    secondary_host.reset();
+
+    assert_eq!(payload_drops.get(), 1);
+    assert_eq!(node_unmounts.get(), 1);
+    assert!(
+        applier_host.borrow_typed().get_mut(retained_node).is_err(),
+        "secondary host reset must dispose retained nodes before clearing ownership"
+    );
+    assert!(
+        composer
+            .core
+            .shared_state
+            .host_for_storage_key(retained_host_key)
+            .is_none(),
+        "secondary host reset must clear the old host storage key"
+    );
+    assert_eq!(
+        composer.core.shared_state.scope_registry_len(),
+        0,
+        "secondary host reset must remove retained scopes from the runtime registry"
+    );
+    assert_eq!(secondary_host.debug_stats().retained_subtree_count, 0);
+    assert_eq!(secondary_host.borrow().validate(), Ok(()));
+
+    drop(composer);
+    drop(secondary_host);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
 
 #[test]

@@ -3575,16 +3575,15 @@ impl SlotsHost {
             inner.active_pass.is_none(),
             "cannot reset SlotsHost during an active pass"
         );
+        let runtime_state = inner.runtime_state.clone();
         drop(inner);
-        if let Some(state) = self.runtime_state() {
-            assert!(
-                state.host_retention_is_empty(self),
-                "cannot reset SlotsHost while retained subtrees are still owned by the host"
-            );
-            state.clear_host(self);
-        }
         let mut inner = self.inner.borrow_mut();
         let mut lifecycle = std::mem::take(&mut inner.lifecycle);
+        if let Some(state) = runtime_state {
+            let host_key = self.storage_key();
+            state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle);
+            state.clear_host(self);
+        }
         lifecycle.dispose_slot_table(&mut inner.table);
         inner.table = SlotTable::default();
         self.storage_key.set(inner.table.storage_id());

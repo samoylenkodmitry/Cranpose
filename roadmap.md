@@ -290,50 +290,50 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## 7. Add retained-node lifecycle integration tests
 
-* [ ] Add tests for retaining inactive groups.
+* [x] Add tests for retaining inactive groups.
 
-    * [ ] Compose group with remembered payload and emitted node.
-    * [ ] Remove group with `RetainWhenInactive`.
-    * [ ] Verify subtree is retained.
-    * [ ] Verify node lifecycle is `RetainedDetached`.
-    * [ ] Verify payload is not dropped.
-    * [ ] Verify scope is inactive but still registered.
+    * [x] Compose group with remembered payload and emitted node.
+    * [x] Remove group with `RetainWhenInactive`.
+    * [x] Verify subtree is retained.
+    * [x] Verify node lifecycle is `RetainedDetached`.
+    * [x] Verify payload is not dropped.
+    * [x] Verify scope is inactive but still registered.
 
-* [ ] Add restore tests.
+* [x] Add restore tests.
 
-    * [ ] Restore retained group by same parent scope and group key.
-    * [ ] Verify node lifecycle returns to active.
-    * [ ] Verify remembered payload is reused.
-    * [ ] Verify restored invalid scope forces recomposition.
-    * [ ] Verify active scope index is restored.
+    * [x] Restore retained group by same parent scope and group key.
+    * [x] Verify node lifecycle returns to active.
+    * [x] Verify remembered payload is reused.
+    * [x] Verify restored invalid scope forces recomposition.
+    * [x] Verify active scope index is restored.
 
-* [ ] Add eviction tests.
+* [x] Add eviction tests.
 
-    * [ ] Set max retained subtree count.
-    * [ ] Retain more groups than budget.
-    * [ ] Verify eviction disposes nodes.
-    * [ ] Verify payload drops are queued/flushed.
-    * [ ] Verify anchors are invalidated.
-    * [ ] Verify scopes are removed or deactivated correctly.
+    * [x] Set max retained subtree count.
+    * [x] Retain more groups than budget.
+    * [x] Verify eviction disposes nodes.
+    * [x] Verify payload drops are queued/flushed.
+    * [x] Verify anchors are invalidated.
+    * [x] Verify scopes are removed or deactivated correctly.
 
-* [ ] Add host reset tests.
+* [x] Add host reset tests.
 
-    * [ ] Retain subtree in subcompose/secondary host.
-    * [ ] Reset host.
-    * [ ] Verify retained subtrees are disposed before host ownership is cleared.
-    * [ ] Verify scope registry has no stale host references.
+    * [x] Retain subtree in subcompose/secondary host.
+    * [x] Reset host.
+    * [x] Verify retained subtrees are disposed before host ownership is cleared.
+    * [x] Verify scope registry has no stale host references.
 
-* [ ] Self-review.
+* [x] Self-review.
 
-    * [ ] Confirm tests exercise composer, retention, slot table, and applier together.
-    * [ ] Confirm no test only validates internal counters while missing user-visible behavior.
-    * [ ] Confirm retained nodes are not accidentally removed from applier.
+    * [x] Confirm tests exercise composer, retention, slot table, and applier together.
+    * [x] Confirm no test only validates internal counters while missing user-visible behavior.
+    * [x] Confirm retained nodes are not accidentally removed from applier.
 
-* [ ] Validate and commit.
+* [x] Validate and commit.
 
-    * [ ] Run full validation baseline.
-    * [ ] Commit: `retention: test retained subtree node and scope lifecycle`
-    * [ ] Mark this item `[x]`.
+    * [x] Run full validation baseline.
+    * [x] Commit: `retention: test retained subtree node and scope lifecycle`
+    * [x] Mark this item `[x]`.
 
 ---
 
