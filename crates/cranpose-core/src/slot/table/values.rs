@@ -3,7 +3,6 @@ use super::SlotTable;
 
 impl SlotTable {
     fn checked_value_slot(&self, slot: ValueSlotId) -> (usize, usize) {
-        #[cfg(any(test, debug_assertions))]
         assert_eq!(
             slot.storage_id(),
             self.storage_id(),

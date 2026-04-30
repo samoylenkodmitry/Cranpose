@@ -321,6 +321,7 @@ fn same_table_value_slot_read_write_respects_storage_identity() {
 
     let slot = compose_single_i32_value_slot(&mut harness, 17, 21);
 
+    assert_eq!(slot.storage_id(), harness.table.storage_id());
     assert_eq!(*harness.table.read_value::<i32>(slot), 21);
     harness.table.write_value(slot, 34_i32);
     assert_eq!(*harness.table.read_value::<i32>(slot), 34);
@@ -336,6 +337,7 @@ fn cross_table_value_slot_read_panics_before_anchor_resolution() {
     let second_slot = compose_single_i32_value_slot(&mut second, 20, 89);
 
     assert_eq!(first_slot.anchor(), second_slot.anchor());
+    assert_ne!(first_slot.storage_id(), second_slot.storage_id());
     let _ = second.table.read_value::<i32>(first_slot);
 }
 
@@ -348,6 +350,7 @@ fn cross_table_value_slot_write_does_not_alias_matching_anchor() {
     let second_slot = compose_single_i32_value_slot(&mut second, 22, 89);
 
     assert_eq!(first_slot.anchor(), second_slot.anchor());
+    assert_ne!(first_slot.storage_id(), second_slot.storage_id());
     let cross_table_write = panic::catch_unwind(AssertUnwindSafe(|| {
         second.table.write_value(first_slot, 144_i32);
     }));

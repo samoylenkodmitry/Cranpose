@@ -116,26 +116,18 @@ impl PayloadAnchor {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct ValueSlotId {
     pub(crate) anchor: PayloadAnchor,
-    #[cfg(any(test, debug_assertions))]
     storage_id: usize,
 }
 
 impl ValueSlotId {
-    #[cfg(any(test, debug_assertions))]
     pub(crate) fn new_for_table(anchor: PayloadAnchor, storage_id: usize) -> Self {
         Self { anchor, storage_id }
-    }
-
-    #[cfg(not(any(test, debug_assertions)))]
-    pub(crate) fn new_for_table(anchor: PayloadAnchor, _storage_id: usize) -> Self {
-        Self { anchor }
     }
 
     pub(crate) fn anchor(self) -> PayloadAnchor {
         self.anchor
     }
 
-    #[cfg(any(test, debug_assertions))]
     pub(crate) fn storage_id(self) -> usize {
         self.storage_id
     }
