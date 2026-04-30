@@ -120,10 +120,13 @@ impl ComposerRuntimeState {
         &self,
         host: &Rc<SlotsHost>,
         key: RetainKey,
+        preflight: impl FnOnce(&crate::slot::DetachedSubtree),
     ) -> Option<crate::slot::DetachedSubtree> {
         let host_key = slots_storage_key(host);
         let mut retention = self.retention_by_host.borrow_mut();
-        let subtree = retention.get_mut(&host_key)?.take(key);
+        let subtree = retention
+            .get_mut(&host_key)?
+            .take_after_restore_preflight(key, preflight);
         if retention
             .get(&host_key)
             .is_some_and(|manager| manager.is_empty() && manager.evictions_total() == 0)
@@ -770,6 +773,11 @@ impl Composer {
             RetainKey {
                 parent_scope: parent_scope_id,
                 key: reserved_key,
+            },
+            |subtree| {
+                self.with_slot_session_mut(|slots| {
+                    slots.assert_retained_restore_ready(reserved_key, subtree);
+                });
             },
         );
         let (group, group_anchor, start_scope_id, start_kind) =

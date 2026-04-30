@@ -59,6 +59,18 @@ impl SlotWriteSession<'_> {
         self.open_started_group(anchor, GroupStartKind::Restored)
     }
 
+    pub(crate) fn assert_retained_restore_ready(
+        &mut self,
+        key: GroupKey,
+        subtree: &DetachedSubtree,
+    ) {
+        let parent_anchor = self.state.current_parent_anchor();
+        let insert_index = self.state.current_child_cursor();
+        let cursor = ChildCursor::new(parent_anchor, insert_index);
+        self.table
+            .assert_subtree_restore_ready(cursor, key, subtree);
+    }
+
     #[inline(always)]
     fn resolve_active_child(
         &mut self,

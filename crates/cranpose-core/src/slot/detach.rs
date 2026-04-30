@@ -2,7 +2,7 @@
 use super::table::SlotMutationGuard;
 use super::{
     checked_u32_delta, CheckedU32Delta, ChildCursor, DetachedChild, DetachedSubtree, GroupRecord,
-    NodeLifecycle, SlotTable, SlotWriteSessionState, SubtreeRange,
+    SlotTable, SlotWriteSessionState, SubtreeRange,
 };
 use crate::{remove_child_and_cleanup_now, AnchorId, Applier, NodeError, NodeId};
 
@@ -20,13 +20,24 @@ impl SlotTable {
         self.groups.drain(range.as_range()).collect::<Vec<_>>()
     }
 
-    fn assert_detached_subtree_restore_ready(&self, subtree: &DetachedSubtree) {
+    pub(in crate::slot) fn assert_subtree_restore_ready(
+        &self,
+        cursor: ChildCursor,
+        key: super::GroupKey,
+        subtree: &DetachedSubtree,
+    ) {
+        self.assert_child_cursor_boundary(cursor);
+        assert_eq!(
+            subtree.root_key(),
+            key,
+            "restored subtree root key must match the requested group key",
+        );
         #[cfg(any(test, debug_assertions))]
         subtree
             .validate_detached()
             .expect("detached subtree must validate before restore");
         subtree.assert_root_parent_detached("restore");
-        subtree.assert_node_lifecycle(NodeLifecycle::Active, "restore");
+        subtree.assert_nodes_restore_ready("restore");
         for group in &subtree.groups {
             assert!(
                 self.anchors.is_detached(group.anchor),
@@ -39,6 +50,37 @@ impl SlotTable {
                 "restored payload anchors must be detached before restore"
             );
         }
+        let restored_group_count = subtree.groups.len();
+        let restored_subtree_len = subtree
+            .groups
+            .first()
+            .map(|group| i64::from(group.subtree_len))
+            .expect("detached subtree must contain a root group");
+        let restored_subtree_node_count = subtree
+            .groups
+            .first()
+            .map(|group| i64::from(group.subtree_node_count))
+            .expect("detached subtree must contain a root group");
+        let restored_subtree_len_usize =
+            usize::try_from(restored_subtree_len).expect("restored subtree length must fit usize");
+        let restored_subtree_node_count_usize = usize::try_from(restored_subtree_node_count)
+            .expect("restored subtree node count must fit usize");
+        assert_eq!(
+            restored_subtree_len_usize, restored_group_count,
+            "detached subtree root span must match the stored group slice"
+        );
+        assert_eq!(
+            restored_subtree_node_count_usize,
+            subtree.nodes.len(),
+            "detached subtree root node count must match the stored node slice"
+        );
+        let restored_scope_entries = subtree
+            .groups
+            .iter()
+            .filter_map(|group| group.scope_id.map(|scope_id| (scope_id, group.anchor)))
+            .collect::<Vec<_>>();
+        self.scope_index
+            .assert_restore_entries_available(&restored_scope_entries);
     }
 
     fn detach_subtree_at_index_internal(
@@ -117,17 +159,11 @@ impl SlotTable {
         cursor: ChildCursor,
         detached: DetachedChild,
     ) -> AnchorId {
-        self.assert_child_cursor_boundary(cursor);
         let key = detached.expected_key();
         let mut subtree = detached.into_subtree();
+        self.assert_subtree_restore_ready(cursor, key, &subtree);
         let insert_index = cursor.index();
         let parent_anchor = cursor.parent();
-        assert_eq!(
-            subtree.root_key(),
-            key,
-            "restored subtree root key must match the requested group key",
-        );
-        self.assert_detached_subtree_restore_ready(&subtree);
         let restored_group_count = subtree.groups.len();
         let restored_subtree_len = subtree
             .groups
@@ -139,19 +175,6 @@ impl SlotTable {
             .first()
             .map(|group| i64::from(group.subtree_node_count))
             .expect("detached subtree must contain a root group");
-        let restored_subtree_len_usize =
-            usize::try_from(restored_subtree_len).expect("restored subtree length must fit usize");
-        let restored_subtree_node_count_usize = usize::try_from(restored_subtree_node_count)
-            .expect("restored subtree node count must fit usize");
-        assert_eq!(
-            restored_subtree_len_usize, restored_group_count,
-            "detached subtree root span must match the stored group slice"
-        );
-        assert_eq!(
-            restored_subtree_node_count_usize,
-            subtree.nodes.len(),
-            "detached subtree root node count must match the stored node slice"
-        );
         let root_anchor = subtree
             .groups
             .first()
@@ -162,8 +185,6 @@ impl SlotTable {
             .iter()
             .filter_map(|group| group.scope_id.map(|scope_id| (scope_id, group.anchor)))
             .collect::<Vec<_>>();
-        self.scope_index
-            .assert_restore_entries_available(&restored_scope_entries);
 
         // Restore recipe:
         // retarget root parent/depth, mark nodes active, restore payload and

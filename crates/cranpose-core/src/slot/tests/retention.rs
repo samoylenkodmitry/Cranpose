@@ -88,7 +88,7 @@ fn identity_snapshot_captures_active_and_retained_identities() {
 }
 
 #[test]
-fn retention_marks_detached_nodes_and_reactivates_on_take() {
+fn retention_take_preserves_retained_node_lifecycle_until_restore() {
     const PARENT_KEY: Key = 364;
     const CHILD_KEY: Key = 365;
 
@@ -135,7 +135,38 @@ fn retention_marks_detached_nodes_and_reactivates_on_take() {
     let restored = retention.take(key).expect("retained subtree must exist");
     assert_eq!(
         restored.node_states().collect::<Vec<_>>(),
-        vec![(child_id, super::NodeLifecycle::Active)]
+        vec![(child_id, super::NodeLifecycle::RetainedDetached)]
+    );
+}
+
+#[test]
+fn retention_take_after_restore_preflight_keeps_subtree_when_preflight_panics() {
+    const PARENT_KEY: Key = 122;
+    const CHILD_KEY: Key = 123;
+
+    let (harness, detached, child_node) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
+    let child_node = child_node.expect("test helper must record a child node");
+    let key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+
+    let mut retention = RetentionManager::default();
+    retention.insert(key, detached);
+
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = retention.take_after_restore_preflight(key, |_| panic!("restore preflight failed"));
+    }));
+    assert!(failed.is_err(), "preflight panic must propagate");
+    assert_eq!(retention.validate(&harness.table), Ok(()));
+
+    let restored = retention
+        .take(key)
+        .expect("failed preflight must leave retained subtree available");
+    assert_eq!(
+        restored.node_states().collect::<Vec<_>>(),
+        vec![(child_node, super::NodeLifecycle::RetainedDetached)]
     );
 }
 

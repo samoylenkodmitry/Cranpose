@@ -389,6 +389,18 @@ impl DetachedSubtree {
         }
     }
 
+    pub(crate) fn assert_nodes_restore_ready(&self, context: &'static str) {
+        for node in &self.nodes {
+            assert!(
+                matches!(
+                    node.lifecycle,
+                    NodeLifecycle::Active | NodeLifecycle::RetainedDetached
+                ),
+                "{context}: detached subtree node lifecycle mismatch"
+            );
+        }
+    }
+
     fn set_node_lifecycle(&mut self, lifecycle: NodeLifecycle) {
         for node in &mut self.nodes {
             node.lifecycle = lifecycle;

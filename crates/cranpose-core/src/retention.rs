@@ -147,7 +147,7 @@ impl RetentionManager {
 
     pub(crate) fn take(&mut self, key: RetainKey) -> Option<DetachedSubtree> {
         let restored_order = self.tick_operation();
-        let mut retained = self.groups.remove(&key)?;
+        let retained = self.groups.remove(&key)?;
         self.restored_at_by_key.insert(key, restored_order);
         retained
             .subtree
@@ -158,11 +158,16 @@ impl RetentionManager {
         retained
             .subtree
             .assert_node_lifecycle(NodeLifecycle::RetainedDetached, "retention restore");
-        retained.subtree.mark_nodes_active();
-        retained
-            .subtree
-            .assert_node_lifecycle(NodeLifecycle::Active, "retention restore");
         Some(retained.subtree)
+    }
+
+    pub(crate) fn take_after_restore_preflight(
+        &mut self,
+        key: RetainKey,
+        preflight: impl FnOnce(&DetachedSubtree),
+    ) -> Option<DetachedSubtree> {
+        preflight(&self.groups.get(&key)?.subtree);
+        self.take(key)
     }
 
     pub(crate) fn insert(
