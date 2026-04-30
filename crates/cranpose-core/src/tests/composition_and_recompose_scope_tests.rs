@@ -1109,6 +1109,13 @@ fn retained_scope_stays_inactive_until_restored() {
         hidden_stats.anchor_slot_count,
         "anchor diagnostics must account for every occupied registry slot",
     );
+    assert_eq!(
+        hidden_stats.active_payload_anchor_count
+            + hidden_stats.detached_payload_anchor_count
+            + hidden_stats.invalidated_payload_anchor_count,
+        hidden_stats.payload_anchor_slot_count,
+        "payload anchor diagnostics must account for every occupied registry slot",
+    );
 
     assert!(
         !scope.is_active(),
@@ -1795,7 +1802,7 @@ fn retention_budget_eviction_disposes_nodes_payloads_anchors_and_scopes() {
         "evicted group anchors must be invalidated for reuse"
     );
     assert!(
-        hidden_stats.invalidated_payload_anchor_count > 0,
+        hidden_stats.free_payload_anchor_count > 0,
         "evicted payload anchors must be invalidated for reuse"
     );
     assert_eq!(first_payload_drops.get(), 1);
@@ -2009,6 +2016,7 @@ struct SlotMemoryPlateau {
     payload_anchor_slot_count: usize,
     detached_payload_anchor_count: usize,
     invalidated_payload_anchor_count: usize,
+    free_payload_anchor_count: usize,
     payload_anchor_capacity: usize,
     payload_anchor_heap_bytes: usize,
     node_count: usize,
@@ -2049,6 +2057,7 @@ impl From<SlotTableDebugStats> for SlotMemoryPlateau {
             payload_anchor_slot_count: stats.payload_anchor_slot_count,
             detached_payload_anchor_count: stats.detached_payload_anchor_count,
             invalidated_payload_anchor_count: stats.invalidated_payload_anchor_count,
+            free_payload_anchor_count: stats.free_payload_anchor_count,
             payload_anchor_capacity: stats.payload_anchor_capacity,
             payload_anchor_heap_bytes: stats.payload_anchor_heap_bytes,
             node_count: stats.node_count,

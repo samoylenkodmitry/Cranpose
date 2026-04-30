@@ -31,6 +31,7 @@ impl SlotTable {
             payload_anchor_slot_count: self.payload_anchors.slot_len(),
             detached_payload_anchor_count: self.payload_anchors.detached_len(),
             invalidated_payload_anchor_count: self.payload_anchors.invalidated_len(),
+            free_payload_anchor_count: self.payload_anchors.free_len(),
             payload_anchor_capacity: self.payload_anchors.capacity(),
             payload_anchor_heap_bytes: self.payload_anchors.heap_bytes(),
             node_count: self.total_node_count(),

@@ -224,6 +224,7 @@ fn debug_stats_report_explicit_v2_table_local_counts() {
     assert_eq!(stats.payload_anchor_slot_count, 1);
     assert_eq!(stats.detached_payload_anchor_count, 0);
     assert_eq!(stats.invalidated_payload_anchor_count, 0);
+    assert_eq!(stats.free_payload_anchor_count, 0);
     assert_eq!(stats.node_count, 1);
     assert_eq!(stats.active_anchor_count, 1);
     assert_eq!(stats.group_record_size, mem::size_of::<GroupRecord>());

@@ -148,6 +148,11 @@ impl PayloadAnchorRegistry {
     }
 
     pub(super) fn invalidated_len(&self) -> usize {
+        self.slot_len()
+            .saturating_sub(self.active_count + self.detached_count)
+    }
+
+    pub(super) fn free_len(&self) -> usize {
         self.free_count
     }
 
@@ -570,6 +575,7 @@ mod tests {
         assert_eq!(registry.active_len(), 0);
         assert_eq!(registry.detached_len(), 1);
         assert_eq!(registry.invalidated_len(), 0);
+        assert_eq!(registry.free_len(), 0);
 
         registry.set_active(stale_anchor, owner, 3);
         assert_eq!(registry.active_location(stale_anchor), Some((owner, 3)));
@@ -594,7 +600,8 @@ mod tests {
         assert_eq!(registry.active_location(stale_anchor), None);
         assert_eq!(registry.active_len(), 0);
         assert_eq!(registry.detached_len(), 0);
-        assert_eq!(registry.invalidated_len(), 1);
+        assert_eq!(registry.invalidated_len(), 0);
+        assert_eq!(registry.free_len(), 1);
         assert_eq!(registry.validate_integrity(), Ok(()));
 
         let reused_anchor = registry.allocate();
@@ -606,6 +613,7 @@ mod tests {
             Some(PayloadAnchorLifecycle::Detached)
         );
         assert_eq!(registry.invalidated_len(), 0);
+        assert_eq!(registry.free_len(), 0);
 
         let stale_set_active = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             registry.set_active(stale_anchor, owner, 99);
@@ -626,6 +634,7 @@ mod tests {
         assert_eq!(registry.active_len(), 1);
         assert_eq!(registry.detached_len(), 0);
         assert_eq!(registry.invalidated_len(), 0);
+        assert_eq!(registry.free_len(), 0);
         assert_eq!(registry.validate_integrity(), Ok(()));
     }
 
@@ -677,13 +686,15 @@ mod tests {
         registry.shrink_to_fit();
 
         assert_eq!(registry.slot_len(), 0);
-        assert_eq!(registry.invalidated_len(), anchors.len());
+        assert_eq!(registry.invalidated_len(), 0);
+        assert_eq!(registry.free_len(), anchors.len());
         assert_eq!(registry.free_ids.len(), 1);
         assert_eq!(registry.validate_integrity(), Ok(()));
 
         let reused = registry.allocate();
         assert_eq!(reused, anchors[0].with_generation(2));
-        assert_eq!(registry.invalidated_len(), anchors.len() - 1);
+        assert_eq!(registry.invalidated_len(), 0);
+        assert_eq!(registry.free_len(), anchors.len() - 1);
         assert_eq!(
             registry.state_kind(anchors[1]),
             Some(PayloadAnchorLifecycle::Invalidated)
@@ -718,7 +729,8 @@ mod tests {
         table.invalidate_payload_anchors(&payloads);
 
         assert_eq!(table.payload_anchors.active_len(), 0);
-        assert_eq!(table.payload_anchors.invalidated_len(), payloads.len());
+        assert_eq!(table.payload_anchors.invalidated_len(), 0);
+        assert_eq!(table.payload_anchors.free_len(), payloads.len());
         assert_eq!(
             table.payload_anchors.dense_states.capacity(),
             dense_capacity_before,
