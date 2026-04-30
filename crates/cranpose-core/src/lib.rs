@@ -388,7 +388,6 @@ pub(crate) struct RecomposeScopeInner {
     force_reuse: Cell<bool>,
     force_recompose: Cell<bool>,
     retention_mode: Cell<RetentionMode>,
-    group_anchor: Cell<AnchorId>,
     parent_hint: Cell<Option<NodeId>>,
     recompose: RefCell<Option<RecomposeCallback>>,
     parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
@@ -412,7 +411,6 @@ impl RecomposeScopeInner {
             force_reuse: Cell::new(false),
             force_recompose: Cell::new(false),
             retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
-            group_anchor: Cell::new(AnchorId::INVALID),
             parent_hint: Cell::new(None),
             recompose: RefCell::new(None),
             parent_scope: RefCell::new(None),
@@ -551,15 +549,6 @@ impl RecomposeScope {
 
     fn has_recompose_callback(&self) -> bool {
         self.inner.recompose.borrow().is_some()
-    }
-
-    fn set_group_anchor(&self, anchor: AnchorId) {
-        self.inner.group_anchor.set(anchor);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn group_anchor(&self) -> AnchorId {
-        self.inner.group_anchor.get()
     }
 
     fn snapshot_locals(&self, stack: LocalStackSnapshot) {

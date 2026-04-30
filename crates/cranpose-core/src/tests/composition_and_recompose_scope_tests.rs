@@ -672,10 +672,6 @@ fn callbackless_scope_promotes_via_parent_scope_metadata() {
                 let scope = composer
                     .current_recranpose_scope()
                     .expect("child scope available");
-                assert!(
-                    scope.group_anchor().is_valid(),
-                    "callbackless scope should own a stable group anchor",
-                );
                 CHILD_SCOPE.with(|slot| slot.replace(Some(scope)));
             });
             OBSERVED_VALUES.with(|values| values.borrow_mut().push(state.value()));
@@ -689,6 +685,14 @@ fn callbackless_scope_promotes_via_parent_scope_metadata() {
     let child_scope = CHILD_SCOPE
         .with(|slot| slot.borrow().clone())
         .expect("captured callbackless child scope");
+    let initial_snapshot = composition.debug_slot_snapshot();
+    assert!(
+        initial_snapshot
+            .scopes
+            .iter()
+            .any(|scope| scope.scope_id == child_scope.id()),
+        "callbackless scope should be indexed by the slot table",
+    );
     let parent_scope = PARENT_SCOPE
         .with(|slot| slot.borrow().clone())
         .expect("captured parent scope");

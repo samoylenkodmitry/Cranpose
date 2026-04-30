@@ -44,6 +44,7 @@ impl SlotWriteSession<'_> {
         let scope_id = self.table.group_scope_id_at_index(group_index);
         GroupStart {
             group: self.table.active_group_id_at_index(group_index),
+            #[cfg(test)]
             anchor,
             scope_id,
             kind,

@@ -276,7 +276,6 @@ impl ComposerRuntimeState {
             for scope_id in subtree.scope_ids() {
                 if let Some(scope) = self.remove_scope(scope_id) {
                     scope.deactivate();
-                    scope.set_group_anchor(crate::AnchorId::INVALID);
                 }
             }
             if let Some(applier_host) = applier_host.as_ref() {
@@ -794,17 +793,15 @@ impl Composer {
                 });
             },
         );
-        let (group, group_anchor, start_scope_id, start_kind) =
-            self.with_slot_session_mut(|slots| {
-                let GroupStart {
-                    group,
-                    anchor,
-                    scope_id,
-                    kind,
-                    ..
-                } = slots.begin_group(BeginGroupInput::new(reserved_key, restored));
-                (group, anchor, scope_id, kind)
-            });
+        let (group, start_scope_id, start_kind) = self.with_slot_session_mut(|slots| {
+            let GroupStart {
+                group,
+                scope_id,
+                kind,
+                ..
+            } = slots.begin_group(BeginGroupInput::new(reserved_key, restored));
+            (group, scope_id, kind)
+        });
         let scope_ref =
             if let Some(scope) = start_scope_id.and_then(|scope_id| self.scope_for_id(scope_id)) {
                 scope
@@ -816,7 +813,6 @@ impl Composer {
             };
 
         scope_ref.reactivate();
-        scope_ref.set_group_anchor(group_anchor);
         scope_ref.set_parent_scope(parent_scope);
         scope_ref.set_retention_mode(options.retention);
 
@@ -934,7 +930,6 @@ impl Composer {
         for scope_id in scope_ids {
             if let Some(scope) = self.remove_scope(scope_id) {
                 scope.deactivate();
-                scope.set_group_anchor(crate::AnchorId::INVALID);
             }
         }
     }

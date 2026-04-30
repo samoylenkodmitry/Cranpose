@@ -157,6 +157,7 @@ impl<R> BeginGroupInput<R> {
 /// Result of starting a group.
 pub(crate) struct GroupStart<G> {
     pub(crate) group: G,
+    #[cfg(test)]
     pub(crate) anchor: AnchorId,
     pub(crate) scope_id: Option<ScopeId>,
     pub(crate) kind: GroupStartKind,
