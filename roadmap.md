@@ -3,4 +3,4 @@
 - [x] Wire cheap slot invariant checks in release-critical cleanup paths.
 - [x] Split raw slot table scope counts from runtime scope registry counts in debug snapshots.
 - [x] Move slot mutation counters behind explicit diagnostics ownership.
-- [ ] Document the sibling index threshold as build-time configuration.
+- [x] Document the sibling index threshold as build-time configuration.

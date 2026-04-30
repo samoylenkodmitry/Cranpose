@@ -402,7 +402,7 @@ Usage: $0 [--profile NAME] [--filter NAME] [--save-baseline NAME] [--baseline NA
 Runs the slot-table Criterion benchmark suite with stable defaults.
 
 Environment:
-  CRANPOSE_SIBLING_INDEX_THRESHOLD sets the compile-time sibling index threshold for one run.
+  CRANPOSE_SIBLING_INDEX_THRESHOLD sets the compile-time sibling index threshold for one benchmark build.
   CRANPOSE_SIBLING_INDEX_THRESHOLDS sets the matrix values for --sibling-threshold-matrix.
 
 Benchmarks:

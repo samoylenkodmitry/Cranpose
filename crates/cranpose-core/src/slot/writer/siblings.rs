@@ -4,7 +4,10 @@ use crate::{collections::map::HashMap, AnchorId};
 use smallvec::SmallVec;
 
 const DEFAULT_SIBLING_INDEX_THRESHOLD: usize = 16;
-const SIBLING_INDEX_THRESHOLD: usize =
+// `option_env!` is evaluated by rustc. Changing this variable requires a
+// rebuild; perf scripts isolate target directories so matrix runs do not reuse
+// an already-compiled threshold.
+const COMPILED_SIBLING_INDEX_THRESHOLD: usize =
     parse_sibling_index_threshold(option_env!("CRANPOSE_SIBLING_INDEX_THRESHOLD"));
 
 const fn parse_sibling_index_threshold(value: Option<&'static str>) -> usize {
@@ -132,7 +135,7 @@ impl SlotWriteSessionState {
 
         let mut index = search_start;
         let mut direct_children_seen = 0usize;
-        while index < siblings.end() && direct_children_seen < SIBLING_INDEX_THRESHOLD {
+        while index < siblings.end() && direct_children_seen < COMPILED_SIBLING_INDEX_THRESHOLD {
             let group = table.group_sibling_record_at_index(index);
             debug_assert_eq!(
                 group.parent_anchor, parent_anchor,

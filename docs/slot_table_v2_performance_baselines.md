@@ -59,8 +59,10 @@ Use filters for focused investigations:
 ## Sibling Index Threshold Matrix
 
 The writer builds a temporary sibling index only after a direct-child scan crosses
-`CRANPOSE_SIBLING_INDEX_THRESHOLD`. The production default is `16`. Before
-changing it, run the focused matrix:
+`CRANPOSE_SIBLING_INDEX_THRESHOLD`. The value is compiled into `cranpose-core`
+with `option_env!`, so changing the environment variable does not affect an
+already-built binary. The production default is `16`. Before changing it, run
+the focused matrix:
 
 ```bash
 ./perf_slot_table_v2.sh --sibling-threshold-matrix
@@ -98,7 +100,7 @@ Use the same machine, power profile, CPU set, sample size, warmup, and measureme
 - `CRANPOSE_SLOT_TABLE_STABILITY_WARMUP_RUNS` controls the number of unrecorded same-tree runs before the stability baseline. The default is `2` so CPU frequency and process-level warmup do not become the saved baseline.
 - `CRANPOSE_SLOT_TABLE_STABILITY_ATTEMPTS` controls same-tree retry attempts per benchmark. The default is `4`.
 - `CRANPOSE_SLOT_TABLE_STABILITY_TIMEOUT_SECS` controls the same-tree stability wall-clock budget. The default is `600`; `0` disables the guard for an explicitly supervised long run.
-- `CRANPOSE_SIBLING_INDEX_THRESHOLD` sets the compile-time sibling-index threshold for one benchmark run.
+- `CRANPOSE_SIBLING_INDEX_THRESHOLD` sets the compile-time sibling-index threshold for one benchmark build.
 
 Record the commit SHA, command line, benchmark filter, CPU set, sample size, warmup, measurement time, and stability-check result with any performance claim. Do not compare numbers from different machines or different script settings.
 
