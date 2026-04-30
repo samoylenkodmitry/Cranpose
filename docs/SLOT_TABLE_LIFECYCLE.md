@@ -46,8 +46,11 @@ Node lifecycle states:
   `dispose_detached_subtree_now` or `Composer::dispose_detached_nodes` for root
   nodes before invalidating anchors and queuing payload drops.
 
-`RetentionManager::take` and `SlotTable::restore_subtree` mark retained nodes active
-again before the subtree is used as active storage.
+`RetentionManager::take_after_restore_preflight` runs the active-table restore
+checks before a retained subtree is removed from retention. `RetentionManager::take`
+then returns the subtree with nodes still marked `RetainedDetached`; only
+`SlotTable::restore_subtree` marks those nodes active, after restore preflight has
+accepted the target cursor and anchors.
 
 ## Payloads
 
@@ -69,6 +72,8 @@ Payload lifecycle:
 
 Restoring a detached subtree must refresh payload anchor locations after segment
 insertion. Payload anchors must be invalidated before their IDs can be reused.
+Diagnostics distinguish occupied invalidated payload-anchor slots from reusable
+free payload-anchor IDs; disposed payload anchors contribute to the free count.
 
 ## Scopes
 

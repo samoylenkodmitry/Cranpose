@@ -246,6 +246,7 @@ pub struct ActiveGroupId {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ValueSlotId {
     anchor: PayloadAnchor,
+    storage_id: usize,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -257,23 +258,26 @@ pub struct AnchorId {
 
 `ActiveGroupId` is a transient active-table handle.
 `AnchorId` is stable across moves and can be invalidated.
-`ValueSlotId` is anchor-based because composer-held value handles routinely outlive one active writer frame. Group-and-offset addressing is still useful as a transient internal concept while writing one group body, but it is not robust as the exposed handle shape.
+`ValueSlotId` is anchor-based because composer-held value handles routinely outlive one active writer frame. It also carries the owning slot-table storage id so stale or cross-table value handles fail in every build mode instead of aliasing another table. Group-and-offset addressing is still useful as a transient internal concept while writing one group body, but it is not robust as the exposed handle shape.
 
 ### 7.2 SlotTable
 
 ```rust
 pub struct SlotTable {
+    storage_id: usize,
     groups: Vec<GroupRecord>,
-    payloads: PayloadTable,
-    nodes: NodeTable,
+    payloads: Vec<PayloadRecord>,
+    nodes: Vec<NodeRecord>,
     anchors: AnchorRegistry,
-    scopes: ScopeIndex,
-    writer: Option<WriterState>,
-    version: u64,
+    payload_anchors: PayloadAnchorRegistry,
+    scope_index: ScopeIndex,
+    mutation_debug_stats: SlotTableMutationDebugStats,
+    next_group_generation: u32,
 }
 ```
 
-The first implementation can use plain `Vec` and `Vec::splice` for subtree insert/remove/move. Optimize later.
+`SlotTable` owns active storage and identity registries only. Runtime ownership,
+scope registries, retention maps, and live-host routing live outside the table.
 
 ### 7.3 GroupRecord
 
@@ -376,7 +380,6 @@ impl SlotWriteSession<'_> {
     fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> ValueSlotId;
     fn read_value<T: 'static>(&self, slot: ValueSlotId) -> &T;
     fn read_value_mut<T: 'static>(&mut self, slot: ValueSlotId) -> &mut T;
-    fn write_value<T: 'static>(&mut self, slot: ValueSlotId, value: T);
     fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T>;
 
     // Nodes
@@ -592,7 +595,7 @@ fn detach_subtree(&mut self, root_index: usize) -> DetachedSubtree {
 
 ### 10.3 Restore operation
 
-Restore is initiated through `begin_group(BeginGroupInput { restored: Some(subtree), .. })`. Internally that operation reparents the restored root, inserts groups/payloads/nodes at the current cursor, marks anchors and scopes active again, and returns `GroupStartKind::Restored`.
+Restore is initiated by composer retention lookup plus `begin_group(BeginGroupInput { restored: Some(subtree), .. })`. The composer preflights the target cursor, expected root key, detached anchors, node lifecycle, root spans, and scope-index availability before the retained subtree is removed from retention. `SlotTable::restore_subtree` repeats the local preflight before mutating active storage, then reparents the restored root, inserts groups/payloads/nodes at the current cursor, marks anchors and scopes active again, marks retained nodes active, and returns `GroupStartKind::Restored`.
 
 Storage restores bytes/records. Composer reactivates scopes and reattaches nodes.
 
@@ -662,7 +665,9 @@ Rules:
 - bounded retention insertion returns evicted `DetachedSubtree` values to the composer so normal disposal paths remove scopes, anchors, payloads, and detached nodes;
 - retained diagnostics must report retained subtree/group/payload/node/scope/anchor counts, estimated retained heap bytes, and cumulative eviction count;
 - live hosts are resolved through `live_hosts` during recomposition;
-- `SlotTable` carries the runtime-state pointer so ownership survives `take()`, and `SlotsHost::reset()` clears host ownership only after retained subtrees are gone;
+- `SlotsHost` owns the runtime-state binding for a table and `ComposerRuntimeState` owns live-host registration; `SlotTable` never carries a runtime-state pointer;
+- `SlotsHost::into_table()` and `SlotsHost::reset()` drain retained subtrees and clear host ownership before storage is transferred or replaced;
+- a host whose previous runtime owner is gone may be rebound to a new runtime state; a host with a live applier owner rejects mismatched runtime binding;
 - every `RecomposeScope` stores both `slots_storage_key` and a weak `slots_runtime_state`, which is the data needed to route invalid scopes back to the correct host.
 
 ### 11.2 ComposerCore additions
@@ -727,6 +732,11 @@ pub fn with_group_seed<R>(&self, key: GroupKeySeed, f: impl FnOnce(&Composer) ->
             parent_scope: parent_scope_id,
             key: reserved_key,
         },
+        |subtree| {
+            self.with_slot_session_mut(|slots| {
+                slots.assert_retained_restore_ready(reserved_key, subtree);
+            });
+        },
     );
 
     let GroupStart {
@@ -739,9 +749,8 @@ pub fn with_group_seed<R>(&self, key: GroupKeySeed, f: impl FnOnce(&Composer) ->
         slots.begin_group(BeginGroupInput::new(reserved_key, restored))
     });
 
-    let scope = if let Some(scope_id) = scope_id {
-        self.scope_for_id(scope_id)
-            .expect("group scope id must resolve through runtime state")
+    let scope = if let Some(scope) = scope_id.and_then(|scope_id| self.scope_for_id(scope_id)) {
+        scope
     } else {
         let scope = RecomposeScope::new(self.runtime_handle());
         self.core.shared_state.register_scope(&scope);
@@ -793,7 +802,7 @@ When a retained inactive scope is invalidated:
 
 ### 11.6 Host binding and recomposition routing
 
-Each pass binds a `SlotsHost` to exactly one `ComposerRuntimeState`. `Composer::with_slot_host_pass` asserts that an already-bound host cannot be silently rebound to a different runtime state.
+Each pass binds a `SlotsHost` to exactly one `ComposerRuntimeState`. `Composer::with_slot_host_pass` rejects mismatched binding while the previous runtime still has a live applier owner. If a host outlives an already-dropped runtime owner, it can be rebound after retained state for that host is drained and the old host registration is cleared.
 
 `Composition::process_invalid_scopes_filtered` resolves the host for each invalid scope in this order:
 
@@ -892,8 +901,9 @@ Command::DetachChild { parent_id, child_id }
 
 When restored:
 
-- `RetentionManager::take(...)` marks the nodes active again;
-- `begin_group(... restored ...)` restores the recorded node IDs into the active table;
+- retention restore preflight runs against the active cursor before the subtree is removed from retention;
+- `RetentionManager::take(...)` returns the subtree with nodes still marked `RetainedDetached`;
+- `begin_group(... restored ...)` restores the recorded node IDs into the active table and `SlotTable::restore_subtree` marks them active;
 - normal parent attach / insert / sync logic reattaches those IDs;
 - do not create new nodes unless the composable emits a genuinely different node type/key.
 
@@ -1162,6 +1172,11 @@ let restored = self.core.shared_state.take_retained(
     RetainKey {
         parent_scope,
         key: reserved_key,
+    },
+    |subtree| {
+        self.with_slot_session_mut(|slots| {
+            slots.assert_retained_restore_ready(reserved_key, subtree);
+        });
     },
 );
 

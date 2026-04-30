@@ -40,7 +40,7 @@ This document is the short operational checklist for Slot Table V2. Keep it smal
 - Anchor registry active count equals active group count.
 - Detached anchors belong only to detached or retained subtrees.
 - Invalidated anchors do not resolve to active or retained records.
-- Free anchors are reusable capacity only; they are not semantic group state.
+- Free group and payload anchors are reusable invalidated IDs only; they are not semantic group or payload state and are counted separately from occupied registry slots.
 - Active and retained storage never share the same anchor as active at the same time.
 
 ## Retention And Detached Subtrees
@@ -52,7 +52,7 @@ This document is the short operational checklist for Slot Table V2. Keep it smal
 - Retained subtree payload owners refer to anchors inside the detached subtree.
 - Retained subtree node owners refer to anchors inside the detached subtree.
 - Retained subtree scopes are inactive and are not present in the active scope index.
-- Restoring a subtree reactivates anchors and scopes before the group participates in recomposition.
+- Restoring a subtree preflights the target cursor, root key, detached anchors, retained node lifecycle, spans, and active scope-index availability before removing it from retention; the actual restore reactivates anchors, scopes, and nodes before the group participates in recomposition.
 - Disposing a detached subtree invalidates anchors, unregisters scopes, drops payloads, and removes nodes.
 
 ## Scope Lookup

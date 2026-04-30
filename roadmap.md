@@ -8,4 +8,4 @@
 - [x] Make retained subtree restore transactional.
 - [x] Collapse runtime-state ownership to a single source of truth across `SlotTable`, `SlotsHost`, and `ComposerRuntimeState`.
 - [x] Normalize anchor lifecycle debug stats semantics for group and payload registries.
-- [ ] Sync active slot-table design docs with implementation.
+- [x] Sync active slot-table design docs with implementation.

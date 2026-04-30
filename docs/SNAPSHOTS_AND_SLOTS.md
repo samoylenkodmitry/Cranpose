@@ -649,12 +649,14 @@ The active table stores groups, payloads, nodes, stable identity registries, and
 
 ```rust
 pub struct SlotTable {
+    storage_id: usize,
     groups: Vec<GroupRecord>,
     payloads: Vec<PayloadRecord>,
     nodes: Vec<NodeRecord>,
     anchors: AnchorRegistry,
     payload_anchors: PayloadAnchorRegistry,
     scope_index: ScopeIndex,
+    mutation_debug_stats: SlotTableMutationDebugStats,
     next_group_generation: u32,
 }
 ```
@@ -696,22 +698,26 @@ Remembered values and emitted nodes are stored outside the structural group tabl
 ```rust
 pub struct PayloadRecord {
     owner: AnchorId,
-    anchor: usize,
-    generation: u32,
+    anchor: PayloadAnchor,
     type_id: TypeId,
+    type_name: &'static str,
+    kind: PayloadKind,
     value: Box<dyn Any>,
 }
 
 pub struct NodeRecord {
     owner: AnchorId,
     id: NodeId,
+    parent_id: Option<NodeId>,
     generation: u32,
     lifecycle: NodeLifecycle,
 }
 ```
 
-Payload anchors back `ValueSlotId`, so remembered values remain addressable even if sibling
-reordering moves the owning group in the active table.
+Payload anchors back `ValueSlotId`, and `ValueSlotId` also stores the owning
+slot-table storage id. Remembered values remain addressable when sibling
+reordering moves the owning group in the active table, while stale cross-table
+handles fail instead of aliasing another table.
 
 #### DetachedSubtree
 
@@ -784,6 +790,8 @@ let state = slots.read_value::<SnapshotMutableState<i32>>(slot);
 
 If a payload slot is revisited with a different type, the old boxed value is dropped through the
 slot lifecycle coordinator and the new typed payload replaces it in place.
+Public composer-held value access uses typed value-slot handles; the old untyped
+composer write surface is not part of the active API.
 
 #### begin_recompose_at_scope()
 
@@ -806,6 +814,8 @@ The slot table validates a small set of invariants after mutations in debug/test
 - payload and node ranges are contiguous and owner-correct;
 - every active scope index entry resolves to the correct group anchor;
 - retained subtree anchors are detached or invalidated, never active.
+- debug stats report occupied invalidated anchor slots separately from reusable
+  free anchor IDs for both group and payload anchor registries.
 
 The active debug helpers are `SlotTable::validate()`, `SlotTable::debug_snapshot()`,
 `SlotTable::debug_dump_groups()`, and `SlotTable::debug_dump_slot_entries()`.
