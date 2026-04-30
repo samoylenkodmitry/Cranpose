@@ -293,7 +293,6 @@ impl DetachedSubtree {
         self.root().key
     }
 
-    #[cfg(any(test, debug_assertions))]
     pub(crate) fn root_parent_anchor(&self) -> AnchorId {
         self.root().parent_anchor
     }
@@ -364,6 +363,30 @@ impl DetachedSubtree {
 
     pub(crate) fn mark_nodes_active(&mut self) {
         self.set_node_lifecycle(NodeLifecycle::Active);
+    }
+
+    pub(crate) fn assert_root_key(&self, expected: GroupKey, context: &'static str) {
+        assert_eq!(
+            self.root_key(),
+            expected,
+            "{context}: detached subtree root key mismatch"
+        );
+    }
+
+    pub(crate) fn assert_root_parent_detached(&self, context: &'static str) {
+        assert!(
+            !self.root_parent_anchor().is_valid(),
+            "{context}: detached subtree root parent must be detached"
+        );
+    }
+
+    pub(crate) fn assert_node_lifecycle(&self, expected: NodeLifecycle, context: &'static str) {
+        for node in &self.nodes {
+            assert_eq!(
+                node.lifecycle, expected,
+                "{context}: detached subtree node lifecycle mismatch"
+            );
+        }
     }
 
     fn set_node_lifecycle(&mut self, lifecycle: NodeLifecycle) {

@@ -1,9 +1,12 @@
 use crate::collections::map::HashMap;
 #[cfg(any(test, debug_assertions))]
-use crate::slot::{AnchorState, NodeLifecycle, PayloadAnchorLifecycle, SlotInvariantError};
+use crate::slot::{AnchorState, PayloadAnchorLifecycle, SlotInvariantError};
 #[cfg(any(test, debug_assertions))]
 use crate::SlotTable;
-use crate::{slot::DetachedSubtree, slot::GroupKey, ScopeId};
+use crate::{
+    slot::{DetachedSubtree, GroupKey, NodeLifecycle},
+    ScopeId,
+};
 use std::cmp::Ordering;
 
 // Retained subtrees follow docs/SLOT_TABLE_LIFECYCLE.md: anchors stay detached,
@@ -146,7 +149,19 @@ impl RetentionManager {
         let restored_order = self.tick_operation();
         let mut retained = self.groups.remove(&key)?;
         self.restored_at_by_key.insert(key, restored_order);
+        retained
+            .subtree
+            .assert_root_key(key.key, "retention restore");
+        retained
+            .subtree
+            .assert_root_parent_detached("retention restore");
+        retained
+            .subtree
+            .assert_node_lifecycle(NodeLifecycle::RetainedDetached, "retention restore");
         retained.subtree.mark_nodes_active();
+        retained
+            .subtree
+            .assert_node_lifecycle(NodeLifecycle::Active, "retention restore");
         Some(retained.subtree)
     }
 
@@ -161,9 +176,12 @@ impl RetentionManager {
             key.parent_scope,
             key.key,
         );
+        subtree.assert_root_key(key.key, "retention insert");
+        subtree.assert_root_parent_detached("retention insert");
         let detached_order = self.tick_operation();
         let last_restored_order = self.restored_at_by_key.remove(&key).unwrap_or_default();
         subtree.mark_nodes_retained_detached();
+        subtree.assert_node_lifecycle(NodeLifecycle::RetainedDetached, "retention insert");
         self.groups.insert(
             key,
             RetainedGroup {
@@ -334,6 +352,15 @@ impl RetentionManager {
             };
             self.restored_at_by_key.remove(&key);
             self.evictions_total = self.evictions_total.saturating_add(1);
+            retained
+                .subtree
+                .assert_root_key(key.key, "retention eviction");
+            retained
+                .subtree
+                .assert_root_parent_detached("retention eviction");
+            retained
+                .subtree
+                .assert_node_lifecycle(NodeLifecycle::RetainedDetached, "retention eviction");
             evicted.push(retained.subtree);
         }
         evicted

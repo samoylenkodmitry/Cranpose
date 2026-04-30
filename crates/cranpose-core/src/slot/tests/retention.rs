@@ -459,12 +459,12 @@ fn retention_insert_rejects_duplicate_key_without_replacing_existing_subtree() {
 }
 
 #[test]
-fn retention_validate_rejects_root_key_mismatch() {
+#[should_panic(expected = "retention insert: detached subtree root key mismatch")]
+fn retention_insert_rejects_root_key_mismatch() {
     const PARENT_KEY: Key = 370;
     const CHILD_KEY: Key = 371;
 
-    let (harness, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
-    let actual_root_key = detached.root_key();
+    let (_, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
     let retain_key = RetainKey {
         parent_scope: None,
         key: GroupKey::new(CHILD_KEY + 10, None, 0),
@@ -472,15 +472,6 @@ fn retention_validate_rejects_root_key_mismatch() {
 
     let mut retention = RetentionManager::default();
     retention.insert(retain_key, detached);
-
-    assert_eq!(
-        retention.validate(&harness.table),
-        Err(SlotInvariantError::RetainedRootKeyMismatch {
-            parent_scope: None,
-            expected: retain_key.key,
-            actual: actual_root_key,
-        })
-    );
 }
 
 #[test]
@@ -674,7 +665,33 @@ fn retention_validate_rejects_active_retained_node() {
 }
 
 #[test]
-fn retention_validate_rejects_retained_root_with_active_parent() {
+#[should_panic(expected = "retention restore: detached subtree node lifecycle mismatch")]
+fn retention_take_rejects_active_retained_node_before_restore() {
+    const PARENT_KEY: Key = 3780;
+    const CHILD_KEY: Key = 3790;
+
+    let (_, detached, child_node) =
+        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
+    child_node.expect("test helper must record a child node");
+    let retain_key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+
+    let mut retention = RetentionManager::default();
+    retention.insert(retain_key, detached);
+    retention
+        .subtrees_mut()
+        .next()
+        .expect("retained subtree must exist")
+        .mark_nodes_active();
+
+    let _ = retention.take(retain_key);
+}
+
+#[test]
+#[should_panic(expected = "retention insert: detached subtree root parent must be detached")]
+fn retention_insert_rejects_retained_root_with_active_parent() {
     const PARENT_KEY: Key = 380;
     const CHILD_KEY: Key = 381;
 
@@ -688,14 +705,6 @@ fn retention_validate_rejects_retained_root_with_active_parent() {
 
     let mut retention = RetentionManager::default();
     retention.insert(retain_key, detached);
-
-    assert_eq!(
-        retention.validate(&harness.table),
-        Err(SlotInvariantError::RetainedRootHasActiveParent {
-            root_key: retain_key.key,
-            parent_anchor,
-        })
-    );
 }
 
 #[test]

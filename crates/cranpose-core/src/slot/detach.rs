@@ -2,7 +2,7 @@
 use super::table::SlotMutationGuard;
 use super::{
     checked_u32_delta, CheckedU32Delta, ChildCursor, DetachedChild, DetachedSubtree, GroupRecord,
-    SlotTable, SlotWriteSessionState, SubtreeRange,
+    NodeLifecycle, SlotTable, SlotWriteSessionState, SubtreeRange,
 };
 use crate::{remove_child_and_cleanup_now, AnchorId, Applier, NodeError, NodeId};
 
@@ -25,6 +25,8 @@ impl SlotTable {
         subtree
             .validate_detached()
             .expect("detached subtree must validate before restore");
+        subtree.assert_root_parent_detached("restore");
+        subtree.assert_node_lifecycle(NodeLifecycle::Active, "restore");
         for group in &subtree.groups {
             assert!(
                 self.anchors.is_detached(group.anchor),
