@@ -1,7 +1,5 @@
-#[cfg(any(test, debug_assertions))]
-use super::table::SlotMutationGuard;
 use super::{
-    checked_u32_delta, CheckedU32Delta, ChildCursor, DetachedChild, DetachedSubtree, GroupRecord,
+    checked_u32_delta, CheckedU32Delta, ChildCursor, DetachedSubtree, GroupKey, GroupRecord,
     SlotTable, SlotWriteSessionState, SubtreeRange,
 };
 use crate::{remove_child_and_cleanup_now, AnchorId, Applier, NodeError, NodeId};
@@ -128,11 +126,13 @@ impl SlotTable {
             nodes: removed_nodes,
         };
         #[cfg(any(test, debug_assertions))]
-        let _guard = refresh_indexes.then(|| SlotMutationGuard::new(self, "detach_subtree"));
-        #[cfg(any(test, debug_assertions))]
         subtree
             .validate_detached()
             .expect("detached subtree must validate after detach");
+        #[cfg(any(test, debug_assertions))]
+        if refresh_indexes {
+            self.debug_assert_valid_after("detach_subtree");
+        }
         subtree
     }
 
@@ -157,10 +157,9 @@ impl SlotTable {
     pub(in crate::slot) fn restore_subtree(
         &mut self,
         cursor: ChildCursor,
-        detached: DetachedChild,
+        key: GroupKey,
+        mut subtree: DetachedSubtree,
     ) -> AnchorId {
-        let key = detached.expected_key();
-        let mut subtree = detached.into_subtree();
         self.assert_subtree_restore_ready(cursor, key, &subtree);
         let insert_index = cursor.index();
         let parent_anchor = cursor.parent();
@@ -222,7 +221,7 @@ impl SlotTable {
         let restored_group_range = SubtreeRange::from_root_len(insert_index, restored_group_count);
         self.refresh_payload_locations_for_group_range(restored_group_range.as_group_range());
         #[cfg(any(test, debug_assertions))]
-        let _guard = SlotMutationGuard::new(self, "restore_subtree");
+        self.debug_assert_valid_after("restore_subtree");
         root_anchor
     }
 

@@ -160,9 +160,7 @@ pub(crate) fn begin_test_group(
     with_test_slot_lifecycle(|lifecycle| {
         let mut session = slots.write_session(lifecycle, state);
         let group_key = session.preview_group_key(crate::slot::GroupKeySeed::unkeyed(key));
-        session
-            .begin_group(crate::slot::BeginGroupInput::new(group_key, None))
-            .group
+        session.begin_group(group_key, None).group
     })
 }
 

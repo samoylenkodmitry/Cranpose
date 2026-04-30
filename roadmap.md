@@ -4,4 +4,4 @@
 [x] Propagate immediate detached-node disposal errors instead of discarding cleanup failures.
 [x] Promote detached subtree root-node metadata from debug-only checks to validated runtime invariants.
 [x] Clean up slot-table introspection: rename the fake reader module, fix sparse anchor stats, and report retained payloads in snapshots.
-[ ] Remove wrapper/generic slot-table ceremony and debug-only mutation-guard indirection that add no semantic value.
+[x] Remove wrapper/generic slot-table ceremony and debug-only mutation-guard indirection that add no semantic value.

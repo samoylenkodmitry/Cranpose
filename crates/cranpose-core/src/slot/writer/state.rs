@@ -171,9 +171,7 @@ impl SlotWriteSessionState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slot::{
-        BeginGroupInput, GroupKeySeed, SlotInvariantError, SlotLifecycleCoordinator, SlotTable,
-    };
+    use crate::slot::{GroupKeySeed, SlotInvariantError, SlotLifecycleCoordinator, SlotTable};
 
     #[test]
     fn removed_payloads_trigger_compaction_hint_at_threshold() {
@@ -225,7 +223,7 @@ mod tests {
         {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
-            let _ = session.begin_group(BeginGroupInput::new(key, None));
+            let _ = session.begin_group(key, None);
         }
 
         state.group_stack[0].next_child_index = table.group_count() + 1;
@@ -253,13 +251,13 @@ mod tests {
         {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let root_key = session.preview_group_key(GroupKeySeed::unkeyed(10));
-            let _ = session.begin_group(BeginGroupInput::new(root_key, None));
+            let _ = session.begin_group(root_key, None);
 
             let child_key = session.preview_group_key(GroupKeySeed::unkeyed(11));
-            let _ = session.begin_group(BeginGroupInput::new(child_key, None));
+            let _ = session.begin_group(child_key, None);
 
             let grandchild_key = session.preview_group_key(GroupKeySeed::unkeyed(12));
-            let _ = session.begin_group(BeginGroupInput::new(grandchild_key, None));
+            let _ = session.begin_group(grandchild_key, None);
         }
 
         let root_anchor = table.group_anchor_at_index(0);
@@ -288,7 +286,7 @@ mod tests {
         {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
-            let _ = session.begin_group(BeginGroupInput::new(key, None));
+            let _ = session.begin_group(key, None);
             let _ = session.value_slot_with_kind(crate::slot::PayloadKind::Internal, || 17_i32);
             session.record_node_with_parent(31, 1, None);
         }
@@ -312,10 +310,10 @@ mod tests {
         {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let root_key = session.preview_group_key(GroupKeySeed::unkeyed(10));
-            let _ = session.begin_group(BeginGroupInput::new(root_key, None));
+            let _ = session.begin_group(root_key, None);
 
             let child_key = session.preview_group_key(GroupKeySeed::unkeyed(11));
-            let child = session.begin_group(BeginGroupInput::new(child_key, None));
+            let child = session.begin_group(child_key, None);
             session.set_group_scope(child.group, scope_id);
             let _ = session.finish_group_body();
             session.end_group();
@@ -347,7 +345,7 @@ mod tests {
         {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
-            let _ = session.begin_group(BeginGroupInput::new(key, None));
+            let _ = session.begin_group(key, None);
             session.record_node_with_parent(31, 1, None);
             let _ = session.finish_group_body();
             session.end_group();
@@ -357,7 +355,7 @@ mod tests {
         {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
-            let _ = session.begin_group(BeginGroupInput::new(key, None));
+            let _ = session.begin_group(key, None);
             let _ = session.finish_group_body();
         }
 

@@ -1,7 +1,7 @@
 use crate::collections::map::{HashMap, HashSet};
 use crate::retention::{RetainKey, RetentionManager};
-use crate::slot::{BeginGroupInput, GroupStart, GroupStartKind, ValueSlotId};
 use crate::slot::{FinishGroupResult, PayloadKind};
+use crate::slot::{GroupStart, GroupStartKind, ValueSlotId};
 use crate::{
     composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
     ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey,
@@ -803,7 +803,7 @@ impl Composer {
                 scope_id,
                 kind,
                 ..
-            } = slots.begin_group(BeginGroupInput::new(reserved_key, restored));
+            } = slots.begin_group(reserved_key, restored);
             (group, scope_id, kind)
         });
         let scope_ref =

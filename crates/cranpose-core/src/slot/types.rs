@@ -142,18 +142,6 @@ pub(crate) enum GroupStartKind {
     Restored,
 }
 
-/// Semantic input required to begin a group at the current writer cursor.
-pub(crate) struct BeginGroupInput<R> {
-    pub(crate) key: GroupKey,
-    pub(crate) restored: Option<R>,
-}
-
-impl<R> BeginGroupInput<R> {
-    pub(crate) fn new(key: GroupKey, restored: Option<R>) -> Self {
-        Self { key, restored }
-    }
-}
-
 /// Result of starting a group.
 pub(crate) struct GroupStart<G> {
     pub(crate) group: G,
@@ -259,28 +247,6 @@ pub(crate) struct DetachedSubtree {
     pub(super) groups: Vec<GroupRecord>,
     pub(super) payloads: Vec<PayloadRecord>,
     pub(super) nodes: Vec<NodeRecord>,
-}
-
-pub(crate) struct DetachedChild {
-    expected_key: GroupKey,
-    subtree: DetachedSubtree,
-}
-
-impl DetachedChild {
-    pub(crate) fn new(expected_key: GroupKey, subtree: DetachedSubtree) -> Self {
-        Self {
-            expected_key,
-            subtree,
-        }
-    }
-
-    pub(crate) fn expected_key(&self) -> GroupKey {
-        self.expected_key
-    }
-
-    pub(crate) fn into_subtree(self) -> DetachedSubtree {
-        self.subtree
-    }
 }
 
 impl DetachedSubtree {

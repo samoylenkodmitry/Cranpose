@@ -5,28 +5,6 @@ use super::super::{
 use super::SlotTable;
 use crate::AnchorId;
 
-#[cfg(any(test, debug_assertions))]
-pub(in crate::slot) struct SlotMutationGuard<'a> {
-    table: &'a SlotTable,
-    operation: &'static str,
-}
-
-#[cfg(any(test, debug_assertions))]
-impl<'a> SlotMutationGuard<'a> {
-    pub(in crate::slot) fn new(table: &'a SlotTable, operation: &'static str) -> Self {
-        Self { table, operation }
-    }
-}
-
-#[cfg(any(test, debug_assertions))]
-impl Drop for SlotMutationGuard<'_> {
-    fn drop(&mut self) {
-        if !std::thread::panicking() {
-            self.table.debug_assert_valid_after(self.operation);
-        }
-    }
-}
-
 impl SlotTable {
     fn allocate_group_anchor(&mut self) -> AnchorId {
         self.anchors.allocate()
@@ -212,6 +190,6 @@ impl SlotTable {
         );
         self.refresh_group_indexes_from(from_index.min(adjusted_index));
         #[cfg(any(test, debug_assertions))]
-        let _guard = SlotMutationGuard::new(self, "move_later_sibling_subtree_to_cursor");
+        self.debug_assert_valid_after("move_later_sibling_subtree_to_cursor");
     }
 }

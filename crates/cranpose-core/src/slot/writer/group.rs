@@ -1,6 +1,6 @@
 use super::super::{
-    ActiveGroupId, ActiveSubtreeRoot, BeginGroupInput, ChildCursor, DetachedChild, DetachedSubtree,
-    GroupKey, GroupKeySeed, GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
+    ActiveGroupId, ActiveSubtreeRoot, ChildCursor, DetachedSubtree, GroupKey, GroupKeySeed,
+    GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
 };
 use super::SlotWriteSessionState;
 use crate::{AnchorId, ScopeId};
@@ -52,11 +52,15 @@ impl SlotWriteSession<'_> {
     }
 
     #[inline(always)]
-    fn restore_started_group(&mut self, detached: DetachedChild) -> GroupStart<ActiveGroupId> {
+    fn restore_started_group(
+        &mut self,
+        key: GroupKey,
+        detached: DetachedSubtree,
+    ) -> GroupStart<ActiveGroupId> {
         let parent_anchor = self.state.current_parent_anchor();
         let insert_index = self.state.current_child_cursor();
         let cursor = ChildCursor::new(parent_anchor, insert_index);
-        let anchor = self.table.restore_subtree(cursor, detached);
+        let anchor = self.table.restore_subtree(cursor, key, detached);
         self.open_started_group(anchor, GroupStartKind::Restored)
     }
 
@@ -135,9 +139,9 @@ impl SlotWriteSession<'_> {
 
     pub(crate) fn begin_group(
         &mut self,
-        input: BeginGroupInput<DetachedSubtree>,
+        key: GroupKey,
+        restored: Option<DetachedSubtree>,
     ) -> GroupStart<ActiveGroupId> {
-        let BeginGroupInput { key, restored } = input;
         self.state.consume_group_key(key);
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
@@ -147,7 +151,7 @@ impl SlotWriteSession<'_> {
         let insert_index = self.state.current_child_cursor();
 
         if let Some(restored) = restored {
-            return self.restore_started_group(DetachedChild::new(key, restored));
+            return self.restore_started_group(key, restored);
         }
 
         let cursor = ChildCursor::new(parent_anchor, insert_index);
