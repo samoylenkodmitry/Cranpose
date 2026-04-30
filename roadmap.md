@@ -379,43 +379,43 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## 9. Add slot table performance regression tests
 
-* [ ] Add large keyed sibling reorder scenario.
+* [x] Add large keyed sibling reorder scenario.
 
-    * [ ] Compose many keyed siblings.
-    * [ ] Reverse or rotate order.
-    * [ ] Verify sibling index path works.
-    * [ ] Verify mutation stats do not show pathological unexpected refreshes.
+    * [x] Compose many keyed siblings.
+    * [x] Reverse or rotate order.
+    * [x] Verify sibling index path works.
+    * [x] Verify mutation stats do not show pathological unexpected refreshes.
 
-* [ ] Add large detach/restore scenario.
+* [x] Add large detach/restore scenario.
 
-    * [ ] Large subtree with groups, payloads, nodes, and scopes.
-    * [ ] Detach and retain.
-    * [ ] Restore.
-    * [ ] Validate exact group spans and payload/node ranges.
+    * [x] Large subtree with groups, payloads, nodes, and scopes.
+    * [x] Detach and retain.
+    * [x] Restore.
+    * [x] Validate exact group spans and payload/node ranges.
 
-* [ ] Add repeated tail removal scenario.
+* [x] Add repeated tail removal scenario.
 
-    * [ ] Compose many payloads/nodes.
-    * [ ] Recompose with shorter tails repeatedly.
-    * [ ] Verify compaction hints trigger at thresholds.
-    * [ ] Verify storage compaction does not invalidate retained identities.
+    * [x] Compose many payloads/nodes.
+    * [x] Recompose with shorter tails repeatedly.
+    * [x] Verify compaction hints trigger at thresholds.
+    * [x] Verify storage compaction does not invalidate retained identities.
 
-* [ ] Add optional ignored benchmark-style tests.
+* [x] Add optional ignored benchmark-style tests.
 
-    * [ ] Mark as `#[ignore]` if too slow for normal CI.
-    * [ ] Keep deterministic and not timing-sensitive unless behind a benchmark feature.
+    * [x] Mark as `#[ignore]` if too slow for normal CI.
+    * [x] Keep deterministic and not timing-sensitive unless behind a benchmark feature.
 
-* [ ] Self-review.
+* [x] Self-review.
 
-    * [ ] Confirm tests detect structural regressions, not machine-specific timing.
-    * [ ] Confirm mutation debug stats are asserted only where stable.
-    * [ ] Confirm large cases remain reasonable in CI.
+    * [x] Confirm tests detect structural regressions, not machine-specific timing.
+    * [x] Confirm mutation debug stats are asserted only where stable.
+    * [x] Confirm large cases remain reasonable in CI.
 
-* [ ] Validate and commit.
+* [x] Validate and commit.
 
-    * [ ] Run full validation baseline.
-    * [ ] Commit: `slot: add structural performance regression coverage`
-    * [ ] Mark this item `[x]`.
+    * [x] Run full validation baseline.
+    * [x] Commit: `slot: add structural performance regression coverage`
+    * [x] Mark this item `[x]`.
 
 ---
 
