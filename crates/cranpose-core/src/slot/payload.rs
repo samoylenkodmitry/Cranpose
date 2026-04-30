@@ -243,6 +243,7 @@ impl SlotTable {
         self.insert_value_payload_internal(owner, insert_index, kind, value, true)
     }
 
+    #[cfg(test)]
     pub(super) fn replace_payload_value<T: 'static>(
         &mut self,
         group_index: usize,

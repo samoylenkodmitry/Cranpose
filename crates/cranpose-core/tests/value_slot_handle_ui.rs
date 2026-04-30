@@ -99,7 +99,17 @@ fn find_artifact(dir: &Path, prefix: &str, extensions: &[&str]) -> PathBuf {
         })
         .collect::<Vec<_>>();
 
-    candidates.sort();
+    candidates.sort_by(|left, right| {
+        let left_modified = fs::metadata(left)
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let right_modified = fs::metadata(right)
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        left_modified
+            .cmp(&right_modified)
+            .then_with(|| left.cmp(right))
+    });
     candidates
         .pop()
         .unwrap_or_else(|| panic!("missing artifact `{prefix}*` in `{}`", dir.display()))
@@ -147,5 +157,10 @@ fn value_slot_handle_cannot_escape_composable_scope() {
             "mutableStateOf(handle)",
             "must outlive `'static`",
         ],
+    );
+    run_compile_fail_case(
+        "write_removed",
+        "value_slot_write_removed.rs",
+        &["no method named `write_slot_value`"],
     );
 }

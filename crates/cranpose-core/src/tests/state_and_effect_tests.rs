@@ -222,12 +222,12 @@ fn with_slot_value_reads_and_updates() {
 
     composer.with_group(key, |composer| {
         let slot_id = composer.use_value_slot(|| 10i32);
-        let initial = composer.with_slot_value::<i32, _>(slot_id, |value| *value);
+        let initial = composer.with_slot_value(slot_id, |value| *value);
         assert_eq!(initial, 10);
-        composer.with_slot_value_mut::<i32, _>(slot_id, |value| {
+        composer.with_slot_value_mut(slot_id, |value| {
             *value = 42;
         });
-        let updated = composer.with_slot_value::<i32, _>(slot_id, |value| *value);
+        let updated = composer.with_slot_value(slot_id, |value| *value);
         assert_eq!(updated, 42);
     });
 

@@ -47,6 +47,7 @@ impl SlotTable {
             .expect("value slot type mismatch")
     }
 
+    #[cfg(test)]
     pub(crate) fn write_value<T: 'static>(&mut self, slot: ValueSlotId, value: T) {
         let (group_index, payload_index) = self.checked_value_slot(slot);
         let kind = self

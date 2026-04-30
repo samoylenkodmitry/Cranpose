@@ -2,7 +2,7 @@ use cranpose_core::{with_current_composer, ValueSlotHandle};
 use cranpose_macros::composable;
 
 #[composable]
-fn ReturnSlotHandle() -> ValueSlotHandle<'static> {
+fn ReturnSlotHandle() -> ValueSlotHandle<'static, i32> {
     with_current_composer(|composer| composer.use_value_slot(|| 1_i32))
 }
 

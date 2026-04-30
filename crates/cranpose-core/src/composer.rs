@@ -18,17 +18,26 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-#[derive(Clone, Copy)]
-pub struct ValueSlotHandle<'pass> {
+pub struct ValueSlotHandle<'pass, T: 'static> {
     slot: ValueSlotId,
     _pass: PhantomData<&'pass Composer>,
+    _value: PhantomData<fn() -> T>,
 }
 
-impl ValueSlotHandle<'_> {
+impl<T: 'static> Copy for ValueSlotHandle<'_, T> {}
+
+impl<T: 'static> Clone for ValueSlotHandle<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: 'static> ValueSlotHandle<'_, T> {
     pub(crate) fn new(slot: ValueSlotId) -> Self {
         Self {
             slot,
             _pass: PhantomData,
+            _value: PhantomData,
         }
     }
 
@@ -1053,7 +1062,7 @@ impl Composer {
     pub fn use_value_slot<'pass, T: 'static>(
         &'pass self,
         init: impl FnOnce() -> T,
-    ) -> ValueSlotHandle<'pass> {
+    ) -> ValueSlotHandle<'pass, T> {
         let slot = self
             .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Internal, init));
         ValueSlotHandle::new(slot)
@@ -1063,7 +1072,7 @@ impl Composer {
     pub fn __use_param_slot<'pass, T: 'static>(
         &'pass self,
         init: impl FnOnce() -> T,
-    ) -> ValueSlotHandle<'pass> {
+    ) -> ValueSlotHandle<'pass, T> {
         let slot = self
             .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Param, init));
         ValueSlotHandle::new(slot)
@@ -1073,7 +1082,7 @@ impl Composer {
     pub fn __use_return_slot<'pass, T: 'static>(
         &'pass self,
         init: impl FnOnce() -> T,
-    ) -> ValueSlotHandle<'pass> {
+    ) -> ValueSlotHandle<'pass, T> {
         let slot = self
             .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Return, init));
         ValueSlotHandle::new(slot)
@@ -1081,7 +1090,7 @@ impl Composer {
 
     pub fn with_slot_value<'pass, T: 'static, R>(
         &'pass self,
-        handle: ValueSlotHandle<'pass>,
+        handle: ValueSlotHandle<'pass, T>,
         f: impl FnOnce(&T) -> R,
     ) -> R {
         self.with_slots(|slots| f(slots.read_value(handle.slot())))
@@ -1089,18 +1098,10 @@ impl Composer {
 
     pub fn with_slot_value_mut<'pass, T: 'static, R>(
         &'pass self,
-        handle: ValueSlotHandle<'pass>,
+        handle: ValueSlotHandle<'pass, T>,
         f: impl FnOnce(&mut T) -> R,
     ) -> R {
         self.with_slots_mut(|slots| f(slots.read_value_mut(handle.slot())))
-    }
-
-    pub fn write_slot_value<'pass, T: 'static>(
-        &'pass self,
-        handle: ValueSlotHandle<'pass>,
-        value: T,
-    ) {
-        self.with_slots_mut(|slots| slots.write_value(handle.slot(), value));
     }
 
     pub fn mutable_state_of<T: Clone + 'static>(&self, initial: T) -> MutableState<T> {
