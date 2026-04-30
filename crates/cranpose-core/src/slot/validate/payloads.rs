@@ -127,8 +127,10 @@ mod tests {
     use crate::AnchorId;
     use std::any::TypeId;
 
-    fn one_payload_table(owner: AnchorId, payload_anchor: usize) -> SlotTable {
+    fn one_payload_table() -> (SlotTable, AnchorId, PayloadAnchor) {
         let mut table = SlotTable::new();
+        let owner = table.anchors.allocate();
+        let payload_anchor = table.payload_anchors.allocate();
         table.groups.push(GroupRecord {
             key: GroupKey::new(9_000, None, 0),
             parent_anchor: AnchorId::INVALID,
@@ -145,22 +147,21 @@ mod tests {
         });
         table.payloads.push(PayloadRecord {
             owner,
-            anchor: PayloadAnchor::new(payload_anchor, 1),
+            anchor: payload_anchor,
             type_id: TypeId::of::<i32>(),
             type_name: std::any::type_name::<i32>(),
             kind: PayloadKind::Internal,
             value: Box::new(0_i32),
         });
         table.anchors.set_active(owner, 0);
-        table
+        table.payload_anchors.set_active(payload_anchor, owner, 0);
+        (table, owner, payload_anchor)
     }
 
     #[test]
     fn reverse_payload_anchor_registry_validation_reports_actual_record() {
-        let owner = AnchorId::new(1);
-        let actual_payload_anchor = PayloadAnchor::new(10, 1);
-        let stale_payload_anchor = PayloadAnchor::new(11, 1);
-        let mut table = one_payload_table(owner, actual_payload_anchor.id());
+        let (mut table, owner, actual_payload_anchor) = one_payload_table();
+        let stale_payload_anchor = table.payload_anchors.allocate();
         table
             .payload_anchors
             .set_active(stale_payload_anchor, owner, 0);

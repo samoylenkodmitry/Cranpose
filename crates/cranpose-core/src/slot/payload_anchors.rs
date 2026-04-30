@@ -109,12 +109,22 @@ impl PayloadAnchorRegistry {
     }
 
     pub(super) fn set_active(&mut self, anchor: PayloadAnchor, owner: AnchorId, index: usize) {
-        self.set_state(anchor, PayloadAnchorState::Active { owner, index });
-        debug_assert_eq!(self.active_location(anchor), Some((owner, index)));
+        let previous = self.set_state(anchor, PayloadAnchorState::Active { owner, index });
+        assert!(
+            previous.is_some(),
+            "payload anchor must be registered with a matching generation before activation: {:?}",
+            anchor
+        );
+        assert_eq!(self.active_location(anchor), Some((owner, index)));
     }
 
     pub(super) fn mark_detached(&mut self, anchor: PayloadAnchor) {
-        self.set_state(anchor, PayloadAnchorState::Detached);
+        let previous = self.set_state(anchor, PayloadAnchorState::Detached);
+        assert!(
+            previous.is_some(),
+            "payload anchor must be registered with a matching generation before detach: {:?}",
+            anchor
+        );
     }
 
     pub(super) fn active_location(&self, anchor: PayloadAnchor) -> Option<(AnchorId, usize)> {

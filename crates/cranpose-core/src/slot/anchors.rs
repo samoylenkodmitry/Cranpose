@@ -206,12 +206,22 @@ impl AnchorRegistry {
     }
 
     pub(super) fn set_active(&mut self, anchor: AnchorId, group_index: usize) {
-        self.set_state(anchor, AnchorState::Active(group_index));
+        let previous = self.set_state(anchor, AnchorState::Active(group_index));
+        assert!(
+            previous.is_some(),
+            "group anchor must be registered with a matching generation before activation: {:?}",
+            anchor
+        );
     }
 
     pub(super) fn mark_detached(&mut self, anchor: AnchorId) {
         if anchor.is_valid() {
-            self.set_state(anchor, AnchorState::Detached);
+            let previous = self.set_state(anchor, AnchorState::Detached);
+            assert!(
+                previous.is_some(),
+                "group anchor must be registered with a matching generation before detach: {:?}",
+                anchor
+            );
         }
     }
 
@@ -478,7 +488,13 @@ mod tests {
         assert_eq!(registry.free_len(), 0);
         assert_eq!(registry.invalidated_len(), 1);
 
-        registry.set_active(stale_anchor, 99);
+        let stale_set_active = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registry.set_active(stale_anchor, 99);
+        }));
+        assert!(
+            stale_set_active.is_err(),
+            "stale generation must be rejected before it can reactivate a reused group anchor id"
+        );
         assert_eq!(
             registry.state(reused_anchor),
             Some(AnchorState::Invalidated),
@@ -534,6 +550,9 @@ mod tests {
         };
         registry.next_anchor = anchor.id as usize + 1;
 
+        assert!(registry
+            .set_state(anchor, AnchorState::Invalidated)
+            .is_none());
         registry.set_active(anchor, 4);
 
         assert_eq!(registry.active_index(anchor), Some(4));

@@ -295,7 +295,7 @@ fn validate_reports_payload_anchor_registry_mismatch_structurally() {
 fn validate_reports_payload_anchor_registry_stale_owner_structurally() {
     let mut table = composed_group_with_value_and_node_table(491);
     let old_anchor = table.groups[0].anchor;
-    let new_anchor = AnchorId::new(1_001);
+    let new_anchor = table.anchors.allocate();
     let payload_anchor = table.group_payload_record_at(0, 0).anchor;
 
     table.groups[0].anchor = new_anchor;
