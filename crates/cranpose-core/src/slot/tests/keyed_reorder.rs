@@ -324,37 +324,6 @@ fn debug_stats_report_payload_location_range_refresh_work_spans() {
 }
 
 #[test]
-fn debug_stats_report_scope_index_rebuild_work_spans() {
-    const GROUP_KEY: Key = 4052;
-    const SCOPE_ID: ScopeId = 405_200;
-
-    let mut harness = SlotHarness::new();
-    harness.begin_pass(SlotPassMode::Compose);
-    harness.session(|session| {
-        let group = begin_unkeyed(session, GROUP_KEY, None);
-        session.set_group_scope(group.group, SCOPE_ID);
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-    });
-    harness.finish_pass();
-
-    let before = harness.table.debug_stats().mutation;
-    harness.table.recompute_scope_index();
-    let after = harness.table.debug_stats().mutation;
-
-    assert_eq!(
-        after.scope_index_rebuild_count - before.scope_index_rebuild_count,
-        1
-    );
-    assert_eq!(
-        after.scope_index_rebuild_scope_count - before.scope_index_rebuild_scope_count,
-        1
-    );
-    assert_eq!(after.scope_index_rebuild_max_span, 1);
-}
-
-#[test]
 fn large_keyed_sibling_reorder_preserves_values_and_anchors() {
     const PARENT_KEY: Key = 405;
     const STATIC_KEY: Key = 406;

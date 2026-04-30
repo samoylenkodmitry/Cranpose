@@ -3,18 +3,6 @@ use super::SlotTable;
 use crate::{AnchorId, ScopeId};
 
 impl SlotTable {
-    #[cfg(test)]
-    pub(in crate::slot) fn recompute_scope_index(&mut self) {
-        let scope_count = self
-            .groups
-            .iter()
-            .filter(|group| group.scope_id.is_some())
-            .count();
-        self.mutation_debug_stats
-            .record_scope_index_rebuild(scope_count);
-        self.scope_index.rebuild(&self.groups);
-    }
-
     pub(in crate::slot) fn refresh_group_indexes_from(&mut self, start: usize) {
         let span = self.groups.len().saturating_sub(start);
         self.mutation_debug_stats.record_group_index_refresh(span);

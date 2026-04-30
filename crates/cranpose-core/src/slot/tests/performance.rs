@@ -51,10 +51,6 @@ fn perf_large_keyed_reorder_avoids_identity_rebuilds() {
         after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
         0
     );
-    assert_eq!(
-        after.scope_index_rebuild_count - before.scope_index_rebuild_count,
-        0
-    );
     assert!(
         after.subtree_move_count - before.subtree_move_count <= CHILD_COUNT as usize,
         "keyed reorder must not perform more moves than moved children"
@@ -107,10 +103,6 @@ fn perf_deep_insert_remove_avoids_full_identity_rebuilds() {
             - before_insert.payload_location_range_refresh_count,
         0
     );
-    assert_eq!(
-        after_insert.scope_index_rebuild_count - before_insert.scope_index_rebuild_count,
-        0
-    );
 
     let before_remove = harness.table.debug_stats().mutation;
 
@@ -132,10 +124,6 @@ fn perf_deep_insert_remove_avoids_full_identity_rebuilds() {
     assert_eq!(
         after_remove.payload_location_range_refresh_count
             - before_remove.payload_location_range_refresh_count,
-        0
-    );
-    assert_eq!(
-        after_remove.scope_index_rebuild_count - before_remove.scope_index_rebuild_count,
         0
     );
 }
@@ -185,10 +173,6 @@ fn perf_retained_restore_refreshes_only_restored_payload_range() {
         after.payload_location_range_refresh_payload_count
             - before.payload_location_range_refresh_payload_count,
         1
-    );
-    assert_eq!(
-        after.scope_index_rebuild_count - before.scope_index_rebuild_count,
-        0
     );
 }
 
@@ -413,10 +397,6 @@ fn perf_mass_conditional_removal_batches_anchor_refresh() {
     assert_eq!(
         after.group_index_refresh_count - before.group_index_refresh_count,
         1
-    );
-    assert_eq!(
-        after.scope_index_rebuild_count - before.scope_index_rebuild_count,
-        0
     );
     assert_eq!(
         after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
@@ -693,10 +673,6 @@ fn perf_storage_compaction_does_not_rebuild_scope_index() {
     harness.table.compact_anchor_registry_storage(None);
     let after = harness.table.debug_stats().mutation;
 
-    assert_eq!(
-        after.scope_index_rebuild_count - before.scope_index_rebuild_count,
-        0
-    );
     assert_eq!(
         after.payload_location_range_refresh_count - before.payload_location_range_refresh_count,
         0

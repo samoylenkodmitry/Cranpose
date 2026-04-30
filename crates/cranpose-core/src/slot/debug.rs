@@ -152,9 +152,6 @@ pub struct SlotTableMutationDebugStats {
     pub group_index_refresh_count: usize,
     pub group_index_refresh_group_count: usize,
     pub group_index_refresh_max_span: usize,
-    pub scope_index_rebuild_count: usize,
-    pub scope_index_rebuild_scope_count: usize,
-    pub scope_index_rebuild_max_span: usize,
     pub segment_range_update_count: usize,
     pub segment_range_update_group_count: usize,
     pub segment_range_update_max_span: usize,
@@ -212,15 +209,6 @@ impl SlotTableMutationDebugStats {
             .saturating_add(payload_span);
         self.payload_location_refresh_max_span =
             self.payload_location_refresh_max_span.max(payload_span);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn record_scope_index_rebuild(&mut self, scope_span: usize) {
-        self.scope_index_rebuild_count = self.scope_index_rebuild_count.saturating_add(1);
-        self.scope_index_rebuild_scope_count = self
-            .scope_index_rebuild_scope_count
-            .saturating_add(scope_span);
-        self.scope_index_rebuild_max_span = self.scope_index_rebuild_max_span.max(scope_span);
     }
 
     pub(crate) fn record_segment_range_update(&mut self, group_span: usize) {

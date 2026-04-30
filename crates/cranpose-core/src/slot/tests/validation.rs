@@ -470,9 +470,7 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
         child_anchor.id as usize > 1_024,
         "test must exercise sparse active anchor storage"
     );
-    let before = harness.table.debug_stats().mutation;
     harness.table.compact_anchor_registry_storage(None);
-    let after = harness.table.debug_stats().mutation;
 
     assert_eq!(harness.table.groups[1].parent_anchor, parent_anchor);
     assert_eq!(
@@ -487,10 +485,6 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
     assert_eq!(
         harness.table.group_anchor_state(child_anchor),
         Some(AnchorState::Active(1))
-    );
-    assert_eq!(
-        after.scope_index_rebuild_count - before.scope_index_rebuild_count,
-        0
     );
     assert_eq!(harness.table.validate(), Ok(()));
 }

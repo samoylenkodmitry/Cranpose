@@ -104,16 +104,6 @@ impl ScopeIndex {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn rebuild(&mut self, groups: &[GroupRecord]) {
-        self.clear();
-        for group in groups {
-            if let Some(scope_id) = group.scope_id {
-                self.by_scope.insert(scope_id, group.anchor);
-            }
-        }
-    }
-
     #[cfg(any(test, debug_assertions))]
     pub(super) fn validate_count(&self, expected: usize) -> Result<(), SlotInvariantError> {
         if self.len() == expected {
