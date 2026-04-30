@@ -341,37 +341,37 @@ Below is a checklist roadmap an agent can follow. Rule for every `[ ]`: mark `[x
 
 ## 8. Strengthen scope index behavior
 
-* [ ] Add tests for scope assignment.
+* [x] Add tests for scope assignment.
 
-    * [ ] New group gets scope.
-    * [ ] Existing group keeps scope across reuse.
-    * [ ] Moved group keeps scope.
-    * [ ] Detached group scope is removed from active index.
-    * [ ] Restored group scope is restored to active index.
-    * [ ] Disposed group scope is removed from runtime registry.
+    * [x] New group gets scope.
+    * [x] Existing group keeps scope across reuse.
+    * [x] Moved group keeps scope.
+    * [x] Detached group scope is removed from active index.
+    * [x] Restored group scope is restored to active index.
+    * [x] Disposed group scope is removed from runtime registry.
 
-* [ ] Add duplicate scope tests.
+* [x] Add duplicate scope tests.
 
-    * [ ] Assigning the same scope to a different active group should fail.
-    * [ ] Restoring a subtree whose scope conflicts with an active group should fail.
+    * [x] Assigning the same scope to a different active group should fail.
+    * [x] Restoring a subtree whose scope conflicts with an active group should fail.
 
-* [ ] Add recomposition entry tests.
+* [x] Add recomposition entry tests.
 
-    * [ ] `begin_recompose_at_scope` finds active scoped group.
-    * [ ] `begin_recompose_at_scope` returns `None` for detached retained scope.
-    * [ ] Restored invalid scope can later recompose normally.
+    * [x] `begin_recompose_at_scope` finds active scoped group.
+    * [x] `begin_recompose_at_scope` returns `None` for detached retained scope.
+    * [x] Restored invalid scope can later recompose normally.
 
-* [ ] Self-review.
+* [x] Self-review.
 
-    * [ ] Confirm slot table only indexes active scopes.
-    * [ ] Confirm detached scope routing remains composer/runtime-state responsibility.
-    * [ ] Confirm no active-scope scan was reintroduced.
+    * [x] Confirm slot table only indexes active scopes.
+    * [x] Confirm detached scope routing remains composer/runtime-state responsibility.
+    * [x] Confirm no active-scope scan was reintroduced.
 
-* [ ] Validate and commit.
+* [x] Validate and commit.
 
-    * [ ] Run full validation baseline.
-    * [ ] Commit: `slot: harden active scope index invariants`
-    * [ ] Mark this item `[x]`.
+    * [x] Run full validation baseline.
+    * [x] Commit: `slot: harden active scope index invariants`
+    * [x] Mark this item `[x]`.
 
 ---
 

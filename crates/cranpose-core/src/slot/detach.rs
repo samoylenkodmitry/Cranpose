@@ -160,6 +160,8 @@ impl SlotTable {
             .iter()
             .filter_map(|group| group.scope_id.map(|scope_id| (scope_id, group.anchor)))
             .collect::<Vec<_>>();
+        self.scope_index
+            .assert_restore_entries_available(&restored_scope_entries);
 
         // Restore recipe:
         // retarget root parent/depth, mark nodes active, restore payload and

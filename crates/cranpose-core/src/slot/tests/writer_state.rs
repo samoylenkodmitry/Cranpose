@@ -1,5 +1,9 @@
 use super::*;
 
+fn active_group_anchors(table: &SlotTable) -> Vec<AnchorId> {
+    table.groups.iter().map(|group| group.anchor).collect()
+}
+
 #[test]
 fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
     const PARENT_KEY: Key = 500;
@@ -201,6 +205,213 @@ fn set_group_scope_replaces_previous_scope_lookup() {
         session.end_recompose();
     });
     harness.finish_pass();
+}
+
+#[test]
+fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
+    const PARENT_KEY: Key = 620;
+    const STATIC_KEY: Key = 621;
+    const FIRST_KEY: Key = 622;
+    const SCOPED_KEY: Key = 623;
+    const SCOPE_ID: ScopeId = 624;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let scoped_anchor = harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let first = begin_keyed(session, STATIC_KEY, FIRST_KEY, None);
+        assert_eq!(first.kind, GroupStartKind::Inserted);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let scoped = begin_keyed(session, STATIC_KEY, SCOPED_KEY, None);
+        assert_eq!(scoped.kind, GroupStartKind::Inserted);
+        session.set_group_scope(scoped.group, SCOPE_ID);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        scoped.anchor
+    });
+    harness.finish_pass();
+    assert_eq!(
+        harness.table.scope_index_anchor(SCOPE_ID),
+        Some(scoped_anchor)
+    );
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let first = begin_keyed(session, STATIC_KEY, FIRST_KEY, None);
+        assert_eq!(first.kind, GroupStartKind::Reused);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let scoped = begin_keyed(session, STATIC_KEY, SCOPED_KEY, None);
+        assert_eq!(scoped.kind, GroupStartKind::Reused);
+        assert_eq!(scoped.anchor, scoped_anchor);
+        session.set_group_scope(scoped.group, SCOPE_ID);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+    assert_eq!(
+        harness.table.scope_index_anchor(SCOPE_ID),
+        Some(scoped_anchor)
+    );
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let scoped = begin_keyed(session, STATIC_KEY, SCOPED_KEY, None);
+        assert_eq!(scoped.kind, GroupStartKind::Moved);
+        assert_eq!(scoped.anchor, scoped_anchor);
+        session.set_group_scope(scoped.group, SCOPE_ID);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let first = begin_keyed(session, STATIC_KEY, FIRST_KEY, None);
+        assert_eq!(first.kind, GroupStartKind::Reused);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    assert_eq!(
+        harness.table.scope_index_anchor(SCOPE_ID),
+        Some(scoped_anchor)
+    );
+    harness.begin_pass(SlotPassMode::Recompose);
+    harness.session(|session| {
+        let group = session
+            .begin_recompose_at_scope(SCOPE_ID)
+            .expect("moved scoped group must resolve through the active scope index");
+        assert_eq!(session.table.active_group_anchor(group), scoped_anchor);
+        session.skip_group();
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_recompose();
+    });
+    harness.finish_pass();
+}
+
+#[test]
+fn assigning_same_scope_to_different_active_group_panics() {
+    const FIRST_KEY: Key = 625;
+    const SECOND_KEY: Key = 626;
+    const SCOPE_ID: ScopeId = 627;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        let first = begin_unkeyed(session, FIRST_KEY, None);
+        session.set_group_scope(first.group, SCOPE_ID);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let second = begin_unkeyed(session, SECOND_KEY, None);
+        let duplicate_assign = panic::catch_unwind(AssertUnwindSafe(|| {
+            session.set_group_scope(second.group, SCOPE_ID);
+        }));
+        assert!(
+            duplicate_assign.is_err(),
+            "one scope id must not be assigned to two active groups"
+        );
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    assert_eq!(
+        harness.table.scope_index_anchor(SCOPE_ID),
+        Some(harness.table.groups[0].anchor)
+    );
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
+fn restoring_scope_that_conflicts_with_active_group_panics_before_mutation() {
+    const PARENT_KEY: Key = 628;
+    const DETACHED_CHILD_KEY: Key = 629;
+    const ACTIVE_CHILD_KEY: Key = 630;
+    const CONFLICT_SCOPE: ScopeId = 631;
+
+    let (mut harness, detached, _) = detached_single_child_with_options(
+        PARENT_KEY,
+        DETACHED_CHILD_KEY,
+        Some(CONFLICT_SCOPE),
+        false,
+        false,
+    );
+    let parent_anchor = harness.table.groups[0].anchor;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let active_conflict_anchor = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        assert_eq!(parent.anchor, parent_anchor);
+
+        let active = begin_unkeyed(session, ACTIVE_CHILD_KEY, None);
+        session.set_group_scope(active.group, CONFLICT_SCOPE);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        active.anchor
+    });
+    harness.finish_pass();
+    assert_eq!(
+        harness.table.scope_index_anchor(CONFLICT_SCOPE),
+        Some(active_conflict_anchor)
+    );
+
+    let before = active_group_anchors(&harness.table);
+    let restore_key = detached.root_key();
+    let insert_index = harness.table.direct_child_range(parent_anchor).end();
+    let restore_result = panic::catch_unwind(AssertUnwindSafe(|| {
+        restore_detached_child(
+            &mut harness.table,
+            parent_anchor,
+            insert_index,
+            restore_key,
+            detached,
+        );
+    }));
+
+    assert!(
+        restore_result.is_err(),
+        "restoring a detached subtree must reject active scope conflicts"
+    );
+    assert_eq!(active_group_anchors(&harness.table), before);
+    assert_eq!(
+        harness.table.scope_index_anchor(CONFLICT_SCOPE),
+        Some(active_conflict_anchor)
+    );
+    assert_eq!(harness.table.validate(), Ok(()));
 }
 
 #[test]

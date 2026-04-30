@@ -93,6 +93,17 @@ impl ScopeIndex {
         }
     }
 
+    pub(super) fn assert_restore_entries_available(&self, entries: &[(ScopeId, AnchorId)]) {
+        for &(scope_id, group_anchor) in entries {
+            if let Some(existing_anchor) = self.anchor(scope_id) {
+                assert_eq!(
+                    existing_anchor, group_anchor,
+                    "restored scope id must resolve to a single active group"
+                );
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn rebuild(&mut self, groups: &[GroupRecord]) {
         self.clear();
