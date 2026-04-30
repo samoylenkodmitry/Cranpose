@@ -798,7 +798,7 @@ fn render_stable_reaches_fixpoint_when_internal_invalid_scope_processing_request
 }
 
 #[test]
-fn reconcile_clears_suppressed_scope_flags_during_root_replay() {
+fn reconcile_clears_scope_flags_during_root_replay() {
     thread_local! {
         static PARENT_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
         static CALLBACKLESS_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
@@ -884,7 +884,7 @@ fn reconcile_clears_suppressed_scope_flags_during_root_replay() {
     assert!(changed, "expected reconcile to perform work");
     assert!(
         !tracked_scope.is_invalid(),
-        "root replay must fully clear suppressed callbackful scopes so they can be invalidated again",
+        "root replay must fully clear callbackful scopes so they can be invalidated again",
     );
 
     tracked_scope.invalidate();
