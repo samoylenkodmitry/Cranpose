@@ -10,6 +10,8 @@ use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 #[cfg(feature = "robot")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
+#[cfg(feature = "robot")]
+use std::any::Any;
 use std::cell::RefCell;
 #[cfg(feature = "robot")]
 use std::collections::HashMap;
@@ -169,6 +171,7 @@ enum RobotCommand {
         name: String,
         argument: String,
     },
+    DriverPanicked(String),
     Exit,
 }
 
@@ -1668,6 +1671,10 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                    RobotCommand::DriverPanicked(message) => {
+                        self.abort_launch(event_loop, LaunchError::TestDriverPanic(message));
+                        return;
+                    }
                     RobotCommand::TypeText(text) => {
                         use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};
 
@@ -1924,8 +1931,14 @@ pub fn try_run(
     #[cfg(feature = "robot")]
     let robot_controller = if let Some(driver) = settings.test_driver.take() {
         let (controller, robot) = RobotController::new();
+        let panic_tx = robot.tx.clone();
         std::thread::spawn(move || {
-            driver(robot);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                driver(robot);
+            }));
+            if let Err(payload) = result {
+                let _ = panic_tx.send(RobotCommand::DriverPanicked(panic_payload_message(payload)));
+            }
         });
         Some(controller)
     } else {
@@ -1945,6 +1958,17 @@ pub fn try_run(
     }
 
     run_result.map_err(LaunchError::EventLoopRun)
+}
+
+#[cfg(feature = "robot")]
+fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
 }
 
 /// Runs a desktop application and exits the process on success.
@@ -2364,9 +2388,9 @@ fn char_to_key_code(ch: char) -> cranpose_app_shell::KeyCode {
 mod tests {
     #[cfg(feature = "robot")]
     use super::{
-        find_button_in_trees, find_text_in_trees, resolve_robot_screenshot_params,
-        semantic_element_from_semantics_node, subtree_contains_matching_text, SemanticRect,
-        SemanticTextMatchKind,
+        find_button_in_trees, find_text_in_trees, panic_payload_message,
+        resolve_robot_screenshot_params, semantic_element_from_semantics_node,
+        subtree_contains_matching_text, SemanticRect, SemanticTextMatchKind,
     };
     #[cfg(feature = "robot")]
     use cranpose_core::NodeId;
@@ -2397,6 +2421,24 @@ mod tests {
     fn robot_screenshot_falls_back_to_physical_buffer_when_layout_is_missing() {
         let resolved = resolve_robot_screenshot_params((1600, 1200), None);
         assert_eq!(resolved, (1600, 1200, 1.0));
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_driver_panic_payload_formats_static_str() {
+        assert_eq!(
+            panic_payload_message(Box::new("driver failed")),
+            "driver failed"
+        );
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_driver_panic_payload_formats_string() {
+        assert_eq!(
+            panic_payload_message(Box::new(String::from("driver failed"))),
+            "driver failed"
+        );
     }
 
     #[cfg(feature = "robot")]

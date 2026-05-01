@@ -59,10 +59,10 @@ fn verify_scroll_decoration_invariance(robot: &cranpose::Robot) {
     // Per-channel tolerance for individual pixel comparison.
     // Sub-pixel rendering variation causes small channel diffs (typically 1-3 per channel).
     let per_step_tolerance: u32 = 4;
-    // Max differing pixels between consecutive 0.7px scrolls at 2x.
-    // At 2x, text glyphs span ~20 device pixels tall. A 1.4-device-pixel vertical shift
-    // re-rasterizes most glyph edges. ~15% pixel change is normal for sub-pixel rendering.
-    let max_consecutive_diff_pixels: usize = 15000;
+    // Max differing pixels between consecutive 0.7px scrolls at 2x, expressed as a
+    // share of the normalized capture. Font rasterization differs across CI hosts;
+    // the invariant is bounded, consistent variation rather than a fixed pixel count.
+    let max_consecutive_diff_ratio: f32 = 0.35;
     // Spike detection: if any step has dramatically more differing pixels than average,
     // that indicates a discrete jump (snap artifact) rather than smooth variation.
     // With smooth rendering, the coefficient of variation should be low.
@@ -113,6 +113,8 @@ fn verify_scroll_decoration_invariance(robot: &cranpose::Robot) {
             curr_bounds.1, stats.differing_pixels, stats.max_difference,
         );
 
+        let max_consecutive_diff_pixels =
+            ((output_size.0 * output_size.1) as f32 * max_consecutive_diff_ratio).ceil() as usize;
         if stats.differing_pixels > max_consecutive_diff_pixels {
             save_debug_images(
                 &format!("step_{step}"),

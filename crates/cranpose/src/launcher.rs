@@ -90,6 +90,10 @@ pub enum LaunchError {
     /// The desktop event loop terminated with an error.
     #[error("desktop event loop terminated with error: {0}")]
     EventLoopRun(#[source] winit::error::EventLoopError),
+    /// The robot driver panicked while controlling the application.
+    #[cfg(feature = "robot")]
+    #[error("desktop robot test driver panicked: {0}")]
+    TestDriverPanic(String),
 }
 
 /// Platform-agnostic application launcher.
