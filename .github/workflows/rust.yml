@@ -200,41 +200,150 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
           WGPU_BACKEND: vulkan
           WINIT_UNIX_BACKEND: x11
-        run: timeout 600s ./run_robot_test.sh --build-only
+        run: >
+          timeout 900s
+          ./run_robot_test.sh
+          --build-only
+          --stage-artifacts target/robot-artifacts
+          --stage-artifact-shards 16
 
-      - name: Upload robot examples
+      - name: Upload robot examples shard 1
         uses: actions/upload-artifact@v4
         with:
-          name: robot-examples
-          path: target/robot/examples/robot_*
+          name: robot-examples-1
+          path: target/robot-artifacts/robot-examples-1.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-2
+          path: target/robot-artifacts/robot-examples-2.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-3
+          path: target/robot-artifacts/robot-examples-3.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 4
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-4
+          path: target/robot-artifacts/robot-examples-4.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-5
+          path: target/robot-artifacts/robot-examples-5.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 6
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-6
+          path: target/robot-artifacts/robot-examples-6.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 7
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-7
+          path: target/robot-artifacts/robot-examples-7.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 8
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-8
+          path: target/robot-artifacts/robot-examples-8.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 9
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-9
+          path: target/robot-artifacts/robot-examples-9.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 10
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-10
+          path: target/robot-artifacts/robot-examples-10.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 11
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-11
+          path: target/robot-artifacts/robot-examples-11.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 12
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-12
+          path: target/robot-artifacts/robot-examples-12.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 13
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-13
+          path: target/robot-artifacts/robot-examples-13.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 14
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-14
+          path: target/robot-artifacts/robot-examples-14.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 15
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-15
+          path: target/robot-artifacts/robot-examples-15.tar
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload robot examples shard 16
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-examples-16
+          path: target/robot-artifacts/robot-examples-16.tar
           compression-level: 0
           if-no-files-found: error
 
   robot-e2e-shard:
-    name: robot e2e shard ${{ matrix.shard }}
+    name: robot e2e shard ${{ matrix.shard_index }}/16
     runs-on: ubuntu-latest
     needs: robot-e2e-build
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard:
-          - 1/16
-          - 2/16
-          - 3/16
-          - 4/16
-          - 5/16
-          - 6/16
-          - 7/16
-          - 8/16
-          - 9/16
-          - 10/16
-          - 11/16
-          - 12/16
-          - 13/16
-          - 14/16
-          - 15/16
-          - 16/16
+        shard_index: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 
     steps:
       - uses: actions/checkout@v6
@@ -252,8 +361,13 @@ jobs:
       - name: Download robot examples
         uses: actions/download-artifact@v4
         with:
-          name: robot-examples
-          path: target/robot/examples
+          name: robot-examples-${{ matrix.shard_index }}
+          path: target/robot-artifacts
+
+      - name: Extract robot examples
+        run: |
+          mkdir -p target/robot/examples
+          tar -C target/robot/examples -xf target/robot-artifacts/robot-examples-${{ matrix.shard_index }}.tar
 
       - name: Run robot shard
         env:
@@ -263,7 +377,7 @@ jobs:
           WINIT_UNIX_BACKEND: x11
         run: |
           chmod +x target/robot/examples/robot_*
-          timeout 600s xvfb-run -a ./run_robot_test.sh --skip-build --sequential --shard "${{ matrix.shard }}"
+          timeout 600s xvfb-run -a ./run_robot_test.sh --skip-build --sequential --shard "${{ matrix.shard_index }}/16"
 
   robot-e2e:
     name: robot e2e

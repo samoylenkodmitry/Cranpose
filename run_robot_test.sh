@@ -13,6 +13,10 @@
 #   --shard N/M     Run the deterministic shard N of M
 #   --build-only    Build matching robot examples and exit
 #   --skip-build    Reuse existing robot example binaries
+#   --stage-artifacts DIR
+#                   Write per-shard robot binary tarballs after building
+#   --stage-artifact-shards N
+#                   Number of staged artifact shards (default: 16)
 #   --help          Show this help message
 
 LOG_FILE="${CRANPOSE_ROBOT_LOG_FILE:-robot_test.log}"
@@ -42,6 +46,8 @@ SHARD_INDEX=""
 SHARD_COUNT=""
 BUILD_ONLY=0
 SKIP_BUILD=0
+STAGE_ARTIFACT_DIR=""
+STAGE_ARTIFACT_SHARDS=16
 
 profile_output_dir() {
     case "$1" in
@@ -119,6 +125,14 @@ while [[ $# -gt 0 ]]; do
             SKIP_BUILD=1
             shift
             ;;
+        --stage-artifacts)
+            STAGE_ARTIFACT_DIR="$2"
+            shift 2
+            ;;
+        --stage-artifact-shards)
+            STAGE_ARTIFACT_SHARDS="$2"
+            shift 2
+            ;;
         --help)
             echo "Usage: $0 [--parallel N] [--sequential] [--example robot_name] [--shard INDEX/TOTAL] [--build-only] [--skip-build]"
             echo ""
@@ -129,6 +143,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --shard N/M     Run the deterministic shard N of M"
             echo "  --build-only    Build matching robot examples and exit"
             echo "  --skip-build    Reuse existing robot example binaries"
+            echo "  --stage-artifacts DIR"
+            echo "                  Write per-shard robot binary tarballs after building"
+            echo "  --stage-artifact-shards N"
+            echo "                  Number of staged artifact shards (default: 16)"
             echo "  --help          Show this help message"
             exit 0
             ;;
@@ -141,6 +159,11 @@ done
 
 if [ "$BUILD_ONLY" = "1" ] && [ "$SKIP_BUILD" = "1" ]; then
     echo "--build-only and --skip-build cannot be used together"
+    exit 1
+fi
+
+if ! [[ "$STAGE_ARTIFACT_SHARDS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--stage-artifact-shards must be a positive integer"
     exit 1
 fi
 
@@ -238,6 +261,51 @@ else
         echo "Build failed!" | tee -a "$LOG_FILE"
         exit 1
     fi
+fi
+
+stage_robot_artifacts() {
+    local output_dir="$1"
+    local shard_count="$2"
+    local stage_root="$output_dir/stage"
+
+    if [ -e "$stage_root" ]; then
+        rm -r -- "$stage_root"
+    fi
+    mkdir -p "$stage_root"
+
+    for shard in $(seq 1 "$shard_count"); do
+        mkdir -p "$stage_root/$shard"
+    done
+
+    for example_index in "${!EXAMPLES[@]}"; do
+        local example="${EXAMPLES[$example_index]}"
+        local shard=$((example_index % shard_count + 1))
+        local example_bin="$EXAMPLE_BIN_DIR/$example"
+
+        if [ ! -x "$example_bin" ] && [ -x "${example_bin}.exe" ]; then
+            example_bin="${example_bin}.exe"
+        fi
+
+        if [ ! -x "$example_bin" ]; then
+            echo "Cannot stage missing robot binary: $example_bin" | tee -a "$LOG_FILE"
+            exit 1
+        fi
+
+        if ! ln "$example_bin" "$stage_root/$shard/$example" 2>/dev/null; then
+            cp "$example_bin" "$stage_root/$shard/$example"
+        fi
+    done
+
+    mkdir -p "$output_dir"
+    for shard in $(seq 1 "$shard_count"); do
+        tar -C "$stage_root/$shard" -cf "$output_dir/robot-examples-$shard.tar" .
+    done
+    rm -r -- "$stage_root"
+}
+
+if [ -n "$STAGE_ARTIFACT_DIR" ]; then
+    echo "Staging robot artifacts into $STAGE_ARTIFACT_DIR..."
+    stage_robot_artifacts "$STAGE_ARTIFACT_DIR" "$STAGE_ARTIFACT_SHARDS"
 fi
 
 if [ "$BUILD_ONLY" = "1" ]; then
