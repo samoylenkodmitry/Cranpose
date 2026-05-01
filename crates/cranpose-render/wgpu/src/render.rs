@@ -4724,6 +4724,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn clamp_effect_surface_scale_keeps_decorated_text_capture_scale() {
+        let clamped = clamp_effect_surface_scale(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 446.0,
+                height: 44.0,
+            },
+            1.0,
+            9.0,
+            16_384,
+        );
+
+        assert_eq!(
+            clamped, 9.0,
+            "decorated text motion-stable captures must keep full scale"
+        );
+    }
+
     fn backdrop_layer(z_index: usize) -> BackdropLayer {
         BackdropLayer {
             rect: Rect {

@@ -82,7 +82,10 @@ type TextMatchBounds = (f32, f32, f32, f32, String);
 
 #[cfg(feature = "robot")]
 fn pump_robot_frame(app: &mut AppShell<WgpuRenderer>) {
-    if app.needs_redraw() || app.has_active_animations() {
+    for _ in 0..3 {
+        if !app.needs_redraw() && !app.has_active_animations() {
+            break;
+        }
         app.update();
     }
 }
@@ -1837,26 +1840,16 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
 
 #[cfg(feature = "robot")]
 fn capture_screenshot(app: &mut AppShell<WgpuRenderer>) -> Result<RobotScreenshot, String> {
-    let logical_size = app.root_layout_size();
+    let logical_size = app.viewport_size();
     let (width, height, capture_scale) =
-        resolve_robot_screenshot_params(app.buffer_size(), logical_size);
+        resolve_robot_screenshot_params(app.buffer_size(), Some(logical_size));
 
     let captured = app
         .renderer()
         .capture_frame_with_scale(width, height, capture_scale)
         .map_err(|err| format!("Failed to capture GPU screenshot: {err:?}"))?;
 
-    let (logical_width, logical_height) = logical_size.unwrap_or_else(|| {
-        let fallback_scale = if capture_scale.is_finite() && capture_scale > 0.0 {
-            capture_scale
-        } else {
-            1.0
-        };
-        (
-            (captured.width as f32 / fallback_scale).max(1.0),
-            (captured.height as f32 / fallback_scale).max(1.0),
-        )
-    });
+    let (logical_width, logical_height) = logical_size;
 
     Ok(RobotScreenshot {
         width: captured.width,
@@ -1872,10 +1865,9 @@ fn capture_screenshot_with_scale(
     app: &mut AppShell<WgpuRenderer>,
     scale: f32,
 ) -> Result<RobotScreenshot, String> {
-    let logical_size = app.root_layout_size();
-    let (logical_width, logical_height) = logical_size.unwrap_or((1.0, 1.0));
-    let width = (logical_width * scale).ceil() as u32;
-    let height = (logical_height * scale).ceil() as u32;
+    let (logical_width, logical_height) = app.viewport_size();
+    let width = (logical_width * scale).ceil().max(1.0) as u32;
+    let height = (logical_height * scale).ceil().max(1.0) as u32;
 
     let captured = app
         .renderer()
@@ -2269,7 +2261,7 @@ mod tests {
 
     #[cfg(feature = "robot")]
     #[test]
-    fn robot_screenshot_prefers_logical_layout_size() {
+    fn robot_screenshot_prefers_logical_viewport_size() {
         let resolved = resolve_robot_screenshot_params((1600, 1200), Some((800.0, 600.0)));
         assert_eq!(resolved, (800, 600, 1.0));
     }

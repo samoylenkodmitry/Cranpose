@@ -195,6 +195,10 @@ where
         self.process_frame();
     }
 
+    pub fn viewport_size(&self) -> (f32, f32) {
+        self.viewport
+    }
+
     pub fn set_buffer_size(&mut self, width: u32, height: u32) {
         self.buffer_size = (width, height);
     }

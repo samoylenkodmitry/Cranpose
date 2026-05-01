@@ -540,6 +540,21 @@ pub fn detect_tab_axis(bounds: &[LabeledRect]) -> Option<TabAxis> {
 }
 
 pub fn root_bounds(robot: &cranpose::Robot) -> Option<RectBounds> {
+    if let Ok(screenshot) = robot.screenshot() {
+        if screenshot.logical_width.is_finite()
+            && screenshot.logical_width > 0.0
+            && screenshot.logical_height.is_finite()
+            && screenshot.logical_height > 0.0
+        {
+            return Some((
+                0.0,
+                0.0,
+                screenshot.logical_width,
+                screenshot.logical_height,
+            ));
+        }
+    }
+
     let semantics = robot.get_semantics().ok()?;
     let root = semantics.first()?;
     Some((
@@ -968,7 +983,7 @@ pub fn normalize_screenshot_region(
 }
 
 /// Count differing pixels and report the strongest difference between two screenshots of equal
-/// dimensions. The difference metric is the sum of per-channel absolute differences.
+/// dimensions. The difference metric is the maximum per-channel absolute difference.
 pub fn screenshot_difference_stats(
     before: &cranpose::RobotScreenshot,
     after: &cranpose::RobotScreenshot,
@@ -1112,7 +1127,8 @@ fn pixel_difference(before: [u8; 4], after: [u8; 4]) -> u32 {
         .into_iter()
         .zip(after)
         .map(|(lhs, rhs)| lhs.abs_diff(rhs) as u32)
-        .sum()
+        .max()
+        .unwrap_or(0)
 }
 
 /// Parse "label: value" text from a slider label, returning the numeric value.
@@ -1454,7 +1470,7 @@ mod tests {
         let stats = screenshot_difference_stats(&before, &after, 3).expect("stats");
 
         assert_eq!(stats.differing_pixels, 1);
-        assert_eq!(stats.max_difference, 64);
+        assert_eq!(stats.max_difference, 55);
         assert_eq!(
             stats.first_difference,
             Some(ScreenshotPixelDifference {
@@ -1462,7 +1478,7 @@ mod tests {
                 y: 0,
                 before: [1, 2, 3, 255],
                 after: [4, 8, 3, 200],
-                difference: 64,
+                difference: 55,
             })
         );
     }

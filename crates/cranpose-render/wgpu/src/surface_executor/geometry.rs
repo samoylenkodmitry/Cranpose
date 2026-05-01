@@ -2,7 +2,8 @@ use crate::effect_renderer::CompositeSampleMode;
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_ui_graphics::Rect;
 
-const MAX_EFFECT_LAYER_SURFACE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_EFFECT_LAYER_SURFACE_BYTES: u64 = 8 * 1024 * 1024;
+const QUAD_AXIS_ALIGNMENT_TOLERANCE: f32 = 1e-4;
 const COMPOSITE_DEST_SNAP_TOLERANCE: f32 = 1e-4;
 
 pub(crate) fn surface_target_size(rect: Rect, root_scale: f32, max_dim: u32) -> (u32, u32) {
@@ -126,10 +127,10 @@ pub(crate) fn scaled_quad(quad: [[f32; 2]; 4], scale: f32) -> [[f32; 2]; 4] {
 }
 
 fn quad_is_axis_aligned_rect(quad: [[f32; 2]; 4]) -> bool {
-    (quad[0][1] - quad[1][1]).abs() <= COMPOSITE_DEST_SNAP_TOLERANCE
-        && (quad[2][1] - quad[3][1]).abs() <= COMPOSITE_DEST_SNAP_TOLERANCE
-        && (quad[0][0] - quad[2][0]).abs() <= COMPOSITE_DEST_SNAP_TOLERANCE
-        && (quad[1][0] - quad[3][0]).abs() <= COMPOSITE_DEST_SNAP_TOLERANCE
+    (quad[0][1] - quad[1][1]).abs() <= QUAD_AXIS_ALIGNMENT_TOLERANCE
+        && (quad[2][1] - quad[3][1]).abs() <= QUAD_AXIS_ALIGNMENT_TOLERANCE
+        && (quad[0][0] - quad[2][0]).abs() <= QUAD_AXIS_ALIGNMENT_TOLERANCE
+        && (quad[1][0] - quad[3][0]).abs() <= QUAD_AXIS_ALIGNMENT_TOLERANCE
 }
 
 pub(crate) fn axis_aligned_quad_rect(dest_quad: [[f32; 2]; 4]) -> Option<Rect> {
