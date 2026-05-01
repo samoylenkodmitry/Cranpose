@@ -5,7 +5,7 @@
 use crate::launcher::{AppSettings, LaunchError};
 #[cfg(feature = "robot")]
 use cranpose_app_shell::RuntimeLeakDebugStats;
-use cranpose_app_shell::{default_root_key, AppShell};
+use cranpose_app_shell::{default_root_key, AppShell, FramePacingMode};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 #[cfg(feature = "robot")]
@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
@@ -876,6 +877,8 @@ struct App {
     surface: Option<wgpu::Surface<'static>>,
     /// Surface configuration
     surface_config: Option<wgpu::SurfaceConfiguration>,
+    /// Surface capabilities used when switching present modes at runtime.
+    surface_caps: Option<wgpu::SurfaceCapabilities>,
     /// Compose app shell
     app: Option<AppShell<WgpuRenderer>>,
     /// Platform adapter
@@ -894,6 +897,9 @@ struct App {
     recorder: Option<crate::recorder::InputRecorder>,
     /// Launch failure captured during window/GPU initialization.
     launch_error: Rc<RefCell<Option<LaunchError>>>,
+    frame_pacing_mode: FramePacingMode,
+    last_frame_start_time: Option<Instant>,
+    vsync_interval: Duration,
 }
 
 impl App {
@@ -909,6 +915,7 @@ impl App {
             .map(crate::recorder::InputRecorder::new);
         #[cfg(feature = "robot")]
         let robot_app_hook = settings.robot_app_hook.take();
+        let frame_pacing_mode = settings.frame_pacing_mode;
 
         Self {
             settings,
@@ -916,6 +923,7 @@ impl App {
             window: None,
             surface: None,
             surface_config: None,
+            surface_caps: None,
             app: None,
             platform: None,
             current_modifiers: winit::keyboard::ModifiersState::empty(),
@@ -926,6 +934,9 @@ impl App {
             robot_app_hook,
             recorder,
             launch_error,
+            frame_pacing_mode,
+            last_frame_start_time: None,
+            vsync_interval: default_vsync_interval(),
         }
     }
 
@@ -937,10 +948,64 @@ impl App {
         event_loop.exit();
     }
 
+    fn frame_interval(&self) -> Option<Duration> {
+        match self.frame_pacing_mode {
+            FramePacingMode::Vsync => Some(self.vsync_interval),
+            FramePacingMode::Hard60 => Some(Duration::from_nanos(16_666_667)),
+            FramePacingMode::Hard120 => Some(Duration::from_nanos(8_333_333)),
+            FramePacingMode::NoVsync => None,
+        }
+    }
+
     #[cfg(feature = "robot")]
     fn set_robot_controller(&mut self, controller: RobotController) {
         self.robot_controller = Some(controller);
     }
+}
+
+fn apply_frame_pacing_mode(
+    app: &mut AppShell<WgpuRenderer>,
+    surface: &wgpu::Surface<'static>,
+    surface_config: &mut wgpu::SurfaceConfiguration,
+    surface_caps: Option<&wgpu::SurfaceCapabilities>,
+    mode: FramePacingMode,
+) {
+    app.set_frame_pacing_mode(mode);
+    if let Some(caps) = surface_caps {
+        let present_mode = crate::present_mode::select_present_mode_for_frame_pacing(caps, mode);
+        let frame_latency = desired_frame_latency(mode);
+        if surface_config.present_mode != present_mode
+            || surface_config.desired_maximum_frame_latency != frame_latency
+        {
+            surface_config.present_mode = present_mode;
+            surface_config.desired_maximum_frame_latency = frame_latency;
+            let device = app.renderer().device();
+            surface.configure(device, surface_config);
+        }
+    }
+}
+
+fn desired_frame_latency(mode: FramePacingMode) -> u32 {
+    match mode {
+        FramePacingMode::Vsync | FramePacingMode::Hard60 | FramePacingMode::Hard120 => 1,
+        FramePacingMode::NoVsync => 2,
+    }
+}
+
+fn default_vsync_interval() -> Duration {
+    Duration::from_nanos(16_666_667)
+}
+
+fn monitor_refresh_interval(window: &Arc<dyn Window>) -> Duration {
+    window
+        .current_monitor()
+        .and_then(|monitor| monitor.current_video_mode())
+        .and_then(|mode| mode.refresh_rate_millihertz())
+        .map(|millihertz| {
+            let nanos = 1_000_000_000_000u64 / u64::from(millihertz.get());
+            Duration::from_nanos(nanos)
+        })
+        .unwrap_or_else(default_vsync_interval)
 }
 
 impl ApplicationHandler for App {
@@ -998,6 +1063,7 @@ impl ApplicationHandler for App {
                 }
             };
         let adapter_info = adapter.get_info();
+        self.vsync_interval = monitor_refresh_interval(&window);
 
         let (device, queue) =
             match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -1024,7 +1090,14 @@ impl ApplicationHandler for App {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
-        let present_mode = crate::present_mode::select_present_mode(&surface_caps);
+        let present_mode = if std::env::var_os("CRANPOSE_PRESENT_MODE").is_some() {
+            crate::present_mode::select_present_mode(&surface_caps)
+        } else {
+            crate::present_mode::select_present_mode_for_frame_pacing(
+                &surface_caps,
+                self.frame_pacing_mode,
+            )
+        };
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -1033,7 +1106,7 @@ impl ApplicationHandler for App {
             present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: desired_frame_latency(self.frame_pacing_mode),
         };
 
         surface.configure(&device, &surface_config);
@@ -1058,7 +1131,9 @@ impl ApplicationHandler for App {
         app.set_semantics_enabled(self.robot_controller.is_some());
 
         // Apply dev options (FPS counter, etc.)
-        app.set_dev_options(self.settings.dev_options.clone());
+        let mut dev_options = self.settings.dev_options.clone();
+        dev_options.frame_pacing_mode = self.frame_pacing_mode;
+        app.set_dev_options(dev_options);
 
         // Runtime-driven frame scheduling: Compose invalidations and animations
         // request frames via the runtime waker, not per-input host redraw forcing.
@@ -1079,6 +1154,7 @@ impl ApplicationHandler for App {
         self.window = Some(window);
         self.surface = Some(surface);
         self.surface_config = Some(surface_config);
+        self.surface_caps = Some(surface_caps);
         self.app = Some(app);
         self.platform = Some(platform);
     }
@@ -1093,6 +1169,11 @@ impl ApplicationHandler for App {
         if window_id != window.id() {
             return;
         }
+
+        let frame_interval = self.frame_interval();
+        let last_frame_start_time = self.last_frame_start_time;
+        let frame_cap_deadline = last_frame_start_time
+            .and_then(|started_at| frame_interval.map(|interval| started_at + interval));
 
         let Some(app) = &mut self.app else { return };
         let Some(platform) = &mut self.platform else {
@@ -1149,6 +1230,9 @@ impl ApplicationHandler for App {
                     app.set_viewport(logical_width, logical_height);
                 }
             }
+            WindowEvent::Moved(_) => {
+                self.vsync_interval = monitor_refresh_interval(window);
+            }
             WindowEvent::PointerMoved { position, .. } => {
                 let logical = platform.pointer_position(position);
                 self.last_cursor_position = Some((logical.x, logical.y));
@@ -1198,6 +1282,7 @@ impl ApplicationHandler for App {
                 button: ButtonSource::Mouse(MouseButton::Left),
                 ..
             } => {
+                let cursor_position = self.last_cursor_position;
                 if let Some((x, y)) = self.last_cursor_position {
                     log::trace!(
                         target: "cranpose::input",
@@ -1210,6 +1295,21 @@ impl ApplicationHandler for App {
                 }
                 match state {
                     ElementState::Pressed => {
+                        if let Some((x, y)) = cursor_position {
+                            if let Some(mode) = app.handle_dev_overlay_click(x, y) {
+                                apply_frame_pacing_mode(
+                                    app,
+                                    surface,
+                                    surface_config,
+                                    self.surface_caps.as_ref(),
+                                    mode,
+                                );
+                                self.frame_pacing_mode = mode;
+                                self.last_frame_start_time = None;
+                                window.request_redraw();
+                                return;
+                            }
+                        }
                         app.pointer_pressed();
                         if let Some(recorder) = &mut self.recorder {
                             recorder.record_mouse_down();
@@ -1375,7 +1475,14 @@ impl ApplicationHandler for App {
                 app.cancel_gesture();
             }
             WindowEvent::RedrawRequested => {
+                if let Some(deadline) = frame_cap_deadline {
+                    if deadline > Instant::now() {
+                        event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                        return;
+                    }
+                }
                 log::trace!(target: "cranpose::input", "desktop redraw requested");
+                let frame_started_at = Instant::now();
                 app.update();
 
                 let output = match surface.get_current_texture() {
@@ -1419,12 +1526,15 @@ impl ApplicationHandler for App {
                 }
 
                 output.present();
+                self.last_frame_start_time = Some(frame_started_at);
             }
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let frame_interval = self.frame_interval();
+        let last_frame_start_time = self.last_frame_start_time;
         let Some(app) = &mut self.app else { return };
         let Some(window) = &self.window else { return };
 
@@ -1760,7 +1870,12 @@ impl ApplicationHandler for App {
                 "about_to_wait needs_redraw={needs_redraw}"
             );
         }
-        if needs_redraw {
+        let now = Instant::now();
+        let next_frame_time = last_frame_start_time
+            .and_then(|started_at| frame_interval.map(|interval| started_at + interval));
+        let waiting_for_frame_cap =
+            needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
+        if needs_redraw && !waiting_for_frame_cap {
             window.request_redraw();
         }
 
@@ -1774,7 +1889,11 @@ impl ApplicationHandler for App {
         // Poll continuously when:
         // - Active animations are running
         // - Robot test is active
-        if has_active_animations || robot_needs_poll {
+        if waiting_for_frame_cap {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                next_frame_time.expect("frame cap deadline should exist"),
+            ));
+        } else if has_active_animations || robot_needs_poll {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if let Some(next_time) = app.next_event_time() {
             // Cursor blink uses timer-based scheduling (not continuous poll)

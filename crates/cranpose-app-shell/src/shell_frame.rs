@@ -1,5 +1,9 @@
 use super::*;
 
+const DEV_OVERLAY_PADDING: f32 = 8.0;
+const DEV_OVERLAY_FONT_SIZE: f32 = 14.0;
+const DEV_OVERLAY_CHAR_WIDTH: f32 = 7.0;
+
 #[derive(Copy, Clone)]
 enum DispatchInvalidationKind {
     Pointer,
@@ -281,13 +285,63 @@ where
 
         // Draw FPS overlay if enabled (directly by renderer, no composition)
         if self.dev_options.fps_counter {
-            let stats = fps_monitor::fps_stats();
-            let text = format!(
-                "{:.0} FPS | {:.1}ms | {} recomp/s",
-                stats.fps, stats.avg_ms, stats.recomps_per_second
-            );
+            let text = self.build_dev_overlay_text(viewport_size);
             self.renderer.draw_dev_overlay(&text, viewport_size);
         }
+    }
+
+    fn build_dev_overlay_text(&mut self, viewport_size: Size) -> String {
+        self.dev_overlay_controls.clear();
+
+        let stats = fps_monitor::fps_stats();
+        let mut text = format!(
+            "{:.0} FPS | {:.1}ms | {} recomp/s",
+            stats.fps, stats.avg_ms, stats.recomps_per_second
+        );
+
+        if !self.dev_options.frame_pacing_controls {
+            return text;
+        }
+
+        text.push_str(" | ");
+        let mut controls = Vec::with_capacity(FramePacingMode::ALL.len());
+        for (index, mode) in FramePacingMode::ALL.into_iter().enumerate() {
+            if index > 0 {
+                text.push(' ');
+            }
+            let start = text.len();
+            if mode == self.dev_options.frame_pacing_mode {
+                text.push('[');
+                text.push_str(mode.label());
+                text.push(']');
+            } else {
+                text.push_str(mode.label());
+            }
+            controls.push((start, text.len(), mode));
+        }
+
+        let overlay_width = text.len() as f32 * DEV_OVERLAY_CHAR_WIDTH;
+        let overlay_x = (viewport_size.width - overlay_width - DEV_OVERLAY_PADDING * 2.0)
+            .max(DEV_OVERLAY_PADDING);
+        let overlay_y = DEV_OVERLAY_PADDING;
+        let text_x = overlay_x + DEV_OVERLAY_PADDING / 2.0;
+        let text_y = overlay_y + DEV_OVERLAY_PADDING / 4.0;
+        let text_height = DEV_OVERLAY_FONT_SIZE * 1.4;
+
+        self.dev_overlay_controls = controls
+            .into_iter()
+            .map(|(start, end, mode)| DevOverlayControl {
+                bounds: Rect {
+                    x: text_x + start as f32 * DEV_OVERLAY_CHAR_WIDTH - 3.0,
+                    y: text_y - 3.0,
+                    width: (end - start) as f32 * DEV_OVERLAY_CHAR_WIDTH + 6.0,
+                    height: text_height + 6.0,
+                },
+                mode,
+            })
+            .collect();
+
+        text
     }
 }
 

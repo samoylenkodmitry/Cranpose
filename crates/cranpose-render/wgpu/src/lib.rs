@@ -1184,7 +1184,7 @@ impl Renderer for WgpuRenderer {
         let char_width = 7.0;
         let text_width = text.len() as f32 * char_width;
         let text_height = font_size * 1.4;
-        let x = viewport.width - text_width - padding * 2.0;
+        let x = (viewport.width - text_width - padding * 2.0).max(padding);
         let y = padding;
 
         let mut overlay_layer = LayerNode {

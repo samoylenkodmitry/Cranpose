@@ -4,6 +4,8 @@
 //! and launch on multiple platforms without knowing platform-specific details.
 
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+use cranpose_app_shell::FramePacingMode;
+#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 use std::path::PathBuf;
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 use thiserror::Error;
@@ -29,6 +31,9 @@ pub struct AppSettings {
     /// Development options for debugging and performance monitoring
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
     pub dev_options: cranpose_app_shell::DevOptions,
+    /// Initial desktop frame pacing mode.
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    pub frame_pacing_mode: FramePacingMode,
     /// Optional test driver to control the application (robot testing)
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
     pub test_driver: Option<Box<dyn FnOnce(crate::desktop::Robot) + Send + 'static>>,
@@ -51,6 +56,8 @@ impl Default for AppSettings {
             headless: false,
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
             dev_options: cranpose_app_shell::DevOptions::default(),
+            #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+            frame_pacing_mode: FramePacingMode::NoVsync,
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
             test_driver: None,
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
@@ -260,6 +267,44 @@ impl AppLauncher {
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
     pub fn with_fps_counter(mut self, enabled: bool) -> Self {
         self.settings.dev_options.fps_counter = enabled;
+        self
+    }
+
+    /// Set the initial desktop frame pacing mode.
+    ///
+    /// This controls whether the desktop surface uses vsync or no-vsync presentation and,
+    /// for hard caps, limits redraw scheduling to the requested frame rate.
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    pub fn with_frame_pacing_mode(mut self, mode: FramePacingMode) -> Self {
+        self.settings.frame_pacing_mode = mode;
+        self.settings.dev_options.frame_pacing_mode = mode;
+        self
+    }
+
+    /// Set the initial desktop frame pacing mode.
+    #[cfg(not(all(feature = "desktop", feature = "renderer-wgpu")))]
+    pub fn with_frame_pacing_mode(self, mode: cranpose_app_shell::FramePacingMode) -> Self {
+        let _ = mode;
+        self
+    }
+
+    /// Enable clickable frame pacing controls in the desktop development overlay.
+    ///
+    /// Enabling the controls also enables the FPS overlay because the controls are rendered
+    /// as part of that overlay.
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    pub fn with_frame_pacing_controls(mut self, enabled: bool) -> Self {
+        self.settings.dev_options.frame_pacing_controls = enabled;
+        if enabled {
+            self.settings.dev_options.fps_counter = true;
+        }
+        self
+    }
+
+    /// Enable clickable frame pacing controls in the desktop development overlay.
+    #[cfg(not(all(feature = "desktop", feature = "renderer-wgpu")))]
+    pub fn with_frame_pacing_controls(self, enabled: bool) -> Self {
+        let _ = enabled;
         self
     }
 

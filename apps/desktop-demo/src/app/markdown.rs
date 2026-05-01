@@ -379,7 +379,7 @@ async fn fetch_markdown(client: &HttpClientRef, url: &str) -> Result<String, Str
 }
 
 const DEFAULT_URL: &str =
-    "https://raw.githubusercontent.com/samoylenkodmitry/s-a--m.github.io/refs/heads/master/_posts/2023-07-14-leetcode_daily.md";
+    "https://raw.githubusercontent.com/samoylenkodmitry/s-a--m.github.io/refs/heads/master/_leetcode_source/2023-07-14-leetcode_daily.md";
 
 // ---------------------------------------------------------------------------
 // Composable
@@ -706,6 +706,14 @@ mod tests {
         LazyScrollbarModel,
     };
     use cranpose_ui::text::FontWeight;
+
+    #[test]
+    fn default_url_points_to_leetcode_source_markdown() {
+        assert_eq!(
+            DEFAULT_URL,
+            "https://raw.githubusercontent.com/samoylenkodmitry/s-a--m.github.io/refs/heads/master/_leetcode_source/2023-07-14-leetcode_daily.md"
+        );
+    }
 
     #[test]
     fn heading_produces_bold_block() {

@@ -1,5 +1,7 @@
 //! Present mode selection helpers for WGPU surfaces.
 
+use cranpose_app_shell::FramePacingMode;
+
 /// Selects the present mode based on `CRANPOSE_PRESENT_MODE` and surface capabilities.
 ///
 /// Supported values: `auto_no_vsync`, `auto_vsync`, `fifo`, `mailbox`, `immediate`.
@@ -30,6 +32,31 @@ fn select_present_mode_for_request(
     wgpu::PresentMode::AutoNoVsync
 }
 
+pub(crate) fn select_present_mode_for_frame_pacing(
+    caps: &wgpu::SurfaceCapabilities,
+    mode: FramePacingMode,
+) -> wgpu::PresentMode {
+    match mode {
+        FramePacingMode::Vsync => supported_or_auto(caps, wgpu::PresentMode::Fifo),
+        FramePacingMode::Hard60 | FramePacingMode::Hard120 | FramePacingMode::NoVsync => {
+            supported_or_auto(caps, wgpu::PresentMode::Immediate)
+        }
+    }
+}
+
+fn supported_or_auto(
+    caps: &wgpu::SurfaceCapabilities,
+    preferred: wgpu::PresentMode,
+) -> wgpu::PresentMode {
+    if caps.present_modes.contains(&preferred) {
+        return preferred;
+    }
+    match preferred {
+        wgpu::PresentMode::Fifo => wgpu::PresentMode::AutoVsync,
+        _ => wgpu::PresentMode::AutoNoVsync,
+    }
+}
+
 fn is_auto_present_mode(mode: wgpu::PresentMode) -> bool {
     matches!(
         mode,
@@ -52,7 +79,10 @@ fn parse_present_mode(value: &str) -> Option<wgpu::PresentMode> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_present_mode, select_present_mode_for_request};
+    use super::{
+        parse_present_mode, select_present_mode_for_frame_pacing, select_present_mode_for_request,
+    };
+    use cranpose_app_shell::FramePacingMode;
     use wgpu::{PresentMode, SurfaceCapabilities, TextureFormat};
 
     fn caps(present_modes: &[PresentMode]) -> SurfaceCapabilities {
@@ -128,5 +158,41 @@ mod tests {
             Some(PresentMode::Immediate)
         );
         assert_eq!(parse_present_mode("unknown"), None);
+    }
+
+    #[test]
+    fn frame_pacing_maps_vsync_and_no_vsync_to_surface_modes() {
+        let caps = caps(&[PresentMode::Fifo, PresentMode::Immediate]);
+
+        assert_eq!(
+            select_present_mode_for_frame_pacing(&caps, FramePacingMode::Vsync),
+            PresentMode::Fifo
+        );
+        assert_eq!(
+            select_present_mode_for_frame_pacing(&caps, FramePacingMode::NoVsync),
+            PresentMode::Immediate
+        );
+        assert_eq!(
+            select_present_mode_for_frame_pacing(&caps, FramePacingMode::Hard60),
+            PresentMode::Immediate
+        );
+        assert_eq!(
+            select_present_mode_for_frame_pacing(&caps, FramePacingMode::Hard120),
+            PresentMode::Immediate
+        );
+    }
+
+    #[test]
+    fn frame_pacing_falls_back_to_auto_modes_when_explicit_modes_are_unavailable() {
+        let caps = caps(&[]);
+
+        assert_eq!(
+            select_present_mode_for_frame_pacing(&caps, FramePacingMode::Vsync),
+            PresentMode::AutoVsync
+        );
+        assert_eq!(
+            select_present_mode_for_frame_pacing(&caps, FramePacingMode::NoVsync),
+            PresentMode::AutoNoVsync
+        );
     }
 }

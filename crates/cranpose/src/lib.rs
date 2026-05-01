@@ -74,4 +74,5 @@ pub use desktop::{Robot, RobotScreenshot, SemanticElement, SemanticRect};
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 pub use cranpose_app_shell::{
     current_fps, fps_display, fps_display_detailed, fps_stats, DevOptions, FpsStats,
+    FramePacingMode,
 };

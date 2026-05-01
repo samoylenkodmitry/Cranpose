@@ -33,7 +33,7 @@ use cranpose_ui::{
     take_pointer_invalidation, take_render_invalidation, HeadlessRenderer, LayoutBox, LayoutNode,
     LayoutTree, MeasureLayoutOptions, SemanticsTree, SubcomposeLayoutNode,
 };
-use cranpose_ui_graphics::{Point, Size};
+use cranpose_ui_graphics::{Point, Rect, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
 use std::collections::HashSet;
 
@@ -94,6 +94,43 @@ where
     clipboard: Option<arboard::Clipboard>,
     /// Dev options for debugging and performance monitoring
     dev_options: DevOptions,
+    dev_overlay_controls: Vec<DevOverlayControl>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FramePacingMode {
+    Vsync,
+    Hard60,
+    Hard120,
+    #[default]
+    NoVsync,
+}
+
+impl FramePacingMode {
+    pub const ALL: [Self; 4] = [Self::Vsync, Self::Hard60, Self::Hard120, Self::NoVsync];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Vsync => "VSync",
+            Self::Hard60 => "60fps",
+            Self::Hard120 => "120fps",
+            Self::NoVsync => "NoVSync",
+        }
+    }
+
+    pub fn target_fps(self) -> Option<u32> {
+        match self {
+            Self::Hard60 => Some(60),
+            Self::Hard120 => Some(120),
+            Self::Vsync | Self::NoVsync => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DevOverlayControl {
+    bounds: Rect,
+    mode: FramePacingMode,
 }
 
 /// Development options for debugging and performance monitoring.
@@ -108,6 +145,8 @@ pub struct DevOptions {
     pub recomposition_counter: bool,
     /// Show layout timing breakdown
     pub layout_timing: bool,
+    pub frame_pacing_controls: bool,
+    pub frame_pacing_mode: FramePacingMode,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -170,6 +209,7 @@ where
             ))]
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
+            dev_overlay_controls: Vec::new(),
         };
         shell.process_frame();
         shell
@@ -181,11 +221,38 @@ where
     /// (not via composition) to avoid affecting performance measurements.
     pub fn set_dev_options(&mut self, options: DevOptions) {
         self.dev_options = options;
+        self.mark_dirty();
     }
 
     /// Get a reference to the current dev options.
     pub fn dev_options(&self) -> &DevOptions {
         &self.dev_options
+    }
+
+    pub fn frame_pacing_mode(&self) -> FramePacingMode {
+        self.dev_options.frame_pacing_mode
+    }
+
+    pub fn set_frame_pacing_mode(&mut self, mode: FramePacingMode) {
+        if self.dev_options.frame_pacing_mode == mode {
+            return;
+        }
+        self.dev_options.frame_pacing_mode = mode;
+        request_render_invalidation();
+        self.mark_dirty();
+    }
+
+    pub fn handle_dev_overlay_click(&mut self, x: f32, y: f32) -> Option<FramePacingMode> {
+        if !self.dev_options.frame_pacing_controls {
+            return None;
+        }
+        let mode = self
+            .dev_overlay_controls
+            .iter()
+            .find(|control| control.bounds.contains(x, y))
+            .map(|control| control.mode)?;
+        self.set_frame_pacing_mode(mode);
+        Some(mode)
     }
 
     pub fn set_viewport(&mut self, width: f32, height: f32) {
@@ -358,6 +425,27 @@ where
 
 pub fn default_root_key() -> Key {
     location_key(file!(), line!(), column!())
+}
+
+#[cfg(test)]
+mod frame_pacing_tests {
+    use super::FramePacingMode;
+
+    #[test]
+    fn frame_pacing_labels_match_overlay_modes() {
+        assert_eq!(FramePacingMode::Vsync.label(), "VSync");
+        assert_eq!(FramePacingMode::Hard60.label(), "60fps");
+        assert_eq!(FramePacingMode::Hard120.label(), "120fps");
+        assert_eq!(FramePacingMode::NoVsync.label(), "NoVSync");
+    }
+
+    #[test]
+    fn only_hard_modes_have_fixed_targets() {
+        assert_eq!(FramePacingMode::Vsync.target_fps(), None);
+        assert_eq!(FramePacingMode::Hard60.target_fps(), Some(60));
+        assert_eq!(FramePacingMode::Hard120.target_fps(), Some(120));
+        assert_eq!(FramePacingMode::NoVsync.target_fps(), None);
+    }
 }
 
 #[cfg(test)]
