@@ -28,7 +28,14 @@ pub struct LayerRasterCacheHashes {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum LayerRasterCacheKind {
+    FullSurface,
+    SourceContent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LayerRasterCacheKey {
+    kind: LayerRasterCacheKind,
     stable_id: Option<NodeId>,
     content_hash: u64,
     effect_hash: u64,
@@ -47,9 +54,33 @@ impl LayerRasterCacheKey {
         scale_bucket: ScaleBucket,
     ) -> Self {
         Self {
+            kind: LayerRasterCacheKind::FullSurface,
             stable_id,
             content_hash,
             effect_hash,
+            local_bounds_bits: [
+                local_bounds.x.to_bits(),
+                local_bounds.y.to_bits(),
+                local_bounds.width.to_bits(),
+                local_bounds.height.to_bits(),
+            ],
+            pixel_size: [pixel_size.0, pixel_size.1],
+            scale_bucket,
+        }
+    }
+
+    pub fn source_content(
+        stable_id: Option<NodeId>,
+        content_hash: u64,
+        local_bounds: Rect,
+        pixel_size: (u32, u32),
+        scale_bucket: ScaleBucket,
+    ) -> Self {
+        Self {
+            kind: LayerRasterCacheKind::SourceContent,
+            stable_id,
+            content_hash,
+            effect_hash: 0,
             local_bounds_bits: [
                 local_bounds.x.to_bits(),
                 local_bounds.y.to_bits(),
@@ -140,5 +171,20 @@ mod tests {
         assert_ne!(base, resized);
         assert_eq!(base.stable_id(), Some(7));
         assert_eq!(base.pixel_size(), (30, 40));
+    }
+
+    #[test]
+    fn source_content_keys_do_not_collide_with_full_surface_keys() {
+        let rect = Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let scale = ScaleBucket::from_scale(1.0);
+        let source = LayerRasterCacheKey::source_content(Some(7), 11, rect, (30, 40), scale);
+        let full = LayerRasterCacheKey::new(Some(7), 11, 0, rect, (30, 40), scale);
+
+        assert_ne!(source, full);
     }
 }

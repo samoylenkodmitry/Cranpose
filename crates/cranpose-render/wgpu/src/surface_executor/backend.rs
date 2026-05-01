@@ -10,7 +10,7 @@ use crate::TextSystemState;
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::LayerNode;
 use cranpose_render_common::raster_cache::LayerRasterCacheKey;
-use cranpose_ui_graphics::{BlendMode, Rect, RenderEffect};
+use cranpose_ui_graphics::{BlendMode, Rect, RenderEffect, RuntimeShader};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -20,6 +20,7 @@ pub(crate) struct LayerSurface {
     pub(crate) composite_alpha: f32,
     pub(crate) blend_mode: BlendMode,
     pub(crate) backdrop: Option<RenderEffect>,
+    pub(crate) deferred_effect: Option<RenderEffect>,
     pub(crate) sample_mode: CompositeSampleMode,
 }
 
@@ -174,6 +175,21 @@ pub(crate) trait SurfaceExecutionBackend {
         dest_view: &wgpu::TextureView,
         effect: &RenderEffect,
         effect_rect: [f32; 4],
+    );
+    #[allow(clippy::too_many_arguments)]
+    fn apply_shader_and_composite_to_view(
+        &mut self,
+        source: &OffscreenTarget,
+        intermediate: &OffscreenTarget,
+        shader: &RuntimeShader,
+        effect_rect: [f32; 4],
+        dest_view: &wgpu::TextureView,
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        blend_mode: BlendMode,
+        dest_viewport: Option<(f32, f32, f32, f32)>,
+        sample_mode: CompositeSampleMode,
     );
     fn is_render_effect_supported(&self, effect: &RenderEffect) -> bool;
     fn warn_unsupported_effect_once(&self);

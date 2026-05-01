@@ -4,12 +4,19 @@ use crate::{AnchorId, ScopeId};
 
 impl SlotTable {
     pub(in crate::slot) fn refresh_group_indexes_from(&mut self, start: usize) {
-        let span = self.groups.len().saturating_sub(start);
+        self.refresh_group_indexes_in_range(start, self.groups.len());
+    }
+
+    pub(in crate::slot) fn refresh_group_indexes_in_range(&mut self, start: usize, end: usize) {
+        assert!(start <= end, "group index refresh range must be ordered");
+        assert!(
+            end <= self.groups.len(),
+            "group index refresh range must stay inside groups"
+        );
+        let span = end - start;
         self.diagnostics.record_group_index_refresh(span);
 
-        for index in start..self.groups.len() {
-            let generation = self.allocate_group_generation();
-            self.groups[index].generation = generation;
+        for index in start..end {
             self.anchors.set_active(self.groups[index].anchor, index);
         }
     }

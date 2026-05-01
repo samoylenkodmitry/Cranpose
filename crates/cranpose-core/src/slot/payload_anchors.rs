@@ -227,12 +227,7 @@ impl PayloadAnchorRegistry {
         self.validate_state_count("active", self.storage.active_len(), active_count)?;
         self.validate_state_count("detached", self.storage.detached_len(), detached_count)?;
 
-        let mut free_ranges = self
-            .free_ids
-            .iter()
-            .map(|Reverse(range)| *range)
-            .collect::<Vec<_>>();
-        free_ranges.sort_unstable();
+        let free_ranges = self.sorted_free_ranges();
 
         let mut free_count = 0usize;
         let mut previous_range_end = None::<u32>;
@@ -268,7 +263,7 @@ impl PayloadAnchorRegistry {
 
         for (id, _) in self.storage.slots() {
             let id = u32::try_from(id).expect("payload anchor id must fit u32");
-            if self.contains_free_id(id) {
+            if Self::sorted_ranges_contain(&free_ranges, id) {
                 return Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
                     detail: "free payload anchor id must not be active or detached",
                     payload_anchor_id: Some(id as usize),
@@ -279,7 +274,7 @@ impl PayloadAnchorRegistry {
         }
 
         for &id in self.reused_generations.keys() {
-            if !self.contains_free_id(id) {
+            if !Self::sorted_ranges_contain(&free_ranges, id) {
                 return Err(SlotInvariantError::PayloadAnchorRegistryInternalMismatch {
                     detail: "reused payload anchor generation must belong to a free id",
                     payload_anchor_id: Some(id as usize),
@@ -389,6 +384,32 @@ impl PayloadAnchorRegistry {
         self.free_ids
             .iter()
             .any(|Reverse(range)| range.contains(id))
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn sorted_free_ranges(&self) -> Vec<FreePayloadAnchorIdRange> {
+        let mut ranges = self
+            .free_ids
+            .iter()
+            .map(|Reverse(range)| *range)
+            .collect::<Vec<_>>();
+        ranges.sort_unstable();
+        ranges
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn sorted_ranges_contain(ranges: &[FreePayloadAnchorIdRange], id: u32) -> bool {
+        ranges
+            .binary_search_by(|range| {
+                if id < range.start {
+                    std::cmp::Ordering::Greater
+                } else if id > range.end {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .is_ok()
     }
 
     fn coalesce_free_id_ranges(&mut self) {

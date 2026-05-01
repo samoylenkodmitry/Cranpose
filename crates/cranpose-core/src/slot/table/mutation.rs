@@ -161,32 +161,22 @@ impl SlotTable {
         );
 
         // Move recipe:
-        // extract group, payload, and node segments from the later sibling;
-        // restore payload and node segments at the earlier cursor; splice groups;
-        // record movement stats; refresh active indexes over the affected suffix.
-        let mut moved = self
-            .groups
-            .drain(moving_groups.as_range())
-            .collect::<Vec<_>>();
-        let moved_payloads = self.move_payloads_for_groups(from_index, &mut moved);
-        let moved_nodes = self.detach_nodes_for_groups(from_index, &mut moved);
-        let moved_group_count = moved.len();
-        let moved_payload_count = moved_payloads.len();
-        let moved_node_count = moved_nodes.len();
-        let adjusted_index = if insert_index > moving_groups.root_index() {
-            insert_index - moving_groups.len()
-        } else {
-            insert_index
-        };
-        self.restore_payloads_for_groups(adjusted_index, &mut moved, moved_payloads);
-        self.restore_nodes_for_groups(adjusted_index, &mut moved, moved_nodes);
-        self.groups.splice(adjusted_index..adjusted_index, moved);
+        // rotate payload, node, and group segments in place; update the segment
+        // starts carried by the affected group records; then refresh active
+        // indexes over the range whose preorder indexes actually changed.
+        let moved_group_count = moving_groups.len();
+        let affected_group_end = moving_groups.root_index() + moved_group_count;
+        let moved_payload_count =
+            self.move_payloads_to_earlier_group(insert_index, from_index, moved_group_count);
+        let moved_node_count =
+            self.move_nodes_to_earlier_group(insert_index, from_index, moved_group_count);
+        self.groups[insert_index..affected_group_end].rotate_right(moved_group_count);
         self.diagnostics.record_subtree_move(
             moved_group_count,
             moved_payload_count,
             moved_node_count,
         );
-        self.refresh_group_indexes_from(from_index.min(adjusted_index));
+        self.refresh_group_indexes_in_range(insert_index, affected_group_end);
         #[cfg(any(test, debug_assertions))]
         self.debug_assert_valid_after("move_later_sibling_subtree_to_cursor");
     }

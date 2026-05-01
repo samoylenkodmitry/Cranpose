@@ -5,6 +5,40 @@
 
 use cranpose_ui_graphics::Rect;
 
+/// Pump a bounded frame window and assert the measured FPS is above `min_fps`.
+///
+/// The metric line is printed in a stable machine-readable form:
+/// `{metric} stage=<stage> fps=<fps> avg_ms=<ms> frames=<count> ...`.
+pub fn assert_robot_fps_over(
+    robot: &cranpose::Robot,
+    metric: &str,
+    stage: &str,
+    min_fps: f32,
+    frames: u32,
+) -> cranpose::FpsStats {
+    robot.pump_frames(frames).expect("pump robot frames");
+    let stats = cranpose::fps_stats();
+    println!(
+        "{} stage={} fps={:.1} avg_ms={:.2} frames={} recompositions={} recomps_per_second={}",
+        metric,
+        stage,
+        stats.fps,
+        stats.avg_ms,
+        stats.frame_count,
+        stats.recompositions,
+        stats.recomps_per_second
+    );
+    if stats.fps <= min_fps {
+        println!(
+            "FAIL: {stage} FPS must be >{min_fps:.1}, got {:.1} ({:.2}ms)",
+            stats.fps, stats.avg_ms
+        );
+        robot.exit().ok();
+        std::process::exit(1);
+    }
+    stats
+}
+
 /// Assert that a value is within an expected range.
 ///
 /// This is useful for fuzzy matching of positions and sizes that might

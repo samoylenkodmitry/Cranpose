@@ -488,7 +488,6 @@ impl SubcomposeLayoutNode {
         self.dispatch_modifier_invalidations(&invalidations, prev_caps);
         self.update_modifier_slices_cache();
         if modifier_changed {
-            self.mark_needs_measure();
             self.request_semantics_update();
         }
     }

@@ -1440,7 +1440,8 @@ impl ModifierNodeChain {
 
                 // Fast path requires same type, key, AND hash to ensure we're not
                 // breaking reordering semantics (where elements can move positions)
-                if same_type && same_key && same_hash {
+                let positional_update = element.requires_update();
+                if same_type && same_key && (same_hash || positional_update) {
                     // Fast path: element matches at same position
                     let same_element = entry.element.as_ref().equals_element(element.as_ref());
                     let capabilities = element.capabilities();
@@ -1488,6 +1489,7 @@ impl ModifierNodeChain {
             // Detach any removed entries (elements_count <= old_len guaranteed here)
             if elements_count < self.entries.len() {
                 for entry in self.entries.drain(elements_count..) {
+                    request_auto_invalidations(context, entry.capabilities);
                     detach_node_tree(&mut **entry.node.borrow_mut());
                 }
             }
@@ -1541,6 +1543,7 @@ impl ModifierNodeChain {
                 self.scratch_old_used[idx] = true;
                 self.scratch_match_order[idx] = Some(new_pos);
                 let entry = &mut old_entries[idx];
+                let moved = idx != new_pos;
 
                 // Check if element actually changed
                 let same_element = entry.element.as_ref().equals_element(element.as_ref());
@@ -1560,6 +1563,9 @@ impl ModifierNodeChain {
                     element.update_node(&mut **entry.node.borrow_mut());
                     entry.element = element;
                     entry.hash_code = hash_code;
+                    request_auto_invalidations(context, capabilities);
+                }
+                if moved {
                     request_auto_invalidations(context, capabilities);
                 }
 
@@ -1596,6 +1602,7 @@ impl ModifierNodeChain {
                     .expect("Missing match order for used modifier entry");
                 self.scratch_final_slots[pos] = Some(entry);
             } else {
+                request_auto_invalidations(context, entry.capabilities);
                 detach_node_tree(&mut **entry.node.borrow_mut());
             }
         }

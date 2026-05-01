@@ -1,8 +1,9 @@
 use super::{
     segments::{
         extract_subtree_segment, group_segment_len, group_segment_range_at, group_segment_start,
-        group_segment_subrange_at, insert_group_segment_item, remove_group_segment_range,
-        restore_subtree_segment, PayloadSegment,
+        group_segment_subrange_at, insert_group_segment_item,
+        move_subtree_segment_to_earlier_group, remove_group_segment_range, restore_subtree_segment,
+        PayloadSegment,
     },
     DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadAnchor, PayloadKind,
     PayloadRange, PayloadRecord, SlotTable, SlotWriteSessionState, ValueSlotId,
@@ -435,12 +436,25 @@ impl SlotTable {
         self.extract_payloads_for_groups(removed_group_index, removed_groups, true)
     }
 
-    pub(super) fn move_payloads_for_groups(
+    pub(super) fn move_payloads_to_earlier_group(
         &mut self,
-        removed_group_index: usize,
-        removed_groups: &mut [GroupRecord],
-    ) -> Vec<PayloadRecord> {
-        self.extract_payloads_for_groups(removed_group_index, removed_groups, false)
+        insert_group_index: usize,
+        moving_group_index: usize,
+        moving_group_len: usize,
+    ) -> usize {
+        let moved_payload_count = move_subtree_segment_to_earlier_group::<PayloadSegment, _>(
+            &mut self.groups,
+            &mut self.payloads,
+            insert_group_index,
+            moving_group_index,
+            moving_group_len,
+        );
+        if moved_payload_count > 0 {
+            self.record_segment_range_update_span(
+                moving_group_index + moving_group_len - insert_group_index,
+            );
+        }
+        moved_payload_count
     }
 
     pub(super) fn restore_payloads_for_groups(

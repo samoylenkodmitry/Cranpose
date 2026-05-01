@@ -4,8 +4,8 @@
 //! WGSL shaders (`RuntimeShader`).
 
 use crate::LayerShape;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 /// Edge treatment for blur effects at the boundary of the blurred region.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -87,6 +87,7 @@ impl Default for BlurredEdgeTreatment {
 #[derive(Clone, Debug)]
 pub struct RuntimeShader {
     source: Arc<str>,
+    source_hash: u64,
     uniforms: Vec<f32>,
 }
 
@@ -99,12 +100,28 @@ impl RuntimeShader {
     pub const RESERVED_UNIFORM_START: usize = 248;
     /// Maximum user-addressable uniform count.
     pub const MAX_USER_UNIFORMS: usize = Self::RESERVED_UNIFORM_START;
+    const INITIAL_UNIFORM_CAPACITY: usize = 16;
 
     /// Create a new RuntimeShader from WGSL source code.
     pub fn new(wgsl_source: &str) -> Self {
+        let source_hash = hash_shader_source(wgsl_source);
         Self {
-            source: Arc::from(wgsl_source),
-            uniforms: Vec::new(),
+            source: intern_shader_source(wgsl_source, source_hash),
+            source_hash,
+            uniforms: Vec::with_capacity(Self::INITIAL_UNIFORM_CAPACITY),
+        }
+    }
+
+    /// Create a RuntimeShader from shared WGSL source code.
+    ///
+    /// This avoids repeatedly copying large shader modules for animated effects
+    /// that rebuild only their uniform payload every frame.
+    pub fn from_shared_source(source: Arc<str>) -> Self {
+        let source_hash = hash_shader_source(&source);
+        Self {
+            source,
+            source_hash,
+            uniforms: Vec::with_capacity(Self::INITIAL_UNIFORM_CAPACITY),
         }
     }
 
@@ -150,9 +167,7 @@ impl RuntimeShader {
 
     /// Compute a hash of the shader source for pipeline caching.
     pub fn source_hash(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.source.hash(&mut hasher);
-        hasher.finish()
+        self.source_hash
     }
 
     fn ensure_capacity(&mut self, min_len: usize) {
@@ -172,8 +187,49 @@ impl RuntimeShader {
 
 impl PartialEq for RuntimeShader {
     fn eq(&self, other: &Self) -> bool {
-        self.source.as_ref() == other.source.as_ref() && self.uniforms == other.uniforms
+        self.source_hash == other.source_hash
+            && (Arc::ptr_eq(&self.source, &other.source)
+                || self.source.as_ref() == other.source.as_ref())
+            && self.uniforms == other.uniforms
     }
+}
+
+fn hash_shader_source(source: &str) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    source
+        .as_bytes()
+        .iter()
+        .fold(FNV_OFFSET_BASIS, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
+        })
+}
+
+type ShaderSourceInterner = HashMap<u64, Vec<Weak<str>>>;
+
+fn intern_shader_source(source: &str, source_hash: u64) -> Arc<str> {
+    static INTERNER: OnceLock<Mutex<ShaderSourceInterner>> = OnceLock::new();
+
+    let interner = INTERNER.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = interner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let bucket = guard.entry(source_hash).or_default();
+
+    for weak in bucket.iter() {
+        if let Some(existing) = weak.upgrade() {
+            if existing.as_ref() == source {
+                return existing;
+            }
+        }
+    }
+
+    bucket.retain(|weak| weak.upgrade().is_some());
+
+    let shared = Arc::<str>::from(source);
+    bucket.push(Arc::downgrade(&shared));
+    shared
 }
 
 /// A render effect applied to a graphics layer's rendered content.
@@ -354,6 +410,15 @@ mod tests {
     fn source_hash_consistent() {
         let s1 = RuntimeShader::new("fn main() {}");
         let s2 = RuntimeShader::new("fn main() {}");
+        assert_eq!(s1.source_hash(), s2.source_hash());
+    }
+
+    #[test]
+    fn runtime_shader_new_interns_repeated_sources() {
+        let s1 = RuntimeShader::new("fn fragment() -> vec4<f32> { return vec4<f32>(1.0); }");
+        let s2 = RuntimeShader::new("fn fragment() -> vec4<f32> { return vec4<f32>(1.0); }");
+
+        assert!(Arc::ptr_eq(&s1.source, &s2.source));
         assert_eq!(s1.source_hash(), s2.source_hash());
     }
 

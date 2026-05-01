@@ -115,6 +115,17 @@ pub(crate) struct RoundedCompositeMask {
     pub radii: [f32; 4],
 }
 
+#[derive(Clone, Copy)]
+struct CompositePassOptions {
+    alpha: f32,
+    load_op: wgpu::LoadOp<wgpu::Color>,
+    scissor: Option<(u32, u32, u32, u32)>,
+    rounded_mask: Option<RoundedCompositeMask>,
+    blend_mode: BlendMode,
+    dest_viewport: Option<(f32, f32, f32, f32)>,
+    sample_mode: CompositeSampleMode,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompositeSampleMode {
     Linear,
@@ -842,6 +853,67 @@ impl EffectRenderer {
         self.debug_effects.set(self.debug_effects.get() + 1);
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn encode_shader_pass(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        shader: &RuntimeShader,
+        layer_pixel_rect: [f32; 4],
+    ) -> bool {
+        let mut padded = shader.uniforms_padded();
+        let slot = RuntimeShader::RESERVED_UNIFORM_START;
+        padded[slot] = layer_pixel_rect[0];
+        padded[slot + 1] = layer_pixel_rect[1];
+        padded[slot + 2] = layer_pixel_rect[2];
+        padded[slot + 3] = layer_pixel_rect[3];
+        self.write_buffer_at_zero_offset(
+            queue,
+            &self.effect_uniform_buffer,
+            bytemuck::cast_slice(&padded),
+        );
+
+        let Some(pipeline) = self.shader_cache.get_or_create(
+            device,
+            shader,
+            self.surface_format,
+            &self.effect_texture_bind_group_layout,
+            &self.effect_uniform_bind_group_layout,
+        ) else {
+            return false;
+        };
+
+        let texture_bind_group = source.get_or_create_bind_group(
+            device,
+            &self.effect_texture_bind_group_layout,
+            &self.effect_linear_sampler,
+        );
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Shader Effect Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &*texture_bind_group, &[]);
+        pass.set_bind_group(1, &self.effect_uniform_bind_group, &[]);
+        pass.draw(0..4, 0..1);
+        true
+    }
+
     /// Apply a custom RuntimeShader effect to a source texture.
     ///
     /// `layer_pixel_rect` is `[x, y, width, height]` in the current effect
@@ -857,29 +929,18 @@ impl EffectRenderer {
         shader: &RuntimeShader,
         layer_pixel_rect: [f32; 4],
     ) {
-        // Upload uniforms with injected effect layer rect at slot 62.
-        let mut padded = shader.uniforms_padded();
-        let slot = RuntimeShader::RESERVED_UNIFORM_START;
-        padded[slot] = layer_pixel_rect[0];
-        padded[slot + 1] = layer_pixel_rect[1];
-        padded[slot + 2] = layer_pixel_rect[2];
-        padded[slot + 3] = layer_pixel_rect[3];
-        self.write_buffer_at_zero_offset(
-            queue,
-            &self.effect_uniform_buffer,
-            bytemuck::cast_slice(&padded),
-        );
-
-        // Get or compile pipeline
-        let Some(pipeline) = self.shader_cache.get_or_create(
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Shader Effect Encoder"),
+        });
+        if !self.encode_shader_pass(
             device,
+            queue,
+            &mut encoder,
+            source,
+            dest_view,
             shader,
-            self.surface_format,
-            &self.effect_texture_bind_group_layout,
-            &self.effect_uniform_bind_group_layout,
-        ) else {
-            // Invalid or unsupported shader source: degrade gracefully by rendering
-            // the original source texture without applying an effect.
+            layer_pixel_rect,
+        ) {
             self.composite_to_view(
                 device,
                 queue,
@@ -889,39 +950,6 @@ impl EffectRenderer {
                 CompositeSampleMode::Linear,
             );
             return;
-        };
-
-        // Use cached bind group
-        let texture_bind_group = source.get_or_create_bind_group(
-            device,
-            &self.effect_texture_bind_group_layout,
-            &self.effect_linear_sampler,
-        );
-
-        // Render pass
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Shader Effect Encoder"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Shader Effect Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
-
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &*texture_bind_group, &[]);
-            pass.set_bind_group(1, &self.effect_uniform_bind_group, &[]);
-            pass.draw(0..4, 0..1);
         }
         queue.submit(std::iter::once(encoder.finish()));
         self.debug_submits.set(self.debug_submits.get() + 1);
@@ -1018,6 +1046,91 @@ impl EffectRenderer {
         );
     }
 
+    fn encode_composite_to_view_pass(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        options: CompositePassOptions,
+    ) {
+        let (mask_rect, mask_radii, mask_enabled) = if let Some(mask) = options.rounded_mask {
+            (mask.rect, mask.radii, [1.0, 0.0, 0.0, 0.0])
+        } else {
+            (
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+            )
+        };
+        let dest_viewport_uniform = options.dest_viewport.unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let resolve_span = options
+            .dest_viewport
+            .filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)
+            .map(|(_, _, width, height)| {
+                (source.width as f32 / width, source.height as f32 / height)
+            })
+            .unwrap_or((0.0, 0.0));
+        let uniforms = BlitUniforms {
+            alpha: [options.alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
+            mask_rect,
+            mask_radii,
+            mask_enabled,
+            sampling: [
+                composite_sampling_mode_value(options.sample_mode),
+                0.0,
+                0.0,
+                0.0,
+            ],
+            dest_viewport: [
+                dest_viewport_uniform.0,
+                dest_viewport_uniform.1,
+                dest_viewport_uniform.2,
+                dest_viewport_uniform.3,
+            ],
+            resolve_span: [resolve_span.0, resolve_span.1, 0.0, 0.0],
+        };
+        self.write_buffer_at_zero_offset(
+            queue,
+            &self.blit_uniform_buffer,
+            bytemuck::bytes_of(&uniforms),
+        );
+
+        let sampler = self.sampler_for_mode(options.sample_mode);
+        let texture_bind_group = source.get_or_create_bind_group(
+            device,
+            &self.effect_texture_bind_group_layout,
+            sampler,
+        );
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Blit Composite Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: options.load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+
+        pass.set_pipeline(match options.blend_mode {
+            BlendMode::DstOut => &self.blit_pipeline_dst_out,
+            _ => &self.blit_pipeline,
+        });
+        pass.set_bind_group(0, &*texture_bind_group, &[]);
+        pass.set_bind_group(1, &self.blit_uniform_bind_group, &[]);
+        if let Some((x, y, w, h)) = options.scissor {
+            pass.set_scissor_rect(x, y, w, h);
+        }
+        pass.draw(0..4, 0..1);
+    }
+
     /// Composite an offscreen target onto a destination view with an optional scissor region
     /// and explicit alpha multiplication.
     #[allow(clippy::too_many_arguments)]
@@ -1097,79 +1210,80 @@ impl EffectRenderer {
         dest_viewport: Option<(f32, f32, f32, f32)>,
         sample_mode: CompositeSampleMode,
     ) {
-        let (mask_rect, mask_radii, mask_enabled) = if let Some(mask) = rounded_mask {
-            (mask.rect, mask.radii, [1.0, 0.0, 0.0, 0.0])
-        } else {
-            (
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-            )
-        };
-        let dest_viewport_uniform = dest_viewport.unwrap_or((0.0, 0.0, 0.0, 0.0));
-        let resolve_span = dest_viewport
-            .filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)
-            .map(|(_, _, width, height)| {
-                (source.width as f32 / width, source.height as f32 / height)
-            })
-            .unwrap_or((0.0, 0.0));
-        let uniforms = BlitUniforms {
-            alpha: [alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
-            mask_rect,
-            mask_radii,
-            mask_enabled,
-            sampling: [composite_sampling_mode_value(sample_mode), 0.0, 0.0, 0.0],
-            dest_viewport: [
-                dest_viewport_uniform.0,
-                dest_viewport_uniform.1,
-                dest_viewport_uniform.2,
-                dest_viewport_uniform.3,
-            ],
-            resolve_span: [resolve_span.0, resolve_span.1, 0.0, 0.0],
-        };
-        self.write_buffer_at_zero_offset(
-            queue,
-            &self.blit_uniform_buffer,
-            bytemuck::bytes_of(&uniforms),
-        );
-
-        let sampler = self.sampler_for_mode(sample_mode);
-        let texture_bind_group = source.get_or_create_bind_group(
-            device,
-            &self.effect_texture_bind_group_layout,
-            sampler,
-        );
-
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Blit Composite Encoder"),
         });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Blit Composite Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
+        self.encode_composite_to_view_pass(
+            device,
+            queue,
+            &mut encoder,
+            source,
+            dest_view,
+            CompositePassOptions {
+                alpha,
+                load_op,
+                scissor,
+                rounded_mask,
+                blend_mode,
+                dest_viewport,
+                sample_mode,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        self.debug_submits.set(self.debug_submits.get() + 1);
+        self.debug_composites.set(self.debug_composites.get() + 1);
+    }
 
-            pass.set_pipeline(match blend_mode {
-                BlendMode::DstOut => &self.blit_pipeline_dst_out,
-                _ => &self.blit_pipeline,
-            });
-            pass.set_bind_group(0, &*texture_bind_group, &[]);
-            pass.set_bind_group(1, &self.blit_uniform_bind_group, &[]);
-            if let Some((x, y, w, h)) = scissor {
-                pass.set_scissor_rect(x, y, w, h);
-            }
-            pass.draw(0..4, 0..1);
-        }
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_shader_and_composite_to_view_scissored_with_alpha_and_blend_mode(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &OffscreenTarget,
+        intermediate: &OffscreenTarget,
+        shader: &RuntimeShader,
+        layer_pixel_rect: [f32; 4],
+        dest_view: &wgpu::TextureView,
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        blend_mode: BlendMode,
+        dest_viewport: Option<(f32, f32, f32, f32)>,
+        sample_mode: CompositeSampleMode,
+    ) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Shader Effect Composite Encoder"),
+        });
+        let composite_source = if self.encode_shader_pass(
+            device,
+            queue,
+            &mut encoder,
+            source,
+            &intermediate.view,
+            shader,
+            layer_pixel_rect,
+        ) {
+            self.debug_effects.set(self.debug_effects.get() + 1);
+            intermediate
+        } else {
+            source
+        };
+        self.encode_composite_to_view_pass(
+            device,
+            queue,
+            &mut encoder,
+            composite_source,
+            dest_view,
+            CompositePassOptions {
+                alpha,
+                load_op,
+                scissor,
+                rounded_mask: None,
+                blend_mode,
+                dest_viewport,
+                sample_mode,
+            },
+        );
         queue.submit(std::iter::once(encoder.finish()));
         self.debug_submits.set(self.debug_submits.get() + 1);
         self.debug_composites.set(self.debug_composites.get() + 1);

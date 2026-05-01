@@ -143,6 +143,9 @@ enum RobotCommand {
         meta: bool,
     },
     WaitForIdle,
+    PumpFrames {
+        count: u32,
+    },
     GetSemantics,
     FindText {
         text: String,
@@ -390,6 +393,23 @@ impl Robot {
         self.tx
             .send(RobotCommand::WaitForIdle)
             .map_err(|e| format!("Failed to send wait command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Run a bounded number of frame updates.
+    ///
+    /// This is intended for robot assertions around live animation, where
+    /// `wait_for_idle` is not meaningful because the application is expected to
+    /// keep producing frames.
+    pub fn pump_frames(&self, count: u32) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::PumpFrames { count })
+            .map_err(|e| format!("Failed to send pump_frames command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
             Ok(RobotResponse::Error(e)) => Err(e),
@@ -1679,6 +1699,12 @@ impl ApplicationHandler for App {
                         controller.waiting_for_idle = true;
                         controller.idle_iterations = 0;
                     }
+                    RobotCommand::PumpFrames { count } => {
+                        for _ in 0..count {
+                            app.update();
+                        }
+                        let _ = controller.tx.send(RobotResponse::Ok);
+                    }
                     RobotCommand::Exit => {
                         let _ = controller.tx.send(RobotResponse::Ok);
                         event_loop.exit();
@@ -1723,7 +1749,8 @@ impl ApplicationHandler for App {
             }
         }
 
-        let needs_redraw = app.needs_redraw();
+        let has_active_animations = app.has_active_animations();
+        let needs_redraw = app.needs_redraw() || has_active_animations;
         if needs_redraw {
             log::trace!(
                 target: "cranpose::input",
@@ -1744,7 +1771,7 @@ impl ApplicationHandler for App {
         // Poll continuously when:
         // - Active animations are running
         // - Robot test is active
-        if app.has_active_animations() || robot_needs_poll {
+        if has_active_animations || robot_needs_poll {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if let Some(next_time) = app.next_event_time() {
             // Cursor blink uses timer-based scheduling (not continuous poll)

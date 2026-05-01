@@ -44,6 +44,7 @@ pub(crate) struct LayerSurfaceRequest<'a> {
 pub(crate) struct LayerSurfaceRenderOptions<'a> {
     pub(crate) target_scale: f32,
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
+    pub(crate) allow_runtime_cache: bool,
     pub(crate) cache_candidate: Option<(
         cranpose_render_common::raster_cache::LayerRasterCacheKey,
         Rect,

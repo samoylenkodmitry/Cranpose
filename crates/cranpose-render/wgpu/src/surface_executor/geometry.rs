@@ -187,7 +187,7 @@ pub(crate) fn quantize_motion_stable_target_scale(
         return target_scale;
     }
 
-    if target_scale < 1.0 {
+    if target_scale < 2.0 {
         target_scale
     } else {
         target_scale.floor().max(1.0)
@@ -274,6 +274,14 @@ mod tests {
         assert_eq!(
             quantize_motion_stable_target_scale(0.72, CompositeSampleMode::Box4),
             0.72
+        );
+    }
+
+    #[test]
+    fn box4_target_scale_quantizes_normal_hidpi_density() {
+        assert_eq!(
+            quantize_motion_stable_target_scale(1.354, CompositeSampleMode::Box4),
+            1.354
         );
     }
 

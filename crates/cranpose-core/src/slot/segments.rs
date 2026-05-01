@@ -238,6 +238,64 @@ pub(in crate::slot) fn restore_subtree_segment<S: GroupSegment, T>(
     items.splice(item_insert_index..item_insert_index, restoring_items);
 }
 
+pub(in crate::slot) fn move_subtree_segment_to_earlier_group<S: GroupSegment, T>(
+    groups: &mut [GroupRecord],
+    items: &mut [T],
+    insert_group_index: usize,
+    moving_group_index: usize,
+    moving_group_len: usize,
+) -> usize {
+    assert!(
+        insert_group_index < moving_group_index,
+        "{} segment move must move a later group to an earlier index",
+        S::NAME
+    );
+    assert!(
+        moving_group_len > 0,
+        "{} segment move must include at least one group",
+        S::NAME
+    );
+    assert!(
+        moving_group_index + moving_group_len <= groups.len(),
+        "{} segment move range must stay inside groups",
+        S::NAME
+    );
+
+    let Some((item_start, item_len)) = subtree_segment_span::<S>(
+        &groups[moving_group_index..moving_group_index + moving_group_len],
+    ) else {
+        return 0;
+    };
+
+    let item_insert_index =
+        segment_insert_index_for_group::<S>(groups, items.len(), insert_group_index);
+    assert!(
+        item_insert_index <= item_start,
+        "{} segment move must not move items backward past their target",
+        S::NAME
+    );
+
+    if item_len > 0 {
+        items[item_insert_index..item_start + item_len].rotate_right(item_len);
+    }
+
+    let moved_start_delta = checked_usize_to_i64(
+        item_start - item_insert_index,
+        "moved subtree segment distance",
+    );
+    let item_len_delta = checked_usize_to_i64(item_len, "moved subtree segment length");
+    offset_detached_group_segment_starts::<S>(
+        &mut groups[moving_group_index..moving_group_index + moving_group_len],
+        -moved_start_delta,
+    );
+    shift_group_segment_starts_from::<S>(
+        &mut groups[insert_group_index..moving_group_index],
+        0,
+        item_len_delta,
+    );
+    item_len
+}
+
 fn apply_group_segment_start_delta<S: GroupSegment>(
     group: &mut GroupRecord,
     delta: CheckedU32Delta,

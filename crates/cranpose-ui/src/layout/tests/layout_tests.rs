@@ -324,6 +324,37 @@ fn set_modifier_marks_dirty() {
 }
 
 #[test]
+fn draw_only_modifier_update_marks_redraw_without_measure() {
+    let mut node = LayoutNode::new(
+        Modifier::empty().background(Color::RED),
+        Rc::new(MaxSizePolicy),
+    );
+    node.clear_needs_measure();
+    node.clear_needs_layout();
+    node.clear_needs_redraw();
+    node.clear_needs_semantics();
+
+    node.set_modifier(Modifier::empty().background(Color::BLUE));
+
+    assert!(
+        !node.needs_measure(),
+        "draw-only modifier updates should not mark measure dirty"
+    );
+    assert!(
+        !node.needs_layout(),
+        "draw-only modifier updates should not mark layout dirty"
+    );
+    assert!(
+        node.needs_redraw(),
+        "draw-only modifier updates should request redraw"
+    );
+    assert!(
+        !node.needs_semantics(),
+        "draw-only modifier updates should not rebuild semantics"
+    );
+}
+
+#[test]
 fn set_measure_policy_marks_dirty() {
     let mut node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     node.clear_needs_measure();

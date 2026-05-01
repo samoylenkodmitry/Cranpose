@@ -309,12 +309,12 @@ impl LayoutNode {
         self.sync_modifier_chain();
         if modifier_changed {
             self.cache.clear();
-            self.mark_needs_measure();
             self.request_semantics_update();
         }
     }
 
     fn sync_modifier_chain(&mut self) {
+        let prev_caps = self.modifier_capabilities;
         let start_parent = self.parent();
         let mut resolver = move |token: ModifierLocalToken| {
             resolve_modifier_local_from_parent_chain(start_parent, token)
@@ -333,7 +333,7 @@ impl LayoutNode {
 
         let mut invalidations = self.modifier_chain.take_invalidations();
         invalidations.extend(modifier_local_invalidations);
-        self.dispatch_modifier_invalidations(&invalidations);
+        self.dispatch_modifier_invalidations_with_prev(&invalidations, prev_caps);
         self.refresh_registry_state();
     }
 
@@ -345,12 +345,24 @@ impl LayoutNode {
         self.modifier_slices_dirty.set(false);
     }
 
+    #[cfg(test)]
     fn dispatch_modifier_invalidations(&self, invalidations: &[ModifierInvalidation]) {
+        self.dispatch_modifier_invalidations_with_prev(invalidations, NodeCapabilities::empty());
+    }
+
+    fn dispatch_modifier_invalidations_with_prev(
+        &self,
+        invalidations: &[ModifierInvalidation],
+        prev_caps: NodeCapabilities,
+    ) {
+        let curr_caps = self.modifier_capabilities;
         for invalidation in invalidations {
             self.modifier_slices_dirty.set(true);
             match invalidation.kind() {
                 InvalidationKind::Layout => {
-                    if self.has_layout_modifier_nodes() {
+                    if curr_caps.contains(NodeCapabilities::LAYOUT)
+                        || prev_caps.contains(NodeCapabilities::LAYOUT)
+                    {
                         self.mark_needs_measure();
                         if let Some(id) = self.id.get() {
                             let inside_composition =
@@ -363,12 +375,16 @@ impl LayoutNode {
                     }
                 }
                 InvalidationKind::Draw => {
-                    if self.has_draw_modifier_nodes() {
+                    if curr_caps.contains(NodeCapabilities::DRAW)
+                        || prev_caps.contains(NodeCapabilities::DRAW)
+                    {
                         self.mark_needs_redraw();
                     }
                 }
                 InvalidationKind::PointerInput => {
-                    if self.has_pointer_input_modifier_nodes() {
+                    if curr_caps.contains(NodeCapabilities::POINTER_INPUT)
+                        || prev_caps.contains(NodeCapabilities::POINTER_INPUT)
+                    {
                         self.mark_needs_pointer_pass();
                         crate::request_pointer_invalidation();
                         // Schedule pointer repass for this node
@@ -381,7 +397,9 @@ impl LayoutNode {
                     self.request_semantics_update();
                 }
                 InvalidationKind::Focus => {
-                    if self.has_focus_modifier_nodes() {
+                    if curr_caps.contains(NodeCapabilities::FOCUS)
+                        || prev_caps.contains(NodeCapabilities::FOCUS)
+                    {
                         self.mark_needs_focus_sync();
                         crate::request_focus_invalidation();
                         // Schedule focus invalidation for this node

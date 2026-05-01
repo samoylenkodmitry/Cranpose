@@ -166,8 +166,10 @@ impl SlotWriteSession<'_> {
             .group_stack
             .pop()
             .expect("unbalanced group stack");
-        let group_index = self.table.current_group_index(frame.group_anchor);
+        let group_anchor = frame.group_anchor;
+        let group_index = self.table.current_group_index(group_anchor);
         let subtree_end = self.table.group_subtree_end_at_index(group_index);
+        self.state.recycle_group_frame(frame);
         self.state.advance_parent_after_child(subtree_end);
     }
 

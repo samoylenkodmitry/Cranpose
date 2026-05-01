@@ -219,7 +219,7 @@ fn hash_runtime_shader<H: Hasher>(shader: &RuntimeShader, state: &mut H) {
     // a new effect_hash every frame, filling the layer surface cache with
     // stale entries. The pipeline cache already deduplicates by source hash,
     // and stable_id in the cache key distinguishes different nodes.
-    shader.source().hash(state);
+    shader.source_hash().hash(state);
 }
 
 fn hash_render_effect<H: Hasher>(effect: &RenderEffect, state: &mut H) {

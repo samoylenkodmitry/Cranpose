@@ -1060,6 +1060,54 @@ fn chain_tracks_node_capabilities() {
 }
 
 #[test]
+fn removing_modifier_requests_capability_invalidation() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![
+        modifier_element(TestLayoutElement),
+        modifier_element(TestDrawElement),
+    ];
+    chain.update_from_slice(&elements, &mut context);
+
+    context.clear_invalidations();
+    chain.update_from_slice(&[modifier_element(TestLayoutElement)], &mut context);
+
+    assert_eq!(
+        context.invalidations(),
+        &[ModifierInvalidation::new(
+            InvalidationKind::Draw,
+            NodeCapabilities::DRAW
+        )]
+    );
+}
+
+#[test]
+fn reordering_modifiers_requests_capability_invalidations() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![
+        modifier_element(TestLayoutElement),
+        modifier_element(TestDrawElement),
+    ];
+    chain.update_from_slice(&elements, &mut context);
+
+    context.clear_invalidations();
+    let reordered = vec![
+        modifier_element(TestDrawElement),
+        modifier_element(TestLayoutElement),
+    ];
+    chain.update_from_slice(&reordered, &mut context);
+
+    assert_eq!(
+        context.invalidations(),
+        &[
+            ModifierInvalidation::new(InvalidationKind::Draw, NodeCapabilities::DRAW),
+            ModifierInvalidation::new(InvalidationKind::Layout, NodeCapabilities::LAYOUT),
+        ]
+    );
+}
+
+#[test]
 fn for_each_node_with_capability_visits_mask_only_nodes() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();

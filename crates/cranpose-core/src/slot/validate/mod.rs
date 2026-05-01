@@ -52,8 +52,12 @@ impl SlotTable {
     }
 
     pub(in crate::slot) fn debug_assert_valid_after(&self, operation: &'static str) {
-        if let Err(err) = self.validate() {
-            panic!("slot table invariant violation after {operation}: {err:?}");
+        if crate::slot_validation_diagnostics_enabled() {
+            if let Err(err) = self.validate() {
+                panic!("slot table invariant violation after {operation}: {err:?}");
+            }
+        } else {
+            self.assert_fast_integrity(operation);
         }
     }
 

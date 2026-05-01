@@ -9,14 +9,14 @@ pub mod testing;
 
 // Re-export testing utilities
 pub use robot::*;
-pub use robot_assertions::{Bounds, SemanticElementLike};
+pub use robot_assertions::{assert_robot_fps_over, Bounds, SemanticElementLike};
 pub use robot_helpers::*;
 pub use testing::*;
 
 pub mod prelude {
     pub use crate::robot::*;
     pub use crate::robot_assertions;
-    pub use crate::robot_assertions::{Bounds, SemanticElementLike};
+    pub use crate::robot_assertions::{assert_robot_fps_over, Bounds, SemanticElementLike};
     pub use crate::robot_helpers::*;
     pub use crate::testing::*;
 }

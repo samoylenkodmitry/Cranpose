@@ -60,7 +60,8 @@ use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_ui_graphics::GraphicsLayer;
 use cranpose_ui_graphics::Point;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, RenderHash, TileMode,
+    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, RenderHash,
+    RuntimeShader, TileMode,
 };
 use glyphon::{
     Cache, Color as GlyphonColor, Resolution, SwashCache, TextArea, TextAtlas, TextBounds,
@@ -1529,6 +1530,39 @@ impl SurfaceExecutionBackend for GpuRenderer {
             effect,
             effect_rect,
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_shader_and_composite_to_view(
+        &mut self,
+        source: &OffscreenTarget,
+        intermediate: &OffscreenTarget,
+        shader: &RuntimeShader,
+        effect_rect: [f32; 4],
+        dest_view: &wgpu::TextureView,
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        blend_mode: BlendMode,
+        dest_viewport: Option<(f32, f32, f32, f32)>,
+        sample_mode: CompositeSampleMode,
+    ) {
+        self.effect_renderer
+            .apply_shader_and_composite_to_view_scissored_with_alpha_and_blend_mode(
+                &self.device,
+                &self.queue,
+                source,
+                intermediate,
+                shader,
+                effect_rect,
+                dest_view,
+                alpha,
+                load_op,
+                scissor,
+                supported_blend_mode(blend_mode),
+                dest_viewport,
+                sample_mode,
+            );
     }
 
     fn is_render_effect_supported(&self, effect: &RenderEffect) -> bool {

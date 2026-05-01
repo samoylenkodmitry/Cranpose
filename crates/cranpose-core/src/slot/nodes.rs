@@ -2,8 +2,9 @@ use super::{
     checked_usize_to_i64,
     segments::{
         extract_subtree_segment, group_segment_len, group_segment_range_at, group_segment_start,
-        group_segment_subrange_at, insert_group_segment_item, remove_group_segment_range,
-        restore_subtree_segment, NodeSegment,
+        group_segment_subrange_at, insert_group_segment_item,
+        move_subtree_segment_to_earlier_group, remove_group_segment_range, restore_subtree_segment,
+        NodeSegment,
     },
     GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
 };
@@ -241,6 +242,27 @@ impl SlotTable {
         removed_groups: &mut [GroupRecord],
     ) -> Vec<NodeRecord> {
         self.extract_node_segment_for_groups(removed_group_index, removed_groups)
+    }
+
+    pub(super) fn move_nodes_to_earlier_group(
+        &mut self,
+        insert_group_index: usize,
+        moving_group_index: usize,
+        moving_group_len: usize,
+    ) -> usize {
+        let moved_node_count = move_subtree_segment_to_earlier_group::<NodeSegment, _>(
+            &mut self.groups,
+            &mut self.nodes,
+            insert_group_index,
+            moving_group_index,
+            moving_group_len,
+        );
+        if moved_node_count > 0 {
+            self.record_segment_range_update_span(
+                moving_group_index + moving_group_len - insert_group_index,
+            );
+        }
+        moved_node_count
     }
 
     pub(super) fn restore_nodes_for_groups(

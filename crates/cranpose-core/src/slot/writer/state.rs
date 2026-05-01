@@ -1,14 +1,12 @@
 use super::super::{DetachedSubtree, SlotPassMode, SlotTable};
 use super::frames::{GroupFrame, RootFrame};
-use crate::{
-    collections::map::{HashMap, HashSet},
-    AnchorId,
-};
+use crate::{collections::map::HashMap, AnchorId};
 
 #[derive(Default)]
 pub(crate) struct SlotWriteSessionState {
     pub(in crate::slot) root: RootFrame,
     pub(in crate::slot) group_stack: Vec<GroupFrame>,
+    frame_pool: Vec<GroupFrame>,
     payload_location_refreshes: HashMap<AnchorId, usize>,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
@@ -24,14 +22,10 @@ impl SlotWriteSessionState {
     const COMPACT_GROUP_THRESHOLD: usize = 32 * 1024;
 
     pub(crate) fn reset_for_pass(&mut self, mode: SlotPassMode) {
-        self.root = RootFrame {
-            next_child_index: 0,
-            detach_remaining_children: matches!(mode, SlotPassMode::Compose),
-            key_ordinals: HashMap::default(),
-            seen_group_keys: HashSet::default(),
-            sibling_index: None,
-        };
-        self.group_stack.clear();
+        self.root.reset(matches!(mode, SlotPassMode::Compose));
+        while let Some(frame) = self.group_stack.pop() {
+            self.recycle_group_frame(frame);
+        }
         self.payload_location_refreshes.clear();
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
@@ -154,19 +148,14 @@ impl SlotWriteSessionState {
         old_payload_len: usize,
         old_node_len: usize,
     ) {
-        self.group_stack.push(GroupFrame {
-            group_anchor: anchor,
-            next_child_index,
-            payload_cursor: 0,
-            old_payload_len,
-            node_cursor: 0,
-            old_node_len,
-            key_ordinals: HashMap::default(),
-            seen_group_keys: HashSet::default(),
-            sibling_index: None,
-            body_finished: false,
-            was_skipped: false,
-        });
+        let mut frame = self.frame_pool.pop().unwrap_or_default();
+        frame.reset(anchor, next_child_index, old_payload_len, old_node_len);
+        self.group_stack.push(frame);
+    }
+
+    pub(in crate::slot) fn recycle_group_frame(&mut self, mut frame: GroupFrame) {
+        frame.reset_for_pool();
+        self.frame_pool.push(frame);
     }
 }
 

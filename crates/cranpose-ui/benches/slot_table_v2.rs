@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
 use cranpose_core::{
-    location_key, Composition, ContentTypeReusePolicy, Key, MemoryApplier, RecomposeOptions,
-    RecomposeScope, SlotId, SubcomposeState,
+    location_key, Composition, ContentTypeReusePolicy, Key, MemoryApplier, MutableState,
+    RecomposeOptions, RecomposeScope, SlotId, State, SubcomposeState,
 };
 use cranpose_foundation::lazy::{
     remember_lazy_list_state_with_position, LazyListScope, LazyListState,
@@ -47,6 +47,9 @@ const LAZY_LIST_ROOT_SIZE: Size = Size {
 };
 const LAZY_LIST_SCROLL_PATTERN: [f32; 6] = [-220.0, -180.0, 96.0, 96.0, 104.0, 104.0];
 const LAZY_LIST_SCROLL_BENCH_STEPS: usize = LAZY_LIST_SCROLL_PATTERN.len();
+const ANIMATION_FRAME_SECTIONS: usize = 16;
+const ANIMATION_FRAME_ITEMS_PER_SECTION: usize = 8;
+const ANIMATION_FRAME_BENCH_STEPS: usize = 16;
 
 #[composable]
 fn KeyedItem(id: u64) {
@@ -143,6 +146,30 @@ fn LazyListScrollContent(state_capture: Rc<Cell<Option<LazyListState>>>) {
             );
         },
     );
+}
+
+#[composable]
+fn AnimationFrameLeaf(progress: State<f32>, section: usize, item: usize) {
+    let remembered = cranpose_core::remember(|| (section as u64) << 32 | item as u64);
+    let value = progress.value();
+    black_box(remembered.with(|id| *id) as f32 + value);
+}
+
+#[composable]
+fn AnimationFrameSection(progress: State<f32>, section: usize) {
+    for item in 0..ANIMATION_FRAME_ITEMS_PER_SECTION {
+        AnimationFrameLeaf(progress, section, item);
+    }
+}
+
+#[composable]
+fn AnimationFrameContent(state_capture: Rc<Cell<Option<MutableState<f32>>>>) {
+    let progress = cranpose_core::useState(|| 0.0_f32);
+    state_capture.set(Some(progress));
+    let progress = progress.as_state();
+    for section in 0..ANIMATION_FRAME_SECTIONS {
+        AnimationFrameSection(progress, section);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -308,6 +335,13 @@ struct LazyListScrollFixture {
     jump_forward: bool,
 }
 
+struct AnimationFrameFixture {
+    composition: Composition<MemoryApplier>,
+    root_key: Key,
+    state_capture: Rc<Cell<Option<MutableState<f32>>>>,
+    frame: usize,
+}
+
 impl LazyListScrollFixture {
     fn new(scenario: LazyListScrollScenario) -> Self {
         let mut fixture = Self {
@@ -406,6 +440,56 @@ impl LazyListScrollFixture {
             stats.items_in_use,
             stats.items_in_pool,
             stats.reuse_count,
+        ));
+    }
+}
+
+impl AnimationFrameFixture {
+    fn new() -> Self {
+        let mut fixture = Self {
+            composition: Composition::new(MemoryApplier::new()),
+            root_key: location_key(file!(), line!(), column!()),
+            state_capture: Rc::new(Cell::new(None)),
+            frame: 0,
+        };
+        fixture.render();
+        fixture.settle();
+        fixture
+    }
+
+    fn render(&mut self) {
+        let state_capture = Rc::clone(&self.state_capture);
+        self.composition
+            .render(self.root_key, move || {
+                AnimationFrameContent(Rc::clone(&state_capture))
+            })
+            .expect("animation frame render");
+    }
+
+    fn progress_state(&self) -> MutableState<f32> {
+        self.state_capture
+            .get()
+            .expect("animation benchmark state must be captured")
+    }
+
+    fn settle(&mut self) {
+        while self
+            .composition
+            .process_invalid_scopes()
+            .expect("animation frame recomposition")
+        {}
+    }
+
+    fn step(&mut self) {
+        self.frame += 1;
+        let progress = (self.frame % 120) as f32 / 120.0;
+        self.progress_state().set(progress);
+        self.settle();
+        let stats = self.composition.debug_slot_table_stats();
+        black_box((
+            stats.group_count,
+            stats.payload_count,
+            stats.active_anchor_count,
         ));
     }
 }
@@ -599,6 +683,13 @@ fn bench_lazy_list_matrix(c: &mut Criterion) {
     }
 }
 
+fn bench_animation_frame_recomposition(c: &mut Criterion) {
+    let mut fixture = AnimationFrameFixture::new();
+    c.bench_function("slot_table_v2_animation_frame_recompose_128", |b| {
+        bench_stateful_steps(b, ANIMATION_FRAME_BENCH_STEPS, || fixture.step());
+    });
+}
+
 criterion_group!(
     name = benches;
     config = Criterion::default()
@@ -610,6 +701,7 @@ criterion_group!(
         bench_conditional_toggle_matrix,
         bench_tab_switching_matrix,
         bench_subcompose_scrolling,
-        bench_lazy_list_matrix
+        bench_lazy_list_matrix,
+        bench_animation_frame_recomposition
 );
 criterion_main!(benches);
