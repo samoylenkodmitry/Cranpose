@@ -116,6 +116,11 @@ name = "robot_shader_rect"
 path = "robot-runners/robot_shader_rect.rs"
 required-features = ["robot-app"]
 
+[[example]]
+name = "robot_winamp_native_window_geometry"
+path = "robot-runners/robot_winamp_native_window_geometry.rs"
+required-features = ["robot-app"]
+
 
 
 [[example]]

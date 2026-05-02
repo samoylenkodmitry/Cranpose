@@ -42,7 +42,7 @@ pub(crate) use shaders::ShaderSection;
 use shaders::ShadersTab;
 use text_showcase::TextShowcaseTab;
 use web_fetch::web_fetch_example;
-use winamp::WinampTab;
+use winamp::{remember_winamp_tab_state, WinampTab, WinampTabState};
 use xkcd::xkcd_tab;
 
 thread_local! {
@@ -368,15 +368,16 @@ fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
 fn TabContent(
     active_tab: cranpose_core::MutableState<DemoTab>,
     startup: StartupSelection,
+    winamp_tab_state: WinampTabState,
     modifier: Modifier,
 ) {
     let active = active_tab.get();
     cranpose_ui::Box(modifier.clip_to_bounds(), BoxSpec::default(), move || {
         cranpose_core::with_key(&active, || {
             if tab_requires_scroll(active) {
-                ScrollableTab(move || render_active_tab(active, startup));
+                ScrollableTab(move || render_active_tab(active, startup, winamp_tab_state));
             } else {
-                render_active_tab(active, startup);
+                render_active_tab(active, startup, winamp_tab_state);
             }
         });
     });
@@ -397,8 +398,9 @@ pub fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
 
 #[composable]
 pub(crate) fn combined_app_with_startup(startup: StartupSelection) {
-    let active_tab =
-        cranpose_core::useState(move || startup.initial_tab.unwrap_or(DemoTab::Counter));
+    let initial_tab = startup.initial_tab.unwrap_or(DemoTab::Counter);
+    let active_tab = cranpose_core::useState(move || initial_tab);
+    let winamp_tab_state = remember_winamp_tab_state();
     TEST_ACTIVE_TAB_STATE.with(|cell| {
         *cell.borrow_mut() = Some(active_tab);
     });
@@ -417,6 +419,7 @@ pub(crate) fn combined_app_with_startup(startup: StartupSelection) {
             TabContent(
                 active_tab,
                 startup,
+                winamp_tab_state,
                 Modifier::empty().fill_max_width().weight(1.0),
             );
         },
@@ -437,7 +440,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
 }
 
 #[composable]
-fn render_active_tab(active: DemoTab, startup: StartupSelection) {
+fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_state: WinampTabState) {
     match active {
         DemoTab::Counter => counter_app(),
         DemoTab::CompositionLocal => composition_local_example(),
@@ -452,7 +455,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection) {
         DemoTab::HackerNews => HackerNewsTab(),
         DemoTab::Images => images_tab(),
         DemoTab::Text => TextShowcaseTab(),
-        DemoTab::Winamp => WinampTab(),
+        DemoTab::Winamp => WinampTab(winamp_tab_state),
         DemoTab::Xkcd => xkcd_tab(),
         DemoTab::Shaders => ShadersTab(startup.initial_shader_section),
         DemoTab::ShaderRect => ShaderRectTab(),

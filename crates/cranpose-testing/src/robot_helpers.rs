@@ -236,7 +236,12 @@ fn find_button_in_semantics_by(
             break;
         };
 
-        let Some((axis, dir)) = overflow_axis_direction(current, root) else {
+        let Some((axis, _dir)) = overflow_axis_direction(current, root) else {
+            break;
+        };
+
+        let Some((scroll_delta_x, scroll_delta_y)) = scroll_delta_for_overflow(current, root, axis)
+        else {
             break;
         };
 
@@ -254,11 +259,8 @@ fn find_button_in_semantics_by(
 
         let start_x = sx + sw / 2.0;
         let start_y = sy + sh / 2.0;
-        let (end_x, end_y) = match axis {
-            TabAxis::Horizontal => (start_x + dir * SCROLL_STEP, start_y),
-            TabAxis::Vertical => (start_x, start_y + dir * SCROLL_STEP),
-        };
-        let _ = robot.drag(start_x, start_y, end_x, end_y);
+        let _ = robot.mouse_move(start_x, start_y);
+        let _ = robot.mouse_scroll(scroll_delta_x, scroll_delta_y);
         std::thread::sleep(Duration::from_millis(SCROLL_SETTLE_MS));
         let _ = robot.wait_for_idle();
 
@@ -566,7 +568,6 @@ pub fn root_bounds(robot: &cranpose::Robot) -> Option<RectBounds> {
 }
 
 const VISIBILITY_PADDING: f32 = 4.0;
-const SCROLL_STEP: f32 = 240.0;
 const SCROLL_SETTLE_MS: u64 = 140;
 type TextMatcher = fn(&str, &str) -> bool;
 
@@ -676,6 +677,27 @@ fn overflow_axis_direction(bounds: RectBounds, root: RectBounds) -> Option<(TabA
         Some((TabAxis::Vertical, 1.0))
     } else {
         Some((TabAxis::Vertical, -1.0))
+    }
+}
+
+fn scroll_delta_for_overflow(
+    bounds: RectBounds,
+    root: RectBounds,
+    axis: TabAxis,
+) -> Option<(f32, f32)> {
+    let (x, y, w, h) = bounds;
+    let (rx, ry, rw, rh) = root;
+    let left = rx + VISIBILITY_PADDING;
+    let right = rx + rw - VISIBILITY_PADDING;
+    let top = ry + VISIBILITY_PADDING;
+    let bottom = ry + rh - VISIBILITY_PADDING;
+
+    match axis {
+        TabAxis::Horizontal if x < left => Some((left - x, 0.0)),
+        TabAxis::Horizontal if x + w > right => Some((-(x + w - right), 0.0)),
+        TabAxis::Vertical if y < top => Some((0.0, top - y)),
+        TabAxis::Vertical if y + h > bottom => Some((0.0, -(y + h - bottom))),
+        _ => None,
     }
 }
 
@@ -1270,6 +1292,24 @@ mod tests {
         assert_eq!(
             overflow_axis_direction(target, root),
             Some((TabAxis::Vertical, 1.0))
+        );
+    }
+
+    #[test]
+    fn scroll_delta_for_overflow_moves_target_toward_visible_area() {
+        let root = (0.0, 0.0, 300.0, 200.0);
+
+        assert_eq!(
+            scroll_delta_for_overflow((320.0, 20.0, 80.0, 30.0), root, TabAxis::Horizontal),
+            Some((-104.0, 0.0))
+        );
+        assert_eq!(
+            scroll_delta_for_overflow((-42.0, 20.0, 80.0, 30.0), root, TabAxis::Horizontal),
+            Some((46.0, 0.0))
+        );
+        assert_eq!(
+            scroll_delta_for_overflow((20.0, 190.0, 80.0, 30.0), root, TabAxis::Vertical),
+            Some((0.0, -24.0))
         );
     }
 

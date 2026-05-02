@@ -95,6 +95,7 @@ where
     /// Dev options for debugging and performance monitoring
     dev_options: DevOptions,
     dev_overlay_controls: Vec<DevOverlayControl>,
+    before_recompose: Option<Box<dyn FnMut()>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -172,7 +173,17 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    pub fn new(mut renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
+    pub fn new(renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
+        Self::new_with_size(renderer, root_key, content, (800, 600), (800.0, 600.0))
+    }
+
+    pub fn new_with_size(
+        mut renderer: R,
+        root_key: Key,
+        content: impl FnMut() + 'static,
+        buffer_size: (u32, u32),
+        viewport: (f32, f32),
+    ) -> Self {
         // Initialize FPS tracking
         fps_monitor::init_fps_tracker();
 
@@ -189,8 +200,8 @@ where
             content: build,
             renderer,
             cursor: (0.0, 0.0),
-            viewport: (800.0, 600.0),
-            buffer_size: (800, 600),
+            viewport,
+            buffer_size,
             start_time: Instant::now(),
             layout_tree: None,
             semantics_tree: None,
@@ -210,6 +221,7 @@ where
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
             dev_overlay_controls: Vec::new(),
+            before_recompose: None,
         };
         shell.process_frame();
         shell
@@ -296,6 +308,10 @@ where
         self.runtime.clear_frame_waker();
     }
 
+    pub fn set_before_recompose(&mut self, callback: impl FnMut() + 'static) {
+        self.before_recompose = Some(Box::new(callback));
+    }
+
     pub fn should_render(&self) -> bool {
         if self.layout_requested
             || self.scene_dirty
@@ -333,6 +349,12 @@ where
     /// Marks the shell as dirty, indicating a redraw is needed.
     pub fn mark_dirty(&mut self) {
         self.is_dirty = true;
+    }
+
+    pub fn request_root_render(&mut self) {
+        self.composition.request_root_render();
+        self.request_forced_layout_pass();
+        self.mark_dirty();
     }
 
     fn request_layout_pass(&mut self) {
@@ -376,6 +398,9 @@ where
                 );
             }
             if should_render {
+                if let Some(before_recompose) = &mut self.before_recompose {
+                    before_recompose();
+                }
                 let Some(root_key) = self.composition.root_key() else {
                     self.process_frame();
                     self.is_dirty = false;

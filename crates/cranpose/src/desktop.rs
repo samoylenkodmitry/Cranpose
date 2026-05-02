@@ -3,26 +3,29 @@
 //! This module provides the desktop event loop implementation using winit.
 
 use crate::launcher::{AppSettings, LaunchError};
+use crate::native_window::{
+    self, NativeWindowEvents, NativeWindowKey, NativeWindowOptions, NativeWindowPositionOrigin,
+    NativeWindowRequest, WindowResizeDirection, WindowState,
+};
 #[cfg(feature = "robot")]
 use cranpose_app_shell::RuntimeLeakDebugStats;
 use cranpose_app_shell::{default_root_key, AppShell, FramePacingMode};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
-use cranpose_render_wgpu::WgpuRenderer;
 #[cfg(feature = "robot")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
+use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 #[cfg(feature = "robot")]
 use std::any::Any;
-use std::cell::RefCell;
-#[cfg(feature = "robot")]
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, Position};
 use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{ResizeDirection, Window, WindowAttributes, WindowId, WindowLevel};
 
 #[cfg(feature = "robot")]
 use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
@@ -869,6 +872,111 @@ impl Robot {
 }
 
 /// Application state that implements winit's ApplicationHandler
+struct DesktopGpuContext {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    adapter_backend: wgpu::Backend,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    text_system: WgpuTextSystem,
+}
+
+struct NativeWindowSurface {
+    key: NativeWindowKey,
+    revision: u64,
+    options: NativeWindowOptions,
+    events: NativeWindowEvents,
+    state: Option<WindowState>,
+    window: Arc<dyn Window>,
+    surface: wgpu::Surface<'static>,
+    surface_config: wgpu::SurfaceConfiguration,
+    app: AppShell<WgpuRenderer>,
+    platform: DesktopWinitPlatform,
+    last_cursor_position: Option<(f32, f32)>,
+    last_cursor_physical_position: Option<PhysicalPosition<f64>>,
+    frame_pacing_mode: FramePacingMode,
+    last_frame_start_time: Option<Instant>,
+    vsync_interval: Duration,
+    pending_outer_positions: PendingNativeWindowPositions,
+    active_drag: Option<NativeWindowDragSession>,
+}
+
+struct NativeWindowShell {
+    request: NativeWindowRequest,
+    window: Arc<dyn Window>,
+    create_started: Instant,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NativeWindowDragSession {
+    last_pointer_screen: PhysicalPosition<f64>,
+}
+
+#[derive(Default)]
+struct PendingNativeWindowPositions {
+    positions: VecDeque<PendingNativeWindowPosition>,
+}
+
+struct PendingNativeWindowPosition {
+    position: (f32, f32),
+    created_at: Instant,
+}
+
+impl PendingNativeWindowPositions {
+    fn push(&mut self, position: (f32, f32)) {
+        if self
+            .positions
+            .back()
+            .is_some_and(|pending| native_window_positions_close(pending.position, position))
+        {
+            return;
+        }
+        self.positions.push_back(PendingNativeWindowPosition {
+            position,
+            created_at: Instant::now(),
+        });
+        while self.positions.len() > 16 {
+            self.positions.pop_front();
+        }
+    }
+
+    fn acknowledge(&mut self, position: (f32, f32)) -> bool {
+        let Some(index) = self
+            .positions
+            .iter()
+            .position(|pending| native_window_positions_close(pending.position, position))
+        else {
+            return false;
+        };
+        for _ in 0..=index {
+            self.positions.pop_front();
+        }
+        true
+    }
+
+    fn has_fresh_pending(&mut self, max_age: Duration) -> bool {
+        let now = Instant::now();
+        while self
+            .positions
+            .front()
+            .is_some_and(|pending| now.duration_since(pending.created_at) > max_age)
+        {
+            self.positions.pop_front();
+        }
+        !self.positions.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.positions.clear();
+    }
+}
+
+impl NativeWindowSurface {
+    fn frame_interval(&self) -> Option<Duration> {
+        frame_interval_for_mode(self.frame_pacing_mode, self.vsync_interval)
+    }
+}
+
 struct App {
     /// Settings for the application
     settings: AppSettings,
@@ -886,6 +994,16 @@ struct App {
     app: Option<AppShell<WgpuRenderer>>,
     /// Platform adapter
     platform: Option<DesktopWinitPlatform>,
+    /// Shared GPU objects used by all desktop surfaces.
+    gpu_context: Option<DesktopGpuContext>,
+    /// Native sub-window surfaces keyed by the operating-system window id.
+    native_windows: HashMap<WindowId, NativeWindowSurface>,
+    /// Declarative native sub-window ids mapped to their current OS window id.
+    native_window_ids: HashMap<NativeWindowKey, WindowId>,
+    /// Last observed OS positions for declarative native sub-windows.
+    native_window_positions: HashMap<NativeWindowKey, (f32, f32)>,
+    /// Native sub-windows closed by the user while still declared by composition.
+    closed_native_windows: HashSet<NativeWindowKey>,
     /// Current keyboard modifiers (shift, ctrl, alt, meta)
     current_modifiers: winit::keyboard::ModifiersState,
     /// Last known cursor position in logical pixels
@@ -929,6 +1047,11 @@ impl App {
             surface_caps: None,
             app: None,
             platform: None,
+            gpu_context: None,
+            native_windows: HashMap::new(),
+            native_window_ids: HashMap::new(),
+            native_window_positions: HashMap::new(),
+            closed_native_windows: HashSet::new(),
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
             #[cfg(feature = "robot")]
@@ -952,12 +1075,827 @@ impl App {
     }
 
     fn frame_interval(&self) -> Option<Duration> {
-        match self.frame_pacing_mode {
-            FramePacingMode::Vsync => Some(self.vsync_interval),
-            FramePacingMode::Hard60 => Some(Duration::from_nanos(16_666_667)),
-            FramePacingMode::Hard120 => Some(Duration::from_nanos(8_333_333)),
-            FramePacingMode::NoVsync => None,
+        frame_interval_for_mode(self.frame_pacing_mode, self.vsync_interval)
+    }
+
+    fn refresh_native_window_requests(&mut self) {
+        if let Some(app) = &mut self.app {
+            app.update();
         }
+    }
+
+    fn sync_native_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.gpu_context.is_none() {
+            return;
+        }
+
+        let has_requests = native_window::has_native_window_requests();
+        if self.native_windows.is_empty() && self.closed_native_windows.is_empty() && !has_requests
+        {
+            return;
+        }
+        if !has_requests
+            && self.closed_native_windows.is_empty()
+            && self
+                .native_windows
+                .values()
+                .all(|native| !native.options.visible)
+        {
+            return;
+        }
+
+        let sync_started = Instant::now();
+        let requests = native_window::native_window_requests();
+        let active_keys: HashSet<NativeWindowKey> =
+            requests.iter().map(|request| request.key).collect();
+        trace_native_window_timing(format_args!(
+            "sync start requests={} existing={}",
+            requests.len(),
+            self.native_windows.len()
+        ));
+
+        self.closed_native_windows
+            .retain(|key| active_keys.contains(key));
+
+        let stale_window_ids: Vec<WindowId> = self
+            .native_windows
+            .iter()
+            .filter_map(|(window_id, native)| {
+                (!active_keys.contains(&native.key)).then_some(*window_id)
+            })
+            .collect();
+        for window_id in stale_window_ids {
+            if let Some(native) = self.native_windows.get(&window_id) {
+                if let Some((x, y)) = current_native_window_position(native) {
+                    self.native_window_positions.insert(native.key, (x, y));
+                    notify_native_window_moved(&native.events, x, y);
+                }
+            }
+            if let Some(native) = self.native_windows.get_mut(&window_id) {
+                if native.options.visible {
+                    native.window.set_visible(false);
+                    native.options.visible = false;
+                    cancel_app_input(&mut native.app);
+                }
+            }
+        }
+
+        let mut native_windows_to_create = Vec::new();
+        for request in requests {
+            if self.closed_native_windows.contains(&request.key) {
+                continue;
+            }
+
+            let request = self.native_window_request_for_host(&request);
+            if let Some(window_id) = self.native_window_ids.get(&request.key).copied() {
+                if let Some(native) = self.native_windows.get_mut(&window_id) {
+                    native.events = request.events.clone();
+                    native.state = request.state;
+                    let revision_changed = native.revision != request.revision;
+                    let options_changed = native.options != request.options;
+                    Self::apply_native_window_options(
+                        native,
+                        &request.options,
+                        self.settings.headless,
+                    );
+                    if revision_changed {
+                        native.revision = request.revision;
+                        native.app.request_root_render();
+                        native.window.request_redraw();
+                    } else if options_changed && request.options.visible {
+                        native.window.request_redraw();
+                    }
+                    continue;
+                }
+                self.native_window_ids.remove(&request.key);
+            }
+
+            native_windows_to_create.push(request);
+        }
+
+        let mut native_window_shells = Vec::with_capacity(native_windows_to_create.len());
+        for request in native_windows_to_create {
+            match Self::create_native_window_shell(event_loop, request, self.settings.headless) {
+                Ok(shell) => native_window_shells.push(shell),
+                Err(error) => {
+                    self.abort_launch(event_loop, error);
+                    return;
+                }
+            }
+        }
+
+        for shell in native_window_shells {
+            match self.create_native_window(shell) {
+                Ok(native) => {
+                    let window_id = native.window.id();
+                    self.remember_native_window_position(&native);
+                    self.native_window_ids.insert(native.key, window_id);
+                    self.native_windows.insert(window_id, native);
+                }
+                Err(error) => {
+                    self.abort_launch(event_loop, error);
+                    return;
+                }
+            }
+        }
+        trace_native_window_timing(format_args!(
+            "sync done in {}ms",
+            sync_started.elapsed().as_millis()
+        ));
+    }
+
+    fn native_window_request_for_host(&self, request: &NativeWindowRequest) -> NativeWindowRequest {
+        let mut request = request.clone();
+        Self::apply_native_window_state_to_options(&mut request.options, request.state);
+        if Self::native_window_options_have_screen_position(&request.options) {
+            request.options = self.resolve_native_window_options(&request.options);
+        } else if let Some((x, y)) = self.native_window_positions.get(&request.key).copied() {
+            request.options.x = Some(x);
+            request.options.y = Some(y);
+            request.options.position_origin = NativeWindowPositionOrigin::Screen;
+        } else {
+            request.options = self.resolve_native_window_options(&request.options);
+        }
+        request
+    }
+
+    fn apply_native_window_state_to_options(
+        options: &mut NativeWindowOptions,
+        state: Option<WindowState>,
+    ) {
+        let Some(state) = state else {
+            return;
+        };
+        let size = state.size_non_reactive();
+        options.width = size.width;
+        options.height = size.height;
+        if let Some(position) = state.position_non_reactive() {
+            options.x = Some(position.x);
+            options.y = Some(position.y);
+            options.position_origin = NativeWindowPositionOrigin::Screen;
+        }
+    }
+
+    fn resolve_native_window_options(&self, options: &NativeWindowOptions) -> NativeWindowOptions {
+        let mut options = options.clone();
+        if options.position_origin == NativeWindowPositionOrigin::HostWindow {
+            if let (Some(x), Some(y), Some((host_x, host_y))) =
+                (options.x, options.y, self.host_window_position())
+            {
+                options.x = Some(host_x + x);
+                options.y = Some(host_y + y);
+            }
+            options.position_origin = NativeWindowPositionOrigin::Screen;
+        }
+        options
+    }
+
+    fn native_window_options_have_screen_position(options: &NativeWindowOptions) -> bool {
+        options.position_origin == NativeWindowPositionOrigin::Screen
+            && options.x.is_some()
+            && options.y.is_some()
+    }
+
+    fn host_window_position(&self) -> Option<(f32, f32)> {
+        let window = self.window.as_ref()?;
+        logical_outer_position(window)
+    }
+
+    fn remember_native_window_position(&mut self, native: &NativeWindowSurface) {
+        if let Some((x, y)) = current_native_window_position(native) {
+            self.native_window_positions.insert(native.key, (x, y));
+            if let Some(state) = native.state {
+                if state.position_non_reactive().is_none() {
+                    state.set_position(Some(cranpose_ui::Point::new(x, y)));
+                }
+            }
+            notify_native_window_moved(&native.events, x, y);
+        }
+    }
+
+    fn create_native_window_shell(
+        event_loop: &dyn ActiveEventLoop,
+        request: NativeWindowRequest,
+        headless: bool,
+    ) -> Result<NativeWindowShell, LaunchError> {
+        let create_started = Instant::now();
+        let options = &request.options;
+        let attributes = native_window_attributes(options, headless);
+
+        let window: Arc<dyn Window> = event_loop
+            .create_window(attributes)
+            .map_err(LaunchError::WindowCreate)?
+            .into();
+        trace_native_window_timing(format_args!(
+            "{} create_window {}ms",
+            options.title,
+            create_started.elapsed().as_millis()
+        ));
+        Ok(NativeWindowShell {
+            request,
+            window,
+            create_started,
+        })
+    }
+
+    fn create_native_window(
+        &self,
+        shell: NativeWindowShell,
+    ) -> Result<NativeWindowSurface, LaunchError> {
+        let NativeWindowShell {
+            request,
+            window,
+            create_started,
+        } = shell;
+        let context = self
+            .gpu_context
+            .as_ref()
+            .expect("native windows require an initialized desktop GPU context");
+
+        let options = &request.options;
+        let surface = context
+            .instance
+            .create_surface(window.clone())
+            .map_err(LaunchError::SurfaceCreate)?;
+        trace_native_window_timing(format_args!(
+            "{} create_surface {}ms",
+            options.title,
+            create_started.elapsed().as_millis()
+        ));
+        let surface_caps = surface.get_capabilities(&context.adapter);
+        let surface_format = select_surface_format(&surface_caps);
+        let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode);
+        let size = window.surface_size();
+        let surface_config = surface_config_for_window(
+            &surface_caps,
+            surface_format,
+            size.width.max(1),
+            size.height.max(1),
+            present_mode,
+            options.transparent,
+            self.frame_pacing_mode,
+        );
+        surface.configure(&context.device, &surface_config);
+        trace_native_window_timing(format_args!(
+            "{} configure {}ms",
+            options.title,
+            create_started.elapsed().as_millis()
+        ));
+
+        let scale_factor = window.scale_factor();
+        let renderer = wgpu_renderer_for_surface(
+            context.text_system.clone(),
+            Arc::clone(&context.device),
+            Arc::clone(&context.queue),
+            surface_format,
+            context.adapter_backend,
+            scale_factor,
+        );
+        trace_native_window_timing(format_args!(
+            "{} renderer {}ms",
+            options.title,
+            create_started.elapsed().as_millis()
+        ));
+        cranpose_ui::set_density(scale_factor as f32);
+
+        let content = request.content.clone();
+        let viewport = (
+            surface_config.width as f32 / scale_factor as f32,
+            surface_config.height as f32 / scale_factor as f32,
+        );
+        let mut app = AppShell::new_with_size(
+            renderer,
+            default_root_key(),
+            move || {
+                (content.borrow_mut())();
+            },
+            (surface_config.width, surface_config.height),
+            viewport,
+        );
+        let mut dev_options = self.settings.dev_options.clone();
+        dev_options.frame_pacing_mode = self.frame_pacing_mode;
+        dev_options.frame_pacing_controls = false;
+        app.set_dev_options(dev_options);
+        trace_native_window_timing(format_args!(
+            "{} app_shell {}ms",
+            options.title,
+            create_started.elapsed().as_millis()
+        ));
+
+        let frame_waker_window = window.clone();
+        app.set_frame_waker(move || {
+            frame_waker_window.request_redraw();
+        });
+
+        let mut platform = DesktopWinitPlatform::default();
+        platform.set_scale_factor(scale_factor);
+        window.request_redraw();
+        trace_native_window_timing(format_args!(
+            "{} create done {}ms",
+            options.title,
+            create_started.elapsed().as_millis()
+        ));
+
+        Ok(NativeWindowSurface {
+            key: request.key,
+            revision: request.revision,
+            options: request.options.clone(),
+            events: request.events.clone(),
+            state: request.state,
+            window,
+            surface,
+            surface_config,
+            app,
+            platform,
+            last_cursor_position: None,
+            last_cursor_physical_position: None,
+            frame_pacing_mode: self.frame_pacing_mode,
+            last_frame_start_time: None,
+            vsync_interval: default_vsync_interval(),
+            pending_outer_positions: PendingNativeWindowPositions::default(),
+            active_drag: None,
+        })
+    }
+
+    fn apply_native_window_options(
+        native: &mut NativeWindowSurface,
+        options: &NativeWindowOptions,
+        headless: bool,
+    ) {
+        if native.options.title != options.title {
+            native.window.set_title(&options.title);
+        }
+        if native.options.decorations != options.decorations {
+            native.window.set_decorations(options.decorations);
+        }
+        if native.options.resizable != options.resizable {
+            native.window.set_resizable(options.resizable);
+        }
+        if native.options.transparent != options.transparent {
+            native.window.set_transparent(options.transparent);
+        }
+        if native.options.always_on_top != options.always_on_top {
+            native
+                .window
+                .set_window_level(native_window_level(options.always_on_top));
+        }
+        if native.options.min_width != options.min_width
+            || native.options.min_height != options.min_height
+        {
+            native
+                .window
+                .set_min_surface_size(match (options.min_width, options.min_height) {
+                    (Some(width), Some(height)) => {
+                        Some(LogicalSize::new(width.max(1.0) as f64, height.max(1.0) as f64).into())
+                    }
+                    _ => None,
+                });
+        }
+        if native.options.max_width != options.max_width
+            || native.options.max_height != options.max_height
+        {
+            native
+                .window
+                .set_max_surface_size(match (options.max_width, options.max_height) {
+                    (Some(width), Some(height)) => {
+                        Some(LogicalSize::new(width.max(1.0) as f64, height.max(1.0) as f64).into())
+                    }
+                    _ => None,
+                });
+        }
+        if native.options.visible != options.visible {
+            native.window.set_visible(!headless && options.visible);
+        }
+        if native.options.x != options.x || native.options.y != options.y {
+            if let (Some(x), Some(y)) = (options.x, options.y) {
+                native.pending_outer_positions.push((x, y));
+                native
+                    .window
+                    .set_outer_position(Position::Logical(LogicalPosition::new(
+                        x as f64, y as f64,
+                    )));
+            }
+        }
+        if native.options.width != options.width || native.options.height != options.height {
+            if let Some(size) = native.window.request_surface_size(
+                LogicalSize::new(
+                    options.width.max(1.0) as f64,
+                    options.height.max(1.0) as f64,
+                )
+                .into(),
+            ) {
+                Self::resize_native_surface(native, size.width, size.height);
+            }
+        }
+        native.options = options.clone();
+    }
+
+    fn resize_native_surface(native: &mut NativeWindowSurface, width: u32, height: u32) {
+        configure_app_surface_size(
+            &mut native.app,
+            &native.window,
+            &native.surface,
+            &mut native.surface_config,
+            width,
+            height,
+        );
+    }
+
+    fn start_native_window_drag(native: &mut NativeWindowSurface) -> bool {
+        let fallback_position = native
+            .last_cursor_physical_position
+            .and_then(|position| native_window_screen_pointer_physical(&native.window, position));
+        let Some(pointer) = native_window_global_pointer_physical().or(fallback_position) else {
+            return false;
+        };
+        native.active_drag = Some(NativeWindowDragSession {
+            last_pointer_screen: pointer,
+        });
+        true
+    }
+
+    fn poll_active_native_window_drags(&mut self) -> bool {
+        let Some(pointer) = native_window_global_pointer_physical() else {
+            return false;
+        };
+        let mut updates = Vec::new();
+        for native in self.native_windows.values_mut() {
+            if native.active_drag.is_some() {
+                if let Some(update) = Self::update_native_window_drag(native, pointer) {
+                    updates.push(update);
+                }
+            }
+        }
+        let moved = !updates.is_empty();
+        for (key, position) in updates {
+            self.native_window_positions.insert(key, position);
+        }
+        moved
+    }
+
+    fn poll_native_window_positions(&mut self) -> bool {
+        let mut changed = false;
+        let native_window_positions = &mut self.native_window_positions;
+        for native in self.native_windows.values_mut() {
+            if !native.options.visible {
+                continue;
+            }
+            let Some(position) = current_native_window_position(native) else {
+                continue;
+            };
+            if native_window_positions
+                .get(&native.key)
+                .is_some_and(|known| native_window_positions_close(*known, position))
+            {
+                continue;
+            }
+
+            let acknowledged_programmatic_move =
+                native.pending_outer_positions.acknowledge(position);
+            if !acknowledged_programmatic_move
+                && native
+                    .pending_outer_positions
+                    .has_fresh_pending(Duration::from_millis(180))
+            {
+                continue;
+            }
+
+            let previous_state_position =
+                native.state.and_then(|state| state.position_non_reactive());
+            native_window_positions.insert(native.key, position);
+            update_native_options_position(&mut native.options, position.0, position.1);
+            if acknowledged_programmatic_move {
+                continue;
+            }
+
+            native.pending_outer_positions.clear();
+            notify_native_window_moved(&native.events, position.0, position.1);
+            sync_native_window_state_position(
+                native.state,
+                previous_state_position,
+                position.0,
+                position.1,
+            );
+            changed = true;
+        }
+        changed
+    }
+
+    fn update_native_window_drag(
+        native: &mut NativeWindowSurface,
+        pointer: PhysicalPosition<f64>,
+    ) -> Option<(NativeWindowKey, (f32, f32))> {
+        let active_drag = native.active_drag.as_mut()?;
+        let delta = PhysicalPosition::new(
+            pointer.x - active_drag.last_pointer_screen.x,
+            pointer.y - active_drag.last_pointer_screen.y,
+        );
+        active_drag.last_pointer_screen = pointer;
+        if delta.x.abs() <= f64::EPSILON && delta.y.abs() <= f64::EPSILON {
+            return None;
+        }
+
+        let current = current_native_window_physical_position(&native.window)?;
+        let target = PhysicalPosition::new(
+            (current.x as f64 + delta.x).round() as i32,
+            (current.y as f64 + delta.y).round() as i32,
+        );
+        let logical = target.to_logical::<f64>(native.window.scale_factor());
+        let logical_position = (logical.x as f32, logical.y as f32);
+        native.pending_outer_positions.push(logical_position);
+        if !native_window_set_outer_position_physical(&native.window, target) {
+            native.window.set_outer_position(Position::Physical(target));
+        }
+        update_native_options_position(&mut native.options, logical_position.0, logical_position.1);
+        let previous_state_position = native.state.and_then(|state| state.position_non_reactive());
+        notify_native_window_moved(&native.events, logical_position.0, logical_position.1);
+        sync_native_window_state_position(
+            native.state,
+            previous_state_position,
+            logical_position.0,
+            logical_position.1,
+        );
+        Some((native.key, logical_position))
+    }
+
+    fn native_window_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        let Some(mut native) = self.native_windows.remove(&window_id) else {
+            return;
+        };
+
+        let mut keep_window = true;
+        let mut sync_after_event = false;
+        match event {
+            WindowEvent::CloseRequested => {
+                notify_native_window_close_requested(&native.events);
+                self.remember_native_window_position(&native);
+                self.native_window_ids.remove(&native.key);
+                self.closed_native_windows.insert(native.key);
+                keep_window = false;
+            }
+            WindowEvent::SurfaceResized(new_size) => {
+                let previous_state_size = native.state.map(|state| state.size_non_reactive());
+                update_native_options_size(
+                    &mut native.options,
+                    &native.window,
+                    new_size.width,
+                    new_size.height,
+                );
+                notify_native_window_resized(
+                    &native.events,
+                    &native.window,
+                    new_size.width,
+                    new_size.height,
+                );
+                sync_native_window_state_size(
+                    native.state,
+                    previous_state_size,
+                    &native.window,
+                    new_size.width,
+                    new_size.height,
+                );
+                Self::resize_native_surface(&mut native, new_size.width, new_size.height);
+                sync_after_event = true;
+            }
+            WindowEvent::ScaleFactorChanged {
+                scale_factor,
+                mut surface_size_writer,
+            } => {
+                let previous_state_size = native.state.map(|state| state.size_non_reactive());
+                update_app_scale_factor(&mut native.app, &mut native.platform, scale_factor);
+
+                let new_size = native.window.surface_size();
+                let _ = surface_size_writer.request_surface_size(new_size);
+                update_native_options_size(
+                    &mut native.options,
+                    &native.window,
+                    new_size.width,
+                    new_size.height,
+                );
+                notify_native_window_resized(
+                    &native.events,
+                    &native.window,
+                    new_size.width,
+                    new_size.height,
+                );
+                sync_native_window_state_size(
+                    native.state,
+                    previous_state_size,
+                    &native.window,
+                    new_size.width,
+                    new_size.height,
+                );
+                Self::resize_native_surface(&mut native, new_size.width, new_size.height);
+                sync_after_event = true;
+            }
+            WindowEvent::Moved(position) => {
+                native.vsync_interval = monitor_refresh_interval(&native.window);
+                let previous_state_position =
+                    native.state.and_then(|state| state.position_non_reactive());
+                let logical = position.to_logical::<f64>(native.window.scale_factor());
+                let position = (logical.x as f32, logical.y as f32);
+                let acknowledged_programmatic_move =
+                    native.pending_outer_positions.acknowledge(position);
+                self.native_window_positions.insert(native.key, position);
+                update_native_options_position(&mut native.options, position.0, position.1);
+                if !acknowledged_programmatic_move {
+                    native.pending_outer_positions.clear();
+                    notify_native_window_moved(&native.events, position.0, position.1);
+                    sync_native_window_state_position(
+                        native.state,
+                        previous_state_position,
+                        position.0,
+                        position.1,
+                    );
+                    sync_after_event = true;
+                }
+            }
+            WindowEvent::PointerMoved { position, .. } => {
+                let logical = native.platform.pointer_position(position);
+                native.last_cursor_position = Some((logical.x, logical.y));
+                native.last_cursor_physical_position = Some(position);
+                let fallback_pointer =
+                    native_window_screen_pointer_physical(&native.window, position);
+                if let Some(pointer) = native_window_global_pointer_physical().or(fallback_pointer)
+                {
+                    if let Some((key, position)) =
+                        Self::update_native_window_drag(&mut native, pointer)
+                    {
+                        self.native_window_positions.insert(key, position);
+                        event_loop.set_control_flow(ControlFlow::Poll);
+                        sync_after_event = true;
+                    }
+                }
+                let handled = native_window::with_native_window_surface_origin(
+                    native_window_surface_origin(&native.window),
+                    || native.app.set_cursor(logical.x, logical.y),
+                );
+                if handled {
+                    sync_after_event = true;
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.current_modifiers = modifiers.state();
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                dispatch_mouse_wheel(
+                    &mut native.app,
+                    &native.platform,
+                    self.current_modifiers,
+                    native.last_cursor_position,
+                    delta,
+                );
+            }
+            WindowEvent::PointerButton {
+                state,
+                button: ButtonSource::Mouse(MouseButton::Left),
+                ..
+            } => {
+                if let Some((x, y)) = native.last_cursor_position {
+                    native_window::with_native_window_surface_origin(
+                        native_window_surface_origin(&native.window),
+                        || native.app.set_cursor(x, y),
+                    );
+                }
+                match state {
+                    ElementState::Pressed => {
+                        let drag_requested = Rc::new(Cell::new(false));
+                        let drag_requested_for_handler = Rc::clone(&drag_requested);
+                        let drag_handler: Rc<dyn Fn()> = Rc::new(move || {
+                            drag_requested_for_handler.set(true);
+                        });
+                        let resize_window = native.window.clone();
+                        let resize_handler: Rc<dyn Fn(WindowResizeDirection)> =
+                            Rc::new(move |direction| {
+                                if let Err(error) = resize_window
+                                    .drag_resize_window(native_resize_direction(direction))
+                                {
+                                    log::debug!("native window resize request failed: {error}");
+                                }
+                            });
+                        let handled = native_window::with_native_window_drag_handler(
+                            drag_handler,
+                            resize_handler,
+                            || {
+                                native_window::with_native_window_surface_origin(
+                                    native_window_surface_origin(&native.window),
+                                    || native.app.pointer_pressed(),
+                                )
+                            },
+                        );
+                        if handled {
+                            if drag_requested.get() && Self::start_native_window_drag(&mut native) {
+                                event_loop.set_control_flow(ControlFlow::Poll);
+                            }
+                            sync_after_event = true;
+                        }
+                    }
+                    ElementState::Released => {
+                        native.active_drag = None;
+                        let handled = native_window::with_native_window_surface_origin(
+                            native_window_surface_origin(&native.window),
+                            || native.app.pointer_released(),
+                        );
+                        native.app.sync_selection_to_primary();
+                        if handled {
+                            sync_after_event = true;
+                        }
+                    }
+                }
+            }
+            WindowEvent::PointerButton {
+                state: ElementState::Pressed,
+                button: ButtonSource::Mouse(MouseButton::Middle),
+                ..
+            } => {
+                dispatch_middle_click_paste(&mut native.app, native.last_cursor_position);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                dispatch_keyboard_input(&mut native.app, self.current_modifiers, event);
+            }
+            WindowEvent::Focused(false) => {
+                native.active_drag = None;
+                cancel_app_input(&mut native.app);
+            }
+            WindowEvent::Ime(ime_event) => {
+                dispatch_ime_event(&mut native.app, ime_event);
+            }
+            WindowEvent::PointerLeft { .. } => {
+                native.active_drag = None;
+                native.app.cancel_gesture();
+            }
+            WindowEvent::RedrawRequested => {
+                if let Some(deadline) = native.last_frame_start_time.and_then(|started_at| {
+                    native
+                        .frame_interval()
+                        .map(|interval| started_at + interval)
+                }) {
+                    if deadline > Instant::now() {
+                        event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                        self.native_windows.insert(window_id, native);
+                        return;
+                    }
+                }
+                Self::redraw_native_window(event_loop, &mut native);
+            }
+            _ => {}
+        }
+
+        if keep_window {
+            self.native_windows.insert(window_id, native);
+            if sync_after_event {
+                self.sync_native_windows(event_loop);
+            }
+        }
+    }
+
+    fn redraw_native_window(event_loop: &dyn ActiveEventLoop, native: &mut NativeWindowSurface) {
+        let frame_started_at = Instant::now();
+        let scale_factor = native.window.scale_factor();
+        cranpose_ui::set_density(scale_factor as f32);
+        native.app.update();
+
+        let output = match native.surface.get_current_texture() {
+            Ok(output) => output,
+            Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
+                let size = native.window.surface_size();
+                Self::resize_native_surface(native, size.width, size.height);
+                return;
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                log::error!("native window surface out of memory, exiting");
+                event_loop.exit();
+                return;
+            }
+            Err(wgpu::SurfaceError::Timeout) => {
+                log::debug!("native window surface timeout, skipping frame");
+                return;
+            }
+            Err(wgpu::SurfaceError::Other) => {
+                log::error!("native window surface other error, skipping frame");
+                return;
+            }
+        };
+
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        if let Err(error) = native.app.renderer().render(
+            &view,
+            native.surface_config.width,
+            native.surface_config.height,
+        ) {
+            log::error!("native window render failed: {error:?}");
+            return;
+        }
+
+        output.present();
+        native.last_frame_start_time = Some(frame_started_at);
     }
 
     #[cfg(feature = "robot")]
@@ -995,6 +1933,545 @@ fn desired_frame_latency(mode: FramePacingMode) -> u32 {
     }
 }
 
+fn frame_interval_for_mode(mode: FramePacingMode, vsync_interval: Duration) -> Option<Duration> {
+    match mode {
+        FramePacingMode::Vsync => Some(vsync_interval),
+        FramePacingMode::Hard60 => Some(Duration::from_nanos(16_666_667)),
+        FramePacingMode::Hard120 => Some(Duration::from_nanos(8_333_333)),
+        FramePacingMode::NoVsync => None,
+    }
+}
+
+fn native_window_attributes(options: &NativeWindowOptions, headless: bool) -> WindowAttributes {
+    let mut attributes = WindowAttributes::default()
+        .with_title(options.title.clone())
+        .with_surface_size(LogicalSize::new(
+            options.width.max(1.0) as f64,
+            options.height.max(1.0) as f64,
+        ))
+        .with_decorations(options.decorations)
+        .with_transparent(options.transparent)
+        .with_resizable(options.resizable)
+        .with_visible(!headless && options.visible)
+        .with_window_level(native_window_level(options.always_on_top));
+    if let (Some(width), Some(height)) = (options.min_width, options.min_height) {
+        attributes = attributes.with_min_surface_size(LogicalSize::new(
+            width.max(1.0) as f64,
+            height.max(1.0) as f64,
+        ));
+    }
+    if let (Some(width), Some(height)) = (options.max_width, options.max_height) {
+        attributes = attributes.with_max_surface_size(LogicalSize::new(
+            width.max(1.0) as f64,
+            height.max(1.0) as f64,
+        ));
+    }
+    if let (Some(x), Some(y)) = (options.x, options.y) {
+        attributes =
+            attributes.with_position(Position::Logical(LogicalPosition::new(x as f64, y as f64)));
+    }
+    attributes
+}
+
+fn desktop_present_mode(
+    surface_caps: &wgpu::SurfaceCapabilities,
+    frame_pacing_mode: FramePacingMode,
+) -> wgpu::PresentMode {
+    if std::env::var_os("CRANPOSE_PRESENT_MODE").is_some() {
+        crate::present_mode::select_present_mode(surface_caps)
+    } else {
+        crate::present_mode::select_present_mode_for_frame_pacing(surface_caps, frame_pacing_mode)
+    }
+}
+
+fn surface_config_for_window(
+    surface_caps: &wgpu::SurfaceCapabilities,
+    surface_format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    present_mode: wgpu::PresentMode,
+    transparent: bool,
+    frame_pacing_mode: FramePacingMode,
+) -> wgpu::SurfaceConfiguration {
+    wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: surface_format,
+        width,
+        height,
+        present_mode,
+        alpha_mode: select_alpha_mode(surface_caps, transparent),
+        view_formats: vec![],
+        desired_maximum_frame_latency: desired_frame_latency(frame_pacing_mode),
+    }
+}
+
+fn wgpu_renderer_for_surface(
+    text_system: WgpuTextSystem,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    surface_format: wgpu::TextureFormat,
+    backend: wgpu::Backend,
+    scale_factor: f64,
+) -> WgpuRenderer {
+    let mut renderer = WgpuRenderer::with_text_system(text_system);
+    renderer.set_root_scale(scale_factor as f32);
+    renderer.init_gpu(device, queue, surface_format, backend);
+    renderer
+}
+
+fn select_surface_format(surface_caps: &wgpu::SurfaceCapabilities) -> wgpu::TextureFormat {
+    surface_caps
+        .formats
+        .iter()
+        .copied()
+        .find(|f| f.is_srgb())
+        .unwrap_or(surface_caps.formats[0])
+}
+
+fn select_alpha_mode(
+    surface_caps: &wgpu::SurfaceCapabilities,
+    transparent: bool,
+) -> wgpu::CompositeAlphaMode {
+    if transparent {
+        surface_caps
+            .alpha_modes
+            .iter()
+            .copied()
+            .find(|mode| *mode == wgpu::CompositeAlphaMode::PreMultiplied)
+            .unwrap_or(surface_caps.alpha_modes[0])
+    } else {
+        surface_caps
+            .alpha_modes
+            .iter()
+            .copied()
+            .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
+            .unwrap_or(surface_caps.alpha_modes[0])
+    }
+}
+
+fn native_window_level(always_on_top: bool) -> WindowLevel {
+    if always_on_top {
+        WindowLevel::AlwaysOnTop
+    } else {
+        WindowLevel::Normal
+    }
+}
+
+fn current_native_window_physical_position(
+    window: &Arc<dyn Window>,
+) -> Option<PhysicalPosition<i32>> {
+    native_window_x11_outer_position_physical(window).or_else(|| window.outer_position().ok())
+}
+
+fn current_native_window_position(native: &NativeWindowSurface) -> Option<(f32, f32)> {
+    current_native_window_physical_position(&native.window).map(|position| {
+        let logical = position.to_logical::<f64>(native.window.scale_factor());
+        (logical.x as f32, logical.y as f32)
+    })
+}
+
+fn native_window_positions_close(a: (f32, f32), b: (f32, f32)) -> bool {
+    (a.0 - b.0).abs() <= 1.0 && (a.1 - b.1).abs() <= 1.0
+}
+
+fn native_window_surface_origin(window: &Arc<dyn Window>) -> Option<cranpose_ui::Point> {
+    let outer = current_native_window_physical_position(window)?;
+    let surface = window.surface_position();
+    let scale_factor = window.scale_factor();
+    let physical = winit::dpi::PhysicalPosition::new(outer.x + surface.x, outer.y + surface.y);
+    let logical = physical.to_logical::<f64>(scale_factor);
+    Some(cranpose_ui::Point::new(logical.x as f32, logical.y as f32))
+}
+
+fn native_window_screen_pointer_physical(
+    window: &Arc<dyn Window>,
+    local: PhysicalPosition<f64>,
+) -> Option<PhysicalPosition<f64>> {
+    let outer = current_native_window_physical_position(window)?;
+    let surface = window.surface_position();
+    Some(PhysicalPosition::new(
+        outer.x as f64 + surface.x as f64 + local.x,
+        outer.y as f64 + surface.y as f64 + local.y,
+    ))
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+struct X11PointerClient {
+    connection: x11rb::rust_connection::RustConnection,
+    root: u32,
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+enum X11PointerClientState {
+    Available(Box<X11PointerClient>),
+    Unavailable,
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+thread_local! {
+    static X11_POINTER_CLIENT: RefCell<Option<X11PointerClientState>> = const { RefCell::new(None) };
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+impl X11PointerClient {
+    fn connect() -> Option<Self> {
+        use x11rb::connection::Connection;
+
+        let (connection, screen_num) = x11rb::connect(None).ok()?;
+        let root = connection.setup().roots.get(screen_num)?.root;
+        Some(Self { connection, root })
+    }
+
+    fn pointer(&self) -> Option<PhysicalPosition<f64>> {
+        use x11rb::protocol::xproto::ConnectionExt;
+
+        let reply = self
+            .connection
+            .query_pointer(self.root)
+            .ok()?
+            .reply()
+            .ok()?;
+        Some(PhysicalPosition::new(
+            reply.root_x as f64,
+            reply.root_y as f64,
+        ))
+    }
+
+    fn configure_window(&self, window: u32, position: PhysicalPosition<i32>) -> Option<()> {
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt};
+
+        self.connection
+            .configure_window(
+                window,
+                &ConfigureWindowAux::new().x(position.x).y(position.y),
+            )
+            .ok()?;
+        self.connection.flush().ok()?;
+        Some(())
+    }
+
+    fn window_position(&self, window: u32) -> Option<PhysicalPosition<i32>> {
+        use x11rb::protocol::xproto::ConnectionExt;
+
+        let reply = self
+            .connection
+            .translate_coordinates(window, self.root, 0, 0)
+            .ok()?
+            .reply()
+            .ok()?;
+        Some(PhysicalPosition::new(
+            reply.dst_x as i32,
+            reply.dst_y as i32,
+        ))
+    }
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+fn native_window_global_pointer_physical() -> Option<PhysicalPosition<f64>> {
+    X11_POINTER_CLIENT.with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = Some(
+                X11PointerClient::connect()
+                    .map(Box::new)
+                    .map(X11PointerClientState::Available)
+                    .unwrap_or(X11PointerClientState::Unavailable),
+            );
+        }
+
+        match slot.borrow().as_ref()? {
+            X11PointerClientState::Available(client) => client.pointer(),
+            X11PointerClientState::Unavailable => None,
+        }
+    })
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+fn native_window_x11_id(window: &Arc<dyn Window>) -> Option<u32> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Xlib(handle) => Some(handle.window as u32),
+        RawWindowHandle::Xcb(handle) => Some(handle.window.get()),
+        _ => None,
+    }
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+fn native_window_x11_outer_position_physical(
+    window: &Arc<dyn Window>,
+) -> Option<PhysicalPosition<i32>> {
+    let window_id = native_window_x11_id(window)?;
+    X11_POINTER_CLIENT.with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = Some(
+                X11PointerClient::connect()
+                    .map(Box::new)
+                    .map(X11PointerClientState::Available)
+                    .unwrap_or(X11PointerClientState::Unavailable),
+            );
+        }
+
+        match slot.borrow().as_ref()? {
+            X11PointerClientState::Available(client) => client.window_position(window_id),
+            X11PointerClientState::Unavailable => None,
+        }
+    })
+}
+
+#[cfg(not(all(target_os = "linux", not(target_arch = "wasm32"))))]
+fn native_window_x11_outer_position_physical(
+    _window: &Arc<dyn Window>,
+) -> Option<PhysicalPosition<i32>> {
+    None
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+fn native_window_set_outer_position_physical(
+    window: &Arc<dyn Window>,
+    position: PhysicalPosition<i32>,
+) -> bool {
+    let Some(window_id) = native_window_x11_id(window) else {
+        return false;
+    };
+    X11_POINTER_CLIENT.with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = Some(
+                X11PointerClient::connect()
+                    .map(Box::new)
+                    .map(X11PointerClientState::Available)
+                    .unwrap_or(X11PointerClientState::Unavailable),
+            );
+        }
+
+        match slot.borrow().as_ref() {
+            Some(X11PointerClientState::Available(client)) => {
+                client.configure_window(window_id, position).is_some()
+            }
+            _ => false,
+        }
+    })
+}
+
+#[cfg(not(all(target_os = "linux", not(target_arch = "wasm32"))))]
+fn native_window_set_outer_position_physical(
+    _window: &Arc<dyn Window>,
+    _position: PhysicalPosition<i32>,
+) -> bool {
+    false
+}
+
+#[cfg(not(all(target_os = "linux", not(target_arch = "wasm32"))))]
+fn native_window_global_pointer_physical() -> Option<PhysicalPosition<f64>> {
+    None
+}
+
+fn update_native_options_position(options: &mut NativeWindowOptions, x: f32, y: f32) {
+    options.x = Some(x);
+    options.y = Some(y);
+    options.position_origin = NativeWindowPositionOrigin::Screen;
+}
+
+fn update_native_options_size(
+    options: &mut NativeWindowOptions,
+    window: &Arc<dyn Window>,
+    width: u32,
+    height: u32,
+) {
+    let scale_factor = window.scale_factor() as f32;
+    if scale_factor > 0.0 {
+        options.width = width.max(1) as f32 / scale_factor;
+        options.height = height.max(1) as f32 / scale_factor;
+    }
+}
+
+fn sync_native_window_state_position(
+    state: Option<WindowState>,
+    previous_position: Option<cranpose_ui::Point>,
+    x: f32,
+    y: f32,
+) {
+    let Some(state) = state else {
+        return;
+    };
+    if state.position_non_reactive() == previous_position {
+        state.set_position(Some(cranpose_ui::Point::new(x, y)));
+    }
+}
+
+fn sync_native_window_state_size(
+    state: Option<WindowState>,
+    previous_size: Option<cranpose_ui::Size>,
+    window: &Arc<dyn Window>,
+    width: u32,
+    height: u32,
+) {
+    let Some(state) = state else {
+        return;
+    };
+    let Some(previous_size) = previous_size else {
+        return;
+    };
+    if state.size_non_reactive() != previous_size {
+        return;
+    }
+    let scale_factor = window.scale_factor() as f32;
+    if scale_factor > 0.0 {
+        state.set_size(cranpose_ui::Size::new(
+            width.max(1) as f32 / scale_factor,
+            height.max(1) as f32 / scale_factor,
+        ));
+    }
+}
+
+fn trace_native_window_timing(args: std::fmt::Arguments<'_>) {
+    if std::env::var_os("CRANPOSE_NATIVE_WINDOW_TIMING").is_some() {
+        println!("native window timing: {args}");
+    }
+}
+
+fn configure_app_surface_size(
+    app: &mut AppShell<WgpuRenderer>,
+    window: &Arc<dyn Window>,
+    surface: &wgpu::Surface<'static>,
+    surface_config: &mut wgpu::SurfaceConfiguration,
+    width: u32,
+    height: u32,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    surface_config.width = width;
+    surface_config.height = height;
+    let device = app.renderer().device();
+    surface.configure(device, surface_config);
+    update_app_viewport(app, window, width, height);
+}
+
+fn update_app_viewport(
+    app: &mut AppShell<WgpuRenderer>,
+    window: &Arc<dyn Window>,
+    width: u32,
+    height: u32,
+) {
+    let scale_factor = window.scale_factor();
+    app.set_buffer_size(width, height);
+    app.set_viewport(
+        width as f32 / scale_factor as f32,
+        height as f32 / scale_factor as f32,
+    );
+}
+
+fn update_app_scale_factor(
+    app: &mut AppShell<WgpuRenderer>,
+    platform: &mut DesktopWinitPlatform,
+    scale_factor: f64,
+) {
+    platform.set_scale_factor(scale_factor);
+    app.renderer().set_root_scale(scale_factor as f32);
+    cranpose_ui::set_density(scale_factor as f32);
+}
+
+fn dispatch_mouse_wheel(
+    app: &mut AppShell<WgpuRenderer>,
+    platform: &DesktopWinitPlatform,
+    current_modifiers: winit::keyboard::ModifiersState,
+    cursor_position: Option<(f32, f32)>,
+    delta: winit::event::MouseScrollDelta,
+) {
+    if let Some((x, y)) = cursor_position {
+        app.set_cursor(x, y);
+    }
+
+    let mut logical_delta = platform.scroll_delta(delta);
+    let alt_pressed = current_modifiers.contains(winit::keyboard::ModifiersState::ALT);
+    if alt_pressed {
+        if logical_delta.x.abs() <= f32::EPSILON {
+            logical_delta.x = logical_delta.y;
+        }
+        logical_delta.y = 0.0;
+    }
+
+    log::trace!(
+        target: "cranpose::input",
+        "desktop wheel delta ({:.2},{:.2}) alt={}",
+        logical_delta.x,
+        logical_delta.y,
+        alt_pressed
+    );
+
+    app.pointer_scrolled(logical_delta.x, logical_delta.y);
+}
+
+fn dispatch_middle_click_paste(
+    app: &mut AppShell<WgpuRenderer>,
+    cursor_position: Option<(f32, f32)>,
+) {
+    if let Some((x, y)) = cursor_position {
+        app.set_cursor(x, y);
+    }
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(target_os = "android"),
+        not(target_os = "ios")
+    ))]
+    if let Some(text) = app.get_primary_selection() {
+        app.on_paste(&text);
+    }
+}
+
+fn cancel_app_input(app: &mut AppShell<WgpuRenderer>) {
+    app.cancel_gesture();
+    let _ = app.on_ime_preedit("", None);
+}
+
+fn logical_outer_position(window: &Arc<dyn Window>) -> Option<(f32, f32)> {
+    window.outer_position().ok().map(|position| {
+        let logical = position.to_logical::<f64>(window.scale_factor());
+        (logical.x as f32, logical.y as f32)
+    })
+}
+
+fn notify_native_window_moved(events: &NativeWindowEvents, x: f32, y: f32) {
+    if let Some(on_moved) = &events.on_moved {
+        on_moved(x, y);
+    }
+}
+
+fn notify_native_window_resized(
+    events: &NativeWindowEvents,
+    window: &Arc<dyn Window>,
+    width: u32,
+    height: u32,
+) {
+    if let Some(on_resized) = &events.on_resized {
+        let scale_factor = window.scale_factor() as f32;
+        if scale_factor > 0.0 {
+            on_resized(width as f32 / scale_factor, height as f32 / scale_factor);
+        }
+    }
+}
+
+fn notify_native_window_close_requested(events: &NativeWindowEvents) {
+    if let Some(on_close_requested) = &events.on_close_requested {
+        on_close_requested();
+    }
+}
+
+fn native_resize_direction(direction: WindowResizeDirection) -> ResizeDirection {
+    match direction {
+        WindowResizeDirection::East => ResizeDirection::East,
+        WindowResizeDirection::North => ResizeDirection::North,
+        WindowResizeDirection::NorthEast => ResizeDirection::NorthEast,
+        WindowResizeDirection::NorthWest => ResizeDirection::NorthWest,
+        WindowResizeDirection::South => ResizeDirection::South,
+        WindowResizeDirection::SouthEast => ResizeDirection::SouthEast,
+        WindowResizeDirection::SouthWest => ResizeDirection::SouthWest,
+        WindowResizeDirection::West => ResizeDirection::West,
+    }
+}
+
 fn default_vsync_interval() -> Duration {
     Duration::from_nanos(16_666_667)
 }
@@ -1009,6 +2486,122 @@ fn monitor_refresh_interval(window: &Arc<dyn Window>) -> Duration {
             Duration::from_nanos(nanos)
         })
         .unwrap_or_else(default_vsync_interval)
+}
+
+fn dispatch_keyboard_input(
+    app: &mut AppShell<WgpuRenderer>,
+    current_modifiers: winit::keyboard::ModifiersState,
+    event: winit::event::KeyEvent,
+) {
+    use cranpose_app_shell::{KeyEvent, KeyEventType};
+    use winit::keyboard::Key;
+
+    let event_type = match event.state {
+        ElementState::Pressed => KeyEventType::KeyDown,
+        ElementState::Released => KeyEventType::KeyUp,
+    };
+    let text = match &event.logical_key {
+        Key::Character(s) => s.to_string(),
+        _ => String::new(),
+    };
+    let key_code = app_key_code(event.physical_key);
+    let key_event = KeyEvent::new(key_code, text, app_modifiers(current_modifiers), event_type);
+
+    if key_code == cranpose_app_shell::KeyCode::D && event_type == KeyEventType::KeyDown {
+        app.log_debug_info();
+    }
+
+    app.on_key_event(&key_event);
+}
+
+fn app_key_code(physical_key: winit::keyboard::PhysicalKey) -> cranpose_app_shell::KeyCode {
+    use cranpose_app_shell::KeyCode;
+    use winit::keyboard::PhysicalKey;
+
+    match physical_key {
+        PhysicalKey::Code(code) => match code {
+            winit::keyboard::KeyCode::KeyA => KeyCode::A,
+            winit::keyboard::KeyCode::KeyB => KeyCode::B,
+            winit::keyboard::KeyCode::KeyC => KeyCode::C,
+            winit::keyboard::KeyCode::KeyD => KeyCode::D,
+            winit::keyboard::KeyCode::KeyE => KeyCode::E,
+            winit::keyboard::KeyCode::KeyF => KeyCode::F,
+            winit::keyboard::KeyCode::KeyG => KeyCode::G,
+            winit::keyboard::KeyCode::KeyH => KeyCode::H,
+            winit::keyboard::KeyCode::KeyI => KeyCode::I,
+            winit::keyboard::KeyCode::KeyJ => KeyCode::J,
+            winit::keyboard::KeyCode::KeyK => KeyCode::K,
+            winit::keyboard::KeyCode::KeyL => KeyCode::L,
+            winit::keyboard::KeyCode::KeyM => KeyCode::M,
+            winit::keyboard::KeyCode::KeyN => KeyCode::N,
+            winit::keyboard::KeyCode::KeyO => KeyCode::O,
+            winit::keyboard::KeyCode::KeyP => KeyCode::P,
+            winit::keyboard::KeyCode::KeyQ => KeyCode::Q,
+            winit::keyboard::KeyCode::KeyR => KeyCode::R,
+            winit::keyboard::KeyCode::KeyS => KeyCode::S,
+            winit::keyboard::KeyCode::KeyT => KeyCode::T,
+            winit::keyboard::KeyCode::KeyU => KeyCode::U,
+            winit::keyboard::KeyCode::KeyV => KeyCode::V,
+            winit::keyboard::KeyCode::KeyW => KeyCode::W,
+            winit::keyboard::KeyCode::KeyX => KeyCode::X,
+            winit::keyboard::KeyCode::KeyY => KeyCode::Y,
+            winit::keyboard::KeyCode::KeyZ => KeyCode::Z,
+            winit::keyboard::KeyCode::Digit0 => KeyCode::Digit0,
+            winit::keyboard::KeyCode::Digit1 => KeyCode::Digit1,
+            winit::keyboard::KeyCode::Digit2 => KeyCode::Digit2,
+            winit::keyboard::KeyCode::Digit3 => KeyCode::Digit3,
+            winit::keyboard::KeyCode::Digit4 => KeyCode::Digit4,
+            winit::keyboard::KeyCode::Digit5 => KeyCode::Digit5,
+            winit::keyboard::KeyCode::Digit6 => KeyCode::Digit6,
+            winit::keyboard::KeyCode::Digit7 => KeyCode::Digit7,
+            winit::keyboard::KeyCode::Digit8 => KeyCode::Digit8,
+            winit::keyboard::KeyCode::Digit9 => KeyCode::Digit9,
+            winit::keyboard::KeyCode::Backspace => KeyCode::Backspace,
+            winit::keyboard::KeyCode::Delete => KeyCode::Delete,
+            winit::keyboard::KeyCode::Enter => KeyCode::Enter,
+            winit::keyboard::KeyCode::Tab => KeyCode::Tab,
+            winit::keyboard::KeyCode::Space => KeyCode::Space,
+            winit::keyboard::KeyCode::Escape => KeyCode::Escape,
+            winit::keyboard::KeyCode::ArrowUp => KeyCode::ArrowUp,
+            winit::keyboard::KeyCode::ArrowDown => KeyCode::ArrowDown,
+            winit::keyboard::KeyCode::ArrowLeft => KeyCode::ArrowLeft,
+            winit::keyboard::KeyCode::ArrowRight => KeyCode::ArrowRight,
+            winit::keyboard::KeyCode::Home => KeyCode::Home,
+            winit::keyboard::KeyCode::End => KeyCode::End,
+            _ => KeyCode::Unknown,
+        },
+        _ => KeyCode::Unknown,
+    }
+}
+
+fn app_modifiers(
+    current_modifiers: winit::keyboard::ModifiersState,
+) -> cranpose_app_shell::Modifiers {
+    cranpose_app_shell::Modifiers {
+        shift: current_modifiers.contains(winit::keyboard::ModifiersState::SHIFT),
+        ctrl: current_modifiers.contains(winit::keyboard::ModifiersState::CONTROL),
+        alt: current_modifiers.contains(winit::keyboard::ModifiersState::ALT),
+        meta: current_modifiers.contains(winit::keyboard::ModifiersState::META),
+    }
+}
+
+fn dispatch_ime_event(app: &mut AppShell<WgpuRenderer>, ime_event: winit::event::Ime) {
+    use winit::event::Ime;
+
+    match ime_event {
+        Ime::Preedit(text, cursor) => {
+            app.on_ime_preedit(&text, cursor);
+        }
+        Ime::Commit(text) => {
+            let _ = app.on_ime_preedit("", None);
+            app.on_paste(&text);
+        }
+        Ime::Enabled => {}
+        Ime::Disabled => {
+            app.on_ime_preedit("", None);
+        }
+        Ime::DeleteSurrounding { .. } => {}
+    }
 }
 
 impl ApplicationHandler for App {
@@ -1086,50 +2679,42 @@ impl ApplicationHandler for App {
 
         let size = window.surface_size();
         let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(surface_caps.formats[0]);
+        let surface_format = select_surface_format(&surface_caps);
 
-        let present_mode = if std::env::var_os("CRANPOSE_PRESENT_MODE").is_some() {
-            crate::present_mode::select_present_mode(&surface_caps)
-        } else {
-            crate::present_mode::select_present_mode_for_frame_pacing(
-                &surface_caps,
-                self.frame_pacing_mode,
-            )
-        };
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width,
-            height: size.height,
+        let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode);
+        let surface_config = surface_config_for_window(
+            &surface_caps,
+            surface_format,
+            size.width.max(1),
+            size.height.max(1),
             present_mode,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: desired_frame_latency(self.frame_pacing_mode),
-        };
+            false,
+            self.frame_pacing_mode,
+        );
+
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
 
         surface.configure(&device, &surface_config);
 
         // Create renderer with fonts from settings
-        let fonts: &[&[u8]] = self.settings.fonts.take().unwrap_or(&[]);
-        let mut renderer = WgpuRenderer::new(fonts);
-        renderer.init_gpu(
-            Arc::new(device),
-            Arc::new(queue),
+        let fonts: &[&[u8]] = self.settings.fonts.unwrap_or(&[]);
+        let text_system = WgpuTextSystem::from_fonts(fonts);
+        let initial_scale = window.scale_factor();
+        let renderer = wgpu_renderer_for_surface(
+            text_system.clone(),
+            Arc::clone(&device),
+            Arc::clone(&queue),
             surface_format,
             adapter_info.backend,
+            initial_scale,
         );
-        let initial_scale = window.scale_factor();
-        renderer.set_root_scale(initial_scale as f32);
         cranpose_ui::set_density(initial_scale as f32);
 
         // Take the content closure (can only be called once)
         let content = self.content.take().expect("content already taken");
         let mut app = AppShell::new(renderer, default_root_key(), content);
+        app.set_before_recompose(native_window::clear_native_window_requests);
         #[cfg(feature = "robot")]
         app.set_semantics_enabled(self.robot_controller.is_some());
 
@@ -1160,6 +2745,15 @@ impl ApplicationHandler for App {
         self.surface_caps = Some(surface_caps);
         self.app = Some(app);
         self.platform = Some(platform);
+        self.gpu_context = Some(DesktopGpuContext {
+            instance,
+            adapter,
+            adapter_backend: adapter_info.backend,
+            device,
+            queue,
+            text_system,
+        });
+        self.sync_native_windows(event_loop);
     }
 
     fn window_event(
@@ -1168,8 +2762,12 @@ impl ApplicationHandler for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(window) = &self.window else { return };
+        let Some(window) = &self.window else {
+            self.native_window_event(event_loop, window_id, event);
+            return;
+        };
         if window_id != window.id() {
+            self.native_window_event(event_loop, window_id, event);
             return;
         }
 
@@ -1187,6 +2785,7 @@ impl ApplicationHandler for App {
             return;
         };
 
+        let mut sync_native_windows_after_event = false;
         match event {
             WindowEvent::CloseRequested => {
                 // Save recording if active
@@ -1198,39 +2797,32 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::SurfaceResized(new_size) if new_size.width > 0 && new_size.height > 0 => {
-                surface_config.width = new_size.width;
-                surface_config.height = new_size.height;
-                let device = app.renderer().device();
-                surface.configure(device, surface_config);
-
-                let scale_factor = window.scale_factor();
-                let logical_width = new_size.width as f32 / scale_factor as f32;
-                let logical_height = new_size.height as f32 / scale_factor as f32;
-
-                app.set_buffer_size(new_size.width, new_size.height);
-                app.set_viewport(logical_width, logical_height);
+                configure_app_surface_size(
+                    app,
+                    window,
+                    surface,
+                    surface_config,
+                    new_size.width,
+                    new_size.height,
+                );
             }
             WindowEvent::ScaleFactorChanged {
                 scale_factor,
                 mut surface_size_writer,
             } => {
-                platform.set_scale_factor(scale_factor);
-                app.renderer().set_root_scale(scale_factor as f32);
-                cranpose_ui::set_density(scale_factor as f32);
+                update_app_scale_factor(app, platform, scale_factor);
 
                 let new_size = window.surface_size();
                 let _ = surface_size_writer.request_surface_size(new_size);
                 if new_size.width > 0 && new_size.height > 0 {
-                    surface_config.width = new_size.width;
-                    surface_config.height = new_size.height;
-                    let device = app.renderer().device();
-                    surface.configure(device, surface_config);
-
-                    let logical_width = new_size.width as f32 / scale_factor as f32;
-                    let logical_height = new_size.height as f32 / scale_factor as f32;
-
-                    app.set_buffer_size(new_size.width, new_size.height);
-                    app.set_viewport(logical_width, logical_height);
+                    configure_app_surface_size(
+                        app,
+                        window,
+                        surface,
+                        surface_config,
+                        new_size.width,
+                        new_size.height,
+                    );
                 }
             }
             WindowEvent::Moved(_) => {
@@ -1255,30 +2847,13 @@ impl ApplicationHandler for App {
                 self.current_modifiers = modifiers.state();
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                if let Some((x, y)) = self.last_cursor_position {
-                    app.set_cursor(x, y);
-                }
-
-                let mut logical_delta = platform.scroll_delta(delta);
-                let alt_pressed = self
-                    .current_modifiers
-                    .contains(winit::keyboard::ModifiersState::ALT);
-                if alt_pressed {
-                    if logical_delta.x.abs() <= f32::EPSILON {
-                        logical_delta.x = logical_delta.y;
-                    }
-                    logical_delta.y = 0.0;
-                }
-
-                log::trace!(
-                    target: "cranpose::input",
-                    "desktop wheel delta ({:.2},{:.2}) alt={}",
-                    logical_delta.x,
-                    logical_delta.y,
-                    alt_pressed
+                dispatch_mouse_wheel(
+                    app,
+                    platform,
+                    self.current_modifiers,
+                    self.last_cursor_position,
+                    delta,
                 );
-
-                app.pointer_scrolled(logical_delta.x, logical_delta.y);
             }
             WindowEvent::PointerButton {
                 state,
@@ -1333,146 +2908,16 @@ impl ApplicationHandler for App {
                 button: ButtonSource::Mouse(MouseButton::Middle),
                 ..
             } => {
-                if let Some((x, y)) = self.last_cursor_position {
-                    app.set_cursor(x, y);
-                }
-                #[cfg(all(
-                    not(target_arch = "wasm32"),
-                    not(target_os = "android"),
-                    not(target_os = "ios")
-                ))]
-                if let Some(text) = app.get_primary_selection() {
-                    app.on_paste(&text);
-                }
+                dispatch_middle_click_paste(app, self.last_cursor_position);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
-                use winit::keyboard::{Key, PhysicalKey};
-
-                // Convert winit key event to cranpose-ui KeyEvent
-                let event_type = match event.state {
-                    ElementState::Pressed => KeyEventType::KeyDown,
-                    ElementState::Released => KeyEventType::KeyUp,
-                };
-
-                // Get text from logical key
-                let text = match &event.logical_key {
-                    Key::Character(s) => s.to_string(),
-                    _ => String::new(),
-                };
-
-                // Convert physical key to KeyCode
-                let key_code = match event.physical_key {
-                    PhysicalKey::Code(code) => match code {
-                        winit::keyboard::KeyCode::KeyA => KeyCode::A,
-                        winit::keyboard::KeyCode::KeyB => KeyCode::B,
-                        winit::keyboard::KeyCode::KeyC => KeyCode::C,
-                        winit::keyboard::KeyCode::KeyD => KeyCode::D,
-                        winit::keyboard::KeyCode::KeyE => KeyCode::E,
-                        winit::keyboard::KeyCode::KeyF => KeyCode::F,
-                        winit::keyboard::KeyCode::KeyG => KeyCode::G,
-                        winit::keyboard::KeyCode::KeyH => KeyCode::H,
-                        winit::keyboard::KeyCode::KeyI => KeyCode::I,
-                        winit::keyboard::KeyCode::KeyJ => KeyCode::J,
-                        winit::keyboard::KeyCode::KeyK => KeyCode::K,
-                        winit::keyboard::KeyCode::KeyL => KeyCode::L,
-                        winit::keyboard::KeyCode::KeyM => KeyCode::M,
-                        winit::keyboard::KeyCode::KeyN => KeyCode::N,
-                        winit::keyboard::KeyCode::KeyO => KeyCode::O,
-                        winit::keyboard::KeyCode::KeyP => KeyCode::P,
-                        winit::keyboard::KeyCode::KeyQ => KeyCode::Q,
-                        winit::keyboard::KeyCode::KeyR => KeyCode::R,
-                        winit::keyboard::KeyCode::KeyS => KeyCode::S,
-                        winit::keyboard::KeyCode::KeyT => KeyCode::T,
-                        winit::keyboard::KeyCode::KeyU => KeyCode::U,
-                        winit::keyboard::KeyCode::KeyV => KeyCode::V,
-                        winit::keyboard::KeyCode::KeyW => KeyCode::W,
-                        winit::keyboard::KeyCode::KeyX => KeyCode::X,
-                        winit::keyboard::KeyCode::KeyY => KeyCode::Y,
-                        winit::keyboard::KeyCode::KeyZ => KeyCode::Z,
-                        winit::keyboard::KeyCode::Digit0 => KeyCode::Digit0,
-                        winit::keyboard::KeyCode::Digit1 => KeyCode::Digit1,
-                        winit::keyboard::KeyCode::Digit2 => KeyCode::Digit2,
-                        winit::keyboard::KeyCode::Digit3 => KeyCode::Digit3,
-                        winit::keyboard::KeyCode::Digit4 => KeyCode::Digit4,
-                        winit::keyboard::KeyCode::Digit5 => KeyCode::Digit5,
-                        winit::keyboard::KeyCode::Digit6 => KeyCode::Digit6,
-                        winit::keyboard::KeyCode::Digit7 => KeyCode::Digit7,
-                        winit::keyboard::KeyCode::Digit8 => KeyCode::Digit8,
-                        winit::keyboard::KeyCode::Digit9 => KeyCode::Digit9,
-                        winit::keyboard::KeyCode::Backspace => KeyCode::Backspace,
-                        winit::keyboard::KeyCode::Delete => KeyCode::Delete,
-                        winit::keyboard::KeyCode::Enter => KeyCode::Enter,
-                        winit::keyboard::KeyCode::Tab => KeyCode::Tab,
-                        winit::keyboard::KeyCode::Space => KeyCode::Space,
-                        winit::keyboard::KeyCode::Escape => KeyCode::Escape,
-                        winit::keyboard::KeyCode::ArrowUp => KeyCode::ArrowUp,
-                        winit::keyboard::KeyCode::ArrowDown => KeyCode::ArrowDown,
-                        winit::keyboard::KeyCode::ArrowLeft => KeyCode::ArrowLeft,
-                        winit::keyboard::KeyCode::ArrowRight => KeyCode::ArrowRight,
-                        winit::keyboard::KeyCode::Home => KeyCode::Home,
-                        winit::keyboard::KeyCode::End => KeyCode::End,
-                        _ => KeyCode::Unknown,
-                    },
-                    _ => KeyCode::Unknown,
-                };
-
-                // Convert winit modifier state to our Modifiers struct
-                let modifiers = Modifiers {
-                    shift: self
-                        .current_modifiers
-                        .contains(winit::keyboard::ModifiersState::SHIFT),
-                    ctrl: self
-                        .current_modifiers
-                        .contains(winit::keyboard::ModifiersState::CONTROL),
-                    alt: self
-                        .current_modifiers
-                        .contains(winit::keyboard::ModifiersState::ALT),
-                    meta: self
-                        .current_modifiers
-                        .contains(winit::keyboard::ModifiersState::META),
-                };
-
-                let key_event = KeyEvent::new(key_code, text, modifiers, event_type);
-
-                // Special: still handle D for debug info
-                if key_code == KeyCode::D && event_type == KeyEventType::KeyDown {
-                    app.log_debug_info();
-                }
-
-                // Dispatch to text fields
-                app.on_key_event(&key_event);
+                dispatch_keyboard_input(app, self.current_modifiers, event);
             }
             WindowEvent::Focused(false) => {
-                // Window lost focus - cancel any in-progress gestures
-                app.cancel_gesture();
-                // Clear any active IME composition
-                let _ = app.on_ime_preedit("", None);
+                cancel_app_input(app);
             }
             WindowEvent::Ime(ime_event) => {
-                use winit::event::Ime;
-                match ime_event {
-                    Ime::Preedit(text, cursor) => {
-                        // IME is composing - show preedit text with underline
-                        app.on_ime_preedit(&text, cursor);
-                    }
-                    Ime::Commit(text) => {
-                        // IME finished - commit the final text
-                        // First clear composition state, then insert the final text
-                        let _ = app.on_ime_preedit("", None);
-                        app.on_paste(&text);
-                    }
-                    Ime::Enabled => {
-                        // IME was enabled - no action needed
-                    }
-                    Ime::Disabled => {
-                        // IME was disabled - clear any composition state
-                        app.on_ime_preedit("", None);
-                    }
-                    Ime::DeleteSurrounding { .. } => {
-                        // IME asks to delete surrounding text; not yet handled by app shell.
-                    }
-                }
+                dispatch_ime_event(app, ime_event);
             }
             WindowEvent::PointerLeft { .. } => {
                 app.cancel_gesture();
@@ -1486,19 +2931,22 @@ impl ApplicationHandler for App {
                 }
                 log::trace!(target: "cranpose::input", "desktop redraw requested");
                 let frame_started_at = Instant::now();
+                cranpose_ui::set_density(window.scale_factor() as f32);
                 app.update();
+                sync_native_windows_after_event = true;
 
                 let output = match surface.get_current_texture() {
                     Ok(output) => output,
                     Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
-                        // Reconfigure surface with current window size
                         let size = window.surface_size();
-                        if size.width > 0 && size.height > 0 {
-                            surface_config.width = size.width;
-                            surface_config.height = size.height;
-                            let device = app.renderer().device();
-                            surface.configure(device, surface_config);
-                        }
+                        configure_app_surface_size(
+                            app,
+                            window,
+                            surface,
+                            surface_config,
+                            size.width,
+                            size.height,
+                        );
                         return;
                     }
                     Err(wgpu::SurfaceError::OutOfMemory) => {
@@ -1533,9 +2981,21 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+
+        if sync_native_windows_after_event {
+            self.refresh_native_window_requests();
+            self.sync_native_windows(event_loop);
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let native_positions_changed = self.poll_native_window_positions();
+        let native_drag_moved = self.poll_active_native_window_drags();
+        if native_positions_changed || native_drag_moved {
+            self.refresh_native_window_requests();
+            self.sync_native_windows(event_loop);
+        }
+
         let frame_interval = self.frame_interval();
         let last_frame_start_time = self.last_frame_start_time;
         let Some(app) = &mut self.app else { return };
@@ -1886,6 +3346,47 @@ impl ApplicationHandler for App {
             window.request_redraw();
         }
 
+        let mut native_has_active_animations = false;
+        let mut native_has_active_drag = false;
+        let mut native_frame_cap_deadline: Option<Instant> = None;
+        let mut native_next_event_time: Option<Instant> = None;
+        for native in self.native_windows.values_mut() {
+            if !native.options.visible {
+                continue;
+            }
+
+            let has_active_animations = native.app.has_active_animations();
+            native_has_active_animations |= has_active_animations;
+            native_has_active_drag |= native.active_drag.is_some();
+            let needs_redraw = native.app.needs_redraw() || has_active_animations;
+            let next_frame_time = native.last_frame_start_time.and_then(|started_at| {
+                native
+                    .frame_interval()
+                    .map(|interval| started_at + interval)
+            });
+            let waiting_for_frame_cap =
+                needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
+
+            if needs_redraw && !waiting_for_frame_cap {
+                native.window.request_redraw();
+            }
+            if waiting_for_frame_cap {
+                let deadline = next_frame_time.expect("native frame cap deadline should exist");
+                native_frame_cap_deadline = Some(
+                    native_frame_cap_deadline
+                        .map(|current| current.min(deadline))
+                        .unwrap_or(deadline),
+                );
+            }
+            if let Some(next_time) = native.app.next_event_time() {
+                native_next_event_time = Some(
+                    native_next_event_time
+                        .map(|current| current.min(next_time))
+                        .unwrap_or(next_time),
+                );
+            }
+        }
+
         // Smart ControlFlow: only Poll when necessary
         #[cfg(feature = "robot")]
         let robot_needs_poll = self.robot_controller.is_some();
@@ -1896,13 +3397,24 @@ impl ApplicationHandler for App {
         // Poll continuously when:
         // - Active animations are running
         // - Robot test is active
-        if waiting_for_frame_cap {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(
-                next_frame_time.expect("frame cap deadline should exist"),
-            ));
-        } else if has_active_animations || robot_needs_poll {
+        if native_has_active_drag || robot_needs_poll {
             event_loop.set_control_flow(ControlFlow::Poll);
-        } else if let Some(next_time) = app.next_event_time() {
+        } else if let Some(deadline) = [
+            next_frame_time.filter(|_| waiting_for_frame_cap),
+            native_frame_cap_deadline,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+        } else if has_active_animations || native_has_active_animations {
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else if let Some(next_time) = [app.next_event_time(), native_next_event_time]
+            .into_iter()
+            .flatten()
+            .min()
+        {
             // Cursor blink uses timer-based scheduling (not continuous poll)
             event_loop.set_control_flow(ControlFlow::WaitUntil(next_time));
         } else {
@@ -1922,6 +3434,7 @@ pub fn try_run(
     mut settings: AppSettings,
     content: impl FnMut() + 'static,
 ) -> Result<(), LaunchError> {
+    native_window::clear_native_window_requests();
     let event_loop = EventLoop::builder()
         .build()
         .map_err(LaunchError::EventLoopCreate)?;
@@ -1953,6 +3466,7 @@ pub fn try_run(
     }
 
     let run_result = event_loop.run_app(app);
+    native_window::clear_native_window_requests();
     if let Some(error) = launch_error.borrow_mut().take() {
         return Err(error);
     }
@@ -2386,6 +3900,10 @@ fn char_to_key_code(ch: char) -> cranpose_app_shell::KeyCode {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        App, NativeWindowOptions, NativeWindowPositionOrigin, PendingNativeWindowPositions,
+    };
+
     #[cfg(feature = "robot")]
     use super::{
         find_button_in_trees, find_text_in_trees, panic_payload_message,
@@ -2401,6 +3919,55 @@ mod tests {
     };
     #[cfg(feature = "robot")]
     use std::rc::Rc;
+
+    #[test]
+    fn native_window_screen_position_is_declarative() {
+        let options = NativeWindowOptions::new("child", 100.0, 50.0).with_position(10.0, 20.0);
+        assert!(App::native_window_options_have_screen_position(&options));
+    }
+
+    #[test]
+    fn native_window_host_position_needs_resolution() {
+        let options =
+            NativeWindowOptions::new("child", 100.0, 50.0).with_host_window_position(10.0, 20.0);
+        assert_eq!(
+            options.position_origin,
+            NativeWindowPositionOrigin::HostWindow
+        );
+        assert!(!App::native_window_options_have_screen_position(&options));
+    }
+
+    #[test]
+    fn pending_native_window_positions_acknowledge_stale_programmatic_moves() {
+        let mut pending = PendingNativeWindowPositions::default();
+        pending.push((100.0, 200.0));
+        pending.push((140.0, 230.0));
+
+        assert!(pending.acknowledge((100.0, 200.0)));
+        assert!(pending.acknowledge((140.0, 230.0)));
+        assert!(!pending.acknowledge((190.0, 260.0)));
+    }
+
+    #[test]
+    fn pending_native_window_positions_match_fractional_window_manager_rounding() {
+        let mut pending = PendingNativeWindowPositions::default();
+        pending.push((100.4, 200.4));
+
+        assert!(pending.acknowledge((101.0, 201.0)));
+        assert!(!pending.acknowledge((101.0, 201.0)));
+    }
+
+    #[test]
+    fn pending_native_window_positions_can_be_cleared_after_external_move() {
+        let mut pending = PendingNativeWindowPositions::default();
+        pending.push((100.0, 200.0));
+        pending.push((140.0, 240.0));
+
+        pending.clear();
+
+        assert!(!pending.acknowledge((100.0, 200.0)));
+        assert!(!pending.acknowledge((140.0, 240.0)));
+    }
 
     #[cfg(feature = "robot")]
     #[test]
