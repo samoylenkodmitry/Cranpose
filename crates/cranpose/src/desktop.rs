@@ -27,6 +27,8 @@ use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{ResizeDirection, Window, WindowAttributes, WindowId, WindowLevel};
 
+const NATIVE_WINDOW_DRAG_POLL_INTERVAL: Duration = Duration::from_millis(16);
+
 #[cfg(feature = "robot")]
 use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
 
@@ -909,17 +911,39 @@ struct NativeWindowShell {
 
 #[derive(Clone, Copy, Debug)]
 struct NativeWindowDragSession {
-    last_pointer_screen: PhysicalPosition<f64>,
+    start_pointer_screen: PhysicalPosition<f64>,
+    start_window_outer: PhysicalPosition<i32>,
+    last_target_outer: PhysicalPosition<i32>,
+    next_poll_at: Instant,
+}
+
+impl NativeWindowDragSession {
+    fn new(
+        start_pointer_screen: PhysicalPosition<f64>,
+        start_window_outer: PhysicalPosition<i32>,
+        now: Instant,
+    ) -> Self {
+        Self {
+            start_pointer_screen,
+            start_window_outer,
+            last_target_outer: start_window_outer,
+            next_poll_at: now + NATIVE_WINDOW_DRAG_POLL_INTERVAL,
+        }
+    }
+
+    fn target_for_pointer(&self, pointer: PhysicalPosition<f64>) -> PhysicalPosition<i32> {
+        PhysicalPosition::new(
+            (self.start_window_outer.x as f64 + pointer.x - self.start_pointer_screen.x).round()
+                as i32,
+            (self.start_window_outer.y as f64 + pointer.y - self.start_pointer_screen.y).round()
+                as i32,
+        )
+    }
 }
 
 #[derive(Default)]
 struct PendingNativeWindowPositions {
-    positions: VecDeque<PendingNativeWindowPosition>,
-}
-
-struct PendingNativeWindowPosition {
-    position: (f32, f32),
-    created_at: Instant,
+    positions: VecDeque<(f32, f32)>,
 }
 
 impl PendingNativeWindowPositions {
@@ -927,14 +951,11 @@ impl PendingNativeWindowPositions {
         if self
             .positions
             .back()
-            .is_some_and(|pending| native_window_positions_close(pending.position, position))
+            .is_some_and(|pending| native_window_positions_close(*pending, position))
         {
             return;
         }
-        self.positions.push_back(PendingNativeWindowPosition {
-            position,
-            created_at: Instant::now(),
-        });
+        self.positions.push_back(position);
         while self.positions.len() > 16 {
             self.positions.pop_front();
         }
@@ -944,7 +965,7 @@ impl PendingNativeWindowPositions {
         let Some(index) = self
             .positions
             .iter()
-            .position(|pending| native_window_positions_close(pending.position, position))
+            .position(|pending| native_window_positions_close(*pending, position))
         else {
             return false;
         };
@@ -952,18 +973,6 @@ impl PendingNativeWindowPositions {
             self.positions.pop_front();
         }
         true
-    }
-
-    fn has_fresh_pending(&mut self, max_age: Duration) -> bool {
-        let now = Instant::now();
-        while self
-            .positions
-            .front()
-            .is_some_and(|pending| now.duration_since(pending.created_at) > max_age)
-        {
-            self.positions.pop_front();
-        }
-        !self.positions.is_empty()
     }
 
     fn clear(&mut self) {
@@ -1469,11 +1478,11 @@ impl App {
         if native.options.x != options.x || native.options.y != options.y {
             if let (Some(x), Some(y)) = (options.x, options.y) {
                 native.pending_outer_positions.push((x, y));
-                native
-                    .window
-                    .set_outer_position(Position::Logical(LogicalPosition::new(
-                        x as f64, y as f64,
-                    )));
+                let logical = LogicalPosition::new(x as f64, y as f64);
+                let physical = logical.to_physical::<i32>(native.window.scale_factor());
+                if !native_window_set_outer_position_physical(&native.window, physical) {
+                    native.window.set_outer_position(Position::Logical(logical));
+                }
             }
         }
         if native.options.width != options.width || native.options.height != options.height {
@@ -1501,31 +1510,96 @@ impl App {
         );
     }
 
+    fn sync_native_window_position_from_os(
+        native: &mut NativeWindowSurface,
+        native_window_positions: &mut HashMap<NativeWindowKey, (f32, f32)>,
+    ) -> bool {
+        let Some(position) = current_native_window_position(native) else {
+            return false;
+        };
+        if native_window_positions
+            .get(&native.key)
+            .is_some_and(|known| native_window_positions_close(*known, position))
+            && native
+                .state
+                .and_then(|state| state.position_non_reactive())
+                .is_some_and(|known| native_window_positions_close((known.x, known.y), position))
+        {
+            return false;
+        }
+
+        let previous_state_position = native.state.and_then(|state| state.position_non_reactive());
+        native_window_positions.insert(native.key, position);
+        update_native_options_position(&mut native.options, position.0, position.1);
+        native.pending_outer_positions.clear();
+        notify_native_window_moved(&native.events, position.0, position.1);
+        sync_native_window_state_position(
+            native.state,
+            previous_state_position,
+            position.0,
+            position.1,
+        );
+        true
+    }
+
     fn start_native_window_drag(native: &mut NativeWindowSurface) -> bool {
         let fallback_position = native
             .last_cursor_physical_position
             .and_then(|position| native_window_screen_pointer_physical(&native.window, position));
-        let Some(pointer) = native_window_global_pointer_physical().or(fallback_position) else {
+        let Some(pointer) = native_window_global_pointer_state()
+            .map(|state| state.position)
+            .or(fallback_position)
+        else {
             return false;
         };
-        native.active_drag = Some(NativeWindowDragSession {
-            last_pointer_screen: pointer,
-        });
+        let Some(window_outer) = current_native_window_physical_position(&native.window) else {
+            return false;
+        };
+        native.active_drag = Some(NativeWindowDragSession::new(
+            pointer,
+            window_outer,
+            Instant::now(),
+        ));
         true
     }
 
-    fn poll_active_native_window_drags(&mut self) -> bool {
-        let Some(pointer) = native_window_global_pointer_physical() else {
+    fn poll_active_native_window_drags(&mut self, now: Instant) -> bool {
+        let has_due_drag = self.native_windows.values().any(|native| {
+            native
+                .active_drag
+                .is_some_and(|active_drag| active_drag.next_poll_at <= now)
+        });
+        if !has_due_drag {
             return false;
-        };
+        }
+
+        let pointer = native_window_global_pointer_state();
         let mut updates = Vec::new();
         for native in self.native_windows.values_mut() {
-            if native.active_drag.is_some() {
-                if let Some(update) = Self::update_native_window_drag(native, pointer) {
-                    updates.push(update);
+            let Some(active_drag) = native.active_drag.as_mut() else {
+                continue;
+            };
+            if active_drag.next_poll_at > now {
+                continue;
+            }
+            active_drag.next_poll_at = now + NATIVE_WINDOW_DRAG_POLL_INTERVAL;
+
+            let Some(pointer) = pointer else {
+                continue;
+            };
+            if !pointer.primary_down {
+                native.active_drag = None;
+                if native.app.pointer_released() {
+                    native.window.request_redraw();
                 }
+                native.app.sync_selection_to_primary();
+                continue;
+            }
+            if let Some(update) = Self::update_native_window_drag(native, pointer.position) {
+                updates.push(update);
             }
         }
+
         let moved = !updates.is_empty();
         for (key, position) in updates {
             self.native_window_positions.insert(key, position);
@@ -1533,73 +1607,16 @@ impl App {
         moved
     }
 
-    fn poll_native_window_positions(&mut self) -> bool {
-        let mut changed = false;
-        let native_window_positions = &mut self.native_window_positions;
-        for native in self.native_windows.values_mut() {
-            if !native.options.visible {
-                continue;
-            }
-            let Some(position) = current_native_window_position(native) else {
-                continue;
-            };
-            if native_window_positions
-                .get(&native.key)
-                .is_some_and(|known| native_window_positions_close(*known, position))
-            {
-                continue;
-            }
-
-            let acknowledged_programmatic_move =
-                native.pending_outer_positions.acknowledge(position);
-            if !acknowledged_programmatic_move
-                && native
-                    .pending_outer_positions
-                    .has_fresh_pending(Duration::from_millis(180))
-            {
-                continue;
-            }
-
-            let previous_state_position =
-                native.state.and_then(|state| state.position_non_reactive());
-            native_window_positions.insert(native.key, position);
-            update_native_options_position(&mut native.options, position.0, position.1);
-            if acknowledged_programmatic_move {
-                continue;
-            }
-
-            native.pending_outer_positions.clear();
-            notify_native_window_moved(&native.events, position.0, position.1);
-            sync_native_window_state_position(
-                native.state,
-                previous_state_position,
-                position.0,
-                position.1,
-            );
-            changed = true;
-        }
-        changed
-    }
-
     fn update_native_window_drag(
         native: &mut NativeWindowSurface,
         pointer: PhysicalPosition<f64>,
     ) -> Option<(NativeWindowKey, (f32, f32))> {
         let active_drag = native.active_drag.as_mut()?;
-        let delta = PhysicalPosition::new(
-            pointer.x - active_drag.last_pointer_screen.x,
-            pointer.y - active_drag.last_pointer_screen.y,
-        );
-        active_drag.last_pointer_screen = pointer;
-        if delta.x.abs() <= f64::EPSILON && delta.y.abs() <= f64::EPSILON {
+        let target = active_drag.target_for_pointer(pointer);
+        if target == active_drag.last_target_outer {
             return None;
         }
-
-        let current = current_native_window_physical_position(&native.window)?;
-        let target = PhysicalPosition::new(
-            (current.x as f64 + delta.x).round() as i32,
-            (current.y as f64 + delta.y).round() as i32,
-        );
+        active_drag.last_target_outer = target;
         let logical = target.to_logical::<f64>(native.window.scale_factor());
         let logical_position = (logical.x as f32, logical.y as f32);
         native.pending_outer_positions.push(logical_position);
@@ -1697,8 +1714,10 @@ impl App {
                 native.vsync_interval = monitor_refresh_interval(&native.window);
                 let previous_state_position =
                     native.state.and_then(|state| state.position_non_reactive());
-                let logical = position.to_logical::<f64>(native.window.scale_factor());
-                let position = (logical.x as f32, logical.y as f32);
+                let position = current_native_window_position(&native).unwrap_or_else(|| {
+                    let logical = position.to_logical::<f64>(native.window.scale_factor());
+                    (logical.x as f32, logical.y as f32)
+                });
                 let acknowledged_programmatic_move =
                     native.pending_outer_positions.acknowledge(position);
                 self.native_window_positions.insert(native.key, position);
@@ -1721,13 +1740,14 @@ impl App {
                 native.last_cursor_physical_position = Some(position);
                 let fallback_pointer =
                     native_window_screen_pointer_physical(&native.window, position);
-                if let Some(pointer) = native_window_global_pointer_physical().or(fallback_pointer)
+                if let Some(pointer) = native_window_global_pointer_state()
+                    .map(|state| state.position)
+                    .or(fallback_pointer)
                 {
                     if let Some((key, position)) =
                         Self::update_native_window_drag(&mut native, pointer)
                     {
                         self.native_window_positions.insert(key, position);
-                        event_loop.set_control_flow(ControlFlow::Poll);
                         sync_after_event = true;
                     }
                 }
@@ -1766,8 +1786,9 @@ impl App {
                     ElementState::Pressed => {
                         let drag_requested = Rc::new(Cell::new(false));
                         let drag_requested_for_handler = Rc::clone(&drag_requested);
-                        let drag_handler: Rc<dyn Fn()> = Rc::new(move || {
+                        let drag_handler: Rc<dyn Fn() -> bool> = Rc::new(move || {
                             drag_requested_for_handler.set(true);
+                            true
                         });
                         let resize_window = native.window.clone();
                         let resize_handler: Rc<dyn Fn(WindowResizeDirection)> =
@@ -1789,8 +1810,18 @@ impl App {
                             },
                         );
                         if handled {
-                            if drag_requested.get() && Self::start_native_window_drag(&mut native) {
-                                event_loop.set_control_flow(ControlFlow::Poll);
+                            if drag_requested.get() {
+                                Self::sync_native_window_position_from_os(
+                                    &mut native,
+                                    &mut self.native_window_positions,
+                                );
+                                for other_native in self.native_windows.values_mut() {
+                                    Self::sync_native_window_position_from_os(
+                                        other_native,
+                                        &mut self.native_window_positions,
+                                    );
+                                }
+                                Self::start_native_window_drag(&mut native);
                             }
                             sync_after_event = true;
                         }
@@ -1826,8 +1857,12 @@ impl App {
                 dispatch_ime_event(&mut native.app, ime_event);
             }
             WindowEvent::PointerLeft { .. } => {
-                native.active_drag = None;
-                native.app.cancel_gesture();
+                let drag_still_has_global_pointer = native.active_drag.is_some()
+                    && native_window_global_pointer_state().is_some_and(|state| state.primary_down);
+                if !drag_still_has_global_pointer {
+                    native.active_drag = None;
+                    native.app.cancel_gesture();
+                }
             }
             WindowEvent::RedrawRequested => {
                 if let Some(deadline) = native.last_frame_start_time.and_then(|started_at| {
@@ -2095,25 +2130,31 @@ fn native_window_screen_pointer_physical(
     ))
 }
 
+#[derive(Clone, Copy, Debug)]
+struct NativeWindowPointerState {
+    position: PhysicalPosition<f64>,
+    primary_down: bool,
+}
+
 #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
-struct X11PointerClient {
+struct X11WindowClient {
     connection: x11rb::rust_connection::RustConnection,
     root: u32,
 }
 
 #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
-enum X11PointerClientState {
-    Available(Box<X11PointerClient>),
+enum X11WindowClientState {
+    Available(Box<X11WindowClient>),
     Unavailable,
 }
 
 #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
 thread_local! {
-    static X11_POINTER_CLIENT: RefCell<Option<X11PointerClientState>> = const { RefCell::new(None) };
+    static X11_WINDOW_CLIENT: RefCell<Option<X11WindowClientState>> = const { RefCell::new(None) };
 }
 
 #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
-impl X11PointerClient {
+impl X11WindowClient {
     fn connect() -> Option<Self> {
         use x11rb::connection::Connection;
 
@@ -2122,8 +2163,8 @@ impl X11PointerClient {
         Some(Self { connection, root })
     }
 
-    fn pointer(&self) -> Option<PhysicalPosition<f64>> {
-        use x11rb::protocol::xproto::ConnectionExt;
+    fn pointer_state(&self) -> Option<NativeWindowPointerState> {
+        use x11rb::protocol::xproto::{ConnectionExt, KeyButMask};
 
         let reply = self
             .connection
@@ -2131,10 +2172,11 @@ impl X11PointerClient {
             .ok()?
             .reply()
             .ok()?;
-        Some(PhysicalPosition::new(
-            reply.root_x as f64,
-            reply.root_y as f64,
-        ))
+        let mask = u16::from(reply.mask);
+        Some(NativeWindowPointerState {
+            position: PhysicalPosition::new(reply.root_x as f64, reply.root_y as f64),
+            primary_down: mask & u16::from(KeyButMask::BUTTON1) != 0,
+        })
     }
 
     fn configure_window(&self, window: u32, position: PhysicalPosition<i32>) -> Option<()> {
@@ -2168,22 +2210,32 @@ impl X11PointerClient {
 }
 
 #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
-fn native_window_global_pointer_physical() -> Option<PhysicalPosition<f64>> {
-    X11_POINTER_CLIENT.with(|slot| {
+fn with_x11_window_client<R>(f: impl FnOnce(&X11WindowClient) -> R) -> Option<R> {
+    X11_WINDOW_CLIENT.with(|slot| {
         if slot.borrow().is_none() {
             *slot.borrow_mut() = Some(
-                X11PointerClient::connect()
+                X11WindowClient::connect()
                     .map(Box::new)
-                    .map(X11PointerClientState::Available)
-                    .unwrap_or(X11PointerClientState::Unavailable),
+                    .map(X11WindowClientState::Available)
+                    .unwrap_or(X11WindowClientState::Unavailable),
             );
         }
 
         match slot.borrow().as_ref()? {
-            X11PointerClientState::Available(client) => client.pointer(),
-            X11PointerClientState::Unavailable => None,
+            X11WindowClientState::Available(client) => Some(f(client)),
+            X11WindowClientState::Unavailable => None,
         }
     })
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+fn native_window_global_pointer_state() -> Option<NativeWindowPointerState> {
+    with_x11_window_client(X11WindowClient::pointer_state).flatten()
+}
+
+#[cfg(not(all(target_os = "linux", not(target_arch = "wasm32"))))]
+fn native_window_global_pointer_state() -> Option<NativeWindowPointerState> {
+    None
 }
 
 #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
@@ -2202,21 +2254,7 @@ fn native_window_x11_outer_position_physical(
     window: &Arc<dyn Window>,
 ) -> Option<PhysicalPosition<i32>> {
     let window_id = native_window_x11_id(window)?;
-    X11_POINTER_CLIENT.with(|slot| {
-        if slot.borrow().is_none() {
-            *slot.borrow_mut() = Some(
-                X11PointerClient::connect()
-                    .map(Box::new)
-                    .map(X11PointerClientState::Available)
-                    .unwrap_or(X11PointerClientState::Unavailable),
-            );
-        }
-
-        match slot.borrow().as_ref()? {
-            X11PointerClientState::Available(client) => client.window_position(window_id),
-            X11PointerClientState::Unavailable => None,
-        }
-    })
+    with_x11_window_client(|client| client.window_position(window_id)).flatten()
 }
 
 #[cfg(not(all(target_os = "linux", not(target_arch = "wasm32"))))]
@@ -2234,23 +2272,8 @@ fn native_window_set_outer_position_physical(
     let Some(window_id) = native_window_x11_id(window) else {
         return false;
     };
-    X11_POINTER_CLIENT.with(|slot| {
-        if slot.borrow().is_none() {
-            *slot.borrow_mut() = Some(
-                X11PointerClient::connect()
-                    .map(Box::new)
-                    .map(X11PointerClientState::Available)
-                    .unwrap_or(X11PointerClientState::Unavailable),
-            );
-        }
-
-        match slot.borrow().as_ref() {
-            Some(X11PointerClientState::Available(client)) => {
-                client.configure_window(window_id, position).is_some()
-            }
-            _ => false,
-        }
-    })
+    with_x11_window_client(|client| client.configure_window(window_id, position).is_some())
+        .unwrap_or(false)
 }
 
 #[cfg(not(all(target_os = "linux", not(target_arch = "wasm32"))))]
@@ -2259,11 +2282,6 @@ fn native_window_set_outer_position_physical(
     _position: PhysicalPosition<i32>,
 ) -> bool {
     false
-}
-
-#[cfg(not(all(target_os = "linux", not(target_arch = "wasm32"))))]
-fn native_window_global_pointer_physical() -> Option<PhysicalPosition<f64>> {
-    None
 }
 
 fn update_native_options_position(options: &mut NativeWindowOptions, x: f32, y: f32) {
@@ -2989,9 +3007,8 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
-        let native_positions_changed = self.poll_native_window_positions();
-        let native_drag_moved = self.poll_active_native_window_drags();
-        if native_positions_changed || native_drag_moved {
+        let now = Instant::now();
+        if self.poll_active_native_window_drags(now) {
             self.refresh_native_window_requests();
             self.sync_native_windows(event_loop);
         }
@@ -3337,7 +3354,6 @@ impl ApplicationHandler for App {
                 "about_to_wait needs_redraw={needs_redraw}"
             );
         }
-        let now = Instant::now();
         let next_frame_time = last_frame_start_time
             .and_then(|started_at| frame_interval.map(|interval| started_at + interval));
         let waiting_for_frame_cap =
@@ -3347,7 +3363,7 @@ impl ApplicationHandler for App {
         }
 
         let mut native_has_active_animations = false;
-        let mut native_has_active_drag = false;
+        let mut native_drag_deadline: Option<Instant> = None;
         let mut native_frame_cap_deadline: Option<Instant> = None;
         let mut native_next_event_time: Option<Instant> = None;
         for native in self.native_windows.values_mut() {
@@ -3357,7 +3373,6 @@ impl ApplicationHandler for App {
 
             let has_active_animations = native.app.has_active_animations();
             native_has_active_animations |= has_active_animations;
-            native_has_active_drag |= native.active_drag.is_some();
             let needs_redraw = native.app.needs_redraw() || has_active_animations;
             let next_frame_time = native.last_frame_start_time.and_then(|started_at| {
                 native
@@ -3369,6 +3384,13 @@ impl ApplicationHandler for App {
 
             if needs_redraw && !waiting_for_frame_cap {
                 native.window.request_redraw();
+            }
+            if let Some(active_drag) = native.active_drag {
+                native_drag_deadline = Some(
+                    native_drag_deadline
+                        .map(|current| current.min(active_drag.next_poll_at))
+                        .unwrap_or(active_drag.next_poll_at),
+                );
             }
             if waiting_for_frame_cap {
                 let deadline = next_frame_time.expect("native frame cap deadline should exist");
@@ -3397,9 +3419,10 @@ impl ApplicationHandler for App {
         // Poll continuously when:
         // - Active animations are running
         // - Robot test is active
-        if native_has_active_drag || robot_needs_poll {
+        if robot_needs_poll {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if let Some(deadline) = [
+            native_drag_deadline,
             next_frame_time.filter(|_| waiting_for_frame_cap),
             native_frame_cap_deadline,
         ]
@@ -3901,8 +3924,11 @@ fn char_to_key_code(ch: char) -> cranpose_app_shell::KeyCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        App, NativeWindowOptions, NativeWindowPositionOrigin, PendingNativeWindowPositions,
+        App, NativeWindowDragSession, NativeWindowOptions, NativeWindowPositionOrigin,
+        PendingNativeWindowPositions,
     };
+    use std::time::Instant;
+    use winit::dpi::PhysicalPosition;
 
     #[cfg(feature = "robot")]
     use super::{
@@ -3967,6 +3993,43 @@ mod tests {
 
         assert!(!pending.acknowledge((100.0, 200.0)));
         assert!(!pending.acknowledge((140.0, 240.0)));
+    }
+
+    #[test]
+    fn native_window_drag_target_is_anchored_to_drag_start() {
+        let session = NativeWindowDragSession::new(
+            PhysicalPosition::new(100.0, 50.0),
+            PhysicalPosition::new(300, 200),
+            Instant::now(),
+        );
+
+        assert_eq!(
+            session.target_for_pointer(PhysicalPosition::new(112.0, 57.0)),
+            PhysicalPosition::new(312, 207)
+        );
+        assert_eq!(
+            session.target_for_pointer(PhysicalPosition::new(120.0, 50.0)),
+            PhysicalPosition::new(320, 200)
+        );
+    }
+
+    #[test]
+    fn native_window_drag_target_does_not_accumulate_window_manager_lag() {
+        let session = NativeWindowDragSession::new(
+            PhysicalPosition::new(100.0, 50.0),
+            PhysicalPosition::new(300, 200),
+            Instant::now(),
+        );
+
+        let first_target = session.target_for_pointer(PhysicalPosition::new(112.0, 50.0));
+        let second_target = session.target_for_pointer(PhysicalPosition::new(120.0, 50.0));
+
+        assert_eq!(first_target, PhysicalPosition::new(312, 200));
+        assert_eq!(
+            second_target,
+            PhysicalPosition::new(320, 200),
+            "the target must be based on the drag start, not on the last reported window position"
+        );
     }
 
     #[cfg(feature = "robot")]

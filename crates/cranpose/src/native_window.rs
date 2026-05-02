@@ -1,5 +1,7 @@
 //! Declarative native window support.
 
+use cranpose_core::MutableState;
+use cranpose_ui::{composable, Modifier, Point, PointerEventKind, PointerInputScope, Size};
 #[cfg(all(
     feature = "desktop",
     feature = "renderer-wgpu",
@@ -20,15 +22,6 @@ use std::collections::HashMap;
 ))]
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-#[cfg(all(
-    feature = "desktop",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-use std::rc::Weak;
-
-use cranpose_core::MutableState;
-use cranpose_ui::{composable, Modifier, Point, PointerEventKind, PointerInputScope, Size};
 
 /// A stable identifier for a declarative native window.
 #[cfg(all(
@@ -512,7 +505,7 @@ pub(crate) type NativeWindowContent = Rc<RefCell<Box<dyn FnMut()>>>;
 ))]
 type NativeWindowOwner = Rc<()>;
 
-type NativeWindowDragHandler = Rc<dyn Fn()>;
+type NativeWindowDragHandler = Rc<dyn Fn() -> bool>;
 type NativeWindowResizeHandler = Rc<dyn Fn(WindowResizeDirection)>;
 
 #[cfg(all(
@@ -536,20 +529,8 @@ pub(crate) struct NativeWindowRequest {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-struct NativeWindowRevision {
-    content: Weak<RefCell<Box<dyn FnMut()>>>,
-    revision: u64,
-}
-
-#[cfg(all(
-    feature = "desktop",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
 thread_local! {
     static NATIVE_WINDOWS: RefCell<HashMap<NativeWindowKey, NativeWindowRequest>> =
-        RefCell::new(HashMap::new());
-    static NATIVE_WINDOW_REVISIONS: RefCell<HashMap<NativeWindowKey, NativeWindowRevision>> =
         RefCell::new(HashMap::new());
     static NEXT_NATIVE_WINDOW_REVISION: Cell<u64> = const { Cell::new(1) };
 }
@@ -631,8 +612,7 @@ fn request_native_window_drag() -> bool {
     CURRENT_NATIVE_WINDOW_DRAG.with(|slot| {
         let handler = slot.borrow().clone();
         if let Some(handler) = handler {
-            handler();
-            true
+            handler()
         } else {
             false
         }
@@ -760,7 +740,7 @@ fn register_native_window(
     content: NativeWindowContent,
     owner: NativeWindowOwner,
 ) {
-    let revision = native_window_content_revision(key, &content);
+    let revision = next_native_window_revision();
     NATIVE_WINDOWS.with(|windows| {
         windows.borrow_mut().insert(
             key,
@@ -792,30 +772,6 @@ fn unregister_native_window(key: NativeWindowKey, owner: NativeWindowOwner) {
             windows.remove(&key);
         }
     });
-}
-
-#[cfg(all(
-    feature = "desktop",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn native_window_content_revision(key: NativeWindowKey, content: &NativeWindowContent) -> u64 {
-    NATIVE_WINDOW_REVISIONS.with(|revisions| {
-        let content = Rc::downgrade(content);
-        let mut revisions = revisions.borrow_mut();
-        if let Some(state) = revisions.get_mut(&key) {
-            if state.content.ptr_eq(&content) {
-                return state.revision;
-            }
-            state.content = content;
-            state.revision = next_native_window_revision();
-            return state.revision;
-        }
-
-        let revision = next_native_window_revision();
-        revisions.insert(key, NativeWindowRevision { content, revision });
-        revision
-    })
 }
 
 #[cfg(all(
@@ -1011,6 +967,25 @@ mod tests {
         assert!(!request_native_window_drag());
     }
 
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[test]
+    fn drag_request_uses_handler_result() {
+        let resize_handler: NativeWindowResizeHandler = Rc::new(|_| {});
+
+        with_native_window_drag_handler(Rc::new(|| true), Rc::clone(&resize_handler), || {
+            assert!(request_native_window_drag());
+        });
+        with_native_window_drag_handler(Rc::new(|| false), resize_handler, || {
+            assert!(!request_native_window_drag());
+        });
+
+        assert!(!request_native_window_drag());
+    }
+
     #[test]
     fn resize_request_reports_missing_handler() {
         assert!(!request_native_window_resize(
@@ -1108,7 +1083,7 @@ mod tests {
         let requests = native_window_requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].key, key);
-        assert_eq!(requests[0].revision, initial_revision);
+        assert_ne!(requests[0].revision, initial_revision);
         assert!(!requests[0].options.visible);
 
         clear_native_window_requests();
@@ -1121,7 +1096,7 @@ mod tests {
         not(target_arch = "wasm32")
     ))]
     #[test]
-    fn registry_revisions_change_when_content_identity_changes() {
+    fn registry_revisions_change_on_each_declaration() {
         clear_native_window_requests();
 
         let key = NativeWindowKey::from_static("content-update");
@@ -1151,6 +1126,53 @@ mod tests {
             NativeWindowEvents::new(),
             None,
             second_content,
+            owner,
+        );
+        let second_revision = native_window_requests()
+            .into_iter()
+            .next()
+            .expect("second native window request")
+            .revision;
+
+        assert_ne!(first_revision, second_revision);
+
+        clear_native_window_requests();
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[test]
+    fn registry_revisions_change_when_same_content_is_updated() {
+        clear_native_window_requests();
+
+        let key = NativeWindowKey::from_static("same-content-update");
+        let owner = test_owner();
+        let content: NativeWindowContent =
+            Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+
+        register_native_window(
+            key,
+            NativeWindowOptions::new("Panel", 100.0, 50.0),
+            NativeWindowEvents::new(),
+            None,
+            Rc::clone(&content),
+            Rc::clone(&owner),
+        );
+        let first_revision = native_window_requests()
+            .into_iter()
+            .next()
+            .expect("first native window request")
+            .revision;
+
+        register_native_window(
+            key,
+            NativeWindowOptions::new("Panel", 100.0, 50.0),
+            NativeWindowEvents::new(),
+            None,
+            content,
             owner,
         );
         let second_revision = native_window_requests()
@@ -1217,7 +1239,7 @@ mod tests {
         not(target_arch = "wasm32")
     ))]
     #[test]
-    fn clear_preserves_same_content_revision() {
+    fn clear_does_not_reuse_same_content_revision() {
         clear_native_window_requests();
 
         let key = NativeWindowKey::from_static("remove-window");
@@ -1256,7 +1278,7 @@ mod tests {
             .expect("registered native window request after cleanup")
             .revision;
 
-        assert_eq!(first_revision, second_revision);
+        assert_ne!(first_revision, second_revision);
 
         clear_native_window_requests();
     }

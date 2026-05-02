@@ -16,6 +16,8 @@ const FAST_MOVE_DY: i32 = 11;
 const PIXEL_TRACE_STEPS: usize = 48;
 const PIXEL_TRACE_STALL_TIMEOUT: Duration = Duration::from_millis(90);
 const GROUP_MOVE_STEP_TIMEOUT: Duration = Duration::from_millis(500);
+const POST_RELEASE_STABILITY_TIMEOUT: Duration = Duration::from_millis(800);
+const POST_RELEASE_STABILITY_POLL: Duration = Duration::from_millis(16);
 const OFFSET_EPSILON: i32 = 3;
 const FIND_WINDOW_POLL: Duration = Duration::from_millis(4);
 const FIND_WINDOW_TIMEOUT: Duration = Duration::from_millis(12_000);
@@ -50,7 +52,7 @@ struct WinampWindows {
     playlist: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WinampGeometries {
     main: WindowGeometry,
     equalizer: WindowGeometry,
@@ -517,12 +519,7 @@ fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, windows: WinampW
     std::thread::sleep(Duration::from_millis(120));
     print_drag_trace(label, &trace);
     assert_pixel_drag_trace_continuity(label, initial, &trace);
-    assert_group_stays_stable(
-        label,
-        windows,
-        windows.geometries(),
-        Duration::from_millis(500),
-    );
+    assert_windows_stop_after_release(label, windows, windows.geometries());
 }
 
 fn drag_main_fast_and_assert_offsets(label: &str, windows: WinampWindows) {
@@ -561,7 +558,7 @@ fn drag_main_fast_and_assert_offsets(label: &str, windows: WinampWindows) {
     let final_geometries = windows.geometries();
     assert_offsets_close(label, FAST_MOVE_STEPS + 1, initial, final_geometries);
     assert_window_moved(label, initial.main, final_geometries.main);
-    assert_group_stays_stable(label, windows, final_geometries, Duration::from_millis(800));
+    assert_windows_stop_after_release(label, windows, final_geometries);
 }
 
 fn print_drag_trace(label: &str, trace: &[DragTraceSample]) {
@@ -590,11 +587,7 @@ fn wait_for_one_pixel_drag_step(
     let started = Instant::now();
     loop {
         let sample = DragTraceSample {
-            pointer: PointerLocation {
-                x: previous.pointer.x + 1,
-                y: previous.pointer.y,
-                window: previous.pointer.window,
-            },
+            pointer: pointer_location(),
             geometries: windows.geometries(),
             elapsed: started.elapsed(),
         };
@@ -788,6 +781,7 @@ fn drag_and_assert_offsets(
     }
     let final_dragged = geometry_for_window(windows, dragged_window, final_geometries);
     assert_window_moved(label, initial_dragged, final_dragged);
+    assert_windows_stop_after_release(label, windows, final_geometries);
 }
 
 fn move_main_with_window_manager_and_assert_offsets(
@@ -796,6 +790,11 @@ fn move_main_with_window_manager_and_assert_offsets(
     dx: i32,
     dy: i32,
 ) {
+    if !window_manager_supports_net_active_window() {
+        println!("{label}: skipping external window-manager move; _NET_ACTIVE_WINDOW unsupported");
+        return;
+    }
+
     let initial = assert_attached_offsets(label, windows.geometries());
     move_window(windows.main, initial.main.x + dx, initial.main.y + dy);
 
@@ -807,6 +806,7 @@ fn move_main_with_window_manager_and_assert_offsets(
             && offsets_close(initial, current)
         {
             println!("{label}: {:?}", current);
+            assert_windows_stop_after_release(label, windows, current);
             return;
         }
         std::thread::sleep(Duration::from_millis(8));
@@ -815,6 +815,21 @@ fn move_main_with_window_manager_and_assert_offsets(
     let current = windows.geometries();
     assert_offsets_close(label, 1, initial, current);
     assert_window_moved(label, initial.main, current.main);
+    assert_windows_stop_after_release(label, windows, current);
+}
+
+fn window_manager_supports_net_active_window() -> bool {
+    let Some(output) = Command::new("xprop")
+        .args(["-root", "_NET_SUPPORTED"])
+        .output()
+        .ok()
+    else {
+        return true;
+    };
+    if !output.status.success() {
+        return true;
+    }
+    String::from_utf8_lossy(&output.stdout).contains("_NET_ACTIVE_WINDOW")
 }
 
 fn wait_for_group_offset(
@@ -839,26 +854,24 @@ fn wait_for_group_offset(
     current
 }
 
-fn assert_group_stays_stable(
+fn assert_windows_stop_after_release(
     label: &str,
     windows: WinampWindows,
     expected: WinampGeometries,
-    duration: Duration,
 ) {
-    let deadline = Instant::now() + duration;
+    let deadline = Instant::now() + POST_RELEASE_STABILITY_TIMEOUT;
     let mut sample = 0;
+    let mut samples = Vec::new();
     while Instant::now() < deadline {
         sample += 1;
         let current = windows.geometries();
-        assert_offsets_close(label, FAST_MOVE_STEPS + sample, expected, current);
-        assert_geometry_close(
-            label,
-            FAST_MOVE_STEPS + sample,
-            "main",
-            expected.main,
-            current.main,
-        );
-        std::thread::sleep(Duration::from_millis(40));
+        samples.push(current);
+        if current != expected {
+            panic!(
+                "{label} post-release sample {sample}: native windows kept moving after mouseup expected={expected:?} actual={current:?} samples={samples:?}"
+            );
+        }
+        std::thread::sleep(POST_RELEASE_STABILITY_POLL);
     }
 }
 
