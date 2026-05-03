@@ -126,6 +126,47 @@ struct WinampNativeWindowStates {
     main: WindowState,
     equalizer: WindowState,
     playlist: WindowState,
+    drag_session: MutableState<Option<WinampNativeDragSession>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WinampNativeDragSession {
+    dragged: WinampWindowId,
+    component: WinampWindowComponent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WinampWindowComponent(u8);
+
+impl WinampWindowComponent {
+    fn from_ids(ids: &[WinampWindowId]) -> Self {
+        Self(ids.iter().fold(0, |mask, id| mask | id.component_bit()))
+    }
+
+    fn ids(self) -> Vec<WinampWindowId> {
+        [
+            WinampWindowId::Main,
+            WinampWindowId::Equalizer,
+            WinampWindowId::Playlist,
+        ]
+        .into_iter()
+        .filter(|id| self.contains(*id))
+        .collect()
+    }
+
+    fn contains(self, id: WinampWindowId) -> bool {
+        self.0 & id.component_bit() != 0
+    }
+}
+
+impl WinampWindowId {
+    fn component_bit(self) -> u8 {
+        match self {
+            WinampWindowId::Main => 1 << 0,
+            WinampWindowId::Equalizer => 1 << 1,
+            WinampWindowId::Playlist => 1 << 2,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -149,6 +190,7 @@ pub(crate) fn remember_winamp_tab_state() -> WinampTabState {
             main: rememberWindowState(MAIN_WIDTH, MAIN_HEIGHT),
             equalizer: rememberWindowState(EQ_WIDTH, EQ_HEIGHT),
             playlist: rememberWindowState(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
+            drag_session: cranpose_core::useState(|| None::<WinampNativeDragSession>),
         },
     }
 }
@@ -1343,8 +1385,15 @@ fn WindowDragHandle(drag_target: WinampDragTarget, area: SpriteRect, scale: f32)
         .absolute_offset(scaled(area.0, scale), scaled(area.1, scale));
 
     match drag_target {
-        WinampDragTarget::NativeGroup { .. } => {
-            Box(modifier.window_drag_area(), BoxSpec::default(), || {});
+        WinampDragTarget::NativeGroup { windows, dragged } => {
+            Box(
+                modifier.window_drag_area_with_callbacks(
+                    move || start_winamp_native_drag_session(windows, dragged),
+                    move || finish_winamp_native_drag_session(windows),
+                ),
+                BoxSpec::default(),
+                || {},
+            );
         }
         WinampDragTarget::Inline(window_position) => {
             let drag_offset = cranpose_core::useState(|| None::<Point>);
@@ -1608,8 +1657,40 @@ fn move_winamp_component_by_delta(
     }
 
     let snapshots = winamp_window_snapshots(native_windows);
-    let moved = move_winamp_snapshots(&snapshots, dragged, delta);
+    let moved = if let Some(session) = native_windows
+        .drag_session
+        .get_non_reactive()
+        .filter(|session| session.dragged == dragged)
+    {
+        let component = session.component.ids();
+        move_winamp_snapshots_for_fixed_component(&snapshots, &component, delta)
+    } else {
+        move_winamp_snapshots(&snapshots, dragged, delta)
+    };
     apply_winamp_window_snapshots(native_windows, moved);
+}
+
+fn start_winamp_native_drag_session(
+    native_windows: WinampNativeWindowStates,
+    dragged: WinampWindowId,
+) {
+    let snapshots = winamp_window_snapshots(native_windows);
+    if snapshots.iter().all(|snapshot| snapshot.id != dragged) {
+        native_windows.drag_session.set(None);
+        return;
+    }
+
+    let component = attached_winamp_component(&snapshots, dragged);
+    native_windows
+        .drag_session
+        .set(Some(WinampNativeDragSession {
+            dragged,
+            component: WinampWindowComponent::from_ids(&component),
+        }));
+}
+
+fn finish_winamp_native_drag_session(native_windows: WinampNativeWindowStates) {
+    native_windows.drag_session.set(None);
 }
 
 fn apply_winamp_window_snapshots(
@@ -1703,6 +1784,16 @@ fn move_winamp_snapshots(
 ) -> Vec<WinampWindowSnapshot> {
     let mut component = attached_winamp_component(snapshots, dragged);
     move_winamp_snapshots_for_component(snapshots, &mut component, delta, true)
+}
+
+fn move_winamp_snapshots_for_fixed_component(
+    snapshots: &[WinampWindowSnapshot],
+    component: &[WinampWindowId],
+    delta: Point,
+) -> Vec<WinampWindowSnapshot> {
+    let mut moved = snapshots.to_vec();
+    translate_winamp_snapshots(&mut moved, component, delta);
+    moved
 }
 
 fn move_winamp_snapshots_for_component(
@@ -2296,17 +2387,20 @@ mod tests {
     }
 
     #[test]
-    fn winamp_main_drag_session_keeps_initial_component_for_large_delta() {
+    fn winamp_frozen_drag_component_keeps_initial_windows_for_large_delta() {
         let snapshots = attached_chain_snapshots();
-        let mut component = attached_winamp_component(&snapshots, WinampWindowId::Main);
+        let component = attached_winamp_component(&snapshots, WinampWindowId::Main);
 
-        let moved = move_winamp_snapshots_for_component(
+        let moved = move_winamp_snapshots_for_fixed_component(
             &snapshots,
-            &mut component,
+            &component,
             Point::new(220.0, 90.0),
-            true,
         );
 
+        assert_eq!(
+            snapshot_position(&moved, WinampWindowId::Main),
+            Point::new(320.0, 190.0)
+        );
         assert_eq!(
             snapshot_position(&moved, WinampWindowId::Equalizer),
             Point::new(320.0, 306.0)
@@ -2322,6 +2416,73 @@ mod tests {
                 WinampWindowId::Equalizer,
                 WinampWindowId::Playlist
             ]
+        );
+    }
+
+    #[test]
+    fn winamp_frozen_drag_component_does_not_attach_new_window() {
+        let snapshots = [
+            WinampWindowSnapshot {
+                id: WinampWindowId::Main,
+                position: Point::new(100.0, 100.0),
+                size: Size::new(275.0, 116.0),
+            },
+            WinampWindowSnapshot {
+                id: WinampWindowId::Equalizer,
+                position: Point::new(100.0, 216.0),
+                size: Size::new(275.0, 116.0),
+            },
+            WinampWindowSnapshot {
+                id: WinampWindowId::Playlist,
+                position: Point::new(386.0, 216.0),
+                size: Size::new(275.0, 116.0),
+            },
+        ];
+        let component = vec![WinampWindowId::Main, WinampWindowId::Equalizer];
+
+        let moved =
+            move_winamp_snapshots_for_fixed_component(&snapshots, &component, Point::new(8.0, 0.0));
+
+        assert_eq!(
+            snapshot_position(&moved, WinampWindowId::Main),
+            Point::new(108.0, 100.0)
+        );
+        assert_eq!(
+            snapshot_position(&moved, WinampWindowId::Equalizer),
+            Point::new(108.0, 216.0)
+        );
+        assert_eq!(
+            snapshot_position(&moved, WinampWindowId::Playlist),
+            Point::new(386.0, 216.0)
+        );
+
+        let moved_again =
+            move_winamp_snapshots_for_fixed_component(&moved, &component, Point::new(12.0, 4.0));
+        assert_eq!(
+            snapshot_position(&moved_again, WinampWindowId::Main),
+            Point::new(120.0, 104.0)
+        );
+        assert_eq!(
+            snapshot_position(&moved_again, WinampWindowId::Equalizer),
+            Point::new(120.0, 220.0)
+        );
+        assert_eq!(
+            snapshot_position(&moved_again, WinampWindowId::Playlist),
+            Point::new(386.0, 216.0)
+        );
+    }
+
+    #[test]
+    fn winamp_drag_session_component_roundtrips_ids() {
+        let component =
+            WinampWindowComponent::from_ids(&[WinampWindowId::Playlist, WinampWindowId::Main]);
+
+        assert!(component.contains(WinampWindowId::Main));
+        assert!(!component.contains(WinampWindowId::Equalizer));
+        assert!(component.contains(WinampWindowId::Playlist));
+        assert_eq!(
+            component.ids(),
+            vec![WinampWindowId::Main, WinampWindowId::Playlist]
         );
     }
 

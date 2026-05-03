@@ -1849,21 +1849,17 @@ impl App {
             WindowEvent::KeyboardInput { event, .. } => {
                 dispatch_keyboard_input(&mut native.app, self.current_modifiers, event);
             }
-            WindowEvent::Focused(false) => {
-                native.active_drag = None;
+            WindowEvent::Focused(false) if native.active_drag.is_none() => {
                 cancel_app_input(&mut native.app);
             }
+            WindowEvent::Focused(false) => {}
             WindowEvent::Ime(ime_event) => {
                 dispatch_ime_event(&mut native.app, ime_event);
             }
-            WindowEvent::PointerLeft { .. } => {
-                let drag_still_has_global_pointer = native.active_drag.is_some()
-                    && native_window_global_pointer_state().is_some_and(|state| state.primary_down);
-                if !drag_still_has_global_pointer {
-                    native.active_drag = None;
-                    native.app.cancel_gesture();
-                }
+            WindowEvent::PointerLeft { .. } if native.active_drag.is_none() => {
+                native.app.cancel_gesture();
             }
+            WindowEvent::PointerLeft { .. } => {}
             WindowEvent::RedrawRequested => {
                 if let Some(deadline) = native.last_frame_start_time.and_then(|started_at| {
                     native

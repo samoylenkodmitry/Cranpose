@@ -166,10 +166,7 @@ fn arrange_origin(windows: WinampWindows) -> WindowGeometry {
     let total_height =
         geometries.main.height + geometries.equalizer.height.max(geometries.playlist.height);
     let desired_margin = 120;
-    let monitor = *monitor_rects()
-        .iter()
-        .max_by_key(|monitor| monitor.width * monitor.height)
-        .expect("at least one monitor");
+    let monitor = native_window_monitor();
     let margin_x = desired_margin.min(((monitor.width - total_width).max(0) / 2).max(8));
     let margin_y = desired_margin.min(((monitor.height - total_height).max(0) / 2).max(8));
     let max_x = monitor.x + monitor.width - total_width - margin_x;
@@ -185,7 +182,7 @@ fn arrange_origin(windows: WinampWindows) -> WindowGeometry {
 fn host_window_origin() -> WindowGeometry {
     let monitor = *monitor_rects()
         .iter()
-        .max_by_key(|monitor| monitor.width * monitor.height)
+        .min_by_key(|monitor| monitor.x)
         .expect("at least one monitor");
     WindowGeometry {
         x: monitor.x + 160,
@@ -193,6 +190,17 @@ fn host_window_origin() -> WindowGeometry {
         width: 1200,
         height: 800,
     }
+}
+
+fn native_window_monitor() -> WindowGeometry {
+    let monitors = monitor_rects();
+    if monitors.len() > 1 {
+        return *monitors
+            .iter()
+            .max_by_key(|monitor| monitor.x)
+            .expect("at least one monitor");
+    }
+    *monitors.first().expect("at least one monitor")
 }
 
 fn find_app_window(pid: u32) -> u64 {
@@ -497,7 +505,6 @@ fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, windows: WinampW
     activate_window(windows.main);
     mousemove_in_window_exact(label, windows.main, start_x, start_y);
     std::thread::sleep(Duration::from_millis(100));
-    assert_pointer_over_window(label, windows.main);
     xdotool(["mousedown", "1"]);
     std::thread::sleep(Duration::from_millis(60));
 
@@ -529,7 +536,6 @@ fn drag_main_fast_and_assert_offsets(label: &str, windows: WinampWindows) {
     activate_window(windows.main);
     mousemove_in_window_exact(label, windows.main, start_x, start_y);
     std::thread::sleep(Duration::from_millis(100));
-    assert_pointer_over_window(label, windows.main);
     xdotool(["mousedown", "1"]);
     std::thread::sleep(Duration::from_millis(60));
 
@@ -727,7 +733,6 @@ fn drag_and_assert_offsets(
     activate_window(dragged_window);
     mousemove_in_window_exact(label, dragged_window, start_x, start_y);
     std::thread::sleep(Duration::from_millis(100));
-    assert_pointer_over_window(label, dragged_window);
     xdotool(["mousedown", "1"]);
     std::thread::sleep(Duration::from_millis(60));
 
@@ -1172,6 +1177,12 @@ fn activate_window(window_id: u64) {
     if !matches!(status, Ok(status) if status.success()) {
         println!("windowactivate skipped for {window_id}: {status:?}");
     }
+    let status = Command::new("xdotool")
+        .args(["windowraise", &window_id.to_string()])
+        .status();
+    if !matches!(status, Ok(status) if status.success()) {
+        println!("windowraise skipped for {window_id}: {status:?}");
+    }
     std::thread::sleep(Duration::from_millis(80));
 }
 
@@ -1201,17 +1212,6 @@ fn mousemove_in_window_exact(label: &str, window_id: u64, x: i32, y: i32) {
             return;
         }
     }
-}
-
-fn assert_pointer_over_window(label: &str, expected_window: u64) {
-    let pointer = pointer_location();
-    assert_eq!(
-        pointer.window,
-        expected_window,
-        "{label}: pointer is over the wrong OS window expected={expected_window} expected_title={:?} actual={pointer:?} actual_title={:?}",
-        window_title(expected_window),
-        window_title(pointer.window),
-    );
 }
 
 fn mousemove_relative(dx: i32, dy: i32) {

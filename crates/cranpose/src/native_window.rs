@@ -450,6 +450,16 @@ pub trait WindowModifierExt {
     /// native desktop sub-window, so the same UI can be used inline.
     fn window_drag_area(self) -> Modifier;
 
+    /// Marks this component as a drag target and reports the native drag lifecycle.
+    ///
+    /// The callbacks run only when an OS-window drag is actually accepted by
+    /// the current native desktop sub-window.
+    fn window_drag_area_with_callbacks(
+        self,
+        on_started: impl Fn() + 'static,
+        on_finished: impl Fn() + 'static,
+    ) -> Modifier;
+
     /// Marks this component as a resize target for its containing OS window.
     ///
     /// The modifier is inert when the component is not currently rendered in a
@@ -459,17 +469,53 @@ pub trait WindowModifierExt {
 
 impl WindowModifierExt for Modifier {
     fn window_drag_area(self) -> Modifier {
-        self.pointer_input((), move |scope: PointerInputScope| async move {
-            scope
-                .await_pointer_event_scope(|await_scope| async move {
-                    loop {
-                        let event = await_scope.await_pointer_event().await;
-                        if event.kind == PointerEventKind::Down && request_native_window_drag() {
-                            event.consume();
+        self.window_drag_area_with_callbacks(|| {}, || {})
+    }
+
+    fn window_drag_area_with_callbacks(
+        self,
+        on_started: impl Fn() + 'static,
+        on_finished: impl Fn() + 'static,
+    ) -> Modifier {
+        let on_started: Rc<dyn Fn()> = Rc::new(on_started);
+        let on_finished: Rc<dyn Fn()> = Rc::new(on_finished);
+        self.pointer_input((), move |scope: PointerInputScope| {
+            let on_started = on_started.clone();
+            let on_finished = on_finished.clone();
+            async move {
+                scope
+                    .await_pointer_event_scope(|await_scope| async move {
+                        let mut dragging = false;
+                        loop {
+                            let event = await_scope.await_pointer_event().await;
+                            match event.kind {
+                                PointerEventKind::Down => {
+                                    if request_native_window_drag() {
+                                        dragging = true;
+                                        event.consume();
+                                        on_started();
+                                    }
+                                }
+                                PointerEventKind::Move => {
+                                    if dragging && event.buttons == Default::default() {
+                                        dragging = false;
+                                        on_finished();
+                                    }
+                                }
+                                PointerEventKind::Up | PointerEventKind::Cancel => {
+                                    if dragging {
+                                        dragging = false;
+                                        on_finished();
+                                    }
+                                }
+                                PointerEventKind::Scroll
+                                | PointerEventKind::Enter
+                                | PointerEventKind::Exit => {}
+                            }
                         }
-                    }
-                })
-                .await;
+                    })
+                    .await;
+            }
         })
     }
 
@@ -984,6 +1030,56 @@ mod tests {
         });
 
         assert!(!request_native_window_drag());
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[test]
+    fn drag_area_callbacks_follow_accepted_native_drag_lifecycle() {
+        use cranpose_ui::{collect_slices_from_modifier, PointerEvent};
+        use std::cell::Cell;
+
+        let started = Rc::new(Cell::new(0));
+        let finished = Rc::new(Cell::new(0));
+        let modifier = Modifier::empty().window_drag_area_with_callbacks(
+            {
+                let started = Rc::clone(&started);
+                move || started.set(started.get() + 1)
+            },
+            {
+                let finished = Rc::clone(&finished);
+                move || finished.set(finished.get() + 1)
+            },
+        );
+        let slices = collect_slices_from_modifier(&modifier);
+        let handler = slices
+            .pointer_inputs()
+            .first()
+            .expect("window drag pointer handler")
+            .clone();
+        let resize_handler: NativeWindowResizeHandler = Rc::new(|_| {});
+
+        with_native_window_drag_handler(Rc::new(|| true), resize_handler, || {
+            let down = PointerEvent::new(
+                PointerEventKind::Down,
+                Point::new(4.0, 5.0),
+                Point::new(4.0, 5.0),
+            );
+            handler(down.clone());
+            assert!(down.is_consumed());
+
+            handler(PointerEvent::new(
+                PointerEventKind::Up,
+                Point::new(4.0, 5.0),
+                Point::new(4.0, 5.0),
+            ));
+        });
+
+        assert_eq!(started.get(), 1);
+        assert_eq!(finished.get(), 1);
     }
 
     #[test]
