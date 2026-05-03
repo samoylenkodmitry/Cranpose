@@ -121,6 +121,11 @@ name = "robot_winamp_native_window_geometry"
 path = "robot-runners/robot_winamp_native_window_geometry.rs"
 required-features = ["robot-app"]
 
+[[example]]
+name = "winamp_standalone"
+path = "examples/winamp_standalone.rs"
+required-features = ["desktop", "renderer-wgpu"]
+
 
 
 [[example]]

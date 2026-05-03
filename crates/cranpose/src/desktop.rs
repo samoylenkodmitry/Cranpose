@@ -5,7 +5,8 @@
 use crate::launcher::{AppSettings, LaunchError};
 use crate::native_window::{
     self, NativeWindowEvents, NativeWindowKey, NativeWindowOptions, NativeWindowPositionOrigin,
-    NativeWindowRequest, WindowResizeDirection, WindowState,
+    NativeWindowRequest, WindowGraphMove, WindowGraphNodeSnapshot, WindowGraphPeerSnapshot,
+    WindowGraphState, WindowResizeDirection, WindowState,
 };
 #[cfg(feature = "robot")]
 use cranpose_app_shell::RuntimeLeakDebugStats;
@@ -25,7 +26,9 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, Position};
 use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::window::{ResizeDirection, Window, WindowAttributes, WindowId, WindowLevel};
+use winit::window::{
+    ResizeDirection, Window, WindowAttributes, WindowId as WinitWindowId, WindowLevel,
+};
 
 const NATIVE_WINDOW_DRAG_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -889,6 +892,7 @@ struct NativeWindowSurface {
     options: NativeWindowOptions,
     events: NativeWindowEvents,
     state: Option<WindowState>,
+    group: Option<native_window::NativeWindowGroupMembership>,
     window: Arc<dyn Window>,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
@@ -1006,13 +1010,15 @@ struct App {
     /// Shared GPU objects used by all desktop surfaces.
     gpu_context: Option<DesktopGpuContext>,
     /// Native sub-window surfaces keyed by the operating-system window id.
-    native_windows: HashMap<WindowId, NativeWindowSurface>,
+    native_windows: HashMap<WinitWindowId, NativeWindowSurface>,
     /// Declarative native sub-window ids mapped to their current OS window id.
-    native_window_ids: HashMap<NativeWindowKey, WindowId>,
+    native_window_ids: HashMap<NativeWindowKey, WinitWindowId>,
     /// Last observed OS positions for declarative native sub-windows.
     native_window_positions: HashMap<NativeWindowKey, (f32, f32)>,
     /// Native sub-windows closed by the user while still declared by composition.
     closed_native_windows: HashSet<NativeWindowKey>,
+    /// Framework-owned peer-window topology and drag sessions.
+    window_graph: WindowGraphState,
     /// Current keyboard modifiers (shift, ctrl, alt, meta)
     current_modifiers: winit::keyboard::ModifiersState,
     /// Last known cursor position in logical pixels
@@ -1061,6 +1067,7 @@ impl App {
             native_window_ids: HashMap::new(),
             native_window_positions: HashMap::new(),
             closed_native_windows: HashSet::new(),
+            window_graph: WindowGraphState::default(),
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
             #[cfg(feature = "robot")]
@@ -1126,7 +1133,7 @@ impl App {
         self.closed_native_windows
             .retain(|key| active_keys.contains(key));
 
-        let stale_window_ids: Vec<WindowId> = self
+        let stale_window_ids: Vec<WinitWindowId> = self
             .native_windows
             .iter()
             .filter_map(|(window_id, native)| {
@@ -1160,6 +1167,7 @@ impl App {
                 if let Some(native) = self.native_windows.get_mut(&window_id) {
                     native.events = request.events.clone();
                     native.state = request.state;
+                    native.group = request.group.clone();
                     let revision_changed = native.revision != request.revision;
                     let options_changed = native.options != request.options;
                     Self::apply_native_window_options(
@@ -1280,6 +1288,94 @@ impl App {
             }
             notify_native_window_moved(&native.events, x, y);
         }
+    }
+
+    fn native_window_graph_snapshots(&self) -> Vec<WindowGraphPeerSnapshot> {
+        self.native_windows
+            .values()
+            .filter_map(|native| self.native_window_graph_snapshot(native, None))
+            .collect()
+    }
+
+    fn native_window_graph_snapshots_with(
+        &self,
+        native: &NativeWindowSurface,
+        position: Option<cranpose_ui::Point>,
+    ) -> Vec<WindowGraphPeerSnapshot> {
+        let mut snapshots = self.native_window_graph_snapshots();
+        snapshots.retain(|snapshot| snapshot.node.id != native.key);
+        if let Some(snapshot) = self.native_window_graph_snapshot(native, position) {
+            snapshots.push(snapshot);
+        }
+        snapshots
+    }
+
+    fn native_window_graph_snapshot(
+        &self,
+        native: &NativeWindowSurface,
+        position: Option<cranpose_ui::Point>,
+    ) -> Option<WindowGraphPeerSnapshot> {
+        let position = position
+            .or_else(|| {
+                self.native_window_positions
+                    .get(&native.key)
+                    .map(|(x, y)| cranpose_ui::Point::new(*x, *y))
+            })
+            .or_else(|| {
+                current_native_window_position(native).map(|(x, y)| cranpose_ui::Point::new(x, y))
+            })
+            .or_else(|| match (native.options.x, native.options.y) {
+                (Some(x), Some(y)) => Some(cranpose_ui::Point::new(x, y)),
+                _ => None,
+            })?;
+        Some(WindowGraphPeerSnapshot {
+            node: WindowGraphNodeSnapshot {
+                id: native.key,
+                position,
+                size: native
+                    .state
+                    .map(WindowState::size_non_reactive)
+                    .unwrap_or_else(|| {
+                        cranpose_ui::Size::new(native.options.width, native.options.height)
+                    }),
+            },
+            group: native.group.clone(),
+        })
+    }
+
+    fn apply_window_graph_drag(
+        &mut self,
+        dragged: NativeWindowKey,
+        target: cranpose_ui::Point,
+    ) -> bool {
+        let moves = self.window_graph.drag_to(dragged, target);
+        self.apply_window_graph_moves(moves)
+    }
+
+    fn finish_window_graph_drag(&mut self) -> bool {
+        let snapshots = self.native_window_graph_snapshots();
+        let moves = self.window_graph.finish_drag(&snapshots);
+        self.apply_window_graph_moves(moves)
+    }
+
+    fn apply_window_graph_moves(&mut self, moves: Vec<WindowGraphMove>) -> bool {
+        let mut moved = false;
+        for window_move in moves {
+            let Some(window_id) = self.native_window_ids.get(&window_move.id).copied() else {
+                continue;
+            };
+            let Some(native) = self.native_windows.get_mut(&window_id) else {
+                continue;
+            };
+            if Self::apply_native_window_position(native, window_move.position) {
+                self.native_window_positions.insert(
+                    window_move.id,
+                    (window_move.position.x, window_move.position.y),
+                );
+                moved = true;
+            }
+        }
+        moved
     }
 
     fn create_native_window_shell(
@@ -1411,6 +1507,7 @@ impl App {
             options: request.options.clone(),
             events: request.events.clone(),
             state: request.state,
+            group: request.group.clone(),
             window,
             surface,
             surface_config,
@@ -1542,6 +1639,37 @@ impl App {
         true
     }
 
+    fn apply_native_window_position(
+        native: &mut NativeWindowSurface,
+        position: cranpose_ui::Point,
+    ) -> bool {
+        let logical_position = (position.x, position.y);
+        if current_native_window_position(native).is_some_and(|current| {
+            (current.0 - logical_position.0).abs() <= f32::EPSILON
+                && (current.1 - logical_position.1).abs() <= f32::EPSILON
+        }) {
+            update_native_options_position(&mut native.options, position.x, position.y);
+            return false;
+        }
+
+        native.pending_outer_positions.push(logical_position);
+        let logical = LogicalPosition::new(position.x as f64, position.y as f64);
+        let physical = logical.to_physical::<i32>(native.window.scale_factor());
+        if !native_window_set_outer_position_physical(&native.window, physical) {
+            native.window.set_outer_position(Position::Logical(logical));
+        }
+        update_native_options_position(&mut native.options, position.x, position.y);
+        let previous_state_position = native.state.and_then(|state| state.position_non_reactive());
+        notify_native_window_moved(&native.events, position.x, position.y);
+        sync_native_window_state_position(
+            native.state,
+            previous_state_position,
+            position.x,
+            position.y,
+        );
+        true
+    }
+
     fn start_native_window_drag(native: &mut NativeWindowSurface) -> bool {
         let fallback_position = native
             .last_cursor_physical_position
@@ -1575,6 +1703,7 @@ impl App {
 
         let pointer = native_window_global_pointer_state();
         let mut updates = Vec::new();
+        let mut finish_drag = false;
         for native in self.native_windows.values_mut() {
             let Some(active_drag) = native.active_drag.as_mut() else {
                 continue;
@@ -1589,28 +1718,32 @@ impl App {
             };
             if !pointer.primary_down {
                 native.active_drag = None;
+                finish_drag = true;
                 if native.app.pointer_released() {
                     native.window.request_redraw();
                 }
                 native.app.sync_selection_to_primary();
                 continue;
             }
-            if let Some(update) = Self::update_native_window_drag(native, pointer.position) {
+            if let Some(update) = Self::update_native_window_drag_target(native, pointer.position) {
                 updates.push(update);
             }
         }
 
-        let moved = !updates.is_empty();
+        let mut moved = !updates.is_empty();
         for (key, position) in updates {
-            self.native_window_positions.insert(key, position);
+            moved |= self.apply_window_graph_drag(key, position);
+        }
+        if finish_drag {
+            moved |= self.finish_window_graph_drag();
         }
         moved
     }
 
-    fn update_native_window_drag(
+    fn update_native_window_drag_target(
         native: &mut NativeWindowSurface,
         pointer: PhysicalPosition<f64>,
-    ) -> Option<(NativeWindowKey, (f32, f32))> {
+    ) -> Option<(NativeWindowKey, cranpose_ui::Point)> {
         let active_drag = native.active_drag.as_mut()?;
         let target = active_drag.target_for_pointer(pointer);
         if target == active_drag.last_target_outer {
@@ -1618,27 +1751,16 @@ impl App {
         }
         active_drag.last_target_outer = target;
         let logical = target.to_logical::<f64>(native.window.scale_factor());
-        let logical_position = (logical.x as f32, logical.y as f32);
-        native.pending_outer_positions.push(logical_position);
-        if !native_window_set_outer_position_physical(&native.window, target) {
-            native.window.set_outer_position(Position::Physical(target));
-        }
-        update_native_options_position(&mut native.options, logical_position.0, logical_position.1);
-        let previous_state_position = native.state.and_then(|state| state.position_non_reactive());
-        notify_native_window_moved(&native.events, logical_position.0, logical_position.1);
-        sync_native_window_state_position(
-            native.state,
-            previous_state_position,
-            logical_position.0,
-            logical_position.1,
-        );
-        Some((native.key, logical_position))
+        Some((
+            native.key,
+            cranpose_ui::Point::new(logical.x as f32, logical.y as f32),
+        ))
     }
 
     fn native_window_event(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
-        window_id: WindowId,
+        window_id: WinitWindowId,
         event: WindowEvent,
     ) {
         let Some(mut native) = self.native_windows.remove(&window_id) else {
@@ -1647,6 +1769,9 @@ impl App {
 
         let mut keep_window = true;
         let mut sync_after_event = false;
+        let mut graph_drag_after_insert = None::<(NativeWindowKey, cranpose_ui::Point)>;
+        let mut graph_moves_after_insert = Vec::<WindowGraphMove>::new();
+        let mut finish_graph_drag_after_insert = false;
         match event {
             WindowEvent::CloseRequested => {
                 notify_native_window_close_requested(&native.events);
@@ -1714,6 +1839,17 @@ impl App {
                 native.vsync_interval = monitor_refresh_interval(&native.window);
                 let previous_state_position =
                     native.state.and_then(|state| state.position_non_reactive());
+                let previous_graph_position = self
+                    .native_window_positions
+                    .get(&native.key)
+                    .map(|(x, y)| cranpose_ui::Point::new(*x, *y))
+                    .or(previous_state_position)
+                    .or_else(|| match (native.options.x, native.options.y) {
+                        (Some(x), Some(y)) => Some(cranpose_ui::Point::new(x, y)),
+                        _ => None,
+                    });
+                let previous_graph_snapshots =
+                    self.native_window_graph_snapshots_with(&native, previous_graph_position);
                 let position = current_native_window_position(&native).unwrap_or_else(|| {
                     let logical = position.to_logical::<f64>(native.window.scale_factor());
                     (logical.x as f32, logical.y as f32)
@@ -1731,6 +1867,11 @@ impl App {
                         position.0,
                         position.1,
                     );
+                    graph_moves_after_insert = self.window_graph.external_move(
+                        &previous_graph_snapshots,
+                        native.key,
+                        cranpose_ui::Point::new(position.0, position.1),
+                    );
                     sync_after_event = true;
                 }
             }
@@ -1745,9 +1886,9 @@ impl App {
                     .or(fallback_pointer)
                 {
                     if let Some((key, position)) =
-                        Self::update_native_window_drag(&mut native, pointer)
+                        Self::update_native_window_drag_target(&mut native, pointer)
                     {
-                        self.native_window_positions.insert(key, position);
+                        graph_drag_after_insert = Some((key, position));
                         sync_after_event = true;
                     }
                 }
@@ -1821,13 +1962,16 @@ impl App {
                                         &mut self.native_window_positions,
                                     );
                                 }
+                                let graph_snapshots =
+                                    self.native_window_graph_snapshots_with(&native, None);
+                                self.window_graph.start_drag(&graph_snapshots, native.key);
                                 Self::start_native_window_drag(&mut native);
                             }
                             sync_after_event = true;
                         }
                     }
                     ElementState::Released => {
-                        native.active_drag = None;
+                        finish_graph_drag_after_insert = native.active_drag.take().is_some();
                         let handled = native_window::with_native_window_surface_origin(
                             native_window_surface_origin(&native.window),
                             || native.app.pointer_released(),
@@ -1879,6 +2023,19 @@ impl App {
 
         if keep_window {
             self.native_windows.insert(window_id, native);
+            if !graph_moves_after_insert.is_empty()
+                && self.apply_window_graph_moves(graph_moves_after_insert)
+            {
+                sync_after_event = true;
+            }
+            if let Some((key, position)) = graph_drag_after_insert {
+                if self.apply_window_graph_drag(key, position) {
+                    sync_after_event = true;
+                }
+            }
+            if finish_graph_drag_after_insert && self.finish_window_graph_drag() {
+                sync_after_event = true;
+            }
             if sync_after_event {
                 self.sync_native_windows(event_loop);
             }
@@ -2628,6 +2785,7 @@ impl ApplicationHandler for App {
         let initial_width = self.settings.initial_width;
         let initial_height = self.settings.initial_height;
         let headless = self.settings.headless;
+        let primary_window_visible = self.settings.primary_window_visible;
 
         let window: Arc<dyn Window> = match event_loop.create_window(
             WindowAttributes::default()
@@ -2637,7 +2795,7 @@ impl ApplicationHandler for App {
                     initial_height as f64,
                 ))
                 // Hide window in headless mode for parallel robot testing
-                .with_visible(!headless),
+                .with_visible(!headless && primary_window_visible),
         ) {
             Ok(window) => window.into(),
             Err(error) => {
@@ -2767,13 +2925,14 @@ impl ApplicationHandler for App {
             queue,
             text_system,
         });
+        self.refresh_native_window_requests();
         self.sync_native_windows(event_loop);
     }
 
     fn window_event(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
-        window_id: WindowId,
+        window_id: WinitWindowId,
         event: WindowEvent,
     ) {
         let Some(window) = &self.window else {

@@ -42,6 +42,7 @@ pub(crate) use shaders::ShaderSection;
 use shaders::ShadersTab;
 use text_showcase::TextShowcaseTab;
 use web_fetch::web_fetch_example;
+pub use winamp::WinampStandaloneApp;
 use winamp::{remember_winamp_tab_state, WinampTab, WinampTabState};
 use xkcd::xkcd_tab;
 

@@ -12,8 +12,8 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 
 use cranpose::{
-    rememberWindowState, Window, WindowConfig, WindowModifierExt, WindowResizeDirection,
-    WindowState,
+    rememberWindowState, WindowAttachPolicy, WindowConfig, WindowGroup, WindowId,
+    WindowModifierExt, WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
 };
 use cranpose_core::{self, MutableState};
 use cranpose_foundation::PointerButton;
@@ -78,17 +78,7 @@ impl Default for WinampState {
 #[derive(Clone, Copy, PartialEq)]
 enum WinampDragTarget {
     Inline(MutableState<Point>),
-    NativeGroup {
-        windows: WinampNativeWindowStates,
-        dragged: WinampWindowId,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum WinampWindowId {
-    Main,
-    Equalizer,
-    Playlist,
+    NativeGroup,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -111,7 +101,7 @@ pub(crate) struct WinampTabState {
     player: MutableState<WinampState>,
     detached: MutableState<bool>,
     inline_windows: WinampInlineWindowStates,
-    native_windows: WinampNativeWindowStates,
+    peer_windows: WinampPeerWindowStates,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -122,58 +112,23 @@ struct WinampInlineWindowStates {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-struct WinampNativeWindowStates {
+struct WinampPeerWindowStates {
     main: WindowState,
     equalizer: WindowState,
     playlist: WindowState,
-    drag_session: MutableState<Option<WinampNativeDragSession>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct WinampNativeDragSession {
-    dragged: WinampWindowId,
-    component: WinampWindowComponent,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct WinampWindowComponent(u8);
-
-impl WinampWindowComponent {
-    fn from_ids(ids: &[WinampWindowId]) -> Self {
-        Self(ids.iter().fold(0, |mask, id| mask | id.component_bit()))
-    }
-
-    fn ids(self) -> Vec<WinampWindowId> {
-        [
-            WinampWindowId::Main,
-            WinampWindowId::Equalizer,
-            WinampWindowId::Playlist,
-        ]
-        .into_iter()
-        .filter(|id| self.contains(*id))
-        .collect()
-    }
-
-    fn contains(self, id: WinampWindowId) -> bool {
-        self.0 & id.component_bit() != 0
-    }
-}
-
-impl WinampWindowId {
-    fn component_bit(self) -> u8 {
-        match self {
-            WinampWindowId::Main => 1 << 0,
-            WinampWindowId::Equalizer => 1 << 1,
-            WinampWindowId::Playlist => 1 << 2,
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
 struct WinampWindowPlacement {
     title: &'static str,
-    host_position: Point,
+    initial_position: WinampInitialWindowPosition,
     state: WindowState,
+}
+
+#[derive(Clone, Copy)]
+enum WinampInitialWindowPosition {
+    Host(Point),
+    Screen(Point),
 }
 
 #[composable]
@@ -186,11 +141,10 @@ pub(crate) fn remember_winamp_tab_state() -> WinampTabState {
             equalizer: cranpose_core::useState(|| Point::new(26.0, 142.0)),
             playlist: cranpose_core::useState(|| Point::new(336.0, 22.0)),
         },
-        native_windows: WinampNativeWindowStates {
+        peer_windows: WinampPeerWindowStates {
             main: rememberWindowState(MAIN_WIDTH, MAIN_HEIGHT),
             equalizer: rememberWindowState(EQ_WIDTH, EQ_HEIGHT),
             playlist: rememberWindowState(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
-            drag_session: cranpose_core::useState(|| None::<WinampNativeDragSession>),
         },
     }
 }
@@ -241,7 +195,7 @@ pub(crate) fn WinampTab(tab_state: WinampTabState) {
                     skin.clone(),
                     state,
                     tab_state.inline_windows,
-                    tab_state.native_windows,
+                    tab_state.peer_windows,
                     scale,
                     snapshot.clone(),
                 );
@@ -344,100 +298,168 @@ fn WinampNativeWindows(
     skin: WinampSkin,
     state: MutableState<WinampState>,
     inline_windows: WinampInlineWindowStates,
-    native_windows: WinampNativeWindowStates,
+    peer_windows: WinampPeerWindowStates,
     scale: f32,
     snapshot: WinampState,
 ) {
-    Window(
-        "winamp-main",
-        winamp_window_config(
-            WinampWindowPlacement {
+    WindowGroup("winamp", winamp_attach_policy(), move || {
+        WindowNode(
+            winamp_main_window_id(),
+            winamp_window_config(WinampWindowPlacement {
                 title: "Winamp",
-                host_position: inline_windows.main.get(),
-                state: native_windows.main,
-            },
-            native_windows,
-            WinampWindowId::Main,
-        ),
-        {
-            let skin = skin.clone();
-            move || {
-                MainWindow(
-                    skin.clone(),
-                    state,
-                    WinampDragTarget::NativeGroup {
-                        windows: native_windows,
-                        dragged: WinampWindowId::Main,
-                    },
-                    scale,
-                );
-            }
-        },
-    );
-
-    if snapshot.eq_visible {
-        Window(
-            "winamp-equalizer",
-            winamp_window_config(
-                WinampWindowPlacement {
-                    title: "Winamp Equalizer",
-                    host_position: inline_windows.equalizer.get(),
-                    state: native_windows.equalizer,
-                },
-                native_windows,
-                WinampWindowId::Equalizer,
-            ),
+                initial_position: WinampInitialWindowPosition::Host(inline_windows.main.get()),
+                state: peer_windows.main,
+            }),
             {
                 let skin = skin.clone();
                 move || {
-                    EqualizerWindow(
+                    MainWindow(skin.clone(), state, WinampDragTarget::NativeGroup, scale);
+                }
+            },
+        );
+
+        if snapshot.eq_visible {
+            WindowNode(
+                winamp_equalizer_window_id(),
+                winamp_window_config(WinampWindowPlacement {
+                    title: "Winamp Equalizer",
+                    initial_position: WinampInitialWindowPosition::Host(
+                        inline_windows.equalizer.get(),
+                    ),
+                    state: peer_windows.equalizer,
+                }),
+                {
+                    let skin = skin.clone();
+                    move || {
+                        EqualizerWindow(skin.clone(), state, WinampDragTarget::NativeGroup, scale);
+                    }
+                },
+            );
+        }
+
+        if snapshot.playlist_visible {
+            WindowNode(
+                winamp_playlist_window_id(),
+                winamp_window_config(WinampWindowPlacement {
+                    title: "Winamp Playlist",
+                    initial_position: WinampInitialWindowPosition::Host(
+                        inline_windows.playlist.get(),
+                    ),
+                    state: peer_windows.playlist,
+                })
+                .with_resizable(true)
+                .with_min_size(
+                    scaled(PLAYLIST_WIDTH, scale),
+                    scaled(PLAYLIST_HEIGHT, scale),
+                ),
+                {
+                    let pledit = skin.pledit.clone();
+                    move || {
+                        PlaylistWindow(
+                            pledit.clone(),
+                            state,
+                            WinampDragTarget::NativeGroup,
+                            WinampWindowSize::State(peer_windows.playlist),
+                            scale,
+                        );
+                    }
+                },
+            );
+        }
+    });
+}
+
+#[composable]
+pub fn WinampStandaloneApp() {
+    let state = cranpose_core::useState(WinampState::default);
+    let peer_windows = WinampPeerWindowStates {
+        main: rememberWindowState(MAIN_WIDTH, MAIN_HEIGHT),
+        equalizer: rememberWindowState(EQ_WIDTH, EQ_HEIGHT),
+        playlist: rememberWindowState(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
+    };
+    let snapshot = state.get();
+    let skin = match remember_winamp_skin() {
+        Ok(skin) => skin,
+        Err(error) => {
+            WinampSkinError(error);
+            return;
+        }
+    };
+
+    WindowGroup("winamp", winamp_attach_policy(), move || {
+        WindowNode(
+            winamp_main_window_id(),
+            winamp_window_config(WinampWindowPlacement {
+                title: "Winamp",
+                initial_position: WinampInitialWindowPosition::Screen(Point::new(140.0, 120.0)),
+                state: peer_windows.main,
+            }),
+            {
+                let skin = skin.clone();
+                move || {
+                    MainWindow(
                         skin.clone(),
                         state,
-                        WinampDragTarget::NativeGroup {
-                            windows: native_windows,
-                            dragged: WinampWindowId::Equalizer,
-                        },
-                        scale,
+                        WinampDragTarget::NativeGroup,
+                        ui_scale(),
                     );
                 }
             },
         );
-    }
 
-    if snapshot.playlist_visible {
-        Window(
-            "winamp-playlist",
-            winamp_window_config(
-                WinampWindowPlacement {
-                    title: "Winamp Playlist",
-                    host_position: inline_windows.playlist.get(),
-                    state: native_windows.playlist,
+        if snapshot.eq_visible {
+            WindowNode(
+                winamp_equalizer_window_id(),
+                winamp_window_config(WinampWindowPlacement {
+                    title: "Winamp Equalizer",
+                    initial_position: WinampInitialWindowPosition::Screen(Point::new(
+                        140.0,
+                        120.0 + MAIN_HEIGHT,
+                    )),
+                    state: peer_windows.equalizer,
+                }),
+                {
+                    let skin = skin.clone();
+                    move || {
+                        EqualizerWindow(
+                            skin.clone(),
+                            state,
+                            WinampDragTarget::NativeGroup,
+                            ui_scale(),
+                        );
+                    }
                 },
-                native_windows,
-                WinampWindowId::Playlist,
-            )
-            .with_resizable(true)
-            .with_min_size(
-                scaled(PLAYLIST_WIDTH, scale),
-                scaled(PLAYLIST_HEIGHT, scale),
-            ),
-            {
-                let pledit = skin.pledit.clone();
-                move || {
-                    PlaylistWindow(
-                        pledit.clone(),
-                        state,
-                        WinampDragTarget::NativeGroup {
-                            windows: native_windows,
-                            dragged: WinampWindowId::Playlist,
-                        },
-                        WinampWindowSize::State(native_windows.playlist),
-                        scale,
-                    );
-                }
-            },
-        );
-    }
+            );
+        }
+
+        if snapshot.playlist_visible {
+            WindowNode(
+                winamp_playlist_window_id(),
+                winamp_window_config(WinampWindowPlacement {
+                    title: "Winamp Playlist",
+                    initial_position: WinampInitialWindowPosition::Screen(Point::new(
+                        140.0 + EQ_WIDTH,
+                        120.0 + MAIN_HEIGHT,
+                    )),
+                    state: peer_windows.playlist,
+                })
+                .with_resizable(true)
+                .with_min_size(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
+                {
+                    let pledit = skin.pledit.clone();
+                    move || {
+                        PlaylistWindow(
+                            pledit.clone(),
+                            state,
+                            WinampDragTarget::NativeGroup,
+                            WinampWindowSize::State(peer_windows.playlist),
+                            ui_scale(),
+                        );
+                    }
+                },
+            );
+        }
+    });
 }
 
 #[composable]
@@ -1385,15 +1407,8 @@ fn WindowDragHandle(drag_target: WinampDragTarget, area: SpriteRect, scale: f32)
         .absolute_offset(scaled(area.0, scale), scaled(area.1, scale));
 
     match drag_target {
-        WinampDragTarget::NativeGroup { windows, dragged } => {
-            Box(
-                modifier.window_drag_area_with_callbacks(
-                    move || start_winamp_native_drag_session(windows, dragged),
-                    move || finish_winamp_native_drag_session(windows),
-                ),
-                BoxSpec::default(),
-                || {},
-            );
+        WinampDragTarget::NativeGroup => {
+            Box(modifier.window_drag_area(), BoxSpec::default(), || {});
         }
         WinampDragTarget::Inline(window_position) => {
             let drag_offset = cranpose_core::useState(|| None::<Point>);
@@ -1460,7 +1475,7 @@ fn WindowResizeHandle(
     height: f32,
     scale: f32,
 ) {
-    if !matches!(drag_target, WinampDragTarget::NativeGroup { .. }) {
+    if !matches!(drag_target, WinampDragTarget::NativeGroup) {
         return;
     }
 
@@ -1599,375 +1614,45 @@ fn native_winamp_windows_available() -> bool {
 
 fn base_winamp_window_config(placement: WinampWindowPlacement) -> WindowConfig {
     let state_size = placement.state.size();
-    WindowConfig::borderless(placement.title, state_size.width, state_size.height)
-        .with_host_window_position(
-            snap_to_pixel(placement.host_position.x + WINAMP_NATIVE_HOST_OFFSET_X),
-            snap_to_pixel(placement.host_position.y + WINAMP_NATIVE_HOST_OFFSET_Y),
-        )
+    let config = WindowConfig::borderless(placement.title, state_size.width, state_size.height);
+    let config = match placement.initial_position {
+        WinampInitialWindowPosition::Host(position) => config.with_host_window_position(
+            snap_to_pixel(position.x + WINAMP_NATIVE_HOST_OFFSET_X),
+            snap_to_pixel(position.y + WINAMP_NATIVE_HOST_OFFSET_Y),
+        ),
+        WinampInitialWindowPosition::Screen(position) => {
+            config.with_position(snap_to_pixel(position.x), snap_to_pixel(position.y))
+        }
+    };
+    config
         .with_transparent(false)
         .with_resizable(false)
         .with_visible(true)
 }
 
-fn winamp_window_config(
-    placement: WinampWindowPlacement,
-    native_windows: WinampNativeWindowStates,
-    window_id: WinampWindowId,
-) -> WindowConfig {
+fn winamp_window_config(placement: WinampWindowPlacement) -> WindowConfig {
     let state = placement.state;
-    base_winamp_window_config(placement)
-        .on_moved(move |x, y| {
-            move_attached_winamp_window(native_windows, window_id, Point::new(x, y));
-        })
-        .with_state(state)
+    base_winamp_window_config(placement).with_state(state)
 }
 
-fn move_attached_winamp_window(
-    native_windows: WinampNativeWindowStates,
-    moved: WinampWindowId,
-    new_position: Point,
-) {
-    let moved_state = native_windows.state(moved);
-    let Some(old_position) = moved_state.position_non_reactive() else {
-        moved_state.set_position(Some(new_position));
-        return;
-    };
-    if moved != WinampWindowId::Main {
-        moved_state.set_position(Some(Point::new(
-            snap_to_pixel(new_position.x),
-            snap_to_pixel(new_position.y),
-        )));
-        return;
-    }
-
-    let delta = Point::new(
-        new_position.x - old_position.x,
-        new_position.y - old_position.y,
-    );
-    move_winamp_component_by_delta(native_windows, WinampWindowId::Main, delta);
+fn winamp_attach_policy() -> WindowAttachPolicy {
+    WindowAttachPolicy::new(
+        WINAMP_SNAP_DISTANCE,
+        WINAMP_ATTACH_EPSILON,
+        WindowMoveMode::DragLeaderOnly(vec![winamp_main_window_id()]),
+    )
 }
 
-fn move_winamp_component_by_delta(
-    native_windows: WinampNativeWindowStates,
-    dragged: WinampWindowId,
-    delta: Point,
-) {
-    if delta.x.abs() <= f32::EPSILON && delta.y.abs() <= f32::EPSILON {
-        return;
-    }
-
-    let snapshots = winamp_window_snapshots(native_windows);
-    let moved = if let Some(session) = native_windows
-        .drag_session
-        .get_non_reactive()
-        .filter(|session| session.dragged == dragged)
-    {
-        let component = session.component.ids();
-        move_winamp_snapshots_for_fixed_component(&snapshots, &component, delta)
-    } else {
-        move_winamp_snapshots(&snapshots, dragged, delta)
-    };
-    apply_winamp_window_snapshots(native_windows, moved);
+fn winamp_main_window_id() -> WindowId {
+    WindowId::from_static("winamp-main")
 }
 
-fn start_winamp_native_drag_session(
-    native_windows: WinampNativeWindowStates,
-    dragged: WinampWindowId,
-) {
-    let snapshots = winamp_window_snapshots(native_windows);
-    if snapshots.iter().all(|snapshot| snapshot.id != dragged) {
-        native_windows.drag_session.set(None);
-        return;
-    }
-
-    let component = attached_winamp_component(&snapshots, dragged);
-    native_windows
-        .drag_session
-        .set(Some(WinampNativeDragSession {
-            dragged,
-            component: WinampWindowComponent::from_ids(&component),
-        }));
+fn winamp_equalizer_window_id() -> WindowId {
+    WindowId::from_static("winamp-equalizer")
 }
 
-fn finish_winamp_native_drag_session(native_windows: WinampNativeWindowStates) {
-    native_windows.drag_session.set(None);
-}
-
-fn apply_winamp_window_snapshots(
-    native_windows: WinampNativeWindowStates,
-    snapshots: Vec<WinampWindowSnapshot>,
-) {
-    for snapshot in snapshots {
-        native_windows
-            .state(snapshot.id)
-            .set_position(Some(Point::new(
-                snap_to_pixel(snapshot.position.x),
-                snap_to_pixel(snapshot.position.y),
-            )));
-    }
-}
-
-impl WinampNativeWindowStates {
-    fn state(self, id: WinampWindowId) -> WindowState {
-        match id {
-            WinampWindowId::Main => self.main,
-            WinampWindowId::Equalizer => self.equalizer,
-            WinampWindowId::Playlist => self.playlist,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct WinampWindowSnapshot {
-    id: WinampWindowId,
-    position: Point,
-    size: Size,
-}
-
-fn winamp_window_snapshots(native_windows: WinampNativeWindowStates) -> Vec<WinampWindowSnapshot> {
-    [
-        WinampWindowId::Main,
-        WinampWindowId::Equalizer,
-        WinampWindowId::Playlist,
-    ]
-    .into_iter()
-    .filter_map(|id| {
-        let state = native_windows.state(id);
-        Some(WinampWindowSnapshot {
-            id,
-            position: state.position_non_reactive()?,
-            size: state.size_non_reactive(),
-        })
-    })
-    .collect()
-}
-
-fn attached_winamp_component(
-    snapshots: &[WinampWindowSnapshot],
-    dragged: WinampWindowId,
-) -> Vec<WinampWindowId> {
-    let mut component = vec![dragged];
-    let mut changed = true;
-
-    while changed {
-        changed = false;
-        for candidate in snapshots {
-            if component.contains(&candidate.id) {
-                continue;
-            }
-
-            let attached_to_component = snapshots
-                .iter()
-                .filter(|snapshot| component.contains(&snapshot.id))
-                .any(|snapshot| {
-                    rects_attached(
-                        candidate.position,
-                        candidate.size,
-                        snapshot.position,
-                        snapshot.size,
-                    )
-                });
-            if attached_to_component {
-                component.push(candidate.id);
-                changed = true;
-            }
-        }
-    }
-
-    component
-}
-
-fn move_winamp_snapshots(
-    snapshots: &[WinampWindowSnapshot],
-    dragged: WinampWindowId,
-    delta: Point,
-) -> Vec<WinampWindowSnapshot> {
-    let mut component = attached_winamp_component(snapshots, dragged);
-    move_winamp_snapshots_for_component(snapshots, &mut component, delta, true)
-}
-
-fn move_winamp_snapshots_for_fixed_component(
-    snapshots: &[WinampWindowSnapshot],
-    component: &[WinampWindowId],
-    delta: Point,
-) -> Vec<WinampWindowSnapshot> {
-    let mut moved = snapshots.to_vec();
-    translate_winamp_snapshots(&mut moved, component, delta);
-    moved
-}
-
-fn move_winamp_snapshots_for_component(
-    snapshots: &[WinampWindowSnapshot],
-    component: &mut Vec<WinampWindowId>,
-    delta: Point,
-    expand_component: bool,
-) -> Vec<WinampWindowSnapshot> {
-    let mut moved = snapshots.to_vec();
-    translate_winamp_snapshots(&mut moved, component, delta);
-
-    if expand_component {
-        while let Some(snap) = closest_winamp_snap(&moved, component) {
-            translate_winamp_snapshots(&mut moved, component, snap.delta);
-            for id in attached_winamp_component(&moved, snap.target) {
-                if !component.contains(&id) {
-                    component.push(id);
-                }
-            }
-        }
-    } else if let Some(snap) = closest_winamp_snap(&moved, component) {
-        translate_winamp_snapshots(&mut moved, component, snap.delta);
-    }
-
-    moved
-}
-
-fn translate_winamp_snapshots(
-    snapshots: &mut [WinampWindowSnapshot],
-    component: &[WinampWindowId],
-    delta: Point,
-) {
-    if delta.x.abs() <= f32::EPSILON && delta.y.abs() <= f32::EPSILON {
-        return;
-    }
-
-    for snapshot in snapshots {
-        if component.contains(&snapshot.id) {
-            snapshot.position.x += delta.x;
-            snapshot.position.y += delta.y;
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct WinampSnap {
-    target: WinampWindowId,
-    delta: Point,
-    distance: f32,
-    contact: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct WinampSnapCandidate {
-    delta: Point,
-    contact: f32,
-}
-
-fn closest_winamp_snap(
-    snapshots: &[WinampWindowSnapshot],
-    component: &[WinampWindowId],
-) -> Option<WinampSnap> {
-    let mut closest = None::<WinampSnap>;
-
-    for moving in snapshots
-        .iter()
-        .filter(|snapshot| component.contains(&snapshot.id))
-    {
-        for stationary in snapshots
-            .iter()
-            .filter(|snapshot| !component.contains(&snapshot.id))
-        {
-            for candidate in winamp_snap_candidates(*moving, *stationary) {
-                let snap = WinampSnap {
-                    target: stationary.id,
-                    delta: candidate.delta,
-                    distance: candidate.delta.x.abs() + candidate.delta.y.abs(),
-                    contact: candidate.contact,
-                };
-                if closest.is_none_or(|current| {
-                    snap.contact > current.contact
-                        || snap.contact == current.contact && snap.distance < current.distance
-                }) {
-                    closest = Some(snap);
-                }
-            }
-        }
-    }
-
-    closest
-}
-
-fn winamp_snap_candidates(
-    moving: WinampWindowSnapshot,
-    stationary: WinampWindowSnapshot,
-) -> Vec<WinampSnapCandidate> {
-    let moving_left = moving.position.x;
-    let moving_top = moving.position.y;
-    let moving_right = moving.position.x + moving.size.width;
-    let moving_bottom = moving.position.y + moving.size.height;
-    let stationary_left = stationary.position.x;
-    let stationary_top = stationary.position.y;
-    let stationary_right = stationary.position.x + stationary.size.width;
-    let stationary_bottom = stationary.position.y + stationary.size.height;
-
-    let mut candidates = Vec::new();
-    if ranges_overlap_strict(moving_top, moving_bottom, stationary_top, stationary_bottom) {
-        let contact =
-            range_overlap_length(moving_top, moving_bottom, stationary_top, stationary_bottom);
-        if near_snap(moving_right, stationary_left) {
-            candidates.push(WinampSnapCandidate {
-                delta: Point::new(stationary_left - moving_right, 0.0),
-                contact,
-            });
-        }
-        if near_snap(moving_left, stationary_right) {
-            candidates.push(WinampSnapCandidate {
-                delta: Point::new(stationary_right - moving_left, 0.0),
-                contact,
-            });
-        }
-    }
-    if ranges_overlap_strict(moving_left, moving_right, stationary_left, stationary_right) {
-        let contact =
-            range_overlap_length(moving_left, moving_right, stationary_left, stationary_right);
-        if near_snap(moving_bottom, stationary_top) {
-            candidates.push(WinampSnapCandidate {
-                delta: Point::new(0.0, stationary_top - moving_bottom),
-                contact,
-            });
-        }
-        if near_snap(moving_top, stationary_bottom) {
-            candidates.push(WinampSnapCandidate {
-                delta: Point::new(0.0, stationary_bottom - moving_top),
-                contact,
-            });
-        }
-    }
-
-    candidates
-}
-
-fn rects_attached(child: Point, child_size: Size, main: Point, main_size: Size) -> bool {
-    let child_right = child.x + child_size.width;
-    let child_bottom = child.y + child_size.height;
-    let main_right = main.x + main_size.width;
-    let main_bottom = main.y + main_size.height;
-
-    let touches_horizontal = near(child.x, main_right) || near(child_right, main.x);
-    let overlaps_vertical = ranges_overlap(child.y, child_bottom, main.y, main_bottom);
-    let touches_vertical = near(child.y, main_bottom) || near(child_bottom, main.y);
-    let overlaps_horizontal = ranges_overlap(child.x, child_right, main.x, main_right);
-
-    touches_horizontal && overlaps_vertical || touches_vertical && overlaps_horizontal
-}
-
-fn near(a: f32, b: f32) -> bool {
-    (a - b).abs() <= WINAMP_ATTACH_EPSILON
-}
-
-fn near_snap(a: f32, b: f32) -> bool {
-    (a - b).abs() <= WINAMP_SNAP_DISTANCE
-}
-
-fn ranges_overlap(a_start: f32, a_end: f32, b_start: f32, b_end: f32) -> bool {
-    a_start <= b_end + WINAMP_ATTACH_EPSILON && b_start <= a_end + WINAMP_ATTACH_EPSILON
-}
-
-fn ranges_overlap_strict(a_start: f32, a_end: f32, b_start: f32, b_end: f32) -> bool {
-    a_start < b_end && b_start < a_end
-}
-
-fn range_overlap_length(a_start: f32, a_end: f32, b_start: f32, b_end: f32) -> f32 {
-    (a_end.min(b_end) - a_start.max(b_start)).max(0.0)
+fn winamp_playlist_window_id() -> WindowId {
+    WindowId::from_static("winamp-playlist")
 }
 
 fn winamp_window_modifier(
@@ -1982,7 +1667,7 @@ fn winamp_window_modifier(
             let position = position.get();
             modifier.offset(snap_to_pixel(position.x), snap_to_pixel(position.y))
         }
-        WinampDragTarget::NativeGroup { .. } => modifier,
+        WinampDragTarget::NativeGroup => modifier,
     }
 }
 
@@ -2066,470 +1751,5 @@ mod tests {
         assert_eq!(vertical_slider_thumb_y(2.0, 63.0, 11.0), 0.0);
         assert_eq!(vertical_slider_thumb_y_down(-1.0, 145.0, 18.0), 0.0);
         assert_eq!(vertical_slider_thumb_y_down(2.0, 145.0, 18.0), 127.0);
-    }
-
-    #[test]
-    fn winamp_windows_attach_by_touching_edges() {
-        let main = Point::new(100.0, 200.0);
-        let main_size = Size::new(275.0, 116.0);
-        let child_size = Size::new(275.0, 116.0);
-
-        assert!(rects_attached(
-            Point::new(375.0, 200.0),
-            child_size,
-            main,
-            main_size
-        ));
-        assert!(rects_attached(
-            Point::new(101.0, 316.0),
-            child_size,
-            main,
-            main_size
-        ));
-        assert!(!rects_attached(
-            Point::new(420.0, 200.0),
-            child_size,
-            main,
-            main_size
-        ));
-    }
-
-    #[test]
-    fn winamp_windows_do_not_attach_through_visible_snap_gap() {
-        let main = Point::new(100.0, 200.0);
-        let main_size = Size::new(275.0, 116.0);
-        let child_size = Size::new(275.0, 116.0);
-
-        assert!(!rects_attached(
-            Point::new(379.0, 204.0),
-            child_size,
-            main,
-            main_size
-        ));
-        assert_eq!(
-            snap_candidate_deltas(
-                WinampWindowSnapshot {
-                    id: WinampWindowId::Equalizer,
-                    position: Point::new(379.0, 204.0),
-                    size: child_size,
-                },
-                WinampWindowSnapshot {
-                    id: WinampWindowId::Main,
-                    position: main,
-                    size: main_size,
-                },
-            ),
-            vec![Point::new(-4.0, 0.0)]
-        );
-        assert!(!rects_attached(
-            Point::new(390.0, 204.0),
-            child_size,
-            main,
-            main_size
-        ));
-    }
-
-    #[test]
-    fn winamp_attached_component_follows_pairwise_connections() {
-        let snapshots = attached_chain_snapshots();
-
-        assert_eq!(
-            sorted_component(&snapshots, WinampWindowId::Main),
-            vec![
-                WinampWindowId::Main,
-                WinampWindowId::Equalizer,
-                WinampWindowId::Playlist
-            ]
-        );
-        assert_eq!(
-            sorted_component(&snapshots, WinampWindowId::Equalizer),
-            vec![
-                WinampWindowId::Main,
-                WinampWindowId::Equalizer,
-                WinampWindowId::Playlist
-            ]
-        );
-        assert_eq!(
-            sorted_component(&snapshots, WinampWindowId::Playlist),
-            vec![
-                WinampWindowId::Main,
-                WinampWindowId::Equalizer,
-                WinampWindowId::Playlist
-            ]
-        );
-    }
-
-    #[test]
-    fn winamp_attached_component_handles_each_pair_topology() {
-        let main_equalizer = [
-            WinampWindowSnapshot {
-                id: WinampWindowId::Main,
-                position: Point::new(100.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Equalizer,
-                position: Point::new(100.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Playlist,
-                position: Point::new(700.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-        ];
-        assert_eq!(
-            sorted_component(&main_equalizer, WinampWindowId::Main),
-            vec![WinampWindowId::Main, WinampWindowId::Equalizer]
-        );
-        assert_eq!(
-            sorted_component(&main_equalizer, WinampWindowId::Playlist),
-            vec![WinampWindowId::Playlist]
-        );
-
-        let equalizer_playlist = [
-            WinampWindowSnapshot {
-                id: WinampWindowId::Main,
-                position: Point::new(100.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Equalizer,
-                position: Point::new(500.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Playlist,
-                position: Point::new(775.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-        ];
-        assert_eq!(
-            sorted_component(&equalizer_playlist, WinampWindowId::Equalizer),
-            vec![WinampWindowId::Equalizer, WinampWindowId::Playlist]
-        );
-        assert_eq!(
-            sorted_component(&equalizer_playlist, WinampWindowId::Main),
-            vec![WinampWindowId::Main]
-        );
-
-        let main_playlist = [
-            WinampWindowSnapshot {
-                id: WinampWindowId::Main,
-                position: Point::new(100.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Equalizer,
-                position: Point::new(900.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Playlist,
-                position: Point::new(375.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-        ];
-        assert_eq!(
-            sorted_component(&main_playlist, WinampWindowId::Playlist),
-            vec![WinampWindowId::Main, WinampWindowId::Playlist]
-        );
-        assert_eq!(
-            sorted_component(&main_playlist, WinampWindowId::Equalizer),
-            vec![WinampWindowId::Equalizer]
-        );
-    }
-
-    #[test]
-    fn winamp_attached_component_leaves_all_separated_windows_out() {
-        let snapshots = [
-            WinampWindowSnapshot {
-                id: WinampWindowId::Main,
-                position: Point::new(100.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Equalizer,
-                position: Point::new(500.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Playlist,
-                position: Point::new(900.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-        ];
-
-        assert_eq!(
-            sorted_component(&snapshots, WinampWindowId::Main),
-            vec![WinampWindowId::Main]
-        );
-        assert_eq!(
-            sorted_component(&snapshots, WinampWindowId::Equalizer),
-            vec![WinampWindowId::Equalizer]
-        );
-        assert_eq!(
-            sorted_component(&snapshots, WinampWindowId::Playlist),
-            vec![WinampWindowId::Playlist]
-        );
-    }
-
-    #[test]
-    fn winamp_move_snaps_separate_playlist_into_main_equalizer_component() {
-        let snapshots = [
-            WinampWindowSnapshot {
-                id: WinampWindowId::Main,
-                position: Point::new(100.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Equalizer,
-                position: Point::new(100.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Playlist,
-                position: Point::new(390.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-        ];
-
-        assert_eq!(
-            snap_candidate_deltas(
-                WinampWindowSnapshot {
-                    id: WinampWindowId::Equalizer,
-                    position: Point::new(110.0, 216.0),
-                    size: Size::new(275.0, 116.0),
-                },
-                snapshots[2],
-            ),
-            vec![Point::new(5.0, 0.0)]
-        );
-
-        let moved = move_winamp_snapshots(&snapshots, WinampWindowId::Main, Point::new(10.0, 0.0));
-
-        assert_eq!(
-            snapshot_position(&moved, WinampWindowId::Equalizer),
-            Point::new(115.0, 216.0)
-        );
-        assert_eq!(
-            snapshot_position(&moved, WinampWindowId::Playlist),
-            Point::new(390.0, 216.0)
-        );
-        assert_eq!(
-            sorted_component(&moved, WinampWindowId::Main),
-            vec![
-                WinampWindowId::Main,
-                WinampWindowId::Equalizer,
-                WinampWindowId::Playlist
-            ]
-        );
-    }
-
-    #[test]
-    fn winamp_child_drag_snaps_without_moving_attached_neighbors() {
-        let snapshots = [
-            WinampWindowSnapshot {
-                id: WinampWindowId::Main,
-                position: Point::new(100.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Equalizer,
-                position: Point::new(100.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Playlist,
-                position: Point::new(386.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-        ];
-
-        let mut component = vec![WinampWindowId::Playlist];
-        let snapped = move_winamp_snapshots_for_component(
-            &snapshots,
-            &mut component,
-            Point::new(-8.0, 0.0),
-            false,
-        );
-        assert_eq!(
-            snapshot_position(&snapped, WinampWindowId::Playlist),
-            Point::new(375.0, 216.0)
-        );
-        assert_eq!(
-            snapshot_position(&snapped, WinampWindowId::Main),
-            Point::new(100.0, 100.0)
-        );
-        assert_eq!(
-            snapshot_position(&snapped, WinampWindowId::Equalizer),
-            Point::new(100.0, 216.0)
-        );
-
-        let moved_again = move_winamp_snapshots_for_component(
-            &snapped,
-            &mut component,
-            Point::new(12.0, 7.0),
-            false,
-        );
-        assert_eq!(
-            snapshot_position(&moved_again, WinampWindowId::Main),
-            Point::new(100.0, 100.0)
-        );
-        assert_eq!(
-            snapshot_position(&moved_again, WinampWindowId::Equalizer),
-            Point::new(100.0, 216.0)
-        );
-        assert_eq!(
-            snapshot_position(&moved_again, WinampWindowId::Playlist),
-            Point::new(387.0, 223.0)
-        );
-    }
-
-    #[test]
-    fn winamp_frozen_drag_component_keeps_initial_windows_for_large_delta() {
-        let snapshots = attached_chain_snapshots();
-        let component = attached_winamp_component(&snapshots, WinampWindowId::Main);
-
-        let moved = move_winamp_snapshots_for_fixed_component(
-            &snapshots,
-            &component,
-            Point::new(220.0, 90.0),
-        );
-
-        assert_eq!(
-            snapshot_position(&moved, WinampWindowId::Main),
-            Point::new(320.0, 190.0)
-        );
-        assert_eq!(
-            snapshot_position(&moved, WinampWindowId::Equalizer),
-            Point::new(320.0, 306.0)
-        );
-        assert_eq!(
-            snapshot_position(&moved, WinampWindowId::Playlist),
-            Point::new(595.0, 306.0)
-        );
-        assert_eq!(
-            sorted_component(&moved, WinampWindowId::Main),
-            vec![
-                WinampWindowId::Main,
-                WinampWindowId::Equalizer,
-                WinampWindowId::Playlist
-            ]
-        );
-    }
-
-    #[test]
-    fn winamp_frozen_drag_component_does_not_attach_new_window() {
-        let snapshots = [
-            WinampWindowSnapshot {
-                id: WinampWindowId::Main,
-                position: Point::new(100.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Equalizer,
-                position: Point::new(100.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Playlist,
-                position: Point::new(386.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-        ];
-        let component = vec![WinampWindowId::Main, WinampWindowId::Equalizer];
-
-        let moved =
-            move_winamp_snapshots_for_fixed_component(&snapshots, &component, Point::new(8.0, 0.0));
-
-        assert_eq!(
-            snapshot_position(&moved, WinampWindowId::Main),
-            Point::new(108.0, 100.0)
-        );
-        assert_eq!(
-            snapshot_position(&moved, WinampWindowId::Equalizer),
-            Point::new(108.0, 216.0)
-        );
-        assert_eq!(
-            snapshot_position(&moved, WinampWindowId::Playlist),
-            Point::new(386.0, 216.0)
-        );
-
-        let moved_again =
-            move_winamp_snapshots_for_fixed_component(&moved, &component, Point::new(12.0, 4.0));
-        assert_eq!(
-            snapshot_position(&moved_again, WinampWindowId::Main),
-            Point::new(120.0, 104.0)
-        );
-        assert_eq!(
-            snapshot_position(&moved_again, WinampWindowId::Equalizer),
-            Point::new(120.0, 220.0)
-        );
-        assert_eq!(
-            snapshot_position(&moved_again, WinampWindowId::Playlist),
-            Point::new(386.0, 216.0)
-        );
-    }
-
-    #[test]
-    fn winamp_drag_session_component_roundtrips_ids() {
-        let component =
-            WinampWindowComponent::from_ids(&[WinampWindowId::Playlist, WinampWindowId::Main]);
-
-        assert!(component.contains(WinampWindowId::Main));
-        assert!(!component.contains(WinampWindowId::Equalizer));
-        assert!(component.contains(WinampWindowId::Playlist));
-        assert_eq!(
-            component.ids(),
-            vec![WinampWindowId::Main, WinampWindowId::Playlist]
-        );
-    }
-
-    fn attached_chain_snapshots() -> [WinampWindowSnapshot; 3] {
-        [
-            WinampWindowSnapshot {
-                id: WinampWindowId::Main,
-                position: Point::new(100.0, 100.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Equalizer,
-                position: Point::new(100.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-            WinampWindowSnapshot {
-                id: WinampWindowId::Playlist,
-                position: Point::new(375.0, 216.0),
-                size: Size::new(275.0, 116.0),
-            },
-        ]
-    }
-
-    fn sorted_component(
-        snapshots: &[WinampWindowSnapshot],
-        dragged: WinampWindowId,
-    ) -> Vec<WinampWindowId> {
-        let mut component = attached_winamp_component(snapshots, dragged);
-        component.sort_by_key(|id| *id as u8);
-        component
-    }
-
-    fn snapshot_position(snapshots: &[WinampWindowSnapshot], id: WinampWindowId) -> Point {
-        snapshots
-            .iter()
-            .find(|snapshot| snapshot.id == id)
-            .expect("snapshot")
-            .position
-    }
-
-    fn snap_candidate_deltas(
-        moving: WinampWindowSnapshot,
-        stationary: WinampWindowSnapshot,
-    ) -> Vec<Point> {
-        winamp_snap_candidates(moving, stationary)
-            .into_iter()
-            .map(|candidate| candidate.delta)
-            .collect()
     }
 }
