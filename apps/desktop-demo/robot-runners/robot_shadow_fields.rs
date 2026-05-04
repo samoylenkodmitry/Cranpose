@@ -5,9 +5,9 @@
 
 use cranpose::AppLauncher;
 use cranpose_testing::{
-    capture_screenshot, changed_pixel_count, changed_pixel_count_in_region, find_bounds_by_text,
-    find_button_in_semantics, find_text_by_prefix_in_semantics, logical_region_to_pixel_bounds,
-    root_bounds,
+    capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
+    find_button_in_semantics, logical_region_to_pixel_bounds, scroll_prefix_into_view,
+    scroll_text_into_view, ScrollConfig,
 };
 use desktop_app::app;
 use image::{ImageBuffer, Rgba, RgbaImage};
@@ -154,78 +154,14 @@ fn shadow_rect_from_label(shadow_label_bounds: (f32, f32, f32, f32)) -> (f32, f3
     )
 }
 
-fn scroll_down(robot: &cranpose::Robot) {
-    cranpose_testing::scroll_down(robot, 620.0, 760.0, 220.0);
-}
-
-fn scroll_up(robot: &cranpose::Robot) {
-    cranpose_testing::scroll_up(robot, 620.0, 220.0, 760.0);
-}
-
-fn y_is_visible(robot: &cranpose::Robot, y: f32) -> bool {
-    cranpose_testing::y_is_visible(robot, y)
-}
-
-fn scroll_text_into_view(
-    robot: &cranpose::Robot,
-    text: &str,
-    max_attempts: usize,
-) -> Option<(f32, f32, f32, f32)> {
-    for attempt in 0..max_attempts {
-        if let Some(bounds) = find_bounds_by_text(robot, text) {
-            let center_y = bounds.1 + bounds.3 * 0.5;
-            if y_is_visible(robot, center_y) {
-                return Some(bounds);
-            }
-            let Some((_, root_y, _, root_h)) = root_bounds(robot) else {
-                return Some(bounds);
-            };
-            let viewport_mid = root_y + root_h * 0.5;
-            if center_y > viewport_mid {
-                scroll_down(robot);
-            } else {
-                scroll_up(robot);
-            }
-        } else {
-            if attempt % 2 == 0 {
-                scroll_down(robot);
-            } else {
-                scroll_up(robot);
-            }
-        }
+fn shadow_scroll_config() -> ScrollConfig {
+    ScrollConfig {
+        center_x: 620.0,
+        down_from_y: 760.0,
+        down_to_y: 220.0,
+        up_from_y: 220.0,
+        up_to_y: 760.0,
     }
-    None
-}
-
-fn scroll_prefix_into_view(
-    robot: &cranpose::Robot,
-    prefix: &str,
-    max_attempts: usize,
-) -> Option<(f32, f32, f32, f32, String)> {
-    for attempt in 0..max_attempts {
-        if let Some(bounds) = find_text_by_prefix_in_semantics(robot, prefix) {
-            let center_y = bounds.1 + bounds.3 * 0.5;
-            if y_is_visible(robot, center_y) {
-                return Some(bounds);
-            }
-            let Some((_, root_y, _, root_h)) = root_bounds(robot) else {
-                return Some(bounds);
-            };
-            let viewport_mid = root_y + root_h * 0.5;
-            if center_y > viewport_mid {
-                scroll_down(robot);
-            } else {
-                scroll_up(robot);
-            }
-        } else {
-            if attempt % 2 == 0 {
-                scroll_down(robot);
-            } else {
-                scroll_up(robot);
-            }
-        }
-    }
-    None
 }
 
 fn set_slider_fraction(robot: &cranpose::Robot, prefix: &str, fraction: f32) -> Option<f32> {
@@ -235,13 +171,7 @@ fn set_slider_fraction(robot: &cranpose::Robot, prefix: &str, fraction: f32) -> 
         fraction,
         SHADOW_SLIDER_WIDTH,
         SLIDER_TOUCH_OFFSET_Y,
-        cranpose_testing::ScrollConfig {
-            center_x: 620.0,
-            down_from_y: 760.0,
-            down_to_y: 220.0,
-            up_from_y: 220.0,
-            up_to_y: 760.0,
-        },
+        shadow_scroll_config(),
     )
 }
 
@@ -278,14 +208,17 @@ fn main() {
             std::thread::sleep(Duration::from_millis(320));
             let _ = robot.wait_for_idle();
 
-            if scroll_text_into_view(&robot, "GraphicsLayer Fields", 18).is_none() {
+            if scroll_text_into_view(&robot, "GraphicsLayer Fields", 18, shadow_scroll_config())
+                .is_none()
+            {
                 println!("FATAL: could not find 'GraphicsLayer Fields'");
                 let _ = robot.exit();
                 std::process::exit(1);
             }
 
-            if scroll_text_into_view(&robot, "Shadow Fields", 40).is_none()
-                && scroll_prefix_into_view(&robot, "shadow_elevation", 40).is_none()
+            if scroll_text_into_view(&robot, "Shadow Fields", 40, shadow_scroll_config()).is_none()
+                && scroll_prefix_into_view(&robot, "shadow_elevation", 40, shadow_scroll_config())
+                    .is_none()
             {
                 println!("FATAL: could not find 'Shadow Fields'");
                 let _ = robot.exit();
@@ -303,17 +236,18 @@ fn main() {
                 ambient_alpha, spot_alpha
             );
 
-            let shadow_label_bounds = scroll_text_into_view(&robot, "shadow", 14).or_else(|| {
-                // Fallback: derive right-preview label area from the stable "none" label.
-                scroll_text_into_view(&robot, "none", 10).map(|none| {
-                    (
-                        none.0 + NONE_LABEL_TO_SHADOW_LABEL_X,
-                        none.1,
-                        none.2,
-                        none.3,
-                    )
-                })
-            });
+            let shadow_label_bounds =
+                scroll_text_into_view(&robot, "shadow", 14, shadow_scroll_config()).or_else(|| {
+                    // Fallback: derive right-preview label area from the stable "none" label.
+                    scroll_text_into_view(&robot, "none", 10, shadow_scroll_config()).map(|none| {
+                        (
+                            none.0 + NONE_LABEL_TO_SHADOW_LABEL_X,
+                            none.1,
+                            none.2,
+                            none.3,
+                        )
+                    })
+                });
             let Some(shadow_label_bounds) = shadow_label_bounds else {
                 println!("FATAL: could not find 'shadow' label in preview");
                 let _ = robot.exit();

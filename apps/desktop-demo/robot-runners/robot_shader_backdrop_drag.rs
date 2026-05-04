@@ -6,6 +6,7 @@ use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
     find_button_in_semantics, find_text_in_semantics, screenshot_logical_size,
+    scroll_text_into_view, ScrollConfig,
 };
 use desktop_app::app;
 use std::time::Duration;
@@ -27,6 +28,16 @@ fn scroll_up(robot: &cranpose::Robot) {
     cranpose_testing::scroll_up(robot, 620.0, 220.0, 720.0);
 }
 
+fn effect_scroll_config() -> ScrollConfig {
+    ScrollConfig {
+        center_x: 620.0,
+        down_from_y: 720.0,
+        down_to_y: 220.0,
+        up_from_y: 220.0,
+        up_to_y: 720.0,
+    }
+}
+
 fn set_slider_fraction(robot: &cranpose::Robot, prefix: &str, fraction: f32) -> Option<f32> {
     cranpose_testing::set_slider_fraction(
         robot,
@@ -34,13 +45,7 @@ fn set_slider_fraction(robot: &cranpose::Robot, prefix: &str, fraction: f32) -> 
         fraction,
         EFFECT_SLIDER_WIDTH,
         EFFECT_SLIDER_TOUCH_OFFSET_Y,
-        cranpose_testing::ScrollConfig {
-            center_x: 620.0,
-            down_from_y: 720.0,
-            down_to_y: 220.0,
-            up_from_y: 220.0,
-            up_to_y: 720.0,
-        },
+        effect_scroll_config(),
     )
 }
 
@@ -108,7 +113,8 @@ fn main() {
                 nested_parent, nested_child_off
             );
 
-            let Some((label_x, label_y, label_w, label_h)) = find_text_in_semantics(&robot, "Child backdrop")
+            let Some((label_x, label_y, label_w, label_h)) =
+                scroll_text_into_view(&robot, "Child backdrop", 24, effect_scroll_config())
             else {
                 println!("✗ Could not find 'Child backdrop' label");
                 std::process::exit(1);
