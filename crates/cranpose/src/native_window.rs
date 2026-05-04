@@ -1504,6 +1504,207 @@ mod tests {
         (runtime, position, size, state)
     }
 
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn reset_request_test_state() {
+        clear_native_window_requests();
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn request_exists(key: NativeWindowKey) -> bool {
+        native_window_requests()
+            .into_iter()
+            .any(|request| request.key == key)
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn request_test_composition() -> (
+        cranpose_core::Runtime,
+        cranpose_core::Composition<cranpose_core::MemoryApplier>,
+    ) {
+        let runtime = cranpose_core::Runtime::new(Arc::new(cranpose_core::DefaultScheduler));
+        let composition = cranpose_core::Composition::with_runtime(
+            cranpose_core::MemoryApplier::new(),
+            runtime.clone(),
+        );
+        (runtime, composition)
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[composable]
+    #[allow(non_snake_case)]
+    fn RequestCounterText(counter: cranpose_core::MutableState<i32>) {
+        cranpose_ui::Text(
+            format!("Counter {}", counter.get()),
+            cranpose_ui::Modifier::empty(),
+            cranpose_ui::TextStyle::default(),
+        );
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[composable]
+    #[allow(non_snake_case)]
+    fn PersistentRequestRoot(counter: cranpose_core::MutableState<i32>) {
+        RequestCounterText(counter);
+        WindowNode(
+            WindowId::from_static("persistent-request"),
+            WindowConfig::new("Persistent request", 100.0, 50.0),
+            || {},
+        );
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[composable]
+    #[allow(non_snake_case)]
+    fn ConditionalRequestRoot(show: cranpose_core::MutableState<bool>) {
+        if show.get() {
+            WindowNode(
+                WindowId::from_static("conditional-request"),
+                WindowConfig::new("Conditional request", 100.0, 50.0),
+                || {},
+            );
+        }
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[composable]
+    #[allow(non_snake_case)]
+    fn KeyedReplacementRequestRoot(show: cranpose_core::MutableState<bool>) {
+        let active = show.get();
+        cranpose_core::with_key(&active, || {
+            if active {
+                WindowNode(
+                    WindowId::from_static("keyed-replacement-request"),
+                    WindowConfig::new("Keyed replacement request", 100.0, 50.0),
+                    || {},
+                );
+            } else {
+                cranpose_ui::Text(
+                    "Inactive branch",
+                    cranpose_ui::Modifier::empty(),
+                    cranpose_ui::TextStyle::default(),
+                );
+            }
+        });
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[test]
+    fn native_window_request_survives_unrelated_scoped_recompose() {
+        reset_request_test_state();
+
+        let (runtime, mut composition) = request_test_composition();
+        let counter = cranpose_core::MutableState::with_runtime(0i32, runtime.handle());
+        let key = WindowId::from_static("persistent-request");
+        let root_key = cranpose_core::location_key(file!(), line!(), column!());
+        composition
+            .render_stable(root_key, || PersistentRequestRoot(counter))
+            .expect("initial persistent native-window request render");
+        assert!(request_exists(key));
+
+        counter.set(1);
+        composition
+            .reconcile(root_key, || PersistentRequestRoot(counter))
+            .expect("persistent native-window request reconcile");
+
+        assert!(
+            request_exists(key),
+            "unchanged native-window declarations must stay registered when only a sibling scope recomposes"
+        );
+        clear_native_window_requests();
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[test]
+    fn native_window_request_unregisters_when_conditional_declaration_is_removed() {
+        reset_request_test_state();
+
+        let (runtime, mut composition) = request_test_composition();
+        let show = cranpose_core::MutableState::with_runtime(true, runtime.handle());
+        let key = WindowId::from_static("conditional-request");
+        let root_key = cranpose_core::location_key(file!(), line!(), column!());
+        composition
+            .render_stable(root_key, || ConditionalRequestRoot(show))
+            .expect("initial conditional native-window request render");
+        assert!(request_exists(key));
+
+        show.set(false);
+        composition
+            .reconcile(root_key, || ConditionalRequestRoot(show))
+            .expect("conditional native-window request reconcile");
+
+        assert!(
+            !request_exists(key),
+            "removed native-window declarations must unregister through their disposable owner"
+        );
+        clear_native_window_requests();
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[test]
+    fn native_window_request_unregisters_when_keyed_branch_is_replaced() {
+        reset_request_test_state();
+
+        let (runtime, mut composition) = request_test_composition();
+        let show = cranpose_core::MutableState::with_runtime(true, runtime.handle());
+        let key = WindowId::from_static("keyed-replacement-request");
+        let root_key = cranpose_core::location_key(file!(), line!(), column!());
+        composition
+            .render_stable(root_key, || KeyedReplacementRequestRoot(show))
+            .expect("initial keyed native-window request render");
+        assert!(request_exists(key));
+
+        show.set(false);
+        composition
+            .reconcile(root_key, || KeyedReplacementRequestRoot(show))
+            .expect("keyed native-window request reconcile");
+
+        assert!(
+            !request_exists(key),
+            "keyed branch replacement must unregister native-window declarations from the inactive branch"
+        );
+        clear_native_window_requests();
+    }
+
     #[test]
     fn borderless_options_disable_decorations_and_resizing() {
         let options = NativeWindowOptions::borderless("Tool", 100.0, 50.0);

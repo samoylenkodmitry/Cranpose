@@ -3420,7 +3420,6 @@ impl ApplicationHandler for App {
         // Take the content closure (can only be called once)
         let content = self.content.take().expect("content already taken");
         let mut app = AppShell::new(renderer, default_root_key(), content);
-        app.set_before_recompose(native_window::clear_native_window_requests);
         #[cfg(feature = "robot")]
         app.set_semantics_enabled(self.robot_controller.is_some());
 

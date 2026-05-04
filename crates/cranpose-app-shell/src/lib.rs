@@ -95,7 +95,6 @@ where
     /// Dev options for debugging and performance monitoring
     dev_options: DevOptions,
     dev_overlay_controls: Vec<DevOverlayControl>,
-    before_recompose: Option<Box<dyn FnMut()>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -221,7 +220,6 @@ where
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
             dev_overlay_controls: Vec::new(),
-            before_recompose: None,
         };
         shell.process_frame();
         shell
@@ -306,10 +304,6 @@ where
 
     pub fn clear_frame_waker(&mut self) {
         self.runtime.clear_frame_waker();
-    }
-
-    pub fn set_before_recompose(&mut self, callback: impl FnMut() + 'static) {
-        self.before_recompose = Some(Box::new(callback));
     }
 
     pub fn should_render(&self) -> bool {
@@ -398,9 +392,6 @@ where
                 );
             }
             if should_render {
-                if let Some(before_recompose) = &mut self.before_recompose {
-                    before_recompose();
-                }
                 let Some(root_key) = self.composition.root_key() else {
                     self.process_frame();
                     self.is_dirty = false;

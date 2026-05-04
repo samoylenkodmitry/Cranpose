@@ -2,7 +2,7 @@
 
 use cranpose::AppLauncher;
 use cranpose_testing::find_button_in_semantics;
-use desktop_app::app::{self, DemoTab};
+use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -23,6 +23,13 @@ const FIND_WINDOW_POLL: Duration = Duration::from_millis(4);
 const FIND_WINDOW_TIMEOUT: Duration = Duration::from_millis(12_000);
 const SETUP_POSITION_TIMEOUT: Duration = Duration::from_millis(1200);
 const CACHED_RESTORE_TIMEOUT: Duration = Duration::from_millis(1_000);
+const TRANSPORT_CLICK_SETTLE: Duration = Duration::from_millis(160);
+const WINAMP_MAIN_SKIN_WIDTH: f32 = 275.0;
+const TRANSPORT_Y: f32 = 88.0;
+const TRANSPORT_BUTTON_WIDTH: f32 = 23.0;
+const PLAY_X: f32 = 39.0;
+const PAUSE_X: f32 = 62.0;
+const STOP_X: f32 = 85.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WindowGeometry {
@@ -89,6 +96,18 @@ fn main() {
         .with_title(WINDOW_TITLE)
         .with_size(1200, 800)
         .with_headless(false)
+        .with_robot_app_hook(|name, argument| match (name.as_str(), argument.as_str()) {
+            ("set-tab", "xkcd") => TEST_ACTIVE_TAB_STATE.with(|slot| {
+                let active_tab = slot
+                    .borrow()
+                    .as_ref()
+                    .copied()
+                    .ok_or_else(|| "active tab state is not initialized".to_string())?;
+                active_tab.set(DemoTab::Xkcd);
+                Ok(None)
+            }),
+            _ => Err(format!("unsupported robot app hook {name}({argument})")),
+        })
         .with_test_driver(|robot| {
             let pid = std::process::id();
             let host_window = find_app_window(pid);
@@ -131,6 +150,7 @@ fn main() {
             drag_main_over_peer_and_assert_peers_static("drag-main-over-peer", windows);
             place_attached_chain(windows, origin.x + 100, origin.y + 50);
             move_main_with_window_manager_and_assert_offsets("wm-move-main", windows, 31, 19);
+            click_transport_buttons_and_assert_windows_remain("transport-buttons", windows);
             drag_volume_to_zero_and_assert_windows_remain("volume-zero", windows);
 
             click_button(&robot, "Dock");
@@ -156,7 +176,10 @@ fn main() {
                 restore_elapsed.as_millis(),
                 CACHED_RESTORE_TIMEOUT.as_millis()
             );
-            click_button(&robot, "Counter App");
+            robot
+                .invoke_app_hook("set-tab", "xkcd")
+                .expect("switch to XKCD tab");
+            robot.wait_for_idle().expect("XKCD tab idle");
             assert_windows_absent(pid, "after tab switch");
 
             robot.exit().expect("exit");
@@ -667,6 +690,58 @@ fn drag_volume_to_zero_and_assert_windows_remain(label: &str, windows: WinampWin
         initial.playlist, after.playlist,
         "{label}: volume drag moved or hid the playlist window"
     );
+}
+
+fn click_transport_buttons_and_assert_windows_remain(label: &str, windows: WinampWindows) {
+    let initial = windows.geometries();
+    let sequence = [
+        ("play", PLAY_X),
+        ("pause", PAUSE_X),
+        ("play", PLAY_X),
+        ("pause", PAUSE_X),
+        ("stop", STOP_X),
+        ("play", PLAY_X),
+        ("pause", PAUSE_X),
+        ("stop", STOP_X),
+    ];
+
+    activate_window(windows.main);
+    for (index, (button, x)) in sequence.into_iter().enumerate() {
+        click_winamp_main_button(label, windows.main, button, x, TRANSPORT_Y);
+        std::thread::sleep(TRANSPORT_CLICK_SETTLE);
+        let current = windows.geometries();
+        assert_eq!(
+            initial.main, current.main,
+            "{label} click {index} ({button}): main window moved or disappeared"
+        );
+        assert_eq!(
+            initial.equalizer, current.equalizer,
+            "{label} click {index} ({button}): equalizer window moved or disappeared"
+        );
+        assert_eq!(
+            initial.playlist, current.playlist,
+            "{label} click {index} ({button}): playlist window moved or disappeared"
+        );
+    }
+}
+
+fn click_winamp_main_button(label: &str, window_id: u64, button: &str, x: f32, y: f32) {
+    let geometry = window_geometry(window_id);
+    let scale = geometry.width as f32 / WINAMP_MAIN_SKIN_WIDTH;
+    let screen_x = geometry.x + ((x + TRANSPORT_BUTTON_WIDTH * 0.5) * scale).round() as i32;
+    let screen_y = geometry.y + ((y + 9.0) * scale).round() as i32;
+    println!(
+        "{label}: click {button} window={window_id} geometry={geometry:?} screen=({screen_x},{screen_y})"
+    );
+    xdotool([
+        "mousemove",
+        "--sync",
+        "--",
+        &screen_x.to_string(),
+        &screen_y.to_string(),
+    ]);
+    std::thread::sleep(Duration::from_millis(40));
+    xdotool(["click", "1"]);
 }
 
 fn print_drag_trace(label: &str, trace: &[DragTraceSample]) {
