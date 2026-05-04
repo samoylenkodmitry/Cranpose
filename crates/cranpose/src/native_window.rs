@@ -1124,6 +1124,10 @@ impl WindowGraphState {
             .collect()
     }
 
+    pub(crate) fn cancel_drag(&mut self) {
+        self.active_drag = None;
+    }
+
     pub(crate) fn finish_drag(
         &mut self,
         windows: &[WindowGraphPeerSnapshot],
@@ -1970,6 +1974,37 @@ mod tests {
             Some(Point::new(216.0, 100.0))
         );
         assert!(second_release_moves.is_empty());
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[test]
+    fn graph_cancel_drag_discards_active_capture_without_release_moves() {
+        let main = WindowId::from_static("main");
+        let group = graph_group(WindowAttachPolicy::default());
+        let windows = vec![
+            graph_node(
+                "main",
+                Point::new(100.0, 100.0),
+                Size::new(100.0, 50.0),
+                &group,
+            ),
+            graph_node(
+                "playlist",
+                Point::new(216.0, 100.0),
+                Size::new(100.0, 50.0),
+                &group,
+            ),
+        ];
+
+        let mut graph = WindowGraphState::default();
+        graph.start_drag(&windows, main);
+        graph.cancel_drag();
+
+        assert!(graph.finish_drag(&windows).is_empty());
     }
 
     #[cfg(all(

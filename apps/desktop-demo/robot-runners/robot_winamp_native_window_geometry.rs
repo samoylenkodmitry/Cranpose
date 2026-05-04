@@ -127,7 +127,11 @@ fn main() {
             place_attached_chain(windows, origin.x + 80, origin.y + 40);
             drag_and_assert_only_dragged("drag-equalizer", windows, windows.equalizer);
             place_attached_chain(windows, origin.x + 100, origin.y + 50);
+            place_overflight_layout(windows, origin.x + 120, origin.y + 60);
+            drag_main_over_peer_and_assert_peers_static("drag-main-over-peer", windows);
+            place_attached_chain(windows, origin.x + 100, origin.y + 50);
             move_main_with_window_manager_and_assert_offsets("wm-move-main", windows, 31, 19);
+            drag_volume_to_zero_and_assert_windows_remain("volume-zero", windows);
 
             click_button(&robot, "Dock");
             assert_windows_absent(pid, "after Dock");
@@ -467,6 +471,21 @@ fn place_attached_chain(windows: WinampWindows, x: i32, y: i32) {
     println!("place attached chain: {:?}", windows.geometries());
 }
 
+fn place_overflight_layout(windows: WinampWindows, x: i32, y: i32) {
+    let sizes = windows.geometries();
+    let peer_x = x + sizes.main.width + 80;
+    place_window_for_setup("place-overflight-main", windows.main, x, y);
+    place_window_for_setup("place-overflight-equalizer", windows.equalizer, peer_x, y);
+    place_window_for_setup(
+        "place-overflight-playlist",
+        windows.playlist,
+        peer_x,
+        y + sizes.equalizer.height + 40,
+    );
+    std::thread::sleep(Duration::from_millis(220));
+    println!("place overflight layout: {:?}", windows.geometries());
+}
+
 fn place_window_for_setup(label: &str, window_id: u64, x: i32, y: i32) {
     activate_window(window_id);
     move_window(window_id, x, y);
@@ -565,6 +584,89 @@ fn drag_main_fast_and_assert_offsets(label: &str, windows: WinampWindows) {
     assert_offsets_close(label, FAST_MOVE_STEPS + 1, initial, final_geometries);
     assert_window_moved(label, initial.main, final_geometries.main);
     assert_windows_stop_after_release(label, windows, final_geometries);
+}
+
+fn drag_main_over_peer_and_assert_peers_static(label: &str, windows: WinampWindows) {
+    let initial = windows.geometries();
+    let (start_x, start_y) = drag_start_for_window(windows, windows.main);
+
+    activate_window(windows.main);
+    mousemove_in_window_exact(label, windows.main, start_x, start_y);
+    std::thread::sleep(Duration::from_millis(100));
+    xdotool(["mousedown", "1"]);
+    std::thread::sleep(Duration::from_millis(60));
+
+    for step in 1..=12 {
+        mousemove_relative(24, 0);
+        std::thread::sleep(Duration::from_millis(35));
+        let current = windows.geometries();
+        assert_eq!(
+            initial.equalizer, current.equalizer,
+            "{label} step {step}: equalizer moved while main passed over it"
+        );
+        assert_eq!(
+            initial.playlist, current.playlist,
+            "{label} step {step}: playlist moved while main passed over it"
+        );
+    }
+
+    xdotool(["mouseup", "1"]);
+    std::thread::sleep(Duration::from_millis(160));
+    let final_geometries = windows.geometries();
+    assert_eq!(
+        initial.equalizer, final_geometries.equalizer,
+        "{label}: equalizer moved after release"
+    );
+    assert_eq!(
+        initial.playlist, final_geometries.playlist,
+        "{label}: playlist moved after release"
+    );
+    assert_window_moved(label, initial.main, final_geometries.main);
+    assert_windows_stop_after_release(label, windows, final_geometries);
+}
+
+fn drag_volume_to_zero_and_assert_windows_remain(label: &str, windows: WinampWindows) {
+    let initial = windows.geometries();
+    let scale = initial.main.width as f32 / 275.0;
+    let start_x = initial.main.x + ((107.0 + 54.0) * scale).round() as i32;
+    let end_x = initial.main.x + (107.0 * scale).round() as i32;
+    let y = initial.main.y + ((57.0 + 5.0) * scale).round() as i32;
+
+    activate_window(windows.main);
+    xdotool([
+        "mousemove",
+        "--sync",
+        "--",
+        &start_x.to_string(),
+        &y.to_string(),
+    ]);
+    std::thread::sleep(Duration::from_millis(80));
+    xdotool(["mousedown", "1"]);
+    std::thread::sleep(Duration::from_millis(80));
+    xdotool([
+        "mousemove",
+        "--sync",
+        "--",
+        &end_x.to_string(),
+        &y.to_string(),
+    ]);
+    std::thread::sleep(Duration::from_millis(120));
+    xdotool(["mouseup", "1"]);
+    std::thread::sleep(Duration::from_millis(180));
+
+    let after = windows.geometries();
+    assert_eq!(
+        initial.main, after.main,
+        "{label}: volume drag moved or hid the main window"
+    );
+    assert_eq!(
+        initial.equalizer, after.equalizer,
+        "{label}: volume drag moved or hid the equalizer window"
+    );
+    assert_eq!(
+        initial.playlist, after.playlist,
+        "{label}: volume drag moved or hid the playlist window"
+    );
 }
 
 fn print_drag_trace(label: &str, trace: &[DragTraceSample]) {

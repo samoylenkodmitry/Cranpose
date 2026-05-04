@@ -31,6 +31,25 @@ fn winamp_press_debug_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("WINAMP_PRESS_DEBUG").is_some())
 }
 
+fn winamp_native_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_NATIVE_TRACE").is_some())
+}
+
+fn trace_winamp_state(action: &str, state: &WinampState) {
+    if winamp_native_trace_enabled() {
+        println!(
+            "winamp trace: action={action} closed={} playback={:?} eq_visible={} playlist_visible={} volume={:.3} status={:?}",
+            state.closed,
+            state.playback,
+            state.eq_visible,
+            state.playlist_visible,
+            state.volume,
+            state.status
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PlaybackState {
     Stopped,
@@ -40,6 +59,7 @@ enum PlaybackState {
 
 #[derive(Clone, Debug, PartialEq)]
 struct WinampState {
+    closed: bool,
     playback: PlaybackState,
     shuffle: bool,
     repeat: bool,
@@ -58,6 +78,7 @@ struct WinampState {
 impl Default for WinampState {
     fn default() -> Self {
         Self {
+            closed: false,
             playback: PlaybackState::Stopped,
             shuffle: false,
             repeat: false,
@@ -82,10 +103,19 @@ enum WinampDragTarget {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+enum WinampCloseAction {
+    SetStatus,
+    CloseApp,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 enum WinampWindowSize {
     Fixed(Size),
     State(WindowState),
 }
+
+const MAIN_TITLE_DRAG_HIT_AREA: SpriteRect = (16.0, 0.0, 228.0, 14.0);
+const EQ_TITLE_DRAG_HIT_AREA: SpriteRect = (0.0, 0.0, 264.0, 14.0);
 
 impl WinampWindowSize {
     fn get(self) -> Size {
@@ -268,6 +298,7 @@ fn WinampInlineStage(
                 skin.clone(),
                 state,
                 WinampDragTarget::Inline(windows.main),
+                WinampCloseAction::SetStatus,
                 scale,
             );
 
@@ -313,7 +344,13 @@ fn WinampNativeWindows(
             {
                 let skin = skin.clone();
                 move || {
-                    MainWindow(skin.clone(), state, WinampDragTarget::NativeGroup, scale);
+                    MainWindow(
+                        skin.clone(),
+                        state,
+                        WinampDragTarget::NativeGroup,
+                        WinampCloseAction::SetStatus,
+                        scale,
+                    );
                 }
             },
         );
@@ -378,6 +415,9 @@ pub fn WinampStandaloneApp() {
         playlist: rememberWindowState(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
     };
     let snapshot = state.get();
+    if snapshot.closed {
+        return;
+    }
     let skin = match remember_winamp_skin() {
         Ok(skin) => skin,
         Err(error) => {
@@ -401,6 +441,7 @@ pub fn WinampStandaloneApp() {
                         skin.clone(),
                         state,
                         WinampDragTarget::NativeGroup,
+                        WinampCloseAction::CloseApp,
                         ui_scale(),
                     );
                 }
@@ -467,6 +508,7 @@ fn MainWindow(
     skin: WinampSkin,
     state: MutableState<WinampState>,
     drag_target: WinampDragTarget,
+    close_action: WinampCloseAction,
     scale: f32,
 ) {
     let snapshot = state.get();
@@ -484,7 +526,7 @@ fn MainWindow(
                 scale,
             );
 
-            WindowDragHandle(drag_target, TITLE_DRAG_AREA, scale);
+            WindowDragHandle(drag_target, MAIN_TITLE_DRAG_HIT_AREA, scale);
 
             {
                 let state_click = state;
@@ -538,7 +580,17 @@ fn MainWindow(
                     POS_CLOSE_BUTTON.1,
                     scale,
                     move || {
-                        state_click.update(|s| s.status = "Close".to_string());
+                        state_click.update(|s| match close_action {
+                            WinampCloseAction::SetStatus => {
+                                s.status = "Close".to_string();
+                                trace_winamp_state("main-close-status", s);
+                            }
+                            WinampCloseAction::CloseApp => {
+                                s.closed = true;
+                                s.status = "Closed".to_string();
+                                trace_winamp_state("main-close-app", s);
+                            }
+                        });
                     },
                 );
             }
@@ -644,7 +696,10 @@ fn MainWindow(
                     VOLUME_BG_HEIGHT,
                     scale,
                     move |fraction| {
-                        state_drag.update(|s| s.volume = fraction);
+                        state_drag.update(|s| {
+                            s.volume = fraction;
+                            trace_winamp_state("volume", s);
+                        });
                     },
                 );
             }
@@ -776,6 +831,7 @@ fn MainWindow(
                             } else {
                                 "Equalizer Hidden".to_string()
                             };
+                            trace_winamp_state("main-eq-toggle", s);
                         });
                     },
                 );
@@ -808,6 +864,7 @@ fn MainWindow(
                             } else {
                                 "Playlist Hidden".to_string()
                             };
+                            trace_winamp_state("main-playlist-toggle", s);
                         });
                     },
                 );
@@ -846,7 +903,7 @@ fn EqualizerWindow(
                 scale,
             );
 
-            WindowDragHandle(drag_target, EQ_DRAG_AREA, scale);
+            WindowDragHandle(drag_target, EQ_TITLE_DRAG_HIT_AREA, scale);
 
             {
                 let state_click = state;
@@ -861,6 +918,7 @@ fn EqualizerWindow(
                         state_click.update(|s| {
                             s.eq_visible = false;
                             s.status = "Equalizer Hidden".to_string();
+                            trace_winamp_state("eq-close", s);
                         });
                     },
                 );
@@ -1519,6 +1577,7 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
                 state_click.update(|s| {
                     s.playback = PlaybackState::Playing;
                     s.status = "Play".to_string();
+                    trace_winamp_state("play", s);
                 });
             },
         );
@@ -1537,6 +1596,7 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
                 state_click.update(|s| {
                     s.playback = PlaybackState::Paused;
                     s.status = "Pause".to_string();
+                    trace_winamp_state("pause", s);
                 });
             },
         );
@@ -1555,6 +1615,7 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
                 state_click.update(|s| {
                     s.playback = PlaybackState::Stopped;
                     s.status = "Stop".to_string();
+                    trace_winamp_state("stop", s);
                 });
             },
         );
