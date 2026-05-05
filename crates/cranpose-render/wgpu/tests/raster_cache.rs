@@ -7,7 +7,7 @@ use cranpose_render_common::graph::{
 };
 use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
 use cranpose_render_common::Renderer;
-use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Rect};
+use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
 
 fn test_layer(
     node_id: Option<NodeId>,
@@ -22,6 +22,7 @@ fn test_layer(
         transform_to_parent,
         motion_context_animated: false,
         translated_content_context: false,
+        translated_content_offset: Point::default(),
         graphics_layer: GraphicsLayer::default(),
         clip_to_bounds: false,
         shadow_clip: None,

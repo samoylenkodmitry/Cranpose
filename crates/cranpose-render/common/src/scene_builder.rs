@@ -119,7 +119,7 @@ fn build_layer_node_internal(
     });
 
     let node_motion_context_animated = inherited_motion_context_animated || motion_context_animated;
-    let node_translated_content_context =
+    let child_translated_content_context =
         inherited_translated_content_context || translated_content_context;
 
     let mut children = draw_nodes(
@@ -148,7 +148,7 @@ fn build_layer_node_internal(
         let mut child_layer = build_layer_node_internal(
             child,
             child_motion_context_animated,
-            node_translated_content_context,
+            child_translated_content_context,
         );
         if content_offset != Point::default() {
             child_layer.transform_to_parent =
@@ -178,7 +178,12 @@ fn build_layer_node_internal(
         local_bounds,
         transform_to_parent,
         motion_context_animated: node_motion_context_animated,
-        translated_content_context: node_translated_content_context,
+        translated_content_context,
+        translated_content_offset: if translated_content_context {
+            content_offset
+        } else {
+            Point::default()
+        },
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -300,8 +305,9 @@ fn build_layer_node_from_data(
 
     let node_motion_context_animated =
         inherited_motion_context_animated || modifier_slices.motion_context_animated();
-    let node_translated_content_context =
-        inherited_translated_content_context || modifier_slices.translated_content_context();
+    let local_translated_content_context = modifier_slices.translated_content_context();
+    let child_translated_content_context =
+        inherited_translated_content_context || local_translated_content_context;
 
     let mut render_children = draw_nodes(
         modifier_slices.draw_commands(),
@@ -334,7 +340,7 @@ fn build_layer_node_from_data(
             applier,
             child_id,
             child_motion_context_animated,
-            node_translated_content_context,
+            child_translated_content_context,
         ) else {
             continue;
         };
@@ -366,7 +372,12 @@ fn build_layer_node_from_data(
         local_bounds,
         transform_to_parent,
         motion_context_animated: node_motion_context_animated,
-        translated_content_context: node_translated_content_context,
+        translated_content_context: local_translated_content_context,
+        translated_content_offset: if local_translated_content_context {
+            layout_state.content_offset
+        } else {
+            Point::default()
+        },
         graphics_layer,
         clip_to_bounds,
         shadow_clip,

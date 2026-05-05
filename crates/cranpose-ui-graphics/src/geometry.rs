@@ -1,6 +1,6 @@
 //! Geometric primitives: Point, Size, Rect, Insets, Path
 
-use crate::{Brush, Color, ColorFilter, ImageBitmap};
+use crate::{Brush, Color, ColorFilter, ImageBitmap, ImageSampling};
 use std::ops::AddAssign;
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -402,6 +402,7 @@ pub enum DrawPrimitive {
         image: ImageBitmap,
         alpha: f32,
         color_filter: Option<ColorFilter>,
+        sampling: ImageSampling,
         /// Optional source rectangle in image-pixel coordinates.
         /// When `None`, the entire image is drawn. When `Some`, only the
         /// specified sub-region of the source image is sampled.
@@ -451,6 +452,14 @@ pub trait DrawScope {
         alpha: f32,
         color_filter: Option<ColorFilter>,
     );
+    fn draw_image_at_sampled(
+        &mut self,
+        rect: Rect,
+        image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+        sampling: ImageSampling,
+    );
     fn draw_image_at_blend(
         &mut self,
         rect: Rect,
@@ -468,6 +477,15 @@ pub trait DrawScope {
         dst_rect: Rect,
         alpha: f32,
         color_filter: Option<ColorFilter>,
+    );
+    fn draw_image_src_sampled(
+        &mut self,
+        image: ImageBitmap,
+        src_rect: Rect,
+        dst_rect: Rect,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+        sampling: ImageSampling,
     );
     fn draw_image_src_blend(
         &mut self,
@@ -564,6 +582,7 @@ impl DrawScope for DrawScopeDefault {
                 image,
                 alpha: 1.0,
                 color_filter: None,
+                sampling: ImageSampling::Nearest,
                 src_rect: None,
             },
             blend_mode,
@@ -577,7 +596,28 @@ impl DrawScope for DrawScopeDefault {
         alpha: f32,
         color_filter: Option<ColorFilter>,
     ) {
-        self.draw_image_at_blend(rect, image, alpha, color_filter, BlendMode::SrcOver);
+        self.draw_image_at_sampled(rect, image, alpha, color_filter, ImageSampling::Nearest);
+    }
+
+    fn draw_image_at_sampled(
+        &mut self,
+        rect: Rect,
+        image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+        sampling: ImageSampling,
+    ) {
+        self.push_blended_primitive(
+            DrawPrimitive::Image {
+                rect,
+                image,
+                alpha: alpha.clamp(0.0, 1.0),
+                color_filter,
+                sampling,
+                src_rect: None,
+            },
+            BlendMode::SrcOver,
+        );
     }
 
     fn draw_image_at_blend(
@@ -594,6 +634,7 @@ impl DrawScope for DrawScopeDefault {
                 image,
                 alpha: alpha.clamp(0.0, 1.0),
                 color_filter,
+                sampling: ImageSampling::Nearest,
                 src_rect: None,
             },
             blend_mode,
@@ -618,6 +659,28 @@ impl DrawScope for DrawScopeDefault {
         );
     }
 
+    fn draw_image_src_sampled(
+        &mut self,
+        image: ImageBitmap,
+        src_rect: Rect,
+        dst_rect: Rect,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+        sampling: ImageSampling,
+    ) {
+        self.push_blended_primitive(
+            DrawPrimitive::Image {
+                rect: dst_rect,
+                image,
+                alpha: alpha.clamp(0.0, 1.0),
+                color_filter,
+                sampling,
+                src_rect: Some(src_rect),
+            },
+            BlendMode::SrcOver,
+        );
+    }
+
     fn draw_image_src_blend(
         &mut self,
         image: ImageBitmap,
@@ -633,6 +696,7 @@ impl DrawScope for DrawScopeDefault {
                 image,
                 alpha: alpha.clamp(0.0, 1.0),
                 color_filter,
+                sampling: ImageSampling::Nearest,
                 src_rect: Some(src_rect),
             },
             blend_mode,
@@ -741,12 +805,14 @@ mod tests {
                 image: actual,
                 alpha,
                 color_filter,
+                sampling,
                 src_rect,
             } => {
                 assert_eq!(*rect, Rect::from_size(Size::new(40.0, 24.0)));
                 assert_eq!(*actual, image);
                 assert_eq!(*alpha, 1.0);
                 assert!(color_filter.is_none());
+                assert_eq!(*sampling, ImageSampling::Nearest);
                 assert!(src_rect.is_none());
             }
             other => panic!("expected image primitive, got {other:?}"),
@@ -777,12 +843,88 @@ mod tests {
                 rect,
                 image: actual,
                 alpha,
+                sampling,
                 src_rect,
                 ..
             } => {
                 assert_eq!(*rect, dst);
                 assert_eq!(*actual, image);
                 assert!((alpha - 0.8).abs() < 1e-5);
+                assert_eq!(*sampling, ImageSampling::Nearest);
+                assert_eq!(*src_rect, Some(src));
+            }
+            other => panic!("expected image primitive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_image_at_sampled_records_requested_sampling() {
+        let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+        let image = ImageBitmap::from_rgba8(8, 8, vec![255; 8 * 8 * 4]).expect("image");
+        let dst = Rect {
+            x: 2.0,
+            y: 3.0,
+            width: 40.0,
+            height: 30.0,
+        };
+
+        scope.draw_image_at_sampled(dst, image.clone(), 0.7, None, ImageSampling::Linear);
+
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        match unwrap_image(&primitives[0]) {
+            DrawPrimitive::Image {
+                rect,
+                image: actual,
+                alpha,
+                sampling,
+                src_rect,
+                ..
+            } => {
+                assert_eq!(*rect, dst);
+                assert_eq!(*actual, image);
+                assert!((alpha - 0.7).abs() < 1e-5);
+                assert_eq!(*sampling, ImageSampling::Linear);
+                assert!(src_rect.is_none());
+            }
+            other => panic!("expected image primitive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_image_src_sampled_records_requested_sampling() {
+        let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+        let image = ImageBitmap::from_rgba8(64, 64, vec![255; 64 * 64 * 4]).expect("image");
+        let src = Rect {
+            x: 4.0,
+            y: 6.0,
+            width: 16.0,
+            height: 20.0,
+        };
+        let dst = Rect {
+            x: 8.0,
+            y: 10.0,
+            width: 32.0,
+            height: 40.0,
+        };
+
+        scope.draw_image_src_sampled(image.clone(), src, dst, 0.5, None, ImageSampling::Linear);
+
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        match unwrap_image(&primitives[0]) {
+            DrawPrimitive::Image {
+                rect,
+                image: actual,
+                alpha,
+                sampling,
+                src_rect,
+                ..
+            } => {
+                assert_eq!(*rect, dst);
+                assert_eq!(*actual, image);
+                assert!((alpha - 0.5).abs() < 1e-5);
+                assert_eq!(*sampling, ImageSampling::Linear);
                 assert_eq!(*src_rect, Some(src));
             }
             other => panic!("expected image primitive, got {other:?}"),

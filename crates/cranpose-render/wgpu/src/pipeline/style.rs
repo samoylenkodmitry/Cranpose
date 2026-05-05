@@ -103,6 +103,7 @@ pub(crate) fn apply_draw_commands(
                 image,
                 alpha,
                 color_filter,
+                sampling,
                 src_rect,
             } => {
                 let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
@@ -118,6 +119,7 @@ pub(crate) fn apply_draw_commands(
                     image,
                     combined_alpha,
                     combined_filter,
+                    sampling,
                     clip,
                     src_rect,
                     blend_mode.unwrap_or(BlendMode::SrcOver),

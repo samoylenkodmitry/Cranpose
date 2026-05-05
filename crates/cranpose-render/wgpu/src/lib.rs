@@ -33,7 +33,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Rect, RenderHash, Size,
+    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, RenderHash, Size,
 };
 use glyphon::{
     Attrs, AttrsOwned, Buffer, FamilyOwned, FontSystem, Metrics, Shaping, Style as GlyphonStyle,
@@ -1212,6 +1212,7 @@ impl Renderer for WgpuRenderer {
             transform_to_parent: ProjectiveTransform::translation(x, y),
             motion_context_animated: false,
             translated_content_context: false,
+            translated_content_offset: Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -1266,6 +1267,7 @@ impl Renderer for WgpuRenderer {
                 transform_to_parent: ProjectiveTransform::identity(),
                 motion_context_animated: false,
                 translated_content_context: false,
+                translated_content_offset: Point::default(),
                 graphics_layer: GraphicsLayer::default(),
                 clip_to_bounds: false,
                 shadow_clip: None,

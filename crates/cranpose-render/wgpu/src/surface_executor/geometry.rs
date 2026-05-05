@@ -1,6 +1,7 @@
 use crate::effect_renderer::CompositeSampleMode;
+use crate::scene::SnapAnchor;
 use cranpose_render_common::primitive_emit::resolve_clip;
-use cranpose_ui_graphics::Rect;
+use cranpose_ui_graphics::{Point, Rect};
 
 const MAX_EFFECT_LAYER_SURFACE_BYTES: u64 = 8 * 1024 * 1024;
 const QUAD_AXIS_ALIGNMENT_TOLERANCE: f32 = 1e-4;
@@ -124,6 +125,26 @@ pub(crate) fn target_quad(width: u32, height: u32) -> [[f32; 2]; 4] {
 
 pub(crate) fn scaled_quad(quad: [[f32; 2]; 4], scale: f32) -> [[f32; 2]; 4] {
     quad.map(|[x, y]| [x * scale, y * scale])
+}
+
+pub(crate) fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Point {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return Point::default();
+    }
+    let device_pixel_step =
+        if anchor.device_pixel_step.is_finite() && anchor.device_pixel_step > 0.0 {
+            anchor.device_pixel_step
+        } else {
+            1.0
+        };
+    Point::new(
+        ((anchor.origin.x * root_scale) / device_pixel_step).round() * device_pixel_step
+            / root_scale
+            - anchor.origin.x,
+        ((anchor.origin.y * root_scale) / device_pixel_step).round() * device_pixel_step
+            / root_scale
+            - anchor.origin.y,
+    )
 }
 
 fn quad_is_axis_aligned_rect(quad: [[f32; 2]; 4]) -> bool {

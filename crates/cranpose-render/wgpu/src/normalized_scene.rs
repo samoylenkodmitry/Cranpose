@@ -7,7 +7,7 @@ use crate::scene::{
     TextDraw,
 };
 use crate::surface_plan::{
-    layer_cache_key, layer_contains_descendant_backdrop, layer_needs_text_leaf_snap,
+    layer_cache_key, layer_contains_descendant_backdrop, layer_needs_rigid_snap,
     layer_surface_requirements_cached, LayerSurfaceRequirements, TranslationRenderContext,
 };
 use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
@@ -31,6 +31,7 @@ pub(crate) struct ChildLayerComposite<'a> {
     pub(crate) layer: &'a LayerNode,
     pub(crate) logical_rect: Rect,
     pub(crate) dest_quad: [[f32; 2]; 4],
+    pub(crate) snap_anchor: Option<SnapAnchor>,
     pub(crate) backdrop_rect: Rect,
     pub(crate) visual_clip: Option<Rect>,
     pub(crate) shadow_draws: Vec<ShadowDraw>,
@@ -41,6 +42,7 @@ pub(crate) struct ChildLayerComposite<'a> {
 pub(crate) struct ResolvedChildSurfaceComposite {
     pub(crate) logical_rect: Rect,
     pub(crate) dest_quad: [[f32; 2]; 4],
+    pub(crate) snap_anchor: Option<SnapAnchor>,
     pub(crate) backdrop_rect: Rect,
     pub(crate) shadow_draws: Vec<ShadowDraw>,
 }
@@ -284,6 +286,9 @@ fn assign_snap_anchor_since(
             text.snap_anchor = Some(snap_anchor);
         }
     }
+    for layer in &mut scene.effect_layers[counts.effect_layers..] {
+        layer.snap_anchor = Some(snap_anchor);
+    }
 }
 
 fn mark_translated_text_since(
@@ -357,6 +362,7 @@ pub(crate) fn resolved_child_surface_composite(
     ResolvedChildSurfaceComposite {
         logical_rect: child.logical_rect,
         dest_quad: child.dest_quad,
+        snap_anchor: child.snap_anchor,
         backdrop_rect: child.backdrop_rect,
         shadow_draws: child.shadow_draws.clone(),
     }
@@ -471,16 +477,32 @@ fn collect_layer_contents_into<'a>(
 
     let effective_translated_content_context =
         translation_context.inherited_content_translation || layer.translated_content_context;
-    let translated_snap_anchor = if effective_translated_content_context {
+    let suppress_rigid_snap = effective_translated_content_context && layer.motion_context_animated;
+    let boundary_snap_anchor = if !translation_context.inherited_content_translation
+        && layer.translated_content_context
+        && !suppress_rigid_snap
+    {
+        rigid_snap_anchor(
+            layer_bounds.translate(
+                layer.translated_content_offset.x,
+                layer.translated_content_offset.y,
+            ),
+            &local_layer,
+            layer.motion_context_animated,
+        )
+    } else {
+        None
+    };
+    let translated_snap_anchor = if suppress_rigid_snap {
         None
     } else {
-        inherited_translated_snap_anchor
+        inherited_translated_snap_anchor.or(boundary_snap_anchor)
     };
-    let layer_snap_anchor = if effective_translated_content_context {
+    let layer_snap_anchor = if suppress_rigid_snap {
         None
     } else {
         translated_snap_anchor.or_else(|| {
-            if layer_needs_text_leaf_snap(layer) {
+            if layer_needs_rigid_snap(layer, effective_translated_content_context) {
                 rigid_snap_anchor(layer_bounds, &local_layer, layer.motion_context_animated)
             } else {
                 None
@@ -488,6 +510,7 @@ fn collect_layer_contents_into<'a>(
         })
     };
     let translated_local_picture = layer.translated_content_context
+        && layer.motion_context_animated
         && !translation_context.inherited_content_translation
         && !translation_context.surface_capture_active;
     let translated_text_motion =
@@ -537,6 +560,24 @@ fn collect_layer_contents_into<'a>(
                     let child_bounds = child_layer
                         .local_bounds
                         .translate(child_offset.x, child_offset.y);
+                    let child_translated_snap_anchor = translated_snap_anchor.or_else(|| {
+                        if effective_translated_content_context {
+                            let child_isolation =
+                                effective_layer_isolation(&child_layer.graphics_layer);
+                            let child_content_layer = layer_for_content(
+                                &child_layer.graphics_layer,
+                                child_isolation.as_ref(),
+                            );
+                            let child_local_layer = local_content_layer(&child_content_layer);
+                            rigid_snap_anchor(
+                                child_bounds,
+                                &child_local_layer,
+                                child_layer.motion_context_animated,
+                            )
+                        } else {
+                            None
+                        }
+                    });
                     let child_shadow_clip = resolve_clip(
                         visual_clip,
                         child_layer
@@ -554,7 +595,7 @@ fn collect_layer_contents_into<'a>(
                         child_layer.as_ref(),
                         visual_clip,
                         child_offset,
-                        translated_snap_anchor,
+                        child_translated_snap_anchor,
                         child_translation_context,
                         local_scene,
                         child_layers,
@@ -594,6 +635,24 @@ fn collect_layer_contents_into<'a>(
                     child_bounds,
                     child_shadow_clip,
                 );
+                let child_snap_anchor = translated_snap_anchor.or_else(|| {
+                    if effective_translated_content_context {
+                        let child_isolation =
+                            effective_layer_isolation(&child_layer.graphics_layer);
+                        let child_content_layer = layer_for_content(
+                            &child_layer.graphics_layer,
+                            child_isolation.as_ref(),
+                        );
+                        let child_local_layer = local_content_layer(&child_content_layer);
+                        rigid_snap_anchor(
+                            child_bounds,
+                            &child_local_layer,
+                            child_layer.motion_context_animated,
+                        )
+                    } else {
+                        None
+                    }
+                });
                 child_layers.push(ChildLayerComposite {
                     z_index: local_scene.next_z,
                     layer: child_layer.as_ref(),
@@ -602,6 +661,7 @@ fn collect_layer_contents_into<'a>(
                         child_layer.transform_to_parent.map_rect(child_logical_rect),
                         layer_offset,
                     ),
+                    snap_anchor: child_snap_anchor,
                     backdrop_rect: quad_bounds(translate_quad(
                         child_layer
                             .transform_to_parent

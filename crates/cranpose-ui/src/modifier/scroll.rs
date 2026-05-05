@@ -19,16 +19,15 @@ use crate::current_density;
 use crate::fling_animation::FlingAnimation;
 use crate::fling_animation::MIN_FLING_VELOCITY;
 use crate::schedule_draw_repass;
-use crate::scroll::{ScrollElement, ScrollState};
+use crate::scroll::{ScrollElement, ScrollMotionContext, ScrollState};
 use cranpose_core::{current_runtime_handle, NodeId};
 use cranpose_foundation::{
     velocity_tracker::ASSUME_STOPPED_MS, DelegatableNode, ModifierNode, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerButton, PointerButtons, VelocityTracker1D, DRAG_THRESHOLD,
     MAX_FLING_VELOCITY,
 };
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use web_time::Instant;
 
 // ============================================================================
@@ -126,101 +125,6 @@ impl Default for ScrollGestureState {
             gesture_start_time: None,
             last_velocity_sample_ms: None,
             fling_animation: None,
-        }
-    }
-}
-
-#[derive(Clone)]
-struct MotionContextState {
-    inner: Rc<MotionContextStateInner>,
-}
-
-struct MotionContextStateInner {
-    active: Cell<bool>,
-    generation: Cell<u64>,
-    invalidate_callbacks: RefCell<std::collections::HashMap<u64, Box<dyn Fn()>>>,
-    pending_invalidation: Cell<bool>,
-}
-
-impl MotionContextState {
-    fn new() -> Self {
-        Self {
-            inner: Rc::new(MotionContextStateInner {
-                active: Cell::new(false),
-                generation: Cell::new(0),
-                invalidate_callbacks: RefCell::new(std::collections::HashMap::new()),
-                pending_invalidation: Cell::new(false),
-            }),
-        }
-    }
-
-    fn is_active(&self) -> bool {
-        self.inner.active.get()
-    }
-
-    fn set_active(&self, active: bool) {
-        if self.inner.active.replace(active) != active {
-            self.bump_generation();
-            self.invalidate();
-        }
-    }
-
-    fn activate_for_next_frame(&self) {
-        let was_active = self.inner.active.replace(true);
-        let generation = self.bump_generation();
-        if !was_active {
-            self.invalidate();
-        }
-        if let Some(runtime) = current_runtime_handle() {
-            let state = self.clone();
-            let _ = runtime.register_frame_callback(move |_| {
-                state.clear_if_generation(generation);
-            });
-            runtime.schedule();
-        } else {
-            self.clear_if_generation(generation);
-        }
-    }
-
-    fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        static NEXT_CALLBACK_ID: AtomicU64 = AtomicU64::new(1);
-        let id = NEXT_CALLBACK_ID.fetch_add(1, Ordering::Relaxed);
-        self.inner
-            .invalidate_callbacks
-            .borrow_mut()
-            .insert(id, callback);
-        if self.inner.pending_invalidation.replace(false) {
-            if let Some(callback) = self.inner.invalidate_callbacks.borrow().get(&id) {
-                callback();
-            }
-        }
-        id
-    }
-
-    fn remove_invalidate_callback(&self, id: u64) {
-        self.inner.invalidate_callbacks.borrow_mut().remove(&id);
-    }
-
-    fn bump_generation(&self) -> u64 {
-        let next = self.inner.generation.get().wrapping_add(1);
-        self.inner.generation.set(next);
-        next
-    }
-
-    fn clear_if_generation(&self, generation: u64) {
-        if self.inner.generation.get() == generation {
-            self.set_active(false);
-        }
-    }
-
-    fn invalidate(&self) {
-        let callbacks = self.inner.invalidate_callbacks.borrow();
-        if callbacks.is_empty() {
-            self.inner.pending_invalidation.set(true);
-            return;
-        }
-        for callback in callbacks.values() {
-            callback();
         }
     }
 }
@@ -339,7 +243,7 @@ struct ScrollGestureDetector<S: ScrollTarget> {
     reverse_scrolling: bool,
 
     /// Active motion state for renderer policy selection.
-    motion_context: MotionContextState,
+    motion_context: ScrollMotionContext,
 }
 
 impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
@@ -349,7 +253,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         scroll_target: S,
         is_vertical: bool,
         reverse_scrolling: bool,
-        motion_context: MotionContextState,
+        motion_context: ScrollMotionContext,
     ) -> Self {
         Self {
             gesture_state,
@@ -633,13 +537,13 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
 pub(crate) struct MotionContextAnimatedNode {
     state: NodeState,
-    motion_context: MotionContextState,
+    motion_context: ScrollMotionContext,
     invalidation_callback_id: Option<u64>,
     node_id: Option<NodeId>,
 }
 
 impl MotionContextAnimatedNode {
-    fn new(motion_context: MotionContextState) -> Self {
+    fn new(motion_context: ScrollMotionContext) -> Self {
         Self {
             state: NodeState::new(),
             motion_context,
@@ -713,11 +617,11 @@ impl ModifierNode for MotionContextAnimatedNode {
 
 #[derive(Clone)]
 struct MotionContextAnimatedElement {
-    motion_context: MotionContextState,
+    motion_context: ScrollMotionContext,
 }
 
 impl MotionContextAnimatedElement {
-    fn new(motion_context: MotionContextState) -> Self {
+    fn new(motion_context: ScrollMotionContext) -> Self {
         Self { motion_context }
     }
 }
@@ -730,7 +634,7 @@ impl std::fmt::Debug for MotionContextAnimatedElement {
 
 impl PartialEq for MotionContextAnimatedElement {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.motion_context.inner, &other.motion_context.inner)
+        self.motion_context.ptr_eq(&other.motion_context)
     }
 }
 
@@ -738,7 +642,7 @@ impl Eq for MotionContextAnimatedElement {}
 
 impl std::hash::Hash for MotionContextAnimatedElement {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        (Rc::as_ptr(&self.motion_context.inner) as usize).hash(state);
+        self.motion_context.stable_key().hash(state);
     }
 }
 
@@ -750,7 +654,7 @@ impl ModifierNodeElement for MotionContextAnimatedElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        if Rc::ptr_eq(&node.motion_context.inner, &self.motion_context.inner) {
+        if node.motion_context.ptr_eq(&self.motion_context) {
             return;
         }
         if let Some(id) = node.invalidation_callback_id.take() {
@@ -906,7 +810,7 @@ fn scroll_impl(
 ) -> Modifier {
     // Create local gesture state - each scroll modifier instance is independent
     let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
-    let motion_context = MotionContextState::new();
+    let motion_context = ScrollMotionContext::new();
 
     // Set up pointer input handler
     let scroll_state = state.clone();
@@ -1025,7 +929,7 @@ impl Modifier {
 fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: bool) -> Modifier {
     let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
     let list_state = state;
-    let motion_context = MotionContextState::new();
+    let motion_context = ScrollMotionContext::new();
 
     // Note: Layout invalidation callback is registered in LazyColumnImpl/LazyRowImpl
     // after the node is created, using schedule_layout_repass(node_id) for O(subtree)

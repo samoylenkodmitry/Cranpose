@@ -66,6 +66,18 @@ fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
     })
 }
 
+fn layer_contains_draw_primitives(layer: &LayerNode) -> bool {
+    layer.children.iter().any(|child| {
+        matches!(
+            child,
+            RenderNode::Primitive(PrimitiveEntry {
+                node: PrimitiveNode::Draw(_),
+                ..
+            })
+        )
+    })
+}
+
 fn span_has_foreground_override(span_style: &cranpose_ui::text::SpanStyle) -> bool {
     matches!(
         span_style.brush.as_ref(),
@@ -135,10 +147,11 @@ fn layer_contains_gpu_effect_text_primitives(layer: &LayerNode) -> bool {
     })
 }
 
-pub(crate) fn layer_needs_text_leaf_snap(layer: &LayerNode) -> bool {
-    !layer.translated_content_context
-        && layer_contains_text_primitives(layer)
-        && !layer_contains_gpu_effect_text_primitives(layer)
+pub(crate) fn layer_needs_rigid_snap(layer: &LayerNode, translated_content_context: bool) -> bool {
+    (translated_content_context
+        && (layer_contains_draw_primitives(layer) || layer_contains_text_primitives(layer)))
+        || (layer_contains_text_primitives(layer)
+            && !layer_contains_gpu_effect_text_primitives(layer))
 }
 
 pub(crate) fn layer_cache_key(layer: &LayerNode) -> usize {
@@ -294,7 +307,7 @@ pub(crate) fn layer_surface_requirements_cached(
 
     let effective_isolation = effective_layer_isolation(&layer.graphics_layer);
     let mut surface_requirements = SurfaceRequirementSet::default();
-    if layer.translated_content_context && layer.clip_to_bounds {
+    if layer.translated_content_context && layer.motion_context_animated && layer.clip_to_bounds {
         surface_requirements.insert(SurfaceRequirement::MotionStableCapture);
     }
     if layer.isolation.explicit_offscreen
@@ -392,6 +405,7 @@ mod tests {
             transform_to_parent: ProjectiveTransform::identity(),
             motion_context_animated: false,
             translated_content_context: false,
+            translated_content_offset: cranpose_ui_graphics::Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -406,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_clip_layer_outside_capture_uses_motion_stable_scale() {
+    fn rested_translated_clip_layer_does_not_force_motion_stable_capture() {
         let mut layer = test_layer(Rect {
             x: 0.0,
             y: 0.0,
@@ -414,6 +428,36 @@ mod tests {
             height: 80.0,
         });
         layer.translated_content_context = true;
+        layer.clip_to_bounds = true;
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(
+            !requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::MotionStableCapture),
+            "rested scroll clips should stay on the direct path so content is not resampled"
+        );
+        assert_eq!(
+            composite_sample_mode_for_requirements(true, false, requirements),
+            CompositeSampleMode::Linear
+        );
+        assert_eq!(
+            layer_surface_target_scale(true, false, requirements, 9.0),
+            9.0
+        );
+    }
+
+    #[test]
+    fn active_translated_clip_layer_outside_capture_uses_motion_stable_scale() {
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+        layer.translated_content_context = true;
+        layer.motion_context_animated = true;
         layer.clip_to_bounds = true;
 
         let requirements = layer_surface_requirements(&layer);
@@ -432,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_clip_layer_inside_capture_keeps_parent_scale() {
+    fn active_translated_clip_layer_inside_capture_keeps_parent_scale() {
         let mut layer = test_layer(Rect {
             x: 0.0,
             y: 0.0,
@@ -440,6 +484,7 @@ mod tests {
             height: 80.0,
         });
         layer.translated_content_context = true;
+        layer.motion_context_animated = true;
         layer.clip_to_bounds = true;
 
         let requirements = layer_surface_requirements(&layer);

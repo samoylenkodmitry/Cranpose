@@ -280,12 +280,14 @@ fn hash_draw_primitive<H: Hasher>(primitive: &DrawPrimitive, state: &mut H) {
             image,
             alpha,
             color_filter,
+            sampling,
             src_rect,
         } => {
             4u8.hash(state);
             hash_rect(*rect, state);
             image.id().hash(state);
             hash_f32_bits(*alpha, state);
+            sampling.hash(state);
             match color_filter {
                 Some(filter) => {
                     1u8.hash(state);

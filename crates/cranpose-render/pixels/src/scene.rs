@@ -4,7 +4,8 @@ use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RoundedCornerShape,
+    BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect,
+    RoundedCornerShape,
 };
 
 #[derive(Clone)]
@@ -40,6 +41,7 @@ pub(crate) struct ImageDraw {
     pub image: ImageBitmap,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
+    pub sampling: ImageSampling,
     pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
@@ -108,6 +110,7 @@ impl RasterScene {
         image: ImageBitmap,
         alpha: f32,
         color_filter: Option<ColorFilter>,
+        sampling: ImageSampling,
         clip: Option<Rect>,
         src_rect: Option<Rect>,
         blend_mode: BlendMode,
@@ -120,6 +123,7 @@ impl RasterScene {
             image,
             alpha: alpha.clamp(0.0, 1.0),
             color_filter,
+            sampling,
             z_index,
             clip,
             blend_mode,
