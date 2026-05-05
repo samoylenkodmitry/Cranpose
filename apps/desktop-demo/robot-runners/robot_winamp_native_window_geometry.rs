@@ -192,10 +192,11 @@ fn arrange_origin(windows: WinampWindows) -> WindowGeometry {
     let total_width = geometries.main.width + geometries.playlist.width;
     let total_height =
         geometries.main.height + geometries.equalizer.height.max(geometries.playlist.height);
-    let desired_margin = 120;
     let monitor = native_window_monitor();
-    let margin_x = desired_margin.min(((monitor.width - total_width).max(0) / 2).max(8));
-    let margin_y = desired_margin.min(((monitor.height - total_height).max(0) / 2).max(8));
+    let desired_margin_x = 120.max(total_width / 2);
+    let desired_margin_y = 120.max(total_height / 2);
+    let margin_x = desired_margin_x.min(((monitor.width - total_width).max(0) / 2).max(8));
+    let margin_y = desired_margin_y.min(((monitor.height - total_height).max(0) / 2).max(8));
     let max_x = monitor.x + monitor.width - total_width - margin_x;
     let max_y = monitor.y + monitor.height - total_height - margin_y;
     WindowGeometry {
@@ -1365,30 +1366,59 @@ fn activate_window(window_id: u64) {
 
 fn mousemove_in_window_exact(label: &str, window_id: u64, x: i32, y: i32) {
     let geometry = window_geometry(window_id);
-    let screen_x = geometry.x + x;
-    let screen_y = geometry.y + y;
-    for attempt in 0..3 {
-        xdotool([
-            "mousemove",
-            "--sync",
-            "--",
-            &screen_x.to_string(),
-            &screen_y.to_string(),
-        ]);
-        std::thread::sleep(Duration::from_millis(15));
-        let pointer = pointer_location();
-        let dx = pointer.x - screen_x;
-        let dy = pointer.y - screen_y;
-        println!(
-            "{label}: mouse target window={window_id} title={:?} geometry={geometry:?} desired_screen=({screen_x},{screen_y}) local=({x},{y}) attempt={} actual={pointer:?} actual_title={:?} error=({dx},{dy})",
-            window_title(window_id),
-            attempt + 1,
-            window_title(pointer.window),
-        );
-        if dx.abs() <= 1 && dy.abs() <= 1 {
-            return;
+    for (candidate_index, (local_x, local_y)) in drag_input_candidates(x, y, geometry) {
+        let screen_x = geometry.x + local_x;
+        let screen_y = geometry.y + local_y;
+        for attempt in 0..3 {
+            xdotool([
+                "mousemove",
+                "--sync",
+                "--",
+                &screen_x.to_string(),
+                &screen_y.to_string(),
+            ]);
+            std::thread::sleep(Duration::from_millis(15));
+            let pointer = pointer_location();
+            let dx = pointer.x - screen_x;
+            let dy = pointer.y - screen_y;
+            println!(
+                "{label}: mouse target window={window_id} title={:?} geometry={geometry:?} desired_screen=({screen_x},{screen_y}) local=({local_x},{local_y}) candidate={} attempt={} actual={pointer:?} actual_title={:?} error=({dx},{dy})",
+                window_title(window_id),
+                candidate_index + 1,
+                attempt + 1,
+                window_title(pointer.window),
+            );
+            if dx.abs() <= 1 && dy.abs() <= 1 && pointer.window == window_id {
+                return;
+            }
         }
     }
+
+    panic!(
+        "{label}: no draggable input point found for window={window_id} title={:?} geometry={geometry:?} preferred_local=({x},{y}) visible_windows={:?}",
+        window_title(window_id),
+        visible_windows_summary(),
+    );
+}
+
+fn drag_input_candidates(
+    preferred_x: i32,
+    preferred_y: i32,
+    geometry: WindowGeometry,
+) -> impl Iterator<Item = (usize, (i32, i32))> {
+    [
+        (preferred_x, preferred_y),
+        (preferred_x, preferred_y + 6),
+        (preferred_x, preferred_y + 12),
+        (preferred_x, preferred_y + 18),
+        (preferred_x + 24, preferred_y + 8),
+        (preferred_x - 24, preferred_y + 8),
+        (geometry.width / 2, preferred_y + 8),
+        (geometry.width / 2, preferred_y + 16),
+    ]
+    .into_iter()
+    .filter(move |(x, y)| *x >= 0 && *y >= 0 && *x < geometry.width && *y < geometry.height)
+    .enumerate()
 }
 
 fn mousemove_relative(dx: i32, dy: i32) {

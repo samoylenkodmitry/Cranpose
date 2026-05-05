@@ -25,6 +25,7 @@ const COMPARE_TRIM_TOP_PX: u32 = 200;
 const COMPARE_TRIM_BOTTOM_PX: u32 = 200;
 const COMPARE_SEARCH_OFFSET_PX: u32 = 32;
 const COMPARE_MAX_ADJACENT_SCORE: u32 = 4;
+const COMPARE_STABILIZED_GUARD_PX: u32 = 0;
 const INTERNAL_DIAGNOSTIC_ENV: &str = "CRANPOSE_TEXT_SCROLL_INTERNAL_DIAGNOSTIC";
 const INTERNAL_DIAGNOSTIC_SCALE_ENV: &str = "CRANPOSE_TEXT_SCROLL_INTERNAL_DIAGNOSTIC_SCALE";
 const RENDER_STATS_ENV: &str = "CRANPOSE_TEXT_SCROLL_RENDER_STATS";
@@ -75,6 +76,7 @@ fn main() {
                     fallback_trim_bottom_px: COMPARE_TRIM_BOTTOM_PX,
                     compare_search_offset_px: COMPARE_SEARCH_OFFSET_PX,
                     compare_max_adjacent_score: COMPARE_MAX_ADJACENT_SCORE,
+                    compare_stabilized_guard_px: COMPARE_STABILIZED_GUARD_PX,
                     compare_viewport_inset_px: 0,
                     render_stats_env: Some(RENDER_STATS_ENV),
                 },

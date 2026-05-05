@@ -21,6 +21,7 @@ pub(crate) struct ScrollStabilityConfig {
     pub fallback_trim_bottom_px: u32,
     pub compare_search_offset_px: u32,
     pub compare_max_adjacent_score: u32,
+    pub compare_stabilized_guard_px: u32,
     pub compare_viewport_inset_px: u32,
     pub render_stats_env: Option<&'static str>,
 }
@@ -60,35 +61,15 @@ pub(crate) fn run_scroll_stability_capture(
 
     let mut previous_bounds = find_text_in_semantics(robot, config.target_text)
         .unwrap_or_else(|| fail_with_semantics(robot, "target text must be visible"));
+
     let mut capture_paths = Vec::with_capacity(config.scroll_steps);
     let mut internal_capture_paths = internal_diagnostic
         .as_ref()
         .map(|_| Vec::with_capacity(config.scroll_steps));
 
     for step in 0..config.scroll_steps {
-        let anchor_x = previous_bounds.0 + previous_bounds.2 * 0.5;
-        let anchor_y = previous_bounds.1 + previous_bounds.3 * 0.5;
-        robot.mouse_move(anchor_x, anchor_y).expect("move cursor");
-        std::thread::sleep(Duration::from_millis(30));
-        robot
-            .mouse_scroll(0.0, config.scroll_delta_y)
-            .expect("1px scroll should succeed");
-        std::thread::sleep(Duration::from_millis(150));
-        let _ = robot.wait_for_idle();
-
-        let current_bounds = find_text_in_semantics(robot, config.target_text)
-            .unwrap_or_else(|| fail_with_semantics(robot, "target text must stay visible"));
-        let actual_delta = current_bounds.1 - previous_bounds.1;
-        println!(
-            "step {step}: target_y={:.2} delta={:.2}",
-            current_bounds.1, actual_delta
-        );
-        assert!(
-            (actual_delta - config.scroll_delta_y).abs() <= config.step_epsilon,
-            "expected exact scroll delta {:.3}, got delta_y={actual_delta:.3} at step {step}",
-            config.scroll_delta_y,
-        );
-        previous_bounds = current_bounds;
+        previous_bounds =
+            scroll_once_and_expect_target_delta(robot, config, previous_bounds, step, "step");
 
         let screenshot_path = output_dir.join(format!("{}_step{step:02}.png", config.file_prefix));
         take_x11_screenshot(&window_id, screenshot_path.to_str().expect("utf8 path"));
@@ -122,6 +103,38 @@ pub(crate) fn run_scroll_stability_capture(
         cleanup_capture_paths(paths);
     }
     compare_ok
+}
+
+fn scroll_once_and_expect_target_delta(
+    robot: &cranpose::Robot,
+    config: ScrollStabilityConfig,
+    previous_bounds: (f32, f32, f32, f32),
+    step: usize,
+    label: &str,
+) -> (f32, f32, f32, f32) {
+    let anchor_x = previous_bounds.0 + previous_bounds.2 * 0.5;
+    let anchor_y = previous_bounds.1 + previous_bounds.3 * 0.5;
+    robot.mouse_move(anchor_x, anchor_y).expect("move cursor");
+    std::thread::sleep(Duration::from_millis(30));
+    robot
+        .mouse_scroll(0.0, config.scroll_delta_y)
+        .expect("1px scroll should succeed");
+    std::thread::sleep(Duration::from_millis(150));
+    let _ = robot.wait_for_idle();
+
+    let current_bounds = find_text_in_semantics(robot, config.target_text)
+        .unwrap_or_else(|| fail_with_semantics(robot, "target text must stay visible"));
+    let actual_delta = current_bounds.1 - previous_bounds.1;
+    println!(
+        "{label} {step}: target_y={:.2} delta={:.2}",
+        current_bounds.1, actual_delta
+    );
+    assert!(
+        (actual_delta - config.scroll_delta_y).abs() <= config.step_epsilon,
+        "expected exact scroll delta {:.3}, got delta_y={actual_delta:.3} at {label} {step}",
+        config.scroll_delta_y,
+    );
+    current_bounds
 }
 
 #[allow(dead_code)]
@@ -286,6 +299,8 @@ fn run_compare_script(
         .arg(config.compare_search_offset_px.to_string())
         .arg("--max-adjacent-score")
         .arg(config.compare_max_adjacent_score.to_string())
+        .arg("--stabilized-guard")
+        .arg(config.compare_stabilized_guard_px.to_string())
         .args(capture_paths)
         .output()
         .unwrap_or_else(|err| panic!("failed to run {}: {err}", script_path.display()));

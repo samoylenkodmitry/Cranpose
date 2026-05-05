@@ -8,7 +8,7 @@ use cranpose::AppLauncher;
 use desktop_app::app;
 use scroll_stability_external_helpers::{run_scroll_stability_capture, ScrollStabilityConfig};
 use std::time::Duration;
-use text_showcase_external_helpers::scroll_text_into_view;
+use text_showcase_external_helpers::scroll_text_into_view_between;
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 700;
@@ -18,6 +18,10 @@ const SCROLL_DELTA_Y: f32 = -1.0;
 const STEP_EPSILON: f32 = 0.05;
 const COMPARE_SEARCH_OFFSET_PX: u32 = 32;
 const COMPARE_MAX_ADJACENT_SCORE: u32 = 4;
+const COMPARE_STABILIZED_GUARD_PX: u32 = 32;
+const COMPARE_VIEWPORT_INSET_PX: u32 = 200;
+const TARGET_MIN_CENTER_Y: f32 = 240.0;
+const TARGET_MAX_CENTER_Y: f32 = 440.0;
 const RENDER_STATS_ENV: &str = "CRANPOSE_SCROLL_STABILITY_RENDER_STATS";
 
 fn main() {
@@ -32,10 +36,11 @@ fn main() {
             std::thread::sleep(Duration::from_millis(1000));
             let _ = robot.wait_for_idle();
 
-            scroll_text_into_view(
+            scroll_text_into_view_between(
                 &robot,
                 app::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE,
-                WINDOW_HEIGHT,
+                TARGET_MIN_CENTER_Y,
+                TARGET_MAX_CENTER_Y,
                 48,
             );
             std::thread::sleep(Duration::from_millis(500));
@@ -58,7 +63,8 @@ fn main() {
                     fallback_trim_bottom_px: 96,
                     compare_search_offset_px: COMPARE_SEARCH_OFFSET_PX,
                     compare_max_adjacent_score: COMPARE_MAX_ADJACENT_SCORE,
-                    compare_viewport_inset_px: 8,
+                    compare_stabilized_guard_px: COMPARE_STABILIZED_GUARD_PX,
+                    compare_viewport_inset_px: COMPARE_VIEWPORT_INSET_PX,
                     render_stats_env: Some(RENDER_STATS_ENV),
                 },
                 None,

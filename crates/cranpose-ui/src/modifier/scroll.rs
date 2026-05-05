@@ -697,13 +697,10 @@ impl TranslatedContentOffsetSource {
         match self {
             Self::LayoutContentOffset => None,
             Self::LazyList {
-                state,
-                is_vertical,
-                reverse_scrolling,
+                state, is_vertical, ..
             } => Some(Rc::new(lazy_list_content_offset_reader(
                 *state,
                 *is_vertical,
-                *reverse_scrolling,
             ))),
         }
     }
@@ -725,21 +722,13 @@ impl TranslatedContentOffsetSource {
     }
 }
 
-fn lazy_list_content_offset_reader(
-    state: LazyListState,
-    is_vertical: bool,
-    reverse_scrolling: bool,
-) -> impl Fn() -> Point {
+fn lazy_list_content_offset_reader(state: LazyListState, is_vertical: bool) -> impl Fn() -> Point {
     move || {
         let info = state.layout_info();
-        let Some(first) = info.visible_items_info.first() else {
+        if info.visible_items_info.is_empty() {
             return Point::default();
         };
-        let main_offset = if reverse_scrolling {
-            info.viewport_size - first.offset - first.size
-        } else {
-            first.offset
-        };
+        let main_offset = info.snap_anchor_offset;
         if is_vertical {
             Point::new(0.0, main_offset)
         } else {

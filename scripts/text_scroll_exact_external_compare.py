@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trim-right", type=int, default=0)
     parser.add_argument("--max-offset", type=int, required=True)
     parser.add_argument("--max-adjacent-score", type=int, default=0)
+    parser.add_argument("--stabilized-guard", type=int, default=0)
     parser.add_argument("images", nargs="+")
     return parser.parse_args()
 
@@ -299,8 +300,14 @@ def main() -> int:
 
     exact_adjacent_scores = [0]
     for step in range(1, len(stabilized_images)):
-        stabilized_reference = stabilized_images[step - 1]
-        stabilized_current = stabilized_images[step]
+        stabilized_reference = crop_with_explicit_guard(
+            stabilized_images[step - 1],
+            args.stabilized_guard,
+        )
+        stabilized_current = crop_with_explicit_guard(
+            stabilized_images[step],
+            args.stabilized_guard,
+        )
         score, first_diff = score_difference(stabilized_reference, stabilized_current)
         exact_adjacent_scores.append(score)
         if score == 0:

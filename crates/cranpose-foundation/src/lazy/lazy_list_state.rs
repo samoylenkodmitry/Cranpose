@@ -877,11 +877,15 @@ impl LazyListState {
     }
 
     /// Updates the layout info from a layout pass.
-    pub(crate) fn update_layout_info(&self, info: LazyListLayoutInfo) {
+    pub(crate) fn update_layout_info(&self, mut info: LazyListLayoutInfo) {
         if !self.inner.is_alive() {
             return;
         }
-        self.inner.with(|rc| rc.borrow_mut().layout_info = info);
+        self.inner.with(|rc| {
+            let mut inner = rc.borrow_mut();
+            info.snap_anchor_offset = continuous_snap_anchor_offset(&inner.layout_info, &info);
+            inner.layout_info = info;
+        });
     }
 
     /// Returns whether we can scroll forward (more items below/right).
@@ -1053,6 +1057,12 @@ pub struct LazyListLayoutInfo {
 
     /// Content padding after the last item.
     pub after_content_padding: f32,
+
+    /// Continuous main-axis visual offset used to snap translated lazy-list content.
+    pub snap_anchor_offset: f32,
+
+    /// Whether item offsets are placed from the end edge of the viewport.
+    pub reverse_layout: bool,
 }
 
 /// Information about a single visible item in a lazy list.
@@ -1069,6 +1079,37 @@ pub struct LazyListItemInfo {
 
     /// Size of the item in the main axis.
     pub size: f32,
+}
+
+fn continuous_snap_anchor_offset(
+    previous: &LazyListLayoutInfo,
+    current: &LazyListLayoutInfo,
+) -> f32 {
+    let Some(first_current) = current.visible_items_info.first() else {
+        return 0.0;
+    };
+
+    for current_item in &current.visible_items_info {
+        if let Some(previous_item) = previous
+            .visible_items_info
+            .iter()
+            .find(|item| item.key == current_item.key)
+        {
+            let previous_offset = snap_anchor_item_offset(previous, previous_item);
+            let current_offset = snap_anchor_item_offset(current, current_item);
+            return previous.snap_anchor_offset + current_offset - previous_offset;
+        }
+    }
+
+    snap_anchor_item_offset(current, first_current)
+}
+
+fn snap_anchor_item_offset(info: &LazyListLayoutInfo, item: &LazyListItemInfo) -> f32 {
+    if info.reverse_layout {
+        info.viewport_size - item.offset - item.size
+    } else {
+        item.offset
+    }
 }
 
 /// Test helpers for creating LazyListState without composition context.
@@ -1147,7 +1188,7 @@ mod tests {
     use super::test_helpers::{
         new_lazy_list_state, new_lazy_list_state_with_position, with_test_runtime,
     };
-    use super::{LazyListLayoutInfo, LazyListState};
+    use super::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
     use cranpose_core::{location_key, Composition, MemoryApplier};
     use std::cell::Cell;
     use std::rc::Rc;
@@ -1161,6 +1202,75 @@ mod tests {
         state.update_layout_info(LazyListLayoutInfo {
             total_items_count: 10,
             ..Default::default()
+        });
+    }
+
+    fn visible_item(index: usize, offset: f32, size: f32) -> LazyListItemInfo {
+        LazyListItemInfo {
+            index,
+            key: index as u64,
+            offset,
+            size,
+        }
+    }
+
+    #[test]
+    fn layout_info_snap_anchor_tracks_common_item_offset_delta() {
+        let previous = LazyListLayoutInfo {
+            visible_items_info: vec![visible_item(15, -31.4, 30.0), visible_item(16, 4.6, 30.0)],
+            snap_anchor_offset: -31.4,
+            ..Default::default()
+        };
+        let current = LazyListLayoutInfo {
+            visible_items_info: vec![visible_item(16, 3.6, 30.0), visible_item(17, 39.6, 30.0)],
+            ..Default::default()
+        };
+
+        let anchor = super::continuous_snap_anchor_offset(&previous, &current);
+
+        assert!((anchor + 32.4).abs() <= 0.001);
+    }
+
+    #[test]
+    fn layout_info_snap_anchor_uses_reverse_visual_item_offset() {
+        let previous = LazyListLayoutInfo {
+            visible_items_info: vec![visible_item(15, 31.4, 30.0), visible_item(16, 67.4, 30.0)],
+            snap_anchor_offset: 58.6,
+            viewport_size: 120.0,
+            reverse_layout: true,
+            ..Default::default()
+        };
+        let current = LazyListLayoutInfo {
+            visible_items_info: vec![visible_item(16, 68.4, 30.0), visible_item(17, 104.4, 30.0)],
+            viewport_size: 120.0,
+            reverse_layout: true,
+            ..Default::default()
+        };
+
+        let anchor = super::continuous_snap_anchor_offset(&previous, &current);
+
+        assert!((anchor - 57.6).abs() <= 0.001);
+    }
+
+    #[test]
+    fn update_layout_info_keeps_snap_anchor_continuous_when_first_visible_item_changes() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            state.update_layout_info(LazyListLayoutInfo {
+                visible_items_info: vec![
+                    visible_item(15, -31.4, 30.0),
+                    visible_item(16, 4.6, 30.0),
+                ],
+                ..Default::default()
+            });
+
+            state.update_layout_info(LazyListLayoutInfo {
+                visible_items_info: vec![visible_item(16, 3.6, 30.0), visible_item(17, 39.6, 30.0)],
+                ..Default::default()
+            });
+
+            let info = state.layout_info();
+            assert!((info.snap_anchor_offset + 32.4).abs() <= 0.001);
         });
     }
 
