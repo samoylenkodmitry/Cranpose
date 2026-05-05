@@ -5,14 +5,16 @@
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
-    find_button_in_semantics, find_text_in_semantics, screenshot_logical_size,
-    scroll_text_into_view, ScrollConfig,
+    find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
+    parse_slider_value, root_bounds, screenshot_logical_size, y_is_visible,
 };
 use desktop_app::app;
 use std::time::Duration;
 
 const EFFECT_SLIDER_WIDTH: f32 = 220.0;
 const EFFECT_SLIDER_TOUCH_OFFSET_Y: f32 = 9.0;
+const NESTED_SECTION_SCAN_ATTEMPTS: usize = 72;
+const NESTED_SECTION_RESET_DRAGS: usize = 8;
 
 fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
     (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5)
@@ -28,25 +30,115 @@ fn scroll_up(robot: &cranpose::Robot) {
     cranpose_testing::scroll_up(robot, 620.0, 220.0, 720.0);
 }
 
-fn effect_scroll_config() -> ScrollConfig {
-    ScrollConfig {
-        center_x: 620.0,
-        down_from_y: 720.0,
-        down_to_y: 220.0,
-        up_from_y: 220.0,
-        up_to_y: 720.0,
+fn scroll_down_small(robot: &cranpose::Robot) {
+    cranpose_testing::scroll_down(robot, 620.0, 680.0, 560.0);
+}
+
+fn scroll_up_small(robot: &cranpose::Robot) {
+    cranpose_testing::scroll_up(robot, 620.0, 560.0, 680.0);
+}
+
+#[derive(Clone, Copy)]
+struct NestedEffectControls {
+    child_label: (f32, f32, f32, f32),
+    parent_slider: (f32, f32, f32, f32),
+    child_slider: (f32, f32, f32, f32),
+}
+
+fn visible_text(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
+    let bounds = find_text_in_semantics(robot, text)?;
+    let center_y = bounds.1 + bounds.3 * 0.5;
+    y_is_visible(robot, center_y).then_some(bounds)
+}
+
+fn visible_prefix(robot: &cranpose::Robot, prefix: &str) -> Option<(f32, f32, f32, f32, String)> {
+    let bounds = find_text_by_prefix_in_semantics(robot, prefix)?;
+    let center_y = bounds.1 + bounds.3 * 0.5;
+    y_is_visible(robot, center_y).then_some(bounds)
+}
+
+fn visible_nested_effect_controls(robot: &cranpose::Robot) -> Option<NestedEffectControls> {
+    let child_label = visible_text(robot, "Child backdrop")?;
+    let (parent_x, parent_y, parent_w, parent_h, _) = visible_prefix(robot, "nested_parent_blur")?;
+    let (child_x, child_y, child_w, child_h, _) =
+        visible_prefix(robot, "nested_child_backdrop_blur")?;
+    Some(NestedEffectControls {
+        child_label,
+        parent_slider: (parent_x, parent_y, parent_w, parent_h),
+        child_slider: (child_x, child_y, child_w, child_h),
+    })
+}
+
+fn scroll_nested_effect_controls_into_view(
+    robot: &cranpose::Robot,
+) -> Option<NestedEffectControls> {
+    for _ in 0..NESTED_SECTION_RESET_DRAGS {
+        scroll_up(robot);
+    }
+    for _ in 0..NESTED_SECTION_SCAN_ATTEMPTS {
+        if let Some(controls) = visible_nested_effect_controls(robot) {
+            return Some(controls);
+        }
+        nudge_nested_effect_controls_toward_view(robot);
+    }
+    None
+}
+
+fn nudge_nested_effect_controls_toward_view(robot: &cranpose::Robot) {
+    let Some((_, root_y, _, root_h)) = root_bounds(robot) else {
+        scroll_down_small(robot);
+        return;
+    };
+    let top = root_y + 96.0;
+    let bottom = root_y + root_h - 96.0;
+    let raw_bounds = [
+        find_text_in_semantics(robot, "Child backdrop"),
+        find_text_by_prefix_in_semantics(robot, "nested_parent_blur")
+            .map(|(x, y, w, h, _)| (x, y, w, h)),
+        find_text_by_prefix_in_semantics(robot, "nested_child_backdrop_blur")
+            .map(|(x, y, w, h, _)| (x, y, w, h)),
+    ];
+
+    if raw_bounds
+        .iter()
+        .flatten()
+        .any(|(_, y, _, h)| y + h * 0.5 < top)
+    {
+        scroll_up_small(robot);
+    } else if raw_bounds
+        .iter()
+        .flatten()
+        .any(|(_, y, _, h)| y + h * 0.5 > bottom)
+    {
+        scroll_down_small(robot);
+    } else {
+        scroll_down_small(robot);
     }
 }
 
-fn set_slider_fraction(robot: &cranpose::Robot, prefix: &str, fraction: f32) -> Option<f32> {
-    cranpose_testing::set_slider_fraction(
-        robot,
-        prefix,
-        fraction,
-        EFFECT_SLIDER_WIDTH,
-        EFFECT_SLIDER_TOUCH_OFFSET_Y,
-        effect_scroll_config(),
-    )
+fn log_nested_effect_probe(robot: &cranpose::Robot) {
+    let child_label = find_text_in_semantics(robot, "Child backdrop");
+    let parent_slider = find_text_by_prefix_in_semantics(robot, "nested_parent_blur");
+    let child_slider = find_text_by_prefix_in_semantics(robot, "nested_child_backdrop_blur");
+    println!(
+        "Nested probe: child_label={:?} parent_slider={:?} child_slider={:?}",
+        child_label, parent_slider, child_slider
+    );
+}
+
+fn set_visible_slider_fraction(
+    robot: &cranpose::Robot,
+    slider_bounds: (f32, f32, f32, f32),
+    prefix: &str,
+    fraction: f32,
+) -> Option<f32> {
+    let slider_y = slider_bounds.1 + slider_bounds.3 + EFFECT_SLIDER_TOUCH_OFFSET_Y;
+    let left_x = slider_bounds.0 + 2.0;
+    let target_x = slider_bounds.0 + EFFECT_SLIDER_WIDTH * fraction.clamp(0.0, 1.0);
+    let _ = robot.drag(left_x, slider_y, target_x, slider_y);
+    std::thread::sleep(Duration::from_millis(120));
+    let _ = robot.wait_for_idle();
+    visible_prefix(robot, prefix).and_then(|(_, _, _, _, text)| parse_slider_value(&text))
 }
 
 fn main() {
@@ -55,7 +147,7 @@ fn main() {
 
     AppLauncher::new()
         .with_title("Robot Shader Backdrop Drag Test")
-        .with_size(1200, 800)
+        .with_size(1200, 1000)
         .with_headless(true)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
@@ -105,20 +197,42 @@ fn main() {
                 std::process::exit(1);
             }
 
+            let Some(mut nested_controls) = scroll_nested_effect_controls_into_view(&robot) else {
+                log_nested_effect_probe(&robot);
+                println!(
+                    "✗ Could not bring nested backdrop preview and sliders into view together"
+                );
+                std::process::exit(1);
+            };
+
             // Regression: nested child backdrop blur must visibly affect pixels.
-            let nested_parent = set_slider_fraction(&robot, "nested_parent_blur", 0.0);
-            let nested_child_off = set_slider_fraction(&robot, "nested_child_backdrop_blur", 0.0);
+            let nested_parent = set_visible_slider_fraction(
+                &robot,
+                nested_controls.parent_slider,
+                "nested_parent_blur",
+                0.0,
+            );
+            nested_controls = visible_nested_effect_controls(&robot).unwrap_or(nested_controls);
+            let nested_child_off = set_visible_slider_fraction(
+                &robot,
+                nested_controls.child_slider,
+                "nested_child_backdrop_blur",
+                0.0,
+            );
             println!(
                 "Nested sliders (off): parent={:?} child={:?}",
                 nested_parent, nested_child_off
             );
+            if nested_parent.is_none() || nested_child_off.is_none() {
+                println!("✗ Could not set nested backdrop sliders to baseline values");
+                std::process::exit(1);
+            }
 
-            let Some((label_x, label_y, label_w, label_h)) =
-                scroll_text_into_view(&robot, "Child backdrop", 24, effect_scroll_config())
-            else {
-                println!("✗ Could not find 'Child backdrop' label");
+            let Some(nested_controls) = visible_nested_effect_controls(&robot) else {
+                println!("✗ Nested backdrop controls moved out of view after slider setup");
                 std::process::exit(1);
             };
+            let (label_x, label_y, label_w, label_h) = nested_controls.child_label;
             let nested_region = (
                 (label_x - 56.0).max(0.0),
                 (label_y - 30.0).max(0.0),
@@ -143,8 +257,17 @@ fn main() {
                 10,
             );
 
-            let nested_child_on = set_slider_fraction(&robot, "nested_child_backdrop_blur", 1.0);
+            let nested_child_on = set_visible_slider_fraction(
+                &robot,
+                nested_controls.child_slider,
+                "nested_child_backdrop_blur",
+                1.0,
+            );
             println!("Nested child slider (on): {:?}", nested_child_on);
+            if nested_child_on.is_none() {
+                println!("✗ Could not set nested_child_backdrop_blur to maximum value");
+                std::process::exit(1);
+            }
             let _ = robot.click(24.0, 24.0);
             std::thread::sleep(Duration::from_millis(100));
             let _ = robot.wait_for_idle();
