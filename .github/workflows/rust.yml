@@ -208,7 +208,7 @@ jobs:
           --stage-artifact-shards 16
 
       - name: Upload robot examples shard 1
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-1
           path: target/robot-artifacts/robot-examples-1.tar
@@ -216,7 +216,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 2
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-2
           path: target/robot-artifacts/robot-examples-2.tar
@@ -224,7 +224,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 3
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-3
           path: target/robot-artifacts/robot-examples-3.tar
@@ -232,7 +232,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 4
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-4
           path: target/robot-artifacts/robot-examples-4.tar
@@ -240,7 +240,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 5
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-5
           path: target/robot-artifacts/robot-examples-5.tar
@@ -248,7 +248,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 6
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-6
           path: target/robot-artifacts/robot-examples-6.tar
@@ -256,7 +256,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 7
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-7
           path: target/robot-artifacts/robot-examples-7.tar
@@ -264,7 +264,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 8
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-8
           path: target/robot-artifacts/robot-examples-8.tar
@@ -272,7 +272,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 9
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-9
           path: target/robot-artifacts/robot-examples-9.tar
@@ -280,7 +280,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 10
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-10
           path: target/robot-artifacts/robot-examples-10.tar
@@ -288,7 +288,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 11
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-11
           path: target/robot-artifacts/robot-examples-11.tar
@@ -296,7 +296,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 12
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-12
           path: target/robot-artifacts/robot-examples-12.tar
@@ -304,7 +304,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 13
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-13
           path: target/robot-artifacts/robot-examples-13.tar
@@ -312,7 +312,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 14
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-14
           path: target/robot-artifacts/robot-examples-14.tar
@@ -320,7 +320,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 15
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-15
           path: target/robot-artifacts/robot-examples-15.tar
@@ -328,7 +328,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload robot examples shard 16
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: robot-examples-16
           path: target/robot-artifacts/robot-examples-16.tar
@@ -359,7 +359,7 @@ jobs:
             xvfb xauth xdotool imagemagick
 
       - name: Download robot examples
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: robot-examples-${{ matrix.shard_index }}
           path: target/robot-artifacts
