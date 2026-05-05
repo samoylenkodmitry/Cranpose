@@ -57,7 +57,7 @@ fn main() {
             }
 
             fn find_item_y(robot: &Robot, item_num: i32) -> Option<f32> {
-                let text = format!("Item {}", item_num);
+                let text = format!("Item #{}", item_num);
                 find_in_semantics(robot, |elem| find_text(elem, &text))
                     .map(|(_, y, _, h)| y + h / 2.0)
             }

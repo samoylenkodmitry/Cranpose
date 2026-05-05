@@ -100,6 +100,11 @@ impl<A: Applier + 'static> Composition<A> {
         std::mem::take(&mut self.root_render_requested)
     }
 
+    pub fn request_root_render(&mut self) {
+        self.root_render_requested = true;
+        self.runtime.handle().schedule();
+    }
+
     fn record_pass_stats(
         &mut self,
         commands: &CommandQueue,

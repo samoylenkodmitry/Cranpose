@@ -960,6 +960,29 @@ impl TextSystemState {
 
 type SharedTextSystemState = Arc<Mutex<TextSystemState>>;
 
+#[derive(Clone)]
+pub struct WgpuTextSystem {
+    render: SharedTextSystemState,
+    measure: SharedTextSystemState,
+}
+
+impl WgpuTextSystem {
+    pub fn from_fonts(fonts: &[&[u8]]) -> Self {
+        Self {
+            render: Arc::new(Mutex::new(TextSystemState::from_fonts(fonts))),
+            measure: Arc::new(Mutex::new(TextSystemState::from_fonts(fonts))),
+        }
+    }
+
+    fn install_measurer(&self) {
+        set_text_measurer(WgpuTextMeasurer::new(Arc::clone(&self.measure)));
+    }
+
+    fn render_state(&self) -> SharedTextSystemState {
+        Arc::clone(&self.render)
+    }
+}
+
 /// WGPU-based renderer for GPU-accelerated 2D rendering.
 ///
 /// This renderer supports:
@@ -970,7 +993,7 @@ type SharedTextSystemState = Arc<Mutex<TextSystemState>>;
 pub struct WgpuRenderer {
     scene: Scene,
     gpu_renderer: Option<GpuRenderer>,
-    render_text_state: TextSystemState,
+    render_text_state: SharedTextSystemState,
     /// Root scale factor for text rendering (use for density scaling)
     root_scale: f32,
 }
@@ -983,15 +1006,16 @@ impl WgpuRenderer {
     ///
     /// Call [`init_gpu`][Self::init_gpu] before rendering.
     pub fn new(fonts: &[&[u8]]) -> Self {
-        let render_text_state = TextSystemState::from_fonts(fonts);
-        let measure_text_state = Arc::new(Mutex::new(TextSystemState::from_fonts(fonts)));
-        let text_measurer = WgpuTextMeasurer::new(measure_text_state);
-        set_text_measurer(text_measurer.clone());
+        Self::with_text_system(WgpuTextSystem::from_fonts(fonts))
+    }
+
+    pub fn with_text_system(text_system: WgpuTextSystem) -> Self {
+        text_system.install_measurer();
 
         Self {
             scene: Scene::new(),
             gpu_renderer: None,
-            render_text_state,
+            render_text_state: text_system.render_state(),
             root_scale: 1.0,
         }
     }
@@ -1034,14 +1058,9 @@ impl WgpuRenderer {
                 .graph
                 .as_ref()
                 .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
-            let result = gpu_renderer.render(
-                &mut self.render_text_state,
-                view,
-                graph,
-                width,
-                height,
-                self.root_scale,
-            );
+            let mut text_state = self.render_text_state.lock().unwrap();
+            let result =
+                gpu_renderer.render(&mut text_state, view, graph, width, height, self.root_scale);
             result.map_err(WgpuRendererError::Wgpu)
         } else {
             Err(WgpuRendererError::Wgpu(
@@ -1074,14 +1093,9 @@ impl WgpuRenderer {
                 .graph
                 .as_ref()
                 .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
+            let mut text_state = self.render_text_state.lock().unwrap();
             let pixels = gpu_renderer
-                .render_to_rgba_pixels(
-                    &mut self.render_text_state,
-                    graph,
-                    width,
-                    height,
-                    root_scale,
-                )
+                .render_to_rgba_pixels(&mut text_state, graph, width, height, root_scale)
                 .map_err(WgpuRendererError::Wgpu)?;
             Ok(CapturedFrame {
                 width,
@@ -2820,7 +2834,7 @@ mod tests {
 
             let _ = cranpose_ui::text::measure_text(&text, &style);
 
-            tx.send(renderer.render_text_state.text_cache.len())
+            tx.send(renderer.render_text_state.lock().unwrap().text_cache.len())
                 .expect("send render text cache size");
         });
 

@@ -172,7 +172,17 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    pub fn new(mut renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
+    pub fn new(renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
+        Self::new_with_size(renderer, root_key, content, (800, 600), (800.0, 600.0))
+    }
+
+    pub fn new_with_size(
+        mut renderer: R,
+        root_key: Key,
+        content: impl FnMut() + 'static,
+        buffer_size: (u32, u32),
+        viewport: (f32, f32),
+    ) -> Self {
         // Initialize FPS tracking
         fps_monitor::init_fps_tracker();
 
@@ -189,8 +199,8 @@ where
             content: build,
             renderer,
             cursor: (0.0, 0.0),
-            viewport: (800.0, 600.0),
-            buffer_size: (800, 600),
+            viewport,
+            buffer_size,
             start_time: Instant::now(),
             layout_tree: None,
             semantics_tree: None,
@@ -333,6 +343,12 @@ where
     /// Marks the shell as dirty, indicating a redraw is needed.
     pub fn mark_dirty(&mut self) {
         self.is_dirty = true;
+    }
+
+    pub fn request_root_render(&mut self) {
+        self.composition.request_root_render();
+        self.request_forced_layout_pass();
+        self.mark_dirty();
     }
 
     fn request_layout_pass(&mut self) {

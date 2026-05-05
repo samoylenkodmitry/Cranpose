@@ -1,5 +1,6 @@
 //! Present mode selection helpers for WGPU surfaces.
 
+#[cfg(any(test, feature = "desktop"))]
 use cranpose_app_shell::FramePacingMode;
 
 /// Selects the present mode based on `CRANPOSE_PRESENT_MODE` and surface capabilities.
@@ -32,6 +33,7 @@ fn select_present_mode_for_request(
     wgpu::PresentMode::AutoNoVsync
 }
 
+#[cfg(any(test, feature = "desktop"))]
 pub(crate) fn select_present_mode_for_frame_pacing(
     caps: &wgpu::SurfaceCapabilities,
     mode: FramePacingMode,
@@ -44,6 +46,7 @@ pub(crate) fn select_present_mode_for_frame_pacing(
     }
 }
 
+#[cfg(any(test, feature = "desktop"))]
 fn supported_or_auto(
     caps: &wgpu::SurfaceCapabilities,
     preferred: wgpu::PresentMode,

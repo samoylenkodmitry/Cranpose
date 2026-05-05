@@ -11,11 +11,15 @@ mod sprites;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
+use cranpose::{
+    rememberWindowState, WindowAttachPolicy, WindowConfig, WindowGroup, WindowId,
+    WindowModifierExt, WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
+};
 use cranpose_core::{self, MutableState};
 use cranpose_foundation::PointerButton;
 use cranpose_ui::{
-    composable, current_density, Box, BoxSpec, Canvas, Color, Column, ColumnSpec, Modifier, Point,
-    PointerEventKind, PointerInputScope, Text, TextStyle,
+    composable, current_density, Box, BoxSpec, Button, Canvas, Color, Column, ColumnSpec, Modifier,
+    Point, PointerEventKind, PointerInputScope, Size, Text, TextStyle,
 };
 use cranpose_ui_graphics::{ImageBitmap, Rect};
 
@@ -27,6 +31,25 @@ fn winamp_press_debug_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("WINAMP_PRESS_DEBUG").is_some())
 }
 
+fn winamp_native_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_NATIVE_TRACE").is_some())
+}
+
+fn trace_winamp_state(action: &str, state: &WinampState) {
+    if winamp_native_trace_enabled() {
+        println!(
+            "winamp trace: action={action} closed={} playback={:?} eq_visible={} playlist_visible={} volume={:.3} status={:?}",
+            state.closed,
+            state.playback,
+            state.eq_visible,
+            state.playlist_visible,
+            state.volume,
+            state.status
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PlaybackState {
     Stopped,
@@ -36,6 +59,7 @@ enum PlaybackState {
 
 #[derive(Clone, Debug, PartialEq)]
 struct WinampState {
+    closed: bool,
     playback: PlaybackState,
     shuffle: bool,
     repeat: bool,
@@ -54,6 +78,7 @@ struct WinampState {
 impl Default for WinampState {
     fn default() -> Self {
         Self {
+            closed: false,
             playback: PlaybackState::Stopped,
             shuffle: false,
             repeat: false,
@@ -71,40 +96,103 @@ impl Default for WinampState {
     }
 }
 
-#[composable]
-pub(crate) fn WinampTab() {
-    let skin_result = cranpose_core::remember(|| {
-        let wsz = include_bytes!("../../../assets/winamp.wsz");
-        load_skin(wsz).map_err(|err| format!("{err:#}"))
-    })
-    .with(|result| result.clone());
+#[derive(Clone, Copy, PartialEq)]
+enum WinampDragTarget {
+    Inline(MutableState<Point>),
+    NativeGroup,
+}
 
-    let skin = match skin_result {
+#[derive(Clone, Copy, PartialEq)]
+enum WinampCloseAction {
+    SetStatus,
+    CloseApp,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum WinampWindowSize {
+    Fixed(Size),
+    State(WindowState),
+}
+
+const MAIN_TITLE_DRAG_HIT_AREA: SpriteRect = (16.0, 0.0, 228.0, 14.0);
+const EQ_TITLE_DRAG_HIT_AREA: SpriteRect = (0.0, 0.0, 264.0, 14.0);
+
+impl WinampWindowSize {
+    fn get(self) -> Size {
+        match self {
+            Self::Fixed(size) => size,
+            Self::State(state) => state.size(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct WinampTabState {
+    player: MutableState<WinampState>,
+    detached: MutableState<bool>,
+    inline_windows: WinampInlineWindowStates,
+    peer_windows: WinampPeerWindowStates,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct WinampInlineWindowStates {
+    main: MutableState<Point>,
+    equalizer: MutableState<Point>,
+    playlist: MutableState<Point>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct WinampPeerWindowStates {
+    main: WindowState,
+    equalizer: WindowState,
+    playlist: WindowState,
+}
+
+#[derive(Clone, Copy)]
+struct WinampWindowPlacement {
+    title: &'static str,
+    initial_position: WinampInitialWindowPosition,
+    state: WindowState,
+}
+
+#[derive(Clone, Copy)]
+enum WinampInitialWindowPosition {
+    Host(Point),
+    Screen(Point),
+}
+
+#[composable]
+pub(crate) fn remember_winamp_tab_state() -> WinampTabState {
+    WinampTabState {
+        player: cranpose_core::useState(WinampState::default),
+        detached: cranpose_core::useState(native_winamp_windows_available),
+        inline_windows: WinampInlineWindowStates {
+            main: cranpose_core::useState(|| Point::new(26.0, 22.0)),
+            equalizer: cranpose_core::useState(|| Point::new(26.0, 142.0)),
+            playlist: cranpose_core::useState(|| Point::new(336.0, 22.0)),
+        },
+        peer_windows: WinampPeerWindowStates {
+            main: rememberWindowState(MAIN_WIDTH, MAIN_HEIGHT),
+            equalizer: rememberWindowState(EQ_WIDTH, EQ_HEIGHT),
+            playlist: rememberWindowState(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
+        },
+    }
+}
+
+#[composable]
+pub(crate) fn WinampTab(tab_state: WinampTabState) {
+    let scale = ui_scale();
+    let state = tab_state.player;
+    let native_available = native_winamp_windows_available();
+    let detached = native_available && tab_state.detached.get();
+    let snapshot = state.get();
+    let skin = match remember_winamp_skin() {
         Ok(skin) => skin,
         Err(error) => {
-            Column(
-                Modifier::empty().padding(16.0),
-                ColumnSpec::default(),
-                move || {
-                    Text(
-                        "Failed to load Winamp skin",
-                        Modifier::empty(),
-                        TextStyle::default(),
-                    );
-                    Text(error.clone(), Modifier::empty(), TextStyle::default());
-                },
-            );
+            WinampSkinError(error);
             return;
         }
     };
-
-    let scale = ui_scale();
-    let main_position = cranpose_core::useState(|| Point::new(26.0, 22.0));
-    let eq_position = cranpose_core::useState(|| Point::new(26.0, 142.0));
-    let pl_position = cranpose_core::useState(|| Point::new(336.0, 22.0));
-    let state = cranpose_core::useState(WinampState::default);
-
-    let snapshot = state.get();
 
     Column(
         Modifier::empty()
@@ -126,46 +214,307 @@ pub(crate) fn WinampTab() {
                 TextStyle::default(),
             );
 
-            Box(
-                Modifier::empty()
-                    .fill_max_size()
-                    .clip_to_bounds()
-                    .background(Color(0.02, 0.02, 0.03, 1.0))
-                    .rounded_corners(8.0),
-                BoxSpec::default(),
-                {
-                    let skin = skin.clone();
-                    move || {
-                        MainWindow(skin.clone(), state, main_position, scale);
+            if native_available {
+                DockToggleButton(tab_state.detached, detached);
+            }
 
-                        if state.get().eq_visible {
-                            EqualizerWindow(skin.clone(), state, eq_position, scale);
-                        }
+            if !detached {
+                WinampInlineStage(skin.clone(), state, tab_state.inline_windows, scale);
+            } else {
+                WinampNativeWindows(
+                    skin.clone(),
+                    state,
+                    tab_state.inline_windows,
+                    tab_state.peer_windows,
+                    scale,
+                    snapshot.clone(),
+                );
+            }
+        },
+    );
+}
 
-                        if state.get().playlist_visible {
-                            PlaylistWindow(skin.pledit.clone(), state, pl_position, scale);
-                        }
-                    }
-                },
+fn remember_winamp_skin() -> Result<WinampSkin, String> {
+    cranpose_core::remember(|| {
+        let wsz = include_bytes!("../../../assets/winamp.wsz");
+        load_skin(wsz).map_err(|err| format!("{err:#}"))
+    })
+    .with(|result| result.clone())
+}
+
+#[composable]
+fn WinampSkinError(error: String) {
+    Column(
+        Modifier::empty().padding(16.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                "Failed to load Winamp skin",
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            Text(error.clone(), Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+
+#[composable]
+fn DockToggleButton(detached_state: MutableState<bool>, detached: bool) {
+    Button(
+        Modifier::empty()
+            .padding(8.0)
+            .background(Color(0.18, 0.34, 0.58, 1.0))
+            .rounded_corners(8.0)
+            .padding(8.0),
+        move || {
+            detached_state.set(!detached_state.get_non_reactive());
+        },
+        move || {
+            Text(
+                if detached { "Dock" } else { "Undock" },
+                Modifier::empty(),
+                TextStyle::default(),
             );
         },
     );
 }
 
 #[composable]
+fn WinampInlineStage(
+    skin: WinampSkin,
+    state: MutableState<WinampState>,
+    windows: WinampInlineWindowStates,
+    scale: f32,
+) {
+    Box(
+        Modifier::empty()
+            .fill_max_size()
+            .clip_to_bounds()
+            .background(Color(0.02, 0.02, 0.03, 1.0))
+            .rounded_corners(8.0),
+        BoxSpec::default(),
+        move || {
+            MainWindow(
+                skin.clone(),
+                state,
+                WinampDragTarget::Inline(windows.main),
+                WinampCloseAction::SetStatus,
+                scale,
+            );
+
+            if state.get().eq_visible {
+                EqualizerWindow(
+                    skin.clone(),
+                    state,
+                    WinampDragTarget::Inline(windows.equalizer),
+                    scale,
+                );
+            }
+
+            if state.get().playlist_visible {
+                PlaylistWindow(
+                    skin.pledit.clone(),
+                    state,
+                    WinampDragTarget::Inline(windows.playlist),
+                    WinampWindowSize::Fixed(Size::new(PLAYLIST_WIDTH, PLAYLIST_HEIGHT)),
+                    scale,
+                );
+            }
+        },
+    );
+}
+
+#[composable]
+fn WinampNativeWindows(
+    skin: WinampSkin,
+    state: MutableState<WinampState>,
+    inline_windows: WinampInlineWindowStates,
+    peer_windows: WinampPeerWindowStates,
+    scale: f32,
+    snapshot: WinampState,
+) {
+    WindowGroup("winamp", winamp_attach_policy(), move || {
+        WindowNode(
+            winamp_main_window_id(),
+            winamp_window_config(WinampWindowPlacement {
+                title: "Winamp",
+                initial_position: WinampInitialWindowPosition::Host(inline_windows.main.get()),
+                state: peer_windows.main,
+            }),
+            {
+                let skin = skin.clone();
+                move || {
+                    MainWindow(
+                        skin.clone(),
+                        state,
+                        WinampDragTarget::NativeGroup,
+                        WinampCloseAction::SetStatus,
+                        scale,
+                    );
+                }
+            },
+        );
+
+        if snapshot.eq_visible {
+            WindowNode(
+                winamp_equalizer_window_id(),
+                winamp_window_config(WinampWindowPlacement {
+                    title: "Winamp Equalizer",
+                    initial_position: WinampInitialWindowPosition::Host(
+                        inline_windows.equalizer.get(),
+                    ),
+                    state: peer_windows.equalizer,
+                }),
+                {
+                    let skin = skin.clone();
+                    move || {
+                        EqualizerWindow(skin.clone(), state, WinampDragTarget::NativeGroup, scale);
+                    }
+                },
+            );
+        }
+
+        if snapshot.playlist_visible {
+            WindowNode(
+                winamp_playlist_window_id(),
+                winamp_window_config(WinampWindowPlacement {
+                    title: "Winamp Playlist",
+                    initial_position: WinampInitialWindowPosition::Host(
+                        inline_windows.playlist.get(),
+                    ),
+                    state: peer_windows.playlist,
+                })
+                .with_resizable(true)
+                .with_min_size(
+                    scaled(PLAYLIST_WIDTH, scale),
+                    scaled(PLAYLIST_HEIGHT, scale),
+                ),
+                {
+                    let pledit = skin.pledit.clone();
+                    move || {
+                        PlaylistWindow(
+                            pledit.clone(),
+                            state,
+                            WinampDragTarget::NativeGroup,
+                            WinampWindowSize::State(peer_windows.playlist),
+                            scale,
+                        );
+                    }
+                },
+            );
+        }
+    });
+}
+
+#[composable]
+pub fn WinampStandaloneApp() {
+    let state = cranpose_core::useState(WinampState::default);
+    let peer_windows = WinampPeerWindowStates {
+        main: rememberWindowState(MAIN_WIDTH, MAIN_HEIGHT),
+        equalizer: rememberWindowState(EQ_WIDTH, EQ_HEIGHT),
+        playlist: rememberWindowState(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
+    };
+    let snapshot = state.get();
+    if snapshot.closed {
+        return;
+    }
+    let skin = match remember_winamp_skin() {
+        Ok(skin) => skin,
+        Err(error) => {
+            WinampSkinError(error);
+            return;
+        }
+    };
+
+    WindowGroup("winamp", winamp_attach_policy(), move || {
+        WindowNode(
+            winamp_main_window_id(),
+            winamp_window_config(WinampWindowPlacement {
+                title: "Winamp",
+                initial_position: WinampInitialWindowPosition::Screen(Point::new(140.0, 120.0)),
+                state: peer_windows.main,
+            }),
+            {
+                let skin = skin.clone();
+                move || {
+                    MainWindow(
+                        skin.clone(),
+                        state,
+                        WinampDragTarget::NativeGroup,
+                        WinampCloseAction::CloseApp,
+                        ui_scale(),
+                    );
+                }
+            },
+        );
+
+        if snapshot.eq_visible {
+            WindowNode(
+                winamp_equalizer_window_id(),
+                winamp_window_config(WinampWindowPlacement {
+                    title: "Winamp Equalizer",
+                    initial_position: WinampInitialWindowPosition::Screen(Point::new(
+                        140.0,
+                        120.0 + MAIN_HEIGHT,
+                    )),
+                    state: peer_windows.equalizer,
+                }),
+                {
+                    let skin = skin.clone();
+                    move || {
+                        EqualizerWindow(
+                            skin.clone(),
+                            state,
+                            WinampDragTarget::NativeGroup,
+                            ui_scale(),
+                        );
+                    }
+                },
+            );
+        }
+
+        if snapshot.playlist_visible {
+            WindowNode(
+                winamp_playlist_window_id(),
+                winamp_window_config(WinampWindowPlacement {
+                    title: "Winamp Playlist",
+                    initial_position: WinampInitialWindowPosition::Screen(Point::new(
+                        140.0 + EQ_WIDTH,
+                        120.0 + MAIN_HEIGHT,
+                    )),
+                    state: peer_windows.playlist,
+                })
+                .with_resizable(true)
+                .with_min_size(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
+                {
+                    let pledit = skin.pledit.clone();
+                    move || {
+                        PlaylistWindow(
+                            pledit.clone(),
+                            state,
+                            WinampDragTarget::NativeGroup,
+                            WinampWindowSize::State(peer_windows.playlist),
+                            ui_scale(),
+                        );
+                    }
+                },
+            );
+        }
+    });
+}
+
+#[composable]
 fn MainWindow(
     skin: WinampSkin,
     state: MutableState<WinampState>,
-    window_position: MutableState<Point>,
+    drag_target: WinampDragTarget,
+    close_action: WinampCloseAction,
     scale: f32,
 ) {
     let snapshot = state.get();
-    let position = window_position.get();
 
     Box(
-        Modifier::empty()
-            .size_points(scaled(MAIN_WIDTH, scale), scaled(MAIN_HEIGHT, scale))
-            .offset(snap_to_pixel(position.x), snap_to_pixel(position.y)),
+        winamp_window_modifier(MAIN_WIDTH, MAIN_HEIGHT, scale, drag_target),
         BoxSpec::default(),
         move || {
             Sprite(skin.main.clone(), MAIN_WINDOW, 0.0, 0.0, scale);
@@ -177,7 +526,7 @@ fn MainWindow(
                 scale,
             );
 
-            WindowDragHandle(window_position, TITLE_DRAG_AREA, scale);
+            WindowDragHandle(drag_target, MAIN_TITLE_DRAG_HIT_AREA, scale);
 
             {
                 let state_click = state;
@@ -231,7 +580,17 @@ fn MainWindow(
                     POS_CLOSE_BUTTON.1,
                     scale,
                     move || {
-                        state_click.update(|s| s.status = "Close".to_string());
+                        state_click.update(|s| match close_action {
+                            WinampCloseAction::SetStatus => {
+                                s.status = "Close".to_string();
+                                trace_winamp_state("main-close-status", s);
+                            }
+                            WinampCloseAction::CloseApp => {
+                                s.closed = true;
+                                s.status = "Closed".to_string();
+                                trace_winamp_state("main-close-app", s);
+                            }
+                        });
                     },
                 );
             }
@@ -337,7 +696,10 @@ fn MainWindow(
                     VOLUME_BG_HEIGHT,
                     scale,
                     move |fraction| {
-                        state_drag.update(|s| s.volume = fraction);
+                        state_drag.update(|s| {
+                            s.volume = fraction;
+                            trace_winamp_state("volume", s);
+                        });
                     },
                 );
             }
@@ -469,6 +831,7 @@ fn MainWindow(
                             } else {
                                 "Equalizer Hidden".to_string()
                             };
+                            trace_winamp_state("main-eq-toggle", s);
                         });
                     },
                 );
@@ -501,6 +864,7 @@ fn MainWindow(
                             } else {
                                 "Playlist Hidden".to_string()
                             };
+                            trace_winamp_state("main-playlist-toggle", s);
                         });
                     },
                 );
@@ -513,16 +877,13 @@ fn MainWindow(
 fn EqualizerWindow(
     skin: WinampSkin,
     state: MutableState<WinampState>,
-    window_position: MutableState<Point>,
+    drag_target: WinampDragTarget,
     scale: f32,
 ) {
     let snapshot = state.get();
-    let position = window_position.get();
 
     Box(
-        Modifier::empty()
-            .size_points(scaled(EQ_WIDTH, scale), scaled(EQ_HEIGHT, scale))
-            .offset(snap_to_pixel(position.x), snap_to_pixel(position.y)),
+        winamp_window_modifier(EQ_WIDTH, EQ_HEIGHT, scale, drag_target),
         BoxSpec::default(),
         move || {
             Sprite(skin.eqmain.clone(), EQ_WINDOW, 0.0, 0.0, scale);
@@ -542,7 +903,7 @@ fn EqualizerWindow(
                 scale,
             );
 
-            WindowDragHandle(window_position, EQ_DRAG_AREA, scale);
+            WindowDragHandle(drag_target, EQ_TITLE_DRAG_HIT_AREA, scale);
 
             {
                 let state_click = state;
@@ -557,6 +918,7 @@ fn EqualizerWindow(
                         state_click.update(|s| {
                             s.eq_visible = false;
                             s.status = "Equalizer Hidden".to_string();
+                            trace_winamp_state("eq-close", s);
                         });
                     },
                 );
@@ -688,27 +1050,31 @@ fn EqualizerWindow(
 fn PlaylistWindow(
     pledit: ImageBitmap,
     state: MutableState<WinampState>,
-    window_position: MutableState<Point>,
+    drag_target: WinampDragTarget,
+    window_size: WinampWindowSize,
     scale: f32,
 ) {
     let snapshot = state.get();
-    let position = window_position.get();
+    let window_size = window_size.get();
+    let skin_scale = scale.max(f32::EPSILON);
+    let width = (window_size.width / skin_scale).max(PLAYLIST_WIDTH);
+    let height = (window_size.height / skin_scale).max(PLAYLIST_HEIGHT);
+    let right_x = width - PLAYLIST_RIGHT_TILE.2;
+    let bottom_y = height - PLAYLIST_BOTTOM_LEFT_CORNER.3;
+    let list_width = (right_x - PLAYLIST_LIST_BG.0).max(1.0);
+    let list_height = (bottom_y - PLAYLIST_LIST_BG.1).max(1.0);
+    let title_min_x = PLAYLIST_TOP_LEFT_CORNER.2;
+    let title_max_x = (width - PLAYLIST_TOP_RIGHT_CORNER.2 - PLAYLIST_TITLE_BAR.2).max(title_min_x);
+    let title_x = ((width - PLAYLIST_TITLE_BAR.2) * 0.5).clamp(title_min_x, title_max_x);
+    let scroll_track_x = width - 15.0;
 
     Box(
-        Modifier::empty()
-            .size_points(
-                scaled(PLAYLIST_WIDTH, scale),
-                scaled(PLAYLIST_HEIGHT, scale),
-            )
-            .offset(snap_to_pixel(position.x), snap_to_pixel(position.y)),
+        winamp_window_modifier(width, height, scale, drag_target),
         BoxSpec::default(),
         move || {
             Box(
                 Modifier::empty()
-                    .size_points(
-                        scaled(PLAYLIST_LIST_BG.2, scale),
-                        scaled(PLAYLIST_LIST_BG.3, scale),
-                    )
+                    .size_points(scaled(list_width, scale), scaled(list_height, scale))
                     .absolute_offset(
                         scaled(PLAYLIST_LIST_BG.0, scale),
                         scaled(PLAYLIST_LIST_BG.1, scale),
@@ -719,59 +1085,69 @@ fn PlaylistWindow(
             );
 
             Sprite(pledit.clone(), PLAYLIST_TOP_LEFT_CORNER, 0.0, 0.0, scale);
-            for x in PLAYLIST_TOP_TILE_XS {
-                Sprite(pledit.clone(), PLAYLIST_TOP_TILE, x, 0.0, scale);
-            }
-            Sprite(
+            StretchSprite(
                 pledit.clone(),
-                PLAYLIST_TITLE_BAR,
-                POS_PLAYLIST_TITLE_BAR.0,
-                POS_PLAYLIST_TITLE_BAR.1,
+                PLAYLIST_TOP_TILE,
+                PLAYLIST_TOP_LEFT_CORNER.2,
+                0.0,
+                width - PLAYLIST_TOP_LEFT_CORNER.2 - PLAYLIST_TOP_RIGHT_CORNER.2,
+                PLAYLIST_TOP_TILE.3,
                 scale,
             );
+            Sprite(pledit.clone(), PLAYLIST_TITLE_BAR, title_x, 0.0, scale);
             Sprite(
                 pledit.clone(),
                 PLAYLIST_TOP_RIGHT_CORNER,
-                POS_PLAYLIST_TOP_RIGHT.0,
-                POS_PLAYLIST_TOP_RIGHT.1,
+                width - PLAYLIST_TOP_RIGHT_CORNER.2,
+                0.0,
                 scale,
             );
 
-            for y in PLAYLIST_SIDE_TILE_YS {
-                Sprite(pledit.clone(), PLAYLIST_LEFT_TILE, 0.0, y, scale);
-                Sprite(
-                    pledit.clone(),
-                    PLAYLIST_RIGHT_TILE,
-                    POS_PLAYLIST_RIGHT_X,
-                    y,
-                    scale,
-                );
-            }
+            StretchSprite(
+                pledit.clone(),
+                PLAYLIST_LEFT_TILE,
+                0.0,
+                PLAYLIST_TOP_LEFT_CORNER.3,
+                PLAYLIST_LEFT_TILE.2,
+                bottom_y - PLAYLIST_TOP_LEFT_CORNER.3,
+                scale,
+            );
+            StretchSprite(
+                pledit.clone(),
+                PLAYLIST_RIGHT_TILE,
+                right_x,
+                PLAYLIST_TOP_RIGHT_CORNER.3,
+                PLAYLIST_RIGHT_TILE.2,
+                bottom_y - PLAYLIST_TOP_RIGHT_CORNER.3,
+                scale,
+            );
 
-            Sprite(
+            StretchSprite(
                 pledit.clone(),
                 PLAYLIST_BOTTOM_LEFT_CORNER,
-                POS_PLAYLIST_BOTTOM_LEFT.0,
-                POS_PLAYLIST_BOTTOM_LEFT.1,
+                0.0,
+                bottom_y,
+                width - PLAYLIST_BOTTOM_RIGHT_CORNER.2,
+                PLAYLIST_BOTTOM_LEFT_CORNER.3,
                 scale,
             );
             Sprite(
                 pledit.clone(),
                 PLAYLIST_BOTTOM_RIGHT_CORNER,
-                POS_PLAYLIST_BOTTOM_RIGHT.0,
-                POS_PLAYLIST_BOTTOM_RIGHT.1,
+                width - PLAYLIST_BOTTOM_RIGHT_CORNER.2,
+                bottom_y,
                 scale,
             );
-            let scroll_y = PLAYLIST_SCROLL_TRACK.1
+            let scroll_y = PLAYLIST_LIST_BG.1
                 + vertical_slider_thumb_y_down(
                     snapshot.playlist_scroll,
-                    PLAYLIST_SCROLL_TRACK.3,
+                    list_height,
                     PLAYLIST_SCROLL_HANDLE.3,
                 );
             Sprite(
                 pledit.clone(),
                 PLAYLIST_SCROLL_HANDLE,
-                PLAYLIST_SCROLL_TRACK.0,
+                scroll_track_x,
                 scroll_y,
                 scale,
             );
@@ -779,10 +1155,10 @@ fn PlaylistWindow(
             {
                 let state_drag = state;
                 VerticalDragSlider(
-                    PLAYLIST_SCROLL_TRACK.0,
-                    PLAYLIST_SCROLL_TRACK.1,
+                    scroll_track_x,
+                    PLAYLIST_LIST_BG.1,
                     PLAYLIST_SCROLL_TRACK.2,
-                    PLAYLIST_SCROLL_TRACK.3,
+                    list_height,
                     scale,
                     false,
                     move |fraction| {
@@ -791,7 +1167,16 @@ fn PlaylistWindow(
                 );
             }
 
-            WindowDragHandle(window_position, PLAYLIST_DRAG_AREA, scale);
+            WindowDragHandle(drag_target, (0.0, 0.0, width, PLAYLIST_DRAG_AREA.3), scale);
+            WindowResizeHandle(
+                drag_target,
+                WindowResizeDirection::SouthEast,
+                width - 16.0,
+                height - 16.0,
+                16.0,
+                16.0,
+                scale,
+            );
         },
     );
 }
@@ -800,6 +1185,34 @@ fn PlaylistWindow(
 fn Sprite(image: ImageBitmap, source: SpriteRect, x: f32, y: f32, scale: f32) {
     let w = scaled(source.2, scale);
     let h = scaled(source.3, scale);
+    Canvas(
+        Modifier::empty()
+            .size_points(w, h)
+            .absolute_offset(scaled(x, scale), scaled(y, scale)),
+        move |scope| {
+            let dst = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: w,
+                height: h,
+            };
+            scope.draw_image_src(image.clone(), to_rect(source), dst, 1.0, None);
+        },
+    );
+}
+
+#[composable]
+fn StretchSprite(
+    image: ImageBitmap,
+    source: SpriteRect,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    scale: f32,
+) {
+    let w = scaled(width.max(1.0), scale);
+    let h = scaled(height.max(1.0), scale);
     Canvas(
         Modifier::empty()
             .size_points(w, h)
@@ -1046,53 +1459,89 @@ fn VerticalDragSlider(
 }
 
 #[composable]
-fn WindowDragHandle(window_position: MutableState<Point>, area: SpriteRect, scale: f32) {
-    let drag_offset = cranpose_core::useState(|| None::<Point>);
+fn WindowDragHandle(drag_target: WinampDragTarget, area: SpriteRect, scale: f32) {
+    let modifier = Modifier::empty()
+        .size_points(scaled(area.2, scale), scaled(area.3, scale))
+        .absolute_offset(scaled(area.0, scale), scaled(area.1, scale));
+
+    match drag_target {
+        WinampDragTarget::NativeGroup => {
+            Box(modifier.window_drag_area(), BoxSpec::default(), || {});
+        }
+        WinampDragTarget::Inline(window_position) => {
+            let drag_offset = cranpose_core::useState(|| None::<Point>);
+
+            Box(
+                modifier.pointer_input((), {
+                    move |scope: PointerInputScope| async move {
+                        scope
+                            .await_pointer_event_scope(|await_scope| async move {
+                                loop {
+                                    let event = await_scope.await_pointer_event().await;
+                                    match event.kind {
+                                        PointerEventKind::Down => {
+                                            let current = window_position.get();
+                                            drag_offset.set(Some(Point::new(
+                                                event.global_position.x - current.x,
+                                                event.global_position.y - current.y,
+                                            )));
+                                            event.consume();
+                                        }
+                                        PointerEventKind::Move => {
+                                            if !event.buttons.contains(PointerButton::Primary) {
+                                                drag_offset.set(None);
+                                                continue;
+                                            }
+                                            if let Some(offset) = drag_offset.get() {
+                                                window_position.set(Point::new(
+                                                    snap_to_pixel(
+                                                        event.global_position.x - offset.x,
+                                                    ),
+                                                    snap_to_pixel(
+                                                        event.global_position.y - offset.y,
+                                                    ),
+                                                ));
+                                                event.consume();
+                                            }
+                                        }
+                                        PointerEventKind::Up | PointerEventKind::Cancel => {
+                                            drag_offset.set(None);
+                                        }
+                                        PointerEventKind::Scroll
+                                        | PointerEventKind::Enter
+                                        | PointerEventKind::Exit => {}
+                                    }
+                                }
+                            })
+                            .await;
+                    }
+                }),
+                BoxSpec::default(),
+                || {},
+            );
+        }
+    }
+}
+
+#[composable]
+fn WindowResizeHandle(
+    drag_target: WinampDragTarget,
+    direction: WindowResizeDirection,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    scale: f32,
+) {
+    if !matches!(drag_target, WinampDragTarget::NativeGroup) {
+        return;
+    }
 
     Box(
         Modifier::empty()
-            .size_points(scaled(area.2, scale), scaled(area.3, scale))
-            .absolute_offset(scaled(area.0, scale), scaled(area.1, scale))
-            .pointer_input((), {
-                move |scope: PointerInputScope| async move {
-                    scope
-                        .await_pointer_event_scope(|await_scope| async move {
-                            loop {
-                                let event = await_scope.await_pointer_event().await;
-                                match event.kind {
-                                    PointerEventKind::Down => {
-                                        let current = window_position.get();
-                                        drag_offset.set(Some(Point::new(
-                                            event.global_position.x - current.x,
-                                            event.global_position.y - current.y,
-                                        )));
-                                        event.consume();
-                                    }
-                                    PointerEventKind::Move => {
-                                        if !event.buttons.contains(PointerButton::Primary) {
-                                            drag_offset.set(None);
-                                            continue;
-                                        }
-                                        if let Some(offset) = drag_offset.get() {
-                                            window_position.set(Point::new(
-                                                snap_to_pixel(event.global_position.x - offset.x),
-                                                snap_to_pixel(event.global_position.y - offset.y),
-                                            ));
-                                            event.consume();
-                                        }
-                                    }
-                                    PointerEventKind::Up | PointerEventKind::Cancel => {
-                                        drag_offset.set(None);
-                                    }
-                                    PointerEventKind::Scroll
-                                    | PointerEventKind::Enter
-                                    | PointerEventKind::Exit => {}
-                                }
-                            }
-                        })
-                        .await;
-                }
-            }),
+            .size_points(scaled(width, scale), scaled(height, scale))
+            .absolute_offset(scaled(x, scale), scaled(y, scale))
+            .window_resize_area(direction),
         BoxSpec::default(),
         || {},
     );
@@ -1128,6 +1577,7 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
                 state_click.update(|s| {
                     s.playback = PlaybackState::Playing;
                     s.status = "Play".to_string();
+                    trace_winamp_state("play", s);
                 });
             },
         );
@@ -1146,6 +1596,7 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
                 state_click.update(|s| {
                     s.playback = PlaybackState::Paused;
                     s.status = "Pause".to_string();
+                    trace_winamp_state("pause", s);
                 });
             },
         );
@@ -1164,6 +1615,7 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
                 state_click.update(|s| {
                     s.playback = PlaybackState::Stopped;
                     s.status = "Stop".to_string();
+                    trace_winamp_state("stop", s);
                 });
             },
         );
@@ -1197,6 +1649,86 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
                 state_click.update(|s| s.status = "Open".to_string());
             },
         );
+    }
+}
+
+const WINAMP_NATIVE_HOST_OFFSET_X: f32 = 640.0;
+const WINAMP_NATIVE_HOST_OFFSET_Y: f32 = 118.0;
+const WINAMP_ATTACH_EPSILON: f32 = 3.0;
+const WINAMP_SNAP_DISTANCE: f32 = 8.0;
+
+fn native_winamp_windows_available() -> bool {
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(target_os = "android"),
+        not(target_os = "ios")
+    ))]
+    {
+        std::env::var_os("CRANPOSE_WINAMP_INLINE").is_none()
+    }
+
+    #[cfg(any(target_arch = "wasm32", target_os = "android", target_os = "ios"))]
+    {
+        false
+    }
+}
+
+fn base_winamp_window_config(placement: WinampWindowPlacement) -> WindowConfig {
+    let state_size = placement.state.size();
+    let config = WindowConfig::borderless(placement.title, state_size.width, state_size.height);
+    let config = match placement.initial_position {
+        WinampInitialWindowPosition::Host(position) => config.with_host_window_position(
+            snap_to_pixel(position.x + WINAMP_NATIVE_HOST_OFFSET_X),
+            snap_to_pixel(position.y + WINAMP_NATIVE_HOST_OFFSET_Y),
+        ),
+        WinampInitialWindowPosition::Screen(position) => {
+            config.with_position(snap_to_pixel(position.x), snap_to_pixel(position.y))
+        }
+    };
+    config
+        .with_transparent(false)
+        .with_resizable(false)
+        .with_visible(true)
+}
+
+fn winamp_window_config(placement: WinampWindowPlacement) -> WindowConfig {
+    let state = placement.state;
+    base_winamp_window_config(placement).with_state(state)
+}
+
+fn winamp_attach_policy() -> WindowAttachPolicy {
+    WindowAttachPolicy::new(
+        WINAMP_SNAP_DISTANCE,
+        WINAMP_ATTACH_EPSILON,
+        WindowMoveMode::DragLeaderOnly(vec![winamp_main_window_id()]),
+    )
+}
+
+fn winamp_main_window_id() -> WindowId {
+    WindowId::from_static("winamp-main")
+}
+
+fn winamp_equalizer_window_id() -> WindowId {
+    WindowId::from_static("winamp-equalizer")
+}
+
+fn winamp_playlist_window_id() -> WindowId {
+    WindowId::from_static("winamp-playlist")
+}
+
+fn winamp_window_modifier(
+    width: f32,
+    height: f32,
+    scale: f32,
+    drag_target: WinampDragTarget,
+) -> Modifier {
+    let modifier = Modifier::empty().size_points(scaled(width, scale), scaled(height, scale));
+    match drag_target {
+        WinampDragTarget::Inline(position) => {
+            let position = position.get();
+            modifier.offset(snap_to_pixel(position.x), snap_to_pixel(position.y))
+        }
+        WinampDragTarget::NativeGroup => modifier,
     }
 }
 

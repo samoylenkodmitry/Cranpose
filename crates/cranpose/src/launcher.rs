@@ -28,6 +28,11 @@ pub struct AppSettings {
     /// robot tests to run in parallel without cluttering the screen
     /// and enables CI environments without a display server.
     pub headless: bool,
+    /// Whether the launcher-created primary desktop window should be visible.
+    ///
+    /// Multi-window apps can hide this bootstrap surface and declare their
+    /// visible operating-system windows through `run_windows`.
+    pub primary_window_visible: bool,
     /// Development options for debugging and performance monitoring
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
     pub dev_options: cranpose_app_shell::DevOptions,
@@ -54,6 +59,7 @@ impl Default for AppSettings {
             fonts: None,
             android_use_system_fonts: false,
             headless: false,
+            primary_window_visible: true,
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
             dev_options: cranpose_app_shell::DevOptions::default(),
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
@@ -434,6 +440,32 @@ impl AppLauncher {
     ))]
     pub fn run(self, content: impl FnMut() + 'static) -> ! {
         self.try_run(content)
+            .unwrap_or_else(|error| panic!("desktop launch failed: {error}"));
+        std::process::exit(0)
+    }
+
+    /// Run a desktop app that declares its visible operating-system windows directly.
+    ///
+    /// The primary launcher surface is kept hidden; content should declare peer
+    /// windows with `WindowNode` or `Window`.
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_os = "android")
+    ))]
+    pub fn try_run_windows(mut self, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
+        self.settings.primary_window_visible = false;
+        self.try_run(content)
+    }
+
+    /// Run a desktop app that declares its visible operating-system windows directly.
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_os = "android")
+    ))]
+    pub fn run_windows(self, content: impl FnMut() + 'static) -> ! {
+        self.try_run_windows(content)
             .unwrap_or_else(|error| panic!("desktop launch failed: {error}"));
         std::process::exit(0)
     }

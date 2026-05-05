@@ -7,8 +7,7 @@
 
 use cranpose::AppLauncher;
 use cranpose_testing::{
-    find_button_in_semantics, find_in_semantics, find_text_by_prefix_in_semantics, find_text_exact,
-    find_text_in_semantics, root_bounds,
+    find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics, root_bounds,
 };
 use cranpose_testing::{find_element_by_text_exact, print_semantics_with_bounds, union_bounds};
 use desktop_app::app;
@@ -79,23 +78,41 @@ fn main() {
             };
 
             // Find items with FULL BOUNDS (x, y, width, height)
-            let find_visible_items_with_bounds = || {
+            let find_visible_items_with_bounds = |list_bounds: Option<(f32, f32, f32, f32)>| {
                 type Rect = (f32, f32, f32, f32);
                 type VisibleItemBounds = (usize, Rect, Rect);
 
-                let mut items: Vec<VisibleItemBounds> = Vec::new(); // (index, row_bounds, group_bounds)
-                for i in 0..20 {
+                let Ok(semantics) = robot.get_semantics() else {
+                    return Vec::new();
+                };
+                let mut items: Vec<VisibleItemBounds> = Vec::new();
+                for i in 0..100 {
                     let item_text = format!("ItemRow #{}", i);
-                    let item_bounds = find_in_semantics(&robot, |elem| {
-                        find_text_exact(elem, &item_text)
-                    });
-                    if let Some(row_bounds) = item_bounds {
+                    if let Some(row_elem) = find_element_by_text_exact(&semantics, &item_text) {
+                        let row_bounds = (
+                            row_elem.bounds.x,
+                            row_elem.bounds.y,
+                            row_elem.bounds.width,
+                            row_elem.bounds.height,
+                        );
                         let hello_text = format!("Hello #{}", i);
-                        let hello_bounds = find_in_semantics(&robot, |elem| {
-                            find_text_exact(elem, &hello_text)
-                        });
+                        let hello_bounds =
+                            find_element_by_text_exact(&semantics, &hello_text).map(|elem| {
+                                (
+                                    elem.bounds.x,
+                                    elem.bounds.y,
+                                    elem.bounds.width,
+                                    elem.bounds.height,
+                                )
+                            });
                         let group_bounds = union_bounds(row_bounds, hello_bounds);
-                        items.push((i, row_bounds, group_bounds));
+                        let intersects_viewport = list_bounds.is_none_or(|(_, y, _, h)| {
+                            let group_bottom = group_bounds.1 + group_bounds.3;
+                            group_bottom > y && group_bounds.1 < y + h
+                        });
+                        if intersects_viewport {
+                            items.push((i, row_bounds, group_bounds));
+                        }
                     }
                 }
                 items
@@ -187,6 +204,7 @@ fn main() {
                     )
                     .ok();
                 std::thread::sleep(Duration::from_millis(200));
+                let _ = robot.wait_for_idle();
 
                 let after_drag_index = read_stat("FirstIndex: ").unwrap_or(initial_first_index);
                 if after_drag_index <= initial_first_index {
@@ -208,7 +226,7 @@ fn main() {
 
             // Step 3: Find all visible items with FULL BOUNDS
             println!("\n--- Step 3: Validate item BOUNDS (detecting overlaps) ---");
-            let mut items = find_visible_items_with_bounds();
+            let mut items = find_visible_items_with_bounds(list_bounds);
             items.sort_by(|a, b| {
                 let a_y = (a.2).1;
                 let b_y = (b.2).1;

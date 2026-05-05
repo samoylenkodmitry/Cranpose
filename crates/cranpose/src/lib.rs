@@ -16,9 +16,15 @@ compile_error!(
 compile_error!("cranpose requires either `renderer-pixels` or `renderer-wgpu` feature.");
 
 mod launcher;
+mod native_window;
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 pub use launcher::LaunchError;
 pub use launcher::{AppLauncher, AppSettings};
+pub use native_window::{
+    current_native_window_surface_origin, rememberWindowState, Window, WindowAttachPolicy,
+    WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
+    WindowResizeDirection, WindowState,
+};
 #[cfg(feature = "renderer-wgpu")]
 mod present_mode;
 
@@ -42,7 +48,11 @@ pub type RobotAppHook = dyn FnMut(String, String) -> Result<Option<String>, Stri
 
 /// Convenience imports for Cranpose applications.
 pub mod prelude {
-    pub use crate::{AppLauncher, AppSettings};
+    pub use crate::{
+        rememberWindowState, AppLauncher, AppSettings, Window, WindowAttachPolicy, WindowConfig,
+        WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
+        WindowResizeDirection, WindowState,
+    };
     pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState};
     pub use cranpose_services::*;
     pub use cranpose_ui::*;

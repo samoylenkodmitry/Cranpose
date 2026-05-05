@@ -236,7 +236,12 @@ fn find_button_in_semantics_by(
             break;
         };
 
-        let Some((axis, dir)) = overflow_axis_direction(current, root) else {
+        let Some((axis, _dir)) = overflow_axis_direction(current, root) else {
+            break;
+        };
+
+        let Some((scroll_delta_x, scroll_delta_y)) = scroll_delta_for_overflow(current, root, axis)
+        else {
             break;
         };
 
@@ -254,11 +259,8 @@ fn find_button_in_semantics_by(
 
         let start_x = sx + sw / 2.0;
         let start_y = sy + sh / 2.0;
-        let (end_x, end_y) = match axis {
-            TabAxis::Horizontal => (start_x + dir * SCROLL_STEP, start_y),
-            TabAxis::Vertical => (start_x, start_y + dir * SCROLL_STEP),
-        };
-        let _ = robot.drag(start_x, start_y, end_x, end_y);
+        let _ = robot.mouse_move(start_x, start_y);
+        let _ = robot.mouse_scroll(scroll_delta_x, scroll_delta_y);
         std::thread::sleep(Duration::from_millis(SCROLL_SETTLE_MS));
         let _ = robot.wait_for_idle();
 
@@ -566,7 +568,6 @@ pub fn root_bounds(robot: &cranpose::Robot) -> Option<RectBounds> {
 }
 
 const VISIBILITY_PADDING: f32 = 4.0;
-const SCROLL_STEP: f32 = 240.0;
 const SCROLL_SETTLE_MS: u64 = 140;
 type TextMatcher = fn(&str, &str) -> bool;
 
@@ -676,6 +677,27 @@ fn overflow_axis_direction(bounds: RectBounds, root: RectBounds) -> Option<(TabA
         Some((TabAxis::Vertical, 1.0))
     } else {
         Some((TabAxis::Vertical, -1.0))
+    }
+}
+
+fn scroll_delta_for_overflow(
+    bounds: RectBounds,
+    root: RectBounds,
+    axis: TabAxis,
+) -> Option<(f32, f32)> {
+    let (x, y, w, h) = bounds;
+    let (rx, ry, rw, rh) = root;
+    let left = rx + VISIBILITY_PADDING;
+    let right = rx + rw - VISIBILITY_PADDING;
+    let top = ry + VISIBILITY_PADDING;
+    let bottom = ry + rh - VISIBILITY_PADDING;
+
+    match axis {
+        TabAxis::Horizontal if x < left => Some((left - x, 0.0)),
+        TabAxis::Horizontal if x + w > right => Some((-(x + w - right), 0.0)),
+        TabAxis::Vertical if y < top => Some((0.0, top - y)),
+        TabAxis::Vertical if y + h > bottom => Some((0.0, -(y + h - bottom))),
+        _ => None,
     }
 }
 
@@ -1162,6 +1184,48 @@ pub fn y_is_visible(robot: &cranpose::Robot, y: f32) -> bool {
     y >= top && y <= bottom
 }
 
+fn scroll_toward_y(robot: &cranpose::Robot, y: f32, cfg: ScrollConfig) {
+    let Some((_, root_y, _, root_h)) = root_bounds(robot) else {
+        return;
+    };
+    let viewport_mid = root_y + root_h * 0.5;
+    let distance = ((y - viewport_mid).abs() / 5.0).clamp(24.0, 140.0);
+    if y > viewport_mid {
+        let target_y = (cfg.down_from_y - distance).max(cfg.down_to_y);
+        let _ = robot.drag(cfg.center_x, cfg.down_from_y, cfg.center_x, target_y);
+    } else {
+        let target_y = (cfg.up_from_y + distance).min(cfg.up_to_y);
+        let _ = robot.drag(cfg.center_x, cfg.up_from_y, cfg.center_x, target_y);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(140));
+    let _ = robot.wait_for_idle();
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MissingTargetScrollDirection {
+    Down,
+    Up,
+}
+
+fn missing_target_scroll_direction(attempt: usize) -> MissingTargetScrollDirection {
+    if attempt % 4 == 3 {
+        MissingTargetScrollDirection::Up
+    } else {
+        MissingTargetScrollDirection::Down
+    }
+}
+
+fn scroll_for_missing_target(robot: &cranpose::Robot, cfg: ScrollConfig, attempt: usize) {
+    match missing_target_scroll_direction(attempt) {
+        MissingTargetScrollDirection::Down => {
+            scroll_down(robot, cfg.center_x, cfg.down_from_y, cfg.down_to_y);
+        }
+        MissingTargetScrollDirection::Up => {
+            scroll_up(robot, cfg.center_x, cfg.up_from_y, cfg.up_to_y);
+        }
+    }
+}
+
 /// Configuration for scroll-into-view helpers so we don't need too many arguments.
 #[derive(Clone, Copy, Debug)]
 pub struct ScrollConfig {
@@ -1186,22 +1250,31 @@ pub fn scroll_prefix_into_view(
             if y_is_visible(robot, center_y) {
                 return Some(bounds);
             }
-            let Some((_, root_y, _, root_h)) = root_bounds(robot) else {
-                return Some(bounds);
-            };
-            let viewport_mid = root_y + root_h * 0.5;
-            if center_y > viewport_mid {
-                scroll_down(robot, cfg.center_x, cfg.down_from_y, cfg.down_to_y);
-            } else {
-                scroll_up(robot, cfg.center_x, cfg.up_from_y, cfg.up_to_y);
-            }
+            scroll_toward_y(robot, center_y, cfg);
         } else {
-            // Not found yet — alternate directions to find it
-            if attempt % 2 == 0 {
-                scroll_down(robot, cfg.center_x, cfg.down_from_y, cfg.down_to_y);
-            } else {
-                scroll_up(robot, cfg.center_x, cfg.up_from_y, cfg.up_to_y);
+            scroll_for_missing_target(robot, cfg, attempt);
+        }
+    }
+    None
+}
+
+/// Scroll until a semantics node with exactly matching text is visible.
+/// Returns bounds `(x, y, w, h)`.
+pub fn scroll_text_into_view(
+    robot: &cranpose::Robot,
+    text: &str,
+    max_attempts: usize,
+    cfg: ScrollConfig,
+) -> Option<(f32, f32, f32, f32)> {
+    for attempt in 0..max_attempts {
+        if let Some(bounds) = find_bounds_by_text(robot, text) {
+            let center_y = bounds.1 + bounds.3 * 0.5;
+            if y_is_visible(robot, center_y) {
+                return Some(bounds);
             }
+            scroll_toward_y(robot, center_y, cfg);
+        } else {
+            scroll_for_missing_target(robot, cfg, attempt);
         }
     }
     None
@@ -1270,6 +1343,43 @@ mod tests {
         assert_eq!(
             overflow_axis_direction(target, root),
             Some((TabAxis::Vertical, 1.0))
+        );
+    }
+
+    #[test]
+    fn scroll_delta_for_overflow_moves_target_toward_visible_area() {
+        let root = (0.0, 0.0, 300.0, 200.0);
+
+        assert_eq!(
+            scroll_delta_for_overflow((320.0, 20.0, 80.0, 30.0), root, TabAxis::Horizontal),
+            Some((-104.0, 0.0))
+        );
+        assert_eq!(
+            scroll_delta_for_overflow((-42.0, 20.0, 80.0, 30.0), root, TabAxis::Horizontal),
+            Some((46.0, 0.0))
+        );
+        assert_eq!(
+            scroll_delta_for_overflow((20.0, 190.0, 80.0, 30.0), root, TabAxis::Vertical),
+            Some((0.0, -24.0))
+        );
+    }
+
+    #[test]
+    fn missing_target_scroll_searches_down_with_periodic_reverse() {
+        let directions: Vec<_> = (0..8).map(missing_target_scroll_direction).collect();
+
+        assert_eq!(
+            directions,
+            vec![
+                MissingTargetScrollDirection::Down,
+                MissingTargetScrollDirection::Down,
+                MissingTargetScrollDirection::Down,
+                MissingTargetScrollDirection::Up,
+                MissingTargetScrollDirection::Down,
+                MissingTargetScrollDirection::Down,
+                MissingTargetScrollDirection::Down,
+                MissingTargetScrollDirection::Up,
+            ]
         );
     }
 
