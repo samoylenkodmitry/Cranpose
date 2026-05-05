@@ -57,11 +57,26 @@ fn visible_prefix(robot: &cranpose::Robot, prefix: &str) -> Option<(f32, f32, f3
     y_is_visible(robot, center_y).then_some(bounds)
 }
 
+fn slider_touch_y(bounds: (f32, f32, f32, f32)) -> f32 {
+    bounds.1 + bounds.3 + EFFECT_SLIDER_TOUCH_OFFSET_Y
+}
+
+fn visible_slider_prefix(
+    robot: &cranpose::Robot,
+    prefix: &str,
+) -> Option<(f32, f32, f32, f32, String)> {
+    let bounds = find_text_by_prefix_in_semantics(robot, prefix)?;
+    let label_center_y = bounds.1 + bounds.3 * 0.5;
+    let touch_y = slider_touch_y((bounds.0, bounds.1, bounds.2, bounds.3));
+    (y_is_visible(robot, label_center_y) && y_is_visible(robot, touch_y)).then_some(bounds)
+}
+
 fn visible_nested_effect_controls(robot: &cranpose::Robot) -> Option<NestedEffectControls> {
     let child_label = visible_text(robot, "Child backdrop")?;
-    let (parent_x, parent_y, parent_w, parent_h, _) = visible_prefix(robot, "nested_parent_blur")?;
+    let (parent_x, parent_y, parent_w, parent_h, _) =
+        visible_slider_prefix(robot, "nested_parent_blur")?;
     let (child_x, child_y, child_w, child_h, _) =
-        visible_prefix(robot, "nested_child_backdrop_blur")?;
+        visible_slider_prefix(robot, "nested_child_backdrop_blur")?;
     Some(NestedEffectControls {
         child_label,
         parent_slider: (parent_x, parent_y, parent_w, parent_h),
@@ -99,17 +114,22 @@ fn nudge_nested_effect_controls_toward_view(robot: &cranpose::Robot) {
             .map(|(x, y, w, h, _)| (x, y, w, h)),
     ];
 
-    if raw_bounds
+    let target_above = raw_bounds
         .iter()
         .flatten()
-        .any(|(_, y, _, h)| y + h * 0.5 < top)
-    {
-        scroll_up_small(robot);
-    } else if raw_bounds
+        .any(|(_, y, _, h)| y + h * 0.5 < top);
+    let target_below = raw_bounds
         .iter()
         .flatten()
         .any(|(_, y, _, h)| y + h * 0.5 > bottom)
-    {
+        || [raw_bounds[1], raw_bounds[2]]
+            .into_iter()
+            .flatten()
+            .any(|bounds| slider_touch_y(bounds) > bottom);
+
+    if target_above {
+        scroll_up_small(robot);
+    } else if target_below {
         scroll_down_small(robot);
     } else {
         scroll_down_small(robot);
@@ -223,7 +243,9 @@ fn main() {
                 "Nested sliders (off): parent={:?} child={:?}",
                 nested_parent, nested_child_off
             );
-            if nested_parent.is_none() || nested_child_off.is_none() {
+            if nested_parent.is_none_or(|value| value > 1.0)
+                || nested_child_off.is_none_or(|value| value > 1.0)
+            {
                 println!("✗ Could not set nested backdrop sliders to baseline values");
                 std::process::exit(1);
             }
@@ -264,7 +286,7 @@ fn main() {
                 1.0,
             );
             println!("Nested child slider (on): {:?}", nested_child_on);
-            if nested_child_on.is_none() {
+            if nested_child_on.is_none_or(|value| value < 16.0) {
                 println!("✗ Could not set nested_child_backdrop_blur to maximum value");
                 std::process::exit(1);
             }
