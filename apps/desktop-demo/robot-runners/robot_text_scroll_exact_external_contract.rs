@@ -25,6 +25,7 @@ const STEP_EPSILON: f32 = 0.05;
 const COMPARE_TRIM_TOP_PX: u32 = 200;
 const COMPARE_TRIM_BOTTOM_PX: u32 = 200;
 const COMPARE_SEARCH_OFFSET_PX: u32 = 32;
+const COMPARE_MAX_ADJACENT_SCORE: u32 = 4;
 const INTERNAL_DIAGNOSTIC_ENV: &str = "CRANPOSE_TEXT_SCROLL_INTERNAL_DIAGNOSTIC";
 const INTERNAL_DIAGNOSTIC_SCALE_ENV: &str = "CRANPOSE_TEXT_SCROLL_INTERNAL_DIAGNOSTIC_SCALE";
 const RENDER_STATS_ENV: &str = "CRANPOSE_TEXT_SCROLL_RENDER_STATS";
@@ -201,6 +202,8 @@ fn run_compare_script(capture_paths: &[PathBuf]) -> bool {
         .arg(COMPARE_TRIM_BOTTOM_PX.to_string())
         .arg("--max-offset")
         .arg(COMPARE_SEARCH_OFFSET_PX.to_string())
+        .arg("--max-adjacent-score")
+        .arg(COMPARE_MAX_ADJACENT_SCORE.to_string())
         .args(capture_paths)
         .output()
         .unwrap_or_else(|err| panic!("failed to run {}: {err}", script_path.display()));

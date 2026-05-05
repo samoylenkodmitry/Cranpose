@@ -15,6 +15,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trim-top", type=int, required=True)
     parser.add_argument("--trim-bottom", type=int, required=True)
     parser.add_argument("--max-offset", type=int, required=True)
+    parser.add_argument("--max-adjacent-score", type=int, default=0)
     parser.add_argument("images", nargs="+")
     return parser.parse_args()
 
@@ -281,6 +282,12 @@ def main() -> int:
         if score == 0:
             print(
                 f"step {step - 1:02}->{step:02}: exact adjacent stabilized match"
+            )
+            continue
+        if score <= args.max_adjacent_score:
+            print(
+                f"step {step - 1:02}->{step:02}: adjacent stabilized match "
+                f"within score budget score={score} budget={args.max_adjacent_score}"
             )
             continue
 
