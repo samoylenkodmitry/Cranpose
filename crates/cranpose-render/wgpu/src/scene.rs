@@ -5,7 +5,7 @@ use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RenderEffect,
+    BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect, RenderEffect,
     RoundedCornerShape,
 };
 use std::rc::Rc;
@@ -63,6 +63,7 @@ pub(crate) struct ImageDraw {
     pub image: ImageBitmap,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
+    pub sampling: ImageSampling,
     pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
@@ -92,6 +93,7 @@ pub(crate) struct ShadowDraw {
 pub(crate) struct EffectLayer {
     pub rect: Rect,
     pub clip: Option<Rect>,
+    pub snap_anchor: Option<SnapAnchor>,
     /// Optional effect to apply to the offscreen subtree.
     /// `None` means isolate/composite only (no post-effect shader).
     pub effect: Option<RenderEffect>,
@@ -204,6 +206,7 @@ impl CompositorScene {
         image: ImageBitmap,
         alpha: f32,
         color_filter: Option<ColorFilter>,
+        sampling: ImageSampling,
         clip: Option<Rect>,
         src_rect: Option<Rect>,
         blend_mode: BlendMode,
@@ -219,6 +222,7 @@ impl CompositorScene {
             image,
             alpha: alpha.clamp(0.0, 1.0),
             color_filter,
+            sampling,
             z_index,
             clip,
             blend_mode,
@@ -280,6 +284,7 @@ impl CompositorScene {
         self.effect_layers.push(EffectLayer {
             rect,
             clip,
+            snap_anchor: None,
             effect,
             blend_mode,
             composite_alpha,

@@ -37,7 +37,7 @@ pub use cursor_animation::{
     stop_cursor_blink, tick_cursor_blink,
 };
 
-pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap};
+pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap, ImageSampling};
 pub use cranpose_ui_layout::IntrinsicSize;
 pub use draw::{execute_draw_commands, DrawCacheBuilder, DrawCommand};
 pub use focus_dispatch::{

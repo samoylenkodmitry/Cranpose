@@ -34,6 +34,7 @@ pub(crate) fn take_x11_screenshot(window_id: &str, path: &str) {
     assert!(status.success(), "import failed for {path}");
 }
 
+#[allow(dead_code)]
 pub(crate) fn open_text_tab(robot: &cranpose::Robot) {
     let (x, y, w, h) = find_button_in_semantics(robot, "Shaders").expect("Shaders tab");
     robot
@@ -54,16 +55,37 @@ pub(crate) fn open_text_tab(robot: &cranpose::Robot) {
     );
 }
 
+#[allow(dead_code)]
 pub(crate) fn scroll_text_into_view(
     robot: &cranpose::Robot,
     text: &str,
     window_height: u32,
     max_attempts: usize,
 ) {
+    scroll_text_into_view_between(
+        robot,
+        text,
+        100.0,
+        window_height as f32 - 100.0,
+        max_attempts,
+    );
+}
+
+pub(crate) fn scroll_text_into_view_between(
+    robot: &cranpose::Robot,
+    text: &str,
+    min_center_y: f32,
+    max_center_y: f32,
+    max_attempts: usize,
+) {
+    assert!(
+        min_center_y < max_center_y,
+        "invalid target center range: {min_center_y}..{max_center_y}"
+    );
     for _ in 0..max_attempts {
         if let Some(bounds) = find_text_in_semantics(robot, text) {
             let center_y = bounds.1 + bounds.3 * 0.5;
-            if center_y > 100.0 && center_y < (window_height as f32 - 100.0) {
+            if center_y > min_center_y && center_y < max_center_y {
                 return;
             }
         }

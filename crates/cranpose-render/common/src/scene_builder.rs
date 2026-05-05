@@ -119,7 +119,7 @@ fn build_layer_node_internal(
     });
 
     let node_motion_context_animated = inherited_motion_context_animated || motion_context_animated;
-    let node_translated_content_context =
+    let child_translated_content_context =
         inherited_translated_content_context || translated_content_context;
 
     let mut children = draw_nodes(
@@ -148,7 +148,7 @@ fn build_layer_node_internal(
         let mut child_layer = build_layer_node_internal(
             child,
             child_motion_context_animated,
-            node_translated_content_context,
+            child_translated_content_context,
         );
         if content_offset != Point::default() {
             child_layer.transform_to_parent =
@@ -178,7 +178,12 @@ fn build_layer_node_internal(
         local_bounds,
         transform_to_parent,
         motion_context_animated: node_motion_context_animated,
-        translated_content_context: node_translated_content_context,
+        translated_content_context,
+        translated_content_offset: if translated_content_context {
+            content_offset
+        } else {
+            Point::default()
+        },
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -300,8 +305,12 @@ fn build_layer_node_from_data(
 
     let node_motion_context_animated =
         inherited_motion_context_animated || modifier_slices.motion_context_animated();
-    let node_translated_content_context =
-        inherited_translated_content_context || modifier_slices.translated_content_context();
+    let local_translated_content_context = modifier_slices.translated_content_context();
+    let local_translated_content_offset = modifier_slices
+        .translated_content_offset()
+        .unwrap_or(layout_state.content_offset);
+    let child_translated_content_context =
+        inherited_translated_content_context || local_translated_content_context;
 
     let mut render_children = draw_nodes(
         modifier_slices.draw_commands(),
@@ -334,7 +343,7 @@ fn build_layer_node_from_data(
             applier,
             child_id,
             child_motion_context_animated,
-            node_translated_content_context,
+            child_translated_content_context,
         ) else {
             continue;
         };
@@ -366,7 +375,12 @@ fn build_layer_node_from_data(
         local_bounds,
         transform_to_parent,
         motion_context_animated: node_motion_context_animated,
-        translated_content_context: node_translated_content_context,
+        translated_content_context: local_translated_content_context,
+        translated_content_offset: if local_translated_content_context {
+            local_translated_content_offset
+        } else {
+            Point::default()
+        },
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -666,6 +680,20 @@ mod tests {
                 RenderNode::Layer(child_layer) => collect_text_labels(child_layer, labels),
             }
         }
+    }
+
+    fn find_translated_content_offset(layer: &LayerNode) -> Option<Point> {
+        if layer.translated_content_context {
+            return Some(layer.translated_content_offset);
+        }
+        for child in &layer.children {
+            if let RenderNode::Layer(child_layer) = child {
+                if let Some(offset) = find_translated_content_offset(child_layer) {
+                    return Some(offset);
+                }
+            }
+        }
+        None
     }
 
     fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
@@ -1471,6 +1499,71 @@ mod tests {
             labels,
             active_children,
             child_debug
+        );
+    }
+
+    #[test]
+    fn scrolled_lazy_column_uses_visible_item_offset_as_snap_anchor_offset() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
+        let state_holder_for_comp = state_holder.clone();
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let list_state = remember_lazy_list_state();
+            *state_holder_for_comp.borrow_mut() = Some(list_state);
+            LazyColumn(
+                Modifier::empty().height(120.0),
+                list_state,
+                LazyColumnSpec::default(),
+                |scope| {
+                    scope.items(
+                        8,
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        |index| {
+                            Text(
+                                format!("LazySnap {index}"),
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                },
+            );
+        });
+
+        let list_state = (*state_holder.borrow()).expect("lazy list state should be captured");
+        list_state.scroll_to_item(2, 7.5);
+
+        let root = composition.root().expect("lazy column root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let _ = applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 240.0,
+                    height: 240.0,
+                },
+            )
+            .expect("lazy column layout");
+        let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("lazy column graph");
+        applier.clear_runtime_handle();
+
+        let layout_info = list_state.layout_info();
+        let first_visible_offset = layout_info
+            .visible_items_info
+            .first()
+            .expect("lazy layout should expose visible item info")
+            .offset;
+        let snap_offset = find_translated_content_offset(&graph.root)
+            .expect("lazy list graph should include translated content context");
+
+        assert!(
+            (snap_offset.y - first_visible_offset).abs() <= 0.001,
+            "lazy snap offset must follow the visible content origin; snap_offset={snap_offset:?} first_visible_offset={first_visible_offset}"
         );
     }
 

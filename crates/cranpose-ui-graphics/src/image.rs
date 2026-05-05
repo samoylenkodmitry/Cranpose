@@ -28,6 +28,16 @@ pub struct ImageBitmap {
     pixels: Arc<[u8]>,
 }
 
+/// Texture sampling mode for image primitives.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ImageSampling {
+    /// Preserve source texels exactly. Use this for atlases, pixel art, and UI skins.
+    #[default]
+    Nearest,
+    /// Interpolate adjacent texels. Use this for photographic or continuously scaled images.
+    Linear,
+}
+
 /// Simple image color filter model.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ColorFilter {

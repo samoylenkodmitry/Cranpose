@@ -125,6 +125,8 @@ where
             viewport_end_offset: config.after_content_padding,
             before_content_padding: config.before_content_padding,
             after_content_padding: config.after_content_padding,
+            snap_anchor_offset: 0.0,
+            reverse_layout: config.reverse_layout,
         });
         state.update_scroll_bounds();
         return LazyListMeasureResult::default();
@@ -144,6 +146,8 @@ where
             viewport_end_offset: config.after_content_padding,
             before_content_padding: config.before_content_padding,
             after_content_padding: config.after_content_padding,
+            snap_anchor_offset: 0.0,
+            reverse_layout: config.reverse_layout,
         });
         state.update_scroll_bounds();
         return LazyListMeasureResult::default();
@@ -338,6 +342,8 @@ where
         viewport_end_offset: config.after_content_padding,
         before_content_padding: config.before_content_padding,
         after_content_padding: config.after_content_padding,
+        snap_anchor_offset: 0.0,
+        reverse_layout: config.reverse_layout,
     });
 
     // Update reactive scroll bounds from layout info

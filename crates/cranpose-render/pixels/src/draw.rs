@@ -603,16 +603,20 @@ fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
             let u = ((sample_x - rect.x) / rect.width).clamp(0.0, 1.0);
             let v = ((sample_y - rect.y) / rect.height).clamp(0.0, 1.0);
 
-            let src_x = ((sr_x + u * sr_w).floor() as i32).clamp(0, img_width as i32 - 1);
-            let src_y = ((sr_y + v * sr_h).floor() as i32).clamp(0, img_height as i32 - 1);
-            let src_idx = ((src_y as u32 * img_width + src_x as u32) * 4) as usize;
-
-            let mut sample = [
-                src_pixels[src_idx] as f32 / 255.0,
-                src_pixels[src_idx + 1] as f32 / 255.0,
-                src_pixels[src_idx + 2] as f32 / 255.0,
-                src_pixels[src_idx + 3] as f32 / 255.0,
-            ];
+            let mut sample = match draw.sampling {
+                cranpose_ui_graphics::ImageSampling::Nearest => {
+                    let src_x = ((sr_x + u * sr_w).floor() as i32).clamp(0, img_width as i32 - 1);
+                    let src_y = ((sr_y + v * sr_h).floor() as i32).clamp(0, img_height as i32 - 1);
+                    sample_image_nearest(src_pixels, img_width, src_x as u32, src_y as u32)
+                }
+                cranpose_ui_graphics::ImageSampling::Linear => sample_image_linear(
+                    src_pixels,
+                    img_width,
+                    img_height,
+                    sr_x + u * sr_w - 0.5,
+                    sr_y + v * sr_h - 0.5,
+                ),
+            };
 
             if let Some(filter) = draw.color_filter {
                 sample = apply_color_filter(sample, filter);
@@ -627,6 +631,47 @@ fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
             blend_pixel(&mut frame[dst_idx..dst_idx + 4], sample, draw.blend_mode);
         }
     }
+}
+
+fn sample_image_nearest(src_pixels: &[u8], img_width: u32, src_x: u32, src_y: u32) -> [f32; 4] {
+    let src_idx = ((src_y * img_width + src_x) * 4) as usize;
+    [
+        src_pixels[src_idx] as f32 / 255.0,
+        src_pixels[src_idx + 1] as f32 / 255.0,
+        src_pixels[src_idx + 2] as f32 / 255.0,
+        src_pixels[src_idx + 3] as f32 / 255.0,
+    ]
+}
+
+fn sample_image_linear(
+    src_pixels: &[u8],
+    img_width: u32,
+    img_height: u32,
+    x: f32,
+    y: f32,
+) -> [f32; 4] {
+    let x = x.clamp(0.0, img_width.saturating_sub(1) as f32);
+    let y = y.clamp(0.0, img_height.saturating_sub(1) as f32);
+    let x0 = x.floor();
+    let y0 = y.floor();
+    let tx = x - x0;
+    let ty = y - y0;
+    let x0 = (x0 as i32).clamp(0, img_width as i32 - 1) as u32;
+    let y0 = (y0 as i32).clamp(0, img_height as i32 - 1) as u32;
+    let x1 = (x0 + 1).min(img_width - 1);
+    let y1 = (y0 + 1).min(img_height - 1);
+    let top_left = sample_image_nearest(src_pixels, img_width, x0, y0);
+    let top_right = sample_image_nearest(src_pixels, img_width, x1, y0);
+    let bottom_left = sample_image_nearest(src_pixels, img_width, x0, y1);
+    let bottom_right = sample_image_nearest(src_pixels, img_width, x1, y1);
+
+    let mut out = [0.0; 4];
+    for channel in 0..4 {
+        let top = top_left[channel] + (top_right[channel] - top_left[channel]) * tx;
+        let bottom = bottom_left[channel] + (bottom_right[channel] - bottom_left[channel]) * tx;
+        out[channel] = top + (bottom - top) * ty;
+    }
+    out
 }
 
 fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
@@ -1211,6 +1256,7 @@ mod tests {
             transform_to_parent: ProjectiveTransform::identity(),
             motion_context_animated: false,
             translated_content_context: false,
+            translated_content_offset: cranpose_ui_graphics::Point::default(),
             graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,

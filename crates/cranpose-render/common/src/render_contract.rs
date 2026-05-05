@@ -23,10 +23,9 @@ const TRANSLATED_SUBTREE_BUDGET: NormalizedDifferenceBudget = NormalizedDifferen
     max_differing_pixels: 245,
     max_pixel_difference: 360,
 };
-// Scrollable content does not snap to device pixels — snapping causes discrete position jumps
-// that produce visible rendering artifacts (underline thickness flickering, glyph quality changes).
-// Without snap, sub-pixel rendering varies smoothly with scroll position. The normalized
-// comparison tolerates this bounded drift while still catching material regressions.
+// Active scroll motion intentionally remains unsnapped, while rested translated content snaps
+// through a shared content-origin anchor. The normalized comparison tolerates bounded active
+// motion drift while still catching material subtree regressions.
 const TRANSLATED_PLAIN_TEXT_BUDGET: NormalizedDifferenceBudget = NormalizedDifferenceBudget {
     max_differing_pixels: 550,
     max_pixel_difference: 360,
@@ -460,6 +459,7 @@ fn graph_layer(
         transform_to_parent,
         motion_context_animated: false,
         translated_content_context: false,
+        translated_content_offset: Point::default(),
         graphics_layer: GraphicsLayer::default(),
         clip_to_bounds: false,
         shadow_clip: None,

@@ -1,22 +1,23 @@
 use super::backend::{LayerSurface, LayerSurfaceTexture, SurfaceExecutionBackend};
 use super::geometry::{
     axis_aligned_quad_rect, clamp_effect_surface_scale, local_effect_pixel_rect,
-    offscreen_byte_size, quantize_motion_stable_target_scale, scaled_quad,
+    offscreen_byte_size, quantize_motion_stable_target_scale, scaled_quad, snap_delta_for_anchor,
     snap_motion_stable_dest_quad, surface_pixel_rect, surface_target_size, target_quad,
     visible_layer_rect,
 };
 use crate::effect_renderer::CompositeSampleMode;
 use crate::normalized_scene::{
     build_scene_window, filtered_effect_layer_index, motion_stable_capture_bounds,
-    resolved_child_surface_composite, resolved_layer_surface_rect, ChildLayerComposite,
-    CollectedLayer, SceneWindowSource, TranslateBy,
+    resolved_child_surface_composite, resolved_layer_surface_rect, translate_quad,
+    ChildLayerComposite, CollectedLayer, SceneWindowSource, TranslateBy,
 };
 use crate::offscreen::OffscreenTarget;
 use crate::render::{
     has_backdrop_layer_in_range, scissor_rect_for_rect, CLEAR_COLOR, MAX_LAYER_SURFACE_CACHE_BYTES,
 };
 use crate::scene::{
-    BackdropLayer, CompositorScene, DrawShape, EffectLayer, ImageDraw, ShadowDraw, TextDraw,
+    BackdropLayer, CompositorScene, DrawShape, EffectLayer, ImageDraw, ShadowDraw, SnapAnchor,
+    TextDraw,
 };
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
@@ -30,6 +31,20 @@ use cranpose_render_common::graph::{CachePolicy, LayerNode, ProjectiveTransform}
 use cranpose_render_common::layer_composition::effective_layer_isolation;
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_ui_graphics::{BlendMode, Rect, RenderEffect};
+
+fn anchored_composite_dest_quad(
+    dest_quad: [[f32; 2]; 4],
+    snap_anchor: Option<SnapAnchor>,
+    root_scale: f32,
+    sample_mode: CompositeSampleMode,
+) -> [[f32; 2]; 4] {
+    if let Some(anchor) = snap_anchor {
+        let snap_delta = snap_delta_for_anchor(anchor, root_scale);
+        return scaled_quad(translate_quad(dest_quad, snap_delta), root_scale);
+    }
+
+    snap_motion_stable_dest_quad(scaled_quad(dest_quad, root_scale), sample_mode)
+}
 
 #[allow(clippy::too_many_arguments)]
 fn copy_surface_region_to_view<B: SurfaceExecutionBackend>(
@@ -193,8 +208,10 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 return Err("root direct path does not support backdrop child surfaces".to_string());
             }
 
-            let dest_quad = snap_motion_stable_dest_quad(
-                scaled_quad(resolved_child.dest_quad, root_scale),
+            let dest_quad = anchored_composite_dest_quad(
+                resolved_child.dest_quad,
+                resolved_child.snap_anchor,
+                root_scale,
                 child_surface.sample_mode,
             );
             composite_layer_surface_to_view(
@@ -414,13 +431,21 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
         }
 
         let resolved_child = resolved_child_surface_composite(&child);
+        let child_dest_quad = if let Some(anchor) = resolved_child.snap_anchor {
+            translate_quad(
+                resolved_child.dest_quad,
+                snap_delta_for_anchor(anchor, target_scale),
+            )
+        } else {
+            resolved_child.dest_quad
+        };
         let child_underlay = child.needs_nested_underlay.then(|| {
             create_projected_child_underlay(
                 backend,
                 &target,
                 backdrop_underlay,
                 resolved_child.logical_rect,
-                resolved_child.dest_quad,
+                child_dest_quad,
                 target_scale,
             )
         });
@@ -469,8 +494,10 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             );
         }
 
-        let dest_quad = snap_motion_stable_dest_quad(
-            scaled_quad(resolved_child.dest_quad, target_scale),
+        let dest_quad = anchored_composite_dest_quad(
+            resolved_child.dest_quad,
+            resolved_child.snap_anchor,
+            target_scale,
             child_surface.sample_mode,
         );
         composite_layer_surface_to_view(
@@ -858,8 +885,10 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
 
     render_result?;
 
-    let dest_quad = snap_motion_stable_dest_quad(
-        scaled_quad(crate::rect_to_quad(capture_rect), root_scale),
+    let dest_quad = anchored_composite_dest_quad(
+        crate::rect_to_quad(capture_rect),
+        layer.snap_anchor,
+        root_scale,
         sample_mode,
     );
     let dest = backend.acquire_offscreen(effect_width, effect_height);

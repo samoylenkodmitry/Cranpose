@@ -220,12 +220,14 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
             image,
             alpha,
             color_filter,
+            sampling,
             src_rect,
         } => DrawPrimitive::Image {
             rect: rect.translate(dx, dy),
             image,
             alpha,
             color_filter,
+            sampling,
             src_rect,
         },
         DrawPrimitive::Shadow(shadow) => {

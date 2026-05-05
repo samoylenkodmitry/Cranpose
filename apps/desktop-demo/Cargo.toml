@@ -117,6 +117,11 @@ path = "robot-runners/robot_shader_rect.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_render_crispness_contract"
+path = "robot-runners/robot_render_crispness_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_winamp_native_window_geometry"
 path = "robot-runners/robot_winamp_native_window_geometry.rs"
 required-features = ["robot-app"]
@@ -571,6 +576,16 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_text_scroll_exact_external_contract"
 path = "robot-runners/robot_text_scroll_exact_external_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_hacker_news_scroll_exact_external_contract"
+path = "robot-runners/robot_hacker_news_scroll_exact_external_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_markdown_scroll_exact_external_contract"
+path = "robot-runners/robot_markdown_scroll_exact_external_contract.rs"
 required-features = ["robot-app"]
 
 [[example]]

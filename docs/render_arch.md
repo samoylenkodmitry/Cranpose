@@ -34,7 +34,9 @@ The branch now enforces these invariants:
 8. Scene build does not round static text rects in logical space.
 9. Idle pure-text leaves participate in the same rigid snap-anchor path as
    mixed text+draw leaves.
-10. Scrolling images use linear sampling; static images stay nearest.
+10. Image primitives carry an explicit sampling policy: low-level draw calls
+    default to nearest for atlases/skins, while the high-level `Image` widget
+    opts into linear sampling for application imagery.
 11. Mixed-content isolation is attributed by real local-surface reasons, not by
    tab-wide wrappers.
 12. Hit testing uses exact transformed geometry, not axis-aligned approximations.
@@ -56,6 +58,8 @@ The branch now enforces these invariants:
   `ModifierNodeSlices::motion_context_animated()`
 - scroll and lazy-scroll modifiers keep `translated_content_context` enabled for
   the whole translated subtree
+- rested translated clip containers stay on the direct path; active translated
+  clip containers use motion-stable capture only while motion is active
 
 Files:
 
@@ -95,7 +99,8 @@ These refactorings are complete in the checked-in branch state:
 5. Removal of renderer-forced text local-surface classification.
 6. Scroll and lazy-scroll motion-context propagation into the render graph.
 7. Persistent translated-content propagation for scroll subtrees.
-8. Motion-aware image sampling (`nearest` static, `linear` scrolling).
+8. Explicit image sampling through `ImageSampling` with nearest as the
+   low-level default and linear selected by the high-level `Image` widget.
 9. Static snap-anchor coverage for pure-text leaves.
 10. Complex-text local-surface classification (`text_local_surface`).
 11. Root direct fallback to the root surface path when local effect/backdrop events exist.
@@ -119,6 +124,8 @@ Current checked-in status:
 - bounded blur/backdrop semantics are covered by focused WGPU tests
 - motion-vs-translated-content text defaults are covered by `scene_builder` unit tests
 - motion-aware image sampling policy is covered by WGPU unit tests
+- atlas isolation and rested-scroll crispness are guarded by
+  `robot_render_crispness_contract`
 - oversized mixed-content isolate regressions on the Shaders tab are guarded by a robot runner
 - screenshot-based robot checks use logical regions against captured images correctly
 - attempted isolated-child-surface device-grid snapping was rejected because it

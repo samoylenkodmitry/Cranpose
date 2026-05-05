@@ -8,7 +8,7 @@
 //! The actual `Modifier.horizontal_scroll()` and `Modifier.vertical_scroll()`
 //! extension methods are defined in `modifier/scroll.rs`.
 
-use cranpose_core::{ownedMutableStateOf, NodeId, OwnedMutableState};
+use cranpose_core::{current_runtime_handle, ownedMutableStateOf, NodeId, OwnedMutableState};
 use cranpose_foundation::{
     Constraints, DelegatableNode, LayoutModifierNode, Measurable, ModifierNode,
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -163,6 +163,109 @@ impl ScrollState {
     /// Removes an invalidation callback by ID
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
         self.inner.invalidate_callbacks.borrow_mut().remove(&id);
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ScrollMotionContext {
+    inner: Rc<ScrollMotionContextInner>,
+}
+
+struct ScrollMotionContextInner {
+    active: Cell<bool>,
+    generation: Cell<u64>,
+    invalidate_callbacks: RefCell<std::collections::HashMap<u64, Box<dyn Fn()>>>,
+    pending_invalidation: Cell<bool>,
+}
+
+impl ScrollMotionContext {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Rc::new(ScrollMotionContextInner {
+                active: Cell::new(false),
+                generation: Cell::new(0),
+                invalidate_callbacks: RefCell::new(std::collections::HashMap::new()),
+                pending_invalidation: Cell::new(false),
+            }),
+        }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.inner.active.get()
+    }
+
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    pub(crate) fn stable_key(&self) -> usize {
+        Rc::as_ptr(&self.inner) as usize
+    }
+
+    pub(crate) fn set_active(&self, active: bool) {
+        if self.inner.active.replace(active) != active {
+            self.bump_generation();
+            self.invalidate();
+        }
+    }
+
+    pub(crate) fn activate_for_next_frame(&self) {
+        let was_active = self.inner.active.replace(true);
+        let generation = self.bump_generation();
+        if !was_active {
+            self.invalidate();
+        }
+        if let Some(runtime) = current_runtime_handle() {
+            let state = self.clone();
+            let _ = runtime.register_frame_callback(move |_| {
+                state.clear_if_generation(generation);
+            });
+            runtime.schedule();
+        } else {
+            self.clear_if_generation(generation);
+        }
+    }
+
+    pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
+        static NEXT_CALLBACK_ID: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_CALLBACK_ID.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .invalidate_callbacks
+            .borrow_mut()
+            .insert(id, callback);
+        if self.inner.pending_invalidation.replace(false) {
+            if let Some(callback) = self.inner.invalidate_callbacks.borrow().get(&id) {
+                callback();
+            }
+        }
+        id
+    }
+
+    pub(crate) fn remove_invalidate_callback(&self, id: u64) {
+        self.inner.invalidate_callbacks.borrow_mut().remove(&id);
+    }
+
+    fn bump_generation(&self) -> u64 {
+        let next = self.inner.generation.get().wrapping_add(1);
+        self.inner.generation.set(next);
+        next
+    }
+
+    fn clear_if_generation(&self, generation: u64) {
+        if self.inner.generation.get() == generation {
+            self.set_active(false);
+        }
+    }
+
+    fn invalidate(&self) {
+        let callbacks = self.inner.invalidate_callbacks.borrow();
+        if callbacks.is_empty() {
+            self.inner.pending_invalidation.set(true);
+            return;
+        }
+        for callback in callbacks.values() {
+            callback();
+        }
     }
 }
 

@@ -25,9 +25,9 @@ use crate::surface_executor::{
     axis_aligned_quad_rect, device_pixel_bounds_for_rect, offscreen_byte_size,
     render_effect_layer_to_target as execute_render_effect_layer_to_target,
     render_layer_surface as execute_render_layer_surface,
-    render_root_direct as execute_render_root_direct, scaled_quad, snap_motion_stable_dest_quad,
-    surface_target_size, CachedLayerSurface, LayerSurface, LayerSurfaceTexture,
-    SurfaceExecutionBackend,
+    render_root_direct as execute_render_root_direct, scaled_quad, snap_delta_for_anchor,
+    snap_motion_stable_dest_quad, surface_target_size, CachedLayerSurface, LayerSurface,
+    LayerSurfaceTexture, SurfaceExecutionBackend,
 };
 #[cfg(test)]
 use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
@@ -56,13 +56,12 @@ use cranpose_render_common::graph::{
 #[cfg(test)]
 use cranpose_render_common::graph::{PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode};
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
-#[cfg(test)]
-use cranpose_ui_graphics::GraphicsLayer;
-use cranpose_ui_graphics::Point;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, RenderHash,
-    RuntimeShader, TileMode,
+    BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Rect, RenderEffect,
+    RenderHash, RuntimeShader, TileMode,
 };
+#[cfg(test)]
+use cranpose_ui_graphics::{GraphicsLayer, Point};
 use glyphon::{
     Cache, Color as GlyphonColor, Resolution, SwashCache, TextArea, TextAtlas, TextBounds,
     TextRenderer, Viewport,
@@ -352,12 +351,6 @@ struct GradientStop {
     position: [f32; 4],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ImageSampleMode {
-    Nearest,
-    Linear,
-}
-
 struct CachedImageTexture {
     _texture: wgpu::Texture,
     _view: wgpu::TextureView,
@@ -365,11 +358,20 @@ struct CachedImageTexture {
     linear_bind_group: wgpu::BindGroup,
 }
 
+impl CachedImageTexture {
+    fn bind_group(&self, sampling: ImageSampling) -> &wgpu::BindGroup {
+        match sampling {
+            ImageSampling::Nearest => &self.nearest_bind_group,
+            ImageSampling::Linear => &self.linear_bind_group,
+        }
+    }
+}
+
 struct ImageDrawCmd {
     index_start: u32,
     scissor: (u32, u32, u32, u32),
     image_id: u64,
-    sample_mode: ImageSampleMode,
+    sampling: ImageSampling,
 }
 
 #[derive(Clone, Copy)]
@@ -656,8 +658,8 @@ pub struct GpuRenderer {
     image_pipeline: wgpu::RenderPipeline,
     image_pipeline_dst_out: wgpu::RenderPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
-    image_sampler_nearest: wgpu::Sampler,
-    image_sampler_linear: wgpu::Sampler,
+    image_nearest_sampler: wgpu::Sampler,
+    image_linear_sampler: wgpu::Sampler,
     text_renderer_pool: Vec<TextRendererSlot>,
     /// Which slot in `text_renderer_pool` the next prepare→encode pair should use.
     text_batch_cursor: usize,
@@ -701,31 +703,23 @@ pub struct GpuRenderer {
     text_chars_this_frame: usize,
 }
 
-fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Point {
-    if !root_scale.is_finite() || root_scale <= 0.0 {
-        return Point::default();
-    }
-    let device_pixel_step =
-        if anchor.device_pixel_step.is_finite() && anchor.device_pixel_step > 0.0 {
-            anchor.device_pixel_step
-        } else {
-            1.0
-        };
-    Point::new(
-        ((anchor.origin.x * root_scale) / device_pixel_step).round() * device_pixel_step
-            / root_scale
-            - anchor.origin.x,
-        ((anchor.origin.y * root_scale) / device_pixel_step).round() * device_pixel_step
-            / root_scale
-            - anchor.origin.y,
-    )
-}
-
-fn image_sample_mode(image_draw: &ImageDraw) -> ImageSampleMode {
-    if image_draw.motion_context_animated {
-        ImageSampleMode::Linear
-    } else {
-        ImageSampleMode::Nearest
+fn image_sampler_descriptor(sampling: ImageSampling) -> wgpu::SamplerDescriptor<'static> {
+    let filter = match sampling {
+        ImageSampling::Nearest => wgpu::FilterMode::Nearest,
+        ImageSampling::Linear => wgpu::FilterMode::Linear,
+    };
+    wgpu::SamplerDescriptor {
+        label: Some(match sampling {
+            ImageSampling::Nearest => "Nearest Image Sampler",
+            ImageSampling::Linear => "Linear Image Sampler",
+        }),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: filter,
+        min_filter: filter,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
     }
 }
 
@@ -933,26 +927,10 @@ impl GpuRenderer {
         // Create persistent shape buffers
         let shape_buffers = ShapeBatchBuffers::new(&device, &shape_bind_group_layout);
 
-        let image_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Nearest Image Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-        let image_sampler_linear = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Linear Image Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
+        let image_nearest_sampler =
+            device.create_sampler(&image_sampler_descriptor(ImageSampling::Nearest));
+        let image_linear_sampler =
+            device.create_sampler(&image_sampler_descriptor(ImageSampling::Linear));
 
         let image_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Image Vertex Buffer"),
@@ -980,8 +958,8 @@ impl GpuRenderer {
             image_pipeline,
             image_pipeline_dst_out,
             image_bind_group_layout,
-            image_sampler_nearest,
-            image_sampler_linear,
+            image_nearest_sampler,
+            image_linear_sampler,
             text_renderer_pool: vec![first_slot],
             text_batch_cursor: 0,
             text_atlas,
@@ -1070,34 +1048,8 @@ impl GpuRenderer {
             .record_upload_bytes(image.pixels().len() as u64);
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let nearest_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Nearest Image Texture Bind Group"),
-            layout: &self.image_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.image_sampler_nearest),
-                },
-            ],
-        });
-        let linear_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Linear Image Texture Bind Group"),
-            layout: &self.image_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.image_sampler_linear),
-                },
-            ],
-        });
+        let nearest_bind_group = self.image_bind_group(&view, &self.image_nearest_sampler);
+        let linear_bind_group = self.image_bind_group(&view, &self.image_linear_sampler);
 
         self.image_texture_cache.put(
             image.id(),
@@ -1109,6 +1061,27 @@ impl GpuRenderer {
             },
         );
         Ok(())
+    }
+
+    fn image_bind_group(
+        &self,
+        view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Image Texture Bind Group"),
+            layout: &self.image_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
     }
 
     /// Acquire an offscreen target from the pool with stats tracking.
@@ -3391,11 +3364,7 @@ impl GpuRenderer {
                 .image_texture_cache
                 .get(&cmd.image_id)
                 .ok_or_else(|| "image texture missing from cache".to_string())?;
-            let bind_group = match cmd.sample_mode {
-                ImageSampleMode::Nearest => &cached.nearest_bind_group,
-                ImageSampleMode::Linear => &cached.linear_bind_group,
-            };
-            render_pass.set_bind_group(1, bind_group, &[]);
+            render_pass.set_bind_group(1, cached.bind_group(cmd.sampling), &[]);
             render_pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
         }
         Ok(())
@@ -3451,6 +3420,7 @@ impl GpuRenderer {
                 image: image_draw.image.clone(),
                 alpha: image_draw.alpha,
                 color_filter: image_draw.color_filter,
+                sampling: image_draw.sampling,
                 z_index: image_draw.z_index,
                 clip: image_draw
                     .clip
@@ -3526,7 +3496,7 @@ impl GpuRenderer {
                 index_start,
                 scissor,
                 image_id: prepared_image.id(),
-                sample_mode: image_sample_mode(image_draw),
+                sampling: image_draw.sampling,
             });
         }
 
@@ -4633,6 +4603,7 @@ mod tests {
                 height: 10.0,
             },
             clip: None,
+            snap_anchor: None,
             effect: Some(RenderEffect::blur(4.0)),
             blend_mode: BlendMode::SrcOver,
             composite_alpha: 1.0,
@@ -4811,6 +4782,7 @@ mod tests {
             image: ImageBitmap::from_rgba8(1, 1, vec![255, 255, 255, 255]).expect("image"),
             alpha: 1.0,
             color_filter: None,
+            sampling: ImageSampling::Nearest,
             z_index,
             clip: None,
             blend_mode,
@@ -4820,16 +4792,14 @@ mod tests {
     }
 
     #[test]
-    fn image_sample_mode_keeps_static_images_nearest() {
-        let image = test_image(0, BlendMode::SrcOver);
-        assert_eq!(image_sample_mode(&image), ImageSampleMode::Nearest);
-    }
+    fn image_sampler_descriptors_match_requested_sampling() {
+        let nearest = image_sampler_descriptor(ImageSampling::Nearest);
+        assert_eq!(nearest.mag_filter, wgpu::FilterMode::Nearest);
+        assert_eq!(nearest.min_filter, wgpu::FilterMode::Nearest);
 
-    #[test]
-    fn image_sample_mode_switches_scrolling_images_to_linear() {
-        let mut image = test_image(0, BlendMode::SrcOver);
-        image.motion_context_animated = true;
-        assert_eq!(image_sample_mode(&image), ImageSampleMode::Linear);
+        let linear = image_sampler_descriptor(ImageSampling::Linear);
+        assert_eq!(linear.mag_filter, wgpu::FilterMode::Linear);
+        assert_eq!(linear.min_filter, wgpu::FilterMode::Linear);
     }
 
     fn test_text(z_index: usize) -> TextDraw {
@@ -4915,6 +4885,7 @@ mod tests {
             transform_to_parent: ProjectiveTransform::translation(14.25, 16.5),
             motion_context_animated: animated,
             translated_content_context,
+            translated_content_offset: Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -5000,6 +4971,7 @@ mod tests {
             transform_to_parent: ProjectiveTransform::translation(14.25, 16.5),
             motion_context_animated: false,
             translated_content_context: true,
+            translated_content_offset: Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -5333,6 +5305,7 @@ mod tests {
             transform_to_parent: ProjectiveTransform::translation(11.4, 23.6),
             motion_context_animated: animated,
             translated_content_context,
+            translated_content_offset: Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -5548,6 +5521,7 @@ mod tests {
             })],
         );
         layer.translated_content_context = true;
+        layer.motion_context_animated = true;
         layer.clip_to_bounds = true;
 
         assert_eq!(
@@ -5588,6 +5562,7 @@ mod tests {
             })],
         );
         layer.translated_content_context = true;
+        layer.motion_context_animated = true;
         layer.clip_to_bounds = true;
 
         assert_eq!(
@@ -5627,6 +5602,7 @@ mod tests {
             })],
         );
         layer.translated_content_context = true;
+        layer.motion_context_animated = true;
         layer.clip_to_bounds = true;
 
         assert_eq!(
@@ -5900,7 +5876,7 @@ mod tests {
 
     #[test]
     fn translated_text_effect_layer_uses_box4_composite_resolve() {
-        let root = pure_text_leaf_root(false, true);
+        let root = pure_text_leaf_root(true, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
         let collected =
@@ -6171,18 +6147,21 @@ mod tests {
         assert_eq!(collected.scene.shapes.len(), 1);
         assert_eq!(collected.scene.texts.len(), 1);
         assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert!(collected.scene.effect_layers[0]
+            .requirements
+            .contains(SurfaceRequirement::MotionStableCapture));
         assert_eq!(
             collected.scene.shapes[0].snap_anchor, None,
-            "scrollable content must not snap — discrete jumps cause visible rendering artifacts"
+            "active scroll motion must not snap while the pointer-driven motion context is active"
         );
         assert_eq!(
             collected.scene.texts[0].snap_anchor, None,
-            "scrollable text must not snap — discrete jumps cause visible rendering artifacts"
+            "active scroll text must not snap while the pointer-driven motion context is active"
         );
     }
 
     #[test]
-    fn translated_content_context_text_leaf_disables_snap_for_smooth_scroll() {
+    fn rested_translated_content_context_text_leaf_snaps_for_crisp_scroll_rest() {
         let root = snapped_text_leaf_root(false, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
@@ -6193,14 +6172,15 @@ mod tests {
         assert_eq!(collected.child_layers.len(), 0);
         assert_eq!(collected.scene.shapes.len(), 1);
         assert_eq!(collected.scene.texts.len(), 1);
-        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert_eq!(collected.scene.effect_layers.len(), 0);
+        let expected_anchor = Some(SnapAnchor::rigid(Point::new(14.25, 16.5)));
         assert_eq!(
-            collected.scene.shapes[0].snap_anchor, None,
-            "scrollable content must not snap — discrete jumps cause visible rendering artifacts"
+            collected.scene.shapes[0].snap_anchor, expected_anchor,
+            "rested scroll content should snap back to device pixels"
         );
         assert_eq!(
-            collected.scene.texts[0].snap_anchor, None,
-            "scrollable text must not snap — discrete jumps cause visible rendering artifacts"
+            collected.scene.texts[0].snap_anchor, expected_anchor,
+            "rested scroll text should snap back to device pixels"
         );
     }
 
@@ -6219,6 +6199,63 @@ mod tests {
         );
         assert!(collected.scene.texts.is_empty());
         assert!(collected.scene.shadow_draws.is_empty());
+    }
+
+    #[test]
+    fn translated_content_surface_composite_uses_scroll_content_snap_anchor() {
+        let mut root = translated_content_local_surface_root();
+        let scroll_offset = Point::new(0.0, -18.5);
+        let Some(RenderNode::Layer(translated_content)) = root.children.get_mut(0) else {
+            panic!("expected translated content layer");
+        };
+        translated_content.translated_content_offset = scroll_offset;
+        let Some(RenderNode::Layer(effectful_text)) = translated_content.children.get_mut(0) else {
+            panic!("expected effectful text layer");
+        };
+        effectful_text.transform_to_parent =
+            effectful_text
+                .transform_to_parent
+                .then(ProjectiveTransform::translation(
+                    scroll_offset.x,
+                    scroll_offset.y,
+                ));
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.child_layers.len(), 1);
+        assert_eq!(
+            collected.child_layers[0].snap_anchor,
+            Some(SnapAnchor::rigid(Point::new(14.25, -2.0))),
+            "isolated scrolled descendants must composite with the same content-origin snap phase"
+        );
+    }
+
+    #[test]
+    fn translated_text_material_effect_layer_uses_scroll_content_snap_anchor() {
+        let mut layer = text_layer_with_style(
+            AnnotatedString::from("gradient"),
+            TextStyle::from_span_style(SpanStyle {
+                brush: Some(Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])),
+                ..SpanStyle::default()
+            }),
+        );
+        layer.translated_content_context = true;
+        layer.translated_content_offset = Point::new(0.0, -18.5);
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&layer, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert_eq!(
+            collected.scene.effect_layers[0].snap_anchor,
+            Some(SnapAnchor::rigid(Point::new(0.0, -18.5))),
+            "text material surfaces must composite with the scroll content-origin snap phase"
+        );
     }
 
     #[test]
@@ -6335,7 +6372,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_pure_text_leaf_disables_snap_for_smooth_scroll() {
+    fn rested_translated_pure_text_leaf_snaps_for_crisp_scroll_rest() {
         let root = pure_text_leaf_root(false, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
@@ -6345,10 +6382,11 @@ mod tests {
 
         assert_eq!(collected.child_layers.len(), 0);
         assert_eq!(collected.scene.texts.len(), 1);
-        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert_eq!(collected.scene.effect_layers.len(), 0);
         assert_eq!(
-            collected.scene.texts[0].snap_anchor, None,
-            "scrollable text must not snap — discrete jumps cause visible rendering artifacts"
+            collected.scene.texts[0].snap_anchor,
+            Some(SnapAnchor::rigid(Point::new(11.4, 23.6))),
+            "rested translated text should snap to device pixels"
         );
     }
 

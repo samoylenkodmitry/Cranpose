@@ -14,7 +14,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--trim-top", type=int, required=True)
     parser.add_argument("--trim-bottom", type=int, required=True)
+    parser.add_argument("--trim-left", type=int, default=0)
+    parser.add_argument("--trim-right", type=int, default=0)
     parser.add_argument("--max-offset", type=int, required=True)
+    parser.add_argument("--max-adjacent-score", type=int, default=0)
+    parser.add_argument("--stabilized-guard", type=int, default=0)
     parser.add_argument("images", nargs="+")
     return parser.parse_args()
 
@@ -41,9 +45,15 @@ def overlap_boxes(height: int, trim_top: int, trim_bottom: int, dy: int) -> tupl
     return (ref_top, ref_bottom), (cand_top, cand_bottom)
 
 
-def crop_vertical(image: Image.Image, top: int, bottom: int) -> Image.Image:
+def crop_viewport(image: Image.Image, top: int, bottom: int, left: int, right: int) -> Image.Image:
     width, height = image.size
-    return image.crop((0, top, width, height - bottom))
+    crop_width = width - left - right
+    crop_height = height - top - bottom
+    if left < 0 or right < 0 or top < 0 or bottom < 0 or crop_width <= 0 or crop_height <= 0:
+        raise ValueError(
+            f"invalid crop: left={left} right={right} top={top} bottom={bottom} size={image.size}"
+        )
+    return image.crop((left, top, width - right, height - bottom))
 
 
 def diff_image_path(reference_path: Path, step_path: Path) -> Path:
@@ -115,6 +125,8 @@ def search_best_alignment(
     candidate: Image.Image,
     trim_top: int,
     trim_bottom: int,
+    trim_left: int,
+    trim_right: int,
     max_offset: int,
 ) -> tuple[
     int,
@@ -132,8 +144,8 @@ def search_best_alignment(
     best = None
     for dy in range(-max_offset, max_offset + 1):
         ref_box, cand_box = overlap_boxes(height, trim_top, trim_bottom, dy)
-        ref_crop = crop_vertical(reference, ref_box[0], ref_box[1])
-        cand_crop = crop_vertical(candidate, cand_box[0], cand_box[1])
+        ref_crop = crop_viewport(reference, ref_box[0], ref_box[1], trim_left, trim_right)
+        cand_crop = crop_viewport(candidate, cand_box[0], cand_box[1], trim_left, trim_right)
         score, first_diff = score_difference(ref_crop, cand_crop)
         if best is None or score < best[0]:
             best = (score, dy, ref_box, cand_box, ref_crop, cand_crop, first_diff)
@@ -239,7 +251,13 @@ def main() -> int:
 
     had_failure = False
     reference = images[0]
-    stabilized_reference = crop_vertical(reference, args.trim_top, args.trim_bottom)
+    stabilized_reference = crop_viewport(
+        reference,
+        args.trim_top,
+        args.trim_bottom,
+        args.trim_left,
+        args.trim_right,
+    )
     stabilized_reference.save(stabilized_step_path(image_paths[0]))
     stabilized_images = [stabilized_reference]
     anchor_dys = [0]
@@ -250,6 +268,8 @@ def main() -> int:
             images[step],
             args.trim_top,
             args.trim_bottom,
+            args.trim_left,
+            args.trim_right,
             args.max_offset,
         )
         trim_top, trim_bottom = anchored_trim_pair(
@@ -258,7 +278,13 @@ def main() -> int:
             args.trim_bottom,
             dy,
         )
-        stabilized_current = crop_vertical(images[step], trim_top, trim_bottom)
+        stabilized_current = crop_viewport(
+            images[step],
+            trim_top,
+            trim_bottom,
+            args.trim_left,
+            args.trim_right,
+        )
         stabilized_current.save(stabilized_step_path(image_paths[step]))
         stabilized_images.append(stabilized_current)
         anchor_dys.append(dy)
@@ -274,13 +300,25 @@ def main() -> int:
 
     exact_adjacent_scores = [0]
     for step in range(1, len(stabilized_images)):
-        stabilized_reference = stabilized_images[step - 1]
-        stabilized_current = stabilized_images[step]
+        stabilized_reference = crop_with_explicit_guard(
+            stabilized_images[step - 1],
+            args.stabilized_guard,
+        )
+        stabilized_current = crop_with_explicit_guard(
+            stabilized_images[step],
+            args.stabilized_guard,
+        )
         score, first_diff = score_difference(stabilized_reference, stabilized_current)
         exact_adjacent_scores.append(score)
         if score == 0:
             print(
                 f"step {step - 1:02}->{step:02}: exact adjacent stabilized match"
+            )
+            continue
+        if score <= args.max_adjacent_score:
+            print(
+                f"step {step - 1:02}->{step:02}: adjacent stabilized match "
+                f"within score budget score={score} budget={args.max_adjacent_score}"
             )
             continue
 

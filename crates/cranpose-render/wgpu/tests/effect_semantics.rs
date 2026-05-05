@@ -1780,10 +1780,12 @@ fn mark_translated_text_wrapper(graph: &mut RenderGraph) {
         panic!("expected translated text wrapper layer");
     };
     wrapper.translated_content_context = true;
+    wrapper.motion_context_animated = true;
     let Some(RenderNode::Layer(text_leaf)) = wrapper.children.get_mut(0) else {
         panic!("expected translated text leaf layer");
     };
     text_leaf.translated_content_context = true;
+    text_leaf.motion_context_animated = true;
 }
 
 fn mark_translated_shape_wrapper(graph: &mut RenderGraph) {
@@ -1791,10 +1793,12 @@ fn mark_translated_shape_wrapper(graph: &mut RenderGraph) {
         panic!("expected translated thin-shape wrapper layer");
     };
     wrapper.translated_content_context = true;
+    wrapper.motion_context_animated = true;
     let Some(RenderNode::Layer(shape_leaf)) = wrapper.children.get_mut(0) else {
         panic!("expected translated thin-shape leaf layer");
     };
     shape_leaf.translated_content_context = true;
+    shape_leaf.motion_context_animated = true;
 }
 
 fn normalize_translated_backdrop_region(frame: &CapturedFrame, translation: Point) -> Vec<u8> {

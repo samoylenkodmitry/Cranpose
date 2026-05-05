@@ -1,5 +1,5 @@
 use cranpose_ui_graphics::{
-    BlendMode, Brush, ColorFilter, DrawPrimitive, GraphicsLayer, ImageBitmap, Rect,
+    BlendMode, Brush, ColorFilter, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Rect,
     RoundedCornerShape, ShadowPrimitive,
 };
 
@@ -32,6 +32,7 @@ pub struct ImageDrawParams {
     pub image: ImageBitmap,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
+    pub sampling: ImageSampling,
     pub clip: Option<Rect>,
     pub src_rect: Option<Rect>,
     pub blend_mode: BlendMode,
@@ -194,6 +195,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             image,
             alpha,
             color_filter,
+            sampling,
             src_rect,
         } => {
             let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
@@ -206,6 +208,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 image,
                 alpha: (alpha * layer.alpha).clamp(0.0, 1.0),
                 color_filter: compose_color_filters(color_filter, layer.color_filter),
+                sampling,
                 clip,
                 src_rect,
                 blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
@@ -305,6 +308,7 @@ mod tests {
                 .expect("image"),
                 alpha: 1.0,
                 color_filter: None,
+                sampling: ImageSampling::Nearest,
                 src_rect: None,
             },
             Rect::from_size(cranpose_ui_graphics::Size {

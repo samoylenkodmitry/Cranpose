@@ -33,6 +33,6 @@ pub mod prelude {
     pub use crate::brush::Brush;
     pub use crate::color::Color;
     pub use crate::geometry::{CornerRadii, EdgeInsets, Point, Rect, RoundedCornerShape, Size};
-    pub use crate::image::{ColorFilter, ImageBitmap, ImageBitmapError};
+    pub use crate::image::{ColorFilter, ImageBitmap, ImageBitmapError, ImageSampling};
     pub use crate::unit::{Dp, Sp};
 }

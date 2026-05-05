@@ -8,7 +8,7 @@ use crate::layout::core::{Alignment, Measurable};
 use crate::modifier::{Modifier, Rect, Size};
 use crate::widgets::Layout;
 use cranpose_core::NodeId;
-use cranpose_ui_graphics::{ColorFilter, DrawScope, ImageBitmap};
+use cranpose_ui_graphics::{ColorFilter, DrawScope, ImageBitmap, ImageSampling};
 use cranpose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
 
 pub const DEFAULT_ALPHA: f32 = 1.0;
@@ -323,12 +323,13 @@ where
                     if src_rect.width <= 0.0 || src_rect.height <= 0.0 {
                         return;
                     }
-                    scope.draw_image_src(
+                    scope.draw_image_src_sampled(
                         draw_painter.bitmap().clone(),
                         src_rect,
                         Rect::from_size(container_size),
                         draw_alpha,
                         color_filter,
+                        ImageSampling::Linear,
                     );
                 } else {
                     let dst_rect =
@@ -346,12 +347,13 @@ where
                     else {
                         return;
                     };
-                    scope.draw_image_src(
+                    scope.draw_image_src_sampled(
                         draw_painter.bitmap().clone(),
                         clipped_src_rect,
                         clipped_dst_rect,
                         draw_alpha,
                         color_filter,
+                        ImageSampling::Linear,
                     );
                 }
             });

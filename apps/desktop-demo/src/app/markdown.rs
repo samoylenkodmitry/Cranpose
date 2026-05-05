@@ -557,6 +557,55 @@ pub fn markdown_viewer_tab() {
     );
 }
 
+pub const MARKDOWN_SCROLL_STABILITY_TARGET_TEXT: &str =
+    "Stability paragraph 032 keeps glyphs, background cards, and links moving as one rigid surface.";
+
+#[allow(non_snake_case)]
+#[composable]
+pub fn MarkdownScrollStabilityFixtureTab() {
+    let blocks = cranpose_core::remember(|| {
+        let markdown = scroll_stability_fixture_markdown();
+        Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(&markdown)))
+    })
+    .with(|blocks| blocks.clone());
+
+    Column(
+        Modifier::empty()
+            .padding(16.0)
+            .background(Color(0.06, 0.08, 0.14, 1.0))
+            .rounded_corners(20.0)
+            .padding(16.0)
+            .fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            render_markdown_blocks(blocks.clone());
+        },
+    );
+}
+
+fn scroll_stability_fixture_markdown() -> String {
+    let mut markdown = String::from("# Markdown Scroll Stability Fixture\n\n");
+    for index in 1..=96 {
+        if index == 32 {
+            markdown.push_str(MARKDOWN_SCROLL_STABILITY_TARGET_TEXT);
+        } else if index % 9 == 0 {
+            markdown.push_str(&format!(
+                "Fixture paragraph {index:03} includes [a deterministic link](https://example.com/{index:03}) so linked text follows the same scroll anchor."
+            ));
+        } else if index % 5 == 0 {
+            markdown.push_str(&format!(
+                "Fixture paragraph {index:03} mixes **bold text** with _italic text_ to keep styled spans in the stability contract."
+            ));
+        } else {
+            markdown.push_str(&format!(
+                "Fixture paragraph {index:03} is plain markdown text with enough width to exercise multi-line text layout during exact scrolling."
+            ));
+        }
+        markdown.push_str("\n\n");
+    }
+    markdown
+}
+
 // ---------------------------------------------------------------------------
 // Render helpers
 // ---------------------------------------------------------------------------
