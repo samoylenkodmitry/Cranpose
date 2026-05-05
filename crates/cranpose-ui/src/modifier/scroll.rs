@@ -560,13 +560,15 @@ impl MotionContextAnimatedNode {
 pub(crate) struct TranslatedContentContextNode {
     state: NodeState,
     identity: usize,
+    offset_source: TranslatedContentOffsetSource,
 }
 
 impl TranslatedContentContextNode {
-    fn new(identity: usize) -> Self {
+    fn new(identity: usize, offset_source: TranslatedContentOffsetSource) -> Self {
         Self {
             state: NodeState::new(),
             identity,
+            offset_source,
         }
     }
 
@@ -576,6 +578,10 @@ impl TranslatedContentContextNode {
 
     pub(crate) fn identity(&self) -> usize {
         self.identity
+    }
+
+    pub(crate) fn content_offset_reader(&self) -> Option<Rc<dyn Fn() -> Point>> {
+        self.offset_source.content_offset_reader()
     }
 }
 
@@ -677,20 +683,95 @@ impl ModifierNodeElement for MotionContextAnimatedElement {
 }
 
 #[derive(Clone)]
+enum TranslatedContentOffsetSource {
+    LayoutContentOffset,
+    LazyList {
+        state: LazyListState,
+        is_vertical: bool,
+        reverse_scrolling: bool,
+    },
+}
+
+impl TranslatedContentOffsetSource {
+    fn content_offset_reader(&self) -> Option<Rc<dyn Fn() -> Point>> {
+        match self {
+            Self::LayoutContentOffset => None,
+            Self::LazyList {
+                state,
+                is_vertical,
+                reverse_scrolling,
+            } => Some(Rc::new(lazy_list_content_offset_reader(
+                *state,
+                *is_vertical,
+                *reverse_scrolling,
+            ))),
+        }
+    }
+
+    fn is_vertical(&self) -> Option<bool> {
+        match self {
+            Self::LayoutContentOffset => None,
+            Self::LazyList { is_vertical, .. } => Some(*is_vertical),
+        }
+    }
+
+    fn reverse_scrolling(&self) -> Option<bool> {
+        match self {
+            Self::LayoutContentOffset => None,
+            Self::LazyList {
+                reverse_scrolling, ..
+            } => Some(*reverse_scrolling),
+        }
+    }
+}
+
+fn lazy_list_content_offset_reader(
+    state: LazyListState,
+    is_vertical: bool,
+    reverse_scrolling: bool,
+) -> impl Fn() -> Point {
+    move || {
+        let info = state.layout_info();
+        let Some(first) = info.visible_items_info.first() else {
+            return Point::default();
+        };
+        let main_offset = if reverse_scrolling {
+            info.viewport_size - first.offset - first.size
+        } else {
+            first.offset
+        };
+        if is_vertical {
+            Point::new(0.0, main_offset)
+        } else {
+            Point::new(main_offset, 0.0)
+        }
+    }
+}
+
+#[derive(Clone)]
 struct TranslatedContentContextElement {
     identity: usize,
+    offset_source: TranslatedContentOffsetSource,
 }
 
 impl TranslatedContentContextElement {
-    fn new(identity: usize) -> Self {
-        Self { identity }
+    fn new(identity: usize, offset_source: TranslatedContentOffsetSource) -> Self {
+        Self {
+            identity,
+            offset_source,
+        }
     }
 }
 
 impl std::fmt::Debug for TranslatedContentContextElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let offset_source = match &self.offset_source {
+            TranslatedContentOffsetSource::LayoutContentOffset => "layout",
+            TranslatedContentOffsetSource::LazyList { .. } => "lazy_list",
+        };
         f.debug_struct("TranslatedContentContextElement")
             .field("identity", &self.identity)
+            .field("offset_source", &offset_source)
             .finish()
     }
 }
@@ -698,6 +779,8 @@ impl std::fmt::Debug for TranslatedContentContextElement {
 impl PartialEq for TranslatedContentContextElement {
     fn eq(&self, other: &Self) -> bool {
         self.identity == other.identity
+            && self.offset_source.is_vertical() == other.offset_source.is_vertical()
+            && self.offset_source.reverse_scrolling() == other.offset_source.reverse_scrolling()
     }
 }
 
@@ -706,6 +789,8 @@ impl Eq for TranslatedContentContextElement {}
 impl std::hash::Hash for TranslatedContentContextElement {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.identity.hash(state);
+        self.offset_source.is_vertical().hash(state);
+        self.offset_source.reverse_scrolling().hash(state);
     }
 }
 
@@ -713,11 +798,12 @@ impl ModifierNodeElement for TranslatedContentContextElement {
     type Node = TranslatedContentContextNode;
 
     fn create(&self) -> Self::Node {
-        TranslatedContentContextNode::new(self.identity)
+        TranslatedContentContextNode::new(self.identity, self.offset_source.clone())
     }
 
     fn update(&self, node: &mut Self::Node) {
         node.identity = self.identity;
+        node.offset_source = self.offset_source.clone();
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -887,8 +973,10 @@ fn scroll_impl(
         ));
     let motion_modifier =
         Modifier::with_element(MotionContextAnimatedElement::new(motion_context.clone()));
-    let translated_content_modifier =
-        Modifier::with_element(TranslatedContentContextElement::new(state.id() as usize));
+    let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(
+        state.id() as usize,
+        TranslatedContentOffsetSource::LayoutContentOffset,
+    ));
 
     // Combine: pointer input THEN layout modifier, clip to bounds by default
     pointer_input
@@ -938,8 +1026,14 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
     // Use a unique key per LazyListState
     let state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
     let key = (state_id, is_vertical, reverse_scrolling);
-    let translated_content_modifier =
-        Modifier::with_element(TranslatedContentContextElement::new(state_id));
+    let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(
+        state_id,
+        TranslatedContentOffsetSource::LazyList {
+            state,
+            is_vertical,
+            reverse_scrolling,
+        },
+    ));
 
     Modifier::with_element(MotionContextAnimatedElement::new(motion_context.clone()))
         .then(translated_content_modifier)

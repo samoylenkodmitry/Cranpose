@@ -33,10 +33,10 @@ mod winamp;
 mod xkcd;
 
 use animations::AnimationsTab;
-use hacker_news::HackerNewsTab;
+use hacker_news::{HackerNewsScrollStabilityFixtureTab, HackerNewsTab};
 use images::images_tab;
 use lazy_list::lazy_list_example;
-use markdown::markdown_viewer_tab;
+use markdown::{markdown_viewer_tab, MarkdownScrollStabilityFixtureTab};
 use shader_rect::ShaderRectTab;
 pub(crate) use shaders::ShaderSection;
 use shaders::ShadersTab;
@@ -45,6 +45,9 @@ use web_fetch::web_fetch_example;
 pub use winamp::WinampStandaloneApp;
 use winamp::{remember_winamp_tab_state, WinampTab, WinampTabState};
 use xkcd::xkcd_tab;
+
+pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
+pub use markdown::MARKDOWN_SCROLL_STABILITY_TARGET_TEXT;
 
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
@@ -431,6 +434,18 @@ pub(crate) fn combined_app_with_startup(startup: StartupSelection) {
 #[composable]
 pub fn MarkdownViewerRobotApp() {
     markdown_viewer_tab();
+}
+
+#[allow(non_snake_case)]
+#[composable]
+pub fn HackerNewsScrollStabilityRobotApp() {
+    HackerNewsScrollStabilityFixtureTab();
+}
+
+#[allow(non_snake_case)]
+#[composable]
+pub fn MarkdownScrollStabilityRobotApp() {
+    MarkdownScrollStabilityFixtureTab();
 }
 
 fn tab_requires_scroll(tab: DemoTab) -> bool {

@@ -579,6 +579,16 @@ path = "robot-runners/robot_text_scroll_exact_external_contract.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_hacker_news_scroll_exact_external_contract"
+path = "robot-runners/robot_hacker_news_scroll_exact_external_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_markdown_scroll_exact_external_contract"
+path = "robot-runners/robot_markdown_scroll_exact_external_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_renderer_micro_contract"
 path = "robot-runners/robot_renderer_micro_contract.rs"
 required-features = ["robot-app"]

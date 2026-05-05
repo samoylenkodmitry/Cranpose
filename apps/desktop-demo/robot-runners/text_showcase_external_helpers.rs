@@ -34,6 +34,7 @@ pub(crate) fn take_x11_screenshot(window_id: &str, path: &str) {
     assert!(status.success(), "import failed for {path}");
 }
 
+#[allow(dead_code)]
 pub(crate) fn open_text_tab(robot: &cranpose::Robot) {
     let (x, y, w, h) = find_button_in_semantics(robot, "Shaders").expect("Shaders tab");
     robot

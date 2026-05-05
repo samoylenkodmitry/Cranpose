@@ -28,6 +28,7 @@ pub struct ModifierNodeSlices {
     motion_context_animated: bool,
     translated_content_context: bool,
     translated_content_context_identity: Option<usize>,
+    translated_content_offset_reader: Option<Rc<dyn Fn() -> Point>>,
     text_content: Option<Rc<crate::text::AnnotatedString>>,
     text_style: Option<TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
@@ -68,6 +69,7 @@ impl Clone for ModifierNodeSlices {
             motion_context_animated: self.motion_context_animated,
             translated_content_context: self.translated_content_context,
             translated_content_context_identity: self.translated_content_context_identity,
+            translated_content_offset_reader: self.translated_content_offset_reader.clone(),
             text_content: self.text_content.clone(),
             text_style: self.text_style.clone(),
             text_layout_options: self.text_layout_options,
@@ -172,6 +174,12 @@ impl ModifierNodeSlices {
 
     pub fn translated_content_context_identity(&self) -> Option<usize> {
         self.translated_content_context_identity
+    }
+
+    pub fn translated_content_offset(&self) -> Option<Point> {
+        self.translated_content_offset_reader
+            .as_ref()
+            .map(|reader| reader())
     }
 
     pub fn text_content(&self) -> Option<&str> {
@@ -289,6 +297,7 @@ impl ModifierNodeSlices {
         self.motion_context_animated = false;
         self.translated_content_context = false;
         self.translated_content_context_identity = None;
+        self.translated_content_offset_reader = None;
         self.text_content = None;
         self.text_style = None;
         self.text_layout_options = None;
@@ -314,6 +323,10 @@ impl fmt::Debug for ModifierNodeSlices {
             .field(
                 "translated_content_context_identity",
                 &self.translated_content_context_identity,
+            )
+            .field(
+                "translated_content_offset",
+                &self.translated_content_offset(),
             )
             .field("text_content", &self.text_content)
             .field("text_style", &self.text_style)
@@ -443,6 +456,8 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                     slices.translated_content_context = translated_content_node.is_active();
                     slices.translated_content_context_identity =
                         Some(translated_content_node.identity());
+                    slices.translated_content_offset_reader =
+                        translated_content_node.content_offset_reader();
                 }
 
                 if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {

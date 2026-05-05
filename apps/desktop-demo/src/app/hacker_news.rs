@@ -2092,6 +2092,60 @@ pub fn HackerNewsTab() {
     );
 }
 
+pub const HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE: &str = "Robot HN Story 024";
+
+#[allow(non_snake_case)]
+#[composable]
+pub fn HackerNewsScrollStabilityFixtureTab() {
+    let list_state = cranpose_foundation::lazy::remember_lazy_list_state();
+    let selected_story_state = cranpose_core::useState(|| None::<Story>);
+    let thread_refresh_trigger = cranpose_core::useState(|| 0u64);
+    let palette = HackerNewsPalette::new(true);
+    let news_state = NewsState::Success(scroll_stability_news_data());
+
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .clip_to_bounds()
+            .background(palette.background)
+            .padding(16.0),
+        ColumnSpec::default(),
+        move || {
+            StoriesPane(
+                Modifier::empty().fill_max_size(),
+                list_state,
+                news_state.clone(),
+                None,
+                selected_story_state,
+                thread_refresh_trigger,
+                palette,
+            );
+        },
+    );
+}
+
+fn scroll_stability_news_data() -> NewsData {
+    let stories = (1usize..=72)
+        .map(|index| Story {
+            id: 9_000_000 + index as u64,
+            title: Some(format!("Robot HN Story {index:03}")),
+            text: Some(format!(
+                "<p>Stable story body {index:03}. Pixel movement in this paragraph must remain locked to the title, metadata, card background, and action row during exact scroll steps.</p>"
+            )),
+            by: format!("robot-{index:03}"),
+            score: 100 + index as i32,
+            time: 1_700_000_000 + index as i64 * 60,
+            url: Some(format!("https://example.com/robot-hn-story-{index:03}")),
+            descendants: Some((index % 17) as i32),
+            kids: Vec::new(),
+            r#type: "story".to_string(),
+        })
+        .collect::<Vec<_>>();
+    let ids = stories.iter().map(|story| story.id).collect::<Vec<_>>();
+    let next_index = ids.len();
+    NewsData::new(ids, stories, next_index)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
