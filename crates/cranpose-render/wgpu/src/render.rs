@@ -352,24 +352,16 @@ struct GradientStop {
     position: [f32; 4],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ImageSampleMode {
-    Nearest,
-    Linear,
-}
-
 struct CachedImageTexture {
     _texture: wgpu::Texture,
     _view: wgpu::TextureView,
-    nearest_bind_group: wgpu::BindGroup,
-    linear_bind_group: wgpu::BindGroup,
+    bind_group: wgpu::BindGroup,
 }
 
 struct ImageDrawCmd {
     index_start: u32,
     scissor: (u32, u32, u32, u32),
     image_id: u64,
-    sample_mode: ImageSampleMode,
 }
 
 #[derive(Clone, Copy)]
@@ -656,8 +648,7 @@ pub struct GpuRenderer {
     image_pipeline: wgpu::RenderPipeline,
     image_pipeline_dst_out: wgpu::RenderPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
-    image_sampler_nearest: wgpu::Sampler,
-    image_sampler_linear: wgpu::Sampler,
+    image_sampler: wgpu::Sampler,
     text_renderer_pool: Vec<TextRendererSlot>,
     /// Which slot in `text_renderer_pool` the next prepare→encode pair should use.
     text_batch_cursor: usize,
@@ -721,11 +712,16 @@ fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Point {
     )
 }
 
-fn image_sample_mode(image_draw: &ImageDraw) -> ImageSampleMode {
-    if image_draw.motion_context_animated {
-        ImageSampleMode::Linear
-    } else {
-        ImageSampleMode::Nearest
+fn image_sampler_descriptor() -> wgpu::SamplerDescriptor<'static> {
+    wgpu::SamplerDescriptor {
+        label: Some("Linear Image Sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
     }
 }
 
@@ -933,26 +929,7 @@ impl GpuRenderer {
         // Create persistent shape buffers
         let shape_buffers = ShapeBatchBuffers::new(&device, &shape_bind_group_layout);
 
-        let image_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Nearest Image Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-        let image_sampler_linear = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Linear Image Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
+        let image_sampler = device.create_sampler(&image_sampler_descriptor());
 
         let image_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Image Vertex Buffer"),
@@ -980,8 +957,7 @@ impl GpuRenderer {
             image_pipeline,
             image_pipeline_dst_out,
             image_bind_group_layout,
-            image_sampler_nearest,
-            image_sampler_linear,
+            image_sampler,
             text_renderer_pool: vec![first_slot],
             text_batch_cursor: 0,
             text_atlas,
@@ -1070,8 +1046,8 @@ impl GpuRenderer {
             .record_upload_bytes(image.pixels().len() as u64);
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let nearest_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Nearest Image Texture Bind Group"),
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Image Texture Bind Group"),
             layout: &self.image_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -1080,21 +1056,7 @@ impl GpuRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.image_sampler_nearest),
-                },
-            ],
-        });
-        let linear_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Linear Image Texture Bind Group"),
-            layout: &self.image_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.image_sampler_linear),
+                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
                 },
             ],
         });
@@ -1104,8 +1066,7 @@ impl GpuRenderer {
             CachedImageTexture {
                 _texture: texture,
                 _view: view,
-                nearest_bind_group,
-                linear_bind_group,
+                bind_group,
             },
         );
         Ok(())
@@ -3391,11 +3352,7 @@ impl GpuRenderer {
                 .image_texture_cache
                 .get(&cmd.image_id)
                 .ok_or_else(|| "image texture missing from cache".to_string())?;
-            let bind_group = match cmd.sample_mode {
-                ImageSampleMode::Nearest => &cached.nearest_bind_group,
-                ImageSampleMode::Linear => &cached.linear_bind_group,
-            };
-            render_pass.set_bind_group(1, bind_group, &[]);
+            render_pass.set_bind_group(1, &cached.bind_group, &[]);
             render_pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
         }
         Ok(())
@@ -3526,7 +3483,6 @@ impl GpuRenderer {
                 index_start,
                 scissor,
                 image_id: prepared_image.id(),
-                sample_mode: image_sample_mode(image_draw),
             });
         }
 
@@ -4820,16 +4776,10 @@ mod tests {
     }
 
     #[test]
-    fn image_sample_mode_keeps_static_images_nearest() {
-        let image = test_image(0, BlendMode::SrcOver);
-        assert_eq!(image_sample_mode(&image), ImageSampleMode::Nearest);
-    }
-
-    #[test]
-    fn image_sample_mode_switches_scrolling_images_to_linear() {
-        let mut image = test_image(0, BlendMode::SrcOver);
-        image.motion_context_animated = true;
-        assert_eq!(image_sample_mode(&image), ImageSampleMode::Linear);
+    fn image_sampler_uses_linear_filtering_for_ui_images() {
+        let descriptor = image_sampler_descriptor();
+        assert_eq!(descriptor.mag_filter, wgpu::FilterMode::Linear);
+        assert_eq!(descriptor.min_filter, wgpu::FilterMode::Linear);
     }
 
     fn test_text(z_index: usize) -> TextDraw {
