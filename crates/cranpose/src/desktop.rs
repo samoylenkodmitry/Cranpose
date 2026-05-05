@@ -1052,6 +1052,12 @@ struct PendingNativeWindowPositions {
     positions: VecDeque<(f32, f32)>,
 }
 
+#[derive(Clone, Copy)]
+enum NativeWindowGraphPositionSource {
+    CachedThenCurrent,
+    CurrentThenCached,
+}
+
 impl PendingNativeWindowPositions {
     fn push(&mut self, position: (f32, f32)) {
         if self
@@ -1551,7 +1557,13 @@ impl App {
     fn native_window_graph_snapshots(&self) -> Vec<WindowGraphPeerSnapshot> {
         self.native_windows
             .values()
-            .filter_map(|native| self.native_window_graph_snapshot(native, None))
+            .filter_map(|native| {
+                self.native_window_graph_snapshot(
+                    native,
+                    None,
+                    NativeWindowGraphPositionSource::CachedThenCurrent,
+                )
+            })
             .collect()
     }
 
@@ -1560,9 +1572,38 @@ impl App {
         native: &NativeWindowSurface,
         position: Option<cranpose_ui::Point>,
     ) -> Vec<WindowGraphPeerSnapshot> {
-        let mut snapshots = self.native_window_graph_snapshots();
+        self.native_window_graph_snapshots_with_source(
+            native,
+            position,
+            NativeWindowGraphPositionSource::CachedThenCurrent,
+        )
+    }
+
+    fn native_window_graph_snapshots_with_current_positions(
+        &self,
+        native: &NativeWindowSurface,
+        position: Option<cranpose_ui::Point>,
+    ) -> Vec<WindowGraphPeerSnapshot> {
+        self.native_window_graph_snapshots_with_source(
+            native,
+            position,
+            NativeWindowGraphPositionSource::CurrentThenCached,
+        )
+    }
+
+    fn native_window_graph_snapshots_with_source(
+        &self,
+        native: &NativeWindowSurface,
+        position: Option<cranpose_ui::Point>,
+        source: NativeWindowGraphPositionSource,
+    ) -> Vec<WindowGraphPeerSnapshot> {
+        let mut snapshots: Vec<_> = self
+            .native_windows
+            .values()
+            .filter_map(|native| self.native_window_graph_snapshot(native, None, source))
+            .collect();
         snapshots.retain(|snapshot| snapshot.node.id != native.key);
-        if let Some(snapshot) = self.native_window_graph_snapshot(native, position) {
+        if let Some(snapshot) = self.native_window_graph_snapshot(native, position, source) {
             snapshots.push(snapshot);
         }
         snapshots
@@ -1572,20 +1613,18 @@ impl App {
         &self,
         native: &NativeWindowSurface,
         position: Option<cranpose_ui::Point>,
+        source: NativeWindowGraphPositionSource,
     ) -> Option<WindowGraphPeerSnapshot> {
-        let position = position
-            .or_else(|| {
-                self.native_window_positions
-                    .get(&native.key)
-                    .map(|(x, y)| cranpose_ui::Point::new(*x, *y))
-            })
-            .or_else(|| {
-                current_native_window_position(native).map(|(x, y)| cranpose_ui::Point::new(x, y))
-            })
-            .or_else(|| match (native.options.x, native.options.y) {
-                (Some(x), Some(y)) => Some(cranpose_ui::Point::new(x, y)),
-                _ => None,
-            })?;
+        let cached_position = self.native_window_positions.get(&native.key).copied();
+        let current_position = current_native_window_position(native);
+        let options_position = native_window_options_position(&native.options);
+        let position = native_window_graph_position(
+            position,
+            cached_position,
+            current_position,
+            options_position,
+            source,
+        )?;
         Some(WindowGraphPeerSnapshot {
             node: WindowGraphNodeSnapshot {
                 id: native.key,
@@ -2196,8 +2235,11 @@ impl App {
                         (Some(x), Some(y)) => Some(cranpose_ui::Point::new(x, y)),
                         _ => None,
                     });
-                let previous_graph_snapshots =
-                    self.native_window_graph_snapshots_with(&native, previous_graph_position);
+                let previous_graph_snapshots = self
+                    .native_window_graph_snapshots_with_current_positions(
+                        &native,
+                        previous_graph_position,
+                    );
                 let position = current_native_window_position(&native).unwrap_or_else(|| {
                     let logical = position.to_logical::<f64>(native.window.scale_factor());
                     (logical.x as f32, logical.y as f32)
@@ -2717,6 +2759,33 @@ fn current_native_window_position(native: &NativeWindowSurface) -> Option<(f32, 
     current_native_window_physical_position(&native.window).map(|position| {
         let logical = position.to_logical::<f64>(native.window.scale_factor());
         (logical.x as f32, logical.y as f32)
+    })
+}
+
+fn native_window_options_position(options: &NativeWindowOptions) -> Option<(f32, f32)> {
+    match (options.x, options.y) {
+        (Some(x), Some(y)) => Some((x, y)),
+        _ => None,
+    }
+}
+
+fn native_window_graph_position(
+    override_position: Option<cranpose_ui::Point>,
+    cached_position: Option<(f32, f32)>,
+    current_position: Option<(f32, f32)>,
+    options_position: Option<(f32, f32)>,
+    source: NativeWindowGraphPositionSource,
+) -> Option<cranpose_ui::Point> {
+    override_position.or_else(|| {
+        let selected = match source {
+            NativeWindowGraphPositionSource::CachedThenCurrent => {
+                cached_position.or(current_position).or(options_position)
+            }
+            NativeWindowGraphPositionSource::CurrentThenCached => {
+                current_position.or(cached_position).or(options_position)
+            }
+        }?;
+        Some(cranpose_ui::Point::new(selected.0, selected.1))
     })
 }
 
@@ -4654,11 +4723,11 @@ fn char_to_key_code(ch: char) -> cranpose_app_shell::KeyCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_rect_to_monitor_delta, nearest_monitor_to_rect,
+        clamp_rect_to_monitor_delta, native_window_graph_position, nearest_monitor_to_rect,
         physical_surface_rect_contains_pointer, primary_declaration_host_needs_direct_update,
         primary_frame_waker_uses_event_proxy, primary_surface_redraw_drives_app, App, DesktopRect,
-        NativeWindowDragSession, NativeWindowOptions, NativeWindowPollingDragSession,
-        NativeWindowPositionOrigin, PendingNativeWindowPositions,
+        NativeWindowDragSession, NativeWindowGraphPositionSource, NativeWindowOptions,
+        NativeWindowPollingDragSession, NativeWindowPositionOrigin, PendingNativeWindowPositions,
     };
     use std::time::Instant;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -4829,6 +4898,45 @@ mod tests {
 
         assert!(!pending.acknowledge((100.0, 200.0)));
         assert!(!pending.acknowledge((140.0, 240.0)));
+    }
+
+    #[test]
+    fn native_window_graph_position_keeps_cache_first_for_programmatic_moves() {
+        let position = native_window_graph_position(
+            None,
+            Some((100.0, 200.0)),
+            Some((140.0, 240.0)),
+            Some((160.0, 260.0)),
+            NativeWindowGraphPositionSource::CachedThenCurrent,
+        );
+
+        assert_eq!(position, Some(cranpose_ui::Point::new(100.0, 200.0)));
+    }
+
+    #[test]
+    fn native_window_graph_position_uses_current_position_for_external_moves() {
+        let position = native_window_graph_position(
+            None,
+            Some((100.0, 200.0)),
+            Some((140.0, 240.0)),
+            Some((160.0, 260.0)),
+            NativeWindowGraphPositionSource::CurrentThenCached,
+        );
+
+        assert_eq!(position, Some(cranpose_ui::Point::new(140.0, 240.0)));
+    }
+
+    #[test]
+    fn native_window_graph_position_override_wins_over_position_source() {
+        let position = native_window_graph_position(
+            Some(cranpose_ui::Point::new(80.0, 90.0)),
+            Some((100.0, 200.0)),
+            Some((140.0, 240.0)),
+            Some((160.0, 260.0)),
+            NativeWindowGraphPositionSource::CurrentThenCached,
+        );
+
+        assert_eq!(position, Some(cranpose_ui::Point::new(80.0, 90.0)));
     }
 
     #[test]
