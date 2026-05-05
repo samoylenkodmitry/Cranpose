@@ -31,6 +31,7 @@ use winit::window::{
 };
 
 const NATIVE_WINDOW_DRAG_POLL_INTERVAL: Duration = Duration::from_millis(16);
+const NATIVE_WINDOW_POSITION_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const NATIVE_WINDOW_PLACEMENT_MARGIN: f32 = 32.0;
 
 #[cfg(feature = "robot")]
@@ -1090,6 +1091,10 @@ impl PendingNativeWindowPositions {
     fn clear(&mut self) {
         self.positions.clear();
     }
+
+    fn has_pending(&self) -> bool {
+        !self.positions.is_empty()
+    }
 }
 
 impl NativeWindowSurface {
@@ -1127,6 +1132,7 @@ struct App {
     closed_native_windows: HashSet<NativeWindowKey>,
     /// Framework-owned peer-window topology and drag sessions.
     window_graph: WindowGraphState,
+    next_native_window_position_poll_at: Instant,
     /// Current keyboard modifiers (shift, ctrl, alt, meta)
     current_modifiers: winit::keyboard::ModifiersState,
     /// Last known cursor position in logical pixels
@@ -1179,6 +1185,8 @@ impl App {
             native_window_positions: HashMap::new(),
             closed_native_windows: HashSet::new(),
             window_graph: WindowGraphState::default(),
+            next_native_window_position_poll_at: Instant::now()
+                + NATIVE_WINDOW_POSITION_POLL_INTERVAL,
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
             #[cfg(feature = "robot")]
@@ -2120,6 +2128,111 @@ impl App {
             moved |= self.finish_window_graph_drag();
         }
         moved
+    }
+
+    fn poll_external_native_window_moves(&mut self, now: Instant) -> bool {
+        if self.native_windows.is_empty() || self.next_native_window_position_poll_at > now {
+            return false;
+        }
+        self.next_native_window_position_poll_at = now + NATIVE_WINDOW_POSITION_POLL_INTERVAL;
+
+        let mut external_moves = Vec::new();
+        let native_window_positions = &mut self.native_window_positions;
+        for (window_id, native) in &mut self.native_windows {
+            if !native.options.visible || native.active_drag.is_some() {
+                continue;
+            }
+            let Some(position) = current_native_window_position(native) else {
+                continue;
+            };
+            if native.pending_outer_positions.acknowledge(position) {
+                native_window_positions.insert(native.key, position);
+                update_native_options_position(&mut native.options, position.0, position.1);
+                continue;
+            }
+            if native.pending_outer_positions.has_pending()
+                || native_window_positions
+                    .get(&native.key)
+                    .is_some_and(|known| native_window_positions_close(*known, position))
+            {
+                continue;
+            }
+
+            let previous_state_position =
+                native.state.and_then(|state| state.position_non_reactive());
+            let previous_graph_position = native_window_positions
+                .get(&native.key)
+                .map(|(x, y)| cranpose_ui::Point::new(*x, *y))
+                .or(previous_state_position)
+                .or_else(|| {
+                    native_window_options_position(&native.options)
+                        .map(|(x, y)| cranpose_ui::Point::new(x, y))
+                });
+            external_moves.push((
+                *window_id,
+                native.key,
+                position,
+                previous_state_position,
+                previous_graph_position,
+            ));
+        }
+
+        let mut moved = false;
+        for (window_id, key, position, previous_state_position, previous_graph_position) in
+            external_moves
+        {
+            moved |= self.reconcile_external_native_window_move(
+                window_id,
+                key,
+                position,
+                previous_state_position,
+                previous_graph_position,
+            );
+        }
+        moved
+    }
+
+    fn reconcile_external_native_window_move(
+        &mut self,
+        window_id: WinitWindowId,
+        key: NativeWindowKey,
+        position: (f32, f32),
+        previous_state_position: Option<cranpose_ui::Point>,
+        previous_graph_position: Option<cranpose_ui::Point>,
+    ) -> bool {
+        let Some(native) = self.native_windows.get(&window_id) else {
+            return false;
+        };
+        let previous_graph_snapshots = self
+            .native_window_graph_snapshots_with_current_positions(native, previous_graph_position);
+
+        let Some(native) = self.native_windows.get_mut(&window_id) else {
+            return false;
+        };
+        if native.active_drag.is_some() || native.pending_outer_positions.has_pending() {
+            return false;
+        }
+
+        trace_native_window(format_args!(
+            "poll external move key={:?} pos=({:.1},{:.1})",
+            key, position.0, position.1
+        ));
+        self.native_window_positions.insert(key, position);
+        update_native_options_position(&mut native.options, position.0, position.1);
+        let position = cranpose_ui::Point::new(position.0, position.1);
+        notify_native_window_moved(&native.events, position.x, position.y);
+        sync_native_window_state_position(
+            native.state,
+            previous_state_position,
+            position.x,
+            position.y,
+        );
+
+        let graph_moves = self
+            .window_graph
+            .external_move(&previous_graph_snapshots, key, position);
+        self.apply_window_graph_moves(graph_moves);
+        true
     }
 
     fn update_native_window_polling_drag_target(
@@ -3790,6 +3903,10 @@ impl ApplicationHandler for App {
             self.refresh_native_window_requests();
             self.sync_native_windows(event_loop);
         }
+        if self.poll_external_native_window_moves(now) {
+            self.refresh_native_window_requests();
+            self.sync_native_windows(event_loop);
+        }
 
         let frame_interval = self.frame_interval();
         let last_frame_start_time = self.last_frame_start_time;
@@ -4162,6 +4279,11 @@ impl ApplicationHandler for App {
 
         let mut native_has_active_animations = false;
         let mut native_drag_deadline: Option<Instant> = None;
+        let native_position_poll_deadline = self
+            .native_windows
+            .values()
+            .any(|native| native.options.visible && native.active_drag.is_none())
+            .then_some(self.next_native_window_position_poll_at);
         let mut native_frame_cap_deadline: Option<Instant> = None;
         let mut native_next_event_time: Option<Instant> = None;
         for native in self.native_windows.values_mut() {
@@ -4218,11 +4340,15 @@ impl ApplicationHandler for App {
         // Poll continuously when:
         // - Active animations are running
         // - Robot test is active
-        if robot_needs_poll || native_drag_deadline.is_some() {
+        if robot_needs_poll
+            || native_drag_deadline.is_some()
+            || native_position_poll_deadline.is_some_and(|deadline| deadline <= now)
+        {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if let Some(deadline) = [
             next_frame_time.filter(|_| waiting_for_frame_cap),
             native_frame_cap_deadline,
+            native_position_poll_deadline,
         ]
         .into_iter()
         .flatten()
@@ -4898,6 +5024,17 @@ mod tests {
 
         assert!(!pending.acknowledge((100.0, 200.0)));
         assert!(!pending.acknowledge((140.0, 240.0)));
+    }
+
+    #[test]
+    fn pending_native_window_positions_report_unacknowledged_programmatic_moves() {
+        let mut pending = PendingNativeWindowPositions::default();
+
+        assert!(!pending.has_pending());
+        pending.push((100.0, 200.0));
+        assert!(pending.has_pending());
+        assert!(pending.acknowledge((100.0, 200.0)));
+        assert!(!pending.has_pending());
     }
 
     #[test]
