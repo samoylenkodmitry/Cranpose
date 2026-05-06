@@ -2477,6 +2477,7 @@ impl GpuRenderer {
                 for batch in prepared_batches.iter_mut() {
                     let draw_result = match batch {
                         PreparedSegmentBatch::Shape { blend_mode, batch } => {
+                            render_pass.set_scissor_rect(0, 0, width, height);
                             self.draw_prepared_shapes(&mut render_pass, *blend_mode, *batch);
                             Ok(())
                         }
@@ -2485,6 +2486,7 @@ impl GpuRenderer {
                             image_cmds,
                         } => self.draw_prepared_images(&mut render_pass, image_cmds, *blend_mode),
                         PreparedSegmentBatch::Text { slot_index } => {
+                            render_pass.set_scissor_rect(0, 0, width, height);
                             self.draw_prepared_text(&mut render_pass, *slot_index)
                         }
                     };

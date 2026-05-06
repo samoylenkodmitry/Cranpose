@@ -8,15 +8,16 @@ use cranpose_testing::{
     capture_screenshot, crop_screenshot_logical, sample_screenshot_pixel_logical,
 };
 use cranpose_ui::{
-    composable, text::SpanStyle, text::TextDecoration, text::TextUnit, Alignment, Box, BoxSpec,
-    Color, ContentScale, Image, ImageBitmap, Modifier, Size, Text, TextStyle,
+    composable, text::SpanStyle, text::TextDecoration, text::TextUnit, Alignment, BasicText, Box,
+    BoxSpec, Canvas, Color, ContentScale, Image, ImageBitmap, Modifier, Rect, Row, RowSpec, Size,
+    Text, TextOverflow, TextStyle,
 };
 use image::{ImageBuffer, RgbaImage};
 use std::path::Path;
 use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 180;
-const WINDOW_HEIGHT: u32 = 120;
+const WINDOW_HEIGHT: u32 = 170;
 const SCREENSHOT_PATH: &str = "/tmp/cranpose_renderer_micro_contract.png";
 
 const BACKGROUND_COLOR: Color = Color(0.12, 0.16, 0.24, 1.0);
@@ -82,6 +83,14 @@ fn count_bright_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
         .count()
 }
 
+fn count_green_text_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
+    screenshot
+        .pixels
+        .chunks_exact(4)
+        .filter(|rgba| rgba[1] > 150 && rgba[1] > rgba[0].saturating_add(24) && rgba[1] > rgba[2])
+        .count()
+}
+
 fn save_png(path: &Path, screenshot: &cranpose::RobotScreenshot) -> Result<(), String> {
     let image: RgbaImage = ImageBuffer::from_raw(
         screenshot.width,
@@ -121,10 +130,129 @@ fn generate_chessboard_bitmap(tile_size: u32, tiles_per_side: u32) -> ImageBitma
     ImageBitmap::from_rgba8(side, side, pixels).expect("valid chessboard bitmap")
 }
 
+fn generate_icon_bitmap() -> ImageBitmap {
+    const SIDE: u32 = 20;
+    let mut pixels = vec![0u8; (SIDE * SIDE * 4) as usize];
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            let rgba = if x < 3 || y < 3 || x >= SIDE - 3 || y >= SIDE - 3 {
+                [255, 230, 48, 255]
+            } else if (x + y) % 2 == 0 {
+                [220, 45, 190, 255]
+            } else {
+                [36, 190, 255, 255]
+            };
+            let index = ((y * SIDE + x) * 4) as usize;
+            pixels[index..index + 4].copy_from_slice(&rgba);
+        }
+    }
+    ImageBitmap::from_rgba8(SIDE, SIDE, pixels).expect("valid icon bitmap")
+}
+
+fn row_text_style() -> TextStyle {
+    TextStyle::from_span_style(SpanStyle {
+        color: Some(Color::from_rgb_u8(180, 255, 190)),
+        font_size: TextUnit::Sp(15.0),
+        ..SpanStyle::default()
+    })
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn BitmapIconTextRow(icon: ImageBitmap, modifier: Modifier) {
+    let style = row_text_style();
+    Row(
+        modifier.size(Size::new(148.0, 24.0)),
+        RowSpec::default(),
+        move || {
+            Image(
+                icon.clone(),
+                Some("Bitmap icon".to_string()),
+                Modifier::empty().size(Size::new(20.0, 20.0)),
+                Alignment::CENTER,
+                ContentScale::FillBounds,
+                1.0,
+                None,
+            );
+            BasicText(
+                "Bitmap icon text",
+                Modifier::empty().weight(1.0),
+                style.clone(),
+                TextOverflow::Clip,
+                false,
+                1,
+                1,
+            );
+            BasicText(
+                "OK",
+                Modifier::empty(),
+                style.clone(),
+                TextOverflow::Clip,
+                false,
+                1,
+                1,
+            );
+        },
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn SourceIconTextRow(icon: ImageBitmap, modifier: Modifier) {
+    let style = row_text_style();
+    Row(
+        modifier.size(Size::new(148.0, 24.0)),
+        RowSpec::default(),
+        move || {
+            Canvas(Modifier::empty().size(Size::new(20.0, 20.0)), {
+                let icon = icon.clone();
+                move |scope| {
+                    scope.draw_image_src(
+                        icon.clone(),
+                        Rect {
+                            x: 2.0,
+                            y: 2.0,
+                            width: 16.0,
+                            height: 16.0,
+                        },
+                        Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 20.0,
+                            height: 20.0,
+                        },
+                        1.0,
+                        None,
+                    );
+                }
+            });
+            BasicText(
+                "Source icon",
+                Modifier::empty(),
+                style.clone(),
+                TextOverflow::Clip,
+                false,
+                1,
+                1,
+            );
+            BasicText(
+                " weighted",
+                Modifier::empty().weight(1.0),
+                style.clone(),
+                TextOverflow::Clip,
+                false,
+                1,
+                1,
+            );
+        },
+    );
+}
+
 #[allow(non_snake_case)]
 #[composable]
 fn RendererMicroContractApp() {
     let board = cranpose_core::remember(|| generate_chessboard_bitmap(8, 4)).with(|b| b.clone());
+    let icon = cranpose_core::remember(generate_icon_bitmap).with(|bitmap| bitmap.clone());
     let underline_style = TextStyle::from_span_style(SpanStyle {
         color: Some(Color(0.97, 0.98, 1.0, 1.0)),
         font_size: TextUnit::Sp(18.0),
@@ -178,6 +306,8 @@ fn RendererMicroContractApp() {
                 Modifier::empty().offset(60.0, 24.0),
                 underline_style.clone(),
             );
+            BitmapIconTextRow(icon.clone(), Modifier::empty().offset(16.0, 100.0));
+            SourceIconTextRow(icon.clone(), Modifier::empty().offset(16.0, 130.0));
         },
     );
 }
@@ -255,10 +385,38 @@ fn main() {
                     ),
                 );
             }
+            let Some(bitmap_row_text) =
+                crop_screenshot_logical(&screenshot, 38.0, 96.0, 134.0, 30.0)
+            else {
+                fail(&robot, "failed to crop bitmap icon text row");
+            };
+            let Some(source_row_text) =
+                crop_screenshot_logical(&screenshot, 38.0, 126.0, 134.0, 30.0)
+            else {
+                fail(&robot, "failed to crop source icon text row");
+            };
+            let bitmap_green = count_green_text_pixels(&bitmap_row_text);
+            let source_green = count_green_text_pixels(&source_row_text);
+            if bitmap_green < 35 {
+                fail(
+                    &robot,
+                    &format!(
+                        "text after Image(BitmapPainter) is missing or clipped: green_pixels={bitmap_green}"
+                    ),
+                );
+            }
+            if source_green < 35 {
+                fail(
+                    &robot,
+                    &format!(
+                        "text after draw_image_src is missing or clipped: green_pixels={source_green}"
+                    ),
+                );
+            }
 
             println!(
-                "PASS: renderer micro-contract pixels match expected image/line/fill layout; underlined text crop looks populated (underlined={}, underline_band={})",
-                underline_bright, underline_band_bright
+                "PASS: renderer micro-contract pixels match expected image/line/fill layout; underlined and post-image text crops are populated (underlined={}, underline_band={}, bitmap_text={}, source_text={})",
+                underline_bright, underline_band_bright, bitmap_green, source_green
             );
             let _ = robot.exit();
         })
