@@ -640,6 +640,14 @@ impl EffectRenderer {
         self.debug_upload_bytes.set(0);
     }
 
+    pub(crate) fn record_blur_pass(&self) {
+        self.debug_blurs.set(self.debug_blurs.get() + 1);
+    }
+
+    pub(crate) fn record_composite_pass(&self) {
+        self.debug_composites.set(self.debug_composites.get() + 1);
+    }
+
     fn write_buffer_at_zero_offset(
         &self,
         queue: &wgpu::Queue,
@@ -689,10 +697,6 @@ impl EffectRenderer {
         tile_mode: TileMode,
         scissor: Option<(u32, u32, u32, u32)>,
     ) {
-        let width = source.width;
-        let height = source.height;
-        let tile_mode_value = tile_mode_uniform_value(tile_mode);
-
         if radius_x <= 0.0 && radius_y <= 0.0 {
             self.composite_to_view(
                 device,
@@ -705,8 +709,88 @@ impl EffectRenderer {
             return;
         }
 
-        // Acquire intermediate target for horizontal pass
-        let intermediate = self.offscreen_pool.acquire(device, width, height, None);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Blur Effect Encoder"),
+        });
+        let intermediate = self.encode_blur_scissored_passes(
+            device,
+            queue,
+            &mut encoder,
+            source,
+            dest_view,
+            radius_x,
+            radius_y,
+            tile_mode,
+            scissor,
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        self.debug_submits.set(self.debug_submits.get() + 1);
+        self.record_blur_pass();
+
+        self.offscreen_pool.release(intermediate);
+    }
+
+    /// Encode a two-pass separable Gaussian blur into an existing command buffer.
+    ///
+    /// The returned intermediate target must stay alive until the caller submits
+    /// the command buffer, then it can be released back to the pool.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_blur_scissored_passes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        radius_x: f32,
+        radius_y: f32,
+        tile_mode: TileMode,
+        scissor: Option<(u32, u32, u32, u32)>,
+    ) -> OffscreenTarget {
+        let intermediate = self
+            .offscreen_pool
+            .acquire(device, source.width, source.height, None);
+        self.encode_blur_scissored_ping_pong_passes(
+            device,
+            queue,
+            encoder,
+            source,
+            &intermediate,
+            dest_view,
+            radius_x,
+            radius_y,
+            tile_mode,
+            scissor,
+        );
+        intermediate
+    }
+
+    /// Encode a two-pass separable Gaussian blur using one caller-owned scratch
+    /// target. The horizontal pass writes source -> scratch, and the vertical
+    /// pass writes scratch -> dest_view.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_blur_scissored_ping_pong_passes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &OffscreenTarget,
+        scratch: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        radius_x: f32,
+        radius_y: f32,
+        tile_mode: TileMode,
+        scissor: Option<(u32, u32, u32, u32)>,
+    ) {
+        debug_assert!(
+            radius_x > 0.0 || radius_y > 0.0,
+            "zero-radius blur should use the composite fast path"
+        );
+        let width = source.width;
+        let height = source.height;
+        debug_assert_eq!(scratch.width, width);
+        debug_assert_eq!(scratch.height, height);
+        let tile_mode_value = tile_mode_uniform_value(tile_mode);
 
         // Upload both pass uniforms up front and execute both passes in a single submit.
         let horizontal_uniforms = BlurUniforms {
@@ -733,20 +817,17 @@ impl EffectRenderer {
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
         );
-        let intermediate_bind_group = intermediate.get_or_create_bind_group(
+        let scratch_bind_group = scratch.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
         );
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Blur Effect Encoder"),
-        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Blur Horizontal Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &intermediate.view,
+                    view: &scratch.view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -781,7 +862,7 @@ impl EffectRenderer {
                 ..Default::default()
             });
             pass.set_pipeline(&self.blur_pipeline);
-            pass.set_bind_group(0, &*intermediate_bind_group, &[]);
+            pass.set_bind_group(0, &*scratch_bind_group, &[]);
             pass.set_bind_group(1, &self.blur_uniform_bind_group_vertical, &[]);
             if let Some((x, y, w, h)) = scissor {
                 pass.set_scissor_rect(x, y, w, h);
@@ -789,13 +870,7 @@ impl EffectRenderer {
             pass.draw(0..4, 0..1);
         }
         drop(source_bind_group);
-        drop(intermediate_bind_group);
-        queue.submit(std::iter::once(encoder.finish()));
-        self.debug_submits.set(self.debug_submits.get() + 1);
-        self.debug_blurs.set(self.debug_blurs.get() + 1);
-
-        // Return intermediate to pool
-        self.offscreen_pool.release(intermediate);
+        drop(scratch_bind_group);
     }
 
     /// Apply a fixed pixel offset to a source texture.
@@ -1129,6 +1204,41 @@ impl EffectRenderer {
             pass.set_scissor_rect(x, y, w, h);
         }
         pass.draw(0..4, 0..1);
+    }
+
+    /// Encode an offscreen composite pass into an existing command buffer.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        rounded_mask: Option<RoundedCompositeMask>,
+        blend_mode: BlendMode,
+        dest_viewport: Option<(f32, f32, f32, f32)>,
+        sample_mode: CompositeSampleMode,
+    ) {
+        self.encode_composite_to_view_pass(
+            device,
+            queue,
+            encoder,
+            source,
+            dest_view,
+            CompositePassOptions {
+                alpha,
+                load_op,
+                scissor,
+                rounded_mask,
+                blend_mode,
+                dest_viewport,
+                sample_mode,
+            },
+        );
     }
 
     /// Composite an offscreen target onto a destination view with an optional scissor region

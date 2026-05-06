@@ -17,7 +17,10 @@ use cranpose_ui::text::{
     TextUnit,
 };
 use cranpose_ui::TextLayoutOptions;
-use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect};
+use cranpose_ui_graphics::{
+    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect,
+    ShadowPrimitive,
+};
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
@@ -552,6 +555,59 @@ fn translated_content_wrapper_with_decorated_shadow_text_uses_bounded_local_surf
     assert!(
         !isolated.is_empty(),
         "translated-content decorated text should report an isolated text surface in stats: {stats:?}"
+    );
+}
+
+#[test]
+fn repeated_translated_drop_shadow_layers_stay_on_direct_path() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping repeated drop-shadow batching assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    const CARD_COUNT: usize = 8;
+    renderer.scene_mut().graph = Some(repeated_drop_shadow_layers_fixture(CARD_COUNT));
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("repeated drop-shadow capture should succeed");
+    let stats = renderer
+        .last_frame_stats()
+        .expect("repeated drop-shadow frame stats");
+
+    assert!(
+        bright_pixel_count(
+            &frame,
+            Rect {
+                x: 8.0,
+                y: 12.0,
+                width: 112.0,
+                height: 68.0,
+            },
+            80,
+        ) > 600,
+        "shadowed cards should remain visible after direct-path flattening"
+    );
+    assert_eq!(
+        stats.isolated_layer_renders, 0,
+        "drop-shadow-only translated layers should flatten into the parent target instead of isolating every card: {stats:?}"
+    );
+    assert!(
+        stats.offscreen_acquires <= (CARD_COUNT as u32) * 2,
+        "one blurred drop shadow should need only source and destination shadow targets: {stats:?}"
+    );
+    assert!(
+        stats.composite_passes <= CARD_COUNT as u32,
+        "drop shadows should composite once per card and avoid a second layer-surface composite: {stats:?}"
+    );
+    assert!(
+        stats.submits <= (CARD_COUNT as u32) * 2 + 1,
+        "single-shape blurred drop shadows should submit once per shadow plus surrounding direct draw chunks: {stats:?}"
     );
 }
 
@@ -1346,6 +1402,79 @@ fn translation_only_wrapper_with_decorated_shadow_text_fixture(
             }),
             ..Default::default()
         }),
+    )
+}
+
+fn repeated_drop_shadow_layers_fixture(card_count: usize) -> RenderGraph {
+    let columns = 4usize;
+    let card_width = 22.0;
+    let card_height = 14.0;
+    let gap_x = 8.0;
+    let gap_y = 10.0;
+
+    let mut children = Vec::with_capacity(card_count + 1);
+    children.push(solid_rect(frame_rect(), Color::BLACK));
+    for index in 0..card_count {
+        let column = index % columns;
+        let row = index / columns;
+        let x = 12.0 + column as f32 * (card_width + gap_x);
+        let y = 14.0 + row as f32 * (card_height + gap_y);
+        children.push(RenderNode::Layer(Box::new(shadowed_card_layer(
+            Point::new(x, y),
+            card_width,
+            card_height,
+            index,
+        ))));
+    }
+
+    graph(children)
+}
+
+fn shadowed_card_layer(
+    translation: Point,
+    card_width: f32,
+    card_height: f32,
+    index: usize,
+) -> cranpose_render_common::graph::LayerNode {
+    let card_rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: card_width,
+        height: card_height,
+    };
+    let shadow_rect = Rect {
+        x: 0.0,
+        y: 3.0,
+        width: card_width,
+        height: card_height,
+    };
+    let shade = 0.52 + (index % 3) as f32 * 0.08;
+    layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: card_width,
+            height: card_height + 6.0,
+        },
+        ProjectiveTransform::translation(translation.x, translation.y),
+        GraphicsLayer::default(),
+        vec![
+            RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+                        shape: Box::new(DrawPrimitive::Rect {
+                            rect: shadow_rect,
+                            brush: Brush::solid(Color(0.0, 0.0, 0.0, 0.50)),
+                        }),
+                        blur_radius: 5.0,
+                        blend_mode: BlendMode::SrcOver,
+                    }),
+                    clip: None,
+                }),
+            }),
+            solid_rect(card_rect, Color(shade, 0.78, 0.94, 1.0)),
+        ],
     )
 }
 

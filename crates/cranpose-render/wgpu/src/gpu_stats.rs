@@ -36,7 +36,6 @@ impl LayerSurfaceReasons {
             || self.backdrop
             || self.group_opacity
             || self.blend_mode
-            || self.immediate_shadow
             || self.text_local_surface
             || self.motion_stable_capture
             || self.non_translation_transform
@@ -105,7 +104,7 @@ impl LayerSurfaceReasons {
     }
 
     pub fn has_renderer_forced_surface(self) -> bool {
-        self.immediate_shadow || self.text_local_surface || self.non_translation_transform
+        self.text_local_surface || self.non_translation_transform
     }
 }
 
@@ -528,7 +527,7 @@ mod tests {
                 height: 5.0,
             },
             LayerSurfaceReasons {
-                immediate_shadow: true,
+                text_local_surface: true,
                 ..LayerSurfaceReasons::default()
             },
         );
@@ -575,6 +574,7 @@ mod tests {
     fn layer_surface_reasons_report_runtime_only_bits() {
         let reasons = LayerSurfaceReasons {
             immediate_shadow: true,
+            text_local_surface: true,
             mixed_direct_content: true,
             ..LayerSurfaceReasons::default()
         };
@@ -583,9 +583,32 @@ mod tests {
         assert!(reasons.has_renderer_forced_surface());
         assert_eq!(
             reasons.labels().collect::<Vec<_>>(),
-            vec!["immediate_shadow", "mixed_direct_content"]
+            vec![
+                "immediate_shadow",
+                "text_local_surface",
+                "mixed_direct_content"
+            ]
         );
-        assert_eq!(reasons.display(), "immediate_shadow+mixed_direct_content");
+        assert_eq!(
+            reasons.display(),
+            "immediate_shadow+text_local_surface+mixed_direct_content"
+        );
+    }
+
+    #[test]
+    fn immediate_shadow_only_is_diagnostic_not_isolating() {
+        let reasons = LayerSurfaceReasons {
+            immediate_shadow: true,
+            ..LayerSurfaceReasons::default()
+        };
+
+        assert!(!reasons.has_any());
+        assert!(!reasons.has_renderer_forced_surface());
+        assert_eq!(
+            reasons.labels().collect::<Vec<_>>(),
+            vec!["immediate_shadow"]
+        );
+        assert_eq!(reasons.display(), "immediate_shadow");
     }
 
     #[test]
@@ -644,7 +667,7 @@ mod tests {
                     height: 10.0,
                 },
                 LayerSurfaceReasons {
-                    immediate_shadow: true,
+                    text_local_surface: true,
                     ..LayerSurfaceReasons::default()
                 },
             );

@@ -52,12 +52,11 @@ impl SurfaceRequirementSet {
     }
 
     pub(crate) fn has_isolating_requirement(self) -> bool {
-        (self.bits & !Self::MIXED_DIRECT_CONTENT) != 0
+        (self.bits & !(Self::MIXED_DIRECT_CONTENT | Self::IMMEDIATE_SHADOW)) != 0
     }
 
     pub(crate) fn has_renderer_forced_surface(self) -> bool {
-        self.contains(SurfaceRequirement::ImmediateShadow)
-            || self.contains(SurfaceRequirement::TextMaterialMask)
+        self.contains(SurfaceRequirement::TextMaterialMask)
             || self.contains(SurfaceRequirement::NonTranslationTransform)
     }
 
@@ -171,5 +170,14 @@ mod tests {
     #[test]
     fn display_reports_none_for_empty_set() {
         assert_eq!(SurfaceRequirementSet::default().display(), "none");
+    }
+
+    #[test]
+    fn immediate_shadow_is_ordered_draw_work_not_layer_isolation() {
+        let requirements =
+            SurfaceRequirementSet::default().with(SurfaceRequirement::ImmediateShadow);
+
+        assert!(!requirements.has_isolating_requirement());
+        assert!(!requirements.has_renderer_forced_surface());
     }
 }
