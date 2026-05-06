@@ -302,7 +302,7 @@ fn RendererMicroContractApp() {
                 || {},
             );
             Image(
-                board.clone(),
+                BitmapPainter(board.clone()),
                 Some("Micro chessboard".to_string()),
                 Modifier::empty()
                     .offset(16.0, 42.0)
