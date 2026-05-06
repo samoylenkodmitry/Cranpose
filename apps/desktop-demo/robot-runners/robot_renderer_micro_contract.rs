@@ -6,9 +6,9 @@
 use cranpose::AppLauncher;
 use cranpose_testing::{crop_screenshot_logical, sample_screenshot_pixel_logical};
 use cranpose_ui::{
-    composable, text::SpanStyle, text::TextDecoration, text::TextUnit, Alignment, BasicText, Box,
-    BoxSpec, Canvas, Color, ContentScale, Image, ImageBitmap, Modifier, Rect, Row, RowSpec, Size,
-    Text, TextOverflow, TextStyle,
+    composable, text::SpanStyle, text::TextDecoration, text::TextUnit, Alignment, BasicText,
+    BitmapPainter, Box, BoxSpec, Color, ContentScale, Image, ImageBitmap, Modifier, Rect, Row,
+    RowSpec, Size, Text, TextOverflow, TextStyle,
 };
 use image::{ImageBuffer, RgbaImage};
 use std::path::Path;
@@ -181,7 +181,7 @@ fn BitmapIconTextRow(icon: ImageBitmap, modifier: Modifier) {
         RowSpec::default(),
         move || {
             Image(
-                icon.clone(),
+                BitmapPainter(icon.clone()),
                 Some("Bitmap icon".to_string()),
                 Modifier::empty().size(Size::new(20.0, 20.0)),
                 Alignment::CENTER,
@@ -219,28 +219,32 @@ fn SourceIconTextRow(icon: ImageBitmap, modifier: Modifier) {
         modifier.size(Size::new(148.0, 24.0)),
         RowSpec::default(),
         move || {
-            Canvas(Modifier::empty().size(Size::new(20.0, 20.0)), {
-                let icon = icon.clone();
-                move |scope| {
-                    scope.draw_image_src(
-                        icon.clone(),
-                        Rect {
-                            x: 2.0,
-                            y: 2.0,
-                            width: 16.0,
-                            height: 16.0,
-                        },
-                        Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: 20.0,
-                            height: 20.0,
-                        },
-                        1.0,
-                        None,
-                    );
-                }
-            });
+            Box(
+                Modifier::empty().size(Size::new(20.0, 20.0)).draw_behind({
+                    let icon = icon.clone();
+                    move |scope| {
+                        scope.draw_image_src(
+                            icon.clone(),
+                            Rect {
+                                x: 2.0,
+                                y: 2.0,
+                                width: 16.0,
+                                height: 16.0,
+                            },
+                            Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 20.0,
+                                height: 20.0,
+                            },
+                            1.0,
+                            None,
+                        );
+                    }
+                }),
+                BoxSpec::default(),
+                || {},
+            );
             BasicText(
                 "Source icon",
                 Modifier::empty(),
