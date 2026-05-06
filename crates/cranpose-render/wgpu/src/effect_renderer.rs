@@ -747,16 +747,50 @@ impl EffectRenderer {
         tile_mode: TileMode,
         scissor: Option<(u32, u32, u32, u32)>,
     ) -> OffscreenTarget {
+        let intermediate = self
+            .offscreen_pool
+            .acquire(device, source.width, source.height, None);
+        self.encode_blur_scissored_ping_pong_passes(
+            device,
+            queue,
+            encoder,
+            source,
+            &intermediate,
+            dest_view,
+            radius_x,
+            radius_y,
+            tile_mode,
+            scissor,
+        );
+        intermediate
+    }
+
+    /// Encode a two-pass separable Gaussian blur using one caller-owned scratch
+    /// target. The horizontal pass writes source -> scratch, and the vertical
+    /// pass writes scratch -> dest_view.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_blur_scissored_ping_pong_passes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &OffscreenTarget,
+        scratch: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        radius_x: f32,
+        radius_y: f32,
+        tile_mode: TileMode,
+        scissor: Option<(u32, u32, u32, u32)>,
+    ) {
         debug_assert!(
             radius_x > 0.0 || radius_y > 0.0,
             "zero-radius blur should use the composite fast path"
         );
         let width = source.width;
         let height = source.height;
+        debug_assert_eq!(scratch.width, width);
+        debug_assert_eq!(scratch.height, height);
         let tile_mode_value = tile_mode_uniform_value(tile_mode);
-
-        // Acquire intermediate target for horizontal pass
-        let intermediate = self.offscreen_pool.acquire(device, width, height, None);
 
         // Upload both pass uniforms up front and execute both passes in a single submit.
         let horizontal_uniforms = BlurUniforms {
@@ -783,7 +817,7 @@ impl EffectRenderer {
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
         );
-        let intermediate_bind_group = intermediate.get_or_create_bind_group(
+        let scratch_bind_group = scratch.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
@@ -793,7 +827,7 @@ impl EffectRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Blur Horizontal Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &intermediate.view,
+                    view: &scratch.view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -828,7 +862,7 @@ impl EffectRenderer {
                 ..Default::default()
             });
             pass.set_pipeline(&self.blur_pipeline);
-            pass.set_bind_group(0, &*intermediate_bind_group, &[]);
+            pass.set_bind_group(0, &*scratch_bind_group, &[]);
             pass.set_bind_group(1, &self.blur_uniform_bind_group_vertical, &[]);
             if let Some((x, y, w, h)) = scissor {
                 pass.set_scissor_rect(x, y, w, h);
@@ -836,8 +870,7 @@ impl EffectRenderer {
             pass.draw(0..4, 0..1);
         }
         drop(source_bind_group);
-        drop(intermediate_bind_group);
-        intermediate
+        drop(scratch_bind_group);
     }
 
     /// Apply a fixed pixel offset to a source texture.

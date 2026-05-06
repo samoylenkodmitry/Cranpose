@@ -2368,8 +2368,7 @@ impl GpuRenderer {
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<bool, String> {
         let mut prepared_batches: Vec<PreparedSegmentBatch> = Vec::new();
-        let mut staged_uploads = std::mem::take(&mut self.staged_uploads);
-        staged_uploads.clear();
+        let mut staged_uploads = self.take_staged_uploads();
         let result = (|| {
             if chunk.needs_viewport_uniforms() {
                 self.stage_viewport_uniforms(&mut staged_uploads, width, height, [0.0, 0.0]);
@@ -2523,7 +2522,7 @@ impl GpuRenderer {
             render_result?;
             Ok(true)
         })();
-        self.staged_uploads = staged_uploads;
+        self.restore_staged_uploads(staged_uploads);
         result
     }
 
@@ -2543,6 +2542,21 @@ impl GpuRenderer {
     ) {
         let uniforms = Self::viewport_uniforms(width, height, viewport_offset);
         staged_uploads.stage(UploadTarget::Uniform, bytemuck::bytes_of(&uniforms));
+    }
+
+    fn take_staged_uploads(&mut self) -> StagedBufferUploads {
+        let mut staged_uploads = std::mem::take(&mut self.staged_uploads);
+        debug_assert!(
+            staged_uploads.is_empty(),
+            "renderer-owned staged uploads should be restored as empty scratch storage"
+        );
+        staged_uploads.clear();
+        staged_uploads
+    }
+
+    fn restore_staged_uploads(&mut self, mut staged_uploads: StagedBufferUploads) {
+        staged_uploads.clear();
+        self.staged_uploads = staged_uploads;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2939,18 +2953,17 @@ impl GpuRenderer {
         let viewport_offset = [device_bounds.x, device_bounds.y];
         let (shape, blend_mode) = &shadow.shapes[0];
 
-        let mut staged_uploads = std::mem::take(&mut self.staged_uploads);
-        staged_uploads.clear();
+        let mut staged_uploads = self.take_staged_uploads();
         self.stage_viewport_uniforms(&mut staged_uploads, bounds_w, bounds_h, viewport_offset);
         let Some(prepared_shape) =
             self.prepare_shapes_batch(std::iter::once(shape), root_scale, &mut staged_uploads)
         else {
-            self.staged_uploads = staged_uploads;
+            self.restore_staged_uploads(staged_uploads);
             return false;
         };
 
         let source = self.acquire_offscreen(bounds_w, bounds_h);
-        let dest = self.acquire_offscreen(bounds_w, bounds_h);
+        let scratch = self.acquire_offscreen(bounds_w, bounds_h);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2977,12 +2990,13 @@ impl GpuRenderer {
             self.draw_prepared_shapes(&mut render_pass, *blend_mode, prepared_shape);
         }
 
-        let intermediate = self.effect_renderer.encode_blur_scissored_passes(
+        self.effect_renderer.encode_blur_scissored_ping_pong_passes(
             &self.device,
             &self.queue,
             &mut encoder,
             &source,
-            &dest.view,
+            &scratch,
+            &source.view,
             pixel_radius,
             pixel_radius,
             TileMode::Decal,
@@ -3009,7 +3023,7 @@ impl GpuRenderer {
                 &self.device,
                 &self.queue,
                 &mut encoder,
-                &dest,
+                &source,
                 target_view,
                 1.0,
                 wgpu::LoadOp::Load,
@@ -3024,11 +3038,10 @@ impl GpuRenderer {
         self.frame_stats.bump_submits();
         self.effect_renderer.record_blur_pass();
         self.effect_renderer.record_composite_pass();
+        self.effect_renderer.offscreen_pool.release(scratch);
         self.effect_renderer.offscreen_pool.release(source);
-        self.effect_renderer.offscreen_pool.release(intermediate);
-        self.effect_renderer.offscreen_pool.release(dest);
         self.write_viewport_uniforms(width, height, [0.0, 0.0]);
-        self.staged_uploads = staged_uploads;
+        self.restore_staged_uploads(staged_uploads);
         true
     }
 
@@ -3453,16 +3466,15 @@ impl GpuRenderer {
     ) where
         I: Iterator<Item = &'a DrawShape>,
     {
-        let mut staged_uploads = std::mem::take(&mut self.staged_uploads);
-        staged_uploads.clear();
+        let mut staged_uploads = self.take_staged_uploads();
         self.stage_viewport_uniforms(&mut staged_uploads, width, height, viewport_offset);
         let Some(batch) = self.prepare_shapes_batch(layer_shapes, root_scale, &mut staged_uploads)
         else {
-            self.staged_uploads = staged_uploads;
+            self.restore_staged_uploads(staged_uploads);
             return;
         };
         self.flush_staged_uploads(encoder, &staged_uploads);
-        self.staged_uploads = staged_uploads;
+        self.restore_staged_uploads(staged_uploads);
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Shape Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
