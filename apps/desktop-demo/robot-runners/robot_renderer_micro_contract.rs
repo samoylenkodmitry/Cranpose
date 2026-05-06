@@ -4,9 +4,7 @@
 //! `cargo run --package desktop-app --example robot_renderer_micro_contract --features robot-app`
 
 use cranpose::AppLauncher;
-use cranpose_testing::{
-    capture_screenshot, crop_screenshot_logical, sample_screenshot_pixel_logical,
-};
+use cranpose_testing::{crop_screenshot_logical, sample_screenshot_pixel_logical};
 use cranpose_ui::{
     composable, text::SpanStyle, text::TextDecoration, text::TextUnit, Alignment, BasicText, Box,
     BoxSpec, Canvas, Color, ContentScale, Image, ImageBitmap, Modifier, Rect, Row, RowSpec, Size,
@@ -24,6 +22,7 @@ const BACKGROUND_COLOR: Color = Color(0.12, 0.16, 0.24, 1.0);
 const LINE_VERTICAL_COLOR: Color = Color(0.98, 0.98, 0.98, 1.0);
 const LINE_HORIZONTAL_COLOR: Color = Color(0.98, 0.72, 0.30, 1.0);
 const RECT_FILL_COLOR: Color = Color(0.30, 0.78, 0.56, 1.0);
+const PANEL_FILL_COLOR: Color = Color(0.04, 0.05, 0.09, 1.0);
 const CHESS_LIGHT: [u8; 3] = [240, 240, 240];
 const CHESS_DARK: [u8; 3] = [36, 54, 72];
 const COLOR_TOLERANCE: u8 = 18;
@@ -91,6 +90,14 @@ fn count_green_text_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
         .count()
 }
 
+fn count_yellow_text_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
+    screenshot
+        .pixels
+        .chunks_exact(4)
+        .filter(|rgba| rgba[0] > 170 && rgba[1] > 150 && rgba[2] < 140)
+        .count()
+}
+
 fn save_png(path: &Path, screenshot: &cranpose::RobotScreenshot) -> Result<(), String> {
     let image: RgbaImage = ImageBuffer::from_raw(
         screenshot.width,
@@ -153,6 +160,14 @@ fn row_text_style() -> TextStyle {
     TextStyle::from_span_style(SpanStyle {
         color: Some(Color::from_rgb_u8(180, 255, 190)),
         font_size: TextUnit::Sp(15.0),
+        ..SpanStyle::default()
+    })
+}
+
+fn panel_text_style() -> TextStyle {
+    TextStyle::from_span_style(SpanStyle {
+        color: Some(Color::from_rgb_u8(252, 228, 132)),
+        font_size: TextUnit::Sp(13.0),
         ..SpanStyle::default()
     })
 }
@@ -301,6 +316,17 @@ fn RendererMicroContractApp() {
                 BoxSpec::default(),
                 || {},
             );
+            Box(
+                Modifier::empty()
+                    .offset(96.0, 42.0)
+                    .size(Size::new(68.0, 38.0))
+                    .background(PANEL_FILL_COLOR)
+                    .padding(6.0),
+                BoxSpec::default().content_alignment(Alignment::TOP_START),
+                || {
+                    Text("PANEL", Modifier::empty(), panel_text_style());
+                },
+            );
             Text(
                 "UNDER",
                 Modifier::empty().offset(60.0, 24.0),
@@ -325,9 +351,32 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            let Some(screenshot) = capture_screenshot(&robot) else {
-                fail(&robot, "failed to capture renderer micro-contract screenshot");
-            };
+            let screenshot = robot
+                .screenshot_with_scale(1.0)
+                .unwrap_or_else(|err| fail(&robot, &format!("failed to capture screenshot: {err}")));
+            if screenshot.width != WINDOW_WIDTH || screenshot.height != WINDOW_HEIGHT {
+                fail(
+                    &robot,
+                    &format!(
+                        "headless scale-1 screenshot dimensions drifted: expected={}x{} actual={}x{}",
+                        WINDOW_WIDTH, WINDOW_HEIGHT, screenshot.width, screenshot.height
+                    ),
+                );
+            }
+            if (screenshot.logical_width - WINDOW_WIDTH as f32).abs() > f32::EPSILON
+                || (screenshot.logical_height - WINDOW_HEIGHT as f32).abs() > f32::EPSILON
+            {
+                fail(
+                    &robot,
+                    &format!(
+                        "headless screenshot logical size drifted: expected={}x{} actual={:.2}x{:.2}",
+                        WINDOW_WIDTH,
+                        WINDOW_HEIGHT,
+                        screenshot.logical_width,
+                        screenshot.logical_height
+                    ),
+                );
+            }
             let output_path = Path::new(SCREENSHOT_PATH);
             if let Err(err) = save_png(output_path, &screenshot) {
                 fail(&robot, &err);
@@ -345,7 +394,8 @@ fn main() {
                 ("horizontal_line", 36.0, 16.0, horizontal_line),
                 ("horizontal_above_bg", 36.0, 12.0, background),
                 ("fill_rect", 72.0, 76.0, fill_rect),
-                ("fill_rect_above_bg", 150.0, 66.0, background),
+                ("fill_rect_above_bg", 90.0, 66.0, background),
+                ("nested_panel", 158.0, 74.0, expected_screenshot_rgb(PANEL_FILL_COLOR)),
                 ("chess_0_0", 20.0, 46.0, CHESS_LIGHT),
                 ("chess_1_0", 28.0, 46.0, CHESS_DARK),
                 ("chess_0_1", 20.0, 54.0, CHESS_DARK),
@@ -397,6 +447,11 @@ fn main() {
             };
             let bitmap_green = count_green_text_pixels(&bitmap_row_text);
             let source_green = count_green_text_pixels(&source_row_text);
+            let Some(panel_text) = crop_screenshot_logical(&screenshot, 100.0, 46.0, 60.0, 22.0)
+            else {
+                fail(&robot, "failed to crop nested panel text");
+            };
+            let panel_yellow = count_yellow_text_pixels(&panel_text);
             if bitmap_green < 35 {
                 fail(
                     &robot,
@@ -413,10 +468,18 @@ fn main() {
                     ),
                 );
             }
+            if panel_yellow < 20 {
+                fail(
+                    &robot,
+                    &format!(
+                        "nested panel text after image layers is missing or clipped: yellow_pixels={panel_yellow}"
+                    ),
+                );
+            }
 
             println!(
-                "PASS: renderer micro-contract pixels match expected image/line/fill layout; underlined and post-image text crops are populated (underlined={}, underline_band={}, bitmap_text={}, source_text={})",
-                underline_bright, underline_band_bright, bitmap_green, source_green
+                "PASS: renderer micro-contract pixels match expected image/line/fill layout; underlined and post-image text crops are populated (underlined={}, underline_band={}, bitmap_text={}, source_text={}, panel_text={})",
+                underline_bright, underline_band_bright, bitmap_green, source_green, panel_yellow
             );
             let _ = robot.exit();
         })

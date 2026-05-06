@@ -1903,13 +1903,14 @@ impl App {
     }
 
     fn resize_native_surface(native: &mut NativeWindowSurface, width: u32, height: u32) {
+        let viewport = surface_logical_viewport_size(width, height, native.window.scale_factor());
         configure_app_surface_size(
             &mut native.app,
-            &native.window,
             &native.surface,
             &mut native.surface_config,
             width,
             height,
+            viewport,
         );
     }
 
@@ -3215,11 +3216,11 @@ fn primary_declaration_host_needs_direct_update(
 
 fn configure_app_surface_size(
     app: &mut AppShell<WgpuRenderer>,
-    window: &Arc<dyn Window>,
     surface: &wgpu::Surface<'static>,
     surface_config: &mut wgpu::SurfaceConfiguration,
     width: u32,
     height: u32,
+    viewport: (f32, f32),
 ) {
     if width == 0 || height == 0 {
         return;
@@ -3229,21 +3230,55 @@ fn configure_app_surface_size(
     surface_config.height = height;
     let device = app.renderer().device();
     surface.configure(device, surface_config);
-    update_app_viewport(app, window, width, height);
+    update_app_viewport(app, width, height, viewport);
 }
 
 fn update_app_viewport(
     app: &mut AppShell<WgpuRenderer>,
-    window: &Arc<dyn Window>,
     width: u32,
     height: u32,
+    viewport: (f32, f32),
 ) {
-    let scale_factor = window.scale_factor();
+    let (logical_width, logical_height) = viewport;
     app.set_buffer_size(width, height);
-    app.set_viewport(
+    app.set_viewport(logical_width, logical_height);
+}
+
+fn surface_logical_viewport_size(width: u32, height: u32, scale_factor: f64) -> (f32, f32) {
+    (
         width as f32 / scale_factor as f32,
         height as f32 / scale_factor as f32,
-    );
+    )
+}
+
+fn headless_requested_viewport(settings: &AppSettings) -> Option<(f32, f32)> {
+    settings.headless.then_some((
+        settings.initial_width.max(1) as f32,
+        settings.initial_height.max(1) as f32,
+    ))
+}
+
+fn viewport_for_surface_size(
+    requested_viewport: Option<(f32, f32)>,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+) -> (f32, f32) {
+    requested_viewport.unwrap_or_else(|| surface_logical_viewport_size(width, height, scale_factor))
+}
+
+fn primary_viewport_for_surface_size(
+    settings: &AppSettings,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+) -> (f32, f32) {
+    viewport_for_surface_size(
+        headless_requested_viewport(settings),
+        width,
+        height,
+        scale_factor,
+    )
 }
 
 fn update_app_scale_factor(
@@ -3599,9 +3634,22 @@ impl ApplicationHandler for App {
         );
         cranpose_ui::set_density(initial_scale as f32);
 
+        let viewport = primary_viewport_for_surface_size(
+            &self.settings,
+            size.width,
+            size.height,
+            initial_scale,
+        );
+
         // Take the content closure (can only be called once)
         let content = self.content.take().expect("content already taken");
-        let mut app = AppShell::new(renderer, default_root_key(), content);
+        let mut app = AppShell::new_with_size(
+            renderer,
+            default_root_key(),
+            content,
+            (size.width, size.height),
+            viewport,
+        );
         #[cfg(feature = "robot")]
         app.set_semantics_enabled(self.robot_controller.is_some());
 
@@ -3628,12 +3676,6 @@ impl ApplicationHandler for App {
 
         let mut platform = DesktopWinitPlatform::default();
         platform.set_scale_factor(initial_scale);
-
-        // Set buffer_size to physical pixels and viewport to logical dp
-        app.set_buffer_size(size.width, size.height);
-        let logical_width = size.width as f32 / initial_scale as f32;
-        let logical_height = size.height as f32 / initial_scale as f32;
-        app.set_viewport(logical_width, logical_height);
 
         self.window = Some(window);
         self.surface = Some(surface);
@@ -3673,6 +3715,8 @@ impl ApplicationHandler for App {
         let frame_cap_deadline = last_frame_start_time
             .and_then(|started_at| frame_interval.map(|interval| started_at + interval));
 
+        let primary_viewport_override = headless_requested_viewport(&self.settings);
+
         let Some(app) = &mut self.app else { return };
         let Some(platform) = &mut self.platform else {
             return;
@@ -3694,13 +3738,19 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::SurfaceResized(new_size) if new_size.width > 0 && new_size.height > 0 => {
+                let viewport = viewport_for_surface_size(
+                    primary_viewport_override,
+                    new_size.width,
+                    new_size.height,
+                    window.scale_factor(),
+                );
                 configure_app_surface_size(
                     app,
-                    window,
                     surface,
                     surface_config,
                     new_size.width,
                     new_size.height,
+                    viewport,
                 );
             }
             WindowEvent::ScaleFactorChanged {
@@ -3712,13 +3762,19 @@ impl ApplicationHandler for App {
                 let new_size = window.surface_size();
                 let _ = surface_size_writer.request_surface_size(new_size);
                 if new_size.width > 0 && new_size.height > 0 {
+                    let viewport = viewport_for_surface_size(
+                        primary_viewport_override,
+                        new_size.width,
+                        new_size.height,
+                        window.scale_factor(),
+                    );
                     configure_app_surface_size(
                         app,
-                        window,
                         surface,
                         surface_config,
                         new_size.width,
                         new_size.height,
+                        viewport,
                     );
                 }
             }
@@ -3848,13 +3904,19 @@ impl ApplicationHandler for App {
                     Ok(output) => output,
                     Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
                         let size = window.surface_size();
+                        let viewport = viewport_for_surface_size(
+                            primary_viewport_override,
+                            size.width,
+                            size.height,
+                            window.scale_factor(),
+                        );
                         configure_app_surface_size(
                             app,
-                            window,
                             surface,
                             surface_config,
                             size.width,
                             size.height,
+                            viewport,
                         );
                         return;
                     }
@@ -4851,10 +4913,12 @@ mod tests {
     use super::{
         clamp_rect_to_monitor_delta, native_window_graph_position, nearest_monitor_to_rect,
         physical_surface_rect_contains_pointer, primary_declaration_host_needs_direct_update,
-        primary_frame_waker_uses_event_proxy, primary_surface_redraw_drives_app, App, DesktopRect,
-        NativeWindowDragSession, NativeWindowGraphPositionSource, NativeWindowOptions,
-        NativeWindowPollingDragSession, NativeWindowPositionOrigin, PendingNativeWindowPositions,
+        primary_frame_waker_uses_event_proxy, primary_surface_redraw_drives_app,
+        primary_viewport_for_surface_size, App, DesktopRect, NativeWindowDragSession,
+        NativeWindowGraphPositionSource, NativeWindowOptions, NativeWindowPollingDragSession,
+        NativeWindowPositionOrigin, PendingNativeWindowPositions,
     };
+    use crate::launcher::AppSettings;
     use std::time::Instant;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
@@ -5160,6 +5224,34 @@ mod tests {
     fn robot_screenshot_uses_ceil_on_fractional_logical_size() {
         let resolved = resolve_robot_screenshot_params((0, 0), Some((801.2, 601.3)));
         assert_eq!(resolved, (802, 602, 1.0));
+    }
+
+    #[test]
+    fn headless_primary_viewport_uses_requested_launcher_size() {
+        let settings = AppSettings {
+            initial_width: 1600,
+            initial_height: 900,
+            headless: true,
+            ..AppSettings::default()
+        };
+
+        let viewport = primary_viewport_for_surface_size(&settings, 1601, 901, 1.0);
+
+        assert_eq!(viewport, (1600.0, 900.0));
+    }
+
+    #[test]
+    fn visible_primary_viewport_uses_actual_surface_size() {
+        let settings = AppSettings {
+            initial_width: 1600,
+            initial_height: 900,
+            headless: false,
+            ..AppSettings::default()
+        };
+
+        let viewport = primary_viewport_for_surface_size(&settings, 1601, 901, 2.0);
+
+        assert_eq!(viewport, (800.5, 450.5));
     }
 
     #[cfg(feature = "robot")]
