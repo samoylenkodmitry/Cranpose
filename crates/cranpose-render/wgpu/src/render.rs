@@ -2384,27 +2384,28 @@ impl GpuRenderer {
                         end,
                         blend_mode,
                     } => {
-                        // Split large shape batches into chunks that fit
-                        // the shader's fixed-size uniform array.
                         let slice = &ordered_items[start..end];
-                        for chunk_items in slice.chunks(MAX_SHAPES_PER_BATCH) {
-                            let Some(prepared) = self.prepare_shapes_batch(
-                                chunk_items.iter().map(|(_, item)| match item {
-                                    SegmentDrawItem::Shape(shape_index) => &shapes[*shape_index],
-                                    _ => {
-                                        unreachable!("shape batch contains only shape items")
-                                    }
-                                }),
-                                root_scale,
-                                &mut staged_uploads,
-                            ) else {
-                                continue;
-                            };
-                            prepared_batches.push(PreparedSegmentBatch::Shape {
-                                blend_mode,
-                                batch: prepared,
-                            });
+                        if slice.len() > MAX_SHAPES_PER_BATCH {
+                            return Err(format!(
+                                "shape batch contains {} shapes, exceeding the renderer limit of {}",
+                                slice.len(),
+                                MAX_SHAPES_PER_BATCH
+                            ));
                         }
+                        let Some(prepared) = self.prepare_shapes_batch(
+                            slice.iter().map(|(_, item)| match item {
+                                SegmentDrawItem::Shape(shape_index) => &shapes[*shape_index],
+                                _ => unreachable!("shape batch contains only shape items"),
+                            }),
+                            root_scale,
+                            &mut staged_uploads,
+                        ) else {
+                            continue;
+                        };
+                        prepared_batches.push(PreparedSegmentBatch::Shape {
+                            blend_mode,
+                            batch: prepared,
+                        });
                     }
                     SegmentBatchPlan::Image {
                         start,
@@ -2474,17 +2475,36 @@ impl GpuRenderer {
                 });
 
                 let mut result = Ok(());
+                let mut scissor_is_image_local = false;
                 for batch in prepared_batches.iter_mut() {
                     let draw_result = match batch {
                         PreparedSegmentBatch::Shape { blend_mode, batch } => {
+                            if scissor_is_image_local {
+                                render_pass.set_scissor_rect(0, 0, width, height);
+                                scissor_is_image_local = false;
+                            }
                             self.draw_prepared_shapes(&mut render_pass, *blend_mode, *batch);
                             Ok(())
                         }
                         PreparedSegmentBatch::Image {
                             blend_mode,
                             image_cmds,
-                        } => self.draw_prepared_images(&mut render_pass, image_cmds, *blend_mode),
+                        } => {
+                            let draw_result = self.draw_prepared_images(
+                                &mut render_pass,
+                                image_cmds,
+                                *blend_mode,
+                            );
+                            if draw_result.is_ok() {
+                                scissor_is_image_local = true;
+                            }
+                            draw_result
+                        }
                         PreparedSegmentBatch::Text { slot_index } => {
+                            if scissor_is_image_local {
+                                render_pass.set_scissor_rect(0, 0, width, height);
+                                scissor_is_image_local = false;
+                            }
                             self.draw_prepared_text(&mut render_pass, *slot_index)
                         }
                     };
@@ -4212,7 +4232,8 @@ fn segment_batch_plan_at_cursor(
         SegmentDrawItem::Shape(index) => {
             let blend_mode = supported_blend_mode(shapes[index].blend_mode);
             let mut end = start + 1;
-            while end < ordered_items.len() {
+            let shape_limit = (start + MAX_SHAPES_PER_BATCH).min(ordered_items.len());
+            while end < shape_limit {
                 match ordered_items[end].1 {
                     SegmentDrawItem::Shape(next_index)
                         if supported_blend_mode(shapes[next_index].blend_mode) == blend_mode =>
@@ -6928,6 +6949,35 @@ mod tests {
                     start: 2,
                     end: 3,
                     blend_mode: BlendMode::DstOut,
+                }])),
+            ]
+        );
+    }
+
+    #[test]
+    fn segment_command_iter_splits_contiguous_shape_runs_at_uniform_batch_limit() {
+        let ordered_items: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+            .map(|index| (index, SegmentDrawItem::Shape(index)))
+            .collect();
+        let shapes: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+            .map(|index| test_shape(index, BlendMode::SrcOver))
+            .collect();
+        let images = Vec::new();
+
+        let commands: Vec<_> = SegmentCommandIter::new(&ordered_items, &shapes, &images).collect();
+
+        assert_eq!(
+            commands,
+            vec![
+                SegmentRenderCommand::DrawChunk(chunk(&[SegmentBatchPlan::Shape {
+                    start: 0,
+                    end: MAX_SHAPES_PER_BATCH,
+                    blend_mode: BlendMode::SrcOver,
+                }])),
+                SegmentRenderCommand::DrawChunk(chunk(&[SegmentBatchPlan::Shape {
+                    start: MAX_SHAPES_PER_BATCH,
+                    end: MAX_SHAPES_PER_BATCH + 1,
+                    blend_mode: BlendMode::SrcOver,
                 }])),
             ]
         );
