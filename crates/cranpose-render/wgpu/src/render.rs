@@ -18,16 +18,14 @@ use crate::scene::{
     TextDraw,
 };
 use crate::shaders;
-#[cfg(test)]
-use crate::surface_executor::DevicePixelBounds;
 use crate::surface_executor::{
     apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
     axis_aligned_quad_rect, device_pixel_bounds_for_rect, offscreen_byte_size,
     render_effect_layer_to_target as execute_render_effect_layer_to_target,
     render_layer_surface as execute_render_layer_surface,
     render_root_direct as execute_render_root_direct, scaled_quad, snap_delta_for_anchor,
-    snap_motion_stable_dest_quad, surface_target_size, CachedLayerSurface, LayerSurface,
-    LayerSurfaceTexture, SurfaceExecutionBackend,
+    snap_motion_stable_dest_quad, surface_target_size, CachedLayerSurface, DevicePixelBounds,
+    LayerSurface, LayerSurfaceTexture, SurfaceExecutionBackend,
 };
 #[cfg(test)]
 use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
@@ -2784,6 +2782,22 @@ impl GpuRenderer {
         let bounds_h = device_bounds.height;
         let pixel_radius = shadow.blur_radius * root_scale;
 
+        if shadow.texts.is_empty()
+            && shadow.shapes.len() == 1
+            && self.render_single_shape_blurred_shadow_draw(
+                target_view,
+                shadow,
+                device_bounds,
+                pixel_radius,
+                processing_scissor,
+                width,
+                height,
+                root_scale,
+            )
+        {
+            return;
+        }
+
         // 1. Acquire bounds-sized offscreen source.
         let source = self.acquire_offscreen(bounds_w, bounds_h);
 
@@ -2906,6 +2920,116 @@ impl GpuRenderer {
         // Restore viewport uniform to full size so subsequent image/text rendering
         // (which shares the uniform_buffer but doesn't write to it) works correctly.
         self.write_viewport_uniforms(width, height, [0.0, 0.0]);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_single_shape_blurred_shadow_draw(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        shadow: &ShadowDraw,
+        device_bounds: DevicePixelBounds,
+        pixel_radius: f32,
+        processing_scissor: Option<(u32, u32, u32, u32)>,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> bool {
+        let bounds_w = device_bounds.width;
+        let bounds_h = device_bounds.height;
+        let viewport_offset = [device_bounds.x, device_bounds.y];
+        let (shape, blend_mode) = &shadow.shapes[0];
+
+        let mut staged_uploads = std::mem::take(&mut self.staged_uploads);
+        staged_uploads.clear();
+        self.stage_viewport_uniforms(&mut staged_uploads, bounds_w, bounds_h, viewport_offset);
+        let Some(prepared_shape) =
+            self.prepare_shapes_batch(std::iter::once(shape), root_scale, &mut staged_uploads)
+        else {
+            self.staged_uploads = staged_uploads;
+            return false;
+        };
+
+        let source = self.acquire_offscreen(bounds_w, bounds_h);
+        let dest = self.acquire_offscreen(bounds_w, bounds_h);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Single Shape Shadow Encoder"),
+            });
+        self.flush_staged_uploads(&mut encoder, &staged_uploads);
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Single Shape Shadow Source Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &source.view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.draw_prepared_shapes(&mut render_pass, *blend_mode, prepared_shape);
+        }
+
+        let intermediate = self.effect_renderer.encode_blur_scissored_passes(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &source,
+            &dest.view,
+            pixel_radius,
+            pixel_radius,
+            TileMode::Decal,
+            None,
+        );
+
+        let clip_scissor = shadow
+            .clip
+            .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
+        let scissor = clip_scissor.or(processing_scissor);
+        let rounded_mask = inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
+            mask.rect[0] -= viewport_offset[0];
+            mask.rect[1] -= viewport_offset[1];
+            mask
+        });
+        let dest_viewport = Some((
+            viewport_offset[0],
+            viewport_offset[1],
+            bounds_w as f32,
+            bounds_h as f32,
+        ));
+        self.effect_renderer
+            .encode_composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &dest,
+                target_view,
+                1.0,
+                wgpu::LoadOp::Load,
+                scissor,
+                rounded_mask,
+                BlendMode::SrcOver,
+                dest_viewport,
+                CompositeSampleMode::Linear,
+            );
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        self.frame_stats.bump_submits();
+        self.effect_renderer.record_blur_pass();
+        self.effect_renderer.record_composite_pass();
+        self.effect_renderer.offscreen_pool.release(source);
+        self.effect_renderer.offscreen_pool.release(intermediate);
+        self.effect_renderer.offscreen_pool.release(dest);
+        self.write_viewport_uniforms(width, height, [0.0, 0.0]);
+        self.staged_uploads = staged_uploads;
+        true
     }
 
     #[allow(clippy::too_many_arguments)]

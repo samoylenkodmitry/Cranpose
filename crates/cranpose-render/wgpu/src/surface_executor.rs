@@ -2,7 +2,6 @@ mod backend;
 mod geometry;
 mod render_paths;
 
-#[cfg(test)]
 pub(crate) use backend::DevicePixelBounds;
 pub(crate) use backend::{
     CachedLayerSurface, LayerSurface, LayerSurfaceTexture, SurfaceExecutionBackend,
