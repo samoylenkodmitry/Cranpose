@@ -368,6 +368,12 @@ pub(crate) struct ParentFrame {
     pub(crate) synthetic_root: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum InitialParentFrame {
+    SyntheticRoot,
+    RealParent,
+}
+
 const LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -417,6 +423,7 @@ impl ComposerCore {
         runtime: RuntimeHandle,
         observer: SnapshotStateObserver,
         root: Option<NodeId>,
+        initial_parent_frame: InitialParentFrame,
     ) -> Self {
         let parent_stack = if let Some(root_id) = root {
             vec![ParentFrame {
@@ -425,7 +432,7 @@ impl ComposerCore {
                 new_children: ChildList::new(),
                 new_children_membership: None,
                 attach_mode: ParentAttachMode::DeferredSync,
-                synthetic_root: true,
+                synthetic_root: matches!(initial_parent_frame, InitialParentFrame::SyntheticRoot),
             }]
         } else {
             Vec::new()
@@ -474,6 +481,26 @@ impl Composer {
         observer: SnapshotStateObserver,
         root: Option<NodeId>,
     ) -> Self {
+        Self::new_with_shared_state_with_parent_frame(
+            shared_state,
+            slots,
+            applier,
+            runtime,
+            observer,
+            root,
+            InitialParentFrame::SyntheticRoot,
+        )
+    }
+
+    fn new_with_shared_state_with_parent_frame(
+        shared_state: Rc<ComposerRuntimeState>,
+        slots: Rc<SlotsHost>,
+        applier: Rc<dyn ApplierHost>,
+        runtime: RuntimeHandle,
+        observer: SnapshotStateObserver,
+        root: Option<NodeId>,
+        initial_parent_frame: InitialParentFrame,
+    ) -> Self {
         shared_state.bind_applier_host(&applier);
         bind_slots_host_to_runtime_state(&shared_state, &slots);
         let core = Rc::new(ComposerCore::new(
@@ -483,6 +510,7 @@ impl Composer {
             runtime,
             observer,
             root,
+            initial_parent_frame,
         ));
         Self { core }
     }
@@ -494,7 +522,7 @@ impl Composer {
         observer: SnapshotStateObserver,
         root: Option<NodeId>,
     ) -> Self {
-        Self::new_with_shared_state(
+        Self::new_with_shared_state_with_parent_frame(
             slots
                 .runtime_state()
                 .unwrap_or_else(|| Rc::new(ComposerRuntimeState::default())),
@@ -503,6 +531,7 @@ impl Composer {
             runtime,
             observer,
             root,
+            InitialParentFrame::RealParent,
         )
     }
 
@@ -1324,6 +1353,7 @@ impl Composer {
             runtime_handle.clone(),
             self.observer(),
             root,
+            InitialParentFrame::RealParent,
         ));
         core.phase.set(phase);
         *core.local_stack.borrow_mut() = locals;
@@ -1380,6 +1410,7 @@ impl Composer {
             runtime_handle.clone(),
             self.observer(),
             root,
+            InitialParentFrame::RealParent,
         ));
         core.phase.set(phase);
         *core.local_stack.borrow_mut() = locals;

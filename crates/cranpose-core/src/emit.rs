@@ -299,6 +299,10 @@ impl Composer {
         // During recomposition, preserve the original parent when possible.
         if let Some(parent_hint) = self.core.recranpose_parent_hint.get() {
             if parent_hint == id {
+                debug_assert_ne!(
+                    parent_hint, id,
+                    "a node cannot be attached as its own parent"
+                );
                 return;
             }
             let parent_status = {

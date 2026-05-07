@@ -3191,6 +3191,41 @@ fn subcompose_in_retains_root_level_groups() {
 }
 
 #[test]
+fn subcompose_slot_root_level_scopes_keep_container_parent_hint() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let container_id = applier.create(Box::<RecordingNode>::default());
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
+    let group_key = location_key(file!(), line!(), column!());
+
+    let (_, scopes) = composer
+        .subcompose_slot(&subcompose_slots, Some(container_id), |composer| {
+            composer.with_group(group_key, |_| {
+                cranpose_test_node(TrackingChild::default);
+            });
+        })
+        .expect("subcompose_slot render");
+
+    assert!(
+        !scopes.is_empty(),
+        "subcompose_slot must record scopes for later scoped recomposition"
+    );
+    for scope in &scopes {
+        assert_eq!(
+            scope.parent_hint(),
+            Some(container_id),
+            "top-level subcompose scopes must reattach through their real container",
+        );
+    }
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
 fn subcompose_in_retained_root_level_nodes_stay_live_while_hidden_and_restore_same_id() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
