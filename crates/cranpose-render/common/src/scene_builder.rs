@@ -454,6 +454,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
     let prepared = modifier_slices
         .and_then(|slices| slices.prepare_text_layout(max_width))
         .unwrap_or_else(|| prepare_text_layout(value, &text_style, options, max_width));
+    let visual_style = prepared.visual_style.clone();
     let draw_width = if options.overflow == TextOverflow::Visible {
         prepared.metrics.width
     } else {
@@ -477,9 +478,9 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         width: content_width,
         height: (local_bounds.height - padding.top - padding.bottom).max(0.0),
     };
-    let font_size = text_style.resolve_font_size(14.0);
+    let font_size = visual_style.resolve_font_size(14.0);
     let expanded_bounds =
-        expand_text_bounds_for_baseline_shift(text_bounds, &text_style, font_size);
+        expand_text_bounds_for_baseline_shift(text_bounds, &visual_style, font_size);
     let clip = if options.overflow == TextOverflow::Visible {
         None
     } else {
@@ -490,7 +491,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         node_id,
         rect,
         text: prepared.text,
-        text_style,
+        text_style: visual_style,
         font_size,
         layout_options: options,
         clip,

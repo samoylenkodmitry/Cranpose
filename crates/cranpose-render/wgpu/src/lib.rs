@@ -1633,6 +1633,7 @@ impl WgpuTextMeasurer {
 
         Some(cranpose_ui::text::PreparedTextLayout {
             text: wrapped_annotated,
+            visual_style: style.clone(),
             metrics: cranpose_ui::TextMetrics {
                 width: size.width.min(max_width),
                 height,

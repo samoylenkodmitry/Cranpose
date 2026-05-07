@@ -8,14 +8,14 @@ use cranpose_testing::{crop_screenshot_logical, sample_screenshot_pixel_logical}
 use cranpose_ui::{
     composable, text::SpanStyle, text::TextDecoration, text::TextUnit, Alignment, BasicText,
     BitmapPainter, Box, BoxSpec, Color, ContentScale, Image, ImageBitmap, Modifier, Rect, Row,
-    RowSpec, Size, Text, TextOverflow, TextStyle,
+    RowSpec, Size, Spacer, Text, TextOptions, TextOverflow, TextStyle, TextWithOptions,
 };
 use image::{ImageBuffer, RgbaImage};
 use std::path::Path;
 use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 180;
-const WINDOW_HEIGHT: u32 = 170;
+const WINDOW_HEIGHT: u32 = 205;
 const SCREENSHOT_PATH: &str = "/tmp/cranpose_renderer_micro_contract.png";
 
 const BACKGROUND_COLOR: Color = Color(0.12, 0.16, 0.24, 1.0);
@@ -23,6 +23,8 @@ const LINE_VERTICAL_COLOR: Color = Color(0.98, 0.98, 0.98, 1.0);
 const LINE_HORIZONTAL_COLOR: Color = Color(0.98, 0.72, 0.30, 1.0);
 const RECT_FILL_COLOR: Color = Color(0.30, 0.78, 0.56, 1.0);
 const PANEL_FILL_COLOR: Color = Color(0.04, 0.05, 0.09, 1.0);
+const BUTTON_FILL_COLOR: Color = Color(0.08, 0.10, 0.14, 1.0);
+const BADGE_FILL_COLOR: Color = Color(0.18, 0.38, 0.92, 1.0);
 const CHESS_LIGHT: [u8; 3] = [240, 240, 240];
 const CHESS_DARK: [u8; 3] = [36, 54, 72];
 const COLOR_TOLERANCE: u8 = 18;
@@ -172,6 +174,22 @@ fn panel_text_style() -> TextStyle {
     })
 }
 
+fn compact_text_style() -> TextStyle {
+    TextStyle::from_span_style(SpanStyle {
+        color: Some(Color::from_rgb_u8(180, 255, 190)),
+        font_size: TextUnit::Sp(18.0),
+        ..SpanStyle::default()
+    })
+}
+
+fn badge_text_style() -> TextStyle {
+    TextStyle::from_span_style(SpanStyle {
+        color: Some(Color::from_rgb_u8(255, 255, 255)),
+        font_size: TextUnit::Sp(10.0),
+        ..SpanStyle::default()
+    })
+}
+
 #[allow(non_snake_case)]
 #[composable]
 fn BitmapIconTextRow(icon: ImageBitmap, modifier: Modifier) {
@@ -269,6 +287,52 @@ fn SourceIconTextRow(icon: ImageBitmap, modifier: Modifier) {
 
 #[allow(non_snake_case)]
 #[composable]
+fn CompactOverflowButton(icon: ImageBitmap, modifier: Modifier) {
+    Row(
+        modifier
+            .size(Size::new(148.0, 28.0))
+            .background(BUTTON_FILL_COLOR)
+            .padding(2.0),
+        RowSpec::default(),
+        move || {
+            Image(
+                BitmapPainter(icon.clone()),
+                Some("Compact icon".to_string()),
+                Modifier::empty().size(Size::new(18.0, 18.0)),
+                Alignment::CENTER,
+                ContentScale::FillBounds,
+                1.0,
+                None,
+            );
+            TextWithOptions(
+                "Save Cranpose WebP",
+                Modifier::empty().weight(1.0),
+                compact_text_style(),
+                TextOptions {
+                    overflow: TextOverflow::ScaleDown {
+                        min_font_size_sp: 9.0,
+                    },
+                    soft_wrap: false,
+                    max_lines: Some(1),
+                    ..TextOptions::default()
+                },
+            );
+            Spacer(Size::new(8.0, 1.0));
+            Box(
+                Modifier::empty()
+                    .size(Size::new(24.0, 18.0))
+                    .background(BADGE_FILL_COLOR),
+                BoxSpec::default().content_alignment(Alignment::CENTER),
+                || {
+                    Text("42", Modifier::empty(), badge_text_style());
+                },
+            );
+        },
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
 fn RendererMicroContractApp() {
     let board = cranpose_core::remember(|| generate_chessboard_bitmap(8, 4)).with(|b| b.clone());
     let icon = cranpose_core::remember(generate_icon_bitmap).with(|bitmap| bitmap.clone());
@@ -338,6 +402,7 @@ fn RendererMicroContractApp() {
             );
             BitmapIconTextRow(icon.clone(), Modifier::empty().offset(16.0, 100.0));
             SourceIconTextRow(icon.clone(), Modifier::empty().offset(16.0, 130.0));
+            CompactOverflowButton(icon.clone(), Modifier::empty().offset(16.0, 160.0));
         },
     );
 }
@@ -404,6 +469,8 @@ fn main() {
                 ("chess_1_0", 28.0, 46.0, CHESS_DARK),
                 ("chess_0_1", 20.0, 54.0, CHESS_DARK),
                 ("chess_1_1", 28.0, 54.0, CHESS_LIGHT),
+                ("compact_button", 24.0, 184.0, expected_screenshot_rgb(BUTTON_FILL_COLOR)),
+                ("compact_badge", 143.0, 174.0, expected_screenshot_rgb(BADGE_FILL_COLOR)),
             ] {
                 if let Err(err) = assert_color(&screenshot, label, x, y, expected) {
                     fail(&robot, &err);
@@ -480,10 +547,42 @@ fn main() {
                     ),
                 );
             }
+            let Some(compact_text) = crop_screenshot_logical(&screenshot, 36.0, 156.0, 94.0, 34.0)
+            else {
+                fail(&robot, "failed to crop compact text row");
+            };
+            let Some(compact_gap) = crop_screenshot_logical(&screenshot, 135.0, 158.0, 4.0, 28.0)
+            else {
+                fail(&robot, "failed to crop compact text gap");
+            };
+            let compact_green = count_green_text_pixels(&compact_text);
+            let gap_green = count_green_text_pixels(&compact_gap);
+            if compact_green < 18 {
+                fail(
+                    &robot,
+                    &format!(
+                        "scaled compact text is missing or over-clipped: green_pixels={compact_green}"
+                    ),
+                );
+            }
+            if gap_green != 0 {
+                fail(
+                    &robot,
+                    &format!(
+                        "scaled compact text drew outside its bounds into badge gap: green_pixels={gap_green}"
+                    ),
+                );
+            }
 
             println!(
-                "PASS: renderer micro-contract pixels match expected image/line/fill layout; underlined and post-image text crops are populated (underlined={}, underline_band={}, bitmap_text={}, source_text={}, panel_text={})",
-                underline_bright, underline_band_bright, bitmap_green, source_green, panel_yellow
+                "PASS: renderer micro-contract pixels match expected image/line/fill layout; underlined, post-image, and compact overflow text crops are populated (underlined={}, underline_band={}, bitmap_text={}, source_text={}, panel_text={}, compact_text={}, compact_gap={})",
+                underline_bright,
+                underline_band_bright,
+                bitmap_green,
+                source_green,
+                panel_yellow,
+                compact_green,
+                gap_green
             );
             let _ = robot.exit();
         })

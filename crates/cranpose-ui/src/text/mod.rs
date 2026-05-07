@@ -14,7 +14,7 @@ pub use font::{
     FileBackedFontFamily, FontFamily, FontFile, FontStyle, FontSynthesis, FontWeight,
     LoadedTypefacePath,
 };
-pub use layout_options::{TextLayoutOptions, TextOverflow};
+pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
 pub use measure::{
     get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
     measure_text_for_node, measure_text_with_options, measure_text_with_options_for_node,
