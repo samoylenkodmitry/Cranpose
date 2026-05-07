@@ -14,6 +14,7 @@ const SURFACE_PLAN_AFFINE_TOLERANCE: f32 = 1e-4;
 pub(crate) struct LayerSurfaceRequirements {
     pub(crate) direct_translation: Option<Point>,
     pub(crate) surface_requirements: SurfaceRequirementSet,
+    pub(crate) pixel_stable_composite: bool,
 }
 
 impl LayerSurfaceRequirements {
@@ -147,6 +148,10 @@ fn layer_contains_gpu_effect_text_primitives(layer: &LayerNode) -> bool {
     })
 }
 
+fn draw_primitive_is_pixel_sensitive(draw: &cranpose_ui_graphics::DrawPrimitive) -> bool {
+    matches!(draw, cranpose_ui_graphics::DrawPrimitive::Image { .. })
+}
+
 pub(crate) fn layer_needs_rigid_snap(layer: &LayerNode, translated_content_context: bool) -> bool {
     (translated_content_context
         && (layer_contains_draw_primitives(layer) || layer_contains_text_primitives(layer)))
@@ -216,12 +221,18 @@ pub(crate) fn composite_sample_mode_for_requirements(
     surface_capture_active: bool,
     requirements: LayerSurfaceRequirements,
 ) -> CompositeSampleMode {
-    effective_surface_requirements(
+    let effective = effective_surface_requirements(
         translated_content_context,
         surface_capture_active,
         requirements,
-    )
-    .composite_sample_mode()
+    );
+    if effective.contains(SurfaceRequirement::MotionStableCapture)
+        || requirements.pixel_stable_composite
+    {
+        CompositeSampleMode::Box4
+    } else {
+        CompositeSampleMode::Linear
+    }
 }
 
 pub(crate) fn layer_surface_target_scale(
@@ -336,13 +347,18 @@ pub(crate) fn layer_surface_requirements_cached(
     let direct_translation = direct_translation(layer.transform_to_parent);
     let mut has_direct_safe_primitive = false;
     let mut has_isolating_child_layer = false;
+    let mut has_pixel_sensitive_content = false;
 
     for child in &layer.children {
         match child {
             RenderNode::Primitive(primitive) => match &primitive.node {
                 PrimitiveNode::Text(text) => {
                     has_direct_safe_primitive = true;
-                    if text_primitive_needs_local_surface(text) {
+                    let needs_local_surface = text_primitive_needs_local_surface(text);
+                    if !needs_local_surface {
+                        has_pixel_sensitive_content = true;
+                    }
+                    if needs_local_surface {
                         surface_requirements.insert(SurfaceRequirement::TextMaterialMask);
                     }
                 }
@@ -350,7 +366,12 @@ pub(crate) fn layer_surface_requirements_cached(
                     cranpose_ui_graphics::DrawPrimitive::Shadow(_) => {
                         surface_requirements.insert(SurfaceRequirement::ImmediateShadow);
                     }
-                    _ => has_direct_safe_primitive = true,
+                    primitive => {
+                        has_direct_safe_primitive = true;
+                        if draw_primitive_is_pixel_sensitive(primitive) {
+                            has_pixel_sensitive_content = true;
+                        }
+                    }
                 },
             },
             RenderNode::Layer(child_layer) => {
@@ -358,6 +379,9 @@ pub(crate) fn layer_surface_requirements_cached(
                     child_layer.as_ref(),
                     layer_surface_requirements_cache,
                 );
+                if child_requirements.pixel_stable_composite {
+                    has_pixel_sensitive_content = true;
+                }
                 if child_requirements
                     .surface_requirements
                     .has_isolating_requirement()
@@ -379,6 +403,9 @@ pub(crate) fn layer_surface_requirements_cached(
     let requirements = LayerSurfaceRequirements {
         direct_translation,
         surface_requirements,
+        pixel_stable_composite: has_pixel_sensitive_content
+            && direct_translation.is_some()
+            && !layer.motion_context_animated,
     };
     layer_surface_requirements_cache.insert(cache_key, requirements);
     requirements
