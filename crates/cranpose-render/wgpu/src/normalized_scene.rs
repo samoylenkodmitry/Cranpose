@@ -186,9 +186,30 @@ pub(crate) fn collected_layer_bounds(
 }
 
 fn hidden_content_precedes_visible_bounds(visible_bounds: Rect, full_bounds: Rect) -> bool {
-    const TOLERANCE: f32 = 1e-4;
+    full_bounds.x < visible_bounds.x - NORMALIZED_SCENE_AFFINE_TOLERANCE
+        || full_bounds.y < visible_bounds.y - NORMALIZED_SCENE_AFFINE_TOLERANCE
+}
 
-    full_bounds.x < visible_bounds.x - TOLERANCE || full_bounds.y < visible_bounds.y - TOLERANCE
+fn leading_capture_bounds(visible_bounds: Rect, full_bounds: Rect) -> Rect {
+    let left = if full_bounds.x < visible_bounds.x - NORMALIZED_SCENE_AFFINE_TOLERANCE {
+        full_bounds.x
+    } else {
+        visible_bounds.x
+    };
+    let top = if full_bounds.y < visible_bounds.y - NORMALIZED_SCENE_AFFINE_TOLERANCE {
+        full_bounds.y
+    } else {
+        visible_bounds.y
+    };
+    let right = visible_bounds.x + visible_bounds.width;
+    let bottom = visible_bounds.y + visible_bounds.height;
+
+    Rect {
+        x: left,
+        y: top,
+        width: (right - left).max(0.0),
+        height: (bottom - top).max(0.0),
+    }
 }
 
 pub(crate) fn motion_stable_capture_bounds(
@@ -210,7 +231,7 @@ pub(crate) fn motion_stable_capture_bounds(
         (Some(visible_bounds), Some(full_bounds))
             if hidden_content_precedes_visible_bounds(visible_bounds, full_bounds) =>
         {
-            Some(full_bounds)
+            Some(leading_capture_bounds(visible_bounds, full_bounds))
         }
         _ => visible_bounds.or(full_bounds),
     }

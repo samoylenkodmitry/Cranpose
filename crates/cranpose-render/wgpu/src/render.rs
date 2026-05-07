@@ -5727,8 +5727,8 @@ mod tests {
             Rect {
                 x: -24.0,
                 y: 0.0,
-                width: 200.0,
-                height: 480.0,
+                width: 144.0,
+                height: 72.0,
             }
         );
     }
@@ -5768,7 +5768,47 @@ mod tests {
                 x: 0.0,
                 y: -24.0,
                 width: 120.0,
-                height: 200.0,
+                height: 96.0,
+            }
+        );
+    }
+
+    #[test]
+    fn estimate_layer_surface_rect_preserves_hidden_leading_without_trailing_scroll_content() {
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 72.0,
+            },
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: -16.0,
+                            y: -24.0,
+                            width: 180.0,
+                            height: 240.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
+        );
+        layer.translated_content_context = true;
+        layer.motion_context_animated = true;
+        layer.clip_to_bounds = true;
+
+        assert_eq!(
+            estimate_layer_surface_rect(&layer),
+            Rect {
+                x: -16.0,
+                y: -24.0,
+                width: 136.0,
+                height: 96.0,
             }
         );
     }
