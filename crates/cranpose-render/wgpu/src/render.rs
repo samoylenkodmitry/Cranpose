@@ -6036,7 +6036,12 @@ mod tests {
         let requirements = layer_surface_requirements(&layer);
 
         assert_eq!(requirements.direct_translation, Some(Point::default()));
-        assert!(!requirements.surface_requirements.has_any());
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::PixelStableComposite));
+        assert!(!requirements
+            .surface_requirements
+            .has_isolating_requirement());
     }
 
     #[test]
@@ -6050,7 +6055,12 @@ mod tests {
             Some(Point::new(11.4, 23.6))
         );
         assert!(
-            !requirements.surface_requirements.has_any(),
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::PixelStableComposite)
+                && !requirements
+                    .surface_requirements
+                    .has_isolating_requirement(),
             "translated plain text should stay on the direct path and isolate only the glyph draw"
         );
     }
@@ -6066,7 +6076,12 @@ mod tests {
             Some(Point::new(14.25, 16.5))
         );
         assert!(
-            !requirements.surface_requirements.has_any(),
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::PixelStableComposite)
+                && !requirements
+                    .surface_requirements
+                    .has_isolating_requirement(),
             "translated text with direct sibling decoration/background should keep the layer direct"
         );
     }
@@ -6310,8 +6325,13 @@ mod tests {
 
         assert_eq!(requirements.direct_translation, Some(Point::default()));
         assert!(
-            !requirements.surface_requirements.has_any(),
-            "decoration-only text should not force any layer surface reasons: {requirements:?}"
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::PixelStableComposite)
+                && !requirements
+                    .surface_requirements
+                    .has_isolating_requirement(),
+            "decoration-only text should not force an isolating layer surface: {requirements:?}"
         );
     }
 
@@ -6678,7 +6698,9 @@ mod tests {
         assert!(!requirements
             .surface_requirements
             .contains(SurfaceRequirement::MixedDirectContent));
-        assert!(!requirements.surface_requirements.has_any());
+        assert!(!requirements
+            .surface_requirements
+            .has_isolating_requirement());
     }
 
     #[test]

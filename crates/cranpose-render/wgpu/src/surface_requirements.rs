@@ -14,6 +14,7 @@ pub(crate) enum SurfaceRequirement {
     MotionStableCapture,
     NonTranslationTransform,
     MixedDirectContent,
+    PixelStableComposite,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -32,6 +33,7 @@ impl SurfaceRequirementSet {
     const MOTION_STABLE_CAPTURE: u16 = 1 << 7;
     const NON_TRANSLATION_TRANSFORM: u16 = 1 << 8;
     const MIXED_DIRECT_CONTENT: u16 = 1 << 9;
+    const PIXEL_STABLE_COMPOSITE: u16 = 1 << 10;
 
     pub(crate) fn insert(&mut self, requirement: SurfaceRequirement) {
         self.bits |= Self::bit(requirement);
@@ -46,13 +48,10 @@ impl SurfaceRequirementSet {
         (self.bits & Self::bit(requirement)) != 0
     }
 
-    #[cfg(test)]
-    pub(crate) fn has_any(self) -> bool {
-        self.bits != 0
-    }
-
     pub(crate) fn has_isolating_requirement(self) -> bool {
-        (self.bits & !(Self::MIXED_DIRECT_CONTENT | Self::IMMEDIATE_SHADOW)) != 0
+        (self.bits
+            & !(Self::MIXED_DIRECT_CONTENT | Self::IMMEDIATE_SHADOW | Self::PIXEL_STABLE_COMPOSITE))
+            != 0
     }
 
     pub(crate) fn has_renderer_forced_surface(self) -> bool {
@@ -82,6 +81,10 @@ impl SurfaceRequirementSet {
                 SurfaceRequirement::MixedDirectContent,
                 "mixed_direct_content",
             ),
+            (
+                SurfaceRequirement::PixelStableComposite,
+                "pixel_stable_composite",
+            ),
         ];
 
         ORDERED
@@ -106,7 +109,9 @@ impl SurfaceRequirementSet {
     }
 
     pub(crate) fn composite_sample_mode(self) -> CompositeSampleMode {
-        if self.contains(SurfaceRequirement::MotionStableCapture) {
+        if self.contains(SurfaceRequirement::MotionStableCapture)
+            || self.contains(SurfaceRequirement::PixelStableComposite)
+        {
             CompositeSampleMode::Box4
         } else {
             CompositeSampleMode::Linear
@@ -133,6 +138,7 @@ impl SurfaceRequirementSet {
             SurfaceRequirement::MotionStableCapture => Self::MOTION_STABLE_CAPTURE,
             SurfaceRequirement::NonTranslationTransform => Self::NON_TRANSLATION_TRANSFORM,
             SurfaceRequirement::MixedDirectContent => Self::MIXED_DIRECT_CONTENT,
+            SurfaceRequirement::PixelStableComposite => Self::PIXEL_STABLE_COMPOSITE,
         }
     }
 }
@@ -149,6 +155,8 @@ impl FromIterator<SurfaceRequirement> for SurfaceRequirementSet {
 
 #[cfg(test)]
 mod tests {
+    use crate::effect_renderer::CompositeSampleMode;
+
     use super::{SurfaceRequirement, SurfaceRequirementSet};
 
     #[test]
@@ -179,5 +187,19 @@ mod tests {
 
         assert!(!requirements.has_isolating_requirement());
         assert!(!requirements.has_renderer_forced_surface());
+    }
+
+    #[test]
+    fn pixel_stable_composite_uses_box4_without_forcing_surface() {
+        let requirements =
+            SurfaceRequirementSet::default().with(SurfaceRequirement::PixelStableComposite);
+
+        assert!(!requirements.has_isolating_requirement());
+        assert!(!requirements.has_renderer_forced_surface());
+        assert_eq!(
+            requirements.composite_sample_mode(),
+            CompositeSampleMode::Box4
+        );
+        assert_eq!(requirements.target_scale(3.0), 3.0);
     }
 }

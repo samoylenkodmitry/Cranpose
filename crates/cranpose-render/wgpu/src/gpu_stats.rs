@@ -23,6 +23,7 @@ pub struct LayerSurfaceReasons {
     pub motion_stable_capture: bool,
     pub mixed_direct_content: bool,
     pub non_translation_transform: bool,
+    pub pixel_stable_composite: bool,
 }
 
 impl LayerSurfaceReasons {
@@ -42,7 +43,7 @@ impl LayerSurfaceReasons {
     }
 
     pub fn labels(self) -> impl Iterator<Item = &'static str> {
-        let mut labels = [None; 10];
+        let mut labels = [None; 11];
         let mut len = 0usize;
 
         if self.explicit_offscreen {
@@ -85,6 +86,10 @@ impl LayerSurfaceReasons {
             labels[len] = Some("non_translation_transform");
             len += 1;
         }
+        if self.pixel_stable_composite {
+            labels[len] = Some("pixel_stable_composite");
+            len += 1;
+        }
 
         labels.into_iter().flatten().take(len)
     }
@@ -122,6 +127,7 @@ impl From<SurfaceRequirementSet> for LayerSurfaceReasons {
             mixed_direct_content: requirements.contains(SurfaceRequirement::MixedDirectContent),
             non_translation_transform: requirements
                 .contains(SurfaceRequirement::NonTranslationTransform),
+            pixel_stable_composite: requirements.contains(SurfaceRequirement::PixelStableComposite),
         }
     }
 }
@@ -640,6 +646,7 @@ mod tests {
             SurfaceRequirement::MotionStableCapture,
             SurfaceRequirement::NonTranslationTransform,
             SurfaceRequirement::MixedDirectContent,
+            SurfaceRequirement::PixelStableComposite,
         ];
         for requirement in all_requirements {
             let set = SurfaceRequirementSet::default().with(requirement);
