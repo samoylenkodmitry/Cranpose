@@ -227,15 +227,28 @@ fn set_android_window_layout_px(
     let window = env
         .call_method(&activity, "getWindow", "()Landroid/view/Window;", &[])
         .and_then(|value| value.l())
-        .map_err(|error| format!("failed to access Android Activity window: {error}"))?;
+        .map_err(|error| {
+            clear_pending_android_jni_exception(&mut env);
+            format!("failed to access Android Activity window: {error}")
+        })?;
     env.call_method(
         &window,
         "setLayout",
         "(II)V",
         &[JValue::Int(width_px), JValue::Int(height_px)],
     )
-    .map_err(|error| format!("failed to request Android window layout: {error}"))?;
+    .map_err(|error| {
+        clear_pending_android_jni_exception(&mut env);
+        format!("failed to request Android window layout: {error}")
+    })?;
     Ok(())
+}
+
+fn clear_pending_android_jni_exception(env: &mut jni::JNIEnv<'_>) {
+    if matches!(env.exception_check(), Ok(true)) {
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
+    }
 }
 
 /// Runs an Android Compose application with wgpu rendering.
