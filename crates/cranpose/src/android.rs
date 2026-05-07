@@ -66,6 +66,17 @@ fn update_android_platform_geometry(
     density
 }
 
+fn update_android_shell_geometry(shell: &mut AppShell<WgpuRenderer>, density: f32) {
+    shell.renderer().set_root_scale(density);
+
+    let (width, height) = shell.buffer_size();
+    if width > 0 && height > 0 {
+        let width_dp = width as f32 / density;
+        let height_dp = height as f32 / density;
+        shell.set_viewport(width_dp, height_dp);
+    }
+}
+
 /// Renders a single frame. Returns true if out of memory (should exit).
 fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>) -> bool {
     shell.update();
@@ -419,14 +430,7 @@ pub fn run(
                                     // Set buffer_size to physical pixels
                                     shell.set_buffer_size(width, height);
 
-                                    // Set viewport to logical dp (marks dirty internally)
-                                    let width_dp = width as f32 / density;
-                                    let height_dp = height as f32 / density;
-                                    shell.set_viewport(width_dp, height_dp);
-
-                                    // Update renderer scale
-                                    shell.renderer().set_root_scale(density);
-                                    cranpose_ui::set_density(density);
+                                    update_android_shell_geometry(shell, density);
                                 }
                             }
                         }
@@ -441,6 +445,10 @@ pub fn run(
                             input_offset_y,
                             density
                         );
+
+                        if let Some(shell) = &mut app_shell {
+                            update_android_shell_geometry(shell, density);
+                        }
                     }
                     MainEvent::RedrawNeeded { .. } => {
                         if let Some(shell) = &mut app_shell {
