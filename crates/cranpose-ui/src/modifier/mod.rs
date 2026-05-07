@@ -53,6 +53,7 @@ pub use cranpose_ui_graphics::{
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 #[allow(unused_imports)]
 pub use focus::{FocusDirection, FocusRequester};
+pub use graphics_layer::GlassMaterial;
 pub(crate) use local::{
     ModifierLocalAncestorResolver, ModifierLocalSource, ModifierLocalToken, ResolvedModifierLocal,
 };

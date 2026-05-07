@@ -1,10 +1,10 @@
 use super::{
     collect_slices_from_modifier, inspector_metadata, modifier_element, Alignment, BlendMode,
     Color, CompositingStrategy, CutDirection, DimensionConstraint, DpOffset, DrawCommand,
-    DynModifierElement, EdgeInsets, GradientCutMaskSpec, GradientFadeMaskSpec, GraphicsLayer,
-    HorizontalAlignment, LayerShape, Modifier, ModifierChainHandle, Point, RenderEffect,
-    RoundedCornerShape, RuntimeShader, SemanticsConfiguration, Shadow, Size, TransformOrigin,
-    VerticalAlignment,
+    DynModifierElement, EdgeInsets, GlassMaterial, GradientCutMaskSpec, GradientFadeMaskSpec,
+    GraphicsLayer, HorizontalAlignment, LayerShape, Modifier, ModifierChainHandle, Point,
+    RenderEffect, RoundedCornerShape, RuntimeShader, SemanticsConfiguration, Shadow, Size,
+    TransformOrigin, VerticalAlignment,
 };
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -266,6 +266,64 @@ fn backdrop_effect_modifier_creates_graphics_layer_with_backdrop_effect() {
         found,
         "Expected backdrop_effect to be present in GraphicsLayer"
     );
+}
+
+#[test]
+fn backdrop_blur_clips_backdrop_to_bounds() {
+    let modifier = Modifier::empty().backdrop_blur(12.0);
+    let slices = collect_slices_from_modifier(&modifier);
+
+    assert!(slices.clip_to_bounds());
+    let layer = slices
+        .graphics_layer()
+        .expect("backdrop_blur should install a graphics layer");
+    match layer.backdrop_effect {
+        Some(RenderEffect::Blur {
+            radius_x, radius_y, ..
+        }) => {
+            assert_eq!(radius_x, 12.0);
+            assert_eq!(radius_y, 12.0);
+        }
+        other => panic!("expected blur backdrop effect, got {other:?}"),
+    }
+}
+
+#[test]
+fn glass_material_applies_blur_tint_and_shape() {
+    let tint = Color::from_rgba_u8(245, 253, 255, 150);
+    let shape = RoundedCornerShape::uniform(18.0);
+    let modifier = Modifier::empty().glass_material(GlassMaterial::new(18.0, tint, shape));
+    let slices = collect_slices_from_modifier(&modifier);
+
+    assert!(slices.clip_to_bounds());
+    assert_eq!(slices.corner_shape(), Some(shape));
+
+    let layer = slices
+        .graphics_layer()
+        .expect("glass_material should install a graphics layer");
+    match layer.backdrop_effect {
+        Some(RenderEffect::Blur {
+            radius_x, radius_y, ..
+        }) => {
+            assert_eq!(radius_x, 18.0);
+            assert_eq!(radius_y, 18.0);
+        }
+        other => panic!("expected glass_material blur backdrop, got {other:?}"),
+    }
+
+    let commands = slices.draw_commands();
+    assert_eq!(commands.len(), 1);
+    let DrawCommand::Behind(draw) = &commands[0] else {
+        panic!("glass_material tint should render behind content");
+    };
+    let primitives = draw(Size {
+        width: 100.0,
+        height: 64.0,
+    });
+    let [DrawPrimitive::RoundRect { brush, .. }] = primitives.as_slice() else {
+        panic!("glass_material tint should respect the rounded shape");
+    };
+    assert_eq!(*brush, Brush::Solid(tint));
 }
 
 #[test]

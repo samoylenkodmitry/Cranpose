@@ -3,7 +3,7 @@ use crate::modifier_nodes::{GraphicsLayerElement, LazyGraphicsLayerElement};
 use cranpose_ui_graphics::{
     gradient_cut_mask_effect, gradient_fade_dst_out_effect, rounded_alpha_mask_effect, BlendMode,
     Color, ColorFilter, CompositingStrategy, GradientCutMaskSpec, GradientFadeMaskSpec, LayerShape,
-    RenderEffect, RuntimeShader, TransformOrigin,
+    RenderEffect, RoundedCornerShape, RuntimeShader, TransformOrigin,
 };
 use std::rc::Rc;
 
@@ -194,6 +194,23 @@ impl Modifier {
         self.then(modifier)
     }
 
+    /// Blur content behind this composable, clipped to the composable bounds.
+    pub fn backdrop_blur(self, radius: f32) -> Self {
+        if radius <= 0.0 {
+            return self.clip_to_bounds();
+        }
+
+        self.backdrop_effect(RenderEffect::blur(radius))
+            .clip_to_bounds()
+    }
+
+    /// Apply a frosted glass material: backdrop blur, clipped shape, and tint.
+    pub fn glass_material(self, material: GlassMaterial) -> Self {
+        self.backdrop_blur(material.blur_radius)
+            .rounded_corner_shape(material.shape)
+            .background(material.tint)
+    }
+
     /// Convenience alias for applying a backdrop shader effect.
     pub fn shader_background(self, shader: RuntimeShader) -> Self {
         self.backdrop_effect(RenderEffect::runtime_shader(shader))
@@ -292,5 +309,23 @@ impl Modifier {
             ..Default::default()
         };
         self.graphics_layer_value(layer)
+    }
+}
+
+/// Visual parameters for [`Modifier::glass_material`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassMaterial {
+    pub blur_radius: f32,
+    pub tint: Color,
+    pub shape: RoundedCornerShape,
+}
+
+impl GlassMaterial {
+    pub fn new(blur_radius: f32, tint: Color, shape: RoundedCornerShape) -> Self {
+        Self {
+            blur_radius,
+            tint,
+            shape,
+        }
     }
 }
