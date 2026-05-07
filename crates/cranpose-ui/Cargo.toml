@@ -23,6 +23,8 @@ futures-task = "0.3"
 # WASM-compatible time - web-time is what winit uses internally
 web-time = "1.1"
 log = "0.4"
+resvg = { version = "0.45.1", default-features = false }
+thiserror = "2.0.18"
 
 [features]
 default = []

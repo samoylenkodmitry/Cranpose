@@ -76,10 +76,11 @@ pub use pointer_dispatch::{
     schedule_pointer_repass,
 };
 pub use primitives::{
-    BasicText, BasicTextField, BasicTextFieldOptions, BasicTextWithOptions, BitmapPainter, Box,
-    BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl,
-    Button, Canvas, Column, ColumnSpec, ContentScale, ForEach, Image, Layout, LayoutNode, Painter,
-    Row, RowSpec, Spacer, SubcomposeLayout, Text, TextWithOptions, DEFAULT_ALPHA,
+    remember_svg, BasicText, BasicTextField, BasicTextFieldOptions, BasicTextWithOptions,
+    BitmapPainter, Box, BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope,
+    BoxWithConstraintsScopeImpl, Button, Canvas, Column, ColumnSpec, ContentScale, ForEach, Image,
+    Layout, LayoutNode, Painter, Row, RowSpec, Spacer, SubcomposeLayout, SvgPainter,
+    SvgPainterError, Text, TextWithOptions, DEFAULT_ALPHA,
 };
 // Lazy list exports - single source from cranpose-foundation
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
