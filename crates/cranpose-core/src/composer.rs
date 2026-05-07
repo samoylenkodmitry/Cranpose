@@ -365,6 +365,7 @@ pub(crate) struct ParentFrame {
     pub(crate) new_children: ChildList,
     pub(crate) new_children_membership: Option<HashSet<NodeId>>,
     pub(crate) attach_mode: ParentAttachMode,
+    pub(crate) synthetic_root: bool,
 }
 
 const LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD: usize = 16;
@@ -424,6 +425,7 @@ impl ComposerCore {
                 new_children: ChildList::new(),
                 new_children_membership: None,
                 attach_mode: ParentAttachMode::DeferredSync,
+                synthetic_root: true,
             }]
         } else {
             Vec::new()
@@ -633,6 +635,14 @@ impl Composer {
 
     pub(crate) fn parent_stack(&self) -> RefMut<'_, Vec<ParentFrame>> {
         self.core.parent_stack.borrow_mut()
+    }
+
+    fn current_parent_hint(&self) -> Option<NodeId> {
+        let stack = self.core.parent_stack.borrow();
+        let stack_hint = stack
+            .last()
+            .and_then(|frame| (!frame.synthetic_root).then_some(frame.id));
+        stack_hint.or_else(|| self.core.recranpose_parent_hint.get())
     }
 
     pub(crate) fn subcompose_stack(&self) -> RefMut<'_, Vec<SubcomposeFrame>> {
@@ -881,7 +891,7 @@ impl Composer {
 
         scope_ref.snapshot_locals(self.current_local_stack());
         {
-            let parent_hint = self.parent_stack().last().map(|frame| frame.id);
+            let parent_hint = self.current_parent_hint();
             scope_ref.set_parent_hint(parent_hint);
         }
 

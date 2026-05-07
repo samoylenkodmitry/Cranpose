@@ -3561,3 +3561,294 @@ fn keyed_child_moved_between_parents_rebuilds_without_stale_attachment() {
         );
     }
 }
+
+#[test]
+fn conditional_nested_child_recompose_keeps_parent_order() {
+    thread_local! {
+        static ROOT_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static QUEUE_ROW_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static CURRENT_ROW_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static STATUS_ROW_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static FIELD_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+    }
+
+    #[allow(non_snake_case)]
+    #[composable]
+    fn Leaf(label: &'static str) -> NodeId {
+        cranpose_core::with_current_composer(|composer| {
+            composer.emit_node(|| TrackingChild {
+                label: label.to_string(),
+                ..TrackingChild::default()
+            })
+        })
+    }
+
+    #[allow(non_snake_case)]
+    #[composable]
+    fn QueueRow() -> NodeId {
+        let id = cranpose_core::with_current_composer(|composer| {
+            composer.emit_node(RecordingNode::default)
+        });
+        QUEUE_ROW_ID.with(|slot| slot.set(Some(id)));
+        cranpose_core::push_parent(id);
+        Leaf("queue");
+        cranpose_core::pop_parent();
+        id
+    }
+
+    #[allow(non_snake_case)]
+    #[composable]
+    fn CurrentField(field_text: MutableState<&'static str>) -> NodeId {
+        let _ = field_text.value();
+        let id = Leaf("field");
+        FIELD_ID.with(|slot| slot.set(Some(id)));
+        id
+    }
+
+    #[allow(non_snake_case)]
+    #[composable]
+    fn CurrentRow(field_text: MutableState<&'static str>) -> NodeId {
+        let id = cranpose_core::with_current_composer(|composer| {
+            composer.emit_node(RecordingNode::default)
+        });
+        CURRENT_ROW_ID.with(|slot| slot.set(Some(id)));
+        cranpose_core::push_parent(id);
+        CurrentField(field_text);
+        cranpose_core::pop_parent();
+        id
+    }
+
+    #[allow(non_snake_case)]
+    #[composable]
+    fn StatusRow() -> NodeId {
+        let id = cranpose_core::with_current_composer(|composer| {
+            composer.emit_node(RecordingNode::default)
+        });
+        STATUS_ROW_ID.with(|slot| slot.set(Some(id)));
+        cranpose_core::push_parent(id);
+        Leaf("status");
+        cranpose_core::pop_parent();
+        id
+    }
+
+    #[allow(non_snake_case)]
+    #[composable]
+    fn Root(show_current: MutableState<bool>, field_text: MutableState<&'static str>) -> NodeId {
+        let show_current = show_current.value();
+        let id = cranpose_core::with_current_composer(|composer| {
+            composer.emit_node(RecordingNode::default)
+        });
+        ROOT_ID.with(|slot| slot.set(Some(id)));
+        cranpose_core::push_parent(id);
+        QueueRow();
+        if show_current {
+            CurrentRow(field_text);
+        }
+        StatusRow();
+        cranpose_core::pop_parent();
+        id
+    }
+
+    fn drain(composition: &mut Composition<MemoryApplier>, context: &'static str) {
+        while composition.process_invalid_scopes().expect(context) {}
+    }
+
+    fn captured_id(slot: &'static std::thread::LocalKey<Cell<Option<NodeId>>>) -> NodeId {
+        slot.with(|cell| cell.get())
+            .expect("node id should be captured")
+    }
+
+    fn assert_row_order(
+        composition: &mut Composition<MemoryApplier>,
+        root_id: NodeId,
+        queue_id: NodeId,
+        current_id: NodeId,
+        status_id: NodeId,
+        field_id: NodeId,
+    ) {
+        let mut applier = composition.applier_mut();
+        let tree = applier.dump_tree(Some(root_id));
+        let root_children = applier
+            .with_node::<RecordingNode, _>(root_id, |node| node.children.clone())
+            .expect("root node should exist");
+        let current_children = applier
+            .with_node::<RecordingNode, _>(current_id, |node| node.children.clone())
+            .expect("current row should exist");
+        let field_parent = applier
+            .with_node::<TrackingChild, _>(field_id, |node| node.parent())
+            .expect("field node should exist");
+
+        assert_eq!(
+            root_children,
+            vec![queue_id, current_id, status_id],
+            "conditional row must stay before the status sibling; tree=\n{tree}",
+        );
+        assert_eq!(
+            current_children,
+            vec![field_id],
+            "field node must remain inside the conditional row; tree=\n{tree}",
+        );
+        assert_eq!(
+            field_parent,
+            Some(current_id),
+            "field parent link must stay on the conditional row; tree=\n{tree}",
+        );
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_current = MutableState::with_runtime(false, runtime.clone());
+    let field_text = MutableState::with_runtime("title", runtime);
+    let root_key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(root_key, || {
+            Root(show_current, field_text);
+        })
+        .expect("initial render");
+
+    show_current.set(true);
+    drain(&mut composition, "insert current row");
+
+    let root_id = captured_id(&ROOT_ID);
+    let queue_id = captured_id(&QUEUE_ROW_ID);
+    let current_id = captured_id(&CURRENT_ROW_ID);
+    let status_id = captured_id(&STATUS_ROW_ID);
+    let field_id = captured_id(&FIELD_ID);
+    assert_row_order(
+        &mut composition,
+        root_id,
+        queue_id,
+        current_id,
+        status_id,
+        field_id,
+    );
+
+    field_text.set("edited");
+    drain(&mut composition, "edit field text");
+
+    assert_row_order(
+        &mut composition,
+        root_id,
+        queue_id,
+        current_id,
+        status_id,
+        field_id,
+    );
+}
+
+#[test]
+fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
+    thread_local! {
+        static ROOT_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+    }
+
+    #[derive(Default)]
+    struct RootReplayNode {
+        id: Option<NodeId>,
+        raw_parent: Option<NodeId>,
+        children: Vec<NodeId>,
+    }
+
+    impl Node for RootReplayNode {
+        fn set_node_id(&mut self, id: NodeId) {
+            self.id = Some(id);
+        }
+
+        fn parent(&self) -> Option<NodeId> {
+            match (self.raw_parent, self.id) {
+                (Some(parent), Some(id)) if parent == id => None,
+                (parent, _) => parent,
+            }
+        }
+
+        fn on_attached_to_parent(&mut self, parent: NodeId) {
+            self.raw_parent = Some(parent);
+        }
+
+        fn on_removed_from_parent(&mut self) {
+            self.raw_parent = None;
+        }
+
+        fn insert_child(&mut self, child: NodeId) {
+            if !self.children.contains(&child) {
+                self.children.push(child);
+            }
+        }
+
+        fn remove_child(&mut self, child: NodeId) {
+            self.children.retain(|&id| id != child);
+        }
+
+        fn children(&self) -> Vec<NodeId> {
+            self.children.clone()
+        }
+    }
+
+    #[allow(non_snake_case)]
+    #[composable]
+    fn Child(value: i32) -> NodeId {
+        cranpose_core::with_current_composer(|composer| {
+            composer.emit_node(|| TrackingChild {
+                label: value.to_string(),
+                ..TrackingChild::default()
+            })
+        })
+    }
+
+    #[allow(non_snake_case)]
+    #[composable]
+    fn Root(value: MutableState<i32>) -> NodeId {
+        let value = value.value();
+        let id = cranpose_core::with_current_composer(|composer| {
+            composer.emit_node(RootReplayNode::default)
+        });
+        ROOT_ID.with(|slot| slot.set(Some(id)));
+        cranpose_core::push_parent(id);
+        Child(value);
+        cranpose_core::pop_parent();
+        id
+    }
+
+    fn root_raw_parent(
+        composition: &mut Composition<MemoryApplier>,
+        root_id: NodeId,
+    ) -> Option<NodeId> {
+        composition
+            .applier_mut()
+            .with_node::<RootReplayNode, _>(root_id, |node| node.raw_parent)
+            .expect("root node should exist")
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let value = MutableState::with_runtime(0, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(root_key, || {
+            Root(value);
+        })
+        .expect("initial render");
+    let root_id = ROOT_ID.with(|slot| slot.get()).expect("root id");
+
+    composition.request_root_render();
+    composition
+        .reconcile(root_key, || {
+            Root(value);
+        })
+        .expect("forced root replay");
+    assert_eq!(root_raw_parent(&mut composition, root_id), None);
+
+    value.set(1);
+    while composition
+        .process_invalid_scopes()
+        .expect("scoped root recomposition")
+    {}
+
+    assert_eq!(
+        root_raw_parent(&mut composition, root_id),
+        None,
+        "a root scope replay must not attach its root node as its own child",
+    );
+}
