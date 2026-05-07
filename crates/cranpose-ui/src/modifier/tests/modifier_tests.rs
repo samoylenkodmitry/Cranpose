@@ -1,10 +1,10 @@
 use super::{
     collect_slices_from_modifier, inspector_metadata, modifier_element, Alignment, BlendMode,
     Color, CompositingStrategy, CutDirection, DimensionConstraint, DpOffset, DrawCommand,
-    DynModifierElement, EdgeInsets, GradientCutMaskSpec, GradientFadeMaskSpec, GraphicsLayer,
-    HorizontalAlignment, LayerShape, Modifier, ModifierChainHandle, Point, RenderEffect,
-    RoundedCornerShape, RuntimeShader, SemanticsConfiguration, Shadow, Size, TransformOrigin,
-    VerticalAlignment,
+    DynModifierElement, EdgeInsets, GlassMaterial, GradientCutMaskSpec, GradientFadeMaskSpec,
+    GraphicsLayer, HorizontalAlignment, LayerShape, Modifier, ModifierChainHandle, Point,
+    RenderEffect, RoundedCornerShape, RuntimeShader, SemanticsConfiguration, Shadow, Size,
+    TransformOrigin, VerticalAlignment,
 };
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -14,6 +14,22 @@ use cranpose_ui_graphics::{
 };
 use std::cell::Cell;
 use std::rc::Rc;
+
+struct DensityGuard(f32);
+
+impl DensityGuard {
+    fn set(density: f32) -> Self {
+        let previous_density = crate::current_density();
+        crate::set_density(density);
+        Self(previous_density)
+    }
+}
+
+impl Drop for DensityGuard {
+    fn drop(&mut self) {
+        crate::set_density(self.0);
+    }
+}
 
 #[test]
 fn padding_nodes_resolve_padding_values() {
@@ -266,6 +282,68 @@ fn backdrop_effect_modifier_creates_graphics_layer_with_backdrop_effect() {
         found,
         "Expected backdrop_effect to be present in GraphicsLayer"
     );
+}
+
+#[test]
+fn backdrop_blur_clips_backdrop_to_bounds() {
+    let _density = DensityGuard::set(2.0);
+    let modifier = Modifier::empty().backdrop_blur(Dp(12.0));
+    let slices = collect_slices_from_modifier(&modifier);
+
+    let layer = slices
+        .graphics_layer()
+        .expect("backdrop_blur should install a graphics layer");
+    assert!(layer.clip);
+    assert_eq!(layer.shape, LayerShape::Rectangle);
+    match layer.backdrop_effect {
+        Some(RenderEffect::Blur {
+            radius_x, radius_y, ..
+        }) => {
+            assert_eq!(radius_x, 24.0);
+            assert_eq!(radius_y, 24.0);
+        }
+        other => panic!("expected blur backdrop effect, got {other:?}"),
+    }
+}
+
+#[test]
+fn glass_material_applies_blur_tint_and_shape() {
+    let _density = DensityGuard::set(1.5);
+    let tint = Color::from_rgba_u8(245, 253, 255, 150);
+    let shape = RoundedCornerShape::uniform(18.0);
+    let modifier = Modifier::empty().glass_material(GlassMaterial::new(Dp(18.0), tint, shape));
+    let slices = collect_slices_from_modifier(&modifier);
+
+    assert_eq!(slices.corner_shape(), Some(shape));
+
+    let layer = slices
+        .graphics_layer()
+        .expect("glass_material should install a graphics layer");
+    assert!(layer.clip);
+    assert_eq!(layer.shape, LayerShape::Rounded(shape));
+    match layer.backdrop_effect {
+        Some(RenderEffect::Blur {
+            radius_x, radius_y, ..
+        }) => {
+            assert_eq!(radius_x, 27.0);
+            assert_eq!(radius_y, 27.0);
+        }
+        other => panic!("expected glass_material blur backdrop, got {other:?}"),
+    }
+
+    let commands = slices.draw_commands();
+    assert_eq!(commands.len(), 1);
+    let DrawCommand::Behind(draw) = &commands[0] else {
+        panic!("glass_material tint should render behind content");
+    };
+    let primitives = draw(Size {
+        width: 100.0,
+        height: 64.0,
+    });
+    let [DrawPrimitive::RoundRect { brush, .. }] = primitives.as_slice() else {
+        panic!("glass_material tint should respect the rounded shape");
+    };
+    assert_eq!(*brush, Brush::Solid(tint));
 }
 
 #[test]
@@ -954,15 +1032,7 @@ fn inner_shadow_large_radius_keeps_fill_and_cutout_pairs_balanced() {
 
 #[test]
 fn inner_shadow_static_uses_density_for_dp_offset() {
-    struct DensityGuard(f32);
-    impl Drop for DensityGuard {
-        fn drop(&mut self) {
-            crate::set_density(self.0);
-        }
-    }
-
-    let guard = DensityGuard(crate::current_density());
-    crate::set_density(2.0);
+    let _density = DensityGuard::set(2.0);
 
     let modifier = Modifier::empty().inner_shadow_value(
         LayerShape::Rectangle,
@@ -985,8 +1055,6 @@ fn inner_shadow_static_uses_density_for_dp_offset() {
 
     let cutout_x = first_inner_cutout_x(&primitives);
     assert_eq!(cutout_x, Some(4.0));
-
-    drop(guard);
 }
 
 #[test]
