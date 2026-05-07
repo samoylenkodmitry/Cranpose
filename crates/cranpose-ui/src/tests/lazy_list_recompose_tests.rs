@@ -90,6 +90,22 @@ fn ChildScrollIndicatorLazyList() {
 }
 
 fn render_texts(composition: &mut Composition<MemoryApplier>, root: NodeId) -> Vec<String> {
+    render_text_records(composition, root)
+        .into_iter()
+        .map(|record| record.value)
+        .collect()
+}
+
+#[derive(Debug)]
+struct RenderedText {
+    value: String,
+    y: f32,
+}
+
+fn render_text_records(
+    composition: &mut Composition<MemoryApplier>,
+    root: NodeId,
+) -> Vec<RenderedText> {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
@@ -109,7 +125,10 @@ fn render_texts(composition: &mut Composition<MemoryApplier>, root: NodeId) -> V
         .operations()
         .iter()
         .filter_map(|op| match op {
-            RenderOp::Text { value, .. } => Some(value.clone()),
+            RenderOp::Text { rect, value, .. } => Some(RenderedText {
+                value: value.clone(),
+                y: rect.y,
+            }),
             _ => None,
         })
         .collect()
@@ -121,6 +140,71 @@ fn measure_root(composition: &mut Composition<MemoryApplier>, root: NodeId, size
     applier.set_runtime_handle(handle);
     let _ = applier.compute_layout(root, size).expect("layout");
     applier.clear_runtime_handle();
+}
+
+fn row_header_indices(records: &[RenderedText]) -> Vec<usize> {
+    records
+        .iter()
+        .filter_map(|record| {
+            record
+                .value
+                .strip_prefix("Row Header ")
+                .and_then(|index| index.parse().ok())
+        })
+        .collect()
+}
+
+fn assert_consecutive_rows(indices: &[usize], context: &str) {
+    assert!(
+        !indices.is_empty(),
+        "expected visible lazy rows after {context}"
+    );
+    assert!(
+        indices.windows(2).all(|window| window[1] == window[0] + 1),
+        "lazy rows should stay in visual order after {context}: {indices:?}"
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn SelectableScrolledLazyList(selected_index: MutableState<usize>) {
+    let list_state = remember_lazy_list_state();
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(list_state);
+    });
+
+    LazyColumn(
+        Modifier::empty().fill_max_width().height(210.0),
+        list_state,
+        LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
+        |scope| {
+            scope.items(
+                80,
+                Some(|index: usize| index as u64),
+                None::<fn(usize) -> u64>,
+                move |index| {
+                    let is_selected = selected_index.value() == index;
+                    Column(
+                        Modifier::empty().fill_max_width().height(52.0).padding(4.0),
+                        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(2.0)),
+                        move || {
+                            Text(
+                                format!("Row Header {index}"),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                            let field_state = if is_selected { "Selected" } else { "Idle" };
+                            Text(
+                                format!("{field_state} Field {index}"),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
 }
 
 #[test]
@@ -223,6 +307,111 @@ fn lazy_list_item_recomposes_when_composable_parent_capture_changes() {
         texts.iter().any(|text| text == "Use Light"),
         "expected lazy list item to refresh when composable parent-captured state changes"
     );
+}
+
+#[test]
+fn scrolled_lazy_list_scoped_row_recompose_does_not_ghost_old_rows() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let selected_index = MutableState::with_runtime(usize::MAX, runtime);
+
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            SelectableScrolledLazyList(selected_index);
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("lazy list root");
+    let viewport = Size {
+        width: 360.0,
+        height: 260.0,
+    };
+    measure_root(&mut composition, root, viewport);
+
+    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    list_state.scroll_to_item(24, 0.0);
+    measure_root(&mut composition, root, viewport);
+
+    let before_records = render_text_records(&mut composition, root);
+    let visible_before = row_header_indices(&before_records);
+    assert_consecutive_rows(&visible_before, "scrolling before row selection");
+    assert!(
+        visible_before.first().copied().unwrap_or_default() >= 20,
+        "test must operate on a scrolled viewport, got rows {visible_before:?}"
+    );
+    assert!(
+        before_records
+            .iter()
+            .all(|record| !record.value.ends_with(" 0")),
+        "offscreen row zero must not render after scrolling: {before_records:?}"
+    );
+
+    let selected_visible_row = visible_before
+        .get(2)
+        .copied()
+        .expect("scrolled viewport should expose at least three rows");
+    selected_index.set(selected_visible_row);
+    while composition
+        .process_invalid_scopes()
+        .expect("row selection scoped recomposition")
+    {}
+    measure_root(&mut composition, root, viewport);
+
+    let after_records = render_text_records(&mut composition, root);
+    let visible_after = row_header_indices(&after_records);
+    assert_eq!(
+        visible_after, visible_before,
+        "row-local recomposition must not shift the scrolled lazy viewport; before={before_records:?} after={after_records:?}"
+    );
+
+    let selected_label = format!("Selected Field {selected_visible_row}");
+    let idle_label = format!("Idle Field {selected_visible_row}");
+    assert_eq!(
+        after_records
+            .iter()
+            .filter(|record| record.value == selected_label)
+            .count(),
+        1,
+        "selected row should render exactly once after scoped recomposition: {after_records:?}"
+    );
+    assert!(
+        after_records
+            .iter()
+            .all(|record| record.value != idle_label),
+        "selected row must not keep a stale idle field after recomposition: {after_records:?}"
+    );
+
+    for hidden_index in 0..20 {
+        let hidden_header = format!("Row Header {hidden_index}");
+        let hidden_idle = format!("Idle Field {hidden_index}");
+        assert!(
+            after_records
+                .iter()
+                .all(|record| record.value != hidden_header && record.value != hidden_idle),
+            "offscreen row {hidden_index} must not ghost into the scrolled viewport: {after_records:?}"
+        );
+    }
+
+    let mut previous_y = None;
+    for record in after_records
+        .iter()
+        .filter(|record| record.value.starts_with("Row Header "))
+    {
+        if let Some(previous_y) = previous_y {
+            assert!(
+                record.y > previous_y,
+                "row headers should keep increasing y positions after scoped recomposition: {after_records:?}"
+            );
+        }
+        previous_y = Some(record.y);
+    }
+
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
 }
 
 #[composable]
