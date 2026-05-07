@@ -177,8 +177,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 ///
 /// Uniform layout:
 /// - 0,1: container size in dp
-/// - 2: corner radius in dp
-/// - 3: edge feather in dp
+/// - 2: edge feather in dp
+/// - 3,4,5,6: corner radii in dp (top-left, top-right, bottom-right, bottom-left)
 pub const ROUNDED_ALPHA_MASK_WGSL: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -251,12 +251,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let size_px = container_dp * dp_scale;
 
     let corner_radii_px = max(vec4<f32>(
+        get_float(3u),
         get_float(4u),
         get_float(5u),
         get_float(6u),
-        get_float(7u),
     ) * s, vec4<f32>(0.0));
-    let feather_px = max(get_float(3u) * s, 0.0);
+    let feather_px = max(get_float(2u) * s, 0.0);
     let mask = rounded_rect_alpha(local_px, size_px, corner_radii_px, feather_px);
 
     let sample = textureSample(input_texture, input_sampler, uv);
@@ -389,10 +389,9 @@ pub fn rounded_corner_alpha_mask_effect(
 ) -> RenderEffect {
     let mut shader = RuntimeShader::new(ROUNDED_ALPHA_MASK_WGSL);
     shader.set_float2(0, area_width.max(1.0), area_height.max(1.0));
-    shader.set_float(2, corner_radii.top_left.max(0.0));
-    shader.set_float(3, edge_feather.max(0.0));
+    shader.set_float(2, edge_feather.max(0.0));
     shader.set_float4(
-        4,
+        3,
         corner_radii.top_left.max(0.0),
         corner_radii.top_right.max(0.0),
         corner_radii.bottom_right.max(0.0),
@@ -495,12 +494,11 @@ mod tests {
         let u = shader.uniforms();
         assert_eq!(u[0], 240.0);
         assert_eq!(u[1], 120.0);
-        assert_eq!(u[2], 14.0);
-        assert_eq!(u[3], 6.0);
+        assert_eq!(u[2], 6.0);
+        assert_eq!(u[3], 14.0);
         assert_eq!(u[4], 14.0);
         assert_eq!(u[5], 14.0);
         assert_eq!(u[6], 14.0);
-        assert_eq!(u[7], 14.0);
     }
 
     #[test]
@@ -524,12 +522,11 @@ mod tests {
         let u = shader.uniforms();
         assert_eq!(u[0], 240.0);
         assert_eq!(u[1], 120.0);
-        assert_eq!(u[2], 4.0);
-        assert_eq!(u[3], 2.0);
-        assert_eq!(u[4], 4.0);
-        assert_eq!(u[5], 8.0);
-        assert_eq!(u[6], 12.0);
-        assert_eq!(u[7], 16.0);
+        assert_eq!(u[2], 2.0);
+        assert_eq!(u[3], 4.0);
+        assert_eq!(u[4], 8.0);
+        assert_eq!(u[5], 12.0);
+        assert_eq!(u[6], 16.0);
     }
 
     #[test]

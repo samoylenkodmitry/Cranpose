@@ -20,6 +20,7 @@ use crate::raster_cache::LayerRasterCacheHashes;
 use crate::style_shared::{primitives_for_placement, DrawPlacement};
 
 const TEXT_CLIP_PAD: f32 = 1.0;
+const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
 
 #[derive(Clone)]
 struct BuildNodeSnapshot {
@@ -577,8 +578,12 @@ fn graphics_layer_with_shaped_clip(
         return graphics_layer;
     }
 
-    let rounded_clip =
-        rounded_corner_alpha_mask_effect(local_bounds.width, local_bounds.height, radii, 1.0);
+    let rounded_clip = rounded_corner_alpha_mask_effect(
+        local_bounds.width,
+        local_bounds.height,
+        radii,
+        ROUNDED_CLIP_EDGE_FEATHER,
+    );
     graphics_layer.render_effect = Some(match graphics_layer.render_effect.take() {
         Some(existing) => existing.then(rounded_clip),
         None => rounded_clip,
@@ -947,10 +952,11 @@ mod tests {
         let uniforms = shader.uniforms();
         assert_eq!(uniforms[0], 100.0);
         assert_eq!(uniforms[1], 40.0);
-        assert_eq!(uniforms[4], 4.0);
-        assert_eq!(uniforms[5], 8.0);
-        assert_eq!(uniforms[6], 12.0);
-        assert_eq!(uniforms[7], 16.0);
+        assert_eq!(uniforms[2], ROUNDED_CLIP_EDGE_FEATHER);
+        assert_eq!(uniforms[3], 4.0);
+        assert_eq!(uniforms[4], 8.0);
+        assert_eq!(uniforms[5], 12.0);
+        assert_eq!(uniforms[6], 16.0);
     }
 
     #[test]
