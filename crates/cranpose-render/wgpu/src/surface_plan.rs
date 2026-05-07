@@ -147,6 +147,16 @@ fn layer_contains_gpu_effect_text_primitives(layer: &LayerNode) -> bool {
     })
 }
 
+fn draw_primitive_is_pixel_sensitive(draw: &cranpose_ui_graphics::DrawPrimitive) -> bool {
+    match draw {
+        cranpose_ui_graphics::DrawPrimitive::Image { .. } => true,
+        cranpose_ui_graphics::DrawPrimitive::Blend { primitive, .. } => {
+            draw_primitive_is_pixel_sensitive(primitive)
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn layer_needs_rigid_snap(layer: &LayerNode, translated_content_context: bool) -> bool {
     (translated_content_context
         && (layer_contains_draw_primitives(layer) || layer_contains_text_primitives(layer)))
@@ -216,12 +226,12 @@ pub(crate) fn composite_sample_mode_for_requirements(
     surface_capture_active: bool,
     requirements: LayerSurfaceRequirements,
 ) -> CompositeSampleMode {
-    effective_surface_requirements(
+    let effective = effective_surface_requirements(
         translated_content_context,
         surface_capture_active,
         requirements,
-    )
-    .composite_sample_mode()
+    );
+    effective.composite_sample_mode()
 }
 
 pub(crate) fn layer_surface_target_scale(
@@ -336,21 +346,30 @@ pub(crate) fn layer_surface_requirements_cached(
     let direct_translation = direct_translation(layer.transform_to_parent);
     let mut has_direct_safe_primitive = false;
     let mut has_isolating_child_layer = false;
+    let mut has_pixel_sensitive_content = false;
 
     for child in &layer.children {
         match child {
             RenderNode::Primitive(primitive) => match &primitive.node {
                 PrimitiveNode::Text(text) => {
                     has_direct_safe_primitive = true;
-                    if text_primitive_needs_local_surface(text) {
+                    let needs_local_surface = text_primitive_needs_local_surface(text);
+                    if needs_local_surface {
                         surface_requirements.insert(SurfaceRequirement::TextMaterialMask);
+                    } else {
+                        has_pixel_sensitive_content = true;
                     }
                 }
                 PrimitiveNode::Draw(draw) => match &draw.primitive {
                     cranpose_ui_graphics::DrawPrimitive::Shadow(_) => {
                         surface_requirements.insert(SurfaceRequirement::ImmediateShadow);
                     }
-                    _ => has_direct_safe_primitive = true,
+                    primitive => {
+                        has_direct_safe_primitive = true;
+                        if draw_primitive_is_pixel_sensitive(primitive) {
+                            has_pixel_sensitive_content = true;
+                        }
+                    }
                 },
             },
             RenderNode::Layer(child_layer) => {
@@ -358,6 +377,12 @@ pub(crate) fn layer_surface_requirements_cached(
                     child_layer.as_ref(),
                     layer_surface_requirements_cache,
                 );
+                if child_requirements
+                    .surface_requirements
+                    .contains(SurfaceRequirement::PixelStableComposite)
+                {
+                    has_pixel_sensitive_content = true;
+                }
                 if child_requirements
                     .surface_requirements
                     .has_isolating_requirement()
@@ -376,6 +401,11 @@ pub(crate) fn layer_surface_requirements_cached(
         surface_requirements.insert(SurfaceRequirement::NonTranslationTransform);
     }
 
+    if has_pixel_sensitive_content && direct_translation.is_some() && !layer.motion_context_animated
+    {
+        surface_requirements.insert(SurfaceRequirement::PixelStableComposite);
+    }
+
     let requirements = LayerSurfaceRequirements {
         direct_translation,
         surface_requirements,
@@ -387,16 +417,20 @@ pub(crate) fn layer_surface_requirements_cached(
 #[cfg(test)]
 mod tests {
     use super::{
-        composite_sample_mode_for_requirements, layer_surface_requirements,
-        layer_surface_target_scale,
+        composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
+        effect_layer_target_scale, layer_surface_requirements, layer_surface_target_scale,
     };
     use crate::effect_renderer::CompositeSampleMode;
+    use crate::scene::EffectLayer;
     use crate::surface_requirements::{SurfaceRequirement, MOTION_STABLE_SURFACE_SCALE_MULTIPLIER};
     use cranpose_render_common::graph::{
-        CachePolicy, IsolationReasons, LayerNode, ProjectiveTransform, RenderNode,
+        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderNode,
     };
     use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
-    use cranpose_ui_graphics::{GraphicsLayer, Rect};
+    use cranpose_ui_graphics::{
+        BlendMode, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Rect,
+    };
 
     fn test_layer(local_bounds: Rect) -> LayerNode {
         LayerNode {
@@ -417,6 +451,82 @@ mod tests {
             cache_hashes_valid: false,
             children: Vec::<RenderNode>::new(),
         }
+    }
+
+    #[test]
+    fn blended_image_marks_layer_pixel_stable_without_forcing_isolation() {
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+        let image = ImageBitmap::from_rgba8(1, 1, vec![255, 255, 255, 255]).expect("image");
+        let image_rect = Rect {
+            x: 4.0,
+            y: 6.0,
+            width: 16.0,
+            height: 16.0,
+        };
+        layer.children.push(RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Blend {
+                    primitive: Box::new(DrawPrimitive::Image {
+                        rect: image_rect,
+                        image,
+                        alpha: 1.0,
+                        color_filter: None,
+                        sampling: ImageSampling::Nearest,
+                        src_rect: None,
+                    }),
+                    blend_mode: BlendMode::SrcOver,
+                },
+                clip: None,
+            }),
+        }));
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::PixelStableComposite));
+        assert!(!requirements.has_isolating_requirement());
+        assert_eq!(
+            composite_sample_mode_for_requirements(false, false, requirements),
+            CompositeSampleMode::Box4
+        );
+        assert_eq!(
+            layer_surface_target_scale(false, false, requirements, 2.0),
+            2.0
+        );
+    }
+
+    #[test]
+    fn effect_layer_pixel_stable_requirement_uses_box4_without_motion_scale() {
+        let layer = EffectLayer {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            clip: None,
+            snap_anchor: None,
+            effect: None,
+            blend_mode: BlendMode::SrcOver,
+            composite_alpha: 1.0,
+            z_start: 0,
+            z_end: 1,
+            requirements: crate::surface_requirements::SurfaceRequirementSet::default()
+                .with(SurfaceRequirement::PixelStableComposite),
+        };
+
+        assert_eq!(
+            composite_sample_mode_for_effect_layer(&layer),
+            CompositeSampleMode::Box4
+        );
+        assert_eq!(effect_layer_target_scale(&layer, 3.0), 3.0);
     }
 
     #[test]

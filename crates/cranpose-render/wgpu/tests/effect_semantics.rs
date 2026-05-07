@@ -18,8 +18,8 @@ use cranpose_ui::text::{
 };
 use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect,
-    ShadowPrimitive,
+    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect,
+    RenderEffect, ShadowPrimitive,
 };
 
 const FRAME_WIDTH: u32 = 128;
@@ -732,6 +732,50 @@ fn translated_showcase_card_surface_stays_exact_at_fractional_root_scale() {
             max_differing_pixels: SHOWCASE_CARD_MAX_DIFFERING_PIXELS,
             max_pixel_difference: SHOWCASE_CARD_MAX_PIXEL_DIFFERENCE,
         },
+    );
+}
+
+#[test]
+fn static_alpha_surface_keeps_nested_text_and_icon_crisp_at_fractional_offset() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping static alpha surface crispness assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let base_translation = Point::new(20.0, 18.0);
+    renderer.scene_mut().graph = Some(alpha_icon_text_surface_fixture(base_translation));
+    let base_frame = renderer
+        .capture_frame(150, 86)
+        .expect("base alpha surface capture should succeed");
+    let base_stats = renderer.last_frame_stats().expect("base frame stats");
+    assert_eq!(
+        base_stats.isolated_layer_renders, 1,
+        "alpha card should isolate exactly its local surface: {base_stats:?}"
+    );
+
+    let fractional_translation = Point::new(20.4, 18.4);
+    renderer.scene_mut().graph = Some(alpha_icon_text_surface_fixture(fractional_translation));
+    let fractional_frame = renderer
+        .capture_frame(150, 86)
+        .expect("fractional alpha surface capture should succeed");
+
+    let size = (94, 46);
+    let base = normalize_translated_region_at_scale(&base_frame, base_translation, size, 1.0);
+    let fractional =
+        normalize_translated_region_at_scale(&fractional_frame, fractional_translation, size, 1.0);
+
+    assert_exact_normalized_match(
+        "static translucent nested icon/text surface",
+        &base,
+        &fractional,
+        size.0,
+        size.1,
     );
 }
 
@@ -1808,6 +1852,152 @@ fn gradient_stroke_text_fixture() -> RenderGraph {
         solid_rect(frame_rect(), Color::BLACK),
         RenderNode::Layer(Box::new(text_leaf)),
     ])
+}
+
+fn crisp_icon_bitmap() -> ImageBitmap {
+    const SIZE: u32 = 16;
+    let mut pixels = vec![0u8; (SIZE * SIZE * 4) as usize];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let stroke =
+                x == 1 || x == SIZE - 2 || y == 1 || y == SIZE - 2 || x == y || x + y == SIZE - 1;
+            let rgba = if stroke {
+                [250, 252, 255, 255]
+            } else {
+                [18, 26, 38, 255]
+            };
+            let index = ((y * SIZE + x) * 4) as usize;
+            pixels[index..index + 4].copy_from_slice(&rgba);
+        }
+    }
+    ImageBitmap::from_rgba8(SIZE, SIZE, pixels).expect("valid crisp icon")
+}
+
+fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
+    let icon = crisp_icon_bitmap();
+    let text_style = TextStyle::from_span_style(SpanStyle {
+        color: Some(Color::WHITE),
+        font_size: TextUnit::Sp(15.0),
+        ..Default::default()
+    });
+    let icon_leaf = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 32.0,
+            height: 32.0,
+        },
+        ProjectiveTransform::translation(8.0, 7.0),
+        GraphicsLayer::default(),
+        vec![RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Image {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 32.0,
+                        height: 32.0,
+                    },
+                    image: icon,
+                    alpha: 1.0,
+                    color_filter: None,
+                    sampling: ImageSampling::Nearest,
+                    src_rect: None,
+                },
+                clip: None,
+            }),
+        })],
+    );
+    let text_leaf = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 44.0,
+            height: 22.0,
+        },
+        ProjectiveTransform::translation(47.0, 12.0),
+        GraphicsLayer::default(),
+        vec![RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node_id: 104,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 44.0,
+                    height: 22.0,
+                },
+                text: AnnotatedString::from("Meta"),
+                text_style,
+                font_size: 15.0,
+                layout_options: TextLayoutOptions::default(),
+                clip: None,
+            })),
+        })],
+    );
+    let alpha_surface = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 94.0,
+            height: 46.0,
+        },
+        ProjectiveTransform::translation(translation.x, translation.y),
+        GraphicsLayer {
+            alpha: 0.82,
+            ..GraphicsLayer::default()
+        },
+        vec![
+            RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: DrawPrimitive::RoundRect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 94.0,
+                            height: 46.0,
+                        },
+                        brush: Brush::solid(Color(0.16, 0.18, 0.24, 1.0)),
+                        radii: cranpose_ui_graphics::CornerRadii::uniform(12.0),
+                    },
+                    clip: None,
+                }),
+            }),
+            RenderNode::Layer(Box::new(icon_leaf)),
+            RenderNode::Layer(Box::new(text_leaf)),
+        ],
+    );
+
+    RenderGraph::new(layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 150.0,
+            height: 86.0,
+        },
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![
+            RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 150.0,
+                            height: 86.0,
+                        },
+                        brush: Brush::solid(Color::BLACK),
+                    },
+                    clip: None,
+                }),
+            }),
+            RenderNode::Layer(Box::new(alpha_surface)),
+        ],
+    ))
 }
 
 #[test]
