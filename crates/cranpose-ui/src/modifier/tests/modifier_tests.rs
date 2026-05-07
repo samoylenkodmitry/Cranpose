@@ -1166,6 +1166,15 @@ fn rounded_alpha_mask_modifier_sets_render_effect_shader() {
 }
 
 #[test]
+fn rounded_corners_records_corner_shape_without_background() {
+    let shape = RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0);
+    let modifier = Modifier::empty().rounded_corner_shape(shape);
+    let slices = collect_slices_from_modifier(&modifier);
+
+    assert_eq!(slices.corner_shape(), Some(shape));
+}
+
+#[test]
 fn gradient_fade_dst_out_modifier_sets_render_effect_shader() {
     use crate::modifier_nodes::GraphicsLayerNode;
 

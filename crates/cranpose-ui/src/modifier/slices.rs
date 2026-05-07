@@ -3,7 +3,7 @@ use std::mem::size_of;
 use std::rc::Rc;
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
-use cranpose_ui_graphics::{ColorFilter, GraphicsLayer, RenderEffect};
+use cranpose_ui_graphics::{ColorFilter, GraphicsLayer, RenderEffect, RoundedCornerShape};
 
 use super::{ModifierChainHandle, Point};
 use crate::draw::DrawCommand;
@@ -35,6 +35,7 @@ pub struct ModifierNodeSlices {
     prepared_text_layout: Option<TextPreparedLayoutHandle>,
     graphics_layer: Option<GraphicsLayer>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
+    corner_shape: Option<RoundedCornerShape>,
     chain_guard: Option<Rc<ChainGuard>>,
 }
 
@@ -76,6 +77,7 @@ impl Clone for ModifierNodeSlices {
             prepared_text_layout: self.prepared_text_layout.clone(),
             graphics_layer: self.graphics_layer.clone(),
             graphics_layer_resolver: self.graphics_layer_resolver.clone(),
+            corner_shape: self.corner_shape,
             chain_guard: self.chain_guard.clone(),
         }
     }
@@ -228,6 +230,10 @@ impl ModifierNodeSlices {
         }
     }
 
+    pub fn corner_shape(&self) -> Option<RoundedCornerShape> {
+        self.corner_shape
+    }
+
     fn push_graphics_layer(
         &mut self,
         layer: GraphicsLayer,
@@ -304,6 +310,7 @@ impl ModifierNodeSlices {
         self.prepared_text_layout = None;
         self.graphics_layer = None;
         self.graphics_layer_resolver = None;
+        self.corner_shape = None;
         self.chain_guard = None;
     }
 }
@@ -337,6 +344,7 @@ impl fmt::Debug for ModifierNodeSlices {
                 "graphics_layer_resolver",
                 &self.graphics_layer_resolver.is_some(),
             )
+            .field("corner_shape", &self.corner_shape)
             .finish()
     }
 }
@@ -480,6 +488,8 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
             }
         });
     }
+
+    slices.corner_shape = corner_shape;
 
     // Convert background + shape into a draw command
     if let Some(color) = background_color {
