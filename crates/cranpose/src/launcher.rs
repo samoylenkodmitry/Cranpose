@@ -14,10 +14,12 @@ use thiserror::Error;
 pub struct AppSettings {
     /// Window title (desktop) / app name (mobile)
     pub window_title: String,
-    /// Initial window width in logical pixels (desktop only)
+    /// Initial window width in logical pixels.
     pub initial_width: u32,
-    /// Initial window height in logical pixels (desktop only)
+    /// Initial window height in logical pixels.
     pub initial_height: u32,
+    /// Whether the initial size was explicitly supplied by the app.
+    pub initial_size_explicit: bool,
     /// Fonts loaded for text rendering (ordered: primary first, fallbacks last).
     pub fonts: Option<&'static [&'static [u8]]>,
     /// Whether to load system fonts on Android (default: false)
@@ -56,6 +58,7 @@ impl Default for AppSettings {
             window_title: "Compose App".into(),
             initial_width: 800,
             initial_height: 600,
+            initial_size_explicit: false,
             fonts: None,
             android_use_system_fonts: false,
             headless: false,
@@ -169,10 +172,13 @@ impl AppLauncher {
         self
     }
 
-    /// Set the initial window size (Desktop only).
+    /// Set the initial window size.
     ///
-    /// This hint is ignored on platforms where the window size is controlled by the OS
-    /// (e.g., Android, iOS, or maximized Web canvas).
+    /// Desktop uses this as the initial primary window size. Android sends it
+    /// as a best-effort host-window request after the native surface exists;
+    /// fullscreen and split-screen activities may keep the system-managed
+    /// bounds, while freeform and desktop-windowing activities can honor it.
+    /// iOS and maximized Web canvases still keep platform-controlled bounds.
     ///
     /// # Arguments
     ///
@@ -181,6 +187,7 @@ impl AppLauncher {
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
         self.settings.initial_width = width;
         self.settings.initial_height = height;
+        self.settings.initial_size_explicit = true;
         self
     }
 

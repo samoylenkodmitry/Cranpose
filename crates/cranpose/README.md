@@ -22,6 +22,24 @@ If you are developing a custom widget library or a low-level extension, you migh
 -   `renderer-wgpu` (default): Hardware-accelerated rendering using `wgpu`.
 -   `renderer-pixels`: Software rendering fallback using `pixels`.
 
+## Android Host Window Sizing
+
+Android apps can opt into best-effort primary host-window sizing with
+`rememberAndroidHostWindowState(width, height)`. The requested size is expressed
+in logical pixels and is separate from content layout; the actual size is updated
+only from Android surface resize events.
+
+Behavior by Android windowing mode:
+
+-   Fullscreen activities usually keep the display-sized system bounds and
+    report `AndroidHostWindowSizeStatus::Unsupported`.
+-   Split-screen activities are system-managed and may clamp or ignore app
+    requests.
+-   Freeform and desktop-windowing activities can honor `Window.setLayout`, then
+    Cranpose reconfigures WGPU and the viewport from the following resize event.
+-   Overlay windows are a separate Android surface and permission model. This
+    API sizes only the current `NativeActivity` host window.
+
 ## Architecture
 
 Cranpose is composed of several crates:

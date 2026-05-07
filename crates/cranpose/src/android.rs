@@ -3,14 +3,16 @@
 //! This module provides the Android event loop implementation with proper
 //! lifecycle management, input handling, and rendering coordination.
 
-use crate::launcher::AppSettings;
+use crate::{android_host_window, launcher::AppSettings};
 use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_ui::Size;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use std::time::Instant;
 
 /// GPU resources for the surface (recreated when window is destroyed/created).
 struct GpuResources {
@@ -25,6 +27,13 @@ enum PendingInput {
     PointerDown(f32, f32),
     PointerUp(f32, f32),
     PointerMove(f32, f32),
+}
+
+#[derive(Clone, Copy)]
+struct PendingHostWindowSizeRequest {
+    state: Option<android_host_window::AndroidHostWindowState>,
+    requested: Size,
+    requested_at: Instant,
 }
 
 /// Get display density from Android NDK Configuration.
@@ -66,7 +75,7 @@ fn update_android_platform_geometry(
     density
 }
 
-fn update_android_shell_geometry(shell: &mut AppShell<WgpuRenderer>, density: f32) {
+fn update_android_shell_geometry(shell: &mut AppShell<WgpuRenderer>, density: f32) -> Option<Size> {
     shell.renderer().set_root_scale(density);
 
     let (width, height) = shell.buffer_size();
@@ -74,13 +83,16 @@ fn update_android_shell_geometry(shell: &mut AppShell<WgpuRenderer>, density: f3
         let width_dp = width as f32 / density;
         let height_dp = height as f32 / density;
         shell.set_viewport(width_dp, height_dp);
+        let actual = Size::new(width_dp, height_dp);
+        android_host_window::sync_android_host_window_actual_size(actual);
+        Some(actual)
+    } else {
+        None
     }
 }
 
 /// Renders a single frame. Returns true if out of memory (should exit).
 fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>) -> bool {
-    shell.update();
-
     match resources.surface.get_current_texture() {
         Ok(frame) => {
             let view = frame
@@ -114,6 +126,116 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
             false
         }
     }
+}
+
+fn dispatch_android_host_window_size_request(
+    app: &android_activity::AndroidApp,
+    requested: Size,
+    density: f32,
+) -> Result<(), String> {
+    let requested =
+        android_host_window::validate_logical_size(requested).map_err(|error| error.to_string())?;
+    let (width_px, height_px) =
+        android_host_window::logical_to_physical_window_size(requested, density);
+    set_android_window_layout_px(app, width_px, height_px)
+}
+
+fn dispatch_registered_android_host_window_request(
+    app: &android_activity::AndroidApp,
+    density: f32,
+    last_dispatched: &mut Option<(android_host_window::AndroidHostWindowState, u64)>,
+    pending_confirmation: &mut Option<PendingHostWindowSizeRequest>,
+) {
+    let Some(request) = android_host_window::latest_android_host_window_request() else {
+        return;
+    };
+    let dispatch_key = (request.state, request.revision);
+    if *last_dispatched == Some(dispatch_key) {
+        return;
+    }
+
+    request.state.mark_pending(request.size);
+    match dispatch_android_host_window_size_request(app, request.size, density) {
+        Ok(()) => {
+            *last_dispatched = Some(dispatch_key);
+            *pending_confirmation = Some(PendingHostWindowSizeRequest {
+                state: Some(request.state),
+                requested: request.size,
+                requested_at: Instant::now(),
+            });
+            log::info!(
+                "Requested Android host-window size {:.1}x{:.1} dp",
+                request.size.width,
+                request.size.height
+            );
+        }
+        Err(message) => {
+            *last_dispatched = Some(dispatch_key);
+            request.state.mark_dispatch_failed(request.size, message);
+        }
+    }
+}
+
+fn confirm_android_host_window_request(
+    pending_confirmation: &mut Option<PendingHostWindowSizeRequest>,
+    actual_size: Size,
+) {
+    let Some(pending) = *pending_confirmation else {
+        return;
+    };
+
+    if android_host_window::sizes_match(pending.requested, actual_size) {
+        if let Some(state) = pending.state {
+            state.mark_applied(pending.requested, actual_size);
+        }
+        *pending_confirmation = None;
+        return;
+    }
+
+    if pending.requested_at.elapsed() >= android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT {
+        if let Some(state) = pending.state {
+            state.mark_unsupported(pending.requested, actual_size);
+        }
+        log::info!(
+            "Android host-window size request {:.1}x{:.1} dp was not honored; actual is {:.1}x{:.1} dp",
+            pending.requested.width,
+            pending.requested.height,
+            actual_size.width,
+            actual_size.height
+        );
+        *pending_confirmation = None;
+    }
+}
+
+fn set_android_window_layout_px(
+    app: &android_activity::AndroidApp,
+    width_px: i32,
+    height_px: i32,
+) -> Result<(), String> {
+    use jni::{objects::JValue, JavaVM};
+
+    // SAFETY: android-activity owns a valid JavaVM pointer for the lifetime of AndroidApp.
+    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }
+        .map_err(|error| format!("failed to access Android Java VM: {error}"))?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|error| format!("failed to attach Android JNI thread: {error}"))?;
+
+    // SAFETY: activity_as_ptr returns a JNI global Activity reference owned by android-activity.
+    // JObject does not delete this reference on drop; it is used only for this JNI call chain.
+    let activity = unsafe { jni::objects::JObject::from_raw(app.activity_as_ptr().cast()) };
+    let window = env
+        .call_method(&activity, "getWindow", "()Landroid/view/Window;", &[])
+        .and_then(|value| value.l())
+        .map_err(|error| format!("failed to access Android Activity window: {error}"))?;
+    env.call_method(
+        &window,
+        "setLayout",
+        "(II)V",
+        &[JValue::Int(width_px), JValue::Int(height_px)],
+    )
+    .map_err(|error| format!("failed to request Android window layout: {error}"))?;
+    Ok(())
 }
 
 /// Runs an Android Compose application with wgpu rendering.
@@ -191,6 +313,16 @@ pub fn run(
 
     // Platform abstraction for density/pointer conversion
     let mut android_platform = AndroidPlatform::new();
+    let mut current_host_window_size = Size::ZERO;
+    let mut initial_host_window_size = settings.initial_size_explicit.then(|| {
+        Size::new(
+            settings.initial_width as f32,
+            settings.initial_height as f32,
+        )
+    });
+    let mut last_dispatched_host_window_request =
+        None::<(android_host_window::AndroidHostWindowState, u64)>;
+    let mut pending_host_window_confirmation = None::<PendingHostWindowSizeRequest>;
 
     // GPU resources (recreated when window is destroyed/created)
     let mut gpu_resources: Option<GpuResources> = None;
@@ -371,10 +503,13 @@ pub fn run(
                             // Set buffer_size and viewport
                             if let Some(shell) = &mut app_shell {
                                 shell.set_buffer_size(width, height);
-
-                                let width_dp = width as f32 / density;
-                                let height_dp = height as f32 / density;
-                                shell.set_viewport(width_dp, height_dp);
+                                if let Some(actual_size) =
+                                    update_android_shell_geometry(shell, density)
+                                {
+                                    current_host_window_size = actual_size;
+                                }
+                                let width_dp = current_host_window_size.width;
+                                let height_dp = current_host_window_size.height;
                                 log::info!(
                                     "Set viewport to {:.1}x{:.1} dp ({}x{} px at {:.2}x density)",
                                     width_dp,
@@ -383,6 +518,31 @@ pub fn run(
                                     height,
                                     density
                                 );
+                            }
+
+                            if let Some(requested) = initial_host_window_size.take() {
+                                match dispatch_android_host_window_size_request(
+                                    &app, requested, density,
+                                ) {
+                                    Ok(()) => {
+                                        pending_host_window_confirmation =
+                                            Some(PendingHostWindowSizeRequest {
+                                                state: None,
+                                                requested,
+                                                requested_at: Instant::now(),
+                                            });
+                                        log::info!(
+                                            "Requested initial Android host-window size {:.1}x{:.1} dp",
+                                            requested.width,
+                                            requested.height
+                                        );
+                                    }
+                                    Err(error) => {
+                                        log::warn!(
+                                            "Initial Android host-window size request failed: {error}"
+                                        );
+                                    }
+                                }
                             }
 
                             // Store GPU resources
@@ -430,7 +590,11 @@ pub fn run(
                                     // Set buffer_size to physical pixels
                                     shell.set_buffer_size(width, height);
 
-                                    update_android_shell_geometry(shell, density);
+                                    if let Some(actual_size) =
+                                        update_android_shell_geometry(shell, density)
+                                    {
+                                        current_host_window_size = actual_size;
+                                    }
                                 }
                             }
                         }
@@ -447,7 +611,10 @@ pub fn run(
                         );
 
                         if let Some(shell) = &mut app_shell {
-                            update_android_shell_geometry(shell, density);
+                            if let Some(actual_size) = update_android_shell_geometry(shell, density)
+                            {
+                                current_host_window_size = actual_size;
+                            }
                         }
                     }
                     MainEvent::RedrawNeeded { .. } => {
@@ -583,6 +750,11 @@ pub fn run(
             }
         }
 
+        confirm_android_host_window_request(
+            &mut pending_host_window_confirmation,
+            current_host_window_size,
+        );
+
         // Check if Destroy event requested exit
         if should_exit.load(Ordering::Relaxed) {
             log::info!("Exiting cleanly after Destroy event");
@@ -592,6 +764,13 @@ pub fn run(
         // Render outside event callback if needed
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
             if shell.needs_redraw() {
+                shell.update();
+                dispatch_registered_android_host_window_request(
+                    &app,
+                    android_platform.scale_factor(),
+                    &mut last_dispatched_host_window_request,
+                    &mut pending_host_window_confirmation,
+                );
                 if render_once(resources, shell) {
                     break; // Out of memory, exit
                 }
