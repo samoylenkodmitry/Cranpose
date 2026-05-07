@@ -1,5 +1,6 @@
 use crate::text_layout_result::TextLayoutResult;
 use cranpose_core::NodeId;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::ops::Range;
 
@@ -8,7 +9,9 @@ use super::paragraph::{Hyphens, LineBreak};
 use super::style::TextStyle;
 
 const ELLIPSIS: &str = "\u{2026}";
+const DEFAULT_FONT_SIZE_SP: f32 = 14.0;
 const WRAP_EPSILON: f32 = 0.5;
+const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 const AUTO_HYPHEN_MIN_SEGMENT_CHARS: usize = 2;
 const AUTO_HYPHEN_MIN_TRAILING_CHARS: usize = 3;
 const AUTO_HYPHEN_PREFERRED_TRAILING_CHARS: usize = 4;
@@ -26,6 +29,7 @@ pub struct TextMetrics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedTextLayout {
     pub text: crate::text::AnnotatedString,
+    pub visual_style: TextStyle,
     pub metrics: TextMetrics,
     pub did_overflow: bool,
 }
@@ -388,6 +392,18 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
 ) -> PreparedTextLayout {
     let opts = options.normalized();
     let max_width = normalize_max_width(max_width);
+    if let Some(min_font_size_sp) = opts.overflow.scale_down_min_font_size_sp() {
+        return prepare_scale_down_text_layout(
+            measurer,
+            node_id,
+            text,
+            style,
+            opts,
+            max_width,
+            min_font_size_sp,
+        );
+    }
+
     let wrap_width = (opts.soft_wrap && opts.overflow != TextOverflow::Visible)
         .then_some(max_width)
         .flatten();
@@ -492,6 +508,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
 
     PreparedTextLayout {
         text: display_annotated,
+        visual_style: style.clone(),
         metrics: TextMetrics {
             width,
             height: layout_line_count as f32 * line_height,
@@ -500,6 +517,215 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
         },
         did_overflow,
     }
+}
+
+fn prepare_scale_down_text_layout<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    node_id: Option<NodeId>,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+    min_font_size_sp: f32,
+) -> PreparedTextLayout {
+    let clipped_options = TextLayoutOptions {
+        overflow: TextOverflow::Clip,
+        ..options
+    }
+    .normalized();
+
+    let full_size = prepare_scaled_text_layout(
+        measurer,
+        node_id,
+        text,
+        style,
+        clipped_options,
+        max_width,
+        1.0,
+    );
+    let Some(width_limit) = max_width else {
+        return full_size;
+    };
+    if !full_size.did_overflow {
+        return full_size;
+    }
+
+    let base_font_size = style.resolve_font_size(DEFAULT_FONT_SIZE_SP);
+    if !base_font_size.is_finite() || base_font_size <= 0.0 {
+        return full_size;
+    }
+    let min_scale = (min_font_size_sp.min(base_font_size) / base_font_size).clamp(0.0, 1.0);
+    if min_scale >= 1.0 {
+        return full_size;
+    }
+
+    let min_size = prepare_scaled_text_layout(
+        measurer,
+        node_id,
+        text,
+        style,
+        clipped_options,
+        Some(width_limit),
+        min_scale,
+    );
+    if min_size.did_overflow {
+        return min_size;
+    }
+
+    let mut low = min_scale;
+    let mut high = 1.0;
+    let mut best = min_size;
+    for _ in 0..SCALE_DOWN_SEARCH_STEPS {
+        let mid = (low + high) * 0.5;
+        let candidate = prepare_scaled_text_layout(
+            measurer,
+            node_id,
+            text,
+            style,
+            clipped_options,
+            Some(width_limit),
+            mid,
+        );
+        if candidate.did_overflow {
+            high = mid;
+        } else {
+            low = mid;
+            best = candidate;
+        }
+    }
+
+    best
+}
+
+fn prepare_scaled_text_layout<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    node_id: Option<NodeId>,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+    font_scale: f32,
+) -> PreparedTextLayout {
+    let visual_style = scale_text_style_font_sizes(style, font_scale);
+    let visual_text = scale_annotated_font_sizes(text, font_scale);
+    prepare_text_layout_with_measurer_for_node(
+        measurer,
+        node_id,
+        visual_text.as_ref(),
+        &visual_style,
+        options,
+        max_width,
+    )
+}
+
+fn scale_annotated_font_sizes(
+    text: &crate::text::AnnotatedString,
+    factor: f32,
+) -> Cow<'_, crate::text::AnnotatedString> {
+    if is_identity_scale(factor) || !annotated_text_needs_scaling(text) {
+        return Cow::Borrowed(text);
+    }
+
+    let mut scaled = text.clone();
+    for span in &mut scaled.span_styles {
+        span.item = scale_span_style_font_sizes(&span.item, factor, None);
+    }
+    Cow::Owned(scaled)
+}
+
+fn scale_text_style_font_sizes(style: &TextStyle, factor: f32) -> TextStyle {
+    if is_identity_scale(factor) {
+        return style.clone();
+    }
+
+    let mut scaled = style.clone();
+    scaled.span_style =
+        scale_span_style_font_sizes(&style.span_style, factor, Some(DEFAULT_FONT_SIZE_SP));
+    scaled.paragraph_style.line_height =
+        scale_text_unit_sp(scaled.paragraph_style.line_height, factor);
+    if let Some(mut indent) = scaled.paragraph_style.text_indent {
+        indent.first_line = scale_text_unit_sp(indent.first_line, factor);
+        indent.rest_line = scale_text_unit_sp(indent.rest_line, factor);
+        scaled.paragraph_style.text_indent = Some(indent);
+    }
+    scaled
+}
+
+fn scale_span_style_font_sizes(
+    style: &crate::text::SpanStyle,
+    factor: f32,
+    default_font_size_sp: Option<f32>,
+) -> crate::text::SpanStyle {
+    let mut scaled = style.clone();
+    scaled.font_size = match (style.font_size, default_font_size_sp) {
+        (crate::text::TextUnit::Unspecified, Some(default_size)) => {
+            crate::text::TextUnit::Sp(default_size * factor)
+        }
+        (unit, Some(_)) => scale_text_unit_sp_and_em(unit, factor),
+        (unit, None) => scale_text_unit_sp(unit, factor),
+    };
+    scaled.letter_spacing = scale_text_unit_sp(scaled.letter_spacing, factor);
+    if let Some(mut shadow) = scaled.shadow {
+        shadow.offset.x = scale_finite_dimension(shadow.offset.x, factor);
+        shadow.offset.y = scale_finite_dimension(shadow.offset.y, factor);
+        shadow.blur_radius = scale_finite_dimension(shadow.blur_radius, factor);
+        scaled.shadow = Some(shadow);
+    }
+    if let Some(crate::text::TextDrawStyle::Stroke { width }) = scaled.draw_style {
+        scaled.draw_style = Some(crate::text::TextDrawStyle::Stroke {
+            width: width * factor,
+        });
+    }
+    scaled
+}
+
+fn annotated_text_needs_scaling(text: &crate::text::AnnotatedString) -> bool {
+    text.span_styles
+        .iter()
+        .any(|span| span_style_needs_scaling(&span.item))
+}
+
+fn span_style_needs_scaling(style: &crate::text::SpanStyle) -> bool {
+    matches!(style.font_size, crate::text::TextUnit::Sp(value) if value.is_finite())
+        || matches!(style.letter_spacing, crate::text::TextUnit::Sp(value) if value.is_finite())
+        || matches!(
+            style.draw_style,
+            Some(crate::text::TextDrawStyle::Stroke { .. })
+        )
+        || style.shadow.is_some()
+}
+
+fn scale_text_unit_sp(unit: crate::text::TextUnit, factor: f32) -> crate::text::TextUnit {
+    match unit {
+        crate::text::TextUnit::Sp(value) if value.is_finite() => {
+            crate::text::TextUnit::Sp(value * factor)
+        }
+        other => other,
+    }
+}
+
+fn scale_text_unit_sp_and_em(unit: crate::text::TextUnit, factor: f32) -> crate::text::TextUnit {
+    match unit {
+        crate::text::TextUnit::Sp(value) if value.is_finite() => {
+            crate::text::TextUnit::Sp(value * factor)
+        }
+        crate::text::TextUnit::Em(value) if value.is_finite() => {
+            crate::text::TextUnit::Em(value * factor)
+        }
+        other => other,
+    }
+}
+
+fn scale_finite_dimension(value: f32, factor: f32) -> f32 {
+    if value.is_finite() {
+        value * factor
+    } else {
+        value
+    }
+}
+
+fn is_identity_scale(factor: f32) -> bool {
+    (factor - 1.0).abs() <= f32::EPSILON
 }
 
 #[derive(Clone, Debug)]
@@ -1105,7 +1331,9 @@ fn apply_line_overflow<M: TextMeasurer + ?Sized>(
             TextOverflow::Ellipsis => format!("{line}{ELLIPSIS}"),
             TextOverflow::StartEllipsis => format!("{ELLIPSIS}{line}"),
             TextOverflow::MiddleEllipsis => format!("{ELLIPSIS}{line}"),
-            TextOverflow::Clip | TextOverflow::Visible => line.to_string(),
+            TextOverflow::Clip | TextOverflow::Visible | TextOverflow::ScaleDown { .. } => {
+                line.to_string()
+            }
         };
     };
 
@@ -1126,6 +1354,7 @@ fn apply_line_overflow<M: TextMeasurer + ?Sized>(
                 line.to_string()
             }
         }
+        TextOverflow::ScaleDown { .. } => line.to_string(),
     }
 }
 
@@ -1379,6 +1608,13 @@ mod tests {
         }
     }
 
+    fn assert_f32_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= 0.01,
+            "actual={actual}, expected={expected}"
+        );
+    }
+
     #[test]
     fn text_layout_options_wraps_and_limits_lines() {
         let style = TextStyle {
@@ -1507,6 +1743,161 @@ mod tests {
         );
         assert!(prepared.text.text.contains(ELLIPSIS));
         assert!(prepared.did_overflow);
+    }
+
+    #[test]
+    fn text_layout_options_scale_down_fits_without_rewriting_text() {
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(20.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::ScaleDown {
+                min_font_size_sp: 10.0,
+            },
+            soft_wrap: false,
+            max_lines: 1,
+            min_lines: 1,
+        };
+
+        let prepared = prepare_text_layout(
+            &crate::text::AnnotatedString::from("ABCDE"),
+            &style,
+            options,
+            Some(36.0),
+        );
+
+        assert_eq!(prepared.text.text, "ABCDE");
+        assert!(prepared.metrics.width <= 36.0 + WRAP_EPSILON);
+        assert!(!prepared.did_overflow);
+        let visual_font_size = prepared.visual_style.resolve_font_size(14.0);
+        assert!(visual_font_size < 20.0);
+        assert!(visual_font_size >= 10.0);
+    }
+
+    #[test]
+    fn text_layout_options_scale_down_scales_root_shadow() {
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(20.0),
+                shadow: Some(crate::text::Shadow {
+                    color: crate::modifier::Color(0.0, 0.0, 0.0, 1.0),
+                    offset: crate::modifier::Point::new(8.0, 4.0),
+                    blur_radius: 6.0,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::ScaleDown {
+                min_font_size_sp: 10.0,
+            },
+            soft_wrap: false,
+            max_lines: 1,
+            min_lines: 1,
+        };
+
+        let prepared = prepare_text_layout(
+            &crate::text::AnnotatedString::from("ABCDE"),
+            &style,
+            options,
+            Some(36.0),
+        );
+
+        let font_scale = prepared.visual_style.resolve_font_size(14.0) / 20.0;
+        let shadow = prepared
+            .visual_style
+            .span_style
+            .shadow
+            .expect("scaled style should retain shadow");
+        assert_f32_close(shadow.offset.x, 8.0 * font_scale);
+        assert_f32_close(shadow.offset.y, 4.0 * font_scale);
+        assert_f32_close(shadow.blur_radius, 6.0 * font_scale);
+    }
+
+    #[test]
+    fn text_layout_options_scale_down_stops_at_minimum_and_clips() {
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(20.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::ScaleDown {
+                min_font_size_sp: 10.0,
+            },
+            soft_wrap: false,
+            max_lines: 1,
+            min_lines: 1,
+        };
+
+        let prepared = prepare_text_layout(
+            &crate::text::AnnotatedString::from("ABCDEFGHIJ"),
+            &style,
+            options,
+            Some(12.0),
+        );
+
+        assert_eq!(prepared.text.text, "ABCDEFGHIJ");
+        assert!(prepared.did_overflow);
+        assert_eq!(prepared.metrics.width, 12.0);
+        assert_eq!(prepared.visual_style.resolve_font_size(14.0), 10.0);
+    }
+
+    #[test]
+    fn scale_annotated_font_sizes_borrows_when_spans_need_no_scaling() {
+        let plain = crate::text::AnnotatedString::from("plain");
+        assert!(matches!(
+            scale_annotated_font_sizes(&plain, 0.5),
+            std::borrow::Cow::Borrowed(_)
+        ));
+
+        let colored = crate::text::annotated_string::Builder::new()
+            .push_style(crate::text::SpanStyle {
+                color: Some(crate::modifier::Color(1.0, 0.0, 0.0, 1.0)),
+                ..Default::default()
+            })
+            .append("colored")
+            .pop()
+            .to_annotated_string();
+        assert!(matches!(
+            scale_annotated_font_sizes(&colored, 0.5),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn scale_annotated_font_sizes_scales_span_shadow_geometry() {
+        let text = crate::text::annotated_string::Builder::new()
+            .push_style(crate::text::SpanStyle {
+                shadow: Some(crate::text::Shadow {
+                    color: crate::modifier::Color(0.0, 0.0, 0.0, 1.0),
+                    offset: crate::modifier::Point::new(6.0, 2.0),
+                    blur_radius: 4.0,
+                }),
+                ..Default::default()
+            })
+            .append("shadow")
+            .pop()
+            .to_annotated_string();
+
+        let scaled = scale_annotated_font_sizes(&text, 0.5);
+        let std::borrow::Cow::Owned(scaled) = scaled else {
+            panic!("shadowed span should be scaled into owned text");
+        };
+        let shadow = scaled.span_styles[0]
+            .item
+            .shadow
+            .expect("scaled span should retain shadow");
+        assert_f32_close(shadow.offset.x, 3.0);
+        assert_f32_close(shadow.offset.y, 1.0);
+        assert_f32_close(shadow.blur_radius, 2.0);
     }
 
     #[test]

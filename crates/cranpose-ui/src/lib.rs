@@ -76,10 +76,10 @@ pub use pointer_dispatch::{
     schedule_pointer_repass,
 };
 pub use primitives::{
-    BasicText, BasicTextField, BasicTextFieldOptions, BitmapPainter, Box, BoxScope, BoxSpec,
-    BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, Canvas,
-    Column, ColumnSpec, ContentScale, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec,
-    Spacer, SubcomposeLayout, Text, DEFAULT_ALPHA,
+    BasicText, BasicTextField, BasicTextFieldOptions, BasicTextWithOptions, BitmapPainter, Box,
+    BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl,
+    Button, Canvas, Column, ColumnSpec, ContentScale, ForEach, Image, Layout, LayoutNode, Painter,
+    Row, RowSpec, Spacer, SubcomposeLayout, Text, TextWithOptions, DEFAULT_ALPHA,
 };
 // Lazy list exports - single source from cranpose-foundation
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
@@ -111,7 +111,7 @@ pub use text::{
     prepare_text_layout, prepare_text_layout_for_node, set_text_measurer, LinkAnnotation,
     ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     PreparedTextLayout, SpanStyle, StringAnnotation, TextDrawStyle, TextLayoutOptions,
-    TextMeasurer, TextMetrics, TextOverflow, TextShaping, TextStyle,
+    TextMeasurer, TextMetrics, TextOptions, TextOverflow, TextShaping, TextStyle,
 };
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};

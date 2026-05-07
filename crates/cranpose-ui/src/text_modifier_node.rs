@@ -498,6 +498,7 @@ mod tests {
             self.recorded.borrow_mut().push(node_id);
             crate::text::PreparedTextLayout {
                 text: text.clone(),
+                visual_style: TextStyle::default(),
                 metrics: crate::text::TextMetrics {
                     width: 12.0,
                     height: 18.0,
@@ -642,5 +643,29 @@ mod tests {
         assert_eq!(recorded, vec![Some(88)]);
         assert_eq!(measured_width, prepared_width);
         assert_eq!(measured_height, prepared_height);
+    }
+
+    #[test]
+    fn semantics_uses_source_text_for_scaled_overflow() {
+        let node = TextModifierNode::new(
+            Rc::new(AnnotatedString::from("Save Cranpose WebP")),
+            TextStyle::default(),
+            TextLayoutOptions {
+                overflow: crate::text::TextOverflow::ScaleDown {
+                    min_font_size_sp: 9.0,
+                },
+                soft_wrap: false,
+                max_lines: 1,
+                min_lines: 1,
+            },
+        );
+        let mut config = SemanticsConfiguration::default();
+
+        node.merge_semantics(&mut config);
+
+        assert_eq!(
+            config.content_description.as_deref(),
+            Some("Save Cranpose WebP")
+        );
     }
 }

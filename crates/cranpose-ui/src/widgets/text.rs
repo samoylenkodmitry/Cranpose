@@ -10,7 +10,7 @@
 use crate::composable;
 use crate::layout::policies::EmptyMeasurePolicy;
 use crate::modifier::Modifier;
-use crate::text::{TextLayoutOptions, TextOverflow, TextStyle};
+use crate::text::{TextLayoutOptions, TextOptions, TextOverflow, TextStyle};
 use crate::text_modifier_node::TextModifierElement;
 use crate::widgets::Layout;
 use cranpose_core::{MutableState, NodeId, State};
@@ -149,20 +149,11 @@ fn compose_basic_text_group(
     text: TextSource,
     modifier: Modifier,
     style: TextStyle,
-    overflow: TextOverflow,
-    soft_wrap: bool,
-    max_lines: usize,
-    min_lines: usize,
+    options: TextLayoutOptions,
 ) -> NodeId {
     let current = text.resolve();
 
-    let options = TextLayoutOptions {
-        overflow,
-        soft_wrap,
-        max_lines,
-        min_lines,
-    }
-    .normalized();
+    let options = options.normalized();
 
     // Create a text modifier element that will add TextModifierNode to the chain
     // TextModifierNode handles measurement, drawing, and semantics
@@ -179,6 +170,19 @@ fn compose_basic_text_group(
 }
 
 #[composable]
+pub fn BasicTextWithOptions<S>(
+    text: S,
+    modifier: Modifier,
+    style: TextStyle,
+    options: TextLayoutOptions,
+) -> NodeId
+where
+    S: IntoTextSource + Clone + PartialEq + 'static,
+{
+    compose_basic_text_group(text.into_text_source(), modifier, style, options)
+}
+
+#[composable]
 pub fn BasicText<S>(
     text: S,
     modifier: Modifier,
@@ -191,15 +195,30 @@ pub fn BasicText<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    compose_basic_text_group(
-        text.into_text_source(),
+    BasicTextWithOptions(
+        text,
         modifier,
         style,
-        overflow,
-        soft_wrap,
-        max_lines,
-        min_lines,
+        TextLayoutOptions {
+            overflow,
+            soft_wrap,
+            max_lines,
+            min_lines,
+        },
     )
+}
+
+#[composable]
+pub fn TextWithOptions<S>(
+    value: S,
+    modifier: Modifier,
+    style: TextStyle,
+    options: TextOptions,
+) -> NodeId
+where
+    S: IntoTextSource + Clone + PartialEq + 'static,
+{
+    BasicTextWithOptions(value, modifier, style, TextLayoutOptions::from(options))
 }
 
 #[composable]
@@ -207,15 +226,7 @@ pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    BasicText(
-        value,
-        modifier,
-        style,
-        TextOverflow::Clip,
-        true,
-        usize::MAX,
-        1,
-    )
+    TextWithOptions(value, modifier, style, TextOptions::default())
 }
 
 #[cfg(test)]
@@ -229,14 +240,30 @@ mod tests {
     #[test]
     fn basic_text_creates_node() {
         let composition = run_test_composition(|| {
-            BasicText(
+            BasicTextWithOptions(
                 "Hello",
                 Modifier::empty(),
                 TextStyle::default(),
-                TextOverflow::Clip,
-                true,
-                usize::MAX,
-                1,
+                TextLayoutOptions::default(),
+            );
+        });
+
+        assert!(composition.root().is_some());
+    }
+
+    #[test]
+    fn text_with_options_creates_node() {
+        let composition = run_test_composition(|| {
+            TextWithOptions(
+                "Hello",
+                Modifier::empty(),
+                TextStyle::default(),
+                TextOptions {
+                    overflow: TextOverflow::Ellipsis,
+                    soft_wrap: false,
+                    max_lines: Some(1),
+                    ..TextOptions::default()
+                },
             );
         });
 
