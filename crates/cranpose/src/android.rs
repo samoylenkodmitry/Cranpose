@@ -47,6 +47,25 @@ fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
     density_dpi.map(|dpi| dpi as f32 / 160.0).unwrap_or(2.0) // Fallback to xhdpi (2.0) if density unavailable
 }
 
+fn update_android_platform_geometry(
+    app: &android_activity::AndroidApp,
+    android_platform: &mut AndroidPlatform,
+) -> f32 {
+    let density = get_display_density(app);
+    android_platform.set_scale_factor(density as f64);
+
+    let content_rect = app.content_rect();
+    if content_rect.right > content_rect.left && content_rect.bottom > content_rect.top {
+        android_platform
+            .set_input_surface_offset_px(content_rect.left as f64, content_rect.top as f64);
+    } else {
+        android_platform.set_input_surface_offset_px(0.0, 0.0);
+    }
+
+    cranpose_ui::set_density(density);
+    density
+}
+
 /// Renders a single frame. Returns true if out of memory (should exit).
 fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>) -> bool {
     shell.update();
@@ -281,11 +300,16 @@ pub fn run(
 
                             surface.configure(&device, &surface_config);
 
-                            // Get display density and update platform
-                            let density = get_display_density(&app);
-                            android_platform.set_scale_factor(density as f64);
-                            cranpose_ui::set_density(density);
-                            log::info!("Display density: {:.2}x", density);
+                            let density =
+                                update_android_platform_geometry(&app, &mut android_platform);
+                            let (input_offset_x, input_offset_y) =
+                                android_platform.input_surface_offset_px();
+                            log::info!(
+                                "Display density: {:.2}x, input surface offset: ({:.1}, {:.1}) px",
+                                density,
+                                input_offset_x,
+                                input_offset_y
+                            );
 
                             // Create or reuse app shell
                             if app_shell.is_none() {
@@ -369,14 +393,17 @@ pub fn run(
                             let width = native_window.width() as u32;
                             let height = native_window.height() as u32;
 
-                            let density = get_display_density(&app);
-                            android_platform.set_scale_factor(density as f64);
-                            cranpose_ui::set_density(density);
+                            let density =
+                                update_android_platform_geometry(&app, &mut android_platform);
+                            let (input_offset_x, input_offset_y) =
+                                android_platform.input_surface_offset_px();
                             log::info!(
-                                "Window resized to {}x{} at {:.2}x density",
+                                "Window resized to {}x{} at {:.2}x density with input surface offset ({:.1}, {:.1}) px",
                                 width,
                                 height,
-                                density
+                                density,
+                                input_offset_x,
+                                input_offset_y
                             );
 
                             if let (Some(resources), Some(shell)) =
@@ -403,6 +430,17 @@ pub fn run(
                                 }
                             }
                         }
+                    }
+                    MainEvent::ContentRectChanged { .. } => {
+                        let density = update_android_platform_geometry(&app, &mut android_platform);
+                        let (input_offset_x, input_offset_y) =
+                            android_platform.input_surface_offset_px();
+                        log::info!(
+                            "Content rect changed; input surface offset: ({:.1}, {:.1}) px at {:.2}x density",
+                            input_offset_x,
+                            input_offset_y,
+                            density
+                        );
                     }
                     MainEvent::RedrawNeeded { .. } => {
                         if let Some(shell) = &mut app_shell {
