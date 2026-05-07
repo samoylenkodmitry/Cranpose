@@ -4,7 +4,7 @@
 //! masking workflows, such as revealing/cutting content with a rounded shape
 //! and a feathered opacity transition.
 
-use crate::{RenderEffect, RuntimeShader};
+use crate::{CornerRadii, RenderEffect, RuntimeShader};
 
 /// Direction of the gradient cut mask.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -177,8 +177,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 ///
 /// Uniform layout:
 /// - 0,1: container size in dp
-/// - 2: corner radius in dp
-/// - 3: edge feather in dp
+/// - 2: edge feather in dp
+/// - 3,4,5,6: corner radii in dp (top-left, top-right, bottom-right, bottom-left)
 pub const ROUNDED_ALPHA_MASK_WGSL: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -207,15 +207,29 @@ fn get_vec2(index: u32) -> vec2<f32> {
     return vec2<f32>(get_float(index), get_float(index + 1u));
 }
 
-fn sd_round_rect(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
+fn corner_radius_for_point(p: vec2<f32>, radii: vec4<f32>) -> f32 {
+    if (p.x < 0.0) {
+        if (p.y < 0.0) {
+            return radii.x;
+        }
+        return radii.w;
+    }
+    if (p.y < 0.0) {
+        return radii.y;
+    }
+    return radii.z;
+}
+
+fn sd_round_rect(p: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>) -> f32 {
+    let radius = corner_radius_for_point(p, radii);
     let q = abs(p) - half_size + vec2<f32>(radius);
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
-fn rounded_rect_alpha(local_px: vec2<f32>, size_px: vec2<f32>, corner_radius_px: f32, feather_px: f32) -> f32 {
+fn rounded_rect_alpha(local_px: vec2<f32>, size_px: vec2<f32>, corner_radii_px: vec4<f32>, feather_px: f32) -> f32 {
     let half = size_px * 0.5;
     let p = local_px - half;
-    let d = sd_round_rect(p, half, corner_radius_px);
+    let d = sd_round_rect(p, half, corner_radii_px);
     let half_feather = max(feather_px * 0.5, 0.001);
     return 1.0 - smoothstep(-half_feather, half_feather, d);
 }
@@ -236,9 +250,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let local_px = uv * tex_size - effect_rect.xy;
     let size_px = container_dp * dp_scale;
 
-    let corner_radius_px = max(get_float(2u) * s, 0.0);
-    let feather_px = max(get_float(3u) * s, 0.0);
-    let mask = rounded_rect_alpha(local_px, size_px, corner_radius_px, feather_px);
+    let corner_radii_px = max(vec4<f32>(
+        get_float(3u),
+        get_float(4u),
+        get_float(5u),
+        get_float(6u),
+    ) * s, vec4<f32>(0.0));
+    let feather_px = max(get_float(2u) * s, 0.0);
+    let mask = rounded_rect_alpha(local_px, size_px, corner_radii_px, feather_px);
 
     let sample = textureSample(input_texture, input_sampler, uv);
     return sample * mask;
@@ -353,10 +372,31 @@ pub fn rounded_alpha_mask_effect(
     corner_radius: f32,
     edge_feather: f32,
 ) -> RenderEffect {
+    rounded_corner_alpha_mask_effect(
+        area_width,
+        area_height,
+        CornerRadii::uniform(corner_radius),
+        edge_feather,
+    )
+}
+
+/// Builds a rounded alpha mask effect with independent corner radii.
+pub fn rounded_corner_alpha_mask_effect(
+    area_width: f32,
+    area_height: f32,
+    corner_radii: CornerRadii,
+    edge_feather: f32,
+) -> RenderEffect {
     let mut shader = RuntimeShader::new(ROUNDED_ALPHA_MASK_WGSL);
     shader.set_float2(0, area_width.max(1.0), area_height.max(1.0));
-    shader.set_float(2, corner_radius.max(0.0));
-    shader.set_float(3, edge_feather.max(0.0));
+    shader.set_float(2, edge_feather.max(0.0));
+    shader.set_float4(
+        3,
+        corner_radii.top_left.max(0.0),
+        corner_radii.top_right.max(0.0),
+        corner_radii.bottom_right.max(0.0),
+        corner_radii.bottom_left.max(0.0),
+    );
     RenderEffect::runtime_shader(shader)
 }
 
@@ -454,8 +494,39 @@ mod tests {
         let u = shader.uniforms();
         assert_eq!(u[0], 240.0);
         assert_eq!(u[1], 120.0);
-        assert_eq!(u[2], 14.0);
-        assert_eq!(u[3], 6.0);
+        assert_eq!(u[2], 6.0);
+        assert_eq!(u[3], 14.0);
+        assert_eq!(u[4], 14.0);
+        assert_eq!(u[5], 14.0);
+        assert_eq!(u[6], 14.0);
+    }
+
+    #[test]
+    fn rounded_corner_alpha_mask_sets_per_corner_uniforms() {
+        let effect = rounded_corner_alpha_mask_effect(
+            240.0,
+            120.0,
+            CornerRadii {
+                top_left: 4.0,
+                top_right: 8.0,
+                bottom_right: 12.0,
+                bottom_left: 16.0,
+            },
+            2.0,
+        );
+        let RenderEffect::Shader { shader } = effect else {
+            panic!("expected shader render effect");
+        };
+
+        assert_eq!(shader.source(), ROUNDED_ALPHA_MASK_WGSL);
+        let u = shader.uniforms();
+        assert_eq!(u[0], 240.0);
+        assert_eq!(u[1], 120.0);
+        assert_eq!(u[2], 2.0);
+        assert_eq!(u[3], 4.0);
+        assert_eq!(u[4], 8.0);
+        assert_eq!(u[5], 12.0);
+        assert_eq!(u[6], 16.0);
     }
 
     #[test]

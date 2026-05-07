@@ -7,7 +7,9 @@ use cranpose_ui::{
     prepare_text_layout, DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect,
     ResolvedModifiers, Size, SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
 };
-use cranpose_ui_graphics::{CompositingStrategy, GraphicsLayer};
+use cranpose_ui_graphics::{
+    rounded_corner_alpha_mask_effect, CompositingStrategy, GraphicsLayer, RoundedCornerShape,
+};
 
 use crate::graph::{
     CachePolicy, DrawPrimitiveNode, HitTestNode, IsolationReasons, LayerNode, PrimitiveEntry,
@@ -18,6 +20,7 @@ use crate::raster_cache::LayerRasterCacheHashes;
 use crate::style_shared::{primitives_for_placement, DrawPlacement};
 
 const TEXT_CLIP_PAD: f32 = 1.0;
+const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
 
 #[derive(Clone)]
 struct BuildNodeSnapshot {
@@ -283,7 +286,13 @@ fn build_layer_node_from_data(
         width: layout_state.size.width,
         height: layout_state.size.height,
     };
-    let graphics_layer = modifier_slices.graphics_layer().unwrap_or_default();
+    let clip_to_bounds = modifier_slices.clip_to_bounds();
+    let graphics_layer = graphics_layer_with_shaped_clip(
+        modifier_slices.graphics_layer().unwrap_or_default(),
+        clip_to_bounds,
+        modifier_slices.corner_shape(),
+        local_bounds,
+    );
     let transform_to_parent =
         layer_transform_to_parent(local_bounds, layout_state.position, &graphics_layer);
     let isolation = isolation_reasons(&graphics_layer);
@@ -292,7 +301,6 @@ fn build_layer_node_from_data(
     } else {
         CachePolicy::None
     };
-    let clip_to_bounds = modifier_slices.clip_to_bounds();
     let click_actions = modifier_slices.click_handlers();
     let pointer_inputs = modifier_slices.pointer_inputs();
     let shadow_clip = clip_to_bounds.then_some(local_bounds);
@@ -509,6 +517,20 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
     for child in &node.children {
         children.push(layout_box_to_snapshot(child, Some(node)));
     }
+    let base_graphics_layer = node.node_data.modifier_slices.graphics_layer();
+    let graphics_layer = graphics_layer_with_shaped_clip(
+        base_graphics_layer.clone().unwrap_or_default(),
+        node.node_data.modifier_slices.clip_to_bounds(),
+        node.node_data.modifier_slices.corner_shape(),
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: node.rect.width,
+            height: node.rect.height,
+        },
+    );
+    let has_graphics_layer =
+        base_graphics_layer.is_some() || graphics_layer.render_effect.is_some();
 
     BuildNodeSnapshot {
         node_id: node.node_id,
@@ -529,9 +551,44 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         annotated_text: node.node_data.modifier_slices.annotated_string(),
         text_style: node.node_data.modifier_slices.text_style().cloned(),
         text_layout_options: node.node_data.modifier_slices.text_layout_options(),
-        graphics_layer: node.node_data.modifier_slices.graphics_layer(),
+        graphics_layer: has_graphics_layer.then_some(graphics_layer),
         children,
     }
+}
+
+fn graphics_layer_with_shaped_clip(
+    mut graphics_layer: GraphicsLayer,
+    clip_to_bounds: bool,
+    corner_shape: Option<RoundedCornerShape>,
+    local_bounds: Rect,
+) -> GraphicsLayer {
+    if !clip_to_bounds {
+        return graphics_layer;
+    }
+
+    let Some(corner_shape) = corner_shape else {
+        return graphics_layer;
+    };
+    let radii = corner_shape.resolve(local_bounds.width, local_bounds.height);
+    if radii.top_left <= f32::EPSILON
+        && radii.top_right <= f32::EPSILON
+        && radii.bottom_right <= f32::EPSILON
+        && radii.bottom_left <= f32::EPSILON
+    {
+        return graphics_layer;
+    }
+
+    let rounded_clip = rounded_corner_alpha_mask_effect(
+        local_bounds.width,
+        local_bounds.height,
+        radii,
+        ROUNDED_CLIP_EDGE_FEATHER,
+    );
+    graphics_layer.render_effect = Some(match graphics_layer.render_effect.take() {
+        Some(existing) => existing.then(rounded_clip),
+        None => rounded_clip,
+    });
+    graphics_layer
 }
 
 fn isolation_reasons(layer: &GraphicsLayer) -> IsolationReasons {
@@ -641,9 +698,9 @@ mod tests {
     };
     use cranpose_ui::{
         Color, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Point, Rect,
-        ResolvedModifiers, Size, Text, TextStyle,
+        ResolvedModifiers, RoundedCornerShape, Size, Text, TextStyle,
     };
-    use cranpose_ui_graphics::{Brush, DrawPrimitive, GraphicsLayer};
+    use cranpose_ui_graphics::{Brush, DrawPrimitive, GraphicsLayer, RenderEffect};
 
     use super::*;
 
@@ -695,6 +752,18 @@ mod tests {
             }
         }
         None
+    }
+
+    fn graph_has_runtime_shader_effect(layer: &LayerNode) -> bool {
+        layer
+            .graphics_layer
+            .render_effect
+            .as_ref()
+            .is_some_and(RenderEffect::contains_runtime_shader)
+            || layer.children.iter().any(|child| match child {
+                RenderNode::Layer(child_layer) => graph_has_runtime_shader_effect(child_layer),
+                RenderNode::Primitive(_) => false,
+            })
     }
 
     fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
@@ -861,6 +930,99 @@ mod tests {
 
         let top_left = child.transform_to_parent.map_point(Point::default());
         assert_eq!(top_left, Point { x: 24.0, y: -2.0 });
+    }
+
+    #[test]
+    fn rounded_clip_to_bounds_injects_per_corner_mask_effect() {
+        let layer = graphics_layer_with_shaped_clip(
+            GraphicsLayer::default(),
+            true,
+            Some(RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0)),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 40.0,
+            },
+        );
+
+        let Some(RenderEffect::Shader { shader }) = layer.render_effect else {
+            panic!("rounded clip must emit a shader mask");
+        };
+        let uniforms = shader.uniforms();
+        assert_eq!(uniforms[0], 100.0);
+        assert_eq!(uniforms[1], 40.0);
+        assert_eq!(uniforms[2], ROUNDED_CLIP_EDGE_FEATHER);
+        assert_eq!(uniforms[3], 4.0);
+        assert_eq!(uniforms[4], 8.0);
+        assert_eq!(uniforms[5], 12.0);
+        assert_eq!(uniforms[6], 16.0);
+    }
+
+    #[test]
+    fn rounded_clip_to_bounds_keeps_existing_effect_inside_mask() {
+        let existing = RenderEffect::blur(3.0);
+        let layer = graphics_layer_with_shaped_clip(
+            GraphicsLayer {
+                render_effect: Some(existing.clone()),
+                ..GraphicsLayer::default()
+            },
+            true,
+            Some(RoundedCornerShape::uniform(10.0)),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 40.0,
+            },
+        );
+
+        let Some(RenderEffect::Chain { first, second }) = layer.render_effect else {
+            panic!("existing effect should chain into rounded clip mask");
+        };
+        assert_eq!(*first, existing);
+        assert!(
+            matches!(*second, RenderEffect::Shader { .. }),
+            "rounded mask must be the outer effect"
+        );
+    }
+
+    #[test]
+    fn rounded_corners_clip_to_bounds_builds_graph_mask_from_modifier_chain() {
+        let mut composition = cranpose_ui::run_test_composition(|| {
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .width(100.0)
+                    .height(40.0)
+                    .rounded_corner_shape(RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0))
+                    .clip_to_bounds(),
+                cranpose_ui::BoxSpec::default(),
+                || {
+                    Text("rounded child", Modifier::empty(), TextStyle::default());
+                },
+            );
+        });
+
+        let root = composition.root().expect("rounded clip root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 160.0,
+                    height: 100.0,
+                },
+            )
+            .expect("rounded clip layout");
+        let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("rounded clip graph");
+        applier.clear_runtime_handle();
+
+        assert!(
+            graph_has_runtime_shader_effect(&graph.root),
+            "rounded_corners().clip_to_bounds() must build a shaped mask effect for descendants"
+        );
     }
 
     #[test]
