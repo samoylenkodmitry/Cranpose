@@ -2,10 +2,22 @@ use super::{inspector_metadata, GraphicsLayer, Modifier};
 use crate::modifier_nodes::{GraphicsLayerElement, LazyGraphicsLayerElement};
 use cranpose_ui_graphics::{
     gradient_cut_mask_effect, gradient_fade_dst_out_effect, rounded_alpha_mask_effect, BlendMode,
-    Color, ColorFilter, CompositingStrategy, GradientCutMaskSpec, GradientFadeMaskSpec, LayerShape,
-    RenderEffect, RoundedCornerShape, RuntimeShader, TransformOrigin,
+    Color, ColorFilter, CompositingStrategy, Dp, GradientCutMaskSpec, GradientFadeMaskSpec,
+    LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader, TransformOrigin,
 };
 use std::rc::Rc;
+
+fn backdrop_blur_layer(radius: Dp, shape: LayerShape) -> GraphicsLayer {
+    let radius_px = radius
+        .to_px(crate::render_state::current_density())
+        .max(0.0);
+    GraphicsLayer {
+        backdrop_effect: (radius_px > 0.0).then(|| RenderEffect::blur(radius_px)),
+        shape,
+        clip: true,
+        ..Default::default()
+    }
+}
 
 impl Modifier {
     /// Apply a lazily evaluated graphics layer.
@@ -195,18 +207,36 @@ impl Modifier {
     }
 
     /// Blur content behind this composable, clipped to the composable bounds.
-    pub fn backdrop_blur(self, radius: f32) -> Self {
-        if radius <= 0.0 {
+    ///
+    /// `radius` is expressed in Dp and converted to px using the current render
+    /// density when modifier slices are evaluated.
+    pub fn backdrop_blur(self, radius: Dp) -> Self {
+        if radius.0 <= 0.0 {
             return self.clip_to_bounds();
         }
 
-        self.backdrop_effect(RenderEffect::blur(radius))
-            .clip_to_bounds()
+        let modifier = Self::with_element(LazyGraphicsLayerElement::new(Rc::new(move || {
+            backdrop_blur_layer(radius, LayerShape::Rectangle)
+        })))
+        .with_inspector_metadata(inspector_metadata("backdropBlur", move |info| {
+            info.add_property("radius", radius.0.to_string());
+        }));
+        self.then(modifier)
     }
 
     /// Apply a frosted glass material: backdrop blur, clipped shape, and tint.
     pub fn glass_material(self, material: GlassMaterial) -> Self {
-        self.backdrop_blur(material.blur_radius)
+        let blur_radius = material.blur_radius;
+        let shape = material.shape;
+        let modifier = Self::with_element(LazyGraphicsLayerElement::new(Rc::new(move || {
+            backdrop_blur_layer(blur_radius, LayerShape::Rounded(shape))
+        })))
+        .with_inspector_metadata(inspector_metadata("glassMaterial", move |info| {
+            info.add_property("blurRadius", blur_radius.0.to_string());
+            info.add_property("shape", format!("{shape:?}"));
+        }));
+
+        self.then(modifier)
             .rounded_corner_shape(material.shape)
             .background(material.tint)
     }
@@ -315,13 +345,13 @@ impl Modifier {
 /// Visual parameters for [`Modifier::glass_material`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassMaterial {
-    pub blur_radius: f32,
+    pub blur_radius: Dp,
     pub tint: Color,
     pub shape: RoundedCornerShape,
 }
 
 impl GlassMaterial {
-    pub fn new(blur_radius: f32, tint: Color, shape: RoundedCornerShape) -> Self {
+    pub fn new(blur_radius: Dp, tint: Color, shape: RoundedCornerShape) -> Self {
         Self {
             blur_radius,
             tint,
