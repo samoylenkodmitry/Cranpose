@@ -954,6 +954,7 @@ dependencies = [
  "cranpose-render-wgpu",
  "cranpose-services",
  "cranpose-ui",
+ "jni",
  "log",
  "pixels",
  "pollster 0.4.0",

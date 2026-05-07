@@ -15,8 +15,15 @@ compile_error!(
 #[cfg(not(any(feature = "renderer-pixels", feature = "renderer-wgpu")))]
 compile_error!("cranpose requires either `renderer-pixels` or `renderer-wgpu` feature.");
 
+#[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
+mod android_host_window;
 mod launcher;
 mod native_window;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+pub use android_host_window::{
+    rememberAndroidHostWindowState, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
+    AndroidHostWindowState,
+};
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 pub use launcher::LaunchError;
 pub use launcher::{AppLauncher, AppSettings};
@@ -48,6 +55,11 @@ pub type RobotAppHook = dyn FnMut(String, String) -> Result<Option<String>, Stri
 
 /// Convenience imports for Cranpose applications.
 pub mod prelude {
+    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+    pub use crate::{
+        rememberAndroidHostWindowState, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
+        AndroidHostWindowState,
+    };
     pub use crate::{
         rememberWindowState, AppLauncher, AppSettings, Window, WindowAttachPolicy, WindowConfig,
         WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
