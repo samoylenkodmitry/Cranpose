@@ -112,6 +112,11 @@ impl Painter {
         }
     }
 
+    /// Returns the underlying bitmap.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this painter is not backed by an `ImageBitmap`.
     pub fn bitmap(&self) -> &ImageBitmap {
         self.as_bitmap()
             .expect("Painter::bitmap is only available for BitmapPainter values")
@@ -219,7 +224,7 @@ impl SvgPainter {
     }
 
     fn cached_bitmap(&self, key: SvgRasterKey) -> Result<Option<ImageBitmap>, SvgPainterError> {
-        let cache = self
+        let mut cache = self
             .inner
             .cache
             .lock()
@@ -238,13 +243,10 @@ impl SvgPainter {
     }
 
     fn rasterize_uncached(&self, key: SvgRasterKey) -> Result<ImageBitmap, SvgPainterError> {
-        let pixel_count = (key.width as usize)
+        (key.width as usize)
             .checked_mul(key.height as usize)
             .and_then(|value| value.checked_mul(4))
             .ok_or(SvgPainterError::RasterDimensionsTooLarge)?;
-        if pixel_count == 0 {
-            return Err(SvgPainterError::InvalidRasterDimensions);
-        }
 
         let mut pixmap = resvg::tiny_skia::Pixmap::new(key.width, key.height).ok_or(
             SvgPainterError::RasterAllocationFailed {
@@ -263,12 +265,14 @@ impl SvgPainter {
 }
 
 fn demultiplied_rgba_pixels(pixmap: &resvg::tiny_skia::Pixmap) -> Vec<u8> {
-    let mut pixels = Vec::with_capacity(pixmap.data().len());
-    for pixel in pixmap.pixels() {
-        let color = pixel.demultiply();
-        pixels.extend_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()]);
-    }
-    pixels
+    pixmap
+        .pixels()
+        .iter()
+        .flat_map(|pixel| {
+            let color = pixel.demultiply();
+            [color.red(), color.green(), color.blue(), color.alpha()]
+        })
+        .collect()
 }
 
 impl std::fmt::Debug for SvgPainter {
@@ -295,23 +299,21 @@ impl Hash for SvgPainter {
 }
 
 impl SvgRasterCache {
-    fn get(&self, key: SvgRasterKey) -> Option<ImageBitmap> {
-        self.entries
-            .iter()
-            .find(|entry| entry.key == key)
-            .map(|entry| entry.bitmap.clone())
+    fn get(&mut self, key: SvgRasterKey) -> Option<ImageBitmap> {
+        let position = self.entries.iter().position(|entry| entry.key == key)?;
+        let entry = self.entries.remove(position);
+        let bitmap = entry.bitmap.clone();
+        self.entries.push(entry);
+        Some(bitmap)
     }
 
     fn insert(&mut self, key: SvgRasterKey, bitmap: ImageBitmap) {
-        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.key == key) {
-            entry.bitmap = bitmap;
-            return;
-        }
-
-        self.entries.push(SvgRasterEntry { key, bitmap });
-        if self.entries.len() > SVG_RASTER_CACHE_LIMIT {
+        if let Some(position) = self.entries.iter().position(|entry| entry.key == key) {
+            self.entries.remove(position);
+        } else if self.entries.len() >= SVG_RASTER_CACHE_LIMIT {
             self.entries.remove(0);
         }
+        self.entries.push(SvgRasterEntry { key, bitmap });
     }
 }
 
@@ -721,6 +723,10 @@ mod tests {
         ImageBitmap::from_rgba8(4, 2, vec![255; 4 * 2 * 4]).expect("bitmap")
     }
 
+    fn cache_test_bitmap(width: u32) -> ImageBitmap {
+        ImageBitmap::from_rgba8(width, 1, vec![255; width as usize * 4]).expect("bitmap")
+    }
+
     fn pixel_at(bitmap: &ImageBitmap, x: u32, y: u32) -> [u8; 4] {
         let offset = ((y * bitmap.width() + x) * 4) as usize;
         let pixels = bitmap.pixels();
@@ -780,6 +786,35 @@ mod tests {
             .expect("second raster");
 
         assert_eq!(first.id(), second.id());
+    }
+
+    #[test]
+    fn svg_raster_cache_evicts_least_recently_used_entry() {
+        let mut cache = SvgRasterCache::default();
+        let keys: Vec<SvgRasterKey> = (0..SVG_RASTER_CACHE_LIMIT)
+            .map(|index| SvgRasterKey {
+                width: index as u32 + 1,
+                height: 1,
+            })
+            .collect();
+
+        for key in &keys {
+            cache.insert(*key, cache_test_bitmap(key.width));
+        }
+
+        let recent = cache.get(keys[0]).expect("cached raster");
+        let new_key = SvgRasterKey {
+            width: SVG_RASTER_CACHE_LIMIT as u32 + 1,
+            height: 1,
+        };
+        cache.insert(new_key, cache_test_bitmap(new_key.width));
+
+        assert!(cache.get(keys[1]).is_none());
+        assert_eq!(
+            cache.get(keys[0]).expect("retained raster").id(),
+            recent.id()
+        );
+        assert!(cache.get(new_key).is_some());
     }
 
     #[test]
