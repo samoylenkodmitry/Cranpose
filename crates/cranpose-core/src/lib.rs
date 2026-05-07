@@ -2110,6 +2110,14 @@ fn update_typed_node<N: Node + 'static>(node: &mut dyn Node, id: NodeId) -> Resu
 }
 
 fn insert_child_with_reparenting(applier: &mut dyn Applier, parent_id: NodeId, child_id: NodeId) {
+    if parent_id == child_id {
+        debug_assert_ne!(
+            parent_id, child_id,
+            "a node cannot be attached as its own child"
+        );
+        return;
+    }
+
     let old_parent = applier
         .get_mut(child_id)
         .ok()

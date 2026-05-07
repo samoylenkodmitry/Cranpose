@@ -298,6 +298,13 @@ impl Composer {
 
         // During recomposition, preserve the original parent when possible.
         if let Some(parent_hint) = self.core.recranpose_parent_hint.get() {
+            if parent_hint == id {
+                debug_assert_ne!(
+                    parent_hint, id,
+                    "a node cannot be attached as its own parent"
+                );
+                return;
+            }
             let parent_status = {
                 let mut applier = self.borrow_applier();
                 applier
@@ -384,6 +391,7 @@ impl Composer {
             new_children: ChildList::new(),
             new_children_membership: None,
             attach_mode,
+            synthetic_root: false,
         });
     }
 
@@ -399,6 +407,7 @@ impl Composer {
                 new_children,
                 new_children_membership: _new_children_membership,
                 attach_mode,
+                synthetic_root: _synthetic_root,
             } = frame;
 
             log::trace!(target: "cranpose::compose::parent", "pop_parent: node #{}", id);

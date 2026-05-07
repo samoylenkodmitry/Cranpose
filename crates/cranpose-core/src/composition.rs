@@ -432,6 +432,9 @@ impl<A: Applier + 'static> Composition<A> {
                         self.observer.clone(),
                         self.root,
                     );
+                    // Scoped recomposition attaches emitted roots through scope parent hints.
+                    // A synthetic root frame would reparent skipped descendants to the root.
+                    composer.parent_stack().clear();
                     self.observer.begin_frame();
                     let (root, commands, side_effects, requested_root_render, compact_applier) =
                         composer.install(|composer| {
