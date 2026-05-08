@@ -956,6 +956,7 @@ dependencies = [
  "cranpose-ui",
  "jni",
  "log",
+ "ndk",
  "pixels",
  "pollster 0.4.0",
  "raw-window-handle",

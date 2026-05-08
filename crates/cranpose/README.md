@@ -37,8 +37,36 @@ Behavior by Android windowing mode:
     requests.
 -   Freeform and desktop-windowing activities can honor `Window.setLayout`, then
     Cranpose reconfigures WGPU and the viewport from the following resize event.
--   Overlay windows are a separate Android surface and permission model. This
-    API sizes only the current `NativeActivity` host window.
+-   Overlay windows have a separate Android surface and permission model; when
+    overlay mode is active, the same state resizes that surface through
+    `WindowManager.updateViewLayout`.
+
+## Android Overlay Windows
+
+Apps that need a true always-on-top Android surface can opt into Cranpose's
+overlay backend with `AppLauncher::with_android_overlay_window(...)`. The
+overlay renders the app root into a Java `SurfaceView` attached through
+`WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY`; pointer events from that
+surface are translated into the same Cranpose input path as activity touches.
+
+Android overlay requirements:
+
+-   Declare `android.permission.SYSTEM_ALERT_WINDOW` in the host manifest.
+-   Ask the user for overlay permission before launch; Cranpose falls back to
+    the activity surface when Android denies or cannot create the overlay.
+-   Include `crates/cranpose/android/java` in the Android source set so the
+    `dev.cranpose.android.CranposeOverlayWindow` helper is packaged with the
+    app.
+-   Use Android 8.0/API 26 or newer for `TYPE_APPLICATION_OVERLAY`.
+-   Treat always-on-top overlays as a product and Play policy risk; Android may
+    deny, revoke, or restrict the permission outside Cranpose's control.
+
+The overlay surface has its own lifecycle: `SurfaceView` creation, resize, touch,
+and destroy callbacks are queued into the Rust Android event loop, and Cranpose
+keeps the `ANativeWindow` reference alive for as long as WGPU uses that surface.
+Apps can resize the active overlay with `rememberAndroidHostWindowState`; the
+runtime forwards accepted size requests to `WindowManager.updateViewLayout` and
+reconfigures WGPU from the following `SurfaceView` resize callback.
 
 ## Architecture
 

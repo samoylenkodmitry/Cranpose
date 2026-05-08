@@ -72,6 +72,7 @@ console_error_panic_hook = "0.1"
 android-activity = { workspace = true }
 android_logger = "0.15"
 jni = "0.21.1"
+ndk = "0.9.0"
 raw-window-handle = "0.6"
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]

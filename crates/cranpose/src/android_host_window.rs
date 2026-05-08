@@ -189,8 +189,9 @@ impl AndroidHostWindowState {
 /// usually keep the system-managed bounds and report
 /// [`AndroidHostWindowSizeStatus::Unsupported`].
 ///
-/// Overlay windows are a separate Android surface and permission model; this
-/// state targets only the current `NativeActivity` host window.
+/// In normal Android activity mode this state targets the current
+/// `NativeActivity` host window. In Android overlay mode it resizes the active
+/// overlay surface through `WindowManager.updateViewLayout`.
 #[allow(non_snake_case)]
 #[composable]
 pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWindowState {
