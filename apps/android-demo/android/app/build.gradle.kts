@@ -89,6 +89,9 @@ android {
     }
 
     sourceSets {
+        getByName("main") {
+            java.srcDirs("../../../../crates/cranpose/android/java")
+        }
         getByName("debug") {
             // Path relative to app/ directory. Cargo builds to android/target/android/
             jniLibs.srcDirs("../target/android")

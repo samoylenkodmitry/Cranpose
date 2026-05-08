@@ -24,6 +24,8 @@ pub struct AppSettings {
     pub fonts: Option<&'static [&'static [u8]]>,
     /// Whether to load system fonts on Android (default: false)
     pub android_use_system_fonts: bool,
+    /// Optional Android overlay surface configuration.
+    pub android_overlay_window: Option<AndroidOverlayWindowOptions>,
     /// Run in headless mode (window hidden, for robot testing)
     ///
     /// When enabled, the window is created but not shown. This allows
@@ -61,6 +63,7 @@ impl Default for AppSettings {
             initial_size_explicit: false,
             fonts: None,
             android_use_system_fonts: false,
+            android_overlay_window: None,
             headless: false,
             primary_window_visible: true,
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
@@ -74,6 +77,52 @@ impl Default for AppSettings {
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
             record_to: None,
         }
+    }
+}
+
+/// Android floating overlay window configuration.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AndroidOverlayWindowOptions {
+    /// Requested overlay width in logical pixels.
+    pub width: u32,
+    /// Requested overlay height in logical pixels.
+    pub height: u32,
+    /// Requested screen X position in logical pixels.
+    pub x: i32,
+    /// Requested screen Y position in logical pixels.
+    pub y: i32,
+    /// Whether the overlay can receive keyboard focus.
+    pub focusable: bool,
+}
+
+impl AndroidOverlayWindowOptions {
+    /// Creates an overlay window request with top-left origin and touch-only focus behavior.
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            x: 0,
+            y: 0,
+            focusable: false,
+        }
+    }
+
+    /// Sets the initial overlay position in logical pixels.
+    pub fn with_position(mut self, x: i32, y: i32) -> Self {
+        self.x = x;
+        self.y = y;
+        self
+    }
+
+    /// Sets whether the overlay should receive keyboard focus.
+    pub fn with_focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// Returns whether this request can create a non-empty overlay surface.
+    pub fn is_valid(self) -> bool {
+        self.width > 0 && self.height > 0
     }
 }
 
@@ -224,6 +273,17 @@ impl AppLauncher {
     /// Use static fonts via `with_fonts()` for reliable rendering.
     pub fn with_android_use_system_fonts(mut self, use_system_fonts: bool) -> Self {
         self.settings.android_use_system_fonts = use_system_fonts;
+        self
+    }
+
+    /// Render the Android root into a floating `TYPE_APPLICATION_OVERLAY` surface.
+    ///
+    /// This Android-only mode requires the host app to declare
+    /// `android.permission.SYSTEM_ALERT_WINDOW`, include Cranpose's Android Java
+    /// helper sources, and obtain overlay permission before launch. Other
+    /// platforms ignore this setting and keep their normal primary surface.
+    pub fn with_android_overlay_window(mut self, options: AndroidOverlayWindowOptions) -> Self {
+        self.settings.android_overlay_window = Some(options);
         self
     }
 
@@ -524,5 +584,39 @@ impl AppLauncher {
 impl Default for AppLauncher {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn android_overlay_options_default_to_touch_only_top_left_window() {
+        let options = AndroidOverlayWindowOptions::new(320, 180);
+
+        assert_eq!(options.width, 320);
+        assert_eq!(options.height, 180);
+        assert_eq!(options.x, 0);
+        assert_eq!(options.y, 0);
+        assert!(!options.focusable);
+        assert!(options.is_valid());
+    }
+
+    #[test]
+    fn android_overlay_options_apply_position_and_focus() {
+        let options = AndroidOverlayWindowOptions::new(320, 180)
+            .with_position(12, 34)
+            .with_focusable(true);
+
+        assert_eq!(options.x, 12);
+        assert_eq!(options.y, 34);
+        assert!(options.focusable);
+    }
+
+    #[test]
+    fn android_overlay_options_reject_zero_size() {
+        assert!(!AndroidOverlayWindowOptions::new(0, 180).is_valid());
+        assert!(!AndroidOverlayWindowOptions::new(320, 0).is_valid());
     }
 }
