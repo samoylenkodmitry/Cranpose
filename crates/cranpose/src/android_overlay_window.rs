@@ -7,7 +7,7 @@ use crate::{
 };
 use cranpose_ui::Size;
 use jni::{
-    objects::{JClass, JObject, JString, JValue},
+    objects::{GlobalRef, JClass, JObject, JString, JValue},
     sys::{jfloat, jint},
     JNIEnv,
 };
@@ -153,10 +153,35 @@ pub(crate) fn drain_android_overlay_window_events() -> Vec<AndroidOverlayWindowE
 fn find_overlay_class<'local>(
     env: &mut JNIEnv<'local>,
     activity: &JObject<'local>,
+) -> Result<&'static GlobalRef, String> {
+    static OVERLAY_CLASS_REF: OnceLock<GlobalRef> = OnceLock::new();
+
+    if let Some(class) = OVERLAY_CLASS_REF.get() {
+        return Ok(class);
+    }
+
+    let class = load_overlay_class(env, activity)?;
+    let global_class = env.new_global_ref(class).map_err(|error| {
+        clear_pending_android_jni_exception(env);
+        format!("failed to cache Android overlay helper class: {error}")
+    })?;
+
+    let _ = OVERLAY_CLASS_REF.set(global_class);
+    OVERLAY_CLASS_REF.get().ok_or_else(|| {
+        "failed to cache Android overlay helper class in process-global storage".to_string()
+    })
+}
+
+fn load_overlay_class<'local>(
+    env: &mut JNIEnv<'local>,
+    activity: &JObject<'local>,
 ) -> Result<JClass<'local>, String> {
     let class_name = env
         .new_string(OVERLAY_CLASS.replace('/', "."))
-        .map_err(|error| format!("failed to create Android overlay helper class name: {error}"))?;
+        .map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to create Android overlay helper class name: {error}")
+        })?;
     let class_name = JObject::from(class_name);
 
     let class = env

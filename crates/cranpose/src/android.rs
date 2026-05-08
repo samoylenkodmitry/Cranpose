@@ -26,10 +26,15 @@ use std::{
     },
 };
 
-/// GPU resources for the surface (recreated when window is destroyed/created).
+/// GPU resources for the current Android surface and its reusable WGPU device.
 struct GpuResources {
     surface: wgpu::Surface<'static>,
+    native_window_ptr: NonNull<c_void>,
+    adapter: Arc<wgpu::Adapter>,
     device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    surface_format: wgpu::TextureFormat,
+    backend: wgpu::Backend,
     config: wgpu::SurfaceConfiguration,
     _native_window: Option<NativeWindow>,
 }
@@ -143,13 +148,12 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
 
 struct AndroidGpuSetup {
     resources: GpuResources,
-    queue: Arc<wgpu::Queue>,
-    surface_format: wgpu::TextureFormat,
-    backend: wgpu::Backend,
+    renderer_needs_init: bool,
 }
 
 fn initialize_android_rendering<F>(
     instance: &wgpu::Instance,
+    existing_resources: Option<GpuResources>,
     app_shell: &mut Option<AppShell<WgpuRenderer>>,
     content: &Rc<RefCell<F>>,
     settings: &AppSettings,
@@ -165,6 +169,7 @@ where
 {
     let setup = create_android_gpu_resources(
         instance,
+        existing_resources,
         native_window_ptr,
         native_window_owner,
         width,
@@ -176,11 +181,10 @@ where
         let mut renderer = WgpuRenderer::new(fonts);
         renderer.init_gpu(
             setup.resources.device.clone(),
-            setup.queue.clone(),
-            setup.surface_format,
-            setup.backend,
+            setup.resources.queue.clone(),
+            setup.resources.surface_format,
+            setup.resources.backend,
         );
-        renderer.set_root_scale(density);
 
         let content_clone = content.clone();
         let shell = AppShell::new(renderer, default_root_key(), move || {
@@ -197,17 +201,24 @@ where
         }
 
         log::info!("App shell created");
-    } else if let Some(shell) = app_shell {
-        shell.renderer().init_gpu(
-            setup.resources.device.clone(),
-            setup.queue.clone(),
-            setup.surface_format,
-            setup.backend,
-        );
-        shell.renderer().set_root_scale(density);
-        cranpose_ui::set_density(density);
-        log::info!("Renderer reinitialized with new GPU resources");
+    } else if setup.renderer_needs_init {
+        if let Some(shell) = app_shell {
+            shell.renderer().init_gpu(
+                setup.resources.device.clone(),
+                setup.resources.queue.clone(),
+                setup.resources.surface_format,
+                setup.resources.backend,
+            );
+            log::info!("Renderer reinitialized with new Android GPU pipeline resources");
+        }
+    } else {
+        log::debug!("Reused Android WGPU device and renderer resources for surface update");
     }
+
+    if let Some(shell) = app_shell {
+        shell.renderer().set_root_scale(density);
+    }
+    cranpose_ui::set_density(density);
 
     let actual_size = app_shell.as_mut().and_then(|shell| {
         shell.set_buffer_size(width, height);
@@ -219,11 +230,38 @@ where
 
 fn create_android_gpu_resources(
     instance: &wgpu::Instance,
+    existing_resources: Option<GpuResources>,
     native_window_ptr: NonNull<c_void>,
     native_window_owner: Option<NativeWindow>,
     width: u32,
     height: u32,
 ) -> AndroidGpuSetup {
+    if let Some(mut resources) = existing_resources {
+        if resources.native_window_ptr == native_window_ptr {
+            resources.config.width = width;
+            resources.config.height = height;
+            resources
+                .surface
+                .configure(&resources.device, &resources.config);
+            if let Some(native_window_owner) = native_window_owner {
+                resources._native_window = Some(native_window_owner);
+            }
+            return AndroidGpuSetup {
+                resources,
+                renderer_needs_init: false,
+            };
+        }
+
+        return create_android_gpu_resources_for_existing_device(
+            instance,
+            &resources,
+            native_window_ptr,
+            native_window_owner,
+            width,
+            height,
+        );
+    }
+
     let surface = create_android_wgpu_surface(instance, native_window_ptr);
 
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -235,6 +273,7 @@ fn create_android_gpu_resources(
 
     let adapter_info = adapter.get_info();
     log::info!("Found adapter: {:?}", adapter_info.backend);
+    let adapter = Arc::new(adapter);
 
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Android Device"),
@@ -248,7 +287,60 @@ fn create_android_gpu_resources(
 
     let device = Arc::new(device);
     let queue = Arc::new(queue);
+    let config = create_android_surface_config(&surface, &adapter, width, height);
+    surface.configure(&device, &config);
 
+    AndroidGpuSetup {
+        resources: GpuResources {
+            surface,
+            native_window_ptr,
+            adapter,
+            device,
+            queue,
+            surface_format: config.format,
+            backend: adapter_info.backend,
+            config,
+            _native_window: native_window_owner,
+        },
+        renderer_needs_init: true,
+    }
+}
+
+fn create_android_gpu_resources_for_existing_device(
+    instance: &wgpu::Instance,
+    existing: &GpuResources,
+    native_window_ptr: NonNull<c_void>,
+    native_window_owner: Option<NativeWindow>,
+    width: u32,
+    height: u32,
+) -> AndroidGpuSetup {
+    let surface = create_android_wgpu_surface(instance, native_window_ptr);
+    let config = create_android_surface_config(&surface, &existing.adapter, width, height);
+    surface.configure(&existing.device, &config);
+    let renderer_needs_init = config.format != existing.surface_format;
+
+    AndroidGpuSetup {
+        resources: GpuResources {
+            surface,
+            native_window_ptr,
+            adapter: existing.adapter.clone(),
+            device: existing.device.clone(),
+            queue: existing.queue.clone(),
+            surface_format: config.format,
+            backend: existing.backend,
+            config,
+            _native_window: native_window_owner,
+        },
+        renderer_needs_init,
+    }
+}
+
+fn create_android_surface_config(
+    surface: &wgpu::Surface<'static>,
+    adapter: &wgpu::Adapter,
+    width: u32,
+    height: u32,
+) -> wgpu::SurfaceConfiguration {
     let surface_caps = surface.get_capabilities(&adapter);
     let surface_format = surface_caps
         .formats
@@ -257,7 +349,7 @@ fn create_android_gpu_resources(
         .find(|f| f.is_srgb())
         .unwrap_or(surface_caps.formats[0]);
     let present_mode = crate::present_mode::select_present_mode(&surface_caps);
-    let config = wgpu::SurfaceConfiguration {
+    wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
         width,
@@ -266,20 +358,6 @@ fn create_android_gpu_resources(
         alpha_mode: surface_caps.alpha_modes[0],
         view_formats: vec![],
         desired_maximum_frame_latency: 2,
-    };
-
-    surface.configure(&device, &config);
-
-    AndroidGpuSetup {
-        resources: GpuResources {
-            surface,
-            device,
-            config,
-            _native_window: native_window_owner,
-        },
-        queue,
-        surface_format,
-        backend: adapter_info.backend,
     }
 }
 
@@ -594,6 +672,7 @@ pub fn run(
 
                                 let (resources, actual_size) = initialize_android_rendering(
                                     &instance,
+                                    gpu_resources.take(),
                                     &mut app_shell,
                                     &content,
                                     &settings,
@@ -839,6 +918,7 @@ pub fn run(
                                 update_android_platform_geometry(&app, &mut android_platform);
                             let (resources, actual_size) = initialize_android_rendering(
                                 &instance,
+                                gpu_resources.take(),
                                 &mut app_shell,
                                 &content,
                                 &settings,
@@ -870,6 +950,7 @@ pub fn run(
                         let native_window_ptr = native_window.ptr().cast();
                         let (resources, actual_size) = initialize_android_rendering(
                             &instance,
+                            gpu_resources.take(),
                             &mut app_shell,
                             &content,
                             &settings,
