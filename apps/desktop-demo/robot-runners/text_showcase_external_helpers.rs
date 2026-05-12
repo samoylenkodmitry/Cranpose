@@ -4,6 +4,7 @@ use cranpose_testing::{
 use std::process::Command;
 use std::time::Duration;
 
+#[allow(dead_code)]
 pub(crate) fn find_window_id(title: &str) -> String {
     for _ in 0..20 {
         let output = Command::new("xdotool")
@@ -26,6 +27,7 @@ pub(crate) fn find_window_id(title: &str) -> String {
     panic!("window '{title}' not found via xdotool");
 }
 
+#[allow(dead_code)]
 pub(crate) fn take_x11_screenshot(window_id: &str, path: &str) {
     let status = Command::new("import")
         .args(["-window", window_id, path])

@@ -36,11 +36,13 @@ struct CompareCrop {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct InternalDiagnostic {
     pub output_dir: PathBuf,
     pub capture_scale: f32,
 }
 
+#[allow(dead_code)]
 pub(crate) fn run_scroll_stability_capture(
     robot: &cranpose::Robot,
     config: ScrollStabilityConfig,
@@ -102,6 +104,57 @@ pub(crate) fn run_scroll_stability_capture(
     if let Some(paths) = internal_capture_paths.as_ref() {
         cleanup_capture_paths(paths);
     }
+    compare_ok
+}
+
+#[allow(dead_code)]
+pub(crate) fn run_internal_scroll_stability_capture(
+    robot: &cranpose::Robot,
+    config: ScrollStabilityConfig,
+    capture_scale: f32,
+) -> bool {
+    assert!(
+        config.scroll_steps >= 2,
+        "scroll stability capture needs at least two steps"
+    );
+    assert!(
+        capture_scale.is_finite() && capture_scale > 0.0,
+        "capture_scale must be positive and finite"
+    );
+
+    let output_dir = prepare_named_output_dir(config.output_name);
+    println!("Window title: {}", config.window_title);
+    println!("Output dir: {}", output_dir.display());
+    let crop = compare_crop(robot, config);
+    println!(
+        "compare crop: left={} right={} top={} bottom={}",
+        crop.trim_left_px, crop.trim_right_px, crop.trim_top_px, crop.trim_bottom_px
+    );
+
+    let mut previous_bounds = find_text_in_semantics(robot, config.target_text)
+        .unwrap_or_else(|| fail_with_semantics(robot, "target text must be visible"));
+
+    let mut capture_paths = Vec::with_capacity(config.scroll_steps);
+    for step in 0..config.scroll_steps {
+        previous_bounds =
+            scroll_once_and_expect_target_delta(robot, config, previous_bounds, step, "step");
+
+        let screenshot = robot
+            .screenshot_with_scale(capture_scale)
+            .expect("internal screenshot");
+        let screenshot_path = output_dir.join(format!("{}_step{step:02}.png", config.file_prefix));
+        save_robot_screenshot(&screenshot_path, &screenshot);
+        capture_paths.push(screenshot_path);
+
+        if let Some(env_name) = config.render_stats_env {
+            if std::env::var_os(env_name).is_some() {
+                log_render_stats(robot, step);
+            }
+        }
+    }
+
+    let compare_ok = run_compare_script(&capture_paths, crop, config);
+    cleanup_capture_paths(&capture_paths);
     compare_ok
 }
 
