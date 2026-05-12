@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -29,6 +31,20 @@ impl DerefMut for LockedRenderer {
 
 pub fn headless_renderer() -> Result<LockedRenderer, String> {
     let lock = GPU_TEST_LOCK.lock().expect("GPU test lock poisoned");
+    let renderer = create_headless_renderer()?;
+    Ok(LockedRenderer {
+        _lock: lock,
+        renderer,
+    })
+}
+
+pub fn headless_renderer_parts() -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
+    let lock = GPU_TEST_LOCK.lock().expect("GPU test lock poisoned");
+    let renderer = create_headless_renderer()?;
+    Ok((lock, renderer))
+}
+
+fn create_headless_renderer() -> Result<WgpuRenderer, String> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         ..Default::default()
@@ -56,8 +72,5 @@ pub fn headless_renderer() -> Result<LockedRenderer, String> {
         wgpu::TextureFormat::Bgra8UnormSrgb,
         adapter.get_info().backend,
     );
-    Ok(LockedRenderer {
-        _lock: lock,
-        renderer,
-    })
+    Ok(renderer)
 }
