@@ -1,8 +1,16 @@
 use super::*;
 
-use cranpose_core::{location_key, with_current_composer, Composition, MemoryApplier, State};
+use cranpose_core::{
+    location_key, with_current_composer, Composer, Composition, MemoryApplier, MutableState, Node,
+    State,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
+
+#[derive(Default)]
+struct DummyNode;
+
+impl Node for DummyNode {}
 
 #[test]
 fn animate_float_as_state_interpolates_over_time() {
@@ -87,6 +95,97 @@ fn animate_float_as_state_interpolates_over_time() {
         "animation should end at target"
     );
     assert!(!composition.should_render());
+}
+
+#[test]
+fn animate_float_as_state_invalidates_composition_time_readers() {
+    fn render_animation_reader(
+        composer: &Composer,
+        target: MutableState<f32>,
+        rendered_values: Rc<RefCell<Vec<f32>>>,
+    ) {
+        {
+            let rendered_values = Rc::clone(&rendered_values);
+            composer.set_recranpose_callback(move |composer| {
+                render_animation_reader(composer, target, Rc::clone(&rendered_values));
+            });
+        }
+
+        let value = animateFloatAsStateWithSpec(
+            target.value(),
+            AnimationType::Tween(AnimationSpec::linear(240)),
+            "alpha",
+        )
+        .value();
+        rendered_values.borrow_mut().push(value);
+        composer.emit_node(|| DummyNode);
+    }
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let root_key = location_key(file!(), line!(), column!());
+    let group_key = location_key(file!(), line!(), column!());
+    let target = MutableState::with_runtime(0.0f32, runtime.clone());
+    let rendered_values = Rc::new(RefCell::new(Vec::<f32>::new()));
+
+    {
+        let rendered_values = Rc::clone(&rendered_values);
+        composition
+            .render(root_key, move || {
+                let rendered_values = Rc::clone(&rendered_values);
+                with_current_composer(|composer| {
+                    composer.with_group(group_key, |composer| {
+                        render_animation_reader(composer, target, rendered_values);
+                    });
+                });
+            })
+            .expect("initial render succeeds");
+    }
+
+    assert_eq!(rendered_values.borrow().as_slice(), &[0.0]);
+
+    target.set_value(1.0);
+    while composition
+        .process_invalid_scopes()
+        .expect("process target invalidation")
+    {}
+
+    assert!(
+        runtime.has_frame_callbacks(),
+        "target change should enqueue animation frames"
+    );
+    assert!(
+        composition.should_render(),
+        "queued animation frames should keep the composition active"
+    );
+
+    let mut frame_time = 0u64;
+    for _ in 0..32 {
+        if !composition.should_render() {
+            break;
+        }
+        frame_time += 16_666_667;
+        runtime.drain_frame_callbacks(frame_time);
+        runtime.drain_ui();
+        while composition
+            .process_invalid_scopes()
+            .expect("process invalid scopes succeeds")
+        {}
+    }
+
+    let rendered = rendered_values.borrow();
+    assert!(
+        rendered.iter().any(|value| *value > 0.0 && *value < 1.0),
+        "composition-time readers should observe intermediate values, got {rendered:?}",
+    );
+    assert!(
+        rendered.len() > 3,
+        "animation should invalidate composition readers across frames, got {rendered:?}",
+    );
+    assert!(
+        (*rendered.last().expect("rendered values") - 1.0).abs() < f32::EPSILON,
+        "animation should finish at target, got {rendered:?}",
+    );
 }
 
 #[test]

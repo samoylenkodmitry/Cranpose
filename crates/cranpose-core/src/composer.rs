@@ -1187,6 +1187,20 @@ impl Composer {
         ValueSlotHandle::new(slot)
     }
 
+    #[doc(hidden)]
+    pub fn __invalidate_return_consumer_scope(&self) {
+        let Some(scope) = self.current_recranpose_scope() else {
+            self.request_root_render();
+            return;
+        };
+
+        if let Some(target) = scope.callback_promotion_target() {
+            target.invalidate();
+        } else {
+            self.request_root_render();
+        }
+    }
+
     pub fn with_slot_value<'pass, T: 'static, R>(
         &'pass self,
         handle: ValueSlotHandle<'pass, T>,

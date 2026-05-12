@@ -45,6 +45,44 @@ fn state_update_schedules_render() {
 }
 
 #[test]
+fn returned_composable_state_change_recomposes_parent_consumer() {
+    thread_local! {
+        static OBSERVED_RETURNS: RefCell<Vec<i32>> = const { RefCell::new(Vec::new()) };
+    }
+
+    #[composable]
+    fn child_value(state: MutableState<i32>) -> i32 {
+        state.value()
+    }
+
+    #[composable]
+    fn parent(state: MutableState<i32>) {
+        let value = child_value(state);
+        OBSERVED_RETURNS.with(|values| values.borrow_mut().push(value));
+    }
+
+    OBSERVED_RETURNS.with(|values| values.borrow_mut().clear());
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let state = MutableState::with_runtime(0, runtime.clone());
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || parent(state))
+        .expect("initial composition");
+
+    state.set_value(1);
+    while composition
+        .process_invalid_scopes()
+        .expect("returned value recomposition")
+    {}
+
+    OBSERVED_RETURNS.with(|values| {
+        assert_eq!(values.borrow().as_slice(), &[0, 1]);
+    });
+}
+
+#[test]
 fn recranpose_does_not_use_stale_indices_when_prior_scope_changes_length() {
     thread_local! {
         static STABLE_RECOMPOSE_A: Cell<usize> = const { Cell::new(0) };

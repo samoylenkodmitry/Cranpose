@@ -138,6 +138,18 @@ fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
     }
 }
 
+fn is_node_id_return(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Path(type_path)
+            if type_path
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "NodeId")
+    )
+}
+
 fn core_crate_path() -> TokenStream2 {
     let crate_name = crate_name("cranpose")
         .ok()
@@ -251,6 +263,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         ReturnType::Type(_, ty) => {
             matches!(ty.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty())
         }
+    };
+    let invalidate_return_consumer = if returns_unit || is_node_id_return(&return_ty) {
+        quote! {}
+    } else {
+        quote! { __composer.__invalidate_return_consumer_scope(); }
     };
     let _helper_ident = Ident::new(
         &format!("__cranpose_impl_{}", func.sig.ident),
@@ -553,6 +570,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     },
                 );
                 #recranpose_setter
+                #invalidate_return_consumer
                 __value
             }
         };
