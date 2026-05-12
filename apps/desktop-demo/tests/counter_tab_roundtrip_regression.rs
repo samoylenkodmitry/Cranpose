@@ -132,19 +132,19 @@ fn max_layer_translation_y(layer: &LayerNode) -> f32 {
 fn returned_press_lift(press_tick: MutableState<u64>) -> f32 {
     let press_target = cranpose_core::useState(|| 0.0_f32);
     cranpose_core::LaunchedEffect!(press_tick.value(), {
-        let press_target = press_target;
-        let press_tick = press_tick;
+        let target_state = press_target;
+        let tick_state = press_tick;
         move |scope| {
-            if press_tick.value() == 0 {
+            if tick_state.value() == 0 {
                 return;
             }
-            press_target.set(1.0);
-            let press_target = press_target;
+            target_state.set(1.0);
+            let reset_target_state = target_state;
             scope.launch_background(
                 move |_| async move {
                     std::thread::sleep(Duration::from_millis(120));
                 },
-                move |_| press_target.set(0.0),
+                move |_| reset_target_state.set(0.0),
             );
         }
     });
