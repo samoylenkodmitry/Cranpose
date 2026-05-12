@@ -61,12 +61,8 @@ fn graphics_layer_supports_rigid_snap(layer: &GraphicsLayer) -> bool {
         && layer.rotation_z.abs() <= f32::EPSILON
 }
 
-fn rigid_snap_anchor(
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    motion_context_animated: bool,
-) -> Option<Point> {
-    if motion_context_animated || !graphics_layer_supports_rigid_snap(layer) {
+fn rigid_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<Point> {
+    if !graphics_layer_supports_rigid_snap(layer) {
         return None;
     }
     let mapped = apply_layer_affine_to_rect(layer_bounds, layer_bounds, layer);
@@ -905,10 +901,10 @@ fn populate_draws_from_graph(
     );
     let effective_translated_content_context =
         inherited_translated_content_context || layer.translated_content_context;
-    let suppress_rigid_snap = effective_translated_content_context && layer.motion_context_animated;
+    let allow_rigid_snap = effective_translated_content_context || !layer.motion_context_animated;
     let boundary_snap_anchor = if !inherited_translated_content_context
         && layer.translated_content_context
-        && !suppress_rigid_snap
+        && allow_rigid_snap
     {
         rigid_snap_anchor(
             transform.bounds_for_rect(layer.local_bounds.translate(
@@ -916,31 +912,21 @@ fn populate_draws_from_graph(
                 layer.translated_content_offset.y,
             )),
             &mapping.raster_content_layer,
-            layer.motion_context_animated,
         )
     } else {
         None
     };
-    let translated_snap_anchor = if suppress_rigid_snap {
-        None
-    } else {
-        inherited_translated_snap_anchor.or(boundary_snap_anchor)
-    };
-    let layer_snap_anchor = if suppress_rigid_snap {
-        None
-    } else {
-        translated_snap_anchor.or_else(|| {
-            if layer_needs_rigid_snap(layer, effective_translated_content_context) {
-                rigid_snap_anchor(
-                    mapping.layer_bounds.raster_rect(),
-                    &mapping.raster_content_layer,
-                    layer.motion_context_animated,
-                )
-            } else {
-                None
-            }
-        })
-    };
+    let translated_snap_anchor = inherited_translated_snap_anchor.or(boundary_snap_anchor);
+    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
+        if allow_rigid_snap && layer_needs_rigid_snap(layer, effective_translated_content_context) {
+            rigid_snap_anchor(
+                mapping.layer_bounds.raster_rect(),
+                &mapping.raster_content_layer,
+            )
+        } else {
+            None
+        }
+    });
 
     if content_clip_to_bounds && visual_clip.is_none() {
         return;
@@ -1268,7 +1254,7 @@ mod tests {
         PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
     };
     use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
-    use cranpose_ui_graphics::CornerRadii;
+    use cranpose_ui_graphics::{CornerRadii, ImageBitmap, ImageSampling};
 
     fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> RenderGraph {
         let text_leaf = LayerNode {
@@ -1305,6 +1291,33 @@ mod tests {
                             },
                             brush: Brush::solid(Color(0.28, 0.30, 0.46, 0.88)),
                             radii: CornerRadii::uniform(6.0),
+                        },
+                        clip: None,
+                    }),
+                }),
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: DrawPrimitive::Image {
+                            rect: Rect {
+                                x: 2.0,
+                                y: 2.0,
+                                width: 12.0,
+                                height: 12.0,
+                            },
+                            image: ImageBitmap::from_rgba8(
+                                2,
+                                2,
+                                vec![
+                                    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255,
+                                    255,
+                                ],
+                            )
+                            .expect("image"),
+                            alpha: 1.0,
+                            color_filter: None,
+                            sampling: ImageSampling::Linear,
+                            src_rect: None,
                         },
                         clip: None,
                     }),
@@ -1535,25 +1548,33 @@ mod tests {
         let scene = build_raster_scene(&snapped_text_leaf_root(false, false));
 
         assert_eq!(scene.shapes.len(), 1);
+        assert_eq!(scene.images.len(), 1);
         assert_eq!(scene.texts.len(), 1);
         let expected_anchor = Some(Point::new(14.25, 16.5));
         assert_eq!(scene.shapes[0].snap_anchor, expected_anchor);
+        assert_eq!(scene.images[0].snap_anchor, expected_anchor);
         assert_eq!(scene.texts[0].snap_anchor, expected_anchor);
     }
 
     #[test]
-    fn translated_animated_text_leaf_disables_snap_for_smooth_scroll() {
+    fn animated_translated_content_text_leaf_keeps_shared_snap_anchor_for_inner_stability() {
         let scene = build_raster_scene(&snapped_text_leaf_root(true, true));
 
         assert_eq!(scene.shapes.len(), 1);
+        assert_eq!(scene.images.len(), 1);
         assert_eq!(scene.texts.len(), 1);
+        let expected_anchor = Some(Point::new(14.25, 16.5));
         assert_eq!(
-            scene.shapes[0].snap_anchor, None,
-            "active scroll content must not snap while motion is in progress"
+            scene.shapes[0].snap_anchor, expected_anchor,
+            "active scroll content should share one anchor so item internals stay pixel-stable"
         );
         assert_eq!(
-            scene.texts[0].snap_anchor, None,
-            "active scroll text must not snap while motion is in progress"
+            scene.images[0].snap_anchor, expected_anchor,
+            "active scroll images should share the item anchor instead of resampling independently"
+        );
+        assert_eq!(
+            scene.texts[0].snap_anchor, expected_anchor,
+            "active scroll text should share the item anchor instead of drifting independently"
         );
     }
 
@@ -1562,11 +1583,16 @@ mod tests {
         let scene = build_raster_scene(&snapped_text_leaf_root(false, true));
 
         assert_eq!(scene.shapes.len(), 1);
+        assert_eq!(scene.images.len(), 1);
         assert_eq!(scene.texts.len(), 1);
         let expected_anchor = Some(Point::new(14.25, 16.5));
         assert_eq!(
             scene.shapes[0].snap_anchor, expected_anchor,
             "rested scroll content should snap back to device pixels"
+        );
+        assert_eq!(
+            scene.images[0].snap_anchor, expected_anchor,
+            "rested scroll images should snap back to device pixels"
         );
         assert_eq!(
             scene.texts[0].snap_anchor, expected_anchor,

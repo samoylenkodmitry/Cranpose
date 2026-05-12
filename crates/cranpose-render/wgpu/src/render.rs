@@ -5071,6 +5071,33 @@ mod tests {
                 }),
                 RenderNode::Primitive(PrimitiveEntry {
                     phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: DrawPrimitive::Image {
+                            rect: Rect {
+                                x: 2.0,
+                                y: 2.0,
+                                width: 12.0,
+                                height: 12.0,
+                            },
+                            image: ImageBitmap::from_rgba8(
+                                2,
+                                2,
+                                vec![
+                                    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255,
+                                    255,
+                                ],
+                            )
+                            .expect("image"),
+                            alpha: 1.0,
+                            color_filter: None,
+                            sampling: ImageSampling::Linear,
+                            src_rect: None,
+                        },
+                        clip: None,
+                    }),
+                }),
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
                     node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
                         node_id: 77,
                         rect: Rect {
@@ -6345,14 +6372,16 @@ mod tests {
             collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
 
         assert_eq!(collected.scene.shapes.len(), 1);
+        assert_eq!(collected.scene.images.len(), 1);
         assert_eq!(collected.scene.texts.len(), 1);
         let expected_anchor = Some(SnapAnchor::rigid(Point::new(14.25, 16.5)));
         assert_eq!(collected.scene.shapes[0].snap_anchor, expected_anchor);
+        assert_eq!(collected.scene.images[0].snap_anchor, expected_anchor);
         assert_eq!(collected.scene.texts[0].snap_anchor, expected_anchor);
     }
 
     #[test]
-    fn translated_animated_text_leaf_disables_snap_for_smooth_scroll() {
+    fn animated_translated_content_text_leaf_keeps_shared_snap_anchor_for_inner_stability() {
         let root = snapped_text_leaf_root(true, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
@@ -6362,18 +6391,24 @@ mod tests {
 
         assert_eq!(collected.child_layers.len(), 0);
         assert_eq!(collected.scene.shapes.len(), 1);
+        assert_eq!(collected.scene.images.len(), 1);
         assert_eq!(collected.scene.texts.len(), 1);
         assert_eq!(collected.scene.effect_layers.len(), 1);
         assert!(collected.scene.effect_layers[0]
             .requirements
             .contains(SurfaceRequirement::MotionStableCapture));
+        let expected_anchor = Some(SnapAnchor::rigid(Point::new(14.25, 16.5)));
         assert_eq!(
-            collected.scene.shapes[0].snap_anchor, None,
-            "active scroll motion must not snap while the pointer-driven motion context is active"
+            collected.scene.shapes[0].snap_anchor, expected_anchor,
+            "active scroll content should share one anchor so item internals stay pixel-stable"
         );
         assert_eq!(
-            collected.scene.texts[0].snap_anchor, None,
-            "active scroll text must not snap while the pointer-driven motion context is active"
+            collected.scene.images[0].snap_anchor, expected_anchor,
+            "active scroll images should share the item anchor instead of resampling independently"
+        );
+        assert_eq!(
+            collected.scene.texts[0].snap_anchor, expected_anchor,
+            "active scroll text should share the item anchor instead of drifting independently"
         );
     }
 
@@ -6388,12 +6423,17 @@ mod tests {
 
         assert_eq!(collected.child_layers.len(), 0);
         assert_eq!(collected.scene.shapes.len(), 1);
+        assert_eq!(collected.scene.images.len(), 1);
         assert_eq!(collected.scene.texts.len(), 1);
         assert_eq!(collected.scene.effect_layers.len(), 0);
         let expected_anchor = Some(SnapAnchor::rigid(Point::new(14.25, 16.5)));
         assert_eq!(
             collected.scene.shapes[0].snap_anchor, expected_anchor,
             "rested scroll content should snap back to device pixels"
+        );
+        assert_eq!(
+            collected.scene.images[0].snap_anchor, expected_anchor,
+            "rested scroll images should snap back to device pixels"
         );
         assert_eq!(
             collected.scene.texts[0].snap_anchor, expected_anchor,
