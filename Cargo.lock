@@ -1090,6 +1090,7 @@ name = "cranpose-render-wgpu"
 version = "0.0.65"
 dependencies = [
  "bytemuck",
+ "cranpose-app-shell",
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-render-common",

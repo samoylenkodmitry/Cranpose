@@ -1727,6 +1727,87 @@ fn draw_repass_updates_render_data_without_layout() {
     );
 }
 
+#[composable]
+#[allow(non_snake_case)]
+fn AbsoluteOffsetStackedTextRows(start: MutableState<i32>) {
+    Box(
+        Modifier::empty()
+            .size_points(260.0, 220.0)
+            .background(Color(0.02, 0.03, 0.05, 1.0)),
+        BoxSpec::default(),
+        move || {
+            for row in 0..14 {
+                Text(
+                    format!("Row {:02}", start.get() + row),
+                    Modifier::empty()
+                        .size_points(220.0, 14.0)
+                        .absolute_offset(12.0, 10.0 + row as f32 * 14.0),
+                    TextStyle::default(),
+                );
+            }
+        },
+    );
+}
+
+fn rendered_text_values(scene: &cranpose_ui::RecordedRenderScene) -> Vec<String> {
+    scene
+        .operations()
+        .iter()
+        .filter_map(|op| match op {
+            RenderOp::Text { value, .. } => Some(value.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn absolute_offset_text_rows_redraw_after_state_only_change() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_holder: Rc<RefCell<Option<MutableState<i32>>>> = Rc::new(RefCell::new(None));
+    let state_holder_for_app = Rc::clone(&state_holder);
+
+    let mut shell = AppShell::new(RecordingRenderer::default(), root_key, move || {
+        let start = useState(|| 0i32);
+        *state_holder_for_app.borrow_mut() = Some(start);
+        AbsoluteOffsetStackedTextRows(start);
+    });
+
+    shell.update();
+    let initial_scene = shell
+        .renderer
+        .last_scene
+        .as_ref()
+        .expect("expected initial render scene");
+    let initial_texts = rendered_text_values(initial_scene);
+    assert!(initial_texts.iter().any(|text| text == "Row 00"));
+    assert!(!initial_texts.iter().any(|text| text == "Row 30"));
+
+    let start = state_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("start state should be captured");
+    start.set(30);
+    shell.update();
+
+    let updated_scene = shell
+        .renderer
+        .last_scene
+        .as_ref()
+        .expect("expected updated render scene");
+    let updated_texts = rendered_text_values(updated_scene);
+
+    assert!(
+        updated_texts.iter().any(|text| text == "Row 30"),
+        "render scene should contain recomposed absolute-offset text rows, got {updated_texts:?}"
+    );
+    assert!(
+        !updated_texts.iter().any(|text| text == "Row 00"),
+        "render scene must not keep stale absolute-offset text rows, got {updated_texts:?}"
+    );
+}
+
 #[test]
 fn app_shell_new_drains_root_render_requests_before_first_frame() {
     let _guard = test_guard();
