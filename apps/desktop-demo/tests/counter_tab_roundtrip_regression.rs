@@ -1,19 +1,26 @@
 pub mod tab_switch_regression_support;
 
+use cranpose_animation::{animateFloatAsStateWithSpec, AnimationSpec, AnimationType};
 use cranpose_app_shell::AppShell;
 use cranpose_core::{location_key, MutableState};
 use cranpose_foundation::PointerEvent;
+use cranpose_macros::composable;
 use cranpose_render_common::graph::ProjectiveTransform;
+use cranpose_render_common::graph::{LayerNode, RenderNode};
 use cranpose_render_common::graph_scene::{ClickAction, HitGeometry, Scene};
 use cranpose_render_common::hit_graph::{collect_hits_from_graph, HitGraphSink};
 use cranpose_render_common::{RenderScene, Renderer};
-use cranpose_ui::{LayoutTree, SemanticsAction, SemanticsNode, SemanticsRole, Size};
+use cranpose_ui::{
+    Button, LayoutTree, Modifier, SemanticsAction, SemanticsNode, SemanticsRole, Size, Text,
+    TextStyle,
+};
 use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};
 use desktop_app::app::{
     combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COUNTER_APP_COUNTER_STATE,
     TEST_LAZY_LIST_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
 };
 use std::rc::Rc;
+use std::time::Duration;
 use tab_switch_regression_support::{active_tab_state, pump_shell_until_stable};
 
 #[derive(Default)]
@@ -106,6 +113,111 @@ impl Renderer for HitGraphRenderer {
         }
         Ok(())
     }
+}
+
+fn max_layer_translation_y(layer: &LayerNode) -> f32 {
+    layer.children.iter().fold(
+        layer.graphics_layer.translation_y.abs(),
+        |max_value, child| {
+            let child_value = match child {
+                RenderNode::Layer(child_layer) => max_layer_translation_y(child_layer),
+                RenderNode::Primitive(_) => 0.0,
+            };
+            max_value.max(child_value)
+        },
+    )
+}
+
+#[composable]
+fn returned_press_lift(press_tick: MutableState<u64>) -> f32 {
+    let press_target = cranpose_core::useState(|| 0.0_f32);
+    cranpose_core::LaunchedEffect!(press_tick.value(), {
+        let press_target = press_target;
+        let press_tick = press_tick;
+        move |scope| {
+            if press_tick.value() == 0 {
+                return;
+            }
+            press_target.set(1.0);
+            let press_target = press_target;
+            scope.launch_background(
+                move |_| async move {
+                    std::thread::sleep(Duration::from_millis(120));
+                },
+                move |_| press_target.set(0.0),
+            );
+        }
+    });
+
+    animateFloatAsStateWithSpec(
+        press_target.value(),
+        AnimationType::Tween(AnimationSpec::linear(240)),
+        "returned_button_graphics_layer_probe",
+    )
+    .value()
+}
+
+#[composable]
+fn animate_float_returned_button_graphics_layer_probe() {
+    let press_tick = cranpose_core::useState(|| 0_u64);
+    let lift = returned_press_lift(press_tick);
+
+    Button(
+        Modifier::empty()
+            .graphics_layer_block(move |layer| {
+                layer.translation_y = lift * 32.0;
+                layer.scale_x = 1.0 - lift * 0.05;
+                layer.scale_y = 1.0 - lift * 0.05;
+            })
+            .height(48.0)
+            .padding_symmetric(12.0, 8.0),
+        move || {
+            press_tick.set(press_tick.value().wrapping_add(1));
+        },
+        move || {
+            Text("Press probe", Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+
+#[test]
+fn animate_float_as_state_returned_value_updates_parent_graphics_layer_after_click() {
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        animate_float_returned_button_graphics_layer_probe,
+    );
+    shell.set_buffer_size(320, 180);
+    shell.set_viewport(320.0, 180.0);
+    pump_shell_until_stable(&mut shell);
+
+    shell.set_cursor(32.0, 24.0);
+    shell.pointer_pressed();
+    shell.pointer_released();
+
+    let mut saw_intermediate_layer = false;
+    let mut last_translation = 0.0;
+    for _ in 0..24 {
+        std::thread::sleep(Duration::from_millis(16));
+        shell.update();
+        let translation = shell
+            .scene()
+            .graph
+            .as_ref()
+            .map(|graph| max_layer_translation_y(&graph.root))
+            .expect("graph available after returned animation frame");
+        last_translation = translation;
+        if translation > 1.0 && translation < 31.0 {
+            saw_intermediate_layer = true;
+            break;
+        }
+    }
+
+    assert!(
+        saw_intermediate_layer,
+        "animateFloatAsState returned from a child composable did not update the parent graphics_layer_block; last translation_y={last_translation}"
+    );
 }
 
 fn semantics_text(node: &SemanticsNode) -> Option<&str> {
