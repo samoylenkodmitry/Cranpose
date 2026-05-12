@@ -246,12 +246,8 @@ fn graphics_layer_supports_rigid_snap(layer: &GraphicsLayer) -> bool {
         && layer.rotation_z.abs() <= NORMALIZED_SCENE_AFFINE_TOLERANCE
 }
 
-fn rigid_snap_anchor(
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    motion_context_animated: bool,
-) -> Option<SnapAnchor> {
-    if motion_context_animated || !graphics_layer_supports_rigid_snap(layer) {
+fn rigid_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<SnapAnchor> {
+    if !graphics_layer_supports_rigid_snap(layer) {
         return None;
     }
     let mapped = cranpose_render_common::layer_transform::apply_layer_affine_to_rect(
@@ -498,10 +494,10 @@ fn collect_layer_contents_into<'a>(
 
     let effective_translated_content_context =
         translation_context.inherited_content_translation || layer.translated_content_context;
-    let suppress_rigid_snap = effective_translated_content_context && layer.motion_context_animated;
+    let allow_rigid_snap = effective_translated_content_context || !layer.motion_context_animated;
     let boundary_snap_anchor = if !translation_context.inherited_content_translation
         && layer.translated_content_context
-        && !suppress_rigid_snap
+        && allow_rigid_snap
     {
         rigid_snap_anchor(
             layer_bounds.translate(
@@ -509,27 +505,18 @@ fn collect_layer_contents_into<'a>(
                 layer.translated_content_offset.y,
             ),
             &local_layer,
-            layer.motion_context_animated,
         )
     } else {
         None
     };
-    let translated_snap_anchor = if suppress_rigid_snap {
-        None
-    } else {
-        inherited_translated_snap_anchor.or(boundary_snap_anchor)
-    };
-    let layer_snap_anchor = if suppress_rigid_snap {
-        None
-    } else {
-        translated_snap_anchor.or_else(|| {
-            if layer_needs_rigid_snap(layer, effective_translated_content_context) {
-                rigid_snap_anchor(layer_bounds, &local_layer, layer.motion_context_animated)
-            } else {
-                None
-            }
-        })
-    };
+    let translated_snap_anchor = inherited_translated_snap_anchor.or(boundary_snap_anchor);
+    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
+        if allow_rigid_snap && layer_needs_rigid_snap(layer, effective_translated_content_context) {
+            rigid_snap_anchor(layer_bounds, &local_layer)
+        } else {
+            None
+        }
+    });
     let translated_local_picture = layer.translated_content_context
         && layer.motion_context_animated
         && !translation_context.inherited_content_translation
@@ -590,11 +577,7 @@ fn collect_layer_contents_into<'a>(
                                 child_isolation.as_ref(),
                             );
                             let child_local_layer = local_content_layer(&child_content_layer);
-                            rigid_snap_anchor(
-                                child_bounds,
-                                &child_local_layer,
-                                child_layer.motion_context_animated,
-                            )
+                            rigid_snap_anchor(child_bounds, &child_local_layer)
                         } else {
                             None
                         }
@@ -665,11 +648,7 @@ fn collect_layer_contents_into<'a>(
                             child_isolation.as_ref(),
                         );
                         let child_local_layer = local_content_layer(&child_content_layer);
-                        rigid_snap_anchor(
-                            child_bounds,
-                            &child_local_layer,
-                            child_layer.motion_context_animated,
-                        )
+                        rigid_snap_anchor(child_bounds, &child_local_layer)
                     } else {
                         None
                     }
