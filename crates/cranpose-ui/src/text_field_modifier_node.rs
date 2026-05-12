@@ -857,6 +857,7 @@ impl ModifierNodeElement for TextFieldElement {
     fn update(&self, node: &mut Self::Node) {
         // Update the state reference
         node.state = self.state.clone();
+        node.style = self.style.clone();
         node.cursor_brush = Brush::solid(self.cursor_color);
         node.line_limits = self.line_limits;
 
@@ -865,7 +866,7 @@ impl ModifierNodeElement for TextFieldElement {
             node.state.clone(),
             node.refs.clone(),
             node.line_limits,
-            node.style.clone(),
+            self.style.clone(),
         );
 
         // Check if content changed and update cache
@@ -951,6 +952,29 @@ mod tests {
             // This ensures proper Eq/Hash contract compliance
             assert_eq!(elem1, elem2, "Same state should be equal");
             assert_ne!(elem1, elem3, "Different states should not be equal");
+        });
+    }
+
+    #[test]
+    fn text_field_element_update_refreshes_existing_node_style() {
+        with_test_runtime(|| {
+            let state = TextFieldState::new("themed text");
+            let dark_style = TextStyle::from_span_style(crate::text::SpanStyle {
+                color: Some(Color::from_rgba_u8(228, 240, 252, 255)),
+                ..crate::text::SpanStyle::default()
+            });
+            let light_style = TextStyle::from_span_style(crate::text::SpanStyle {
+                color: Some(Color::from_rgba_u8(14, 58, 96, 255)),
+                ..crate::text::SpanStyle::default()
+            });
+            let initial = TextFieldElement::new(state.clone(), dark_style);
+            let updated = TextFieldElement::new(state, light_style.clone());
+            let mut node = initial.create();
+
+            updated.update(&mut node);
+
+            assert_eq!(node.text(), "themed text");
+            assert_eq!(node.style(), &light_style);
         });
     }
 
