@@ -1,7 +1,7 @@
 //! Android host-window size request state.
 
 use cranpose_core::MutableState;
-use cranpose_ui::{composable, Size};
+use cranpose_ui::{composable, Point, Size};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -27,6 +27,14 @@ pub enum AndroidHostWindowSizeError {
     /// Width or height was zero or negative.
     #[error("Android host-window dimensions must be greater than zero")]
     NonPositive,
+}
+
+/// Validation error for an Android host-window position request.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum AndroidHostWindowPositionError {
+    /// X or Y was NaN or infinite.
+    #[error("Android host-window coordinates must be finite")]
+    NonFinite,
 }
 
 /// Result status for the latest Android host-window size request.
@@ -77,8 +85,10 @@ pub enum AndroidHostWindowSizeStatus {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct AndroidHostWindowState {
     requested_size: MutableState<Size>,
+    requested_position: MutableState<Point>,
     actual_size: MutableState<Size>,
     request_revision: MutableState<u64>,
+    position_revision: MutableState<u64>,
     status: MutableState<AndroidHostWindowSizeStatus>,
 }
 
@@ -91,6 +101,19 @@ impl AndroidHostWindowState {
     /// Returns the requested host-window size without subscribing to changes.
     pub fn requested_size_non_reactive(self) -> Size {
         self.requested_size.get_non_reactive()
+    }
+
+    /// Returns the requested host-window position in logical pixels.
+    ///
+    /// Position requests are only applied when Android overlay-window mode is active.
+    /// Normal Activity windows keep Android-managed positioning and ignore this value.
+    pub fn requested_position(self) -> Point {
+        self.requested_position.get()
+    }
+
+    /// Returns the requested host-window position without subscribing to changes.
+    pub fn requested_position_non_reactive(self) -> Point {
+        self.requested_position.get_non_reactive()
     }
 
     /// Returns the actual host surface size last reported by Android in logical pixels.
@@ -141,8 +164,30 @@ impl AndroidHostWindowState {
         Ok(())
     }
 
+    /// Requests a new Android overlay-window position in logical pixels.
+    ///
+    /// This is meaningful only when the app is launched with
+    /// [`crate::AppLauncher::with_android_overlay_window`]. In overlay mode the
+    /// request is sent after the next successful composition pass and updates the
+    /// `WindowManager.LayoutParams` for the active overlay surface. In normal
+    /// Activity mode Android owns task/window placement, so position requests are
+    /// retained in state but not dispatched to the platform.
+    pub fn set_position(self, position: Point) -> Result<(), AndroidHostWindowPositionError> {
+        let requested = validate_logical_position(position)?;
+        if self.requested_position.get_non_reactive() != requested {
+            self.requested_position.set(requested);
+        }
+        self.position_revision
+            .set(self.position_revision.get_non_reactive().wrapping_add(1));
+        Ok(())
+    }
+
     pub(crate) fn request_revision_non_reactive(self) -> u64 {
         self.request_revision.get_non_reactive()
+    }
+
+    pub(crate) fn position_revision_non_reactive(self) -> u64 {
+        self.position_revision.get_non_reactive()
     }
 
     pub(crate) fn mark_pending(self, requested: Size) {
@@ -191,7 +236,7 @@ impl AndroidHostWindowState {
 ///
 /// In normal Android activity mode this state targets the current
 /// `NativeActivity` host window. In Android overlay mode it resizes the active
-/// overlay surface through `WindowManager.updateViewLayout`.
+/// overlay surface and can move it through `WindowManager.updateViewLayout`.
 #[allow(non_snake_case)]
 #[composable]
 pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWindowState {
@@ -212,8 +257,10 @@ pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWin
 
     let state = AndroidHostWindowState {
         requested_size: cranpose_core::useState(move || initial_requested),
+        requested_position: cranpose_core::useState(|| Point::ZERO),
         actual_size: cranpose_core::useState(|| Size::ZERO),
         request_revision: cranpose_core::useState(move || initial_revision),
+        position_revision: cranpose_core::useState(|| 0_u64),
         status: cranpose_core::useState(move || initial_status),
     };
 
@@ -238,7 +285,9 @@ pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWin
 pub(crate) struct AndroidHostWindowRequest {
     pub(crate) state: AndroidHostWindowState,
     pub(crate) size: Size,
-    pub(crate) revision: u64,
+    pub(crate) position: Point,
+    pub(crate) size_revision: u64,
+    pub(crate) position_revision: u64,
 }
 
 #[derive(Clone)]
@@ -264,7 +313,9 @@ pub(crate) fn latest_android_host_window_request() -> Option<AndroidHostWindowRe
             .map(|registration| AndroidHostWindowRequest {
                 state: registration.state,
                 size: registration.state.requested_size_non_reactive(),
-                revision: registration.state.request_revision_non_reactive(),
+                position: registration.state.requested_position_non_reactive(),
+                size_revision: registration.state.request_revision_non_reactive(),
+                position_revision: registration.state.position_revision_non_reactive(),
             })
     })
 }
@@ -285,6 +336,15 @@ pub(crate) fn validate_logical_size(size: Size) -> Result<Size, AndroidHostWindo
         return Err(AndroidHostWindowSizeError::NonPositive);
     }
     Ok(size)
+}
+
+pub(crate) fn validate_logical_position(
+    position: Point,
+) -> Result<Point, AndroidHostWindowPositionError> {
+    if !position.x.is_finite() || !position.y.is_finite() {
+        return Err(AndroidHostWindowPositionError::NonFinite);
+    }
+    Ok(position)
 }
 
 pub(crate) fn logical_to_physical_window_size(size: Size, density: f32) -> (i32, i32) {
@@ -350,36 +410,51 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    fn test_state(
-        width: f32,
-        height: f32,
-    ) -> (
-        cranpose_core::Runtime,
-        cranpose_core::OwnedMutableState<Size>,
-        cranpose_core::OwnedMutableState<Size>,
-        cranpose_core::OwnedMutableState<u64>,
-        cranpose_core::OwnedMutableState<AndroidHostWindowSizeStatus>,
-        AndroidHostWindowState,
-    ) {
+    struct TestState {
+        _runtime: cranpose_core::Runtime,
+        _requested: cranpose_core::OwnedMutableState<Size>,
+        _position: cranpose_core::OwnedMutableState<Point>,
+        _actual: cranpose_core::OwnedMutableState<Size>,
+        _revision: cranpose_core::OwnedMutableState<u64>,
+        _position_revision: cranpose_core::OwnedMutableState<u64>,
+        _status: cranpose_core::OwnedMutableState<AndroidHostWindowSizeStatus>,
+        state: AndroidHostWindowState,
+    }
+
+    fn test_state(width: f32, height: f32) -> TestState {
         let runtime = cranpose_core::Runtime::new(Arc::new(cranpose_core::DefaultScheduler));
         let handle = runtime.handle();
         let requested = cranpose_core::OwnedMutableState::with_runtime(
             Size::new(width, height),
             handle.clone(),
         );
+        let position = cranpose_core::OwnedMutableState::with_runtime(Point::ZERO, handle.clone());
         let actual = cranpose_core::OwnedMutableState::with_runtime(Size::ZERO, handle.clone());
         let revision = cranpose_core::OwnedMutableState::with_runtime(1_u64, handle.clone());
+        let position_revision =
+            cranpose_core::OwnedMutableState::with_runtime(0_u64, handle.clone());
         let status = cranpose_core::OwnedMutableState::with_runtime(
             AndroidHostWindowSizeStatus::Idle,
             handle,
         );
         let state = AndroidHostWindowState {
             requested_size: requested.handle(),
+            requested_position: position.handle(),
             actual_size: actual.handle(),
             request_revision: revision.handle(),
+            position_revision: position_revision.handle(),
             status: status.handle(),
         };
-        (runtime, requested, actual, revision, status, state)
+        TestState {
+            _runtime: runtime,
+            _requested: requested,
+            _position: position,
+            _actual: actual,
+            _revision: revision,
+            _position_revision: position_revision,
+            _status: status,
+            state,
+        }
     }
 
     #[test]
@@ -414,6 +489,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_logical_position_accepts_finite_coordinates() {
+        let position = Point::new(-20.0, 48.5);
+
+        assert_eq!(validate_logical_position(position), Ok(position));
+    }
+
+    #[test]
+    fn validate_logical_position_rejects_non_finite_coordinates() {
+        assert_eq!(
+            validate_logical_position(Point::new(f32::NAN, 10.0)),
+            Err(AndroidHostWindowPositionError::NonFinite)
+        );
+        assert_eq!(
+            validate_logical_position(Point::new(10.0, f32::INFINITY)),
+            Err(AndroidHostWindowPositionError::NonFinite)
+        );
+    }
+
+    #[test]
     fn logical_to_physical_window_size_rounds_and_clamps() {
         assert_eq!(
             logical_to_physical_window_size(Size::new(10.4, 12.6), 2.0),
@@ -427,7 +521,8 @@ mod tests {
 
     #[test]
     fn state_set_size_updates_requested_size_and_revision() {
-        let (_runtime, _requested, _actual, _revision, _status, state) = test_state(100.0, 50.0);
+        let harness = test_state(100.0, 50.0);
+        let state = harness.state;
 
         state.set_size(Size::new(200.0, 75.0)).unwrap();
 
@@ -443,7 +538,8 @@ mod tests {
 
     #[test]
     fn state_set_size_rejects_invalid_size_without_changing_request() {
-        let (_runtime, _requested, _actual, _revision, _status, state) = test_state(100.0, 50.0);
+        let harness = test_state(100.0, 50.0);
+        let state = harness.state;
 
         let result = state.set_size(Size::new(f32::NAN, 75.0));
 
@@ -461,8 +557,37 @@ mod tests {
     }
 
     #[test]
+    fn state_set_position_updates_requested_position_and_revision() {
+        let harness = test_state(100.0, 50.0);
+        let state = harness.state;
+
+        state.set_position(Point::new(12.0, -4.0)).unwrap();
+
+        assert_eq!(
+            state.requested_position_non_reactive(),
+            Point::new(12.0, -4.0)
+        );
+        assert_eq!(state.request_revision_non_reactive(), 1);
+        assert_eq!(state.position_revision_non_reactive(), 1);
+    }
+
+    #[test]
+    fn state_set_position_rejects_invalid_position_without_changing_request() {
+        let harness = test_state(100.0, 50.0);
+        let state = harness.state;
+
+        let result = state.set_position(Point::new(f32::NAN, 4.0));
+
+        assert_eq!(result, Err(AndroidHostWindowPositionError::NonFinite));
+        assert_eq!(state.requested_position_non_reactive(), Point::ZERO);
+        assert_eq!(state.request_revision_non_reactive(), 1);
+        assert_eq!(state.position_revision_non_reactive(), 0);
+    }
+
+    #[test]
     fn state_tracks_actual_size_separately_from_requested_size() {
-        let (_runtime, _requested, _actual, _revision, _status, state) = test_state(100.0, 50.0);
+        let harness = test_state(100.0, 50.0);
+        let state = harness.state;
 
         state.set_size(Size::new(200.0, 75.0)).unwrap();
         state.set_actual_size(Size::new(120.0, 60.0));
@@ -475,5 +600,22 @@ mod tests {
     fn sizes_match_allows_half_logical_pixel_rounding_error() {
         assert!(sizes_match(Size::new(100.0, 50.0), Size::new(100.5, 49.5)));
         assert!(!sizes_match(Size::new(100.0, 50.0), Size::new(100.6, 50.0)));
+    }
+
+    #[test]
+    fn latest_request_includes_requested_position() {
+        let harness = test_state(100.0, 50.0);
+        let state = harness.state;
+        state.set_position(Point::new(24.0, 36.0)).unwrap();
+        let owner = Rc::new(());
+        register_android_host_window_state(state, Rc::clone(&owner));
+
+        let request = latest_android_host_window_request().expect("registered request");
+
+        assert_eq!(request.size, Size::new(100.0, 50.0));
+        assert_eq!(request.position, Point::new(24.0, 36.0));
+        assert_eq!(request.size_revision, 1);
+        assert_eq!(request.position_revision, 1);
+        unregister_android_host_window_state(state, owner);
     }
 }
