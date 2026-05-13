@@ -9,7 +9,7 @@ impl TextDecoration {
     pub const LINE_THROUGH: Self = Self(2);
 
     pub fn contains(&self, other: Self) -> bool {
-        (self.0 & other.0) != 0
+        (self.0 | other.0) == self.0
     }
 
     pub fn combine(self, other: Self) -> Self {
@@ -20,6 +20,30 @@ impl TextDecoration {
 impl Default for TextDecoration {
     fn default() -> Self {
         Self::NONE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contains_requires_all_bits_from_other_decoration() {
+        let combined = TextDecoration::UNDERLINE.combine(TextDecoration::LINE_THROUGH);
+
+        assert!(combined.contains(TextDecoration::UNDERLINE));
+        assert!(combined.contains(TextDecoration::LINE_THROUGH));
+        assert!(combined.contains(combined));
+        assert!(!TextDecoration::UNDERLINE.contains(combined));
+        assert!(!TextDecoration::LINE_THROUGH.contains(combined));
+    }
+
+    #[test]
+    fn none_contains_only_none() {
+        assert!(TextDecoration::NONE.contains(TextDecoration::NONE));
+        assert!(TextDecoration::UNDERLINE.contains(TextDecoration::NONE));
+        assert!(!TextDecoration::NONE.contains(TextDecoration::UNDERLINE));
+        assert!(!TextDecoration::NONE.contains(TextDecoration::LINE_THROUGH));
     }
 }
 
