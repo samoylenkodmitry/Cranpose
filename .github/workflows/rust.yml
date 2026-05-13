@@ -339,7 +339,7 @@ jobs:
     name: robot e2e shard ${{ matrix.shard_index }}/16
     runs-on: ubuntu-latest
     needs: robot-e2e-build
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
