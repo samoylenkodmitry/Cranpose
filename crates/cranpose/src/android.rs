@@ -12,7 +12,7 @@ use crate::{
 use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
-use cranpose_ui::Size;
+use cranpose_ui::{Point, Size};
 use ndk::native_window::NativeWindow;
 use std::time::Instant;
 use std::{
@@ -389,14 +389,15 @@ fn create_android_wgpu_surface(
 fn dispatch_android_surface_size_request(
     app: &android_activity::AndroidApp,
     requested: Size,
+    position: Point,
     density: f32,
     overlay_options: Option<AndroidOverlayWindowOptions>,
 ) -> Result<(), String> {
     let requested =
         android_host_window::validate_logical_size(requested).map_err(|error| error.to_string())?;
-    if let Some(options) = overlay_options {
+    if overlay_options.is_some() {
         return android_overlay_window::update_android_overlay_window_bounds(
-            app, options, requested, density,
+            app, position, requested, density,
         );
     }
 
@@ -409,19 +410,37 @@ fn dispatch_registered_android_surface_size_request(
     app: &android_activity::AndroidApp,
     density: f32,
     overlay_options: Option<AndroidOverlayWindowOptions>,
-    last_dispatched: &mut Option<(android_host_window::AndroidHostWindowState, u64)>,
+    last_dispatched: &mut Option<(android_host_window::AndroidHostWindowState, u64, u64)>,
     pending_confirmation: &mut Option<PendingHostWindowSizeRequest>,
 ) {
     let Some(request) = android_host_window::latest_android_host_window_request() else {
         return;
     };
-    let dispatch_key = (request.state, request.revision);
+    let dispatch_key = (
+        request.state,
+        request.size_revision,
+        if overlay_options.is_some() {
+            request.position_revision
+        } else {
+            0
+        },
+    );
     if *last_dispatched == Some(dispatch_key) {
         return;
     }
 
+    let position = overlay_options
+        .filter(|_| request.position_revision == 0)
+        .map(|options| Point::new(options.x as f32, options.y as f32))
+        .unwrap_or(request.position);
     request.state.mark_pending(request.size);
-    match dispatch_android_surface_size_request(app, request.size, density, overlay_options) {
+    match dispatch_android_surface_size_request(
+        app,
+        request.size,
+        position,
+        density,
+        overlay_options,
+    ) {
         Ok(()) => {
             *last_dispatched = Some(dispatch_key);
             *pending_confirmation = Some(PendingHostWindowSizeRequest {
@@ -434,11 +453,21 @@ fn dispatch_registered_android_surface_size_request(
             } else {
                 "Android host-window"
             };
-            log::info!(
-                "Requested {target} size {:.1}x{:.1} dp",
-                request.size.width,
-                request.size.height
-            );
+            if overlay_options.is_some() {
+                log::info!(
+                    "Requested {target} bounds {:.1}x{:.1} dp at {:.1},{:.1} dp",
+                    request.size.width,
+                    request.size.height,
+                    position.x,
+                    position.y
+                );
+            } else {
+                log::info!(
+                    "Requested {target} size {:.1}x{:.1} dp",
+                    request.size.width,
+                    request.size.height
+                );
+            }
         }
         Err(message) => {
             *last_dispatched = Some(dispatch_key);
@@ -590,7 +619,7 @@ pub fn run(
         )
     });
     let mut last_dispatched_host_window_request =
-        None::<(android_host_window::AndroidHostWindowState, u64)>;
+        None::<(android_host_window::AndroidHostWindowState, u64, u64)>;
     let mut pending_host_window_confirmation = None::<PendingHostWindowSizeRequest>;
     let mut overlay_window_options = settings.android_overlay_window;
     let mut overlay_window_requested = false;
@@ -699,7 +728,11 @@ pub fn run(
 
                                 if let Some(requested) = initial_host_window_size.take() {
                                     match dispatch_android_surface_size_request(
-                                        &app, requested, density, None,
+                                        &app,
+                                        requested,
+                                        Point::ZERO,
+                                        density,
+                                        None,
                                     ) {
                                         Ok(()) => {
                                             pending_host_window_confirmation =

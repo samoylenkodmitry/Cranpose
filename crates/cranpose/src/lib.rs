@@ -25,8 +25,8 @@ mod launcher;
 mod native_window;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android_host_window::{
-    rememberAndroidHostWindowState, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
-    AndroidHostWindowState,
+    rememberAndroidHostWindowState, AndroidHostWindowPositionError, AndroidHostWindowSizeError,
+    AndroidHostWindowSizeStatus, AndroidHostWindowState,
 };
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 pub use launcher::LaunchError;
@@ -61,8 +61,8 @@ pub type RobotAppHook = dyn FnMut(String, String) -> Result<Option<String>, Stri
 pub mod prelude {
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub use crate::{
-        rememberAndroidHostWindowState, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
-        AndroidHostWindowState,
+        rememberAndroidHostWindowState, AndroidHostWindowPositionError, AndroidHostWindowSizeError,
+        AndroidHostWindowSizeStatus, AndroidHostWindowState,
     };
     pub use crate::{
         rememberWindowState, AndroidOverlayWindowOptions, AppLauncher, AppSettings, Window,

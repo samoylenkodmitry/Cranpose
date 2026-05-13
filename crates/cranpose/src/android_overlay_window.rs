@@ -5,7 +5,7 @@ use crate::{
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
     launcher::AndroidOverlayWindowOptions,
 };
-use cranpose_ui::Size;
+use cranpose_ui::{Point, Size};
 use jni::{
     objects::{GlobalRef, JClass, JObject, JString, JValue},
     sys::{jfloat, jint},
@@ -92,11 +92,11 @@ pub(crate) fn show_android_overlay_window(
 
 pub(crate) fn update_android_overlay_window_bounds(
     app: &android_activity::AndroidApp,
-    options: AndroidOverlayWindowOptions,
+    position: Point,
     size: Size,
     density: f32,
 ) -> Result<(), String> {
-    let bounds = overlay_size_to_physical_bounds(options, size, density)?;
+    let bounds = overlay_bounds_to_physical(position, size, density)?;
 
     with_android_activity_env(app, |env, activity| {
         let class = find_overlay_class(env, &activity)?;
@@ -223,15 +223,15 @@ fn overlay_options_to_physical_bounds(
     if !options.is_valid() {
         return Err("Android overlay window dimensions must be greater than zero".to_string());
     }
-    overlay_size_to_physical_bounds(
-        options,
+    overlay_bounds_to_physical(
+        Point::new(options.x as f32, options.y as f32),
         Size::new(options.width as f32, options.height as f32),
         density,
     )
 }
 
-fn overlay_size_to_physical_bounds(
-    options: AndroidOverlayWindowOptions,
+fn overlay_bounds_to_physical(
+    position: Point,
     size: Size,
     density: f32,
 ) -> Result<AndroidOverlayWindowBounds, String> {
@@ -240,8 +240,8 @@ fn overlay_size_to_physical_bounds(
     Ok(AndroidOverlayWindowBounds {
         width_px: logical_dimension_to_physical_px(size.width, density)?,
         height_px: logical_dimension_to_physical_px(size.height, density)?,
-        x_px: logical_to_physical_px(options.x as f32, density)?,
-        y_px: logical_to_physical_px(options.y as f32, density)?,
+        x_px: logical_to_physical_px(position.x, density)?,
+        y_px: logical_to_physical_px(position.y, density)?,
     })
 }
 
@@ -397,17 +397,34 @@ mod tests {
     }
 
     #[test]
-    fn overlay_size_to_physical_bounds_uses_requested_size_and_initial_position() {
+    fn overlay_options_to_physical_bounds_uses_initial_position_and_size() {
         let options = AndroidOverlayWindowOptions::new(100, 50).with_position(-4, 8);
-        let bounds = overlay_size_to_physical_bounds(options, Size::new(200.0, 80.0), 2.0).unwrap();
+        let bounds = overlay_options_to_physical_bounds(options, 2.0).unwrap();
+
+        assert_eq!(
+            bounds,
+            AndroidOverlayWindowBounds {
+                width_px: 200,
+                height_px: 100,
+                x_px: -8,
+                y_px: 16,
+            }
+        );
+    }
+
+    #[test]
+    fn overlay_bounds_to_physical_uses_runtime_position_and_size() {
+        let bounds =
+            overlay_bounds_to_physical(Point::new(12.25, -4.5), Size::new(200.0, 80.0), 2.0)
+                .unwrap();
 
         assert_eq!(
             bounds,
             AndroidOverlayWindowBounds {
                 width_px: 400,
                 height_px: 160,
-                x_px: -8,
-                y_px: 16,
+                x_px: 25,
+                y_px: -9,
             }
         );
     }
