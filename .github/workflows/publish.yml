@@ -3,6 +3,12 @@ name: Publish
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, for example v0.0.67"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -23,8 +29,9 @@ jobs:
       - name: Sync Cargo versions with tag
         id: sync
         env:
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          IS_TAG_PUSH: ${{ github.event_name == 'push' }}
         run: |
           set -euo pipefail
           tag="${TAG_NAME}"
@@ -39,7 +46,7 @@ jobs:
 
           tag_commit="$(git rev-list -n 1 "$tag")"
           branch_commit="$(git rev-parse HEAD)"
-          if [[ "$tag_commit" != "$branch_commit" ]]; then
+          if [[ "$IS_TAG_PUSH" == "true" && "$tag_commit" != "$branch_commit" ]]; then
             echo "Tag $tag must be created from $DEFAULT_BRANCH HEAD." >&2
             exit 1
           fi
@@ -220,6 +227,9 @@ jobs:
 
           if git diff --quiet; then
             echo "No version changes needed for ${tag}."
+          elif [[ "$IS_TAG_PUSH" != "true" ]]; then
+            echo "Manual publish requires $DEFAULT_BRANCH to already match ${tag}." >&2
+            exit 1
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -240,6 +250,7 @@ jobs:
     if: needs.sync_versions.outputs.should_publish == 'true'
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -251,10 +262,10 @@ jobs:
       - name: Verify tag and workspace versions
         run: |
           git fetch --tags origin
-          tag_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          tag_commit="$(git rev-list -n 1 "$TAG_NAME")"
           head_commit="$(git rev-parse HEAD)"
-          if [ "$tag_commit" != "$head_commit" ]; then
-            echo "Tag $GITHUB_REF_NAME does not point to HEAD." >&2
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$tag_commit" != "$head_commit" ]; then
+            echo "Tag $TAG_NAME does not point to HEAD." >&2
             exit 1
           fi
           python - <<'PY'
@@ -262,7 +273,7 @@ jobs:
           import sys
           import tomllib
 
-          tag = os.environ.get("GITHUB_REF_NAME", "")
+          tag = os.environ.get("TAG_NAME", "")
           if not tag.startswith("v"):
               sys.exit(f"Expected tag starting with 'v', got '{tag}'")
           tag_version = tag[1:]
@@ -301,7 +312,56 @@ jobs:
       - name: Publish crates (skip existing versions)
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG_NAME#v}"
+
+          cargo metadata --format-version 1 --no-deps > publish-metadata.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          metadata = json.loads(Path("publish-metadata.json").read_text())
+          workspace_members = set(metadata["workspace_members"])
+          member_index = {package_id: index for index, package_id in enumerate(metadata["workspace_members"])}
+
+          packages = {}
+          package_order = {}
+          for package in metadata["packages"]:
+              if package["id"] not in workspace_members:
+                  continue
+              if not package["name"].startswith("cranpose"):
+                  continue
+              packages[package["name"]] = package
+              package_order[package["name"]] = member_index[package["id"]]
+
+          remaining = {}
+          for name, package in packages.items():
+              remaining[name] = {
+                  dependency["name"]
+                  for dependency in package["dependencies"]
+                  if dependency["name"] in packages
+              }
+
+          order = []
+          while remaining:
+              ready = sorted(
+                  [name for name, dependencies in remaining.items() if not dependencies],
+                  key=lambda name: (package_order[name], name),
+              )
+              if not ready:
+                  cycle = ", ".join(sorted(remaining))
+                  raise SystemExit(f"Cyclic cranpose publish dependencies: {cycle}")
+
+              for name in ready:
+                  order.append(name)
+                  del remaining[name]
+              for dependencies in remaining.values():
+                  dependencies.difference_update(ready)
+
+          Path("publish-order.txt").write_text("\n".join(order) + "\n")
+          print("Resolved publish order:")
+          for name in order:
+              print(f"  {name}")
+          PY
 
           crate_exists() {
             python - "$1" "$2" <<'PY'
@@ -342,22 +402,6 @@ jobs:
             cargo publish -p "$crate"
           }
 
-          publish_if_needed cranpose-macros
-          publish_if_needed cranpose-core
-          publish_if_needed cranpose-services
-          publish_if_needed cranpose-runtime-std
-          publish_if_needed cranpose-ui-graphics
-          publish_if_needed cranpose-ui-layout
-          publish_if_needed cranpose-animation
-          publish_if_needed cranpose-foundation
-          publish_if_needed cranpose-ui
-          publish_if_needed cranpose-render-common
-          publish_if_needed cranpose-render-pixels
-          publish_if_needed cranpose-render-wgpu
-          publish_if_needed cranpose-app-shell
-          publish_if_needed cranpose-platform-web
-          publish_if_needed cranpose-platform-android
-          publish_if_needed cranpose-platform-desktop-winit
-          publish_if_needed cranpose-assets
-          publish_if_needed cranpose
-          publish_if_needed cranpose-testing
+          while IFS= read -r crate; do
+            publish_if_needed "$crate"
+          done < publish-order.txt
