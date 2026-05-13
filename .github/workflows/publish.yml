@@ -11,11 +11,11 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   sync_versions:
-    name: Sync versions with tag
+    name: Verify versions with tag
     runs-on: ubuntu-latest
     outputs:
       should_publish: ${{ steps.sync.outputs.should_publish }}
@@ -227,18 +227,10 @@ jobs:
 
           if git diff --quiet; then
             echo "No version changes needed for ${tag}."
-          elif [[ "$IS_TAG_PUSH" != "true" ]]; then
-            echo "Manual publish requires $DEFAULT_BRANCH to already match ${tag}." >&2
-            exit 1
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add Cargo.toml Cargo.lock apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
-            git commit -m "chore(release): ${tag}"
-            git push origin "$DEFAULT_BRANCH"
-
-            git tag -f "$tag"
-            git push origin "$tag" --force
+            git diff -- Cargo.toml Cargo.lock apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
+            echo "$DEFAULT_BRANCH must already contain the release metadata for ${tag} before publishing." >&2
+            exit 1
           fi
 
           echo "should_publish=true" >> "$GITHUB_OUTPUT"
