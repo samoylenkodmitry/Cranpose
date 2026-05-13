@@ -7,9 +7,9 @@
 
 #![allow(non_snake_case)]
 
-use cranpose_animation::animateFloatAsState;
 use cranpose_animation::{
-    infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
+    animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec,
+    AnimationType, RepeatMode, StartOffset,
 };
 use cranpose_ui::{
     composable,
@@ -629,9 +629,10 @@ fn FireShaderBox(style: FireStyle) {
         style.base_core_scale
     };
 
-    let intensity_anim = animateFloatAsState(target_intensity, "fire_intensity");
-    let smoke_anim = animateFloatAsState(target_smoke, "fire_smoke");
-    let core_anim = animateFloatAsState(target_core, "fire_core");
+    let intensity_anim =
+        animateFloatAsState(target_intensity, AnimationType::default(), "fire_intensity");
+    let smoke_anim = animateFloatAsState(target_smoke, AnimationType::default(), "fire_smoke");
+    let core_anim = animateFloatAsState(target_core, AnimationType::default(), "fire_core");
 
     let effect = fire_shader_effect(&FireShaderParams {
         resolution_w: outer_width,
@@ -731,8 +732,9 @@ fn HaloBorderBox(color: Color, corner_radius: f32, max_halo_width: f32, label: &
     let target_press = if is_pressed.get() { 1.0f32 } else { 0.0f32 };
     let target_intensity = if is_pressed.get() { 1.6f32 } else { 1.0f32 };
 
-    let press_anim = animateFloatAsState(target_press, "halo_press");
-    let intensity_anim = animateFloatAsState(target_intensity, "halo_intensity");
+    let press_anim = animateFloatAsState(target_press, AnimationType::default(), "halo_press");
+    let intensity_anim =
+        animateFloatAsState(target_intensity, AnimationType::default(), "halo_intensity");
 
     let content_width = 280.0f32;
     let content_height = 120.0f32;

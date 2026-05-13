@@ -1,6 +1,6 @@
 use cranpose_animation::{
-    animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode,
-    StartOffset,
+    animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec,
+    AnimationType, RepeatMode, StartOffset,
 };
 use cranpose_core::{
     self, compositionLocalOf, CompositionLocal, CompositionLocalProvider, DisposableEffect,
@@ -21,6 +21,7 @@ use std::rc::Rc;
 mod animations;
 mod hacker_news;
 mod images;
+mod interactive_anim;
 pub mod lazy_list;
 mod lazy_scrollbar;
 mod markdown;
@@ -35,6 +36,7 @@ mod xkcd;
 use animations::AnimationsTab;
 use hacker_news::{HackerNewsScrollStabilityFixtureTab, HackerNewsTab};
 use images::images_tab;
+use interactive_anim::InteractiveAnimTab;
 use lazy_list::lazy_list_example;
 use markdown::{markdown_viewer_tab, MarkdownScrollStabilityFixtureTab};
 use shader_rect::ShaderRectTab;
@@ -65,6 +67,7 @@ pub enum DemoTab {
     CompositionLocal,
     Async,
     Animations,
+    InteractiveAnim,
     WebFetch,
     TextInput,
     Layout,
@@ -88,6 +91,7 @@ impl DemoTab {
             DemoTab::CompositionLocal => "CompositionLocal Test",
             DemoTab::Async => "Async Runtime",
             DemoTab::Animations => "Animations",
+            DemoTab::InteractiveAnim => "Interactive Anim",
             DemoTab::WebFetch => "Web Fetch",
             DemoTab::TextInput => "Text Input",
             DemoTab::Layout => "Recursive Layout",
@@ -117,6 +121,9 @@ impl DemoTab {
             "compositionlocal" | "compositionlocaltest" => Some(Self::CompositionLocal),
             "async" | "asyncruntime" => Some(Self::Async),
             "animations" => Some(Self::Animations),
+            "interactiveanim" | "interactiveanimation" | "interactiveanimations" => {
+                Some(Self::InteractiveAnim)
+            }
             "webfetch" => Some(Self::WebFetch),
             "textinput" => Some(Self::TextInput),
             "layout" | "recursivelayout" => Some(Self::Layout),
@@ -136,7 +143,7 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 18] = [
+pub const DEMO_TABS: [DemoTab; 19] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -155,6 +162,7 @@ pub const DEMO_TABS: [DemoTab; 18] = [
     DemoTab::Shaders,
     DemoTab::ShaderRect,
     DemoTab::MarkdownViewer,
+    DemoTab::InteractiveAnim,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -462,6 +470,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::CompositionLocal => composition_local_example(),
         DemoTab::Async => async_runtime_example(),
         DemoTab::Animations => AnimationsTab(),
+        DemoTab::InteractiveAnim => InteractiveAnimTab(),
         DemoTab::WebFetch => web_fetch_example(),
         DemoTab::TextInput => text_input_example(),
         DemoTab::Layout => recursive_layout_example(),
@@ -1313,7 +1322,7 @@ fn counter_app() {
     } else {
         pointer_wave * 0.6
     };
-    let wave_state = animateFloatAsState(target_wave, "wave");
+    let wave_state = animateFloatAsState(target_wave, AnimationType::default(), "wave");
     let fetch_key = fetch_request.get();
     LaunchedEffect!(fetch_key, move |_scope| {
         if fetch_key == 0 {

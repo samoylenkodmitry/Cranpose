@@ -30,7 +30,11 @@ fn animate_float_as_state_interpolates_over_time() {
                 let target = Rc::clone(&target);
                 with_current_composer(|composer| {
                     composer.with_group(group_key, |_| {
-                        let state = animateFloatAsState(*target.borrow(), "alpha");
+                        let state = animateFloatAsState(
+                            *target.borrow(),
+                            AnimationType::default(),
+                            "alpha",
+                        );
                         state_slot.borrow_mut().replace(state);
                     });
                 });
@@ -55,7 +59,11 @@ fn animate_float_as_state_interpolates_over_time() {
                 let target = Rc::clone(&target);
                 with_current_composer(|composer| {
                     composer.with_group(group_key, |_| {
-                        let state = animateFloatAsState(*target.borrow(), "alpha");
+                        let state = animateFloatAsState(
+                            *target.borrow(),
+                            AnimationType::default(),
+                            "alpha",
+                        );
                         state_slot.borrow_mut().replace(state);
                     });
                 });
@@ -111,7 +119,7 @@ fn animate_float_as_state_invalidates_composition_time_readers() {
             });
         }
 
-        let value = animateFloatAsStateWithSpec(
+        let value = animateFloatAsState(
             target.value(),
             AnimationType::Tween(AnimationSpec::linear(240)),
             "alpha",

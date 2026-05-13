@@ -3,11 +3,34 @@
 #![allow(non_snake_case)]
 
 use crate::composable;
+use crate::interaction::MutableInteractionSource;
 use crate::layout::policies::FlexMeasurePolicy;
 use crate::modifier::Modifier;
 use crate::widgets::Layout;
 use cranpose_core::NodeId;
 use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+fn button_modifier<F>(
+    modifier: Modifier,
+    interaction_source: Option<MutableInteractionSource>,
+    on_click: F,
+) -> Modifier
+where
+    F: FnMut() + 'static,
+{
+    let on_click_rc: Rc<RefCell<dyn FnMut()>> = Rc::new(RefCell::new(on_click));
+    let modifier = if let Some(interaction_source) = interaction_source {
+        modifier.press_interaction_source(interaction_source)
+    } else {
+        modifier
+    };
+
+    modifier.clickable(move |_point| {
+        (on_click_rc.borrow_mut())();
+    })
+}
 
 /// A clickable button with a background and content.
 ///
@@ -36,21 +59,29 @@ where
     F: FnMut() + 'static,
     G: FnMut() + 'static,
 {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    // Wrap the on_click handler in Rc<RefCell<>> to make it callable from Fn closure
-    let on_click_rc: Rc<RefCell<dyn FnMut()>> = Rc::new(RefCell::new(on_click));
-
-    // Add clickable modifier to handle click events
-    let clickable_modifier = modifier.clickable(move |_point| {
-        (on_click_rc.borrow_mut())();
-    });
-
-    // Use Layout with FlexMeasurePolicy (column) to arrange button content
-    // This matches how Button is implemented in Jetpack Compose
     Layout(
-        clickable_modifier,
+        button_modifier(modifier, None, on_click),
+        FlexMeasurePolicy::column(
+            LinearArrangement::Center,
+            HorizontalAlignment::CenterHorizontally,
+        ),
+        content,
+    )
+}
+
+#[composable]
+pub fn ButtonWithInteractionSource<F, G>(
+    modifier: Modifier,
+    interaction_source: MutableInteractionSource,
+    on_click: F,
+    content: G,
+) -> NodeId
+where
+    F: FnMut() + 'static,
+    G: FnMut() + 'static,
+{
+    Layout(
+        button_modifier(modifier, Some(interaction_source), on_click),
         FlexMeasurePolicy::column(
             LinearArrangement::Center,
             HorizontalAlignment::CenterHorizontally,

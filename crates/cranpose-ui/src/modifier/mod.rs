@@ -778,7 +778,7 @@ impl Modifier {
         handle.resolved_modifiers()
     }
 
-    fn with_element<E>(element: E) -> Self
+    pub(crate) fn with_element<E>(element: E) -> Self
     where
         E: ModifierNodeElement,
     {

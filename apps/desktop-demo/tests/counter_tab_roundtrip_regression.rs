@@ -1,6 +1,6 @@
 pub mod tab_switch_regression_support;
 
-use cranpose_animation::{animateFloatAsStateWithSpec, AnimationSpec, AnimationType};
+use cranpose_animation::{animateFloatAsState, AnimationSpec, AnimationType};
 use cranpose_app_shell::AppShell;
 use cranpose_core::{location_key, MutableState};
 use cranpose_foundation::PointerEvent;
@@ -149,7 +149,7 @@ fn returned_press_lift(press_tick: MutableState<u64>) -> f32 {
         }
     });
 
-    animateFloatAsStateWithSpec(
+    animateFloatAsState(
         press_target.value(),
         AnimationType::Tween(AnimationSpec::linear(240)),
         "returned_button_graphics_layer_probe",

@@ -107,6 +107,11 @@ path = "robot-runners/robot_animation_showcase.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_interactive_anim"
+path = "robot-runners/robot_interactive_anim.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_image_chessboard"
 path = "robot-runners/robot_image_chessboard.rs"
 required-features = ["robot-app"]
