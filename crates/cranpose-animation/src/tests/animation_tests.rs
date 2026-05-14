@@ -30,7 +30,11 @@ fn animate_float_as_state_interpolates_over_time() {
                 let target = Rc::clone(&target);
                 with_current_composer(|composer| {
                     composer.with_group(group_key, |_| {
-                        let state = animateFloatAsState(*target.borrow(), "alpha");
+                        let state = animateFloatAsState(
+                            *target.borrow(),
+                            AnimationType::default(),
+                            "alpha",
+                        );
                         state_slot.borrow_mut().replace(state);
                     });
                 });
@@ -55,7 +59,11 @@ fn animate_float_as_state_interpolates_over_time() {
                 let target = Rc::clone(&target);
                 with_current_composer(|composer| {
                     composer.with_group(group_key, |_| {
-                        let state = animateFloatAsState(*target.borrow(), "alpha");
+                        let state = animateFloatAsState(
+                            *target.borrow(),
+                            AnimationType::default(),
+                            "alpha",
+                        );
                         state_slot.borrow_mut().replace(state);
                     });
                 });
@@ -111,7 +119,7 @@ fn animate_float_as_state_invalidates_composition_time_readers() {
             });
         }
 
-        let value = animateFloatAsStateWithSpec(
+        let value = animateFloatAsState(
             target.value(),
             AnimationType::Tween(AnimationSpec::linear(240)),
             "alpha",
@@ -349,4 +357,12 @@ fn spring_spec_stiff_has_high_stiffness() {
     let spec = SpringSpec::stiff();
     assert_eq!(spec.stiffness, 3000.0);
     assert!(spec.stiffness > SpringSpec::default().stiffness);
+}
+
+#[test]
+fn tween_factory_creates_tween_animation_type() {
+    assert_eq!(
+        tween(450, Easing::FastOutSlowInEasing),
+        AnimationType::Tween(AnimationSpec::tween(450, Easing::FastOutSlowInEasing))
+    );
 }

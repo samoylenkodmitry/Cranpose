@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Context};
 use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef, HttpError};
 use cranpose_ui::{
-    composable, Alignment, Box, BoxSpec, Color, Column, ColumnSpec, ContentScale, Image,
-    ImageBitmap, LinearArrangement, Modifier, Row, RowSpec, ScrollState, Size, Spacer, Text,
+    composable, Alignment, Box, BoxSpec, ButtonSpec, Color, Column, ColumnSpec, ContentScale,
+    Image, ImageBitmap, LinearArrangement, Modifier, Row, RowSpec, ScrollState, Size, Spacer, Text,
     TextStyle, VerticalAlignment,
 };
 use serde::Deserialize;
@@ -174,6 +174,7 @@ pub(crate) fn xkcd_tab() {
                             .padding(10.0)
                             .background(Color(0.21, 0.44, 0.83, 1.0))
                             .rounded_corners(12.0),
+                        ButtonSpec::default(),
                         {
                             move || {
                                 request_id.update(|value| *value = value.wrapping_add(1));

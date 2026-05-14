@@ -9,6 +9,7 @@ mod debug;
 mod draw;
 pub mod fling_animation;
 mod focus_dispatch;
+mod interaction;
 mod key_event;
 pub mod layout;
 mod modifier;
@@ -44,6 +45,10 @@ pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
     process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
 };
+pub use interaction::{
+    rememberMutableInteractionSource, Interaction, MutableInteractionSource, PressInteraction,
+    PressInteractionCancel, PressInteractionPress, PressInteractionRelease,
+};
 // Re-export FocusManager from cranpose-foundation to avoid duplication
 pub use cranpose_foundation::nodes::input::focus::FocusManager;
 pub use layout::{
@@ -78,9 +83,9 @@ pub use pointer_dispatch::{
 pub use primitives::{
     remember_svg, BasicText, BasicTextField, BasicTextFieldOptions, BasicTextWithOptions,
     BitmapPainter, Box, BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope,
-    BoxWithConstraintsScopeImpl, Button, Canvas, Column, ColumnSpec, ContentScale, ForEach, Image,
-    Layout, LayoutNode, Painter, Row, RowSpec, Spacer, SubcomposeLayout, SvgPainter,
-    SvgPainterError, Text, TextWithOptions, DEFAULT_ALPHA,
+    BoxWithConstraintsScopeImpl, Button, ButtonSpec, Canvas, Column, ColumnSpec, ContentScale,
+    ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec, Spacer, SubcomposeLayout,
+    SvgPainter, SvgPainterError, Text, TextWithOptions, DEFAULT_ALPHA,
 };
 // Lazy list exports - single source from cranpose-foundation
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};

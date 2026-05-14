@@ -1,6 +1,6 @@
 use cranpose_animation::{
-    animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode,
-    StartOffset,
+    animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec,
+    AnimationType, RepeatMode, StartOffset,
 };
 use cranpose_core::{
     self, compositionLocalOf, CompositionLocal, CompositionLocalProvider, DisposableEffect,
@@ -11,9 +11,10 @@ use cranpose_foundation::text::TextFieldState;
 use cranpose_foundation::PointerEventKind;
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{
-    composable, BasicTextField, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
-    GraphicsLayer, IntrinsicSize, LinearArrangement, Modifier, Point, PointerInputScope,
-    RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    composable, BasicTextField, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
+    CornerRadii, GraphicsLayer, IntrinsicSize, LinearArrangement, Modifier, Point,
+    PointerInputScope, RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, TextStyle,
+    VerticalAlignment,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -21,6 +22,7 @@ use std::rc::Rc;
 mod animations;
 mod hacker_news;
 mod images;
+mod interactive_anim;
 pub mod lazy_list;
 mod lazy_scrollbar;
 mod markdown;
@@ -35,6 +37,7 @@ mod xkcd;
 use animations::AnimationsTab;
 use hacker_news::{HackerNewsScrollStabilityFixtureTab, HackerNewsTab};
 use images::images_tab;
+use interactive_anim::InteractiveAnimTab;
 use lazy_list::lazy_list_example;
 use markdown::{markdown_viewer_tab, MarkdownScrollStabilityFixtureTab};
 use shader_rect::ShaderRectTab;
@@ -65,6 +68,7 @@ pub enum DemoTab {
     CompositionLocal,
     Async,
     Animations,
+    InteractiveAnim,
     WebFetch,
     TextInput,
     Layout,
@@ -88,6 +92,7 @@ impl DemoTab {
             DemoTab::CompositionLocal => "CompositionLocal Test",
             DemoTab::Async => "Async Runtime",
             DemoTab::Animations => "Animations",
+            DemoTab::InteractiveAnim => "Interactive Anim",
             DemoTab::WebFetch => "Web Fetch",
             DemoTab::TextInput => "Text Input",
             DemoTab::Layout => "Recursive Layout",
@@ -117,6 +122,9 @@ impl DemoTab {
             "compositionlocal" | "compositionlocaltest" => Some(Self::CompositionLocal),
             "async" | "asyncruntime" => Some(Self::Async),
             "animations" => Some(Self::Animations),
+            "interactiveanim" | "interactiveanimation" | "interactiveanimations" => {
+                Some(Self::InteractiveAnim)
+            }
             "webfetch" => Some(Self::WebFetch),
             "textinput" => Some(Self::TextInput),
             "layout" | "recursivelayout" => Some(Self::Layout),
@@ -136,7 +144,7 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 18] = [
+pub const DEMO_TABS: [DemoTab; 19] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -155,6 +163,7 @@ pub const DEMO_TABS: [DemoTab; 18] = [
     DemoTab::Shaders,
     DemoTab::ShaderRect,
     DemoTab::MarkdownViewer,
+    DemoTab::InteractiveAnim,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -331,6 +340,7 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
                 );
             })
             .padding(padding),
+        ButtonSpec::default(),
         {
             move || {
                 if active_tab.get() != tab {
@@ -462,6 +472,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::CompositionLocal => composition_local_example(),
         DemoTab::Async => async_runtime_example(),
         DemoTab::Animations => AnimationsTab(),
+        DemoTab::InteractiveAnim => InteractiveAnimTab(),
         DemoTab::WebFetch => web_fetch_example(),
         DemoTab::TextInput => text_input_example(),
         DemoTab::Layout => recursive_layout_example(),
@@ -622,6 +633,7 @@ fn text_input_example() {
                                         );
                                     })
                                     .padding(10.0),
+                                ButtonSpec::default(),
                                 move || {
                                     state.set_text("");
                                 },
@@ -648,6 +660,7 @@ fn text_input_example() {
                                         );
                                     })
                                     .padding(10.0),
+                                ButtonSpec::default(),
                                 move || {
                                     state.edit(|buffer| {
                                         buffer.place_cursor_at_end();
@@ -679,6 +692,7 @@ fn text_input_example() {
                                         );
                                     })
                                     .padding(10.0),
+                                ButtonSpec::default(),
                                 move || {
                                     let text = from.text();
                                     to.set_text(text);
@@ -742,6 +756,7 @@ fn recursive_layout_example() {
                                 .background(Color(0.35, 0.45, 0.85, 1.0))
                                 .rounded_corners(16.0)
                                 .padding(10.0),
+                            ButtonSpec::default(),
                             {
                                 move || {
                                     let next = (depth_state.get() + 1).min(96);
@@ -764,6 +779,7 @@ fn recursive_layout_example() {
                                 .background(Color(0.65, 0.35, 0.35, 1.0))
                                 .rounded_corners(16.0)
                                 .padding(10.0),
+                            ButtonSpec::default(),
                             {
                                 move || {
                                     let next = depth_state.get().saturating_sub(1).max(1);
@@ -941,6 +957,7 @@ pub fn composition_local_example() {
                         );
                     })
                     .padding(12.0),
+                ButtonSpec::default(),
                 {
                     move || {
                         let new_val = counter.get() + 1;
@@ -1173,6 +1190,7 @@ pub fn AsyncRuntimeTabContent(
                                     );
                                 })
                                 .padding(12.0),
+                            ButtonSpec::default(),
                             move || {
                                 is_running.set(!is_running.get());
                             },
@@ -1202,6 +1220,7 @@ pub fn AsyncRuntimeTabContent(
                                     );
                                 })
                                 .padding(12.0),
+                            ButtonSpec::default(),
                             move || {
                                 animation.set(AnimationState::default());
                                 stats.set(FrameStats::default());
@@ -1313,7 +1332,7 @@ fn counter_app() {
     } else {
         pointer_wave * 0.6
     };
-    let wave_state = animateFloatAsState(target_wave, "wave");
+    let wave_state = animateFloatAsState(target_wave, AnimationType::default(), "wave");
     let fetch_key = fetch_request.get();
     LaunchedEffect!(fetch_key, move |_scope| {
         if fetch_key == 0 {
@@ -1566,6 +1585,7 @@ fn counter_app() {
                                             );
                                         })
                                         .padding(10.0),
+                                    ButtonSpec::default(),
                                     || {},
                                     || {
                                         Text(
@@ -1591,6 +1611,7 @@ fn counter_app() {
                                             );
                                         })
                                         .padding(10.0),
+                                    ButtonSpec::default(),
                                     || {},
                                     || {
                                         Text(
@@ -1611,6 +1632,7 @@ fn counter_app() {
                                             );
                                         })
                                         .padding(10.0),
+                                    ButtonSpec::default(),
                                     || {},
                                     || {
                                         Text(
@@ -1648,6 +1670,7 @@ fn counter_app() {
                                             });
                                         })
                                         .padding(12.0),
+                                    ButtonSpec::default(),
                                     move || {
                                         println!("Incrementing counter to {}", counter.get() + 1);
                                         counter.set(counter.get() + 1)
@@ -1670,6 +1693,7 @@ fn counter_app() {
                                             );
                                         })
                                         .padding(12.0),
+                                    ButtonSpec::default(),
                                     move || counter.set(counter.get() - 1),
                                     || {
                                         Text(
@@ -1716,6 +1740,7 @@ fn counter_app() {
                                     });
                                 })
                                 .padding(12.0),
+                            ButtonSpec::default(),
                             {
                                 move || {
                                     async_message
@@ -1829,6 +1854,7 @@ fn modifier_showcase_tab() {
                                     );
                                 })
                                 .padding(10.0),
+                            ButtonSpec::default(),
                             {
                                 move || {
                                     if selected_showcase.get() != showcase_type {
@@ -2345,6 +2371,7 @@ pub fn dynamic_modifiers_showcase() {
                     );
                 })
                 .padding(10.0),
+            ButtonSpec::default(),
             move || {
                 frame.set(frame.get() + 1);
             },

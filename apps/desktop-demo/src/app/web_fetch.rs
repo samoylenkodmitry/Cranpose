@@ -2,8 +2,8 @@ use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
     composable,
     text::{SpanStyle, TextDecoration},
-    Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier, Row,
-    RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
+    Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,6 +174,7 @@ pub(crate) fn web_fetch_example() {
                                         );
                                     })
                                     .padding(10.0),
+                                ButtonSpec::default(),
                                 move || {
                                     fetch_status.set(FetchStatus::Loading);
                                     request_counter.update(|tick| *tick = tick.wrapping_add(1));

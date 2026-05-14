@@ -26,6 +26,7 @@ fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
 
             Button(
                 Modifier::empty().padding(10.0),
+                ButtonSpec::default(),
                 {
                     move || {
                         counter.set(counter.get() + 1);
@@ -61,6 +62,7 @@ fn alternative_view(counter: MutableState<i32>, render_count: MutableState<i32>)
 
             Button(
                 Modifier::empty().padding(10.0),
+                ButtonSpec::default(),
                 {
                     move || {
                         counter.set(counter.get() + 1);
@@ -102,6 +104,7 @@ fn combined_switching_app(
                 move || {
                     Button(
                         Modifier::empty().padding(10.0),
+                        ButtonSpec::default(),
                         {
                             let show_counter = show_counter_for_button1;
                             move || {
@@ -124,6 +127,7 @@ fn combined_switching_app(
 
                     Button(
                         Modifier::empty().padding(10.0),
+                        ButtonSpec::default(),
                         {
                             let show_counter = show_counter_for_button2;
                             move || {
@@ -398,6 +402,7 @@ fn test_multiple_switches_with_state_changes() {
                     );
                     Button(
                         Modifier::empty(),
+                        ButtonSpec::default(),
                         {
                             let counter_a = counter_a_inner;
                             move || counter_a.set(counter_a.get() + 1)
@@ -414,6 +419,7 @@ fn test_multiple_switches_with_state_changes() {
                     );
                     Button(
                         Modifier::empty(),
+                        ButtonSpec::default(),
                         {
                             let counter_b = counter_b_inner;
                             move || counter_b.set(counter_b.get() + 1)
@@ -655,6 +661,7 @@ fn test_conditional_with_complex_button_structure() {
                             Text("First View", Modifier::empty(), TextStyle::default());
                             Button(
                                 Modifier::empty(),
+                                ButtonSpec::default(),
                                 move || counter.set(counter.get() + 1),
                                 || {
                                     Text("Button 1", Modifier::empty(), TextStyle::default());
@@ -662,6 +669,7 @@ fn test_conditional_with_complex_button_structure() {
                             );
                             Button(
                                 Modifier::empty(),
+                                ButtonSpec::default(),
                                 move || counter.set(counter.get() + 10),
                                 || {
                                     Text("Button 2", Modifier::empty(), TextStyle::default());
@@ -674,6 +682,7 @@ fn test_conditional_with_complex_button_structure() {
                     Text("Second View", Modifier::empty(), TextStyle::default());
                     Button(
                         Modifier::empty(),
+                        ButtonSpec::default(),
                         {
                             let counter = counter_inner;
                             move || counter.set(counter.get() - 1)
@@ -752,6 +761,7 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
 
                         Button(
                             Modifier::empty(),
+                            ButtonSpec::default(),
                             move || show_counter_for_btn1.set(true),
                             || {
                                 Text("Counter App", Modifier::empty(), TextStyle::default());
@@ -760,6 +770,7 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
 
                         Button(
                             Modifier::empty(),
+                            ButtonSpec::default(),
                             move || show_counter_for_btn2.set(false),
                             || {
                                 Text(
@@ -926,6 +937,7 @@ fn test_composition_local_demo(
 
             Button(
                 Modifier::empty().padding(10.0),
+                ButtonSpec::default(),
                 {
                     move || {
                         counter.set(counter.get() + 1);
@@ -997,6 +1009,7 @@ fn composable_view_a() {
             Text("View A - Line 2", Modifier::empty(), TextStyle::default());
             Button(
                 Modifier::empty(),
+                ButtonSpec::default(),
                 || {},
                 || {
                     Text("Button A", Modifier::empty(), TextStyle::default());
@@ -1017,6 +1030,7 @@ fn composable_view_b() {
             Text("View B - Line 3", Modifier::empty(), TextStyle::default());
             Button(
                 Modifier::empty(),
+                ButtonSpec::default(),
                 || {},
                 || {
                     Text("Button B", Modifier::empty(), TextStyle::default());

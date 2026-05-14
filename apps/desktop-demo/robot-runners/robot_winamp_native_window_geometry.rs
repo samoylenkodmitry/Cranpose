@@ -199,12 +199,106 @@ fn arrange_origin(windows: WinampWindows) -> WindowGeometry {
     let margin_y = desired_margin_y.min(((monitor.height - total_height).max(0) / 2).max(8));
     let max_x = monitor.x + monitor.width - total_width - margin_x;
     let max_y = monitor.y + monitor.height - total_height - margin_y;
-    WindowGeometry {
+    let fallback = WindowGeometry {
         x: (monitor.x + margin_x).min(max_x.max(monitor.x)),
         y: (monitor.y + margin_y).min(max_y.max(monitor.y)),
         width: geometries.main.width,
         height: geometries.main.height,
+    };
+    unobstructed_origin(monitor, total_width, total_height, fallback)
+}
+
+fn unobstructed_origin(
+    monitor: WindowGeometry,
+    total_width: i32,
+    total_height: i32,
+    fallback: WindowGeometry,
+) -> WindowGeometry {
+    let obstacles = visible_window_obstacles();
+    if !intersects_any_obstacle(fallback, total_width, total_height, &obstacles) {
+        return fallback;
     }
+
+    let max_x = monitor.x + monitor.width - total_width;
+    let max_y = monitor.y + monitor.height - total_height;
+    let min_x = monitor.x + 8;
+    let min_y = monitor.y + 8;
+    if max_x < min_x || max_y < min_y {
+        return fallback;
+    }
+    let step = 96.max(total_height / 3);
+    let x_candidates = [
+        fallback.x,
+        min_x,
+        (monitor.x + monitor.width / 2 - total_width / 2).clamp(min_x, max_x),
+        max_x.saturating_sub(8),
+    ];
+
+    for x in x_candidates {
+        let x = x.clamp(min_x, max_x);
+        let mut y = min_y;
+        while y <= max_y {
+            let candidate = WindowGeometry {
+                x,
+                y,
+                width: fallback.width,
+                height: fallback.height,
+            };
+            if !intersects_any_obstacle(candidate, total_width, total_height, &obstacles) {
+                println!("arrange origin avoided occupied area: fallback={fallback:?} selected={candidate:?}");
+                return candidate;
+            }
+            y += step;
+        }
+    }
+
+    fallback
+}
+
+fn visible_window_obstacles() -> Vec<WindowGeometry> {
+    visible_windows_summary()
+        .into_iter()
+        .filter_map(|(_, title, geometry)| {
+            let title = title.as_deref();
+            if matches!(
+                title,
+                Some("Desktop")
+                    | Some("xfdesktop")
+                    | Some("Xfwm4")
+                    | Some(WINDOW_TITLE)
+                    | Some("Winamp")
+                    | Some("Winamp Equalizer")
+                    | Some("Winamp Playlist")
+            ) {
+                return None;
+            }
+            geometry.filter(|geometry| geometry.width > 1 && geometry.height > 1)
+        })
+        .collect()
+}
+
+fn intersects_any_obstacle(
+    origin: WindowGeometry,
+    total_width: i32,
+    total_height: i32,
+    obstacles: &[WindowGeometry],
+) -> bool {
+    let bounds = WindowGeometry {
+        x: origin.x,
+        y: origin.y,
+        width: total_width,
+        height: total_height,
+    };
+    obstacles
+        .iter()
+        .any(|obstacle| rectangles_intersect(bounds, *obstacle))
+}
+
+fn rectangles_intersect(first: WindowGeometry, second: WindowGeometry) -> bool {
+    first.x < second.x + second.width
+        && first.x + first.width > second.x
+        && first.y < second.y + second.height
+        && first.y + first.height > second.y
 }
 
 fn host_window_origin() -> WindowGeometry {

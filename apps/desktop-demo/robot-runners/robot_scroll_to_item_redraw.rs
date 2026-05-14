@@ -10,7 +10,8 @@ use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
-    Box, BoxSpec, Button, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
+    Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec,
+    Text,
 };
 use cranpose_ui::{Alignment, Color, Modifier, Size, TextStyle};
 use std::time::Duration;
@@ -96,6 +97,7 @@ fn main() {
                         move || {
                             Button(
                                 Modifier::default().background(Color::rgb(0.3, 0.4, 0.6)),
+                                ButtonSpec::default(),
                                 move || {
                                     // This should immediately show Item 50 at the top
                                     state.scroll_to_item(50, 0.0);

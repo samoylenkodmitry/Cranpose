@@ -136,6 +136,7 @@ fn pause_button_app(is_running: MutableState<bool>, click_count: MutableState<i3
                             scope.draw_round_rect(Brush::solid(color), CornerRadii::uniform(16.0));
                         }
                     })),
+                ButtonSpec::default(),
                 {
                     move || {
                         is_running.set(!is_running.get());

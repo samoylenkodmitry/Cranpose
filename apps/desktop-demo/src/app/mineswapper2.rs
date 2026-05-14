@@ -1,7 +1,7 @@
 use cranpose_core::useState;
 use cranpose_ui::{
-    composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
-    Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    composable, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii,
+    LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -290,6 +290,7 @@ pub fn mineswapper2_tab() {
                                                 );
                                             })
                                             .padding(8.0),
+                                        ButtonSpec::default(),
                                         move || {
                                             preset_state.set(preset);
                                             game_state.set(MineswapperGame::new_from_preset(
@@ -323,6 +324,7 @@ pub fn mineswapper2_tab() {
                                 );
                             })
                             .padding(10.0),
+                        ButtonSpec::default(),
                         {
                             move || {
                                 let preset = preset_state.get();
@@ -348,6 +350,7 @@ pub fn mineswapper2_tab() {
                                 );
                             })
                             .padding(10.0),
+                        ButtonSpec::default(),
                         move || {
                             let next_mode = match flag_mode.get() {
                                 MineswapperTool::Reveal => MineswapperTool::Flag,
@@ -474,6 +477,7 @@ pub fn mineswapper2_tab() {
                                                     CornerRadii::uniform(8.0),
                                                 );
                                             }),
+                                        ButtonSpec::default(),
                                         move || match flag_mode.get() {
                                             MineswapperTool::Flag => {
                                                 game_state.update(|game| game.toggle_flag(x, y));

@@ -34,6 +34,7 @@ fn equal_width_buttons_api_demonstration() {
         Row(Modifier::empty(), RowSpec::default(), || {
             Button(
                 Modifier::empty().width_intrinsic(IntrinsicSize::Max),
+                ButtonSpec::default(),
                 || {},
                 || {
                     Text("OK", Modifier::empty(), TextStyle::default());
@@ -41,6 +42,7 @@ fn equal_width_buttons_api_demonstration() {
             );
             Button(
                 Modifier::empty().width_intrinsic(IntrinsicSize::Max),
+                ButtonSpec::default(),
                 || {},
                 || {
                     Text("Cancel", Modifier::empty(), TextStyle::default());
@@ -48,6 +50,7 @@ fn equal_width_buttons_api_demonstration() {
             );
             Button(
                 Modifier::empty().width_intrinsic(IntrinsicSize::Max),
+                ButtonSpec::default(),
                 || {},
                 || {
                     Text("Apply", Modifier::empty(), TextStyle::default());

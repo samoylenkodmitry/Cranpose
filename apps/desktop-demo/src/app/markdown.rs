@@ -9,7 +9,7 @@ use cranpose_ui::{
         AnnotatedString, FontFamily, FontStyle, FontWeight, LinkAnnotation, ParagraphStyle,
         PlatformParagraphStyle, SpanStyle, TextDecoration, TextShaping, TextUnit,
     },
-    Brush, Button, Color, Column, ColumnSpec, CornerRadii, LazyColumn, LazyColumnSpec,
+    Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, LazyColumn, LazyColumnSpec,
     LinearArrangement, LinkedText, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle,
     VerticalAlignment,
 };
@@ -478,6 +478,7 @@ pub fn markdown_viewer_tab() {
                                         );
                                     })
                                     .padding(10.0),
+                                ButtonSpec::default(),
                                 move || request_counter.update(|v| *v = v.wrapping_add(1)),
                                 || {
                                     Text(

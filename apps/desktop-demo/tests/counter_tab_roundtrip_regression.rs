@@ -1,6 +1,6 @@
 pub mod tab_switch_regression_support;
 
-use cranpose_animation::{animateFloatAsStateWithSpec, AnimationSpec, AnimationType};
+use cranpose_animation::{animateFloatAsState, tween, Easing};
 use cranpose_app_shell::AppShell;
 use cranpose_core::{location_key, MutableState};
 use cranpose_foundation::PointerEvent;
@@ -11,8 +11,8 @@ use cranpose_render_common::graph_scene::{ClickAction, HitGeometry, Scene};
 use cranpose_render_common::hit_graph::{collect_hits_from_graph, HitGraphSink};
 use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_ui::{
-    Button, LayoutTree, Modifier, SemanticsAction, SemanticsNode, SemanticsRole, Size, Text,
-    TextStyle,
+    Button, ButtonSpec, LayoutTree, Modifier, SemanticsAction, SemanticsNode, SemanticsRole, Size,
+    Text, TextStyle,
 };
 use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};
 use desktop_app::app::{
@@ -149,9 +149,9 @@ fn returned_press_lift(press_tick: MutableState<u64>) -> f32 {
         }
     });
 
-    animateFloatAsStateWithSpec(
+    animateFloatAsState(
         press_target.value(),
-        AnimationType::Tween(AnimationSpec::linear(240)),
+        tween(240, Easing::LinearEasing),
         "returned_button_graphics_layer_probe",
     )
     .value()
@@ -171,6 +171,7 @@ fn animate_float_returned_button_graphics_layer_probe() {
             })
             .height(48.0)
             .padding_symmetric(12.0, 8.0),
+        ButtonSpec::default(),
         move || {
             press_tick.set(press_tick.value().wrapping_add(1));
         },

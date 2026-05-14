@@ -6,6 +6,7 @@
 //! 1:1 API parity with Jetpack Compose.
 
 #![allow(non_snake_case)]
+#![allow(non_upper_case_globals)]
 
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
@@ -293,6 +294,16 @@ pub struct SpringSpec {
 }
 
 impl SpringSpec {
+    /// Create a spring with explicit Compose-style physics constants.
+    pub fn new(damping_ratio: f32, stiffness: f32) -> Self {
+        Self {
+            damping_ratio,
+            stiffness,
+            velocity_threshold: 0.01,
+            position_threshold: 0.001,
+        }
+    }
+
     /// Create a spring with default material design values.
     pub fn default_spring() -> Self {
         Self {
@@ -328,6 +339,32 @@ impl Default for SpringSpec {
     fn default() -> Self {
         Self::default_spring()
     }
+}
+
+/// Compose-compatible spring constants.
+pub struct Spring;
+
+impl Spring {
+    pub const DampingRatioNoBouncy: f32 = 1.0;
+    pub const DampingRatioLowBouncy: f32 = 0.75;
+    pub const DampingRatioMediumBouncy: f32 = 0.5;
+    pub const DampingRatioHighBouncy: f32 = 0.2;
+
+    pub const StiffnessHigh: f32 = 10_000.0;
+    pub const StiffnessMedium: f32 = 1_500.0;
+    pub const StiffnessMediumLow: f32 = 400.0;
+    pub const StiffnessLow: f32 = 200.0;
+    pub const StiffnessVeryLow: f32 = 50.0;
+}
+
+/// Compose-style spring animation spec factory.
+pub fn spring(damping_ratio: f32, stiffness: f32) -> AnimationType {
+    AnimationType::Spring(SpringSpec::new(damping_ratio, stiffness))
+}
+
+/// Compose-style tween animation spec factory.
+pub fn tween(duration_millis: u64, easing: Easing) -> AnimationType {
+    AnimationType::Tween(AnimationSpec::tween(duration_millis, easing))
 }
 
 /// Animation type specification.
@@ -849,16 +886,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
 }
 
 #[allow(non_snake_case)]
-pub fn animateFloatAsState(target: f32, label: &str) -> State<f32> {
-    animateFloatAsStateWithSpec(target, AnimationType::default(), label)
-}
-
-#[allow(non_snake_case)]
-pub fn animateFloatAsStateWithSpec(
-    target: f32,
-    animation: AnimationType,
-    label: &str,
-) -> State<f32> {
+pub fn animateFloatAsState(target: f32, animation: AnimationType, label: &str) -> State<f32> {
     let _ = label;
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();

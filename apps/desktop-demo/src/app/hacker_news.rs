@@ -12,7 +12,7 @@ use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle},
     widgets::{BoxWithConstraints, BoxWithConstraintsScope, LazyColumn, LazyColumnSpec},
-    Brush, Button, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer, LayerShape,
+    Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer, LayerShape,
     LinearArrangement, Modifier, RoundedCornerShape, Row, RowSpec, Text, TextStyle,
     VerticalAlignment,
 };
@@ -989,6 +989,7 @@ where
     DebugScopeTag("ActionButton");
     Button(
         rounded_surface(Modifier::empty(), background, 8.0).padding_symmetric(10.0, 6.0),
+        ButtonSpec::default(),
         on_click,
         move || {
             Text(

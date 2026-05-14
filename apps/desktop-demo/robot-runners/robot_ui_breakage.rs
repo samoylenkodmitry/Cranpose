@@ -12,7 +12,8 @@
 
 use cranpose_core::useState;
 use cranpose_ui::{
-    composable, Box, BoxSpec, Button, Column, ColumnSpec, Modifier, Row, RowSpec, Text, TextStyle,
+    composable, Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Text,
+    TextStyle,
 };
 // use desktop_app::app;
 use cranpose::AppLauncher;
@@ -26,6 +27,7 @@ fn reproduction_app() {
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Button(
             Modifier::empty(),
+            ButtonSpec::default(),
             move || toggle.set(!toggle.get()),
             || {
                 Text("Toggle Parent", Modifier::empty(), TextStyle::default());

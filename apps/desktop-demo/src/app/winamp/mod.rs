@@ -18,8 +18,8 @@ use cranpose::{
 use cranpose_core::{self, MutableState};
 use cranpose_foundation::PointerButton;
 use cranpose_ui::{
-    composable, current_density, Box, BoxSpec, Button, Canvas, Color, Column, ColumnSpec, Modifier,
-    Point, PointerEventKind, PointerInputScope, Size, Text, TextStyle,
+    composable, current_density, Box, BoxSpec, Button, ButtonSpec, Canvas, Color, Column,
+    ColumnSpec, Modifier, Point, PointerEventKind, PointerInputScope, Size, Text, TextStyle,
 };
 use cranpose_ui_graphics::{ImageBitmap, Rect};
 
@@ -266,6 +266,7 @@ fn DockToggleButton(detached_state: MutableState<bool>, detached: bool) {
             .background(Color(0.18, 0.34, 0.58, 1.0))
             .rounded_corners(8.0)
             .padding(8.0),
+        ButtonSpec::default(),
         move || {
             detached_state.set(!detached_state.get_non_reactive());
         },

@@ -1999,7 +1999,11 @@ impl App {
                 )
             });
         if handled {
-            native.window.request_redraw();
+            apply_pointer_button_frame_request(
+                &native.window,
+                &mut native.last_frame_start_time,
+                pointer_button_frame_request(handled),
+            );
             if drag_requested.get() {
                 trace_native_window(format_args!("drag requested key={:?}", native.key));
                 Self::sync_native_window_position_from_os(
@@ -2499,7 +2503,11 @@ impl App {
                         );
                         native.app.sync_selection_to_primary();
                         if handled {
-                            native.window.request_redraw();
+                            apply_pointer_button_frame_request(
+                                &native.window,
+                                &mut native.last_frame_start_time,
+                                pointer_button_frame_request(handled),
+                            );
                             sync_after_event = true;
                         }
                     }
@@ -3214,6 +3222,32 @@ fn primary_declaration_host_needs_direct_update(
         && !primary_surface_redraw_drives_app(primary_window_visible, headless)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PointerButtonFrameRequest {
+    request_redraw: bool,
+    reset_frame_cap: bool,
+}
+
+fn pointer_button_frame_request(input_handled: bool) -> PointerButtonFrameRequest {
+    PointerButtonFrameRequest {
+        request_redraw: input_handled,
+        reset_frame_cap: input_handled,
+    }
+}
+
+fn apply_pointer_button_frame_request(
+    window: &Arc<dyn Window>,
+    last_frame_start_time: &mut Option<Instant>,
+    request: PointerButtonFrameRequest,
+) {
+    if request.reset_frame_cap {
+        *last_frame_start_time = None;
+    }
+    if request.request_redraw {
+        window.request_redraw();
+    }
+}
+
 fn configure_app_surface_size(
     app: &mut AppShell<WgpuRenderer>,
     surface: &wgpu::Surface<'static>,
@@ -3790,7 +3824,9 @@ impl ApplicationHandler for App {
                     logical.x,
                     logical.y
                 );
-                app.set_cursor(logical.x, logical.y);
+                if app.set_cursor(logical.x, logical.y) {
+                    window.request_redraw();
+                }
                 if let Some(recorder) = &mut self.recorder {
                     recorder.record_mouse_move(logical.x, logical.y);
                 }
@@ -3822,7 +3858,9 @@ impl ApplicationHandler for App {
                         x,
                         y
                     );
-                    app.set_cursor(x, y);
+                    if app.set_cursor(x, y) {
+                        window.request_redraw();
+                    }
                 }
                 match state {
                     ElementState::Pressed => {
@@ -3853,14 +3891,24 @@ impl ApplicationHandler for App {
                                 return;
                             }
                         }
-                        app.pointer_pressed();
+                        let request = pointer_button_frame_request(app.pointer_pressed());
+                        apply_pointer_button_frame_request(
+                            window,
+                            &mut self.last_frame_start_time,
+                            request,
+                        );
                         if let Some(recorder) = &mut self.recorder {
                             recorder.record_mouse_down();
                         }
                     }
                     ElementState::Released => {
-                        app.pointer_released();
+                        let request = pointer_button_frame_request(app.pointer_released());
                         app.sync_selection_to_primary();
+                        apply_pointer_button_frame_request(
+                            window,
+                            &mut self.last_frame_start_time,
+                            request,
+                        );
                         if let Some(recorder) = &mut self.recorder {
                             recorder.record_mouse_up();
                         }
@@ -4912,11 +4960,11 @@ fn char_to_key_code(ch: char) -> cranpose_app_shell::KeyCode {
 mod tests {
     use super::{
         clamp_rect_to_monitor_delta, native_window_graph_position, nearest_monitor_to_rect,
-        physical_surface_rect_contains_pointer, primary_declaration_host_needs_direct_update,
-        primary_frame_waker_uses_event_proxy, primary_surface_redraw_drives_app,
-        primary_viewport_for_surface_size, App, DesktopRect, NativeWindowDragSession,
-        NativeWindowGraphPositionSource, NativeWindowOptions, NativeWindowPollingDragSession,
-        NativeWindowPositionOrigin, PendingNativeWindowPositions,
+        physical_surface_rect_contains_pointer, pointer_button_frame_request,
+        primary_declaration_host_needs_direct_update, primary_frame_waker_uses_event_proxy,
+        primary_surface_redraw_drives_app, primary_viewport_for_surface_size, App, DesktopRect,
+        NativeWindowDragSession, NativeWindowGraphPositionSource, NativeWindowOptions,
+        NativeWindowPollingDragSession, NativeWindowPositionOrigin, PendingNativeWindowPositions,
     };
     use crate::launcher::AppSettings;
     use std::time::Instant;
@@ -5056,6 +5104,21 @@ mod tests {
         assert!(!primary_declaration_host_needs_direct_update(
             false, false, false, false
         ));
+    }
+
+    #[test]
+    fn pointer_button_input_requests_uncapped_frame_when_handled() {
+        let request = pointer_button_frame_request(true);
+
+        assert!(request.request_redraw);
+        assert!(request.reset_frame_cap);
+        assert_eq!(
+            pointer_button_frame_request(false),
+            super::PointerButtonFrameRequest {
+                request_redraw: false,
+                reset_frame_cap: false,
+            }
+        );
     }
 
     #[test]
