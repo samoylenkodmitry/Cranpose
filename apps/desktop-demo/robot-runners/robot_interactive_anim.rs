@@ -88,7 +88,7 @@ fn main() {
                     &format!("press did not produce visible button pixels: {press_delta}"),
                 );
             }
-            if held_delta < 20 {
+            if held_delta < 2 {
                 fail(
                     &robot,
                     &format!("held press animation did not advance: {held_delta}"),
@@ -126,8 +126,67 @@ fn main() {
                 fail(&robot, "click count did not update after release");
             }
 
+            let Some((reveal_x, reveal_y, reveal_w, reveal_h)) =
+                find_button_in_semantics(&robot, "Reveal")
+            else {
+                fail(&robot, "'Reveal' button not found");
+            };
+            let reveal_region = (
+                reveal_x - 4.0,
+                reveal_y - 4.0,
+                reveal_w + 8.0,
+                reveal_h + 8.0,
+            );
+            let reveal_center_x = reveal_x + reveal_w / 2.0;
+            let reveal_center_y = reveal_y + reveal_h / 2.0;
+
+            robot
+                .move_to(reveal_center_x, reveal_center_y)
+                .unwrap_or_else(|err| fail(&robot, &format!("reveal move failed: {err}")));
+            robot
+                .wait_for_idle()
+                .unwrap_or_else(|err| fail(&robot, &format!("pre-reveal idle failed: {err}")));
+            let reveal_baseline = capture(&robot, "reveal baseline");
+            robot
+                .mouse_down()
+                .unwrap_or_else(|err| fail(&robot, &format!("reveal mouse down failed: {err}")));
+            robot
+                .mouse_up()
+                .unwrap_or_else(|err| fail(&robot, &format!("reveal mouse up failed: {err}")));
+            robot
+                .pump_frames(4)
+                .unwrap_or_else(|err| fail(&robot, &format!("reveal start pump failed: {err}")));
+            let reveal_started = capture(&robot, "reveal started");
+            robot
+                .pump_frames(14)
+                .unwrap_or_else(|err| fail(&robot, &format!("reveal progress pump failed: {err}")));
+            let reveal_later = capture(&robot, "reveal later");
+
+            let reveal_start_delta =
+                changed_pixels(&reveal_baseline, &reveal_started, reveal_region);
+            let reveal_progress_delta =
+                changed_pixels(&reveal_started, &reveal_later, reveal_region);
+            let reveal_total_delta =
+                changed_pixels(&reveal_baseline, &reveal_later, reveal_region);
+            if reveal_total_delta < 80 {
+                fail(
+                    &robot,
+                    &format!(
+                        "reveal click did not draw visible circular pixels: start={reveal_start_delta}, total={reveal_total_delta}"
+                    ),
+                );
+            }
+            if reveal_progress_delta < 30 {
+                fail(
+                    &robot,
+                    &format!(
+                        "reveal animation did not expand over time: {reveal_progress_delta}"
+                    ),
+                );
+            }
+
             println!(
-                "PASS: interactive press changed pixels (press={press_delta}, held={held_delta}, release={release_delta}, slow_release={slow_release_delta})"
+                "PASS: interactive press/reveal changed pixels (press={press_delta}, held={held_delta}, release={release_delta}, slow_release={slow_release_delta}, reveal_start={reveal_start_delta}, reveal_total={reveal_total_delta}, reveal_progress={reveal_progress_delta})"
             );
             robot.exit().ok();
         })

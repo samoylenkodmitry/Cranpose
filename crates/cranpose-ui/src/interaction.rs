@@ -22,6 +22,7 @@ struct MutableInteractionSourceInner {
     id: u64,
     active_presses: RefCell<HashSet<u64>>,
     pressed: OwnedMutableState<bool>,
+    last_interaction: OwnedMutableState<Option<Interaction>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,7 +65,8 @@ impl MutableInteractionSource {
             inner: Rc::new(MutableInteractionSourceInner {
                 id: NEXT_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
                 active_presses: RefCell::new(HashSet::new()),
-                pressed: OwnedMutableState::with_runtime(false, runtime),
+                pressed: OwnedMutableState::with_runtime(false, runtime.clone()),
+                last_interaction: OwnedMutableState::with_runtime(None, runtime),
             }),
         }
     }
@@ -96,6 +98,7 @@ impl MutableInteractionSource {
     }
 
     pub fn emit(&self, interaction: Interaction) {
+        self.inner.last_interaction.set(Some(interaction));
         let is_pressed = {
             let mut active_presses = self.inner.active_presses.borrow_mut();
             match interaction {
@@ -119,6 +122,16 @@ impl MutableInteractionSource {
 
     pub fn collectIsPressedAsState(&self) -> State<bool> {
         self.inner.pressed.as_state()
+    }
+
+    pub fn collectLastInteractionAsState(&self) -> State<Option<Interaction>> {
+        self.inner.last_interaction.as_state()
+    }
+}
+
+impl PressInteractionPress {
+    pub fn id(&self) -> u64 {
+        self.id
     }
 }
 
@@ -338,10 +351,35 @@ mod tests {
         assert!(pressed.get());
 
         let second = source.press(Point { x: 3.0, y: 4.0 });
+        assert_ne!(first.id(), second.id());
         source.release(first);
         assert!(pressed.get());
 
         source.cancel(second);
         assert!(!pressed.get());
+    }
+
+    #[test]
+    fn interaction_source_exposes_latest_interaction() {
+        let composition = Composition::new(MemoryApplier::new());
+        let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
+        let last_interaction = source.collectLastInteractionAsState();
+
+        assert_eq!(last_interaction.get(), None);
+
+        let press = source.press(Point { x: 8.0, y: 12.0 });
+        assert_eq!(
+            last_interaction.get(),
+            Some(Interaction::Press(PressInteraction::Press(press)))
+        );
+        assert_eq!(press.press_position, Point { x: 8.0, y: 12.0 });
+
+        source.release(press);
+        assert_eq!(
+            last_interaction.get(),
+            Some(Interaction::Press(PressInteraction::Release(
+                PressInteractionRelease { press }
+            )))
+        );
     }
 }

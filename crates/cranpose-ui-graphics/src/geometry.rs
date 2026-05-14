@@ -443,6 +443,14 @@ pub trait DrawScope {
     fn draw_rect_at_blend(&mut self, rect: Rect, brush: Brush, blend_mode: BlendMode);
     fn draw_round_rect(&mut self, brush: Brush, radii: CornerRadii);
     fn draw_round_rect_blend(&mut self, brush: Brush, radii: CornerRadii, blend_mode: BlendMode);
+    fn draw_circle(&mut self, brush: Brush, center: Point, radius: f32);
+    fn draw_circle_blend(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        radius: f32,
+        blend_mode: BlendMode,
+    );
     fn draw_image(&mut self, image: ImageBitmap);
     fn draw_image_blend(&mut self, image: ImageBitmap, blend_mode: BlendMode);
     fn draw_image_at(
@@ -566,6 +574,34 @@ impl DrawScope for DrawScopeDefault {
                 rect: Rect::from_size(self.size),
                 brush,
                 radii,
+            },
+            blend_mode,
+        );
+    }
+
+    fn draw_circle(&mut self, brush: Brush, center: Point, radius: f32) {
+        self.draw_circle_blend(brush, center, radius, BlendMode::SrcOver);
+    }
+
+    fn draw_circle_blend(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        radius: f32,
+        blend_mode: BlendMode,
+    ) {
+        let radius = radius.max(0.0);
+        let diameter = radius * 2.0;
+        self.push_blended_primitive(
+            DrawPrimitive::RoundRect {
+                rect: Rect {
+                    x: center.x - radius,
+                    y: center.y - radius,
+                    width: diameter,
+                    height: diameter,
+                },
+                brush,
+                radii: CornerRadii::uniform(radius),
             },
             blend_mode,
         );
@@ -763,6 +799,54 @@ mod tests {
                 assert!(matches!(**primitive, DrawPrimitive::Rect { .. }));
             }
             other => panic!("expected blended primitive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_circle_records_centered_round_rect() {
+        let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0));
+        scope.draw_circle(Brush::solid(Color::BLUE), Point::new(12.0, 16.0), 5.0);
+
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        match &primitives[0] {
+            DrawPrimitive::RoundRect { rect, radii, .. } => {
+                assert_eq!(
+                    *rect,
+                    Rect {
+                        x: 7.0,
+                        y: 11.0,
+                        width: 10.0,
+                        height: 10.0,
+                    }
+                );
+                assert_eq!(*radii, CornerRadii::uniform(5.0));
+            }
+            other => panic!("expected circular round rect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_circle_blend_wraps_non_default_modes() {
+        let mut scope = DrawScopeDefault::new(Size::new(10.0, 10.0));
+        scope.draw_circle_blend(
+            Brush::solid(Color::RED),
+            Point::new(5.0, 5.0),
+            3.0,
+            BlendMode::Plus,
+        );
+
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        match &primitives[0] {
+            DrawPrimitive::Blend {
+                primitive,
+                blend_mode,
+            } => {
+                assert_eq!(*blend_mode, BlendMode::Plus);
+                assert!(matches!(**primitive, DrawPrimitive::RoundRect { .. }));
+            }
+            other => panic!("expected blended circle primitive, got {other:?}"),
         }
     }
 
