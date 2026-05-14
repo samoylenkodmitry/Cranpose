@@ -214,7 +214,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-1
-          path: target/robot-artifacts/robot-examples-1.tar
+          path: target/robot-artifacts/robot-examples-1.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -222,7 +222,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-2
-          path: target/robot-artifacts/robot-examples-2.tar
+          path: target/robot-artifacts/robot-examples-2.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -230,7 +230,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-3
-          path: target/robot-artifacts/robot-examples-3.tar
+          path: target/robot-artifacts/robot-examples-3.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -238,7 +238,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-4
-          path: target/robot-artifacts/robot-examples-4.tar
+          path: target/robot-artifacts/robot-examples-4.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -246,7 +246,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-5
-          path: target/robot-artifacts/robot-examples-5.tar
+          path: target/robot-artifacts/robot-examples-5.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -254,7 +254,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-6
-          path: target/robot-artifacts/robot-examples-6.tar
+          path: target/robot-artifacts/robot-examples-6.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -262,7 +262,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-7
-          path: target/robot-artifacts/robot-examples-7.tar
+          path: target/robot-artifacts/robot-examples-7.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -270,7 +270,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-8
-          path: target/robot-artifacts/robot-examples-8.tar
+          path: target/robot-artifacts/robot-examples-8.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -278,7 +278,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-9
-          path: target/robot-artifacts/robot-examples-9.tar
+          path: target/robot-artifacts/robot-examples-9.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -286,7 +286,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-10
-          path: target/robot-artifacts/robot-examples-10.tar
+          path: target/robot-artifacts/robot-examples-10.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -294,7 +294,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-11
-          path: target/robot-artifacts/robot-examples-11.tar
+          path: target/robot-artifacts/robot-examples-11.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -302,7 +302,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-12
-          path: target/robot-artifacts/robot-examples-12.tar
+          path: target/robot-artifacts/robot-examples-12.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -310,7 +310,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-13
-          path: target/robot-artifacts/robot-examples-13.tar
+          path: target/robot-artifacts/robot-examples-13.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -318,7 +318,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-14
-          path: target/robot-artifacts/robot-examples-14.tar
+          path: target/robot-artifacts/robot-examples-14.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -326,7 +326,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-15
-          path: target/robot-artifacts/robot-examples-15.tar
+          path: target/robot-artifacts/robot-examples-15.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -334,7 +334,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: robot-examples-16
-          path: target/robot-artifacts/robot-examples-16.tar
+          path: target/robot-artifacts/robot-examples-16.tar.gz
           compression-level: 0
           if-no-files-found: error
 
@@ -371,7 +371,7 @@ jobs:
       - name: Extract robot examples
         run: |
           mkdir -p target/robot/examples
-          tar -C target/robot/examples -xf target/robot-artifacts/robot-examples-${{ matrix.shard_index }}.tar
+          tar -C target/robot/examples -xzf target/robot-artifacts/robot-examples-${{ matrix.shard_index }}.tar.gz
 
       - name: Run robot shard
         env:

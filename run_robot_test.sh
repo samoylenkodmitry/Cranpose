@@ -298,7 +298,11 @@ stage_robot_artifacts() {
 
     mkdir -p "$output_dir"
     for shard in $(seq 1 "$shard_count"); do
-        tar -C "$stage_root/$shard" -cf "$output_dir/robot-examples-$shard.tar" .
+        local archive="$output_dir/robot-examples-$shard.tar.gz"
+        if ! tar -C "$stage_root/$shard" -I "gzip -1" -cf "$archive" .; then
+            echo "Cannot stage robot artifact: $archive" | tee -a "$LOG_FILE"
+            exit 1
+        fi
     done
     rm -r -- "$stage_root"
 }
