@@ -826,6 +826,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     fn set_node_id(&mut self, id: NodeId) {
         self.id.set(Some(id));
         self.inner.borrow_mut().modifier_chain.set_node_id(Some(id));
+        self.update_modifier_slices_cache();
     }
 
     fn on_attached_to_parent(&mut self, parent: NodeId) {

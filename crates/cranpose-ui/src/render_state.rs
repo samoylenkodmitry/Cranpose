@@ -1,4 +1,4 @@
-use cranpose_core::NodeId;
+use cranpose_core::{current_runtime_handle, NodeId, SnapshotStateObserver};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -15,6 +15,57 @@ struct RenderState {
     focus_invalidated: AtomicBool,
     layout_invalidated: AtomicBool,
     density_bits: AtomicU32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DrawObservationScope {
+    node_id: NodeId,
+    command_index: usize,
+}
+
+impl DrawObservationScope {
+    pub(crate) fn new(node_id: NodeId, command_index: usize) -> Self {
+        Self {
+            node_id,
+            command_index,
+        }
+    }
+}
+
+std::thread_local! {
+    static DRAW_OBSERVER: SnapshotStateObserver = {
+        let observer = SnapshotStateObserver::new(|callback| {
+            if let Some(runtime) = current_runtime_handle() {
+                runtime.enqueue_ui_task(callback);
+            } else {
+                callback();
+            }
+        });
+        observer.start();
+        observer
+    };
+}
+
+pub(crate) fn observe_draw_reads<R>(scope: DrawObservationScope, block: impl FnOnce() -> R) -> R {
+    DRAW_OBSERVER.with(|observer| {
+        observer.observe_reads(
+            scope,
+            |scope| {
+                schedule_draw_repass(scope.node_id);
+            },
+            block,
+        )
+    })
+}
+
+pub(crate) fn clear_draw_observations_for_node(node_id: NodeId) {
+    DRAW_OBSERVER.with(|observer| {
+        observer.clear_if(|scope| {
+            scope
+                .downcast_ref::<DrawObservationScope>()
+                .is_some_and(|scope| scope.node_id == node_id)
+        });
+    });
 }
 
 impl RenderState {
@@ -146,6 +197,7 @@ pub fn schedule_draw_repass(node_id: NodeId) {
             .expect("draw repass manager poisoned")
             .schedule_repass(node_id);
     });
+    request_render_invalidation();
 }
 
 /// Returns true if any draw repasses are pending.

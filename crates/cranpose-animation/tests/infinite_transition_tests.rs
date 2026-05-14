@@ -2,7 +2,8 @@ use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
 };
 use cranpose_core::{
-    location_key, with_current_composer, Composition, MemoryApplier, Node, NodeError, State,
+    location_key, with_current_composer, Composition, MemoryApplier, MutableState, Node, NodeError,
+    State,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -148,6 +149,153 @@ fn infinite_transition_survives_conditional_cycle() {
     assert!(
         saw_forward_after_reverse,
         "transition should keep cycling when a conditional child collapses and restores",
+    );
+}
+
+#[test]
+fn infinite_transition_inserted_after_state_change_advances() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let root_key = location_key(file!(), line!(), column!());
+    let busy = MutableState::with_runtime(false, runtime.clone());
+    let state_slot = Rc::new(RefCell::new(None::<State<f32>>));
+
+    let mut render = {
+        let state_slot = Rc::clone(&state_slot);
+        move || {
+            let state_slot = Rc::clone(&state_slot);
+            with_current_composer(|composer| {
+                composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                    if busy.value() {
+                        let state_slot = Rc::clone(&state_slot);
+                        composer.with_group(
+                            location_key(file!(), line!(), column!()),
+                            |composer| {
+                                let transition = rememberInfiniteTransition("inserted_busy_pulse");
+                                let state = transition.animateFloat(
+                                    0.0,
+                                    1.0,
+                                    infiniteRepeatable(
+                                        AnimationSpec::linear(600),
+                                        RepeatMode::Restart,
+                                        StartOffset::default(),
+                                    ),
+                                    "inserted_busy_pulse",
+                                );
+                                state_slot.borrow_mut().replace(state);
+                                composer.emit_node(|| DummyNode);
+                            },
+                        );
+                    }
+                });
+            });
+        }
+    };
+
+    composition
+        .render(root_key, &mut render)
+        .expect("initial render");
+
+    drain_all(&mut composition).expect("initial drain");
+    assert!(
+        state_slot.borrow().is_none(),
+        "transition should be absent before busy state starts"
+    );
+
+    busy.set_value(true);
+    composition
+        .reconcile(root_key, &mut render)
+        .expect("reconcile after busy state update");
+
+    let initial = state_slot.borrow().as_ref().expect("state available").get();
+    assert_eq!(initial, 0.0);
+
+    let mut time = 0u64;
+    let mut last_value = initial;
+    for _ in 0..40 {
+        time += 16_666_667;
+        runtime.drain_frame_callbacks(time);
+        composition
+            .reconcile(root_key, &mut render)
+            .expect("reconcile after frame");
+        last_value = state_slot.borrow().as_ref().expect("state available").get();
+        if (last_value - initial).abs() > 0.0001 {
+            return;
+        }
+    }
+
+    panic!("inserted infinite transition stayed frozen: initial={initial} last={last_value}");
+}
+
+#[test]
+fn infinite_transition_restarts_when_first_animation_is_inserted_later() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let root_key = location_key(file!(), line!(), column!());
+    let busy = MutableState::with_runtime(false, runtime.clone());
+    let state_slot = Rc::new(RefCell::new(None::<State<f32>>));
+
+    let mut render = {
+        let state_slot = Rc::clone(&state_slot);
+        move || {
+            with_current_composer(|composer| {
+                composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                    let transition = rememberInfiniteTransition("late_child_pulse");
+                    if busy.value() {
+                        let state_slot = Rc::clone(&state_slot);
+                        composer.with_group(location_key(file!(), line!(), column!()), |_| {
+                            let state = transition.animateFloat(
+                                0.0,
+                                1.0,
+                                infiniteRepeatable(
+                                    AnimationSpec::linear(600),
+                                    RepeatMode::Restart,
+                                    StartOffset::default(),
+                                ),
+                                "late_child_pulse",
+                            );
+                            state_slot.borrow_mut().replace(state);
+                        });
+                    }
+                });
+            });
+        }
+    };
+
+    composition
+        .render(root_key, &mut render)
+        .expect("initial render");
+    drain_all(&mut composition).expect("initial drain");
+
+    runtime.drain_frame_callbacks(16_666_667);
+    composition
+        .reconcile(root_key, &mut render)
+        .expect("reconcile empty transition frame");
+
+    busy.set_value(true);
+    composition
+        .reconcile(root_key, &mut render)
+        .expect("reconcile after animation insertion");
+
+    let initial = state_slot.borrow().as_ref().expect("state available").get();
+    assert_eq!(initial, 0.0);
+
+    let mut time = 16_666_667u64;
+    let mut last_value = initial;
+    for _ in 0..40 {
+        time += 16_666_667;
+        runtime.drain_frame_callbacks(time);
+        composition
+            .reconcile(root_key, &mut render)
+            .expect("reconcile after frame");
+        last_value = state_slot.borrow().as_ref().expect("state available").get();
+        if (last_value - initial).abs() > 0.0001 {
+            return;
+        }
+    }
+
+    panic!(
+        "infinite transition did not restart after first animation insertion: initial={initial} last={last_value}"
     );
 }
 
