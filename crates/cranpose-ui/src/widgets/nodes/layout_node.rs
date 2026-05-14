@@ -540,6 +540,7 @@ impl LayoutNode {
         // Propagate the ID to the modifier chain. This triggers a lifecycle update
         // for nodes that depend on the node ID for invalidation (e.g., ScrollNode).
         self.modifier_chain.set_node_id(Some(id));
+        self.update_modifier_slices_cache();
     }
 
     /// Get this node's ID.

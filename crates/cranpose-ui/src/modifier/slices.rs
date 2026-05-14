@@ -408,9 +408,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 }
 
                 if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
-                    slices
-                        .draw_commands
-                        .extend(commands.commands().iter().cloned());
+                    slices.draw_commands.extend(commands.observed_commands());
                 }
 
                 if let Some(draw_node) = node.as_draw_node() {

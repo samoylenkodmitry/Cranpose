@@ -60,6 +60,7 @@
 //! these nodes. The system achieves complete 1:1 parity with Jetpack Compose's modifier
 //! architecture.
 
+use cranpose_core::NodeId;
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, LayoutModifierNode, Measurable,
     MeasurementProxy, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
@@ -67,6 +68,7 @@ use cranpose_foundation::{
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 
+use std::cell::Cell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1827,6 +1829,7 @@ impl ModifierNodeElement for ClipToBoundsElement {
 /// Node that stores draw commands emitted by draw modifiers.
 pub struct DrawCommandNode {
     commands: Vec<DrawCommand>,
+    node_id: Cell<Option<NodeId>>,
     state: NodeState,
 }
 
@@ -1834,12 +1837,24 @@ impl DrawCommandNode {
     pub fn new(commands: Vec<DrawCommand>) -> Self {
         Self {
             commands,
+            node_id: Cell::new(None),
             state: NodeState::new(),
         }
     }
 
+    #[cfg(test)]
     pub fn commands(&self) -> &[DrawCommand] {
         &self.commands
+    }
+
+    pub(crate) fn observed_commands(&self) -> Vec<DrawCommand> {
+        let node_id = self.node_id.get();
+        self.commands
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, command)| observe_draw_command(command, node_id, index))
+            .collect()
     }
 }
 
@@ -1851,7 +1866,14 @@ impl DelegatableNode for DrawCommandNode {
 
 impl ModifierNode for DrawCommandNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        self.node_id.set(context.node_id());
         context.invalidate(cranpose_foundation::InvalidationKind::Draw);
+    }
+
+    fn on_detach(&mut self) {
+        if let Some(node_id) = self.node_id.replace(None) {
+            crate::render_state::clear_draw_observations_for_node(node_id);
+        }
     }
 
     fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
@@ -1865,6 +1887,28 @@ impl ModifierNode for DrawCommandNode {
 
 impl DrawModifierNode for DrawCommandNode {
     fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
+}
+
+fn observe_draw_command(
+    command: DrawCommand,
+    node_id: Option<NodeId>,
+    command_index: usize,
+) -> DrawCommand {
+    let Some(node_id) = node_id else {
+        return command;
+    };
+    let scope = crate::render_state::DrawObservationScope::new(node_id, command_index);
+    match command {
+        DrawCommand::Behind(draw) => DrawCommand::Behind(Rc::new(move |size| {
+            crate::render_state::observe_draw_reads(scope, || draw(size))
+        })),
+        DrawCommand::WithContent(draw) => DrawCommand::WithContent(Rc::new(move |size| {
+            crate::render_state::observe_draw_reads(scope, || draw(size))
+        })),
+        DrawCommand::Overlay(draw) => DrawCommand::Overlay(Rc::new(move |size| {
+            crate::render_state::observe_draw_reads(scope, || draw(size))
+        })),
+    }
 }
 
 fn draw_command_tag(cmd: &DrawCommand) -> u8 {

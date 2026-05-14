@@ -1083,6 +1083,31 @@ fn draw_width_app(width_state: cranpose_core::MutableState<f32>) {
     );
 }
 
+#[composable]
+fn draw_observed_width_app(width_state: cranpose_core::MutableState<f32>) {
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: 200.0,
+                height: 40.0,
+            })
+            .draw_behind(move |scope| {
+                let width = width_state.get();
+                scope.draw_rect_at(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width,
+                        height: 10.0,
+                    },
+                    Brush::solid(Color(0.2, 0.7, 0.3, 1.0)),
+                );
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
 struct DeleteSurroundingHandler {
     last_delete: Cell<Option<(usize, usize)>>,
 }
@@ -1725,6 +1750,56 @@ fn draw_repass_updates_render_data_without_layout() {
     assert!(
         (updated_width - 120.0).abs() < 0.1,
         "updated width should reflect latest state"
+    );
+}
+
+#[test]
+fn draw_state_reads_schedule_draw_repass_without_composition_read() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let state_holder_for_app = Rc::clone(&state_holder);
+
+    let mut shell = AppShell::new(RecordingRenderer::default(), root_key, move || {
+        let width_state = useState(|| 24.0f32);
+        *state_holder_for_app.borrow_mut() = Some(width_state);
+        draw_observed_width_app(width_state);
+    });
+
+    shell.update();
+    let initial_scene = shell
+        .renderer
+        .last_scene
+        .as_ref()
+        .expect("expected initial render scene");
+    let initial_width = find_rect_width(initial_scene, Color(0.2, 0.7, 0.3, 1.0))
+        .expect("expected initial observed draw rect");
+
+    let width_state = state_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("width state should be captured");
+    width_state.set(120.0);
+
+    shell.update();
+
+    let updated_scene = shell
+        .renderer
+        .last_scene
+        .as_ref()
+        .expect("expected updated render scene");
+    let updated_width = find_rect_width(updated_scene, Color(0.2, 0.7, 0.3, 1.0))
+        .expect("expected updated observed draw rect");
+
+    assert_ne!(
+        initial_width, updated_width,
+        "state reads inside draw closures must invalidate draw output"
+    );
+    assert!(
+        (updated_width - 120.0).abs() < 0.1,
+        "updated draw width should reflect latest state-only read"
     );
 }
 
