@@ -362,6 +362,11 @@ pub fn spring(damping_ratio: f32, stiffness: f32) -> AnimationType {
     AnimationType::Spring(SpringSpec::new(damping_ratio, stiffness))
 }
 
+/// Compose-style tween animation spec factory.
+pub fn tween(duration_millis: u64, easing: Easing) -> AnimationType {
+    AnimationType::Tween(AnimationSpec::tween(duration_millis, easing))
+}
+
 /// Animation type specification.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnimationType {

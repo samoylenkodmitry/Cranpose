@@ -358,3 +358,11 @@ fn spring_spec_stiff_has_high_stiffness() {
     assert_eq!(spec.stiffness, 3000.0);
     assert!(spec.stiffness > SpringSpec::default().stiffness);
 }
+
+#[test]
+fn tween_factory_creates_tween_animation_type() {
+    assert_eq!(
+        tween(450, Easing::FastOutSlowInEasing),
+        AnimationType::Tween(AnimationSpec::tween(450, Easing::FastOutSlowInEasing))
+    );
+}

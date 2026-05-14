@@ -1,8 +1,6 @@
 #![allow(non_snake_case)]
 
-use cranpose_animation::{
-    animateFloatAsState, spring, AnimationSpec, AnimationType, Easing, Spring,
-};
+use cranpose_animation::{animateFloatAsState, spring, tween, Easing, Spring};
 use cranpose_ui::{
     composable, rememberMutableInteractionSource,
     text::{FontWeight, SpanStyle, TextUnit},
@@ -85,10 +83,7 @@ fn PressAnimatedButton(text: &'static str, modifier: Modifier, on_click: impl Fn
     let press_animation = if is_pressed {
         spring(Spring::DampingRatioMediumBouncy, Spring::StiffnessMedium)
     } else {
-        AnimationType::Tween(AnimationSpec::tween(
-            BUTTON_RELEASE_DURATION_MS,
-            Easing::FastOutSlowInEasing,
-        ))
+        tween(BUTTON_RELEASE_DURATION_MS, Easing::FastOutSlowInEasing)
     };
     let target_scale = if is_pressed { 0.94 } else { 1.0 };
     let scale = animateFloatAsState(
@@ -148,10 +143,7 @@ fn RevealAnimatedButton(text: &'static str, modifier: Modifier, on_click: impl F
     };
     let raw_progress = animateFloatAsState(
         target_progress,
-        AnimationType::Tween(AnimationSpec::tween(
-            REVEAL_DURATION_MS,
-            Easing::FastOutSlowInEasing,
-        )),
+        tween(REVEAL_DURATION_MS, Easing::FastOutSlowInEasing),
         "interactive_button_reveal_progress",
     );
     let progress = if trigger.generation == 0 {
