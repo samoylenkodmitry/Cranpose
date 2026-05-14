@@ -12,19 +12,50 @@ use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-fn button_modifier<F>(
-    modifier: Modifier,
-    interaction_source: Option<MutableInteractionSource>,
-    on_click: F,
-) -> Modifier
+#[derive(Clone, Debug, PartialEq)]
+pub struct ButtonSpec {
+    pub modifier: Modifier,
+    pub interaction_source: Option<MutableInteractionSource>,
+}
+
+impl ButtonSpec {
+    pub fn new(modifier: Modifier) -> Self {
+        Self {
+            modifier,
+            ..Default::default()
+        }
+    }
+
+    pub fn interaction_source(mut self, interaction_source: MutableInteractionSource) -> Self {
+        self.interaction_source = Some(interaction_source);
+        self
+    }
+}
+
+impl Default for ButtonSpec {
+    fn default() -> Self {
+        Self {
+            modifier: Modifier::empty(),
+            interaction_source: None,
+        }
+    }
+}
+
+impl From<Modifier> for ButtonSpec {
+    fn from(modifier: Modifier) -> Self {
+        Self::new(modifier)
+    }
+}
+
+fn button_modifier<F>(spec: ButtonSpec, on_click: F) -> Modifier
 where
     F: FnMut() + 'static,
 {
     let on_click_rc: Rc<RefCell<dyn FnMut()>> = Rc::new(RefCell::new(on_click));
-    let modifier = if let Some(interaction_source) = interaction_source {
-        modifier.press_interaction_source(interaction_source)
+    let modifier = if let Some(interaction_source) = spec.interaction_source {
+        spec.modifier.press_interaction_source(interaction_source)
     } else {
-        modifier
+        spec.modifier
     };
 
     modifier.clickable(move |_point| {
@@ -40,7 +71,7 @@ where
 ///
 /// # Arguments
 ///
-/// * `modifier` - Modifiers to apply to the button container (e.g., size, padding).
+/// * `spec` - A `Modifier` or `ButtonSpec` for the button container.
 /// * `on_click` - The callback to execute when the button is clicked.
 /// * `content` - The content to display inside the button (e.g., `Text` or `Icon`).
 ///
@@ -54,13 +85,14 @@ where
 /// );
 /// ```
 #[composable]
-pub fn Button<F, G>(modifier: Modifier, on_click: F, content: G) -> NodeId
+pub fn Button<S, F, G>(spec: S, on_click: F, content: G) -> NodeId
 where
+    S: Into<ButtonSpec> + Clone + PartialEq + 'static,
     F: FnMut() + 'static,
     G: FnMut() + 'static,
 {
     Layout(
-        button_modifier(modifier, None, on_click),
+        button_modifier(spec.into(), on_click),
         FlexMeasurePolicy::column(
             LinearArrangement::Center,
             HorizontalAlignment::CenterHorizontally,
@@ -69,23 +101,34 @@ where
     )
 }
 
-#[composable]
-pub fn ButtonWithInteractionSource<F, G>(
-    modifier: Modifier,
-    interaction_source: MutableInteractionSource,
-    on_click: F,
-    content: G,
-) -> NodeId
-where
-    F: FnMut() + 'static,
-    G: FnMut() + 'static,
-{
-    Layout(
-        button_modifier(modifier, Some(interaction_source), on_click),
-        FlexMeasurePolicy::column(
-            LinearArrangement::Center,
-            HorizontalAlignment::CenterHorizontally,
-        ),
-        content,
-    )
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cranpose_core::{Composition, MemoryApplier};
+
+    #[test]
+    fn button_spec_from_modifier_preserves_modifier() {
+        let modifier = Modifier::empty().padding(8.0);
+        let spec = ButtonSpec::from(modifier.clone());
+
+        assert_eq!(spec.modifier, modifier);
+        assert!(spec.interaction_source.is_none());
+    }
+
+    #[test]
+    fn default_button_spec_has_empty_modifier() {
+        let spec = ButtonSpec::default();
+
+        assert_eq!(spec.modifier, Modifier::empty());
+        assert!(spec.interaction_source.is_none());
+    }
+
+    #[test]
+    fn button_spec_builder_preserves_interaction_source() {
+        let composition = Composition::new(MemoryApplier::new());
+        let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
+        let spec = ButtonSpec::default().interaction_source(source.clone());
+
+        assert_eq!(spec.interaction_source, Some(source));
+    }
 }

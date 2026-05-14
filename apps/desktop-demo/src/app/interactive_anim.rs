@@ -4,9 +4,12 @@ use cranpose_animation::{animateFloatAsState, spring, Spring};
 use cranpose_ui::{
     composable, rememberMutableInteractionSource,
     text::{FontWeight, SpanStyle, TextUnit},
-    Brush, ButtonWithInteractionSource, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer,
-    LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer, LayerShape,
+    LinearArrangement, Modifier, RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, TextStyle,
+    VerticalAlignment,
 };
+
+const BUTTON_RADIUS: f32 = 20.0;
 
 fn title_style() -> TextStyle {
     TextStyle {
@@ -47,33 +50,47 @@ fn button_text_style() -> TextStyle {
 fn PressAnimatedButton(text: &'static str, modifier: Modifier, on_click: impl FnMut() + 'static) {
     let interaction_source = rememberMutableInteractionSource();
     let pressed = interaction_source.collectIsPressedAsState();
-    let target_scale = if pressed.value() { 0.94 } else { 1.0 };
+    let is_pressed = pressed.value();
+    let press_animation = if is_pressed {
+        spring(Spring::DampingRatioMediumBouncy, Spring::StiffnessMedium)
+    } else {
+        spring(Spring::DampingRatioNoBouncy, Spring::StiffnessLow)
+    };
+    let target_scale = if is_pressed { 0.94 } else { 1.0 };
     let scale = animateFloatAsState(
         target_scale,
-        spring(Spring::DampingRatioMediumBouncy, Spring::StiffnessMedium),
+        press_animation,
         "interactive_button_press_scale",
     );
-    let fill = if pressed.value() {
+    let target_shadow = if is_pressed { 4.0 } else { 10.0 };
+    let shadow = animateFloatAsState(
+        target_shadow,
+        press_animation,
+        "interactive_button_press_shadow",
+    );
+    let fill = if is_pressed {
         Color(0.03, 0.33, 0.64, 1.0)
     } else {
         Color(0.05, 0.42, 0.82, 1.0)
     };
-    let shadow = if pressed.value() { 4.0 } else { 10.0 };
 
-    ButtonWithInteractionSource(
-        modifier
-            .graphics_layer_block(move |layer: &mut GraphicsLayer| {
-                let scale = scale.value();
-                layer.scale_x = scale;
-                layer.scale_y = scale;
-                layer.shadow_elevation = shadow;
-            })
-            .rounded_corners(20.0)
-            .draw_behind(move |scope| {
-                scope.draw_round_rect(Brush::solid(fill), CornerRadii::uniform(20.0));
-            })
-            .padding(18.0),
-        interaction_source,
+    Button(
+        ButtonSpec::new(
+            modifier
+                .graphics_layer_block(move |layer: &mut GraphicsLayer| {
+                    let scale = scale.value();
+                    layer.scale_x = scale;
+                    layer.scale_y = scale;
+                    layer.shadow_elevation = shadow.value();
+                    layer.shape = LayerShape::Rounded(RoundedCornerShape::uniform(BUTTON_RADIUS));
+                })
+                .rounded_corners(BUTTON_RADIUS)
+                .draw_behind(move |scope| {
+                    scope.draw_round_rect(Brush::solid(fill), CornerRadii::uniform(BUTTON_RADIUS));
+                })
+                .padding(18.0),
+        )
+        .interaction_source(interaction_source),
         on_click,
         move || {
             Text(text, Modifier::empty(), button_text_style());

@@ -99,14 +99,26 @@ fn main() {
                 .mouse_up()
                 .unwrap_or_else(|err| fail(&robot, &format!("mouse up failed: {err}")));
             robot
-                .pump_frames(12)
+                .pump_frames(6)
                 .unwrap_or_else(|err| fail(&robot, &format!("release pump failed: {err}")));
-            let released = capture(&robot, "released");
-            let release_delta = changed_pixels(&down_later, &released, sample_region);
-            if release_delta < 120 {
+            let released_first = capture(&robot, "first released");
+            robot
+                .pump_frames(14)
+                .unwrap_or_else(|err| fail(&robot, &format!("slow release pump failed: {err}")));
+            let released_later = capture(&robot, "later released");
+            let release_delta = changed_pixels(&down_later, &released_first, sample_region);
+            let slow_release_delta =
+                changed_pixels(&released_first, &released_later, sample_region);
+            if release_delta < 80 {
                 fail(
                     &robot,
                     &format!("release did not animate button back up: {release_delta}"),
+                );
+            }
+            if slow_release_delta < 20 {
+                fail(
+                    &robot,
+                    &format!("release animation did not continue slowly: {slow_release_delta}"),
                 );
             }
 
@@ -115,7 +127,7 @@ fn main() {
             }
 
             println!(
-                "PASS: interactive press changed pixels (press={press_delta}, held={held_delta}, release={release_delta})"
+                "PASS: interactive press changed pixels (press={press_delta}, held={held_delta}, release={release_delta}, slow_release={slow_release_delta})"
             );
             robot.exit().ok();
         })
