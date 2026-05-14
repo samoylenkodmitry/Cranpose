@@ -35,6 +35,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Check Cranpose package versions
+        run: python3 scripts/check_cranpose_versions.py
+
       - name: Run workspace tests
         run: cargo test --profile ci --workspace --verbose
 
