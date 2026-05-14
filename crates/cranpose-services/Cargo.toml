@@ -12,7 +12,7 @@ readme = "README.md"
 description = "Multiplatform system services for Cranpose (HTTP, URI, and OS integrations)"
 
 [dependencies]
-cranpose-core = { workspace = true, features = ["internal"] }
+cranpose-core = { workspace = true }
 cranpose-macros = { workspace = true }
 thiserror = "2.0.18"
 
