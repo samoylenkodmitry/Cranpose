@@ -11,7 +11,8 @@ use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
-    Box, BoxSpec, Button, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
+    Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec,
+    Text,
 };
 use cranpose_ui::{Alignment, Color, Modifier, Size, TextStyle};
 use std::time::Duration;
@@ -146,6 +147,7 @@ fn main() {
                                     // Set MAX button
                                     Button(
                                         Modifier::default().background(Color::rgb(0.6, 0.3, 0.6)),
+                                        ButtonSpec::default(),
                                         move || {
                                             item_count.set(usize::MAX);
                                         },
@@ -161,6 +163,7 @@ fn main() {
                                     // Go Middle button
                                     Button(
                                         Modifier::default().background(Color::rgb(0.3, 0.4, 0.6)),
+                                        ButtonSpec::default(),
                                         move || {
                                             let c = item_count.get();
                                             let middle = c / 2;

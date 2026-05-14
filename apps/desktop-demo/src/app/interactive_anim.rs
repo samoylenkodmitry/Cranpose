@@ -10,6 +10,7 @@ use cranpose_ui::{
 };
 
 const BUTTON_RADIUS: f32 = 20.0;
+const BUTTON_RELEASE_STIFFNESS: f32 = Spring::StiffnessVeryLow / 4.0;
 
 fn title_style() -> TextStyle {
     TextStyle {
@@ -54,7 +55,7 @@ fn PressAnimatedButton(text: &'static str, modifier: Modifier, on_click: impl Fn
     let press_animation = if is_pressed {
         spring(Spring::DampingRatioMediumBouncy, Spring::StiffnessMedium)
     } else {
-        spring(Spring::DampingRatioNoBouncy, Spring::StiffnessLow)
+        spring(Spring::DampingRatioNoBouncy, BUTTON_RELEASE_STIFFNESS)
     };
     let target_scale = if is_pressed { 0.94 } else { 1.0 };
     let scale = animateFloatAsState(
@@ -75,22 +76,20 @@ fn PressAnimatedButton(text: &'static str, modifier: Modifier, on_click: impl Fn
     };
 
     Button(
-        ButtonSpec::new(
-            modifier
-                .graphics_layer_block(move |layer: &mut GraphicsLayer| {
-                    let scale = scale.value();
-                    layer.scale_x = scale;
-                    layer.scale_y = scale;
-                    layer.shadow_elevation = shadow.value();
-                    layer.shape = LayerShape::Rounded(RoundedCornerShape::uniform(BUTTON_RADIUS));
-                })
-                .rounded_corners(BUTTON_RADIUS)
-                .draw_behind(move |scope| {
-                    scope.draw_round_rect(Brush::solid(fill), CornerRadii::uniform(BUTTON_RADIUS));
-                })
-                .padding(18.0),
-        )
-        .interaction_source(interaction_source),
+        modifier
+            .graphics_layer_block(move |layer: &mut GraphicsLayer| {
+                let scale = scale.value();
+                layer.scale_x = scale;
+                layer.scale_y = scale;
+                layer.shadow_elevation = shadow.value();
+                layer.shape = LayerShape::Rounded(RoundedCornerShape::uniform(BUTTON_RADIUS));
+            })
+            .rounded_corners(BUTTON_RADIUS)
+            .draw_behind(move |scope| {
+                scope.draw_round_rect(Brush::solid(fill), CornerRadii::uniform(BUTTON_RADIUS));
+            })
+            .padding(18.0),
+        ButtonSpec::new().interaction_source(interaction_source),
         on_click,
         move || {
             Text(text, Modifier::empty(), button_text_style());

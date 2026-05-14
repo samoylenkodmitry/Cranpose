@@ -22,6 +22,7 @@ fn simple_button_app(clicked_count: MutableState<i32>) {
 
             Button(
                 Modifier::empty().padding(10.0),
+                ButtonSpec::default(),
                 {
                     let count = clicked_count;
                     move || {
@@ -67,11 +68,11 @@ fn test_button_creates_valid_composition() {
         "Button should not have been clicked yet"
     );
 
-    // The composition should have created nodes for Column, Text, Button, and Button's Text child
+    // The composition should have created nodes for Column, Text, Button, ButtonSpec, and Button's Text child
     let node_count = rule.applier_mut().len();
     assert!(
         node_count >= 4,
-        "Should have at least 4 nodes (Column, Text, Button, Button's Text)"
+        "Should have at least 4 nodes (Column, Text, Button, ButtonSpec, Button's Text)"
     );
 
     // In a real app, clicking would:
@@ -102,6 +103,7 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
 
             Button(
                 Modifier::empty().padding(10.0),
+                ButtonSpec::default(),
                 {
                     let clicks = button1_clicks;
                     move || {
@@ -125,6 +127,7 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
 
             Button(
                 Modifier::empty().padding(10.0),
+                ButtonSpec::default(),
                 {
                     let clicks = button2_clicks;
                     move || {

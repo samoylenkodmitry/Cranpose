@@ -121,6 +121,7 @@ fn button_with_modifiers_app(click_count: MutableState<i32>) {
                             CornerRadii::uniform(12.0),
                         );
                     })),
+                ButtonSpec::default(),
                 {
                     let count = click_count;
                     move || {
@@ -186,6 +187,7 @@ fn dynamic_label_button_app(click_count: MutableState<i32>, is_active: MutableSt
 
             Button(
                 Modifier::empty().padding(10.0),
+                ButtonSpec::default(),
                 {
                     let count = click_count;
                     move || {

@@ -7,7 +7,7 @@ use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyLis
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
 use cranpose_ui::{
-    composable, Box, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
+    composable, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii,
     LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
@@ -135,6 +135,7 @@ where
                 scope.draw_round_rect(Brush::solid(background), CornerRadii::uniform(8.0));
             })
             .padding(8.0),
+        ButtonSpec::default(),
         on_click,
         move || {
             Text(label, Modifier::empty().padding(4.0), TextStyle::default());

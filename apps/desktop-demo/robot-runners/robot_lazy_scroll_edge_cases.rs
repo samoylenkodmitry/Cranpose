@@ -14,7 +14,8 @@ use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
-    Box, BoxSpec, Button, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
+    Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec,
+    Text,
 };
 use cranpose_ui::{Alignment, Color, LinearArrangement, Modifier, Size, TextStyle};
 use std::time::Duration;
@@ -163,6 +164,7 @@ fn main() {
                     move || {
                         Button(
                             Modifier::default(),
+                            ButtonSpec::default(),
                             move || {
                                 state.scroll_to_item(50, 0.0);
                             },
@@ -172,6 +174,7 @@ fn main() {
                         );
                         Button(
                             Modifier::default(),
+                            ButtonSpec::default(),
                             move || {
                                 state.scroll_to_item(95, 0.0);
                             },

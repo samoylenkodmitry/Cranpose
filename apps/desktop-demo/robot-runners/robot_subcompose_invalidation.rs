@@ -70,6 +70,7 @@ fn test_app() {
                         c.is_button = true;
                         c.content_description = Some("Change Colors".into());
                     }),
+                ButtonSpec::default(),
                 move || {
                     color_scheme.set((color_scheme.get() + 1) % 3);
                 },

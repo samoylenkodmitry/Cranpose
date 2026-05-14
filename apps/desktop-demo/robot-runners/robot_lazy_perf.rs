@@ -100,6 +100,7 @@ fn test_app() {
                 Modifier::empty()
                     .padding(8.0)
                     .background(Color(0.3, 0.5, 0.8, 1.0)),
+                ButtonSpec::default(),
                 move || {
                     list_state.scroll_to_item(middle_index, 0.0);
                 },

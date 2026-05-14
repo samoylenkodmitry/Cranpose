@@ -11,7 +11,9 @@
 
 use cranpose::{AppLauncher, SemanticElement};
 use cranpose_testing::find_button_in_semantics;
-use cranpose_ui::{Button, Column, ColumnSpec, Modifier, Size, Spacer, Text, TextStyle};
+use cranpose_ui::{
+    Button, ButtonSpec, Column, ColumnSpec, Modifier, Size, Spacer, Text, TextStyle,
+};
 use desktop_app::app::{AnimationState, AsyncRuntimeTabContent, FrameStats};
 use std::time::Duration;
 
@@ -260,6 +262,7 @@ fn main() {
                     );
                     Button(
                         Modifier::empty().padding(6.0),
+                        ButtonSpec::default(),
                         move || {
                             let last = TEST_PCTS.len().saturating_sub(1);
                             let next = (step_state.get() + 1).min(last);

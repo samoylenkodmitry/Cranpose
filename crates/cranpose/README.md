@@ -90,7 +90,9 @@ fn CounterApp() {
         Text(format!("Count: {}", count.value()));
         
         Button(
-            onClick = move || count.set(count.value() + 1), 
+            Modifier::empty(),
+            ButtonSpec::default(),
+            move || count.set(count.value() + 1),
             || Text("Increment")
         );
     });

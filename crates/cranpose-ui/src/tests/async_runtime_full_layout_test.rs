@@ -9,8 +9,8 @@
 // Root cause: Conditional rendering breaks RecomposeScope connections for sibling components
 
 use crate::{
-    Brush, Button, Color, Column, ColumnSpec, CornerRadii, Modifier, Row, RowSpec, Size, Spacer,
-    Text, TextStyle,
+    Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, Modifier, Row, RowSpec,
+    Size, Spacer, Text, TextStyle,
 };
 use cranpose_core::{
     __launched_effect_async_impl as launched_effect_async_impl, location_key, Composition,
@@ -246,6 +246,7 @@ fn async_runtime_full_layout(
                         };
                         Button(
                             Modifier::empty().padding(12.0),
+                            ButtonSpec::default(),
                             {
                                 let toggle_state = is_running_for_button;
                                 move || toggle_state.set(!toggle_state.get())

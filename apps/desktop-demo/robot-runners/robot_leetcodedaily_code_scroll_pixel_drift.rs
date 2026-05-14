@@ -14,9 +14,9 @@ use cranpose_ui::{
     composable,
     text::{FontFamily, FontWeight, SpanStyle, TextUnit},
     widgets::BasicTextFieldWithOptions,
-    Alignment, BasicTextFieldOptions, Box as ComposeBox, BoxSpec, Button, Color, Column,
-    ColumnSpec, ContentScale, CornerRadii, Image, ImageBitmap, LinearArrangement, Modifier, Row,
-    RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    Alignment, BasicTextFieldOptions, Box as ComposeBox, BoxSpec, Button, ButtonSpec, Color,
+    Column, ColumnSpec, ContentScale, CornerRadii, Image, ImageBitmap, LinearArrangement, Modifier,
+    Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 use scroll_stability_external_helpers::{
     run_internal_scroll_stability_capture, ScrollStabilityConfig,
@@ -222,6 +222,7 @@ fn ActionButton(label: &'static str) {
             .background(Color(0.15, 0.20, 0.30, 0.96))
             .rounded_corners(12.0)
             .padding(8.0),
+        ButtonSpec::default(),
         || {},
         move || {
             Text(label, Modifier::empty(), label_style());

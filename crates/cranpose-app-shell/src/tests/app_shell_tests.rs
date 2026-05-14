@@ -7,7 +7,7 @@ use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyLis
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_macros::composable;
 use cranpose_ui::{
-    BlendMode, Box, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
+    BlendMode, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii,
     HeadlessRenderer, IntrinsicSize, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier,
     PointerInputScope, Rect, RenderOp, Row, RowSpec, ScrollState, Size, Text, TextStyle,
     VerticalAlignment,
@@ -971,6 +971,7 @@ fn frame_stable_pointer_handler_content() {
     let pending_clicks_state = pending_clicks;
     Button(
         Modifier::empty().padding(8.0),
+        ButtonSpec::default(),
         move || {
             if pending_handler {
                 pending_clicks_state.set_value(pending_clicks_state.value() + 1);
@@ -2458,6 +2459,7 @@ fn app_shell_interactive_counter_test_tab(counter: MutableState<i32>) {
                             Modifier::empty()
                                 .background(Color(0.25, 0.45, 0.75, 1.0))
                                 .padding(12.0),
+                            ButtonSpec::default(),
                             move || {
                                 counter.set_value(counter.value() + 1);
                             },
@@ -2638,6 +2640,7 @@ fn app_shell_interactive_clickable_tab_host() {
             Row(Modifier::empty(), RowSpec::default(), move || {
                 Button(
                     Modifier::empty().padding(8.0),
+                    ButtonSpec::default(),
                     move || counter_tab.set_value(0),
                     || {
                         Text("Counter App", Modifier::empty(), TextStyle::default());
@@ -2645,6 +2648,7 @@ fn app_shell_interactive_clickable_tab_host() {
                 );
                 Button(
                     Modifier::empty().padding(8.0),
+                    ButtonSpec::default(),
                     move || composition_local_tab.set_value(1),
                     || {
                         Text(
@@ -2656,6 +2660,7 @@ fn app_shell_interactive_clickable_tab_host() {
                 );
                 Button(
                     Modifier::empty().padding(8.0),
+                    ButtonSpec::default(),
                     move || web_fetch_tab.set_value(2),
                     || {
                         Text("Web Fetch", Modifier::empty(), TextStyle::default());
@@ -2826,6 +2831,7 @@ fn app_shell_demo_like_counter_tab() {
                                                     });
                                                 })
                                                 .padding(12.0),
+                                            ButtonSpec::default(),
                                             move || counter.set(counter.get() + 1),
                                             || {
                                                 Text(
@@ -2859,6 +2865,7 @@ fn app_shell_demo_like_clickable_tab_host() {
             Row(Modifier::empty(), RowSpec::default(), move || {
                 Button(
                     Modifier::empty().padding(8.0),
+                    ButtonSpec::default(),
                     move || counter_tab.set_value(0),
                     || {
                         Text("Counter App", Modifier::empty(), TextStyle::default());
@@ -2866,6 +2873,7 @@ fn app_shell_demo_like_clickable_tab_host() {
                 );
                 Button(
                     Modifier::empty().padding(8.0),
+                    ButtonSpec::default(),
                     move || composition_local_tab.set_value(1),
                     || {
                         Text(
@@ -3075,6 +3083,7 @@ fn app_shell_actual_like_counter_tab() {
                                             );
                                         })
                                         .padding(10.0),
+                                    ButtonSpec::default(),
                                     || {},
                                     move || {
                                         Text(
@@ -3107,6 +3116,7 @@ fn app_shell_actual_like_counter_tab() {
                                         });
                                     })
                                     .padding(12.0),
+                                ButtonSpec::default(),
                                 move || counter.set(counter.get() + 1),
                                 || {
                                     Text(
@@ -3126,6 +3136,7 @@ fn app_shell_actual_like_counter_tab() {
                                         );
                                     })
                                     .padding(12.0),
+                                ButtonSpec::default(),
                                 move || counter.set(counter.get() - 1),
                                 || {
                                     Text(
@@ -3162,6 +3173,7 @@ fn app_shell_actual_like_counter_tab() {
                                 });
                             })
                             .padding(12.0),
+                        ButtonSpec::default(),
                         {
                             move || {
                                 async_message
@@ -3196,6 +3208,7 @@ fn app_shell_actual_like_clickable_tab_host() {
             Row(Modifier::empty(), RowSpec::default(), move || {
                 Button(
                     Modifier::empty().padding(8.0),
+                    ButtonSpec::default(),
                     move || counter_tab.set_value(0),
                     || {
                         Text("Counter App", Modifier::empty(), TextStyle::default());
@@ -3203,6 +3216,7 @@ fn app_shell_actual_like_clickable_tab_host() {
                 );
                 Button(
                     Modifier::empty().padding(8.0),
+                    ButtonSpec::default(),
                     move || composition_local_tab.set_value(1),
                     || {
                         Text(
@@ -3282,6 +3296,7 @@ fn app_shell_many_tabs_clickable_host() {
                     );
                 })
                 .padding(10.0),
+            ButtonSpec::default(),
             move || {
                 if active_tab.get() != index {
                     active_tab.set_value(index);
@@ -3363,6 +3378,7 @@ fn app_shell_many_tabs_precise_tab_button(
                 );
             })
             .padding(10.0),
+        ButtonSpec::default(),
         move || {
             if active_tab.get() != index {
                 active_tab.set_value(index);
@@ -3492,6 +3508,7 @@ fn app_shell_animated_draw_counter_tab() {
             );
             Button(
                 Modifier::empty().padding(8.0),
+                ButtonSpec::default(),
                 move || phase_state.set_value(0.8),
                 || {
                     Text("Drive wave", Modifier::empty(), TextStyle::default());

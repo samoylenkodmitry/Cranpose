@@ -11,9 +11,10 @@ use cranpose_foundation::text::TextFieldState;
 use cranpose_foundation::PointerEventKind;
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{
-    composable, BasicTextField, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
-    GraphicsLayer, IntrinsicSize, LinearArrangement, Modifier, Point, PointerInputScope,
-    RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    composable, BasicTextField, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
+    CornerRadii, GraphicsLayer, IntrinsicSize, LinearArrangement, Modifier, Point,
+    PointerInputScope, RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, TextStyle,
+    VerticalAlignment,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -339,6 +340,7 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
                 );
             })
             .padding(padding),
+        ButtonSpec::default(),
         {
             move || {
                 if active_tab.get() != tab {
@@ -631,6 +633,7 @@ fn text_input_example() {
                                         );
                                     })
                                     .padding(10.0),
+                                ButtonSpec::default(),
                                 move || {
                                     state.set_text("");
                                 },
@@ -657,6 +660,7 @@ fn text_input_example() {
                                         );
                                     })
                                     .padding(10.0),
+                                ButtonSpec::default(),
                                 move || {
                                     state.edit(|buffer| {
                                         buffer.place_cursor_at_end();
@@ -688,6 +692,7 @@ fn text_input_example() {
                                         );
                                     })
                                     .padding(10.0),
+                                ButtonSpec::default(),
                                 move || {
                                     let text = from.text();
                                     to.set_text(text);
@@ -751,6 +756,7 @@ fn recursive_layout_example() {
                                 .background(Color(0.35, 0.45, 0.85, 1.0))
                                 .rounded_corners(16.0)
                                 .padding(10.0),
+                            ButtonSpec::default(),
                             {
                                 move || {
                                     let next = (depth_state.get() + 1).min(96);
@@ -773,6 +779,7 @@ fn recursive_layout_example() {
                                 .background(Color(0.65, 0.35, 0.35, 1.0))
                                 .rounded_corners(16.0)
                                 .padding(10.0),
+                            ButtonSpec::default(),
                             {
                                 move || {
                                     let next = depth_state.get().saturating_sub(1).max(1);
@@ -950,6 +957,7 @@ pub fn composition_local_example() {
                         );
                     })
                     .padding(12.0),
+                ButtonSpec::default(),
                 {
                     move || {
                         let new_val = counter.get() + 1;
@@ -1182,6 +1190,7 @@ pub fn AsyncRuntimeTabContent(
                                     );
                                 })
                                 .padding(12.0),
+                            ButtonSpec::default(),
                             move || {
                                 is_running.set(!is_running.get());
                             },
@@ -1211,6 +1220,7 @@ pub fn AsyncRuntimeTabContent(
                                     );
                                 })
                                 .padding(12.0),
+                            ButtonSpec::default(),
                             move || {
                                 animation.set(AnimationState::default());
                                 stats.set(FrameStats::default());
@@ -1575,6 +1585,7 @@ fn counter_app() {
                                             );
                                         })
                                         .padding(10.0),
+                                    ButtonSpec::default(),
                                     || {},
                                     || {
                                         Text(
@@ -1600,6 +1611,7 @@ fn counter_app() {
                                             );
                                         })
                                         .padding(10.0),
+                                    ButtonSpec::default(),
                                     || {},
                                     || {
                                         Text(
@@ -1620,6 +1632,7 @@ fn counter_app() {
                                             );
                                         })
                                         .padding(10.0),
+                                    ButtonSpec::default(),
                                     || {},
                                     || {
                                         Text(
@@ -1657,6 +1670,7 @@ fn counter_app() {
                                             });
                                         })
                                         .padding(12.0),
+                                    ButtonSpec::default(),
                                     move || {
                                         println!("Incrementing counter to {}", counter.get() + 1);
                                         counter.set(counter.get() + 1)
@@ -1679,6 +1693,7 @@ fn counter_app() {
                                             );
                                         })
                                         .padding(12.0),
+                                    ButtonSpec::default(),
                                     move || counter.set(counter.get() - 1),
                                     || {
                                         Text(
@@ -1725,6 +1740,7 @@ fn counter_app() {
                                     });
                                 })
                                 .padding(12.0),
+                            ButtonSpec::default(),
                             {
                                 move || {
                                     async_message
@@ -1838,6 +1854,7 @@ fn modifier_showcase_tab() {
                                     );
                                 })
                                 .padding(10.0),
+                            ButtonSpec::default(),
                             {
                                 move || {
                                     if selected_showcase.get() != showcase_type {
@@ -2354,6 +2371,7 @@ pub fn dynamic_modifiers_showcase() {
                     );
                 })
                 .padding(10.0),
+            ButtonSpec::default(),
             move || {
                 frame.set(frame.get() + 1);
             },
