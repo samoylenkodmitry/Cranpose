@@ -307,11 +307,16 @@ struct Vertex {
     position: [f32; 2],
     color: [f32; 4],
     uv: [f32; 2],
+    uv_bounds: [f32; 4],
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x2];
+    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x4,
+        2 => Float32x2,
+        3 => Float32x4
+    ];
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -370,6 +375,13 @@ struct ImageDrawCmd {
     scissor: (u32, u32, u32, u32),
     image_id: u64,
     sampling: ImageSampling,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ImageUvRect {
+    min: [f32; 2],
+    max: [f32; 2],
+    sample_bounds: [f32; 4],
 }
 
 #[derive(Clone, Copy)]
@@ -3358,21 +3370,25 @@ impl GpuRenderer {
                     position: vertices[0],
                     color,
                     uv: [0.0, 0.0],
+                    uv_bounds: [0.0, 0.0, 1.0, 1.0],
                 },
                 Vertex {
                     position: vertices[1],
                     color,
                     uv: [1.0, 0.0],
+                    uv_bounds: [0.0, 0.0, 1.0, 1.0],
                 },
                 Vertex {
                     position: vertices[2],
                     color,
                     uv: [0.0, 1.0],
+                    uv_bounds: [0.0, 0.0, 1.0, 1.0],
                 },
                 Vertex {
                     position: vertices[3],
                     color,
                     uv: [1.0, 1.0],
+                    uv_bounds: [0.0, 0.0, 1.0, 1.0],
                 },
             ]);
 
@@ -3590,17 +3606,8 @@ impl GpuRenderer {
                 continue;
             };
 
-            let (u_min, v_min, u_max, v_max) = if let Some(sr) = image_draw.src_rect {
-                let iw = image_draw.image.width() as f32;
-                let ih = image_draw.image.height() as f32;
-                (
-                    sr.x / iw,
-                    sr.y / ih,
-                    (sr.x + sr.width) / iw,
-                    (sr.y + sr.height) / ih,
-                )
-            } else {
-                (0.0, 0.0, 1.0, 1.0)
+            let Some(uv_rect) = image_uv_rect(&image_draw.image, image_draw.src_rect) else {
+                continue;
             };
 
             let base_vertex = image_vertices.len() as u32;
@@ -3620,7 +3627,8 @@ impl GpuRenderer {
                         adjusted_image.quad[0][1] * root_scale,
                     ],
                     color: tint,
-                    uv: [u_min, v_min],
+                    uv: [uv_rect.min[0], uv_rect.min[1]],
+                    uv_bounds: uv_rect.sample_bounds,
                 },
                 Vertex {
                     position: [
@@ -3628,7 +3636,8 @@ impl GpuRenderer {
                         adjusted_image.quad[1][1] * root_scale,
                     ],
                     color: tint,
-                    uv: [u_max, v_min],
+                    uv: [uv_rect.max[0], uv_rect.min[1]],
+                    uv_bounds: uv_rect.sample_bounds,
                 },
                 Vertex {
                     position: [
@@ -3636,7 +3645,8 @@ impl GpuRenderer {
                         adjusted_image.quad[2][1] * root_scale,
                     ],
                     color: tint,
-                    uv: [u_min, v_max],
+                    uv: [uv_rect.min[0], uv_rect.max[1]],
+                    uv_bounds: uv_rect.sample_bounds,
                 },
                 Vertex {
                     position: [
@@ -3644,7 +3654,8 @@ impl GpuRenderer {
                         adjusted_image.quad[3][1] * root_scale,
                     ],
                     color: tint,
-                    uv: [u_max, v_max],
+                    uv: [uv_rect.max[0], uv_rect.max[1]],
+                    uv_bounds: uv_rect.sample_bounds,
                 },
             ]);
 
@@ -4663,6 +4674,61 @@ fn tint_for_image(
     }
 }
 
+fn image_uv_rect(image: &ImageBitmap, src_rect: Option<Rect>) -> Option<ImageUvRect> {
+    let Some(src) = src_rect else {
+        return Some(ImageUvRect {
+            min: [0.0, 0.0],
+            max: [1.0, 1.0],
+            sample_bounds: [0.0, 0.0, 1.0, 1.0],
+        });
+    };
+
+    let (u_min, u_max, u_bound_min, u_bound_max) =
+        source_axis_uv(src.x, src.width, image.width() as f32)?;
+    let (v_min, v_max, v_bound_min, v_bound_max) =
+        source_axis_uv(src.y, src.height, image.height() as f32)?;
+
+    Some(ImageUvRect {
+        min: [u_min, v_min],
+        max: [u_max, v_max],
+        sample_bounds: [u_bound_min, v_bound_min, u_bound_max, v_bound_max],
+    })
+}
+
+fn source_axis_uv(start: f32, extent: f32, image_extent: f32) -> Option<(f32, f32, f32, f32)> {
+    if !start.is_finite()
+        || !extent.is_finite()
+        || !image_extent.is_finite()
+        || extent == 0.0
+        || image_extent <= 0.0
+    {
+        return None;
+    }
+
+    let end = start + extent;
+    let edge_min = start.min(end).clamp(0.0, image_extent);
+    let edge_max = start.max(end).clamp(0.0, image_extent);
+    if edge_max <= edge_min {
+        return None;
+    }
+
+    let center_min = edge_min + 0.5;
+    let center_max = edge_max - 0.5;
+    let (bound_min, bound_max) = if center_min <= center_max {
+        (center_min, center_max)
+    } else {
+        let center = (edge_min + edge_max) * 0.5;
+        (center, center)
+    };
+
+    Some((
+        edge_min / image_extent,
+        edge_max / image_extent,
+        bound_min / image_extent,
+        bound_max / image_extent,
+    ))
+}
+
 fn apply_filter_to_bitmap(image: &ImageBitmap, filter: ColorFilter) -> Result<ImageBitmap, String> {
     let mut filtered = Vec::with_capacity(image.pixels().len());
     for pixel in image.pixels().chunks_exact(4) {
@@ -4957,6 +5023,38 @@ mod tests {
         let linear = image_sampler_descriptor(ImageSampling::Linear);
         assert_eq!(linear.mag_filter, wgpu::FilterMode::Linear);
         assert_eq!(linear.min_filter, wgpu::FilterMode::Linear);
+    }
+
+    #[test]
+    fn image_uv_rect_clamps_source_rect_to_texel_centers() {
+        let image = ImageBitmap::from_rgba8(24, 16, vec![0; 24 * 16 * 4]).expect("image");
+        let uv = image_uv_rect(
+            &image,
+            Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 16.0,
+            }),
+        )
+        .expect("uv rect");
+
+        assert_eq!(uv.min, [0.0, 0.0]);
+        assert_eq!(uv.max, [16.0 / 24.0, 1.0]);
+        assert_eq!(
+            uv.sample_bounds,
+            [0.5 / 24.0, 0.5 / 16.0, 15.5 / 24.0, 15.5 / 16.0]
+        );
+    }
+
+    #[test]
+    fn image_uv_rect_keeps_full_image_unclamped() {
+        let image = ImageBitmap::from_rgba8(2, 2, vec![0; 16]).expect("image");
+        let uv = image_uv_rect(&image, None).expect("uv rect");
+
+        assert_eq!(uv.min, [0.0, 0.0]);
+        assert_eq!(uv.max, [1.0, 1.0]);
+        assert_eq!(uv.sample_bounds, [0.0, 0.0, 1.0, 1.0]);
     }
 
     fn test_text(z_index: usize) -> TextDraw {
@@ -6398,6 +6496,10 @@ mod tests {
             .requirements
             .contains(SurfaceRequirement::MotionStableCapture));
         let expected_anchor = Some(SnapAnchor::rigid(Point::new(14.25, 16.5)));
+        assert_eq!(
+            collected.scene.effect_layers[0].snap_anchor, expected_anchor,
+            "active scroll local-picture surfaces must composite with the same content-origin snap phase as their children"
+        );
         assert_eq!(
             collected.scene.shapes[0].snap_anchor, expected_anchor,
             "active scroll content should share one anchor so item internals stay pixel-stable"
