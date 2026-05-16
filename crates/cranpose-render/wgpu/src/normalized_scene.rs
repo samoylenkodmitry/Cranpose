@@ -348,6 +348,7 @@ fn flush_translated_local_picture(
     scene: &mut CompositorScene,
     state: &mut Option<TranslatedLocalPictureState>,
     clip: Option<Rect>,
+    snap_anchor: Option<SnapAnchor>,
 ) {
     let Some(current) = *state else {
         return;
@@ -365,12 +366,26 @@ fn flush_translated_local_picture(
                 z_end,
                 SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
             );
+            if translated_local_picture_needs_composite_anchor(scene, current.counts) {
+                let layer = scene
+                    .effect_layers
+                    .last_mut()
+                    .expect("effect layer was just pushed");
+                layer.snap_anchor = snap_anchor;
+            }
         }
     }
     *state = Some(TranslatedLocalPictureState {
         counts: scene_emission_counts(scene),
         z_start: scene.next_z,
     });
+}
+
+fn translated_local_picture_needs_composite_anchor(
+    scene: &CompositorScene,
+    counts: SceneEmissionCounts,
+) -> bool {
+    scene.images.len() > counts.images()
 }
 
 pub(crate) fn resolved_child_surface_composite(
@@ -612,6 +627,7 @@ fn collect_layer_contents_into<'a>(
                     local_scene,
                     &mut translated_local_picture_state,
                     visual_clip,
+                    layer_snap_anchor,
                 );
                 let mut shadow_scene = CompositorScene::new();
                 let child_logical_rect = estimate_layer_surface_rect_cached(
@@ -691,6 +707,7 @@ fn collect_layer_contents_into<'a>(
         local_scene,
         &mut translated_local_picture_state,
         visual_clip,
+        layer_snap_anchor,
     );
 }
 
