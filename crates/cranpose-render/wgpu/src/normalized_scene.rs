@@ -7,13 +7,15 @@ use crate::scene::{
     TextDraw,
 };
 use crate::surface_plan::{
-    layer_cache_key, layer_contains_descendant_backdrop, layer_needs_rigid_snap,
-    layer_surface_requirements_cached, LayerSurfaceRequirements, TranslationRenderContext,
+    effective_surface_requirements, layer_cache_key, layer_contains_descendant_backdrop,
+    layer_needs_rigid_snap, layer_surface_requirements_cached, translated_content_axes_for_layer,
+    LayerSurfaceRequirements, TranslatedContentAxes, TranslationRenderContext,
 };
 use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
 use cranpose_render_common::graph::{
-    quad_bounds, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode,
+    quad_bounds, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+    RenderNode,
 };
 use cranpose_render_common::layer_composition::{
     effective_layer_isolation, layer_for_content, local_content_layer,
@@ -25,6 +27,12 @@ use cranpose_ui_graphics::{GraphicsLayer, Point, Rect};
 use std::collections::HashMap;
 
 const NORMALIZED_SCENE_AFFINE_TOLERANCE: f32 = 1e-4;
+const MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD: f32 = 64.0;
+const MOTION_STABLE_CAPTURE_MAX_LEADING_GUARD: f32 = 2048.0;
+const MOTION_STABLE_CAPTURE_LEADING_VIEWPORTS: f32 = 3.0;
+const TRANSLATED_LOCAL_CAPTURE_STABLE_GUARD: f32 = 64.0;
+const MOTION_STABLE_CAPTURE_PHASE_BUCKET: f32 = 64.0;
+const MOTION_STABLE_CAPTURE_CROSS_AXIS_LEADING_GUARD: f32 = 96.0;
 
 pub(crate) struct ChildLayerComposite<'a> {
     pub(crate) z_index: usize,
@@ -34,6 +42,7 @@ pub(crate) struct ChildLayerComposite<'a> {
     pub(crate) snap_anchor: Option<SnapAnchor>,
     pub(crate) backdrop_rect: Rect,
     pub(crate) visual_clip: Option<Rect>,
+    pub(crate) surface_clip: Option<Rect>,
     pub(crate) shadow_draws: Vec<ShadowDraw>,
     pub(crate) needs_nested_underlay: bool,
 }
@@ -44,6 +53,7 @@ pub(crate) struct ResolvedChildSurfaceComposite {
     pub(crate) dest_quad: [[f32; 2]; 4],
     pub(crate) snap_anchor: Option<SnapAnchor>,
     pub(crate) backdrop_rect: Rect,
+    pub(crate) surface_clip: Option<Rect>,
     pub(crate) shadow_draws: Vec<ShadowDraw>,
 }
 
@@ -95,7 +105,11 @@ fn scene_bounds_with_clip(scene: &CompositorScene, apply_clip: bool) -> Option<R
         bounds = union_rect(bounds, shadow_bounds);
     }
     for layer in &scene.effect_layers {
-        let rect = if apply_clip {
+        let rect = if apply_clip
+            || layer
+                .requirements
+                .contains(SurfaceRequirement::MotionStableCapture)
+        {
             visible_draw_rect(layer.rect, layer.clip)
         } else {
             Some(layer.rect)
@@ -190,19 +204,51 @@ fn hidden_content_precedes_visible_bounds(visible_bounds: Rect, full_bounds: Rec
         || full_bounds.y < visible_bounds.y - NORMALIZED_SCENE_AFFINE_TOLERANCE
 }
 
+fn leading_capture_guard(extent: f32) -> f32 {
+    (extent * MOTION_STABLE_CAPTURE_LEADING_VIEWPORTS).clamp(
+        MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD,
+        MOTION_STABLE_CAPTURE_MAX_LEADING_GUARD,
+    )
+}
+
+fn stable_deep_leading_axis(
+    visible_start: f32,
+    visible_extent: f32,
+    full_start: f32,
+) -> (f32, f32) {
+    let guard = leading_capture_guard(visible_extent);
+    stable_deep_leading_axis_with_guard(visible_start, visible_extent, full_start, guard)
+}
+
+fn stable_deep_leading_axis_with_guard(
+    visible_start: f32,
+    visible_extent: f32,
+    full_start: f32,
+    guard: f32,
+) -> (f32, f32) {
+    let visible_end = visible_start + visible_extent;
+    let guarded_start = visible_start - guard;
+    if full_start >= guarded_start - NORMALIZED_SCENE_AFFINE_TOLERANCE {
+        return (full_start, visible_end);
+    }
+
+    let bucket = guard.clamp(1.0, MOTION_STABLE_CAPTURE_PHASE_BUCKET);
+    let phase = (full_start - guarded_start).rem_euclid(bucket);
+    let start = guarded_start + phase;
+    (start, visible_end + phase)
+}
+
 fn leading_capture_bounds(visible_bounds: Rect, full_bounds: Rect) -> Rect {
-    let left = if full_bounds.x < visible_bounds.x - NORMALIZED_SCENE_AFFINE_TOLERANCE {
-        full_bounds.x
+    let (left, right) = if full_bounds.x < visible_bounds.x - NORMALIZED_SCENE_AFFINE_TOLERANCE {
+        stable_deep_leading_axis(visible_bounds.x, visible_bounds.width, full_bounds.x)
     } else {
-        visible_bounds.x
+        (visible_bounds.x, visible_bounds.x + visible_bounds.width)
     };
-    let top = if full_bounds.y < visible_bounds.y - NORMALIZED_SCENE_AFFINE_TOLERANCE {
-        full_bounds.y
+    let (top, bottom) = if full_bounds.y < visible_bounds.y - NORMALIZED_SCENE_AFFINE_TOLERANCE {
+        stable_deep_leading_axis(visible_bounds.y, visible_bounds.height, full_bounds.y)
     } else {
-        visible_bounds.y
+        (visible_bounds.y, visible_bounds.y + visible_bounds.height)
     };
-    let right = visible_bounds.x + visible_bounds.width;
-    let bottom = visible_bounds.y + visible_bounds.height;
 
     Rect {
         x: left,
@@ -212,16 +258,179 @@ fn leading_capture_bounds(visible_bounds: Rect, full_bounds: Rect) -> Rect {
     }
 }
 
+fn leading_axis_capture_bounds(
+    visible_start: f32,
+    visible_extent: f32,
+    full_start: f32,
+) -> (f32, f32) {
+    if full_start < visible_start - NORMALIZED_SCENE_AFFINE_TOLERANCE {
+        stable_deep_leading_axis(visible_start, visible_extent, full_start)
+    } else {
+        (visible_start, visible_start + visible_extent)
+    }
+}
+
+fn stable_axis_reference(
+    visible_start: f32,
+    visible_extent: f32,
+    clip_start: Option<f32>,
+    clip_extent: Option<f32>,
+) -> (f32, f32) {
+    match (clip_start, clip_extent) {
+        (Some(start), Some(extent)) if extent.is_finite() && extent > 0.0 => (start, extent),
+        _ => (visible_start, visible_extent),
+    }
+}
+
+fn fixed_cross_axis_capture_bounds(
+    visible_start: f32,
+    visible_extent: f32,
+    clip_start: Option<f32>,
+    clip_extent: Option<f32>,
+) -> (f32, f32) {
+    match (clip_start, clip_extent) {
+        (Some(start), Some(extent)) if extent.is_finite() && extent > 0.0 => (
+            start - MOTION_STABLE_CAPTURE_CROSS_AXIS_LEADING_GUARD,
+            start + extent,
+        ),
+        _ => (visible_start, visible_start + visible_extent),
+    }
+}
+
+fn translated_capture_bounds(
+    visible_bounds: Rect,
+    full_bounds: Rect,
+    clip: Option<Rect>,
+    preserve_leading_x: bool,
+    preserve_leading_y: bool,
+) -> Rect {
+    let (left, right) = if preserve_leading_x {
+        let (start, extent) = stable_axis_reference(
+            visible_bounds.x,
+            visible_bounds.width,
+            clip.map(|clip| clip.x),
+            clip.map(|clip| clip.width),
+        );
+        leading_axis_capture_bounds(start, extent, full_bounds.x)
+    } else if preserve_leading_y {
+        fixed_cross_axis_capture_bounds(
+            visible_bounds.x,
+            visible_bounds.width,
+            clip.map(|clip| clip.x),
+            clip.map(|clip| clip.width),
+        )
+    } else {
+        (visible_bounds.x, visible_bounds.x + visible_bounds.width)
+    };
+    let (top, bottom) = if preserve_leading_y {
+        let (start, extent) = stable_axis_reference(
+            visible_bounds.y,
+            visible_bounds.height,
+            clip.map(|clip| clip.y),
+            clip.map(|clip| clip.height),
+        );
+        leading_axis_capture_bounds(start, extent, full_bounds.y)
+    } else if preserve_leading_x {
+        fixed_cross_axis_capture_bounds(
+            visible_bounds.y,
+            visible_bounds.height,
+            clip.map(|clip| clip.y),
+            clip.map(|clip| clip.height),
+        )
+    } else {
+        (visible_bounds.y, visible_bounds.y + visible_bounds.height)
+    };
+
+    Rect {
+        x: left,
+        y: top,
+        width: (right - left).max(0.0),
+        height: (bottom - top).max(0.0),
+    }
+}
+
+fn translated_local_capture_bounds(
+    visible_bounds: Rect,
+    full_bounds: Rect,
+    clip: Option<Rect>,
+    stabilize_x: bool,
+    stabilize_y: bool,
+) -> Rect {
+    let stable_guard_x = TRANSLATED_LOCAL_CAPTURE_STABLE_GUARD.min(visible_bounds.width);
+    let stable_guard_y = TRANSLATED_LOCAL_CAPTURE_STABLE_GUARD.min(visible_bounds.height);
+    let (left, right) = if stabilize_x {
+        let (start, extent) = stable_axis_reference(
+            visible_bounds.x,
+            visible_bounds.width,
+            clip.map(|clip| clip.x),
+            clip.map(|clip| clip.width),
+        );
+        if full_bounds.x < start - NORMALIZED_SCENE_AFFINE_TOLERANCE {
+            stable_deep_leading_axis_with_guard(start, extent, full_bounds.x, stable_guard_x)
+        } else {
+            (start, start + extent)
+        }
+    } else if stabilize_y {
+        fixed_cross_axis_capture_bounds(
+            visible_bounds.x,
+            visible_bounds.width,
+            clip.map(|clip| clip.x),
+            clip.map(|clip| clip.width),
+        )
+    } else {
+        (visible_bounds.x, visible_bounds.x + visible_bounds.width)
+    };
+    let (top, bottom) = if stabilize_y {
+        let (start, extent) = stable_axis_reference(
+            visible_bounds.y,
+            visible_bounds.height,
+            clip.map(|clip| clip.y),
+            clip.map(|clip| clip.height),
+        );
+        if full_bounds.y < start - NORMALIZED_SCENE_AFFINE_TOLERANCE {
+            stable_deep_leading_axis_with_guard(start, extent, full_bounds.y, stable_guard_y)
+        } else {
+            (start, start + extent)
+        }
+    } else if stabilize_x {
+        fixed_cross_axis_capture_bounds(
+            visible_bounds.y,
+            visible_bounds.height,
+            clip.map(|clip| clip.y),
+            clip.map(|clip| clip.height),
+        )
+    } else {
+        (visible_bounds.y, visible_bounds.y + visible_bounds.height)
+    };
+
+    Rect {
+        x: left,
+        y: top,
+        width: (right - left).max(0.0),
+        height: (bottom - top).max(0.0),
+    }
+}
+
+fn combined_capture_clip(layer_clip: Option<Rect>, capture_clip: Option<Rect>) -> Option<Rect> {
+    match (layer_clip, capture_clip) {
+        (Some(layer_clip), Some(capture_clip)) => layer_clip.intersect(capture_clip),
+        (Some(clip), None) | (None, Some(clip)) => Some(clip),
+        (None, None) => None,
+    }
+}
+
 pub(crate) fn motion_stable_capture_bounds(
     layer: &LayerNode,
     scene: &CompositorScene,
     child_layers: &[ChildLayerComposite<'_>],
     requirements: SurfaceRequirementSet,
+    translated_content_axes: TranslatedContentAxes,
+    capture_clip_override: Option<Rect>,
 ) -> Option<Rect> {
-    let visible_bounds = collected_layer_bounds(scene, child_layers, true);
-    if !requirements.contains(SurfaceRequirement::MotionStableCapture)
-        || layer.effect().is_some()
-        || layer.backdrop().is_some()
+    let capture_clip = combined_capture_clip(layer.clip_rect(), capture_clip_override);
+    let visible_bounds = collected_layer_bounds(scene, child_layers, true)
+        .and_then(|bounds| visible_draw_rect(bounds, capture_clip));
+    if !requirements.contains(SurfaceRequirement::MotionStableCapture) || layer.backdrop().is_some()
     {
         return visible_bounds;
     }
@@ -231,7 +440,21 @@ pub(crate) fn motion_stable_capture_bounds(
         (Some(visible_bounds), Some(full_bounds))
             if hidden_content_precedes_visible_bounds(visible_bounds, full_bounds) =>
         {
-            Some(leading_capture_bounds(visible_bounds, full_bounds))
+            let translated_content_axes =
+                translated_content_axes.union(translated_content_axes_for_layer(layer));
+            let preserve_leading_x = translated_content_axes.x;
+            let preserve_leading_y = translated_content_axes.y;
+            if preserve_leading_x || preserve_leading_y {
+                Some(translated_capture_bounds(
+                    visible_bounds,
+                    full_bounds,
+                    capture_clip,
+                    preserve_leading_x,
+                    preserve_leading_y,
+                ))
+            } else {
+                Some(leading_capture_bounds(visible_bounds, full_bounds))
+            }
         }
         _ => visible_bounds.or(full_bounds),
     }
@@ -342,6 +565,8 @@ fn mark_motion_stable_effect_layers_since(
 struct TranslatedLocalPictureState {
     counts: SceneEmissionCounts,
     z_start: usize,
+    stabilize_x: bool,
+    stabilize_y: bool,
 }
 
 fn flush_translated_local_picture(
@@ -356,6 +581,16 @@ fn flush_translated_local_picture(
     let z_end = scene.next_z;
     if z_end > current.z_start {
         if let Some(surface_rect) = emitted_scene_bounds(scene, current.counts) {
+            let surface_rect = match visible_draw_rect(surface_rect, clip) {
+                Some(visible_rect) => translated_local_capture_bounds(
+                    visible_rect,
+                    surface_rect,
+                    clip,
+                    current.stabilize_x,
+                    current.stabilize_y,
+                ),
+                None => return,
+            };
             scene.push_effect_layer_with_requirements(
                 surface_rect,
                 clip,
@@ -378,6 +613,8 @@ fn flush_translated_local_picture(
     *state = Some(TranslatedLocalPictureState {
         counts: scene_emission_counts(scene),
         z_start: scene.next_z,
+        stabilize_x: current.stabilize_x,
+        stabilize_y: current.stabilize_y,
     });
 }
 
@@ -396,6 +633,7 @@ pub(crate) fn resolved_child_surface_composite(
         dest_quad: child.dest_quad,
         snap_anchor: child.snap_anchor,
         backdrop_rect: child.backdrop_rect,
+        surface_clip: child.surface_clip,
         shadow_draws: child.shadow_draws.clone(),
     }
 }
@@ -509,9 +747,17 @@ fn collect_layer_contents_into<'a>(
 
     let effective_translated_content_context =
         translation_context.inherited_content_translation || layer.translated_content_context;
+    let direct_translated_content_axes = translation_context
+        .translated_content_axes
+        .union(translated_content_axes_for_layer(layer));
     let allow_rigid_snap = effective_translated_content_context || !layer.motion_context_animated;
+    let translated_local_picture = layer.translated_content_context
+        && layer.motion_context_animated
+        && !translation_context.inherited_content_translation
+        && !translation_context.surface_capture_active;
     let boundary_snap_anchor = if !translation_context.inherited_content_translation
         && layer.translated_content_context
+        && !translated_local_picture
         && allow_rigid_snap
     {
         rigid_snap_anchor(
@@ -525,23 +771,31 @@ fn collect_layer_contents_into<'a>(
         None
     };
     let translated_snap_anchor = inherited_translated_snap_anchor.or(boundary_snap_anchor);
-    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
-        if allow_rigid_snap && layer_needs_rigid_snap(layer, effective_translated_content_context) {
-            rigid_snap_anchor(layer_bounds, &local_layer)
-        } else {
-            None
-        }
-    });
-    let translated_local_picture = layer.translated_content_context
-        && layer.motion_context_animated
-        && !translation_context.inherited_content_translation
-        && !translation_context.surface_capture_active;
+    let layer_snap_anchor = if translated_local_picture {
+        None
+    } else {
+        translated_snap_anchor.or_else(|| {
+            if allow_rigid_snap
+                && layer_needs_rigid_snap(layer, effective_translated_content_context)
+            {
+                rigid_snap_anchor(layer_bounds, &local_layer)
+            } else {
+                None
+            }
+        })
+    };
+    let stabilize_translated_capture_x =
+        layer.translated_content_offset.x.abs() > NORMALIZED_SCENE_AFFINE_TOLERANCE;
+    let stabilize_translated_capture_y =
+        layer.translated_content_offset.y.abs() > NORMALIZED_SCENE_AFFINE_TOLERANCE;
     let translated_text_motion =
         effective_translated_content_context && !translation_context.surface_capture_active;
     let mut translated_local_picture_state =
         translated_local_picture.then(|| TranslatedLocalPictureState {
             counts: scene_emission_counts(local_scene),
             z_start: local_scene.next_z,
+            stabilize_x: stabilize_translated_capture_x,
+            stabilize_y: stabilize_translated_capture_y,
         });
     let local_primitive_context = LocalPrimitiveContext {
         layer_bounds,
@@ -555,6 +809,7 @@ fn collect_layer_contents_into<'a>(
     };
     let child_translation_context = TranslationRenderContext {
         inherited_content_translation: effective_translated_content_context,
+        translated_content_axes: direct_translated_content_axes,
         surface_capture_active: translation_context.surface_capture_active,
     };
     let mut deferred_primitives = Vec::new();
@@ -583,20 +838,24 @@ fn collect_layer_contents_into<'a>(
                     let child_bounds = child_layer
                         .local_bounds
                         .translate(child_offset.x, child_offset.y);
-                    let child_translated_snap_anchor = translated_snap_anchor.or_else(|| {
-                        if effective_translated_content_context {
-                            let child_isolation =
-                                effective_layer_isolation(&child_layer.graphics_layer);
-                            let child_content_layer = layer_for_content(
-                                &child_layer.graphics_layer,
-                                child_isolation.as_ref(),
-                            );
-                            let child_local_layer = local_content_layer(&child_content_layer);
-                            rigid_snap_anchor(child_bounds, &child_local_layer)
-                        } else {
-                            None
-                        }
-                    });
+                    let child_translated_snap_anchor = if translated_local_picture {
+                        None
+                    } else {
+                        translated_snap_anchor.or_else(|| {
+                            if effective_translated_content_context {
+                                let child_isolation =
+                                    effective_layer_isolation(&child_layer.graphics_layer);
+                                let child_content_layer = layer_for_content(
+                                    &child_layer.graphics_layer,
+                                    child_isolation.as_ref(),
+                                );
+                                let child_local_layer = local_content_layer(&child_content_layer);
+                                rigid_snap_anchor(child_bounds, &child_local_layer)
+                            } else {
+                                None
+                            }
+                        })
+                    };
                     let child_shadow_clip = resolve_clip(
                         visual_clip,
                         child_layer
@@ -655,19 +914,35 @@ fn collect_layer_contents_into<'a>(
                     child_bounds,
                     child_shadow_clip,
                 );
-                let child_snap_anchor = translated_snap_anchor.or_else(|| {
-                    if effective_translated_content_context {
-                        let child_isolation =
-                            effective_layer_isolation(&child_layer.graphics_layer);
-                        let child_content_layer = layer_for_content(
-                            &child_layer.graphics_layer,
-                            child_isolation.as_ref(),
-                        );
-                        let child_local_layer = local_content_layer(&child_content_layer);
-                        rigid_snap_anchor(child_bounds, &child_local_layer)
-                    } else {
-                        None
-                    }
+                let child_snap_anchor = if translated_local_picture {
+                    None
+                } else {
+                    translated_snap_anchor.or_else(|| {
+                        if effective_translated_content_context {
+                            let child_isolation =
+                                effective_layer_isolation(&child_layer.graphics_layer);
+                            let child_content_layer = layer_for_content(
+                                &child_layer.graphics_layer,
+                                child_isolation.as_ref(),
+                            );
+                            let child_local_layer = local_content_layer(&child_content_layer);
+                            rigid_snap_anchor(child_bounds, &child_local_layer)
+                        } else {
+                            None
+                        }
+                    })
+                };
+                let child_to_parent =
+                    child_layer
+                        .transform_to_parent
+                        .then(ProjectiveTransform::translation(
+                            layer_offset.x,
+                            layer_offset.y,
+                        ));
+                let surface_clip = visual_clip.and_then(|clip| {
+                    child_to_parent
+                        .inverse()
+                        .map(|parent_to_child| parent_to_child.bounds_for_rect(clip))
                 });
                 child_layers.push(ChildLayerComposite {
                     z_index: local_scene.next_z,
@@ -685,6 +960,7 @@ fn collect_layer_contents_into<'a>(
                         layer_offset,
                     )),
                     visual_clip,
+                    surface_clip,
                     shadow_draws: shadow_scene.shadow_draws,
                     needs_nested_underlay: layer_contains_descendant_backdrop(child_layer.as_ref()),
                 });
@@ -693,6 +969,8 @@ fn collect_layer_contents_into<'a>(
                     translated_local_picture_state = Some(TranslatedLocalPictureState {
                         counts: scene_emission_counts(local_scene),
                         z_start: local_scene.next_z,
+                        stabilize_x: stabilize_translated_capture_x,
+                        stabilize_y: stabilize_translated_capture_y,
                     });
                 }
             }
@@ -811,11 +1089,19 @@ pub(crate) fn estimate_layer_surface_rect_cached(
     );
     let surface_requirements =
         layer_surface_requirements_cached(layer, layer_surface_requirements_cache);
+    let translated_content_context =
+        layer.translated_content_context || surface_requirements.contains_translated_content;
+    let effective_requirements =
+        effective_surface_requirements(translated_content_context, false, surface_requirements);
+    let translated_content_axes = translated_content_axes_for_layer(layer)
+        .union(surface_requirements.translated_content_axes);
     let bounds = motion_stable_capture_bounds(
         layer,
         &collected.scene,
         &collected.child_layers,
-        surface_requirements.surface_requirements,
+        effective_requirements,
+        translated_content_axes,
+        None,
     );
     let rect = resolved_layer_surface_rect(layer, bounds);
     layer_surface_rect_cache.insert(cache_key, rect);

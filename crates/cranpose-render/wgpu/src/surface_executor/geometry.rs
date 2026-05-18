@@ -1,9 +1,10 @@
 use crate::effect_renderer::CompositeSampleMode;
 use crate::scene::SnapAnchor;
+use crate::surface_plan::TranslatedContentAxes;
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_ui_graphics::{Point, Rect};
 
-const MAX_EFFECT_LAYER_SURFACE_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) const MAX_EFFECT_LAYER_SURFACE_BYTES: u64 = 8 * 1024 * 1024;
 const QUAD_AXIS_ALIGNMENT_TOLERANCE: f32 = 1e-4;
 const COMPOSITE_DEST_SNAP_TOLERANCE: f32 = 1e-4;
 
@@ -78,6 +79,76 @@ pub(crate) fn clamp_effect_surface_scale(
     scale = scale.min(max_scale_by_bytes);
 
     scale.max(safe_minimum_scale)
+}
+
+pub(crate) fn fit_capture_rect_to_scale_budget_for_axes(
+    rect: Rect,
+    required_rect: Rect,
+    target_scale: f32,
+    max_texture_dim: u32,
+    translated_axes: TranslatedContentAxes,
+) -> Rect {
+    let (trim_width, trim_height) = match (translated_axes.x, translated_axes.y) {
+        (true, false) => (true, false),
+        (false, true) => (false, true),
+        _ => (true, true),
+    };
+    fit_capture_rect_to_scale_budget_with_axis_trimming(
+        rect,
+        required_rect,
+        target_scale,
+        max_texture_dim,
+        trim_width,
+        trim_height,
+    )
+}
+
+fn fit_capture_rect_to_scale_budget_with_axis_trimming(
+    rect: Rect,
+    required_rect: Rect,
+    target_scale: f32,
+    max_texture_dim: u32,
+    trim_width: bool,
+    trim_height: bool,
+) -> Rect {
+    if !target_scale.is_finite() || target_scale <= 0.0 {
+        return rect;
+    }
+    let Some(required_rect) = resolve_clip(Some(rect), Some(required_rect)) else {
+        return rect;
+    };
+
+    let max_target_extent = max_texture_dim as f32 / target_scale;
+    let max_target_pixels = (MAX_EFFECT_LAYER_SURFACE_BYTES / 4) as f32;
+    let mut fitted = rect;
+
+    let target_width = (fitted.width.max(1.0) * target_scale).ceil().max(1.0);
+    let max_height_by_bytes = (max_target_pixels / target_width).floor() / target_scale;
+    let max_height_for_width = max_target_extent.min(max_height_by_bytes);
+    if trim_height
+        && fitted.height > max_height_for_width
+        && max_height_for_width >= required_rect.height
+    {
+        let required_bottom = required_rect.y + required_rect.height;
+        let new_y = fitted.y.max(required_bottom - max_height_for_width);
+        fitted.height = (required_bottom - new_y).max(required_rect.height);
+        fitted.y = new_y;
+    }
+
+    let target_height = (fitted.height.max(1.0) * target_scale).ceil().max(1.0);
+    let max_width_by_bytes = (max_target_pixels / target_height).floor() / target_scale;
+    let max_width_for_height = max_target_extent.min(max_width_by_bytes);
+    if trim_width
+        && fitted.width > max_width_for_height
+        && max_width_for_height >= required_rect.width
+    {
+        let required_right = required_rect.x + required_rect.width;
+        let new_x = fitted.x.max(required_right - max_width_for_height);
+        fitted.width = (required_right - new_x).max(required_rect.width);
+        fitted.x = new_x;
+    }
+
+    fitted
 }
 
 use super::backend::DevicePixelBounds;
@@ -219,11 +290,12 @@ pub(crate) fn quantize_motion_stable_target_scale(
 #[cfg(test)]
 mod tests {
     use super::{
-        axis_aligned_quad_rect, quantize_motion_stable_target_scale, snap_motion_stable_dest_quad,
-        surface_target_size,
+        axis_aligned_quad_rect, fit_capture_rect_to_scale_budget_for_axes,
+        quantize_motion_stable_target_scale, snap_motion_stable_dest_quad, surface_target_size,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::rect_to_quad;
+    use crate::surface_plan::TranslatedContentAxes;
     use cranpose_ui_graphics::Rect;
 
     #[test]
@@ -328,6 +400,125 @@ mod tests {
             "quantization must preserve the max-texture clamp when the capture already needs sub-1 scaling"
         );
         assert_eq!(height, max_dim as u32);
+    }
+
+    #[test]
+    fn fit_capture_rect_to_scale_budget_trims_hidden_leading_content_before_downscale() {
+        let rect = Rect {
+            x: -67.0,
+            y: -1953.0,
+            width: 1119.0,
+            height: 2761.0,
+        };
+        let required_rect = Rect {
+            x: -67.0,
+            y: 0.0,
+            width: 1119.0,
+            height: 808.0,
+        };
+
+        let fitted = fit_capture_rect_to_scale_budget_for_axes(
+            rect,
+            required_rect,
+            1.25,
+            8192,
+            TranslatedContentAxes::default(),
+        );
+        let (width, height) = surface_target_size(fitted, 1.25, 8192);
+
+        assert_eq!(width, 1399);
+        assert_eq!(height, 1499);
+        assert!(
+            fitted.y > rect.y,
+            "hidden leading content must shrink before dropping root-scale capture density"
+        );
+        assert_eq!(fitted.x, rect.x);
+        assert_eq!(fitted.y + fitted.height, rect.y + rect.height);
+    }
+
+    #[test]
+    fn fit_capture_rect_to_scale_budget_keeps_rect_when_target_scale_fits() {
+        let rect = Rect {
+            x: -20.0,
+            y: -64.0,
+            width: 240.0,
+            height: 360.0,
+        };
+        let required_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 220.0,
+            height: 296.0,
+        };
+
+        assert_eq!(
+            fit_capture_rect_to_scale_budget_for_axes(
+                rect,
+                required_rect,
+                1.25,
+                8192,
+                TranslatedContentAxes::default(),
+            ),
+            rect
+        );
+    }
+
+    #[test]
+    fn vertical_capture_budget_fit_preserves_horizontal_rect() {
+        let rect = Rect {
+            x: -67.0,
+            y: -213.0,
+            width: 1119.0,
+            height: 1055.0,
+        };
+        let required_rect = Rect {
+            x: 29.0,
+            y: -213.0,
+            width: 1023.0,
+            height: 1055.0,
+        };
+
+        let fitted = fit_capture_rect_to_scale_budget_for_axes(
+            rect,
+            required_rect,
+            1.355,
+            8192,
+            TranslatedContentAxes { x: false, y: true },
+        );
+
+        assert_eq!(fitted.x, rect.x);
+        assert_eq!(fitted.width, rect.width);
+    }
+
+    #[test]
+    fn vertical_capture_budget_fit_anchors_trimmed_height_to_required_viewport() {
+        let rect = Rect {
+            x: -96.0,
+            y: -2_016.46,
+            width: 1_148.0,
+            height: 2_856.0,
+        };
+        let required_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1_052.0,
+            height: 808.0,
+        };
+
+        let fitted = fit_capture_rect_to_scale_budget_for_axes(
+            rect,
+            required_rect,
+            1.355,
+            8192,
+            TranslatedContentAxes { x: false, y: true },
+        );
+
+        assert_eq!(fitted.x, rect.x);
+        assert_eq!(fitted.width, rect.width);
+        assert!(
+            ((fitted.y + fitted.height) - 808.0).abs() < 0.001,
+            "trimmed vertical captures must keep the viewport bottom stable instead of preserving phase-shifted trailing content"
+        );
     }
 
     #[test]

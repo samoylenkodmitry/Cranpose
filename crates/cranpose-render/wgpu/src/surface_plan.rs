@@ -14,6 +14,9 @@ const SURFACE_PLAN_AFFINE_TOLERANCE: f32 = 1e-4;
 pub(crate) struct LayerSurfaceRequirements {
     pub(crate) direct_translation: Option<Point>,
     pub(crate) surface_requirements: SurfaceRequirementSet,
+    pub(crate) contains_translated_content: bool,
+    pub(crate) translated_content_axes: TranslatedContentAxes,
+    pub(crate) contains_backdrop_content: bool,
 }
 
 impl LayerSurfaceRequirements {
@@ -27,8 +30,31 @@ impl LayerSurfaceRequirements {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TranslatedContentAxes {
+    pub(crate) x: bool,
+    pub(crate) y: bool,
+}
+
+impl TranslatedContentAxes {
+    pub(crate) fn from_offset(offset: Point) -> Self {
+        Self {
+            x: offset.x.abs() > SURFACE_PLAN_AFFINE_TOLERANCE,
+            y: offset.y.abs() > SURFACE_PLAN_AFFINE_TOLERANCE,
+        }
+    }
+
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self {
+            x: self.x || other.x,
+            y: self.y || other.y,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TranslationRenderContext {
     pub(crate) inherited_content_translation: bool,
+    pub(crate) translated_content_axes: TranslatedContentAxes,
     pub(crate) surface_capture_active: bool,
 }
 
@@ -37,6 +63,7 @@ pub(crate) struct LayerSurfaceRequest<'a> {
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) logical_rect_override: Option<Rect>,
+    pub(crate) capture_clip_override: Option<Rect>,
     pub(crate) activates_nested_capture: bool,
     pub(crate) translation_context: TranslationRenderContext,
 }
@@ -50,6 +77,7 @@ pub(crate) struct LayerSurfaceRenderOptions<'a> {
         Rect,
     )>,
     pub(crate) logical_rect_override: Option<Rect>,
+    pub(crate) capture_clip_override: Option<Rect>,
     pub(crate) composite_sample_mode: CompositeSampleMode,
     pub(crate) translation_context: TranslationRenderContext,
 }
@@ -198,6 +226,14 @@ pub(crate) fn direct_translation(transform: ProjectiveTransform) -> Option<Point
     Some(Point::new(matrix[0][2], matrix[1][2]))
 }
 
+pub(crate) fn translated_content_axes_for_layer(layer: &LayerNode) -> TranslatedContentAxes {
+    if layer.translated_content_context {
+        TranslatedContentAxes::from_offset(layer.translated_content_offset)
+    } else {
+        TranslatedContentAxes::default()
+    }
+}
+
 pub(crate) fn root_can_render_directly_cached(
     layer: &LayerNode,
     layer_surface_requirements_cache: &mut std::collections::HashMap<
@@ -245,7 +281,10 @@ pub(crate) fn layer_surface_target_scale(
         surface_capture_active,
         requirements,
     );
-    if surface_capture_active && effective.contains(SurfaceRequirement::MotionStableCapture) {
+    let motion_stable_uses_root_scale = effective.contains(SurfaceRequirement::MotionStableCapture)
+        && (surface_capture_active
+            || (!translated_content_context && requirements.contains_translated_content));
+    if motion_stable_uses_root_scale {
         root_scale
     } else {
         effective.target_scale(root_scale)
@@ -282,16 +321,22 @@ pub(crate) fn effect_layer_minimum_scale(layer: &EffectLayer, root_scale: f32) -
     }
 }
 
-fn effective_surface_requirements(
+pub(crate) fn effective_surface_requirements(
     translated_content_context: bool,
     surface_capture_active: bool,
     requirements: LayerSurfaceRequirements,
 ) -> SurfaceRequirementSet {
     let mut effective = requirements.surface_requirements;
-    if translated_content_context
+    let contains_translated_content =
+        translated_content_context || requirements.contains_translated_content;
+    let translated_text_material = contains_translated_content
         && !surface_capture_active
-        && effective.contains(SurfaceRequirement::TextMaterialMask)
-    {
+        && effective.contains(SurfaceRequirement::TextMaterialMask);
+    let translated_isolated_pixel_surface = !requirements.contains_backdrop_content
+        && (contains_translated_content || surface_capture_active)
+        && effective.contains(SurfaceRequirement::PixelStableComposite)
+        && effective.has_isolating_requirement();
+    if translated_text_material || translated_isolated_pixel_surface {
         effective.insert(SurfaceRequirement::MotionStableCapture);
     }
     effective
@@ -344,6 +389,9 @@ pub(crate) fn layer_surface_requirements_cached(
         surface_requirements.insert(SurfaceRequirement::BlendMode);
     }
     let direct_translation = direct_translation(layer.transform_to_parent);
+    let mut contains_translated_content = layer.translated_content_context;
+    let mut translated_content_axes = translated_content_axes_for_layer(layer);
+    let mut contains_backdrop_content = layer.backdrop().is_some();
     let mut has_direct_safe_primitive = false;
     let mut has_isolating_child_layer = false;
     let mut has_pixel_sensitive_content = false;
@@ -377,6 +425,10 @@ pub(crate) fn layer_surface_requirements_cached(
                     child_layer.as_ref(),
                     layer_surface_requirements_cache,
                 );
+                contains_translated_content |= child_requirements.contains_translated_content;
+                translated_content_axes =
+                    translated_content_axes.union(child_requirements.translated_content_axes);
+                contains_backdrop_content |= child_requirements.contains_backdrop_content;
                 if child_requirements
                     .surface_requirements
                     .contains(SurfaceRequirement::PixelStableComposite)
@@ -409,6 +461,9 @@ pub(crate) fn layer_surface_requirements_cached(
     let requirements = LayerSurfaceRequirements {
         direct_translation,
         surface_requirements,
+        contains_translated_content,
+        translated_content_axes,
+        contains_backdrop_content,
     };
     layer_surface_requirements_cache.insert(cache_key, requirements);
     requirements
@@ -418,7 +473,8 @@ pub(crate) fn layer_surface_requirements_cached(
 mod tests {
     use super::{
         composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
-        effect_layer_target_scale, layer_surface_requirements, layer_surface_target_scale,
+        effect_layer_target_scale, effective_surface_requirements, layer_surface_requirements,
+        layer_surface_target_scale,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::scene::EffectLayer;
@@ -429,7 +485,8 @@ mod tests {
     };
     use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
     use cranpose_ui_graphics::{
-        BlendMode, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Rect,
+        BlendMode, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect,
+        RenderEffect,
     };
 
     fn test_layer(local_bounds: Rect) -> LayerNode {
@@ -527,6 +584,201 @@ mod tests {
             CompositeSampleMode::Box4
         );
         assert_eq!(effect_layer_target_scale(&layer, 3.0), 3.0);
+    }
+
+    #[test]
+    fn inherited_translated_isolated_pixel_surface_uses_motion_stable_capture() {
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+        layer.graphics_layer.render_effect = Some(RenderEffect::blur(2.0));
+        let image = ImageBitmap::from_rgba8(1, 1, vec![255, 255, 255, 255]).expect("image");
+        layer.children.push(RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Image {
+                    rect: Rect {
+                        x: 4.0,
+                        y: 6.0,
+                        width: 16.0,
+                        height: 16.0,
+                    },
+                    image,
+                    alpha: 1.0,
+                    color_filter: None,
+                    sampling: ImageSampling::Nearest,
+                    src_rect: None,
+                },
+                clip: None,
+            }),
+        }));
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::RenderEffect));
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::PixelStableComposite));
+        assert!(!requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::MotionStableCapture));
+        let effective = effective_surface_requirements(true, false, requirements);
+        assert!(effective.contains(SurfaceRequirement::MotionStableCapture));
+        assert_eq!(
+            layer_surface_target_scale(true, false, requirements, 2.0),
+            2.0 * MOTION_STABLE_SURFACE_SCALE_MULTIPLIER
+        );
+        assert_eq!(
+            composite_sample_mode_for_requirements(true, false, requirements),
+            CompositeSampleMode::Box4
+        );
+    }
+
+    #[test]
+    fn translated_descendant_isolated_pixel_surface_uses_motion_stable_capture() {
+        let image = ImageBitmap::from_rgba8(1, 1, vec![255, 255, 255, 255]).expect("image");
+        let mut scrolled_content = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 240.0,
+        });
+        scrolled_content.translated_content_context = true;
+        scrolled_content.translated_content_offset = Point::new(0.0, -48.0);
+        scrolled_content
+            .children
+            .push(RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: DrawPrimitive::Image {
+                        rect: Rect {
+                            x: 4.0,
+                            y: 96.0,
+                            width: 16.0,
+                            height: 16.0,
+                        },
+                        image,
+                        alpha: 1.0,
+                        color_filter: None,
+                        sampling: ImageSampling::Nearest,
+                        src_rect: None,
+                    },
+                    clip: None,
+                }),
+            }));
+
+        let mut viewport = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+        viewport.graphics_layer.render_effect = Some(RenderEffect::blur(2.0));
+        viewport
+            .children
+            .push(RenderNode::Layer(Box::new(scrolled_content)));
+
+        let requirements = layer_surface_requirements(&viewport);
+
+        assert!(requirements.contains_translated_content);
+        assert!(!requirements.translated_content_axes.x);
+        assert!(requirements.translated_content_axes.y);
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::RenderEffect));
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::PixelStableComposite));
+        assert!(!requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::MotionStableCapture));
+        assert!(effective_surface_requirements(false, false, requirements)
+            .contains(SurfaceRequirement::MotionStableCapture));
+        assert!(effective_surface_requirements(false, true, requirements)
+            .contains(SurfaceRequirement::MotionStableCapture));
+        assert_eq!(
+            layer_surface_target_scale(false, false, requirements, 2.0),
+            2.0
+        );
+        assert_eq!(
+            layer_surface_target_scale(false, true, requirements, 2.0),
+            2.0
+        );
+    }
+
+    #[test]
+    fn translated_backdrop_dependent_surface_does_not_use_motion_stable_capture() {
+        let image = ImageBitmap::from_rgba8(1, 1, vec![255, 255, 255, 255]).expect("image");
+        let mut backdrop_child = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 64.0,
+            height: 48.0,
+        });
+        backdrop_child.graphics_layer.backdrop_effect = Some(RenderEffect::blur(4.0));
+        backdrop_child
+            .children
+            .push(RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: DrawPrimitive::Image {
+                        rect: Rect {
+                            x: 8.0,
+                            y: 8.0,
+                            width: 16.0,
+                            height: 16.0,
+                        },
+                        image,
+                        alpha: 1.0,
+                        color_filter: None,
+                        sampling: ImageSampling::Nearest,
+                        src_rect: None,
+                    },
+                    clip: None,
+                }),
+            }));
+
+        let mut scrolled_content = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 240.0,
+        });
+        scrolled_content.translated_content_context = true;
+        scrolled_content
+            .children
+            .push(RenderNode::Layer(Box::new(backdrop_child)));
+
+        let mut viewport = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+        viewport.graphics_layer.render_effect = Some(RenderEffect::blur(2.0));
+        viewport
+            .children
+            .push(RenderNode::Layer(Box::new(scrolled_content)));
+
+        let requirements = layer_surface_requirements(&viewport);
+
+        assert!(requirements.contains_translated_content);
+        assert!(requirements.contains_backdrop_content);
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::RenderEffect));
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::PixelStableComposite));
+        assert!(!effective_surface_requirements(false, false, requirements)
+            .contains(SurfaceRequirement::MotionStableCapture));
+        assert!(!effective_surface_requirements(false, true, requirements)
+            .contains(SurfaceRequirement::MotionStableCapture));
     }
 
     #[test]

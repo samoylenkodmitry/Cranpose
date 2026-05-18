@@ -594,6 +594,11 @@ path = "robot-runners/robot_leetcodedaily_code_scroll_pixel_drift.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_leetcodedaily_full_layout_scroll_stability"
+path = "robot-runners/robot_leetcodedaily_full_layout_scroll_stability.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_hacker_news_scroll_exact_external_contract"
 path = "robot-runners/robot_hacker_news_scroll_exact_external_contract.rs"
 required-features = ["robot-app"]

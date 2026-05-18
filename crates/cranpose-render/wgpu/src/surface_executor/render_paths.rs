@@ -1,15 +1,16 @@
 use super::backend::{LayerSurface, LayerSurfaceTexture, SurfaceExecutionBackend};
 use super::geometry::{
-    axis_aligned_quad_rect, clamp_effect_surface_scale, local_effect_pixel_rect,
-    offscreen_byte_size, quantize_motion_stable_target_scale, scaled_quad, snap_delta_for_anchor,
-    snap_motion_stable_dest_quad, surface_pixel_rect, surface_target_size, target_quad,
-    visible_layer_rect,
+    axis_aligned_quad_rect, clamp_effect_surface_scale, fit_capture_rect_to_scale_budget_for_axes,
+    local_effect_pixel_rect, offscreen_byte_size, quantize_motion_stable_target_scale, scaled_quad,
+    snap_delta_for_anchor, snap_motion_stable_dest_quad, surface_pixel_rect, surface_target_size,
+    target_quad, visible_layer_rect,
 };
 use crate::effect_renderer::CompositeSampleMode;
 use crate::normalized_scene::{
-    build_scene_window, filtered_effect_layer_index, motion_stable_capture_bounds,
-    resolved_child_surface_composite, resolved_layer_surface_rect, translate_quad,
-    ChildLayerComposite, CollectedLayer, SceneWindowSource, TranslateBy,
+    build_scene_window, collected_layer_bounds, filtered_effect_layer_index,
+    motion_stable_capture_bounds, resolved_child_surface_composite, resolved_layer_surface_rect,
+    translate_quad, visible_draw_rect, ChildLayerComposite, CollectedLayer, SceneWindowSource,
+    TranslateBy,
 };
 use crate::offscreen::OffscreenTarget;
 use crate::render::{
@@ -21,9 +22,10 @@ use crate::scene::{
 };
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
-    effect_layer_minimum_scale, effect_layer_target_scale, layer_surface_target_scale,
-    layer_uses_external_backdrop_input, LayerSurfaceRenderOptions, LayerSurfaceRequest,
-    LayerSurfaceRequirements, TranslationRenderContext,
+    effect_layer_minimum_scale, effect_layer_target_scale, effective_surface_requirements,
+    layer_surface_target_scale, layer_uses_external_backdrop_input,
+    translated_content_axes_for_layer, LayerSurfaceRenderOptions, LayerSurfaceRequest,
+    LayerSurfaceRequirements, TranslatedContentAxes, TranslationRenderContext,
 };
 use crate::surface_requirements::SurfaceRequirement;
 use crate::TextSystemState;
@@ -38,12 +40,49 @@ fn anchored_composite_dest_quad(
     root_scale: f32,
     sample_mode: CompositeSampleMode,
 ) -> [[f32; 2]; 4] {
-    if let Some(anchor) = snap_anchor {
+    let scaled = if let Some(anchor) = snap_anchor {
         let snap_delta = snap_delta_for_anchor(anchor, root_scale);
-        return scaled_quad(translate_quad(dest_quad, snap_delta), root_scale);
+        scaled_quad(translate_quad(dest_quad, snap_delta), root_scale)
+    } else {
+        scaled_quad(dest_quad, root_scale)
+    };
+
+    snap_motion_stable_dest_quad(scaled, sample_mode)
+}
+
+fn composite_dest_viewport(
+    dest_rect: Rect,
+    _source_width: u32,
+    _source_height: u32,
+    sample_mode: CompositeSampleMode,
+) -> (f32, f32, f32, f32) {
+    if sample_mode != CompositeSampleMode::Box4 {
+        return (dest_rect.x, dest_rect.y, dest_rect.width, dest_rect.height);
     }
 
-    snap_motion_stable_dest_quad(scaled_quad(dest_quad, root_scale), sample_mode)
+    (
+        dest_rect.x.round(),
+        dest_rect.y.round(),
+        dest_rect.width,
+        dest_rect.height,
+    )
+}
+
+fn layer_surface_dest_quad(
+    child_logical_rect: Rect,
+    child_dest_quad: [[f32; 2]; 4],
+    surface_logical_rect: Rect,
+) -> [[f32; 2]; 4] {
+    ProjectiveTransform::from_rect_to_quad(child_logical_rect, child_dest_quad)
+        .map_rect(surface_logical_rect)
+}
+
+fn combined_capture_clip(layer_clip: Option<Rect>, capture_clip: Option<Rect>) -> Option<Rect> {
+    match (layer_clip, capture_clip) {
+        (Some(layer_clip), Some(capture_clip)) => layer_clip.intersect(capture_clip),
+        (Some(clip), None) | (None, Some(clip)) => Some(clip),
+        (None, None) => None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -200,6 +239,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     backdrop_underlay: None,
                     allow_runtime_cache: true,
                     logical_rect_override: Some(resolved_child.logical_rect),
+                    capture_clip_override: resolved_child.surface_clip,
                     activates_nested_capture: true,
                     translation_context: TranslationRenderContext::default(),
                 },
@@ -208,8 +248,13 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 return Err("root direct path does not support backdrop child surfaces".to_string());
             }
 
-            let dest_quad = anchored_composite_dest_quad(
+            let dest_quad = layer_surface_dest_quad(
+                resolved_child.logical_rect,
                 resolved_child.dest_quad,
+                child_surface.logical_rect,
+            );
+            let dest_quad = anchored_composite_dest_quad(
+                dest_quad,
                 resolved_child.snap_anchor,
                 root_scale,
                 child_surface.sample_mode,
@@ -266,25 +311,44 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         backdrop_underlay,
         allow_runtime_cache,
         logical_rect_override,
+        capture_clip_override,
         activates_nested_capture,
         translation_context,
     } = request;
     let surface_requirements = backend.layer_surface_requirements(layer);
-    let effective_translated_content_context =
+    let direct_translated_content_context =
         translation_context.inherited_content_translation || layer.translated_content_context;
+    let effective_translated_content_context =
+        direct_translated_content_context || surface_requirements.contains_translated_content;
+    let direct_translated_content_axes = translation_context
+        .translated_content_axes
+        .union(translated_content_axes_for_layer(layer));
+    let effective_requirements = effective_surface_requirements(
+        effective_translated_content_context,
+        translation_context.surface_capture_active,
+        surface_requirements,
+    );
     let composite_sample_mode = composite_sample_mode_for_requirements(
         effective_translated_content_context,
         translation_context.surface_capture_active,
         surface_requirements,
     );
     let target_scale = layer_surface_target_scale(
-        effective_translated_content_context,
+        direct_translated_content_context,
         translation_context.surface_capture_active,
         surface_requirements,
         root_scale,
     );
-    let translation_context =
-        layer_surface_translation_context(translation_context, activates_nested_capture);
+    let child_translation_context = TranslationRenderContext {
+        inherited_content_translation: direct_translated_content_context,
+        translated_content_axes: direct_translated_content_axes,
+        surface_capture_active: translation_context.surface_capture_active,
+    };
+    let translation_context = layer_surface_translation_context(
+        child_translation_context,
+        activates_nested_capture
+            && effective_requirements.contains(SurfaceRequirement::MotionStableCapture),
+    );
     let cache_candidate = backend.layer_raster_cache_candidate(
         layer,
         target_scale,
@@ -323,6 +387,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
                 allow_runtime_cache,
                 cache_candidate: Some((cache_key, logical_rect)),
                 logical_rect_override,
+                capture_clip_override,
                 composite_sample_mode,
                 translation_context,
             },
@@ -339,6 +404,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
             allow_runtime_cache,
             cache_candidate: None,
             logical_rect_override,
+            capture_clip_override,
             composite_sample_mode,
             translation_context,
         },
@@ -347,12 +413,13 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
 
 fn layer_surface_translation_context(
     translation_context: TranslationRenderContext,
-    activates_nested_capture: bool,
+    surface_provides_motion_stable_capture: bool,
 ) -> TranslationRenderContext {
     TranslationRenderContext {
         inherited_content_translation: translation_context.inherited_content_translation,
+        translated_content_axes: translation_context.translated_content_axes,
         surface_capture_active: translation_context.surface_capture_active
-            || activates_nested_capture,
+            || surface_provides_motion_stable_capture,
     }
 }
 
@@ -399,6 +466,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     width: u32,
     height: u32,
     effective_translated_content_context: bool,
+    effective_translated_content_axes: TranslatedContentAxes,
     translation_context: TranslationRenderContext,
 ) -> Result<OffscreenTarget, String> {
     let target = backend.acquire_offscreen(width, height);
@@ -458,9 +526,11 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 backdrop_underlay: child_underlay.as_ref(),
                 allow_runtime_cache: true,
                 logical_rect_override: Some(resolved_child.logical_rect),
+                capture_clip_override: resolved_child.surface_clip,
                 activates_nested_capture: true,
                 translation_context: TranslationRenderContext {
                     inherited_content_translation: effective_translated_content_context,
+                    translated_content_axes: effective_translated_content_axes,
                     surface_capture_active: translation_context.surface_capture_active,
                 },
             },
@@ -494,8 +564,13 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             );
         }
 
-        let dest_quad = anchored_composite_dest_quad(
+        let dest_quad = layer_surface_dest_quad(
+            resolved_child.logical_rect,
             resolved_child.dest_quad,
+            child_surface.logical_rect,
+        );
+        let dest_quad = anchored_composite_dest_quad(
+            dest_quad,
             resolved_child.snap_anchor,
             target_scale,
             child_surface.sample_mode,
@@ -554,8 +629,9 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         target_scale,
         backdrop_underlay,
         allow_runtime_cache,
-        cache_candidate,
+        mut cache_candidate,
         logical_rect_override,
+        capture_clip_override,
         composite_sample_mode,
         translation_context,
     } = options;
@@ -570,22 +646,73 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         translation_context,
     );
     let result = (|| -> Result<LayerSurface, String> {
-        let effective_translated_content_context =
-            translation_context.inherited_content_translation || layer.translated_content_context;
         let surface_requirements = backend.layer_surface_requirements(layer);
-        let surface_rect = cache_candidate
-            .map(|(_, logical_rect)| logical_rect)
+        let effective_translated_content_context = translation_context
+            .inherited_content_translation
+            || layer.translated_content_context
+            || surface_requirements.contains_translated_content;
+        let effective_translated_content_axes = translation_context
+            .translated_content_axes
+            .union(translated_content_axes_for_layer(layer))
+            .union(surface_requirements.translated_content_axes);
+        let effective_requirements = effective_surface_requirements(
+            effective_translated_content_context,
+            translation_context.surface_capture_active,
+            surface_requirements,
+        );
+        let capture_clip = combined_capture_clip(layer.clip_rect(), capture_clip_override);
+        let estimated_surface_rect = cache_candidate
+            .as_ref()
+            .map(|(_, logical_rect)| *logical_rect)
             .or(logical_rect_override)
             .unwrap_or_else(|| {
                 let bounds = motion_stable_capture_bounds(
                     layer,
                     &local_scene,
                     &child_layers,
-                    surface_requirements.surface_requirements,
+                    effective_requirements,
+                    effective_translated_content_axes,
+                    capture_clip,
                 );
                 resolved_layer_surface_rect(layer, bounds)
             });
+        let mut surface_rect =
+            if effective_requirements.contains(SurfaceRequirement::MotionStableCapture) {
+                let bounds = motion_stable_capture_bounds(
+                    layer,
+                    &local_scene,
+                    &child_layers,
+                    effective_requirements,
+                    effective_translated_content_axes,
+                    capture_clip,
+                );
+                resolved_layer_surface_rect(layer, bounds)
+            } else {
+                estimated_surface_rect
+            };
+        if cache_candidate
+            .as_ref()
+            .is_some_and(|(_, logical_rect)| *logical_rect != surface_rect)
+        {
+            cache_candidate = None;
+        }
         let max_dim = backend.max_texture_dim() as f32;
+        if effective_requirements.contains(SurfaceRequirement::MotionStableCapture) {
+            if let Some(visible_bounds) = collected_layer_bounds(&local_scene, &child_layers, true)
+                .and_then(|bounds| visible_draw_rect(bounds, capture_clip))
+            {
+                let required_rect = resolved_layer_surface_rect(layer, Some(visible_bounds));
+                let desired_scale =
+                    quantize_motion_stable_target_scale(target_scale, composite_sample_mode);
+                surface_rect = fit_capture_rect_to_scale_budget_for_axes(
+                    surface_rect,
+                    required_rect,
+                    desired_scale,
+                    backend.max_texture_dim(),
+                    effective_translated_content_axes,
+                );
+            }
+        }
         let target_scale = target_scale
             .min(max_dim / surface_rect.width.max(1.0))
             .min(max_dim / surface_rect.height.max(1.0));
@@ -623,7 +750,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             height,
             layer.node_id,
             surface_rect,
-            surface_requirements.surface_requirements,
+            effective_requirements,
         );
         let source_cache_key = runtime_effect_source_cache_key(
             layer,
@@ -649,6 +776,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                     width,
                     height,
                     effective_translated_content_context,
+                    effective_translated_content_axes,
                     translation_context,
                 )?;
                 if offscreen_byte_size(rendered.width, rendered.height)
@@ -672,6 +800,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                 width,
                 height,
                 effective_translated_content_context,
+                effective_translated_content_axes,
                 translation_context,
             )?)
         };
@@ -891,34 +1020,50 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
         root_scale,
         sample_mode,
     );
+    if layer.effect.is_none() {
+        let composite_result = composite_surface_to_view(
+            backend,
+            &source,
+            &target.view,
+            (width, height),
+            dest_quad,
+            layer.composite_alpha,
+            wgpu::LoadOp::Load,
+            Some(scissor),
+            layer.blend_mode,
+            sample_mode,
+        );
+        backend.release_offscreen(source);
+        return composite_result;
+    }
+
     let dest = backend.acquire_offscreen(effect_width, effect_height);
     let mut composited_effect_to_target = false;
-    if let Some(effect) = &layer.effect {
-        if backend.is_render_effect_supported(effect) {
-            if let RenderEffect::Shader { shader } = effect {
-                if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
-                    backend.apply_shader_and_composite_to_view(
-                        &source,
-                        &dest,
-                        shader,
-                        local_effect_pixel_rect(effect_width, effect_height),
-                        &target.view,
-                        layer.composite_alpha,
-                        wgpu::LoadOp::Load,
-                        Some(scissor),
-                        layer.blend_mode,
-                        Some((dest_rect.x, dest_rect.y, dest_rect.width, dest_rect.height)),
+    let Some(effect) = &layer.effect else {
+        unreachable!("effect-free layers return before allocating a destination surface");
+    };
+    if backend.is_render_effect_supported(effect) {
+        if let RenderEffect::Shader { shader } = effect {
+            if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
+                backend.apply_shader_and_composite_to_view(
+                    &source,
+                    &dest,
+                    shader,
+                    local_effect_pixel_rect(effect_width, effect_height),
+                    &target.view,
+                    layer.composite_alpha,
+                    wgpu::LoadOp::Load,
+                    Some(scissor),
+                    layer.blend_mode,
+                    Some(composite_dest_viewport(
+                        dest_rect,
+                        effect_width,
+                        effect_height,
                         sample_mode,
-                    );
-                    composited_effect_to_target = true;
-                } else {
-                    backend.apply_effect(
-                        &source,
-                        &dest.view,
-                        effect,
-                        local_effect_pixel_rect(effect_width, effect_height),
-                    );
-                }
+                    )),
+                    sample_mode,
+                );
+                composited_effect_to_target = true;
             } else {
                 backend.apply_effect(
                     &source,
@@ -928,15 +1073,15 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
                 );
             }
         } else {
-            backend.warn_unsupported_effect_once();
-            backend.composite_to_view(
+            backend.apply_effect(
                 &source,
                 &dest.view,
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                CompositeSampleMode::Linear,
+                effect,
+                local_effect_pixel_rect(effect_width, effect_height),
             );
         }
     } else {
+        backend.warn_unsupported_effect_once();
         backend.composite_to_view(
             &source,
             &dest.view,
@@ -1086,7 +1231,12 @@ fn composite_surface_to_view<B: SurfaceExecutionBackend>(
             scissor,
             None,
             blend_mode,
-            Some((dest_rect.x, dest_rect.y, dest_rect.width, dest_rect.height)),
+            Some(composite_dest_viewport(
+                dest_rect,
+                source.width,
+                source.height,
+                sample_mode,
+            )),
             sample_mode,
         );
         return Ok(());
@@ -1141,7 +1291,12 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
                 load_op,
                 scissor,
                 surface.blend_mode,
-                Some((dest_rect.x, dest_rect.y, dest_rect.width, dest_rect.height)),
+                Some(composite_dest_viewport(
+                    dest_rect,
+                    source.width,
+                    source.height,
+                    surface.sample_mode,
+                )),
                 surface.sample_mode,
             );
             backend.release_offscreen(intermediate);
@@ -1191,15 +1346,131 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
 
 #[cfg(test)]
 mod tests {
-    use super::layer_surface_translation_context;
+    use super::{
+        anchored_composite_dest_quad, composite_dest_viewport, layer_surface_dest_quad,
+        layer_surface_translation_context,
+    };
+    use crate::effect_renderer::CompositeSampleMode;
+    use crate::scene::SnapAnchor;
     use crate::surface_plan::TranslationRenderContext;
+    use cranpose_ui_graphics::Point;
+    use cranpose_ui_graphics::Rect;
 
     #[test]
-    fn layer_surface_context_marks_nested_linear_capture_active() {
+    fn anchored_box4_composite_snaps_final_dest_quad() {
+        let quad = [
+            [0.0, -1953.0],
+            [1119.0, -1953.0],
+            [0.0, 808.0],
+            [1119.0, 808.0],
+        ];
+
+        assert_eq!(
+            anchored_composite_dest_quad(
+                quad,
+                Some(SnapAnchor::rigid(Point::new(0.0, 0.0))),
+                1.25,
+                CompositeSampleMode::Box4,
+            ),
+            [
+                [0.0, -2441.0],
+                [1398.75, -2441.0],
+                [0.0, 1010.25],
+                [1398.75, 1010.25],
+            ]
+        );
+    }
+
+    #[test]
+    fn box4_composite_viewport_snaps_origin_without_changing_geometry_extent() {
+        let viewport = composite_dest_viewport(
+            Rect {
+                x: 0.0,
+                y: -2441.0,
+                width: 1398.75,
+                height: 3451.25,
+            },
+            1399,
+            3452,
+            CompositeSampleMode::Box4,
+        );
+
+        assert_eq!(viewport, (0.0, -2441.0, 1398.75, 3451.25));
+    }
+
+    #[test]
+    fn linear_composite_viewport_keeps_fractional_geometry_extent() {
+        let viewport = composite_dest_viewport(
+            Rect {
+                x: 0.25,
+                y: 10.5,
+                width: 40.75,
+                height: 20.25,
+            },
+            41,
+            21,
+            CompositeSampleMode::Linear,
+        );
+
+        assert_eq!(viewport, (0.25, 10.5, 40.75, 20.25));
+    }
+
+    #[test]
+    fn box4_composite_viewport_keeps_scaled_geometry_extent() {
+        let viewport = composite_dest_viewport(
+            Rect {
+                x: 0.25,
+                y: 10.5,
+                width: 140.0,
+                height: 80.0,
+            },
+            70,
+            40,
+            CompositeSampleMode::Box4,
+        );
+
+        assert_eq!(viewport, (0.0, 11.0, 140.0, 80.0));
+    }
+
+    #[test]
+    fn layer_surface_dest_quad_maps_actual_trimmed_surface_rect() {
+        let child_rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 200.0,
+        };
+        let child_quad = [
+            [110.0, 220.0],
+            [310.0, 220.0],
+            [110.0, 620.0],
+            [310.0, 620.0],
+        ];
+        let surface_rect = Rect {
+            x: 10.0,
+            y: 70.0,
+            width: 100.0,
+            height: 80.0,
+        };
+
+        assert_eq!(
+            layer_surface_dest_quad(child_rect, child_quad, surface_rect),
+            [
+                [110.0, 320.0],
+                [310.0, 320.0],
+                [110.0, 480.0],
+                [310.0, 480.0],
+            ],
+        );
+    }
+
+    #[test]
+    fn layer_surface_context_marks_nested_motion_stable_capture_active() {
         let context = layer_surface_translation_context(
             TranslationRenderContext {
                 inherited_content_translation: true,
                 surface_capture_active: false,
+                ..TranslationRenderContext::default()
             },
             true,
         );
@@ -1209,6 +1480,28 @@ mod tests {
             TranslationRenderContext {
                 inherited_content_translation: true,
                 surface_capture_active: true,
+                ..TranslationRenderContext::default()
+            }
+        );
+    }
+
+    #[test]
+    fn layer_surface_context_keeps_generic_parent_surface_inactive() {
+        let context = layer_surface_translation_context(
+            TranslationRenderContext {
+                inherited_content_translation: true,
+                surface_capture_active: false,
+                ..TranslationRenderContext::default()
+            },
+            false,
+        );
+
+        assert_eq!(
+            context,
+            TranslationRenderContext {
+                inherited_content_translation: true,
+                surface_capture_active: false,
+                ..TranslationRenderContext::default()
             }
         );
     }
@@ -1219,6 +1512,7 @@ mod tests {
             TranslationRenderContext {
                 inherited_content_translation: false,
                 surface_capture_active: true,
+                ..TranslationRenderContext::default()
             },
             false,
         );
@@ -1228,6 +1522,7 @@ mod tests {
             TranslationRenderContext {
                 inherited_content_translation: false,
                 surface_capture_active: true,
+                ..TranslationRenderContext::default()
             }
         );
     }
@@ -1238,6 +1533,7 @@ mod tests {
             TranslationRenderContext {
                 inherited_content_translation: false,
                 surface_capture_active: false,
+                ..TranslationRenderContext::default()
             },
             false,
         );
@@ -1247,6 +1543,7 @@ mod tests {
             TranslationRenderContext {
                 inherited_content_translation: false,
                 surface_capture_active: false,
+                ..TranslationRenderContext::default()
             }
         );
     }

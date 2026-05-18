@@ -369,7 +369,7 @@ run_test() {
         robot_text_scroll_exact_external_contract)
             timeout_secs=180
             ;;
-        robot_leetcodedaily_code_scroll_pixel_drift)
+        robot_leetcodedaily_code_scroll_pixel_drift|robot_leetcodedaily_full_layout_scroll_stability)
             timeout_secs=180
             ;;
         robot_content_type_reuse|robot_lazy_perf_validation)
