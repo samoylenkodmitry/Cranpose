@@ -2,8 +2,6 @@
 
 use crate::effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask};
 #[cfg(test)]
-use crate::normalized_scene::estimate_layer_surface_rect;
-#[cfg(test)]
 use crate::normalized_scene::{
     build_scene_window, filtered_effect_layer_index, scene_bounds, visible_draw_rect,
     SceneWindowSource,
@@ -12,6 +10,8 @@ use crate::normalized_scene::{
     collect_layer_contents, collect_layer_contents_with_translation_context, effect_layer_in_range,
     estimate_layer_surface_rect_cached, scene_has_layer_events, translate_quad, CollectedLayer,
 };
+#[cfg(test)]
+use crate::normalized_scene::{estimate_layer_surface_rect, motion_stable_capture_bounds};
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawShape, EffectLayer, ImageDraw, ShadowDraw, SnapAnchor,
@@ -33,7 +33,7 @@ use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
     direct_translation, effect_layer_target_scale, layer_contains_descendant_backdrop,
-    layer_surface_requirements, layer_surface_target_scale,
+    layer_surface_requirements, layer_surface_target_scale, TranslatedContentAxes,
 };
 use crate::surface_plan::{
     layer_surface_requirements_cached, layer_uses_external_backdrop_input,
@@ -1931,6 +1931,7 @@ impl GpuRenderer {
                 backdrop_underlay: None,
                 allow_runtime_cache: false,
                 logical_rect_override: Some(viewport_rect),
+                capture_clip_override: None,
                 activates_nested_capture: false,
                 translation_context: TranslationRenderContext::default(),
             },
@@ -3584,7 +3585,7 @@ impl GpuRenderer {
             };
             self.ensure_image_cached(&prepared_image)?;
 
-            let adjusted_image = ImageDraw {
+            let mut adjusted_image = ImageDraw {
                 rect,
                 local_rect: image_draw.local_rect.translate(snap_delta.x, snap_delta.y),
                 quad: translate_quad(image_draw.quad, snap_delta),
@@ -3601,6 +3602,7 @@ impl GpuRenderer {
                 src_rect: image_draw.src_rect,
                 motion_context_animated: image_draw.motion_context_animated,
             };
+            snap_nearest_image_to_device_pixels(&mut adjusted_image, root_scale);
             let scissor = scissor_rect_for_image(&adjusted_image, root_scale, width, height);
             let Some(scissor) = scissor else {
                 continue;
@@ -3609,6 +3611,24 @@ impl GpuRenderer {
             let Some(uv_rect) = image_uv_rect(&image_draw.image, image_draw.src_rect) else {
                 continue;
             };
+            let device_quad = nearest_image_device_quad(&adjusted_image, root_scale).unwrap_or([
+                [
+                    adjusted_image.quad[0][0] * root_scale,
+                    adjusted_image.quad[0][1] * root_scale,
+                ],
+                [
+                    adjusted_image.quad[1][0] * root_scale,
+                    adjusted_image.quad[1][1] * root_scale,
+                ],
+                [
+                    adjusted_image.quad[2][0] * root_scale,
+                    adjusted_image.quad[2][1] * root_scale,
+                ],
+                [
+                    adjusted_image.quad[3][0] * root_scale,
+                    adjusted_image.quad[3][1] * root_scale,
+                ],
+            ]);
 
             let base_vertex = image_vertices.len() as u32;
             let index_start = image_indices.len() as u32;
@@ -3622,37 +3642,25 @@ impl GpuRenderer {
             ]);
             image_vertices.extend_from_slice(&[
                 Vertex {
-                    position: [
-                        adjusted_image.quad[0][0] * root_scale,
-                        adjusted_image.quad[0][1] * root_scale,
-                    ],
+                    position: device_quad[0],
                     color: tint,
                     uv: [uv_rect.min[0], uv_rect.min[1]],
                     uv_bounds: uv_rect.sample_bounds,
                 },
                 Vertex {
-                    position: [
-                        adjusted_image.quad[1][0] * root_scale,
-                        adjusted_image.quad[1][1] * root_scale,
-                    ],
+                    position: device_quad[1],
                     color: tint,
                     uv: [uv_rect.max[0], uv_rect.min[1]],
                     uv_bounds: uv_rect.sample_bounds,
                 },
                 Vertex {
-                    position: [
-                        adjusted_image.quad[2][0] * root_scale,
-                        adjusted_image.quad[2][1] * root_scale,
-                    ],
+                    position: device_quad[2],
                     color: tint,
                     uv: [uv_rect.min[0], uv_rect.max[1]],
                     uv_bounds: uv_rect.sample_bounds,
                 },
                 Vertex {
-                    position: [
-                        adjusted_image.quad[3][0] * root_scale,
-                        adjusted_image.quad[3][1] * root_scale,
-                    ],
+                    position: device_quad[3],
                     color: tint,
                     uv: [uv_rect.max[0], uv_rect.max[1]],
                     uv_bounds: uv_rect.sample_bounds,
@@ -4693,6 +4701,56 @@ fn image_uv_rect(image: &ImageBitmap, src_rect: Option<Rect>) -> Option<ImageUvR
         max: [u_max, v_max],
         sample_bounds: [u_bound_min, v_bound_min, u_bound_max, v_bound_max],
     })
+}
+
+fn snap_nearest_image_to_device_pixels(image: &mut ImageDraw, root_scale: f32) {
+    if image.sampling != ImageSampling::Nearest || !root_scale.is_finite() || root_scale <= 0.0 {
+        return;
+    }
+
+    let Some(rect) = axis_aligned_quad_rect(image.quad) else {
+        return;
+    };
+
+    let left_px = (rect.x * root_scale).round();
+    let top_px = (rect.y * root_scale).round();
+    let width_px = (rect.width * root_scale).round().max(1.0);
+    let height_px = (rect.height * root_scale).round().max(1.0);
+    let snapped = Rect {
+        x: left_px / root_scale,
+        y: top_px / root_scale,
+        width: width_px / root_scale,
+        height: height_px / root_scale,
+    };
+
+    image.rect = snapped;
+    image.local_rect = Rect {
+        x: image.local_rect.x + snapped.x - rect.x,
+        y: image.local_rect.y + snapped.y - rect.y,
+        width: snapped.width,
+        height: snapped.height,
+    };
+    image.quad = crate::rect_to_quad(snapped);
+}
+
+fn nearest_image_device_quad(image: &ImageDraw, root_scale: f32) -> Option<[[f32; 2]; 4]> {
+    if image.sampling != ImageSampling::Nearest || !root_scale.is_finite() || root_scale <= 0.0 {
+        return None;
+    }
+
+    let rect = axis_aligned_quad_rect(image.quad)?;
+    let left_px = (rect.x * root_scale).round();
+    let top_px = (rect.y * root_scale).round();
+    let width_px = (rect.width * root_scale).round().max(1.0);
+    let height_px = (rect.height * root_scale).round().max(1.0);
+    let right_px = left_px + width_px;
+    let bottom_px = top_px + height_px;
+    Some([
+        [left_px, top_px],
+        [right_px, top_px],
+        [left_px, bottom_px],
+        [right_px, bottom_px],
+    ])
 }
 
 fn source_axis_uv(start: f32, extent: f32, image_extent: f32) -> Option<(f32, f32, f32, f32)> {
@@ -5939,6 +5997,188 @@ mod tests {
     }
 
     #[test]
+    fn estimate_layer_surface_rect_bounds_deep_hidden_leading_scroll_content() {
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 72.0,
+            },
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: -1200.0,
+                            width: 120.0,
+                            height: 1400.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
+        );
+        layer.translated_content_context = true;
+        layer.motion_context_animated = true;
+        layer.clip_to_bounds = true;
+
+        assert_eq!(
+            estimate_layer_surface_rect(&layer),
+            Rect {
+                x: 0.0,
+                y: -176.0,
+                width: 120.0,
+                height: 288.0,
+            }
+        );
+    }
+
+    #[test]
+    fn motion_stable_capture_bounds_bounds_shadows_for_clipped_effect_layer() {
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 72.0,
+            },
+            vec![],
+        );
+        layer.clip_to_bounds = true;
+        layer.graphics_layer.clip = true;
+        layer.graphics_layer.render_effect = Some(RenderEffect::blur(2.0));
+
+        let mut shadow_shape = test_shape(0, BlendMode::SrcOver);
+        shadow_shape.rect = Rect {
+            x: -24.0,
+            y: -1200.0,
+            width: 180.0,
+            height: 1400.0,
+        };
+        let mut scene = CompositorScene::new();
+        scene
+            .shadow_draws
+            .push(test_shadow_draw(vec![(shadow_shape, BlendMode::SrcOver)]));
+
+        let requirements = SurfaceRequirementSet::default()
+            .with(SurfaceRequirement::RenderEffect)
+            .with(SurfaceRequirement::MotionStableCapture);
+
+        assert_eq!(
+            motion_stable_capture_bounds(
+                &layer,
+                &scene,
+                &[],
+                requirements,
+                TranslatedContentAxes::default(),
+                None,
+            ),
+            Some(Rect {
+                x: -48.0,
+                y: -200.0,
+                width: 168.0,
+                height: 288.0,
+            })
+        );
+    }
+
+    #[test]
+    fn vertical_motion_stable_capture_uses_viewport_cross_axis_bounds() {
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 100.0,
+            },
+            vec![],
+        );
+        layer.clip_to_bounds = true;
+        layer.graphics_layer.clip = true;
+
+        let mut shape = test_shape(0, BlendMode::SrcOver);
+        shape.rect = Rect {
+            x: 60.0,
+            y: -80.0,
+            width: 80.0,
+            height: 220.0,
+        };
+        let mut scene = CompositorScene::new();
+        scene.shapes.push(shape);
+
+        let requirements =
+            SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture);
+
+        assert_eq!(
+            motion_stable_capture_bounds(
+                &layer,
+                &scene,
+                &[],
+                requirements,
+                TranslatedContentAxes { x: false, y: true },
+                None,
+            ),
+            Some(Rect {
+                x: -96.0,
+                y: -80.0,
+                width: 296.0,
+                height: 180.0,
+            })
+        );
+    }
+
+    #[test]
+    fn vertical_motion_stable_capture_uses_external_surface_clip() {
+        let layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 100.0,
+            },
+            vec![],
+        );
+
+        let mut shape = test_shape(0, BlendMode::SrcOver);
+        shape.rect = Rect {
+            x: 60.0,
+            y: -80.0,
+            width: 80.0,
+            height: 220.0,
+        };
+        let mut scene = CompositorScene::new();
+        scene.shapes.push(shape);
+
+        let requirements =
+            SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture);
+
+        assert_eq!(
+            motion_stable_capture_bounds(
+                &layer,
+                &scene,
+                &[],
+                requirements,
+                TranslatedContentAxes { x: false, y: true },
+                Some(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 200.0,
+                    height: 100.0,
+                }),
+            ),
+            Some(Rect {
+                x: -96.0,
+                y: -80.0,
+                width: 296.0,
+                height: 180.0,
+            })
+        );
+    }
+
+    #[test]
     fn estimate_layer_surface_rect_expands_for_child_layer_shadow() {
         let mut child = test_layer(
             Rect {
@@ -6479,7 +6719,7 @@ mod tests {
     }
 
     #[test]
-    fn animated_translated_content_text_leaf_keeps_shared_snap_anchor_for_inner_stability() {
+    fn animated_translated_content_text_leaf_defers_snap_to_motion_stable_capture() {
         let root = snapped_text_leaf_root(true, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
@@ -6495,22 +6735,21 @@ mod tests {
         assert!(collected.scene.effect_layers[0]
             .requirements
             .contains(SurfaceRequirement::MotionStableCapture));
-        let expected_anchor = Some(SnapAnchor::rigid(Point::new(14.25, 16.5)));
         assert_eq!(
-            collected.scene.effect_layers[0].snap_anchor, expected_anchor,
-            "active scroll local-picture surfaces must composite with the same content-origin snap phase as their children"
+            collected.scene.effect_layers[0].snap_anchor, None,
+            "active scroll local-picture surfaces must not quantize the moving content phase"
         );
         assert_eq!(
-            collected.scene.shapes[0].snap_anchor, expected_anchor,
-            "active scroll content should share one anchor so item internals stay pixel-stable"
+            collected.scene.shapes[0].snap_anchor, None,
+            "active scroll shapes must render in motion-stable capture space instead of taking a rigid screen snap"
         );
         assert_eq!(
-            collected.scene.images[0].snap_anchor, expected_anchor,
-            "active scroll images should share the item anchor instead of resampling independently"
+            collected.scene.images[0].snap_anchor, None,
+            "active scroll images must render in motion-stable capture space instead of taking a rigid screen snap"
         );
         assert_eq!(
-            collected.scene.texts[0].snap_anchor, expected_anchor,
-            "active scroll text should share the item anchor instead of drifting independently"
+            collected.scene.texts[0].snap_anchor, None,
+            "active scroll text must render in motion-stable capture space instead of taking a rigid screen snap"
         );
     }
 
@@ -6593,6 +6832,38 @@ mod tests {
     }
 
     #[test]
+    fn animated_translated_content_surface_composite_does_not_rigid_snap_child_surface() {
+        let mut root = translated_content_local_surface_root();
+        let scroll_offset = Point::new(0.0, -18.5);
+        let Some(RenderNode::Layer(translated_content)) = root.children.get_mut(0) else {
+            panic!("expected translated content layer");
+        };
+        translated_content.motion_context_animated = true;
+        translated_content.translated_content_offset = scroll_offset;
+        let Some(RenderNode::Layer(effectful_text)) = translated_content.children.get_mut(0) else {
+            panic!("expected effectful text layer");
+        };
+        effectful_text.transform_to_parent =
+            effectful_text
+                .transform_to_parent
+                .then(ProjectiveTransform::translation(
+                    scroll_offset.x,
+                    scroll_offset.y,
+                ));
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.child_layers.len(), 1);
+        assert_eq!(
+            collected.child_layers[0].snap_anchor, None,
+            "animated scrolled descendants must not quantize their composite phase while the content is moving"
+        );
+    }
+
+    #[test]
     fn translated_text_material_effect_layer_uses_scroll_content_snap_anchor() {
         let mut layer = text_layer_with_style(
             AnnotatedString::from("gradient"),
@@ -6641,6 +6912,7 @@ mod tests {
             TranslationRenderContext {
                 inherited_content_translation: false,
                 surface_capture_active: true,
+                ..TranslationRenderContext::default()
             },
             &mut rect_cache,
             &mut requirements_cache,
@@ -6678,6 +6950,7 @@ mod tests {
             TranslationRenderContext {
                 inherited_content_translation: false,
                 surface_capture_active: true,
+                ..TranslationRenderContext::default()
             },
             &mut rect_cache,
             &mut requirements_cache,

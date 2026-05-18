@@ -372,6 +372,9 @@ run_test() {
         robot_leetcodedaily_code_scroll_pixel_drift)
             timeout_secs=180
             ;;
+        robot_leetcodedaily_full_layout_scroll_stability)
+            timeout_secs=540
+            ;;
         robot_content_type_reuse|robot_lazy_perf_validation)
             timeout_secs=240
             ;;

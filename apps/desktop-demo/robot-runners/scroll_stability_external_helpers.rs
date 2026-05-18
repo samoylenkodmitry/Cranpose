@@ -233,10 +233,14 @@ fn compare_crop_from_bounds(
     config: ScrollStabilityConfig,
 ) -> CompareCrop {
     let inset = config.compare_viewport_inset_px as f32;
-    let left = (bounds.0 + inset).ceil();
-    let top = (bounds.1 + inset).ceil();
-    let right = (config.window_width as f32 - (bounds.0 + bounds.2 - inset)).ceil();
-    let bottom = (config.window_height as f32 - (bounds.1 + bounds.3 - inset)).ceil();
+    let viewport_left = bounds.0.max(0.0);
+    let viewport_top = bounds.1.max(0.0);
+    let viewport_right = (bounds.0 + bounds.2).min(config.window_width as f32);
+    let viewport_bottom = (bounds.1 + bounds.3).min(config.window_height as f32);
+    let left = (viewport_left + inset).ceil();
+    let top = (viewport_top + inset).ceil();
+    let right = (config.window_width as f32 - (viewport_right - inset)).ceil();
+    let bottom = (config.window_height as f32 - (viewport_bottom - inset)).ceil();
     CompareCrop {
         trim_top_px: clamp_crop_component(top, config.window_height),
         trim_bottom_px: clamp_crop_component(bottom, config.window_height),
