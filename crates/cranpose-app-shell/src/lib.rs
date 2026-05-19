@@ -66,6 +66,7 @@ where
     viewport: (f32, f32),
     buffer_size: (u32, u32),
     start_time: Instant,
+    last_frame_time_nanos: u64,
     layout_tree: Option<LayoutTree>,
     semantics_tree: Option<SemanticsTree>,
     semantics_enabled: bool,
@@ -202,6 +203,7 @@ where
             viewport,
             buffer_size,
             start_time: Instant::now(),
+            last_frame_time_nanos: 0,
             layout_tree: None,
             semantics_tree: None,
             semantics_enabled: false,
@@ -371,14 +373,26 @@ where
         cranpose_ui::next_cursor_blink_time()
     }
 
-    pub fn update(&mut self) {
+    fn frame_time_nanos_at(&self, now: Instant) -> u64 {
+        now.checked_duration_since(self.start_time)
+            .unwrap_or_default()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64
+    }
+
+    pub fn update_after_frame_interval(&mut self, frame_interval: std::time::Duration) {
+        let wall_frame_time = self.frame_time_nanos_at(Instant::now());
+        let base_frame_time = self.last_frame_time_nanos.max(wall_frame_time);
+        let frame_time = base_frame_time
+            .saturating_add(frame_interval.as_nanos().min(u128::from(u64::MAX)) as u64);
+        self.update_at_frame_time_nanos(frame_time);
+    }
+
+    pub fn update_at_frame_time_nanos(&mut self, frame_time: u64) {
+        let frame_time = frame_time.max(self.last_frame_time_nanos);
+        self.last_frame_time_nanos = frame_time;
         let runtime_handle = self.runtime.runtime_handle();
         runtime_handle.with_deferred_state_releases(|| {
-            let now = Instant::now();
-            let frame_time = now
-                .checked_duration_since(self.start_time)
-                .unwrap_or_default()
-                .as_nanos() as u64;
             self.runtime.drain_frame_callbacks(frame_time);
             runtime_handle.drain_ui();
             let should_render = self.composition.should_render();
@@ -427,6 +441,11 @@ where
             // Clear dirty flag after update (frame has been processed)
             self.is_dirty = false;
         });
+    }
+
+    pub fn update(&mut self) {
+        let frame_time = self.frame_time_nanos_at(Instant::now());
+        self.update_at_frame_time_nanos(frame_time);
     }
 }
 

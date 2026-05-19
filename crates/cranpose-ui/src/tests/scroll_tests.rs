@@ -28,6 +28,15 @@ fn pointer_handler_for(modifier: Modifier) -> (Rc<dyn Fn(PointerEvent)>, Modifie
     (handler, chain)
 }
 
+fn scroll_wheel_event(dx: f32, dy: f32) -> PointerEvent {
+    PointerEvent::new(
+        PointerEventKind::Scroll,
+        Point { x: 0.0, y: 0.0 },
+        Point { x: 0.0, y: 0.0 },
+    )
+    .with_scroll_delta(Point { x: dx, y: dy })
+}
+
 #[test]
 fn vertical_scroll_clips_to_bounds_by_default() {
     with_test_runtime(|| {
@@ -52,12 +61,7 @@ fn wheel_scroll_updates_vertical_scroll_state() {
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
 
-        let event = PointerEvent::new(
-            PointerEventKind::Scroll,
-            Point { x: 0.0, y: 0.0 },
-            Point { x: 0.0, y: 0.0 },
-        )
-        .with_scroll_delta(Point { x: 0.0, y: 48.0 });
+        let event = scroll_wheel_event(0.0, 48.0);
 
         handler(event.clone());
 
@@ -80,12 +84,7 @@ fn wheel_scroll_uses_horizontal_delta_for_horizontal_scroll() {
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().horizontal_scroll(scroll_state.clone(), false));
 
-        let event = PointerEvent::new(
-            PointerEventKind::Scroll,
-            Point { x: 0.0, y: 0.0 },
-            Point { x: 0.0, y: 0.0 },
-        )
-        .with_scroll_delta(Point { x: 30.0, y: 120.0 });
+        let event = scroll_wheel_event(30.0, 120.0);
 
         handler(event.clone());
 
@@ -96,6 +95,77 @@ fn wheel_scroll_uses_horizontal_delta_for_horizontal_scroll() {
         assert!(
             (scroll_state.value_non_reactive() - 70.0).abs() < 0.001,
             "horizontal scroll should use horizontal wheel component"
+        );
+    });
+}
+
+#[test]
+fn scroll_motion_context_survives_modifier_recomposition_with_stale_pointer_task() {
+    with_test_runtime(|| {
+        let scroll_state = ScrollState::new(100.0);
+        scroll_state.set_max_value(400.0);
+
+        let mut chain = ModifierNodeChain::new();
+        let mut context = BasicModifierNodeContext::new();
+        let first = Modifier::empty().vertical_scroll(scroll_state.clone(), false);
+        chain.update_from_slice(&first.elements(), &mut context);
+        let stale_handler = collect_modifier_slices(&chain)
+            .pointer_inputs()
+            .first()
+            .cloned()
+            .expect("scroll modifier should provide pointer input handler");
+
+        let recomposed = Modifier::empty().vertical_scroll(scroll_state.clone(), false);
+        chain.update_from_slice(&recomposed.elements(), &mut context);
+        assert!(
+            !collect_modifier_slices(&chain).motion_context_animated(),
+            "scroll motion should start inactive after recomposition"
+        );
+
+        let event = scroll_wheel_event(0.0, 48.0);
+        stale_handler(event.clone());
+
+        assert!(event.is_consumed(), "wheel event should still scroll");
+        assert!(
+            collect_modifier_slices(&chain).motion_context_animated(),
+            "the active pointer task and recomposed render policy must share one scroll motion context"
+        );
+    });
+}
+
+#[test]
+fn lazy_scroll_motion_context_survives_modifier_recomposition_with_stale_pointer_task() {
+    with_test_runtime(|| {
+        let mut list_state = None;
+        let _composition = crate::run_test_composition(|| {
+            list_state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
+        });
+        let list_state = list_state.expect("lazy list state should be created");
+
+        let mut chain = ModifierNodeChain::new();
+        let mut context = BasicModifierNodeContext::new();
+        let first = Modifier::empty().lazy_vertical_scroll(list_state, false);
+        chain.update_from_slice(&first.elements(), &mut context);
+        let stale_handler = collect_modifier_slices(&chain)
+            .pointer_inputs()
+            .first()
+            .cloned()
+            .expect("lazy scroll modifier should provide pointer input handler");
+
+        let recomposed = Modifier::empty().lazy_vertical_scroll(list_state, false);
+        chain.update_from_slice(&recomposed.elements(), &mut context);
+        assert!(
+            !collect_modifier_slices(&chain).motion_context_animated(),
+            "lazy scroll motion should start inactive after recomposition"
+        );
+
+        let event = scroll_wheel_event(0.0, -48.0);
+        stale_handler(event.clone());
+
+        assert!(event.is_consumed(), "wheel event should still scroll");
+        assert!(
+            collect_modifier_slices(&chain).motion_context_animated(),
+            "the active lazy-list pointer task and recomposed render policy must share one scroll motion context"
         );
     });
 }

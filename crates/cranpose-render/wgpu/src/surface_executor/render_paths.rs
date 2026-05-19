@@ -27,7 +27,7 @@ use crate::surface_plan::{
     translated_content_axes_for_layer, LayerSurfaceRenderOptions, LayerSurfaceRequest,
     LayerSurfaceRequirements, TranslatedContentAxes, TranslationRenderContext,
 };
-use crate::surface_requirements::SurfaceRequirement;
+use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use crate::TextSystemState;
 use cranpose_render_common::graph::{CachePolicy, LayerNode, ProjectiveTransform};
 use cranpose_render_common::layer_composition::effective_layer_isolation;
@@ -320,9 +320,6 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         translation_context.inherited_content_translation || layer.translated_content_context;
     let effective_translated_content_context =
         direct_translated_content_context || surface_requirements.contains_translated_content;
-    let direct_translated_content_axes = translation_context
-        .translated_content_axes
-        .union(translated_content_axes_for_layer(layer));
     let effective_requirements = effective_surface_requirements(
         effective_translated_content_context,
         translation_context.surface_capture_active,
@@ -339,13 +336,8 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         surface_requirements,
         root_scale,
     );
-    let child_translation_context = TranslationRenderContext {
-        inherited_content_translation: direct_translated_content_context,
-        translated_content_axes: direct_translated_content_axes,
-        surface_capture_active: translation_context.surface_capture_active,
-    };
     let translation_context = layer_surface_translation_context(
-        child_translation_context,
+        translation_context,
         activates_nested_capture
             && effective_requirements.contains(SurfaceRequirement::MotionStableCapture),
     );
@@ -420,6 +412,21 @@ fn layer_surface_translation_context(
         translated_content_axes: translation_context.translated_content_axes,
         surface_capture_active: translation_context.surface_capture_active
             || surface_provides_motion_stable_capture,
+        local_picture_capture_active: translation_context.local_picture_capture_active,
+    }
+}
+
+fn minimum_surface_scale_for_composite(
+    target_scale: f32,
+    sample_mode: CompositeSampleMode,
+    effective_requirements: SurfaceRequirementSet,
+) -> f32 {
+    if sample_mode == CompositeSampleMode::Box4
+        && !effective_requirements.contains(SurfaceRequirement::MotionStableCapture)
+    {
+        target_scale
+    } else {
+        target_scale.min(1.0)
     }
 }
 
@@ -532,6 +539,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                     inherited_content_translation: effective_translated_content_context,
                     translated_content_axes: effective_translated_content_axes,
                     surface_capture_active: translation_context.surface_capture_active,
+                    local_picture_capture_active: translation_context.local_picture_capture_active,
                 },
             },
         )?;
@@ -716,9 +724,14 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         let target_scale = target_scale
             .min(max_dim / surface_rect.width.max(1.0))
             .min(max_dim / surface_rect.height.max(1.0));
+        let minimum_surface_scale = minimum_surface_scale_for_composite(
+            target_scale,
+            composite_sample_mode,
+            effective_requirements,
+        );
         let target_scale = clamp_effect_surface_scale(
             surface_rect,
-            target_scale.min(1.0),
+            minimum_surface_scale,
             target_scale,
             backend.max_texture_dim(),
         );
@@ -1348,11 +1361,12 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
 mod tests {
     use super::{
         anchored_composite_dest_quad, composite_dest_viewport, layer_surface_dest_quad,
-        layer_surface_translation_context,
+        layer_surface_translation_context, minimum_surface_scale_for_composite,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::scene::SnapAnchor;
     use crate::surface_plan::TranslationRenderContext;
+    use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
     use cranpose_ui_graphics::Point;
     use cranpose_ui_graphics::Rect;
 
@@ -1378,6 +1392,17 @@ mod tests {
                 [0.0, 1010.25],
                 [1398.75, 1010.25],
             ]
+        );
+    }
+
+    #[test]
+    fn unanchored_box4_composite_snaps_final_dest_quad() {
+        let quad = [[0.25, 10.5], [40.75, 10.5], [0.25, 20.25], [40.75, 20.25]];
+
+        assert_eq!(
+            anchored_composite_dest_quad(quad, None, 1.0, CompositeSampleMode::Box4),
+            [[0.0, 11.0], [40.5, 11.0], [0.0, 20.75], [40.5, 20.75]],
+            "unanchored pixel-stable surfaces should keep their composite phase snapped"
         );
     }
 
@@ -1430,6 +1455,44 @@ mod tests {
         );
 
         assert_eq!(viewport, (0.0, 11.0, 140.0, 80.0));
+    }
+
+    #[test]
+    fn box4_non_capture_surface_keeps_device_scale_as_minimum() {
+        assert_eq!(
+            minimum_surface_scale_for_composite(
+                1.35,
+                CompositeSampleMode::Box4,
+                SurfaceRequirementSet::default().with(SurfaceRequirement::ExplicitOffscreen),
+            ),
+            1.35
+        );
+    }
+
+    #[test]
+    fn linear_surface_can_use_memory_budget_scale_floor() {
+        assert_eq!(
+            minimum_surface_scale_for_composite(
+                1.35,
+                CompositeSampleMode::Linear,
+                SurfaceRequirementSet::default()
+                    .with(SurfaceRequirement::ExplicitOffscreen)
+                    .with(SurfaceRequirement::NonTranslationTransform),
+            ),
+            1.0
+        );
+    }
+
+    #[test]
+    fn motion_stable_capture_keeps_its_existing_budget_scale_floor() {
+        assert_eq!(
+            minimum_surface_scale_for_composite(
+                8.0,
+                CompositeSampleMode::Box4,
+                SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
+            ),
+            1.0
+        );
     }
 
     #[test]

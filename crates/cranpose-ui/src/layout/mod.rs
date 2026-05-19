@@ -889,6 +889,18 @@ fn process_pending_layout_repasses(
     applier: &mut MemoryApplier,
     root: NodeId,
 ) -> Result<(), NodeError> {
+    for node_id in crate::render_state::take_modifier_slice_repass_nodes() {
+        if let Ok(node) = applier.get_mut(node_id) {
+            let any = node.as_any_mut();
+            if let Some(layout) = any.downcast_mut::<crate::widgets::nodes::LayoutNode>() {
+                layout.mark_modifier_slices_dirty();
+            } else if let Some(subcompose) =
+                any.downcast_mut::<crate::subcompose_layout::SubcomposeLayoutNode>()
+            {
+                subcompose.mark_modifier_slices_dirty();
+            }
+        }
+    }
     let repass_nodes = crate::take_layout_repass_nodes();
     if repass_nodes.is_empty() {
         return Ok(());

@@ -902,11 +902,8 @@ fn populate_draws_from_graph(
     let effective_translated_content_context =
         inherited_translated_content_context || layer.translated_content_context;
     let allow_rigid_snap = effective_translated_content_context || !layer.motion_context_animated;
-    let active_translated_content =
-        layer.translated_content_context && layer.motion_context_animated;
     let boundary_snap_anchor = if !inherited_translated_content_context
         && layer.translated_content_context
-        && !active_translated_content
         && allow_rigid_snap
     {
         rigid_snap_anchor(
@@ -920,22 +917,16 @@ fn populate_draws_from_graph(
         None
     };
     let translated_snap_anchor = inherited_translated_snap_anchor.or(boundary_snap_anchor);
-    let layer_snap_anchor = if active_translated_content {
-        None
-    } else {
-        translated_snap_anchor.or_else(|| {
-            if allow_rigid_snap
-                && layer_needs_rigid_snap(layer, effective_translated_content_context)
-            {
-                rigid_snap_anchor(
-                    mapping.layer_bounds.raster_rect(),
-                    &mapping.raster_content_layer,
-                )
-            } else {
-                None
-            }
-        })
-    };
+    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
+        if allow_rigid_snap && layer_needs_rigid_snap(layer, effective_translated_content_context) {
+            rigid_snap_anchor(
+                mapping.layer_bounds.raster_rect(),
+                &mapping.raster_content_layer,
+            )
+        } else {
+            None
+        }
+    });
 
     if content_clip_to_bounds && visual_clip.is_none() {
         return;
@@ -977,18 +968,13 @@ fn populate_draws_from_graph(
                 }
             },
             RenderNode::Layer(child_layer) => {
-                let child_snap_anchor = if active_translated_content {
-                    None
-                } else {
-                    translated_snap_anchor
-                };
                 populate_draws_from_graph(
                     child_layer,
                     transform,
                     mapping.content_style.clone(),
                     scene,
                     visual_clip,
-                    child_snap_anchor,
+                    translated_snap_anchor,
                     effective_translated_content_context,
                 );
             }
@@ -1571,23 +1557,24 @@ mod tests {
     }
 
     #[test]
-    fn animated_translated_content_text_leaf_defers_rigid_snap_while_moving() {
+    fn animated_translated_content_text_leaf_uses_content_snap() {
         let scene = build_raster_scene(&snapped_text_leaf_root(true, true));
 
         assert_eq!(scene.shapes.len(), 1);
         assert_eq!(scene.images.len(), 1);
         assert_eq!(scene.texts.len(), 1);
+        let expected_anchor = Some(Point::new(14.25, 16.5));
         assert_eq!(
-            scene.shapes[0].snap_anchor, None,
-            "active scroll shapes must not take a rigid screen snap while moving"
+            scene.shapes[0].snap_anchor, expected_anchor,
+            "active scroll shapes should render with the same content-origin snap phase as settled content"
         );
         assert_eq!(
-            scene.images[0].snap_anchor, None,
-            "active scroll images must not take a rigid screen snap while moving"
+            scene.images[0].snap_anchor, expected_anchor,
+            "active scroll images should render with the same content-origin snap phase as settled content"
         );
         assert_eq!(
-            scene.texts[0].snap_anchor, None,
-            "active scroll text must not take a rigid screen snap while moving"
+            scene.texts[0].snap_anchor, expected_anchor,
+            "active scroll text should render with the same content-origin snap phase as settled content"
         );
     }
 

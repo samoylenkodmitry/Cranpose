@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 struct RenderState {
     layout_repasses: Mutex<LayoutRepassManager>,
     draw_repasses: Mutex<DrawRepassManager>,
+    modifier_slice_repasses: Mutex<LayoutRepassManager>,
     render_invalidated: AtomicBool,
     pointer_invalidated: AtomicBool,
     focus_invalidated: AtomicBool,
@@ -73,6 +74,7 @@ impl RenderState {
         Self {
             layout_repasses: Mutex::new(LayoutRepassManager::new()),
             draw_repasses: Mutex::new(DrawRepassManager::new()),
+            modifier_slice_repasses: Mutex::new(LayoutRepassManager::new()),
             render_invalidated: AtomicBool::new(false),
             pointer_invalidated: AtomicBool::new(false),
             focus_invalidated: AtomicBool::new(false),
@@ -185,6 +187,17 @@ pub fn schedule_layout_repass(node_id: NodeId) {
     request_render_invalidation();
 }
 
+pub(crate) fn schedule_modifier_slices_repass(node_id: NodeId) {
+    with_render_state(|state| {
+        state
+            .modifier_slice_repasses
+            .lock()
+            .expect("modifier slice repass manager poisoned")
+            .schedule_repass(node_id);
+    });
+    schedule_layout_repass(node_id);
+}
+
 /// Schedules a draw-only repass for a specific node.
 ///
 /// This ensures draw/pointer data stays in sync when modifier updates do not
@@ -242,6 +255,16 @@ pub fn take_layout_repass_nodes() -> Vec<NodeId> {
             .layout_repasses
             .lock()
             .expect("layout repass manager poisoned")
+            .take_dirty_nodes()
+    })
+}
+
+pub(crate) fn take_modifier_slice_repass_nodes() -> Vec<NodeId> {
+    with_render_state(|state| {
+        state
+            .modifier_slice_repasses
+            .lock()
+            .expect("modifier slice repass manager poisoned")
             .take_dirty_nodes()
     })
 }
@@ -360,6 +383,7 @@ pub fn peek_layout_invalidation() -> bool {
 pub fn reset_render_state_for_tests() {
     let _ = take_draw_repass_nodes();
     let _ = take_layout_repass_nodes();
+    let _ = take_modifier_slice_repass_nodes();
     let _ = take_render_invalidation();
     let _ = take_pointer_invalidation();
     let _ = take_focus_invalidation();

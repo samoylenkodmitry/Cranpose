@@ -500,6 +500,10 @@ impl SubcomposeLayoutNode {
         self.modifier_slices_dirty.set(false);
     }
 
+    pub(crate) fn mark_modifier_slices_dirty(&self) {
+        self.modifier_slices_dirty.set(true);
+    }
+
     pub fn set_debug_modifiers(&mut self, enabled: bool) {
         self.inner.borrow_mut().set_debug_modifiers(enabled);
     }

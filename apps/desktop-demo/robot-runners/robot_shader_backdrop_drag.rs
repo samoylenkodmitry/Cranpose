@@ -15,6 +15,9 @@ const EFFECT_SLIDER_WIDTH: f32 = 220.0;
 const EFFECT_SLIDER_TOUCH_OFFSET_Y: f32 = 9.0;
 const NESTED_SECTION_SCAN_ATTEMPTS: usize = 72;
 const NESTED_SECTION_RESET_DRAGS: usize = 8;
+const NESTED_BACKDROP_MIN_CHANGED_PIXELS: usize = 90;
+const NESTED_BACKDROP_VISUAL_WAIT_ATTEMPTS: usize = 8;
+const NESTED_BACKDROP_VISUAL_WAIT_MS: u64 = 80;
 
 fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
     (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5)
@@ -161,6 +164,32 @@ fn set_visible_slider_fraction(
     visible_prefix(robot, prefix).and_then(|(_, _, _, _, text)| parse_slider_value(&text))
 }
 
+fn wait_for_nested_backdrop_region_change(
+    robot: &cranpose::Robot,
+    baseline: &cranpose::RobotScreenshot,
+    region: (f32, f32, f32, f32),
+    baseline_noise: usize,
+) -> Option<(usize, usize)> {
+    let mut last = None;
+    for attempt in 1..=NESTED_BACKDROP_VISUAL_WAIT_ATTEMPTS {
+        if attempt > 1 {
+            std::thread::sleep(Duration::from_millis(NESTED_BACKDROP_VISUAL_WAIT_MS));
+            let _ = robot.wait_for_idle();
+        }
+        let screenshot = capture_screenshot(robot)?;
+        let raw = changed_pixel_count_in_region(baseline, &screenshot, region, 10);
+        let net = raw.saturating_sub(baseline_noise);
+        println!(
+            "Nested child backdrop diff attempt {attempt}: raw={raw} baseline={baseline_noise} net={net}"
+        );
+        last = Some((raw, net));
+        if net >= NESTED_BACKDROP_MIN_CHANGED_PIXELS {
+            break;
+        }
+    }
+    last
+}
+
 fn main() {
     env_logger::init();
     println!("=== Robot Shader Backdrop Drag Test ===");
@@ -294,22 +323,20 @@ fn main() {
             std::thread::sleep(Duration::from_millis(100));
             let _ = robot.wait_for_idle();
 
-            let Some(nested_after) = capture_screenshot(&robot) else {
+            let Some((nested_raw, nested_net)) = wait_for_nested_backdrop_region_change(
+                &robot,
+                &nested_base_b,
+                nested_region,
+                nested_baseline_noise,
+            ) else {
                 println!("✗ Could not capture nested backdrop screenshot after slider");
                 std::process::exit(1);
             };
-            let nested_raw = changed_pixel_count_in_region(
-                &nested_base_b,
-                &nested_after,
-                nested_region,
-                10,
-            );
-            let nested_net = nested_raw.saturating_sub(nested_baseline_noise);
             println!(
                 "Nested child backdrop diff: raw={} baseline={} net={}",
                 nested_raw, nested_baseline_noise, nested_net
             );
-            if nested_net < 90 {
+            if nested_net < NESTED_BACKDROP_MIN_CHANGED_PIXELS {
                 println!(
                     "✗ nested_child_backdrop_blur did not produce visible changes (net={})",
                     nested_net
