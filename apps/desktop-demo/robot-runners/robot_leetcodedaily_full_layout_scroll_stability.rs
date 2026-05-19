@@ -53,6 +53,7 @@ const WORKSPACE_SCROLL_SHADOW_HEIGHT: f32 = 82.0;
 const COMPARE_VIEWPORT_INSET_PX: u32 = WORKSPACE_SCROLL_SHADOW_HEIGHT as u32;
 const TARGET_MIN_CENTER_Y: f32 = 720.0;
 const TARGET_MAX_CENTER_Y: f32 = 865.0;
+const WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y: f32 = 240.0;
 const BUTTON_QUALITY_MAX_EDGE_LOSS_RATIO: f32 = 0.10;
 const BUTTON_QUALITY_MAX_EXTRA_COLORS: usize = 180;
 const BUTTON_QUALITY_SAFE_EDGE: f32 = 2.0;
@@ -5176,14 +5177,14 @@ fn scroll_workspace_text_into_view_between(
             .map(|bounds| {
                 let center_y = bounds.center_y();
                 if center_y < min_center_y {
-                    (min_center_y - center_y).clamp(4.0, 80.0)
+                    (min_center_y - center_y).clamp(4.0, WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y)
                 } else if center_y > max_center_y {
-                    -(center_y - max_center_y).clamp(4.0, 80.0)
+                    -(center_y - max_center_y).clamp(4.0, WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y)
                 } else {
                     0.0
                 }
             })
-            .unwrap_or(-80.0);
+            .unwrap_or(-WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y);
         robot
             .mouse_scroll(0.0, scroll_delta_y)
             .expect("scroll workspace to find text");
