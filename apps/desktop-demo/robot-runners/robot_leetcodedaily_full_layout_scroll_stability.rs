@@ -29,8 +29,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
 
-const APP_WIDTH: u32 = 1480;
-const APP_HEIGHT: u32 = 1560;
+const APP_WIDTH: u32 = 1100;
+const APP_HEIGHT: u32 = 1100;
 const APP_BOTTOM_LIST_GAP: f32 = 50.0;
 const WORKSPACE_VIEWPORT_FALLBACK_TOP: f32 = 96.0;
 const INTERACTIVE_QUEUE_CHIP_WIDTH: f32 = 214.0;
