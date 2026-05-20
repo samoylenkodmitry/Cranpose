@@ -8,6 +8,7 @@ use crate::{
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
     android_overlay_window,
     launcher::{AndroidOverlayWindowOptions, AppSettings},
+    wgpu_surface::{current_surface_texture, SurfaceFrame},
 };
 use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_android::AndroidPlatform;
@@ -111,8 +112,8 @@ fn update_android_shell_geometry(shell: &mut AppShell<WgpuRenderer>, density: f3
 
 /// Renders a single frame. Returns true if out of memory (should exit).
 fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>) -> bool {
-    match resources.surface.get_current_texture() {
-        Ok(frame) => {
+    match current_surface_texture(&resources.surface, "android") {
+        SurfaceFrame::Ready(frame) => {
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
@@ -125,8 +126,7 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
             frame.present();
             false
         }
-        Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
-            // Reconfigure surface using current size and config
+        SurfaceFrame::Reconfigure => {
             let (width, height) = shell.buffer_size();
             resources.config.width = width;
             resources.config.height = height;
@@ -135,14 +135,7 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
                 .configure(&resources.device, &resources.config);
             false
         }
-        Err(wgpu::SurfaceError::OutOfMemory) => {
-            log::error!("Out of memory; exiting");
-            true
-        }
-        Err(e) => {
-            log::debug!("Surface error: {:?}", e);
-            false
-        }
+        SurfaceFrame::Skip => false,
     }
 }
 
@@ -376,7 +369,7 @@ fn create_android_wgpu_surface(
         let raw_display_handle = RawDisplayHandle::Android(display_handle);
 
         let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-            raw_display_handle,
+            raw_display_handle: Some(raw_display_handle),
             raw_window_handle,
         };
 
@@ -512,11 +505,16 @@ fn set_android_window_layout_px(
     width_px: i32,
     height_px: i32,
 ) -> Result<(), String> {
-    use jni::objects::JValue;
+    use jni::{jni_sig, jni_str, objects::JValue};
 
     with_android_activity_env(app, |env, activity| {
         let window = env
-            .call_method(&activity, "getWindow", "()Landroid/view/Window;", &[])
+            .call_method(
+                &activity,
+                jni_str!("getWindow"),
+                jni_sig!("()Landroid/view/Window;"),
+                &[],
+            )
             .and_then(|value| value.l())
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
@@ -524,8 +522,8 @@ fn set_android_window_layout_px(
             })?;
         env.call_method(
             &window,
-            "setLayout",
-            "(II)V",
+            jni_str!("setLayout"),
+            jni_sig!("(II)V"),
             &[JValue::Int(width_px), JValue::Int(height_px)],
         )
         .map_err(|error| {
@@ -603,11 +601,11 @@ pub fn run(
     // (vk_common_SetDebugUtilsObjectNameEXT crashes on null labels)
     let backends = wgpu::Backends::GL | wgpu::Backends::VULKAN;
 
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends,
-        flags: wgpu::InstanceFlags::empty(), // No debug/validation - prevents label crash
-        ..Default::default()
-    });
+    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    instance_descriptor.backends = backends;
+    // No debug/validation: emulator Vulkan debug utils can crash on null labels.
+    instance_descriptor.flags = wgpu::InstanceFlags::empty();
+    let instance = wgpu::Instance::new(instance_descriptor);
 
     // Platform abstraction for density/pointer conversion
     let mut android_platform = AndroidPlatform::new();

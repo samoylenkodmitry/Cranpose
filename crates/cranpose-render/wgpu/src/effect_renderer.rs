@@ -199,8 +199,8 @@ impl EffectRenderer {
         let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Blur Pipeline Layout"),
             bind_group_layouts: &[
-                &effect_texture_bind_group_layout,
-                &blur_uniform_bind_group_layout,
+                Some(&effect_texture_bind_group_layout),
+                Some(&blur_uniform_bind_group_layout),
             ],
             immediate_size: 0,
         });
@@ -247,8 +247,8 @@ impl EffectRenderer {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Offset Pipeline Layout"),
                 bind_group_layouts: &[
-                    &effect_texture_bind_group_layout,
-                    &offset_uniform_bind_group_layout,
+                    Some(&effect_texture_bind_group_layout),
+                    Some(&offset_uniform_bind_group_layout),
                 ],
                 immediate_size: 0,
             });
@@ -294,8 +294,8 @@ impl EffectRenderer {
         let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Blit Pipeline Layout"),
             bind_group_layouts: &[
-                &effect_texture_bind_group_layout,
-                &blit_uniform_bind_group_layout,
+                Some(&effect_texture_bind_group_layout),
+                Some(&blit_uniform_bind_group_layout),
             ],
             immediate_size: 0,
         });
@@ -383,8 +383,8 @@ impl EffectRenderer {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Projective Blit Pipeline Layout"),
                 bind_group_layouts: &[
-                    &effect_texture_bind_group_layout,
-                    &blit_uniform_bind_group_layout,
+                    Some(&effect_texture_bind_group_layout),
+                    Some(&blit_uniform_bind_group_layout),
                 ],
                 immediate_size: 0,
             });

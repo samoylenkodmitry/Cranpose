@@ -8,6 +8,7 @@ use crate::native_window::{
     NativeWindowRequest, WindowGraphMove, WindowGraphNodeSnapshot, WindowGraphPeerSnapshot,
     WindowGraphState, WindowGroupId, WindowResizeDirection, WindowState,
 };
+use crate::wgpu_surface::{current_surface_texture, SurfaceFrame};
 #[cfg(feature = "robot")]
 use cranpose_app_shell::RuntimeLeakDebugStats;
 use cranpose_app_shell::{default_root_key, AppShell, FramePacingMode};
@@ -2548,7 +2549,7 @@ impl App {
                         return;
                     }
                 }
-                Self::redraw_native_window(event_loop, &mut native);
+                Self::redraw_native_window(&mut native);
             }
             _ => {}
         }
@@ -2574,30 +2575,20 @@ impl App {
         }
     }
 
-    fn redraw_native_window(event_loop: &dyn ActiveEventLoop, native: &mut NativeWindowSurface) {
+    fn redraw_native_window(native: &mut NativeWindowSurface) {
         let frame_started_at = Instant::now();
         let scale_factor = native.window.scale_factor();
         cranpose_ui::set_density(scale_factor as f32);
         native.app.update();
 
-        let output = match native.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
+        let output = match current_surface_texture(&native.surface, "native window") {
+            SurfaceFrame::Ready(output) => output,
+            SurfaceFrame::Reconfigure => {
                 let size = native.window.surface_size();
                 Self::resize_native_surface(native, size.width, size.height);
                 return;
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                log::error!("native window surface out of memory, exiting");
-                event_loop.exit();
-                return;
-            }
-            Err(wgpu::SurfaceError::Timeout) => {
-                log::debug!("native window surface timeout, skipping frame");
-                return;
-            }
-            Err(wgpu::SurfaceError::Other) => {
-                log::error!("native window surface other error, skipping frame");
+            SurfaceFrame::Skip => {
                 return;
             }
         };
@@ -3592,10 +3583,9 @@ impl ApplicationHandler for App {
         };
 
         // Initialize WGPU
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
+        let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance_descriptor.backends = wgpu::Backends::all();
+        let instance = wgpu::Instance::new(instance_descriptor);
 
         let surface = match instance.create_surface(window.clone()) {
             Ok(surface) => surface,
@@ -3950,9 +3940,9 @@ impl ApplicationHandler for App {
                 app.update();
                 sync_native_windows_after_event = true;
 
-                let output = match surface.get_current_texture() {
-                    Ok(output) => output,
-                    Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
+                let output = match current_surface_texture(surface, "primary window") {
+                    SurfaceFrame::Ready(output) => output,
+                    SurfaceFrame::Reconfigure => {
                         let size = window.surface_size();
                         let viewport = viewport_for_surface_size(
                             primary_viewport_override,
@@ -3970,17 +3960,7 @@ impl ApplicationHandler for App {
                         );
                         return;
                     }
-                    Err(wgpu::SurfaceError::OutOfMemory) => {
-                        log::error!("Out of memory, exiting");
-                        event_loop.exit();
-                        return;
-                    }
-                    Err(wgpu::SurfaceError::Timeout) => {
-                        log::debug!("Surface timeout, skipping frame");
-                        return;
-                    }
-                    Err(wgpu::SurfaceError::Other) => {
-                        log::error!("Surface other error, skipping frame");
+                    SurfaceFrame::Skip => {
                         return;
                     }
                 };

@@ -1,30 +1,28 @@
 //! Shared Android JNI helpers.
 
-use jni::{objects::JObject, JNIEnv, JavaVM};
+use jni::{objects::JObject, Env, JavaVM};
 
 pub(crate) fn with_android_activity_env<T, F>(
     app: &android_activity::AndroidApp,
     f: F,
 ) -> Result<T, String>
 where
-    F: for<'local> FnOnce(&mut JNIEnv<'local>, JObject<'local>) -> Result<T, String>,
+    F: for<'local> FnOnce(&mut Env<'local>, JObject<'local>) -> Result<T, String>,
 {
     // SAFETY: android-activity owns a valid JavaVM pointer for the lifetime of AndroidApp.
-    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }
-        .map_err(|error| format!("failed to access Android Java VM: {error}"))?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|error| format!("failed to attach Android JNI thread: {error}"))?;
-
-    // SAFETY: activity_as_ptr returns a JNI global Activity reference owned by android-activity.
-    // JObject does not delete this reference on drop; it is used only for this JNI call chain.
-    let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
-    f(&mut env, activity)
+    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    vm.attach_current_thread(|env| -> jni::errors::Result<Result<T, String>> {
+        // SAFETY: activity_as_ptr returns a JNI global Activity reference owned by android-activity.
+        // JObject does not delete this reference on drop; it is used only for this JNI call chain.
+        let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
+        Ok(f(env, activity))
+    })
+    .map_err(|error| format!("failed to attach Android JNI thread: {error}"))?
 }
 
-pub(crate) fn clear_pending_android_jni_exception(env: &mut JNIEnv<'_>) {
-    if matches!(env.exception_check(), Ok(true)) {
-        let _ = env.exception_describe();
-        let _ = env.exception_clear();
+pub(crate) fn clear_pending_android_jni_exception(env: &mut Env<'_>) {
+    if env.exception_check() {
+        env.exception_describe();
+        env.exception_clear();
     }
 }

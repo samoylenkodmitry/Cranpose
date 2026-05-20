@@ -1,5 +1,3 @@
-import java.io.ByteArrayOutputStream
-
 plugins {
     id("com.android.application")
 }
@@ -50,12 +48,12 @@ val releaseRustTargetArgs = releaseRustAbis.joinToString(" \\\n            ") { 
 
 android {
     namespace = "com.compose_rs.demo"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.compose_rs.demo"
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }
@@ -90,14 +88,14 @@ android {
 
     sourceSets {
         getByName("main") {
-            java.srcDirs("../../../../crates/cranpose/android/java")
+            java.directories.add("../../../../crates/cranpose/android/java")
         }
         getByName("debug") {
             // Path relative to app/ directory. Cargo builds to android/target/android/
-            jniLibs.srcDirs("../target/android")
+            jniLibs.directories.add("../target/android")
         }
         getByName("release") {
-            jniLibs.srcDirs("../target/android")
+            jniLibs.directories.add("../target/android")
         }
     }
 
@@ -111,18 +109,15 @@ android {
 }
 
 dependencies {
-    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.appcompat:appcompat:1.7.1")
 }
 
 // Check if cargo-ndk is available
 fun checkCargoNdk() {
-    val result = exec {
+    val result = providers.exec {
         commandLine("cargo", "ndk", "--version")
         isIgnoreExitValue = true
-        // Output suppression: version check is silent
-        standardOutput = ByteArrayOutputStream()
-        errorOutput = ByteArrayOutputStream()
-    }
+    }.result.get()
 
     if (result.exitValue != 0) {
         throw GradleException(
