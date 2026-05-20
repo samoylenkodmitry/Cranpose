@@ -1191,6 +1191,20 @@ impl Renderer for WgpuRenderer {
         Ok(())
     }
 
+    fn update_scene_from_applier(
+        &mut self,
+        applier: &mut MemoryApplier,
+        root: NodeId,
+        viewport: Size,
+        dirty_nodes: &[NodeId],
+    ) -> Result<(), Self::Error> {
+        if dirty_nodes.is_empty() {
+            return self.rebuild_scene_from_applier(applier, root, viewport);
+        }
+        pipeline::update_from_applier(applier, root, &mut self.scene, 1.0, dirty_nodes);
+        Ok(())
+    }
+
     fn draw_dev_overlay(&mut self, text: &str, viewport: Size) {
         const DEV_OVERLAY_NODE_ID: NodeId = NodeId::MAX;
         let padding = 8.0;

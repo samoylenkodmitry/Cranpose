@@ -109,6 +109,17 @@ pub trait Renderer {
         viewport: Size,
     ) -> Result<(), Self::Error>;
 
+    fn update_scene_from_applier(
+        &mut self,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        viewport: Size,
+        dirty_nodes: &[cranpose_core::NodeId],
+    ) -> Result<(), Self::Error> {
+        let _ = dirty_nodes;
+        self.rebuild_scene_from_applier(applier, root, viewport)
+    }
+
     /// Draw a development overlay (e.g., FPS counter) on top of the scene.
     ///
     /// This is called after rebuild_scene when dev options are enabled.

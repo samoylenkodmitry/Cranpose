@@ -2,7 +2,7 @@ use crate::effect_renderer::{CompositeSampleMode, RoundedCompositeMask};
 use crate::normalized_scene::CollectedLayer;
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{
-    BackdropLayer, DrawShape, EffectLayer, ImageDraw, ShadowDraw, SnapAnchor, TextDraw,
+    BackdropLayer, DrawOp, DrawShape, EffectLayer, ImageDraw, ShadowDraw, SnapAnchor, TextDraw,
 };
 use crate::surface_plan::{LayerSurfaceRequirements, TranslationRenderContext};
 use crate::surface_requirements::SurfaceRequirementSet;
@@ -97,6 +97,7 @@ pub(crate) trait SurfaceExecutionBackend {
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        draw_ops: &[DrawOp],
         z_start: usize,
         z_end: usize,
         effect_z_ranges: &[Range<usize>],
@@ -114,6 +115,7 @@ pub(crate) trait SurfaceExecutionBackend {
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        draw_ops: &[DrawOp],
         effect_layers: &[EffectLayer],
         backdrop_layers: &[BackdropLayer],
         z_start: usize,

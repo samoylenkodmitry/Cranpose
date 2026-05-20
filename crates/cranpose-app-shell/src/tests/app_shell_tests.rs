@@ -748,6 +748,80 @@ impl Renderer for CountingRenderer {
     }
 }
 
+struct ScopedUpdateCountingRenderer {
+    scene: TestScene,
+    last_scene: Option<cranpose_ui::RecordedRenderScene>,
+    rebuilds: Rc<Cell<usize>>,
+    updates: Rc<Cell<usize>>,
+    last_dirty_nodes: Rc<RefCell<Vec<cranpose_core::NodeId>>>,
+}
+
+impl ScopedUpdateCountingRenderer {
+    fn new(
+        rebuilds: Rc<Cell<usize>>,
+        updates: Rc<Cell<usize>>,
+        last_dirty_nodes: Rc<RefCell<Vec<cranpose_core::NodeId>>>,
+    ) -> Self {
+        Self {
+            scene: TestScene,
+            last_scene: None,
+            rebuilds,
+            updates,
+            last_dirty_nodes,
+        }
+    }
+}
+
+impl Renderer for ScopedUpdateCountingRenderer {
+    type Scene = TestScene;
+    type Error = ();
+
+    fn scene(&self) -> &Self::Scene {
+        &self.scene
+    }
+
+    fn scene_mut(&mut self) -> &mut Self::Scene {
+        &mut self.scene
+    }
+
+    fn rebuild_scene(
+        &mut self,
+        layout_tree: &LayoutTree,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        self.rebuilds.set(self.rebuilds.get() + 1);
+        let renderer = HeadlessRenderer::new();
+        self.last_scene = Some(renderer.render(layout_tree));
+        Ok(())
+    }
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        self.rebuilds.set(self.rebuilds.get() + 1);
+        let renderer = HeadlessRenderer::new();
+        self.last_scene = Some(renderer.render_from_applier(applier, root));
+        Ok(())
+    }
+
+    fn update_scene_from_applier(
+        &mut self,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        _viewport: Size,
+        dirty_nodes: &[cranpose_core::NodeId],
+    ) -> Result<(), Self::Error> {
+        self.updates.set(self.updates.get() + 1);
+        *self.last_dirty_nodes.borrow_mut() = dirty_nodes.to_vec();
+        let renderer = HeadlessRenderer::new();
+        self.last_scene = Some(renderer.render_from_applier(applier, root));
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct HitGraphRenderer {
     scene: cranpose_render_common::graph_scene::Scene,
@@ -1828,6 +1902,61 @@ fn draw_state_reads_schedule_draw_repass_without_composition_read() {
     assert!(
         (updated_width - 120.0).abs() < 0.1,
         "updated draw width should reflect latest state-only read"
+    );
+}
+
+#[test]
+fn draw_only_repass_uses_scoped_renderer_update() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let state_holder_for_app = Rc::clone(&state_holder);
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::new(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        move || {
+            let width_state = useState(|| 24.0f32);
+            *state_holder_for_app.borrow_mut() = Some(width_state);
+            draw_observed_width_app(width_state);
+        },
+    );
+
+    shell.update();
+    rebuilds.set(0);
+    updates.set(0);
+    last_dirty_nodes.borrow_mut().clear();
+
+    let width_state = state_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("width state should be captured");
+    width_state.set(120.0);
+
+    shell.update();
+
+    assert_eq!(
+        updates.get(),
+        1,
+        "draw-only repass should call the scoped renderer update"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "draw-only repass should not rebuild the full scene"
+    );
+    assert!(
+        !last_dirty_nodes.borrow().is_empty(),
+        "scoped renderer update should receive dirty node ids"
     );
 }
 
