@@ -1,17 +1,15 @@
-import java.io.ByteArrayOutputStream
-
 plugins {
     id("com.android.application")
 }
 
 android {
     namespace = "com.cranpose.isolated.demo"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.cranpose.isolated.demo"
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }
@@ -43,25 +41,23 @@ android {
 
     sourceSets {
         getByName("debug") {
-            jniLibs.srcDirs("../target/android")
+            jniLibs.directories.add("../target/android")
         }
         getByName("release") {
-            jniLibs.srcDirs("../target/android")
+            jniLibs.directories.add("../target/android")
         }
     }
 }
 
 dependencies {
-    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.appcompat:appcompat:1.7.1")
 }
 
 fun checkCargoNdk() {
-    val result = exec {
+    val result = providers.exec {
         commandLine("cargo", "ndk", "--version")
         isIgnoreExitValue = true
-        standardOutput = ByteArrayOutputStream()
-        errorOutput = ByteArrayOutputStream()
-    }
+    }.result.get()
 
     if (result.exitValue != 0) {
         throw GradleException(

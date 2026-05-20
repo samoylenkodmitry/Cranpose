@@ -2,7 +2,10 @@
 //!
 //! This module provides the web event loop implementation using wasm-bindgen and WebGPU.
 
-use crate::launcher::AppSettings;
+use crate::{
+    launcher::AppSettings,
+    wgpu_surface::{current_surface_texture, SurfaceFrame},
+};
 use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_web::WebPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
@@ -67,16 +70,14 @@ pub async fn run(
     }
 
     let backend_preference = requested_web_backend(&window);
-    let instance_desc = wgpu::InstanceDescriptor {
-        backends: instance_backends(backend_preference),
-        ..Default::default()
-    };
+    let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    instance_desc.backends = instance_backends(backend_preference);
     let instance = match backend_preference {
         WebBackendPreference::Auto => {
-            wgpu::util::new_instance_with_webgpu_detection(&instance_desc).await
+            wgpu::util::new_instance_with_webgpu_detection(instance_desc).await
         }
         WebBackendPreference::WebGpu | WebBackendPreference::Gl => {
-            wgpu::Instance::new(&instance_desc)
+            wgpu::Instance::new(instance_desc)
         }
     };
 
@@ -146,9 +147,17 @@ pub async fn run(
             // WebGL backends can cap the swapchain below the requested size.
             // Probe the actual surface once so layout and root scale match the
             // real render target instead of the requested CSS size.
-            let probe = surface
-                .get_current_texture()
-                .map_err(|e| format!("failed to probe surface texture: {e:?}"))?;
+            let probe = match current_surface_texture(&surface, "web probe") {
+                SurfaceFrame::Ready(probe) => probe,
+                SurfaceFrame::Reconfigure => {
+                    return Err(
+                        "failed to probe surface texture: surface needs reconfiguration".into(),
+                    );
+                }
+                SurfaceFrame::Skip => {
+                    return Err("failed to probe surface texture: surface unavailable".into());
+                }
+            };
             let actual_width = probe.texture.width();
             let actual_height = probe.texture.height();
             probe.present();
@@ -608,8 +617,8 @@ pub async fn run(
         app.borrow_mut().update();
 
         let config = surface_config.borrow();
-        match surface.get_current_texture() {
-            Ok(output) => {
+        match current_surface_texture(&surface, "web") {
+            SurfaceFrame::Ready(output) => {
                 let view = output
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
@@ -628,21 +637,12 @@ pub async fn run(
 
                 output.present();
             }
-            Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
-                // Reconfigure surface
+            SurfaceFrame::Reconfigure => {
                 let mut app_mut = app.borrow_mut();
                 let device = app_mut.renderer().device();
                 surface.configure(device, &*config);
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                log::error!("Out of memory");
-            }
-            Err(wgpu::SurfaceError::Timeout) => {
-                log::debug!("Surface timeout, skipping frame");
-            }
-            Err(wgpu::SurfaceError::Other) => {
-                log::error!("Surface other error, skipping frame");
-            }
+            SurfaceFrame::Skip => {}
         }
 
         // Request next frame

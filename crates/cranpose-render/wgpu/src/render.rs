@@ -209,7 +209,7 @@ fn create_shape_pipeline(
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
-        bind_group_layouts: &[uniform_layout, shape_layout],
+        bind_group_layouts: &[Some(uniform_layout), Some(shape_layout)],
         immediate_size: 0,
     });
 
@@ -262,7 +262,7 @@ fn create_image_pipeline(
 
     let image_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Image Pipeline Layout"),
-        bind_group_layouts: &[uniform_layout, image_layout],
+        bind_group_layouts: &[Some(uniform_layout), Some(image_layout)],
         immediate_size: 0,
     });
 

@@ -38,6 +38,8 @@ pub use native_window::{
 };
 #[cfg(feature = "renderer-wgpu")]
 mod present_mode;
+#[cfg(feature = "renderer-wgpu")]
+mod wgpu_surface;
 
 /// Re-export framework services (HTTP, URI, etc.) from the dedicated services crate.
 pub use cranpose_services::*;
