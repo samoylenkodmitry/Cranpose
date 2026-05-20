@@ -8,7 +8,9 @@
 //! The actual `Modifier.horizontal_scroll()` and `Modifier.vertical_scroll()`
 //! extension methods are defined in `modifier/scroll.rs`.
 
-use cranpose_core::{current_runtime_handle, ownedMutableStateOf, NodeId, OwnedMutableState};
+use cranpose_core::{
+    current_runtime_handle, ownedMutableStateOf, NodeId, OwnedMutableState, RuntimeHandle,
+};
 use cranpose_foundation::{
     Constraints, DelegatableNode, LayoutModifierNode, Measurable, ModifierNode,
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -16,11 +18,13 @@ use cranpose_foundation::{
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::LayoutModifierMeasureResult;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_SCROLL_STATE_ID: AtomicU64 = AtomicU64::new(1);
+const SCROLL_MOTION_ACTIVE_FRAME_COUNT: u8 = 6;
 
 /// State object for scroll position tracking.
 ///
@@ -171,11 +175,44 @@ pub(crate) struct ScrollMotionContext {
     inner: Rc<ScrollMotionContextInner>,
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum ScrollMotionContextKey {
+    ScrollState {
+        state_id: u64,
+        is_vertical: bool,
+        reverse_scrolling: bool,
+    },
+    LazyList {
+        state_identity: usize,
+        is_vertical: bool,
+        reverse_scrolling: bool,
+    },
+}
+
 struct ScrollMotionContextInner {
     active: Cell<bool>,
     generation: Cell<u64>,
     invalidate_callbacks: RefCell<std::collections::HashMap<u64, Box<dyn Fn()>>>,
     pending_invalidation: Cell<bool>,
+}
+
+thread_local! {
+    static SCROLL_MOTION_CONTEXTS: RefCell<HashMap<ScrollMotionContextKey, Weak<ScrollMotionContextInner>>> =
+        RefCell::new(HashMap::new());
+}
+
+pub(crate) fn scroll_motion_context_for_key(key: ScrollMotionContextKey) -> ScrollMotionContext {
+    SCROLL_MOTION_CONTEXTS.with(|contexts| {
+        let mut contexts = contexts.borrow_mut();
+        if let Some(inner) = contexts.get(&key).and_then(Weak::upgrade) {
+            return ScrollMotionContext { inner };
+        }
+
+        let context = ScrollMotionContext::new();
+        contexts.insert(key, Rc::downgrade(&context.inner));
+        contexts.retain(|_, weak| weak.strong_count() > 0);
+        context
+    })
 }
 
 impl ScrollMotionContext {
@@ -216,11 +253,7 @@ impl ScrollMotionContext {
             self.invalidate();
         }
         if let Some(runtime) = current_runtime_handle() {
-            let state = self.clone();
-            let _ = runtime.register_frame_callback(move |_| {
-                state.clear_if_generation(generation);
-            });
-            runtime.schedule();
+            self.schedule_clear_after_frames(runtime, generation, SCROLL_MOTION_ACTIVE_FRAME_COUNT);
         } else {
             self.clear_if_generation(generation);
         }
@@ -255,6 +288,31 @@ impl ScrollMotionContext {
         if self.inner.generation.get() == generation {
             self.set_active(false);
         }
+    }
+
+    fn schedule_clear_after_frames(
+        &self,
+        runtime: RuntimeHandle,
+        generation: u64,
+        frames_remaining: u8,
+    ) {
+        let state = self.clone();
+        let runtime_for_next = runtime.clone();
+        let _ = runtime.register_frame_callback(move |_| {
+            if state.inner.generation.get() != generation {
+                return;
+            }
+            if frames_remaining <= 1 {
+                state.clear_if_generation(generation);
+            } else {
+                state.schedule_clear_after_frames(
+                    runtime_for_next,
+                    generation,
+                    frames_remaining - 1,
+                );
+            }
+        });
+        runtime.schedule();
     }
 
     fn invalidate(&self) {

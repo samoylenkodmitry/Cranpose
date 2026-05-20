@@ -59,6 +59,21 @@ impl SurfaceRequirementSet {
             || self.contains(SurfaceRequirement::NonTranslationTransform)
     }
 
+    pub(crate) fn composite_requires_resampling(self) -> bool {
+        self.contains(SurfaceRequirement::NonTranslationTransform)
+            || !self.composite_preserves_raster_content()
+    }
+
+    pub(crate) fn composite_preserves_raster_content(self) -> bool {
+        self.contains(SurfaceRequirement::MotionStableCapture)
+            || self.contains(SurfaceRequirement::PixelStableComposite)
+            || self.contains(SurfaceRequirement::ExplicitOffscreen)
+            || self.contains(SurfaceRequirement::RenderEffect)
+            || self.contains(SurfaceRequirement::Backdrop)
+            || self.contains(SurfaceRequirement::GroupOpacity)
+            || self.contains(SurfaceRequirement::BlendMode)
+    }
+
     #[cfg(test)]
     pub(crate) fn labels(self) -> impl Iterator<Item = &'static str> {
         const ORDERED: &[(SurfaceRequirement, &str)] = &[
@@ -109,12 +124,10 @@ impl SurfaceRequirementSet {
     }
 
     pub(crate) fn composite_sample_mode(self) -> CompositeSampleMode {
-        if self.contains(SurfaceRequirement::MotionStableCapture)
-            || self.contains(SurfaceRequirement::PixelStableComposite)
-        {
-            CompositeSampleMode::Box4
-        } else {
+        if self.composite_requires_resampling() {
             CompositeSampleMode::Linear
+        } else {
+            CompositeSampleMode::Box4
         }
     }
 
@@ -201,5 +214,64 @@ mod tests {
             CompositeSampleMode::Box4
         );
         assert_eq!(requirements.target_scale(3.0), 3.0);
+    }
+
+    #[test]
+    fn translation_only_layer_surfaces_composite_without_resampling() {
+        for requirement in [
+            SurfaceRequirement::ExplicitOffscreen,
+            SurfaceRequirement::RenderEffect,
+            SurfaceRequirement::Backdrop,
+            SurfaceRequirement::GroupOpacity,
+            SurfaceRequirement::BlendMode,
+            SurfaceRequirement::MotionStableCapture,
+        ] {
+            let requirements = SurfaceRequirementSet::default().with(requirement);
+
+            assert_eq!(
+                requirements.composite_sample_mode(),
+                CompositeSampleMode::Box4,
+                "{requirement:?} should preserve pixels when the layer transform is pure translation"
+            );
+            assert!(!requirements.composite_requires_resampling());
+        }
+    }
+
+    #[test]
+    fn text_material_mask_intermediate_uses_linear_sampling() {
+        let requirements =
+            SurfaceRequirementSet::default().with(SurfaceRequirement::TextMaterialMask);
+
+        assert_eq!(
+            requirements.composite_sample_mode(),
+            CompositeSampleMode::Linear
+        );
+        assert!(requirements.composite_requires_resampling());
+    }
+
+    #[test]
+    fn motion_stable_text_material_mask_uses_box4_sampling() {
+        let requirements = SurfaceRequirementSet::default()
+            .with(SurfaceRequirement::TextMaterialMask)
+            .with(SurfaceRequirement::MotionStableCapture);
+
+        assert_eq!(
+            requirements.composite_sample_mode(),
+            CompositeSampleMode::Box4
+        );
+        assert!(!requirements.composite_requires_resampling());
+    }
+
+    #[test]
+    fn non_translation_transform_uses_linear_sampling() {
+        let requirements = SurfaceRequirementSet::default()
+            .with(SurfaceRequirement::ExplicitOffscreen)
+            .with(SurfaceRequirement::NonTranslationTransform);
+
+        assert_eq!(
+            requirements.composite_sample_mode(),
+            CompositeSampleMode::Linear
+        );
+        assert!(requirements.composite_requires_resampling());
     }
 }

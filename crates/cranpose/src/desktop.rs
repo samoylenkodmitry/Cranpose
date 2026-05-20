@@ -33,6 +33,8 @@ use winit::window::{
 const NATIVE_WINDOW_DRAG_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const NATIVE_WINDOW_POSITION_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const NATIVE_WINDOW_PLACEMENT_MARGIN: f32 = 32.0;
+#[cfg(feature = "robot")]
+const ROBOT_PUMP_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 
 #[cfg(feature = "robot")]
 use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
@@ -4305,7 +4307,7 @@ impl ApplicationHandler for App {
                     }
                     RobotCommand::PumpFrames { count } => {
                         for _ in 0..count {
-                            app.update();
+                            app.update_after_frame_interval(ROBOT_PUMP_FRAME_INTERVAL);
                         }
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }

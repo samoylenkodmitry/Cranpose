@@ -1475,12 +1475,6 @@ pub(crate) struct SceneEmissionCounts {
     backdrop_layers: usize,
 }
 
-impl SceneEmissionCounts {
-    pub(crate) fn images(self) -> usize {
-        self.images
-    }
-}
-
 pub(crate) fn scene_emission_counts(scene: &CompositorScene) -> SceneEmissionCounts {
     SceneEmissionCounts {
         shapes: scene.shapes.len(),

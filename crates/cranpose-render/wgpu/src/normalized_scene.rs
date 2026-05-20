@@ -1,3 +1,4 @@
+use crate::effect_renderer::CompositeSampleMode;
 use crate::pipeline::{
     emitted_scene_bounds, push_draw_primitive, push_layer_shadow, push_text_style_draws,
     scene_emission_counts, SceneEmissionCounts,
@@ -7,9 +8,10 @@ use crate::scene::{
     TextDraw,
 };
 use crate::surface_plan::{
-    effective_surface_requirements, layer_cache_key, layer_contains_descendant_backdrop,
-    layer_needs_rigid_snap, layer_surface_requirements_cached, translated_content_axes_for_layer,
-    LayerSurfaceRequirements, TranslatedContentAxes, TranslationRenderContext,
+    composite_sample_mode_for_requirements, effective_surface_requirements, layer_cache_key,
+    layer_contains_descendant_backdrop, layer_needs_rigid_snap, layer_surface_requirements_cached,
+    translated_content_axes_for_layer, LayerSurfaceRequirements, TranslatedContentAxes,
+    TranslationRenderContext,
 };
 use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
@@ -31,7 +33,6 @@ const MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD: f32 = 64.0;
 const MOTION_STABLE_CAPTURE_MAX_LEADING_GUARD: f32 = 2048.0;
 const MOTION_STABLE_CAPTURE_LEADING_VIEWPORTS: f32 = 3.0;
 const TRANSLATED_LOCAL_CAPTURE_STABLE_GUARD: f32 = 64.0;
-const MOTION_STABLE_CAPTURE_PHASE_BUCKET: f32 = 64.0;
 const MOTION_STABLE_CAPTURE_CROSS_AXIS_LEADING_GUARD: f32 = 96.0;
 
 pub(crate) struct ChildLayerComposite<'a> {
@@ -223,19 +224,12 @@ fn stable_deep_leading_axis(
 fn stable_deep_leading_axis_with_guard(
     visible_start: f32,
     visible_extent: f32,
-    full_start: f32,
+    _full_start: f32,
     guard: f32,
 ) -> (f32, f32) {
     let visible_end = visible_start + visible_extent;
     let guarded_start = visible_start - guard;
-    if full_start >= guarded_start - NORMALIZED_SCENE_AFFINE_TOLERANCE {
-        return (full_start, visible_end);
-    }
-
-    let bucket = guard.clamp(1.0, MOTION_STABLE_CAPTURE_PHASE_BUCKET);
-    let phase = (full_start - guarded_start).rem_euclid(bucket);
-    let start = guarded_start + phase;
-    (start, visible_end + phase)
+    (guarded_start, visible_end)
 }
 
 fn leading_capture_bounds(visible_bounds: Rect, full_bounds: Rect) -> Rect {
@@ -481,6 +475,18 @@ fn rigid_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<SnapAn
     Some(SnapAnchor::rigid(Point::new(mapped.x, mapped.y)))
 }
 
+fn surface_composite_needs_rigid_snap(
+    requirements: LayerSurfaceRequirements,
+    translated_content_context: bool,
+    surface_capture_active: bool,
+) -> bool {
+    composite_sample_mode_for_requirements(
+        translated_content_context,
+        surface_capture_active,
+        requirements,
+    ) == CompositeSampleMode::Box4
+}
+
 #[derive(Clone, Copy)]
 struct SceneCounts {
     shapes: usize,
@@ -601,13 +607,11 @@ fn flush_translated_local_picture(
                 z_end,
                 SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
             );
-            if translated_local_picture_needs_composite_anchor(scene, current.counts) {
-                let layer = scene
-                    .effect_layers
-                    .last_mut()
-                    .expect("effect layer was just pushed");
-                layer.snap_anchor = snap_anchor;
-            }
+            let layer = scene
+                .effect_layers
+                .last_mut()
+                .expect("effect layer was just pushed");
+            layer.snap_anchor = snap_anchor;
         }
     }
     *state = Some(TranslatedLocalPictureState {
@@ -616,13 +620,6 @@ fn flush_translated_local_picture(
         stabilize_x: current.stabilize_x,
         stabilize_y: current.stabilize_y,
     });
-}
-
-fn translated_local_picture_needs_composite_anchor(
-    scene: &CompositorScene,
-    counts: SceneEmissionCounts,
-) -> bool {
-    scene.images.len() > counts.images()
 }
 
 pub(crate) fn resolved_child_surface_composite(
@@ -751,13 +748,8 @@ fn collect_layer_contents_into<'a>(
         .translated_content_axes
         .union(translated_content_axes_for_layer(layer));
     let allow_rigid_snap = effective_translated_content_context || !layer.motion_context_animated;
-    let translated_local_picture = layer.translated_content_context
-        && layer.motion_context_animated
-        && !translation_context.inherited_content_translation
-        && !translation_context.surface_capture_active;
     let boundary_snap_anchor = if !translation_context.inherited_content_translation
         && layer.translated_content_context
-        && !translated_local_picture
         && allow_rigid_snap
     {
         rigid_snap_anchor(
@@ -771,25 +763,25 @@ fn collect_layer_contents_into<'a>(
         None
     };
     let translated_snap_anchor = inherited_translated_snap_anchor.or(boundary_snap_anchor);
-    let layer_snap_anchor = if translated_local_picture {
-        None
-    } else {
-        translated_snap_anchor.or_else(|| {
-            if allow_rigid_snap
-                && layer_needs_rigid_snap(layer, effective_translated_content_context)
-            {
-                rigid_snap_anchor(layer_bounds, &local_layer)
-            } else {
-                None
-            }
-        })
-    };
+    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
+        if allow_rigid_snap && layer_needs_rigid_snap(layer, effective_translated_content_context) {
+            rigid_snap_anchor(layer_bounds, &local_layer)
+        } else {
+            None
+        }
+    });
+    let translated_local_picture = layer.translated_content_context
+        && layer.motion_context_animated
+        && layer_clip.is_none()
+        && !translation_context.inherited_content_translation
+        && !translation_context.surface_capture_active
+        && !translation_context.local_picture_capture_active;
     let stabilize_translated_capture_x =
         layer.translated_content_offset.x.abs() > NORMALIZED_SCENE_AFFINE_TOLERANCE;
     let stabilize_translated_capture_y =
         layer.translated_content_offset.y.abs() > NORMALIZED_SCENE_AFFINE_TOLERANCE;
     let translated_text_motion =
-        effective_translated_content_context && !translation_context.surface_capture_active;
+        effective_translated_content_context && !translation_context.local_picture_capture_active;
     let mut translated_local_picture_state =
         translated_local_picture.then(|| TranslatedLocalPictureState {
             counts: scene_emission_counts(local_scene),
@@ -811,6 +803,7 @@ fn collect_layer_contents_into<'a>(
         inherited_content_translation: effective_translated_content_context,
         translated_content_axes: direct_translated_content_axes,
         surface_capture_active: translation_context.surface_capture_active,
+        local_picture_capture_active: translation_context.local_picture_capture_active,
     };
     let mut deferred_primitives = Vec::new();
 
@@ -838,24 +831,20 @@ fn collect_layer_contents_into<'a>(
                     let child_bounds = child_layer
                         .local_bounds
                         .translate(child_offset.x, child_offset.y);
-                    let child_translated_snap_anchor = if translated_local_picture {
-                        None
-                    } else {
-                        translated_snap_anchor.or_else(|| {
-                            if effective_translated_content_context {
-                                let child_isolation =
-                                    effective_layer_isolation(&child_layer.graphics_layer);
-                                let child_content_layer = layer_for_content(
-                                    &child_layer.graphics_layer,
-                                    child_isolation.as_ref(),
-                                );
-                                let child_local_layer = local_content_layer(&child_content_layer);
-                                rigid_snap_anchor(child_bounds, &child_local_layer)
-                            } else {
-                                None
-                            }
-                        })
-                    };
+                    let child_translated_snap_anchor = translated_snap_anchor.or_else(|| {
+                        if effective_translated_content_context {
+                            let child_isolation =
+                                effective_layer_isolation(&child_layer.graphics_layer);
+                            let child_content_layer = layer_for_content(
+                                &child_layer.graphics_layer,
+                                child_isolation.as_ref(),
+                            );
+                            let child_local_layer = local_content_layer(&child_content_layer);
+                            rigid_snap_anchor(child_bounds, &child_local_layer)
+                        } else {
+                            None
+                        }
+                    });
                     let child_shadow_clip = resolve_clip(
                         visual_clip,
                         child_layer
@@ -914,24 +903,25 @@ fn collect_layer_contents_into<'a>(
                     child_bounds,
                     child_shadow_clip,
                 );
-                let child_snap_anchor = if translated_local_picture {
-                    None
-                } else {
-                    translated_snap_anchor.or_else(|| {
-                        if effective_translated_content_context {
-                            let child_isolation =
-                                effective_layer_isolation(&child_layer.graphics_layer);
-                            let child_content_layer = layer_for_content(
-                                &child_layer.graphics_layer,
-                                child_isolation.as_ref(),
-                            );
-                            let child_local_layer = local_content_layer(&child_content_layer);
-                            rigid_snap_anchor(child_bounds, &child_local_layer)
-                        } else {
-                            None
-                        }
-                    })
-                };
+                let child_snap_anchor = translated_snap_anchor.or_else(|| {
+                    let child_surface_needs_snap = surface_composite_needs_rigid_snap(
+                        child_requirements,
+                        effective_translated_content_context,
+                        translation_context.surface_capture_active,
+                    );
+                    if effective_translated_content_context || child_surface_needs_snap {
+                        let child_isolation =
+                            effective_layer_isolation(&child_layer.graphics_layer);
+                        let child_content_layer = layer_for_content(
+                            &child_layer.graphics_layer,
+                            child_isolation.as_ref(),
+                        );
+                        let child_local_layer = local_content_layer(&child_content_layer);
+                        rigid_snap_anchor(child_bounds, &child_local_layer)
+                    } else {
+                        None
+                    }
+                });
                 let child_to_parent =
                     child_layer
                         .transform_to_parent
@@ -980,7 +970,6 @@ fn collect_layer_contents_into<'a>(
     for primitive in deferred_primitives {
         push_local_primitive(local_scene, primitive, &local_primitive_context);
     }
-
     flush_translated_local_picture(
         local_scene,
         &mut translated_local_picture_state,

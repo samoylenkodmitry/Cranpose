@@ -16,6 +16,7 @@ use cranpose_ui_graphics::{DrawPrimitive, GraphicsLayer, Point, RoundedCornerSha
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
 
 fn test_guard() -> MutexGuard<'static, ()> {
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -135,6 +136,10 @@ fn live_slot_count(slots: &[cranpose_core::SlotDebugEntry]) -> usize {
 
 thread_local! {
     static APP_SHELL_LAZY_LIST_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
+}
+
+thread_local! {
+    static APP_SHELL_FRAME_TIME_RECORDS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
 #[composable]
@@ -946,6 +951,29 @@ fn one_shot_frame_request_content() {
         } else {
             "Frame Applied"
         },
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
+fn frame_time_recorder_content() {
+    launched_effect_async_impl(
+        location_key(file!(), line!(), column!()),
+        (),
+        move |scope| {
+            Box::pin(async move {
+                let clock = scope.runtime().frame_clock();
+                let first = clock.next_frame().await;
+                APP_SHELL_FRAME_TIME_RECORDS.with(|records| records.borrow_mut().push(first));
+                let second = clock.next_frame().await;
+                APP_SHELL_FRAME_TIME_RECORDS.with(|records| records.borrow_mut().push(second));
+            })
+        },
+    );
+
+    Text(
+        "Frame Time Recorder",
         Modifier::empty(),
         TextStyle::default(),
     );
@@ -4098,6 +4126,29 @@ fn app_shell_single_frame_callback_returns_to_idle() {
     assert!(
         !shell.needs_redraw(),
         "shell kept requesting redraw after the one-shot frame callback completed"
+    );
+}
+
+#[test]
+fn app_shell_manual_frame_interval_advances_frame_clock_monotonically() {
+    let _guard = test_guard();
+    APP_SHELL_FRAME_TIME_RECORDS.with(|records| records.borrow_mut().clear());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        frame_time_recorder_content,
+    );
+
+    for _ in 0..4 {
+        shell.update_after_frame_interval(Duration::from_nanos(16_666_667));
+    }
+
+    let records = APP_SHELL_FRAME_TIME_RECORDS.with(|records| records.borrow().clone());
+    assert_eq!(records.len(), 2, "expected two recorded frame callbacks");
+    assert!(
+        records[1] > records[0],
+        "manual frame pumping must advance animation time monotonically: {records:?}"
     );
 }
 

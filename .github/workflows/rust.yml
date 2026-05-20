@@ -39,7 +39,7 @@ jobs:
         run: python3 scripts/check_cranpose_versions.py
 
       - name: Run workspace tests
-        run: cargo test --profile ci --workspace --verbose
+        run: cargo test --profile ci --workspace
 
       - name: Run workspace clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -63,7 +63,7 @@ jobs:
           key: rust-${{ matrix.feature }}
 
       - name: Run cranpose-core feature tests
-        run: cargo test --profile ci -p cranpose-core --features ${{ matrix.feature }} --verbose
+        run: cargo test --profile ci -p cranpose-core --features ${{ matrix.feature }}
 
   property-smoke:
     name: linux / stable / property smoke
@@ -84,7 +84,6 @@ jobs:
           cargo test --profile ci
           -p cranpose-core
           deterministic_model_render_frames_match_slot_table
-          --verbose
 
   criterion-smoke:
     name: linux / stable / criterion smoke

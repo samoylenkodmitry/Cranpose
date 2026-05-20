@@ -345,6 +345,10 @@ impl LayoutNode {
         self.modifier_slices_dirty.set(false);
     }
 
+    pub(crate) fn mark_modifier_slices_dirty(&self) {
+        self.modifier_slices_dirty.set(true);
+    }
+
     #[cfg(test)]
     fn dispatch_modifier_invalidations(&self, invalidations: &[ModifierInvalidation]) {
         self.dispatch_modifier_invalidations_with_prev(invalidations, NodeCapabilities::empty());

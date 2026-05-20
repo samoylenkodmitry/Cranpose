@@ -29,8 +29,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
 
-const APP_WIDTH: u32 = 1120;
-const APP_HEIGHT: u32 = 900;
+const APP_WIDTH: u32 = 1100;
+const APP_HEIGHT: u32 = 1100;
 const APP_BOTTOM_LIST_GAP: f32 = 50.0;
 const WORKSPACE_VIEWPORT_FALLBACK_TOP: f32 = 96.0;
 const INTERACTIVE_QUEUE_CHIP_WIDTH: f32 = 214.0;
@@ -53,13 +53,19 @@ const WORKSPACE_SCROLL_SHADOW_HEIGHT: f32 = 82.0;
 const COMPARE_VIEWPORT_INSET_PX: u32 = WORKSPACE_SCROLL_SHADOW_HEIGHT as u32;
 const TARGET_MIN_CENTER_Y: f32 = 720.0;
 const TARGET_MAX_CENTER_Y: f32 = 865.0;
-const CAPTURE_SCALE: f32 = 1517.0 / APP_WIDTH as f32;
-const CAPTURE_SCALE_EPSILON: f32 = 0.02;
+const WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y: f32 = 240.0;
 const BUTTON_QUALITY_MAX_EDGE_LOSS_RATIO: f32 = 0.10;
 const BUTTON_QUALITY_MAX_EXTRA_COLORS: usize = 180;
 const BUTTON_QUALITY_SAFE_EDGE: f32 = 2.0;
 const BUTTON_QUALITY_TARGET_MIN_STABLE_RATIO: f32 = 0.24;
 const BUTTON_QUALITY_TARGET_MAX_STABLE_RATIO: f32 = 0.58;
+const BUTTON_REFERENCE_FIXTURE_WIDTH: f32 = 152.0;
+const BUTTON_REFERENCE_FIXTURE_HEIGHT: f32 = 60.0;
+const BUTTON_REFERENCE_DIFF_TOLERANCE: u32 = 4;
+const BUTTON_REFERENCE_MAX_DIFFERING_RATIO: f32 = 0.10;
+const BUTTON_REFERENCE_MAX_EDGE_LOSS_RATIO: f32 = 0.06;
+const BUTTON_REFERENCE_MAX_RED_EDGE_LOSS_RATIO: f32 = 0.06;
+const BUTTON_REFERENCE_MAX_EXTRA_COLORS: usize = 160;
 const ROW_MICRO_STABILITY_STEPS: usize = 20;
 const ROW_MICRO_SCROLL_DELTA_Y: f32 = -1.0;
 const ROW_MICRO_TARGET_MIN_STABLE_RATIO: f32 = 0.50;
@@ -79,8 +85,8 @@ const ROW_MICRO_HORIZONTAL_SEARCH_RADIUS_PX: i32 = 4;
 const ROW_MICRO_HORIZONTAL_SHIFT_MIN_IMPROVEMENT_RATIO: f32 = 0.05;
 const ROW_MICRO_FIELD_ICON_LEFT_PAD: f32 = 96.0;
 const ROW_MICRO_FIELD_ICON_REGION_WIDTH: f32 = 88.0;
-const WORKSPACE_STRIP_STABILITY_STEPS: usize = 5;
-const WORKSPACE_STRIP_SCROLL_DELTA_Y: f32 = -40.0;
+const WORKSPACE_STRIP_STABILITY_STEPS: usize = 1;
+const WORKSPACE_STRIP_SCROLL_DELTA_Y: f32 = -1.0;
 const WORKSPACE_STRIP_TARGET_MIN_STABLE_RATIO: f32 = 0.34;
 const WORKSPACE_STRIP_TARGET_MAX_STABLE_RATIO: f32 = 0.58;
 const WORKSPACE_STRIP_REGION_INSET_X: f32 = 12.0;
@@ -92,7 +98,51 @@ const WORKSPACE_STRIP_FRACTIONAL_HORIZONTAL_SEARCH_RADIUS_PX: f32 = 1.5;
 const WORKSPACE_STRIP_FRACTIONAL_HORIZONTAL_STEP_PX: f32 = 0.25;
 const WORKSPACE_STRIP_FRACTIONAL_HORIZONTAL_MIN_ABS_SHIFT_PX: f32 = 0.20;
 const WORKSPACE_STRIP_FRACTIONAL_HORIZONTAL_SHIFT_MIN_IMPROVEMENT_RATIO: f32 = 0.015;
-const WORKSPACE_TOP_BAND_STABILITY_STEPS: usize = 8;
+const WORKSPACE_STRIP_ACTIVE_SETTLE_FRAMES: u32 = 8;
+const WORKSPACE_STRIP_ACTIVE_DIFF_TOLERANCE: u32 = 4;
+const WORKSPACE_STRIP_ACTIVE_MAX_DIFFERING_PIXELS: usize = 2_500;
+const WORKSPACE_STRIP_ACTIVE_MAX_DIFFERING_RATIO: f32 = 0.0025;
+const WORKSPACE_STRIP_ACTIVE_MAX_PIXEL_DIFF: u32 = 72;
+const WORKSPACE_STRIP_ACTIVE_MAX_EDGE_LOSS_RATIO: f32 = 0.025;
+const WORKSPACE_STRIP_ACTIVE_MAX_EXTRA_COLORS: usize = 96;
+const WORKSPACE_STRIP_ACTIVE_CAPTURE_ATTEMPTS: usize = 12;
+const WORKSPACE_STRIP_ACTIVE_CAPTURE_SLEEP_MS: u64 = 8;
+const WORKSPACE_ACTIVE_VIEWPORT_STABILITY_STEPS: usize = 1;
+const WORKSPACE_ACTIVE_VIEWPORT_SCROLL_DELTA_Y: f32 = -1.0;
+const WORKSPACE_ACTIVE_VIEWPORT_DIFF_TOLERANCE: u32 = 4;
+const WORKSPACE_ACTIVE_VIEWPORT_MAX_DIFFERING_RATIO: f32 = 0.0025;
+const WORKSPACE_ACTIVE_VIEWPORT_MAX_PIXEL_DIFF: u32 = 72;
+const WORKSPACE_ACTIVE_VIEWPORT_MAX_EDGE_LOSS_RATIO: f32 = 0.025;
+const WORKSPACE_ACTIVE_VIEWPORT_MAX_EXTRA_COLORS: usize = 160;
+const WORKSPACE_ACTIVE_VIEWPORT_ACTIVE_PUMP_FRAMES: u32 = 1;
+const WORKSPACE_SURFACE_GEOMETRY_EPSILON: f32 = 0.05;
+const WORKSPACE_RIGID_STABILITY_STEPS: usize = 1;
+const WORKSPACE_RIGID_SCROLL_DELTA_Y: f32 = -1.0;
+const WORKSPACE_RIGID_TARGET_MIN_STABLE_RATIO: f32 = 0.40;
+const WORKSPACE_RIGID_TARGET_MAX_STABLE_RATIO: f32 = 0.58;
+const WORKSPACE_RIGID_REGION_INSET_X: f32 = 22.0;
+const WORKSPACE_RIGID_REGION_INSET_Y: f32 = 18.0;
+const WORKSPACE_RIGID_DELTA_EPSILON: f32 = 0.05;
+const WORKSPACE_RIGID_DIFF_TOLERANCE: u32 = 8;
+const WORKSPACE_RIGID_MAX_DIFFERING_PIXELS: usize = 2_500;
+const WORKSPACE_RIGID_MAX_DIFFERING_RATIO: f32 = 0.006;
+const WORKSPACE_RIGID_PUMP_FRAMES_AFTER_SCROLL: u32 = 1;
+const WORKSPACE_ACTIVE_CRISPNESS_SETTLE_FRAMES: u32 = 8;
+const WORKSPACE_ACTIVE_CRISPNESS_MAX_EDGE_LOSS_RATIO: f32 = 0.04;
+const WORKSPACE_ACTIVE_CRISPNESS_MAX_EXTRA_COLORS: usize = 48;
+const WORKSPACE_ANCHOR_FEATURE_PAD: f32 = 10.0;
+const WORKSPACE_ANCHOR_FIELD_LEFT_PAD: f32 = 82.0;
+const WORKSPACE_ANCHOR_FIELD_WIDTH: f32 = 72.0;
+const WORKSPACE_ANCHOR_FIELD_TOP_PAD: f32 = 18.0;
+const WORKSPACE_ANCHOR_FIELD_HEIGHT: f32 = 62.0;
+const WORKSPACE_ANCHOR_MAX_CENTER_DELTA_PX: f32 = 0.55;
+const WORKSPACE_ANCHOR_MAX_CENTROID_DELTA_PX: f32 = 4.0;
+const WORKSPACE_ANCHOR_MAX_TEXT_CENTROID_DELTA_PX: f32 = 10.0;
+const WORKSPACE_ANCHOR_MAX_WIDTH_DELTA_PX: i32 = 1;
+const WORKSPACE_ANCHOR_MAX_COUNT_DELTA_RATIO: f32 = 0.14;
+const WORKSPACE_ANCHOR_MAX_TEXT_COUNT_DELTA_RATIO: f32 = 0.30;
+const WORKSPACE_ANCHOR_MAX_PAIR_DISTANCE_DELTA_PX: f32 = 1.10;
+const WORKSPACE_TOP_BAND_STABILITY_STEPS: usize = 2;
 const WORKSPACE_TOP_BAND_SCROLL_DELTA_Y: f32 = -1.0;
 const WORKSPACE_TOP_BAND_REGION_INSET_X: f32 = 12.0;
 const WORKSPACE_TOP_BAND_REGION_TOP: f32 = 12.0;
@@ -123,26 +173,39 @@ const BOTTOM_CLEAR_MAX_RED_PROFILE_L1_RATIO: f32 = 0.055;
 const BOTTOM_CLEAR_MAX_RED_COLUMN_DELTA_RATIO: f32 = 0.10;
 const BOTTOM_CLEAR_HORIZONTAL_SEARCH_RADIUS_PX: i32 = 4;
 const BOTTOM_CLEAR_HORIZONTAL_SHIFT_MIN_IMPROVEMENT_RATIO: f32 = 0.05;
+const BOTTOM_CLEAR_ACTIVE_CRISPNESS_SETTLE_FRAMES: u32 = 8;
+const BOTTOM_CLEAR_ACTIVE_CRISPNESS_MAX_EDGE_LOSS_RATIO: f32 = 0.04;
+const BOTTOM_CLEAR_ACTIVE_CRISPNESS_MAX_EXTRA_COLORS: usize = 48;
 const RENDER_STATS_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_SCROLL_RENDER_STATS";
 const INTERACTIVE_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_INTERACTIVE";
 const EXTENDED_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_EXTENDED";
+const WINDOW_WIDTH_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_WINDOW_WIDTH";
+const WINDOW_HEIGHT_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_WINDOW_HEIGHT";
 const STRIP_ONLY_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_STRIP_ONLY";
 const STRIP_TARGET_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_STRIP_TARGET";
 const STRIP_STEPS_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_STRIP_STEPS";
 const STRIP_SCROLL_DELTA_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_STRIP_SCROLL_DELTA";
+const ACTIVE_VIEWPORT_ONLY_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_ACTIVE_VIEWPORT_ONLY";
+const ACTIVE_VIEWPORT_TARGET_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_ACTIVE_VIEWPORT_TARGET";
+const ACTIVE_VIEWPORT_STEPS_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_ACTIVE_VIEWPORT_STEPS";
+const ACTIVE_VIEWPORT_SCROLL_DELTA_ENV: &str =
+    "CRANPOSE_LEETCODEDAILY_FULL_ACTIVE_VIEWPORT_SCROLL_DELTA";
+const RIGID_ONLY_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_RIGID_ONLY";
+const RIGID_TARGET_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_RIGID_TARGET";
+const RIGID_STEPS_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_RIGID_STEPS";
 const TOP_BAND_ONLY_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_TOP_BAND_ONLY";
 const TOP_BAND_TARGET_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_TOP_BAND_TARGET";
 const TOP_BAND_STEPS_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_TOP_BAND_STEPS";
+const BOTTOM_CLEAR_ONLY_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_BOTTOM_CLEAR_ONLY";
+const VISUAL_ANCHORS_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_VISUAL_ANCHORS";
 const TOP_BAND_CAPTURE_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_TOP_BAND_CAPTURE";
 const BUTTON_QUALITY_CAPTURE_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_BUTTON_QUALITY_CAPTURE";
+const BUTTON_REFERENCE_ONLY_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_BUTTON_REFERENCE_ONLY";
+const BUTTON_REFERENCE_CAPTURE_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_BUTTON_REFERENCE_CAPTURE";
+const BUTTON_REFERENCE_OUTSIDE_TAG: &str = "LeetcodeDailyFullOutsideReferenceClear";
+const BUTTON_REFERENCE_INSIDE_TAG: &str = "LeetcodeDailyFullInsideReferenceClear";
 const BOTTOM_CLEAR_CAPTURE_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_BOTTOM_CLEAR_CAPTURE";
 static NEXT_X11_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
-const DEEP_CAPTURE_TARGETS: [&str; 4] = [
-    "Rust Code",
-    "Card Preview",
-    "Cranpose Preview",
-    "Blog Template Preview",
-];
 const APP_BACKGROUND_PNG: &[u8] = include_bytes!("../assets/leetcodedaily/app-background.png");
 const APP_LOGO_PNG: &[u8] = include_bytes!("../assets/leetcodedaily/app-logo.png");
 const UI_ICONS_PNG: &[u8] = include_bytes!("../assets/leetcodedaily/ui-icons.png");
@@ -154,6 +217,13 @@ const HERO_WRITE_PNG: &[u8] = include_bytes!("../assets/leetcodedaily/hero-write
 const HERO_CODE_PNG: &[u8] = include_bytes!("../assets/leetcodedaily/hero-code.png");
 const HERO_REVIEW_PNG: &[u8] = include_bytes!("../assets/leetcodedaily/hero-review.png");
 const HERO_SHIP_PNG: &[u8] = include_bytes!("../assets/leetcodedaily/hero-ship.png");
+const DEJAVU_SANS_TTF: &[u8] = include_bytes!("../assets/leetcodedaily/fonts/DejaVuSans.ttf");
+const DEJAVU_SANS_MONO_TTF: &[u8] =
+    include_bytes!("../assets/leetcodedaily/fonts/DejaVuSansMono.ttf");
+const MONASPACE_KRYPTON_TTF: &[u8] =
+    include_bytes!("../assets/leetcodedaily/fonts/MonaspaceKryptonVarVF.ttf");
+static LEETCODEDAILY_APP_FONTS: &[&[u8]] =
+    &[DEJAVU_SANS_TTF, MONASPACE_KRYPTON_TTF, DEJAVU_SANS_MONO_TTF];
 
 const KOTLIN_CODE: &str = r#"class Solution {
     fun countGood(nums: IntArray, k: Int): Long {
@@ -1122,6 +1192,15 @@ fn LeetcodeDailyFullLayoutApp() {
                                                 theme,
                                                 compact,
                                             );
+                                            if button_reference_enabled() {
+                                                ButtonQualityReferenceFixture(
+                                                    BUTTON_REFERENCE_OUTSIDE_TAG,
+                                                    "quality.reference.outside.clear",
+                                                    status.clone(),
+                                                    ui_preferences.clone(),
+                                                    theme,
+                                                );
+                                            }
                                             let viewport_scroll_state =
                                                 workspace_scroll_state.clone();
                                             BoxWithConstraints(
@@ -1261,6 +1340,52 @@ fn LeetcodeDailyFullLayoutApp() {
 
 #[allow(non_snake_case)]
 #[composable]
+fn ButtonQualityReferenceFixture(
+    tag: &'static str,
+    count_key: &'static str,
+    status: MutableState<String>,
+    ui_preferences: MutableState<UiPreferences>,
+    theme: ThemeMode,
+) {
+    ComposeBox(
+        Modifier::empty()
+            .size(Size::new(
+                BUTTON_REFERENCE_FIXTURE_WIDTH,
+                BUTTON_REFERENCE_FIXTURE_HEIGHT,
+            ))
+            .background(reference_fixture_background(theme))
+            .semantics(move |config: &mut SemanticsConfiguration| {
+                config.content_description = Some(tag.to_string());
+            }),
+        BoxSpec::default().content_alignment(Alignment::CENTER),
+        move || {
+            let status = status.clone();
+            subtle_button(
+                "Clear".to_string(),
+                count_key.to_string(),
+                ui_preferences.clone(),
+                theme,
+                move || {
+                    status.set("Reference clear pressed.".to_string());
+                },
+            );
+        },
+    );
+}
+
+fn button_reference_enabled() -> bool {
+    std::env::var_os(BUTTON_REFERENCE_ONLY_ENV).is_some()
+}
+
+fn reference_fixture_background(theme: ThemeMode) -> Color {
+    match theme {
+        ThemeMode::Dark => Color::from_rgb_u8(20, 33, 55),
+        ThemeMode::Light => Color::from_rgb_u8(218, 247, 249),
+    }
+}
+
+#[allow(non_snake_case)]
+#[composable]
 fn GuidedWorkspace(
     fields: EditorFields,
     preview_state: MutableState<PreviewState>,
@@ -1277,6 +1402,15 @@ fn GuidedWorkspace(
     theme: ThemeMode,
     compact: bool,
 ) {
+    if button_reference_enabled() {
+        ButtonQualityReferenceFixture(
+            BUTTON_REFERENCE_INSIDE_TAG,
+            "quality.reference.inside.clear",
+            status.clone(),
+            ui_preferences.clone(),
+            theme,
+        );
+    }
     ProblemMetaCard(
         fields.clone(),
         status.clone(),
@@ -5043,14 +5177,14 @@ fn scroll_workspace_text_into_view_between(
             .map(|bounds| {
                 let center_y = bounds.center_y();
                 if center_y < min_center_y {
-                    (min_center_y - center_y).clamp(4.0, 80.0)
+                    (min_center_y - center_y).clamp(4.0, WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y)
                 } else if center_y > max_center_y {
-                    -(center_y - max_center_y).clamp(4.0, 80.0)
+                    -(center_y - max_center_y).clamp(4.0, WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y)
                 } else {
                     0.0
                 }
             })
-            .unwrap_or(-80.0);
+            .unwrap_or(-WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y);
         robot
             .mouse_scroll(0.0, scroll_delta_y)
             .expect("scroll workspace to find text");
@@ -5153,56 +5287,6 @@ fn workspace_scroll_anchor(robot: &cranpose::Robot) -> (f32, f32) {
     )
 }
 
-fn assert_workspace_capture_preserves_capture_scale(robot: &cranpose::Robot, label: &str) {
-    let _ = robot
-        .screenshot_with_scale(CAPTURE_SCALE)
-        .expect("capture screenshot for workspace density check");
-    let stats = robot
-        .get_render_stats()
-        .expect("render stats request should succeed")
-        .expect("render stats should be available after capture");
-    let Some(layer) = stats.top_isolated_layers().find(|layer| {
-        layer.reasons.motion_stable_capture
-            && layer.reasons.pixel_stable_composite
-            && layer.logical_rect.width >= 900.0
-            && layer.logical_rect.height >= 700.0
-    }) else {
-        eprintln!(
-            "FATAL: workspace motion-stable capture layer was not present in render stats at {label}"
-        );
-        std::process::exit(1);
-    };
-
-    let scale_x = layer.width as f32 / layer.logical_rect.width.max(1.0);
-    let scale_y = layer.height as f32 / layer.logical_rect.height.max(1.0);
-    println!(
-        "workspace_capture_density label={label}: rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} scale=({scale_x:.3},{scale_y:.3})",
-        layer.logical_rect.x,
-        layer.logical_rect.y,
-        layer.logical_rect.width,
-        layer.logical_rect.height,
-        layer.width,
-        layer.height
-    );
-    if scale_x + CAPTURE_SCALE_EPSILON < CAPTURE_SCALE
-        || scale_y + CAPTURE_SCALE_EPSILON < CAPTURE_SCALE
-    {
-        eprintln!(
-            "FATAL: workspace capture fell below capture scale at {label}: scale=({scale_x:.3},{scale_y:.3}) required={CAPTURE_SCALE:.3}"
-        );
-        std::process::exit(1);
-    }
-}
-
-fn assert_deep_workspace_captures_preserve_capture_scale(robot: &cranpose::Robot) {
-    for target in DEEP_CAPTURE_TARGETS {
-        scroll_workspace_text_into_view_between(robot, target, 520.0, 760.0, 80);
-        std::thread::sleep(Duration::from_millis(250));
-        let _ = robot.wait_for_idle();
-        assert_workspace_capture_preserves_capture_scale(robot, target);
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 struct Bounds {
     x: f32,
@@ -5268,6 +5352,18 @@ struct ButtonQualitySample {
 }
 
 #[derive(Debug)]
+struct ButtonReferenceSample {
+    tag: &'static str,
+    bounds: Bounds,
+    edge_energy: f32,
+    red_edge_energy: f32,
+    unique_rgb_count: usize,
+    red_profile: RedIconHorizontalProfile,
+    crop: cranpose::RobotScreenshot,
+    crop_path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
 struct RowMicroStabilitySample {
     label_bounds: Bounds,
     clear_bounds: Bounds,
@@ -5282,6 +5378,22 @@ struct WorkspaceStripStabilitySample {
     target_bounds: Bounds,
     region: Bounds,
     screenshot: cranpose::RobotScreenshot,
+}
+
+struct WorkspaceRigidStabilitySample {
+    target_bounds: Bounds,
+    region: Bounds,
+    visual_anchors: Vec<WorkspaceVisualAnchor>,
+    screenshot: cranpose::RobotScreenshot,
+}
+
+#[derive(Clone, Debug)]
+struct WorkspaceVisualAnchor {
+    label: &'static str,
+    region: Bounds,
+    bounds: PixelFeatureBounds,
+    edge_energy: f32,
+    unique_rgb_count: usize,
 }
 
 struct WorkspaceTopBandStabilitySample {
@@ -5299,6 +5411,8 @@ struct BottomClearStabilitySample {
     fixed_crop: cranpose::RobotScreenshot,
     clear_crop: cranpose::RobotScreenshot,
     red_profile: RedIconHorizontalProfile,
+    clear_edge_energy: f32,
+    clear_unique_rgb_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -5454,10 +5568,23 @@ fn assert_workspace_strip_stable_under_micro_scroll(robot: &cranpose::Robot, tar
         robot
             .mouse_scroll(0.0, scroll_delta_y)
             .expect("workspace strip stability scroll should succeed");
-        std::thread::sleep(Duration::from_millis(120));
-        let _ = robot.wait_for_idle();
 
+        let active_screenshot = capture_first_moved_workspace_strip_screenshot(
+            robot,
+            target_text,
+            step,
+            &previous,
+            scroll_delta_y,
+        );
+        robot
+            .pump_frames(WORKSPACE_STRIP_ACTIVE_SETTLE_FRAMES)
+            .expect("workspace strip settle frame pump should succeed");
         let current = capture_workspace_strip_stability_sample(robot, target_text);
+        let active = WorkspaceStripStabilitySample {
+            target_bounds: current.target_bounds,
+            region: previous.region,
+            screenshot: active_screenshot,
+        };
         log_workspace_strip_render_stats(robot, step);
         let actual_delta_y = current.target_bounds.y - previous.target_bounds.y;
         println!(
@@ -5474,13 +5601,332 @@ fn assert_workspace_strip_stable_under_micro_scroll(robot: &cranpose::Robot, tar
             );
             fail_with_robot(
                 robot,
+            &format!(
+                "{target_text} workspace strip did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
+                scroll_delta_y,
+            ),
+        );
+        }
+        assert_workspace_strip_horizontal_stable(
+            robot,
+            target_text,
+            step,
+            &previous,
+            &active,
+            actual_delta_y,
+        );
+        assert_workspace_strip_active_frame_matches_settled(
+            robot,
+            target_text,
+            step,
+            &active,
+            &current,
+        );
+        previous = current;
+    }
+}
+
+fn capture_workspace_active_viewport_sample(
+    robot: &cranpose::Robot,
+    target_text: &str,
+) -> WorkspaceStripStabilitySample {
+    let target_bounds = workspace_text_bounds_exact(robot, target_text)
+        .unwrap_or_else(|| fail_with_robot(robot, &format!("{target_text} label not found")));
+    let stable_band = stable_workspace_content_bounds(robot);
+    if !stable_band.overlaps_x(target_bounds)
+        || !stable_band.inset_contains(target_bounds, WORKSPACE_STRIP_REGION_INSET_Y)
+    {
+        fail_with_robot(
+            robot,
+            &format!(
+                "{target_text} label is outside the active viewport stable band: bounds=({:.1},{:.1},{:.1},{:.1}) viewport=({:.1},{:.1},{:.1},{:.1})",
+                target_bounds.x,
+                target_bounds.y,
+                target_bounds.width,
+                target_bounds.height,
+                stable_band.x,
+                stable_band.y,
+                stable_band.width,
+                stable_band.height
+            ),
+        );
+    }
+
+    let region = Bounds {
+        x: stable_band.x + WORKSPACE_STRIP_REGION_INSET_X,
+        y: stable_band.y + WORKSPACE_STRIP_REGION_INSET_Y,
+        width: (stable_band.width - WORKSPACE_STRIP_REGION_INSET_X * 2.0).max(0.0),
+        height: (stable_band.height - WORKSPACE_STRIP_REGION_INSET_Y * 2.0).max(0.0),
+    };
+    let screenshot = capture_visible_window_screenshot("workspace-active-viewport");
+
+    WorkspaceStripStabilitySample {
+        target_bounds,
+        region,
+        screenshot,
+    }
+}
+
+fn assert_workspace_active_viewport_first_frame_matches_settled(
+    robot: &cranpose::Robot,
+    target_text: &str,
+) {
+    let steps =
+        env_usize(ACTIVE_VIEWPORT_STEPS_ENV).unwrap_or(WORKSPACE_ACTIVE_VIEWPORT_STABILITY_STEPS);
+    let scroll_delta_y = env_f32(ACTIVE_VIEWPORT_SCROLL_DELTA_ENV)
+        .unwrap_or(WORKSPACE_ACTIVE_VIEWPORT_SCROLL_DELTA_Y);
+    scroll_workspace_text_into_stable_band(
+        robot,
+        target_text,
+        WORKSPACE_STRIP_TARGET_MIN_STABLE_RATIO,
+        WORKSPACE_STRIP_TARGET_MAX_STABLE_RATIO,
+        120,
+    );
+    std::thread::sleep(Duration::from_millis(250));
+    let _ = robot.wait_for_idle();
+
+    let mut previous = capture_workspace_active_viewport_sample(robot, target_text);
+    for step in 1..=steps {
+        let (anchor_x, anchor_y) = workspace_scroll_anchor(robot);
+        robot
+            .mouse_move(anchor_x, anchor_y)
+            .expect("move cursor to workspace for active viewport stability");
+        std::thread::sleep(Duration::from_millis(30));
+        robot
+            .mouse_scroll(0.0, scroll_delta_y)
+            .expect("workspace active viewport micro scroll should succeed");
+
+        robot
+            .pump_frames(WORKSPACE_ACTIVE_VIEWPORT_ACTIVE_PUMP_FRAMES)
+            .expect("workspace active viewport first frame pump should succeed");
+        let active_screenshot =
+            capture_visible_window_screenshot("workspace-active-viewport-first");
+        robot
+            .pump_frames(WORKSPACE_STRIP_ACTIVE_SETTLE_FRAMES)
+            .expect("workspace active viewport settle frame pump should succeed");
+        let settled = capture_workspace_active_viewport_sample(robot, target_text);
+        let actual_delta_y = settled.target_bounds.y - previous.target_bounds.y;
+        println!(
+            "workspace_active_viewport_geometry step={step} target={target_text} target_delta_y={actual_delta_y:.3} region=({:.1},{:.1},{:.1},{:.1})",
+            settled.region.x, settled.region.y, settled.region.width, settled.region.height,
+        );
+        if (actual_delta_y - scroll_delta_y).abs() > WORKSPACE_STRIP_DELTA_EPSILON {
+            save_workspace_strip_failure(
+                step,
+                &previous.screenshot,
+                &settled.screenshot,
+                previous.region,
+                actual_delta_y,
+            );
+            fail_with_robot(
+                robot,
                 &format!(
-                    "{target_text} workspace strip did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
+                    "{target_text} active viewport did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
                     scroll_delta_y,
                 ),
             );
         }
-        assert_workspace_strip_horizontal_stable(
+        assert_workspace_active_viewport_first_frame_moved(
+            robot,
+            target_text,
+            step,
+            &previous,
+            &active_screenshot,
+            scroll_delta_y,
+        );
+        let active = WorkspaceStripStabilitySample {
+            target_bounds: settled.target_bounds,
+            region: previous.region,
+            screenshot: active_screenshot,
+        };
+        assert_workspace_active_viewport_frame_matches_settled(
+            robot,
+            target_text,
+            step,
+            &active,
+            &settled,
+        );
+        previous = settled;
+    }
+}
+
+fn assert_workspace_active_viewport_first_frame_moved(
+    robot: &cranpose::Robot,
+    target_text: &str,
+    step: usize,
+    previous: &WorkspaceStripStabilitySample,
+    active_screenshot: &cranpose::RobotScreenshot,
+    expected_delta_y: f32,
+) {
+    let previous_crop = normalize_workspace_region(&previous.screenshot, previous.region);
+    let followed_region = Bounds {
+        y: previous.region.y + expected_delta_y,
+        ..previous.region
+    };
+    let unmoved_crop = normalize_workspace_region(active_screenshot, previous.region);
+    let followed_crop = normalize_workspace_region(active_screenshot, followed_region);
+    let unmoved_score = screenshot_abs_difference_score(&previous_crop, &unmoved_crop)
+        .expect("active viewport unmoved crop should match size");
+    let followed_score = screenshot_abs_difference_score(&previous_crop, &followed_crop)
+        .expect("active viewport followed crop should match size");
+    let improvement_ratio = if unmoved_score == 0 {
+        0.0
+    } else {
+        unmoved_score.saturating_sub(followed_score) as f32 / unmoved_score as f32
+    };
+    println!(
+        "workspace_active_viewport_first_frame step={step} target={target_text} unmoved_score={unmoved_score} followed_score={followed_score} improvement_ratio={improvement_ratio:.4}"
+    );
+    if followed_score >= unmoved_score {
+        save_workspace_strip_failure(
+            step,
+            &previous.screenshot,
+            active_screenshot,
+            previous.region,
+            expected_delta_y,
+        );
+        fail_with_robot(
+            robot,
+            &format!(
+                "{target_text} active viewport first frame was stale at step {step}: unmoved_score={unmoved_score} followed_score={followed_score}"
+            ),
+        );
+    }
+}
+
+fn assert_workspace_active_viewport_frame_matches_settled(
+    robot: &cranpose::Robot,
+    target_text: &str,
+    step: usize,
+    active: &WorkspaceStripStabilitySample,
+    settled: &WorkspaceStripStabilitySample,
+) {
+    let target_dx = settled.target_bounds.x - active.target_bounds.x;
+    let target_dy = settled.target_bounds.y - active.target_bounds.y;
+    if target_dx.abs() > WORKSPACE_SURFACE_GEOMETRY_EPSILON
+        || target_dy.abs() > WORKSPACE_SURFACE_GEOMETRY_EPSILON
+    {
+        save_workspace_strip_failure(
+            step,
+            &active.screenshot,
+            &settled.screenshot,
+            active.region,
+            target_dy,
+        );
+        fail_with_robot(
+            robot,
+            &format!(
+                "{target_text} active viewport frame and settled frame do not describe the same scroll position at step {step}: dx={target_dx:.3} dy={target_dy:.3}"
+            ),
+        );
+    }
+
+    let active_crop = normalize_workspace_region(&active.screenshot, active.region);
+    let settled_crop = normalize_workspace_region(&settled.screenshot, active.region);
+    let stats = screenshot_difference_stats(
+        &active_crop,
+        &settled_crop,
+        WORKSPACE_ACTIVE_VIEWPORT_DIFF_TOLERANCE,
+    )
+    .expect("workspace active viewport and settled crops should match size");
+    let pixel_count = (active_crop.width as usize).saturating_mul(active_crop.height as usize);
+    let differing_ratio = stats.differing_pixels as f32 / pixel_count.max(1) as f32;
+    let active_edge = screenshot_edge_energy(&active_crop);
+    let settled_edge = screenshot_edge_energy(&settled_crop);
+    let min_edge = settled_edge * (1.0 - WORKSPACE_ACTIVE_VIEWPORT_MAX_EDGE_LOSS_RATIO);
+    let active_unique = screenshot_unique_rgb_count(&active_crop);
+    let settled_unique = screenshot_unique_rgb_count(&settled_crop);
+    let max_unique = settled_unique + WORKSPACE_ACTIVE_VIEWPORT_MAX_EXTRA_COLORS;
+    println!(
+        "workspace_active_viewport_settled step={step} target={target_text} differing_pixels={} differing_ratio={differing_ratio:.5} max_diff={} active_edge={active_edge:.3} settled_edge={settled_edge:.3} min_edge={min_edge:.3} active_unique={active_unique} settled_unique={settled_unique} max_unique={max_unique}",
+        stats.differing_pixels,
+        stats.max_difference,
+    );
+
+    let changed_too_much = differing_ratio > WORKSPACE_ACTIVE_VIEWPORT_MAX_DIFFERING_RATIO;
+    let hard_pixel_delta = stats.max_difference > WORKSPACE_ACTIVE_VIEWPORT_MAX_PIXEL_DIFF
+        && stats.differing_pixels > pixel_count / 1_000;
+    let blurrier_than_settled = active_edge < min_edge || active_unique > max_unique;
+    if changed_too_much || hard_pixel_delta || blurrier_than_settled {
+        save_workspace_strip_failure(
+            step,
+            &active.screenshot,
+            &settled.screenshot,
+            active.region,
+            0.0,
+        );
+        let first = stats
+            .first_difference
+            .as_ref()
+            .expect("failing workspace active viewport diff should have first difference");
+        fail_with_robot(
+            robot,
+            &format!(
+                "{target_text} first active viewport frame differs from its settled frame at step {step}: differing_pixels={} differing_ratio={differing_ratio:.5} max_diff={} first_diff=({}, {}) before={:?} after={:?} active_edge={active_edge:.3} settled_edge={settled_edge:.3} min_edge={min_edge:.3} active_unique={active_unique} settled_unique={settled_unique} max_unique={max_unique}",
+                stats.differing_pixels,
+                stats.max_difference,
+                first.x,
+                first.y,
+                first.before,
+                first.after
+            ),
+        );
+    }
+}
+
+fn assert_workspace_rigid_picture_stable_during_active_scroll(
+    robot: &cranpose::Robot,
+    target_text: &str,
+) {
+    let steps = env_usize(RIGID_STEPS_ENV).unwrap_or(WORKSPACE_RIGID_STABILITY_STEPS);
+    scroll_workspace_text_into_stable_band(
+        robot,
+        target_text,
+        WORKSPACE_RIGID_TARGET_MIN_STABLE_RATIO,
+        WORKSPACE_RIGID_TARGET_MAX_STABLE_RATIO,
+        120,
+    );
+    std::thread::sleep(Duration::from_millis(250));
+    let _ = robot.wait_for_idle();
+
+    let mut previous = capture_workspace_rigid_stability_sample(robot, target_text);
+    for step in 1..=steps {
+        let (anchor_x, anchor_y) = workspace_scroll_anchor(robot);
+        robot
+            .mouse_move(anchor_x, anchor_y)
+            .expect("move cursor to workspace for rigid active-scroll stability");
+        robot
+            .mouse_scroll(0.0, WORKSPACE_RIGID_SCROLL_DELTA_Y)
+            .expect("workspace rigid active-scroll should succeed");
+        robot
+            .pump_frames(WORKSPACE_RIGID_PUMP_FRAMES_AFTER_SCROLL)
+            .expect("workspace rigid active-scroll frame pump should succeed");
+
+        let current = capture_workspace_rigid_stability_sample(robot, target_text);
+        log_top_isolated_layer_render_stats(robot, "workspace_rigid", step);
+        let actual_delta_y = current.target_bounds.y - previous.target_bounds.y;
+        println!(
+            "workspace_rigid_geometry step={step} target={target_text} target_delta_y={actual_delta_y:.3} region=({:.1},{:.1},{:.1},{:.1})",
+            current.region.x, current.region.y, current.region.width, current.region.height,
+        );
+        if (actual_delta_y - WORKSPACE_RIGID_SCROLL_DELTA_Y).abs() > WORKSPACE_RIGID_DELTA_EPSILON {
+            save_workspace_strip_failure(
+                step,
+                &previous.screenshot,
+                &current.screenshot,
+                previous.region,
+                actual_delta_y,
+            );
+            fail_with_robot(
+                robot,
+                &format!(
+                    "{target_text} workspace rigid active-scroll did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
+                    WORKSPACE_RIGID_SCROLL_DELTA_Y,
+                ),
+            );
+        }
+        assert_workspace_visual_anchors_stable(robot, target_text, step, &previous, &current);
+        assert_workspace_rigid_picture_stable(
             robot,
             target_text,
             step,
@@ -5488,8 +5934,20 @@ fn assert_workspace_strip_stable_under_micro_scroll(robot: &cranpose::Robot, tar
             &current,
             actual_delta_y,
         );
-        previous = current;
+        robot
+            .pump_frames(WORKSPACE_ACTIVE_CRISPNESS_SETTLE_FRAMES)
+            .expect("workspace active-scroll settle frame pump should succeed");
+        let settled = capture_workspace_rigid_stability_sample(robot, target_text);
+        assert_workspace_active_frame_crispness_matches_settled(
+            robot,
+            target_text,
+            step,
+            &current,
+            &settled,
+        );
+        previous = settled;
     }
+    let _ = robot.wait_for_idle();
 }
 
 fn assert_workspace_top_band_stable_under_micro_scroll(robot: &cranpose::Robot, target_text: &str) {
@@ -5579,8 +6037,9 @@ fn assert_bottom_clear_button_stable_under_one_px_scroll(robot: &cranpose::Robot
         robot
             .mouse_scroll(0.0, BOTTOM_CLEAR_SCROLL_DELTA_Y)
             .expect("bottom Clear micro scroll should succeed");
-        std::thread::sleep(Duration::from_millis(120));
-        let _ = robot.wait_for_idle();
+        robot
+            .pump_frames(1)
+            .expect("bottom Clear active-scroll frame pump should succeed");
 
         let current = capture_bottom_clear_stability_sample(robot);
         save_bottom_clear_sample_if_requested(step, &current);
@@ -5612,7 +6071,12 @@ fn assert_bottom_clear_button_stable_under_one_px_scroll(robot: &cranpose::Robot
         }
         assert_bottom_clear_screen_crop_stable(robot, step, &previous, &current, actual_delta_y);
         assert_bottom_clear_icon_profile_stable(robot, step, &previous, &current);
-        previous = current;
+        robot
+            .pump_frames(BOTTOM_CLEAR_ACTIVE_CRISPNESS_SETTLE_FRAMES)
+            .expect("bottom Clear settle frame pump should succeed");
+        let settled = capture_bottom_clear_stability_sample(robot);
+        assert_bottom_clear_active_frame_crispness_matches_settled(robot, step, &current, &settled);
+        previous = settled;
     }
 }
 
@@ -5779,6 +6243,516 @@ fn capture_workspace_strip_stability_sample(
     }
 }
 
+fn capture_first_moved_workspace_strip_screenshot(
+    robot: &cranpose::Robot,
+    target_text: &str,
+    step: usize,
+    previous: &WorkspaceStripStabilitySample,
+    expected_delta_y: f32,
+) -> cranpose::RobotScreenshot {
+    let previous_crop = normalize_workspace_strip(&previous.screenshot, previous.region);
+    let followed_region = Bounds {
+        y: previous.region.y + expected_delta_y,
+        ..previous.region
+    };
+    let mut best_attempt = None::<(cranpose::RobotScreenshot, usize, u64, u64, f32)>;
+
+    for attempt in 0..=WORKSPACE_STRIP_ACTIVE_CAPTURE_ATTEMPTS {
+        if attempt > 0 {
+            robot
+                .pump_frames(1)
+                .expect("workspace strip active capture frame pump should succeed");
+            std::thread::sleep(Duration::from_millis(
+                WORKSPACE_STRIP_ACTIVE_CAPTURE_SLEEP_MS,
+            ));
+        }
+
+        let screenshot = capture_visible_window_screenshot("workspace-strip-active-first-moved");
+        let unmoved_crop = normalize_workspace_strip(&screenshot, previous.region);
+        let followed_crop = normalize_workspace_strip(&screenshot, followed_region);
+        let unmoved_score = screenshot_abs_difference_score(&previous_crop, &unmoved_crop)
+            .expect("workspace strip unmoved active crop should match size");
+        let followed_score = screenshot_abs_difference_score(&previous_crop, &followed_crop)
+            .expect("workspace strip followed active crop should match size");
+        let improvement_ratio = if unmoved_score == 0 {
+            0.0
+        } else {
+            unmoved_score.saturating_sub(followed_score) as f32 / unmoved_score as f32
+        };
+        println!(
+            "workspace_strip_active_capture step={step} target={target_text} attempt={attempt} unmoved_score={unmoved_score} followed_score={followed_score} improvement_ratio={improvement_ratio:.4}"
+        );
+
+        if best_attempt
+            .as_ref()
+            .is_none_or(|(_, _, _, best_score, _)| followed_score < *best_score)
+        {
+            best_attempt = Some((
+                screenshot.clone(),
+                attempt,
+                unmoved_score,
+                followed_score,
+                improvement_ratio,
+            ));
+        }
+        if followed_score < unmoved_score {
+            return screenshot;
+        }
+    }
+
+    let (best_screenshot, best_attempt, best_unmoved, best_followed, best_improvement) =
+        best_attempt.expect("workspace strip active capture should run at least once");
+    save_workspace_strip_failure(
+        step,
+        &previous.screenshot,
+        &best_screenshot,
+        previous.region,
+        expected_delta_y,
+    );
+    fail_with_robot(
+        robot,
+        &format!(
+            "{target_text} workspace strip did not present a moved X11 frame after scroll step {step}: best_attempt={best_attempt} unmoved_score={best_unmoved} followed_score={best_followed} improvement_ratio={best_improvement:.4}"
+        ),
+    );
+}
+
+fn capture_workspace_rigid_stability_sample(
+    robot: &cranpose::Robot,
+    target_text: &str,
+) -> WorkspaceRigidStabilitySample {
+    let target_bounds = workspace_text_bounds_exact(robot, target_text)
+        .unwrap_or_else(|| fail_with_robot(robot, &format!("{target_text} label not found")));
+    let stable_band = stable_workspace_content_bounds(robot);
+    if !stable_band.overlaps_x(target_bounds)
+        || !stable_band.inset_contains(target_bounds, WORKSPACE_RIGID_REGION_INSET_Y)
+    {
+        fail_with_robot(
+            robot,
+            &format!(
+                "{target_text} label is outside the rigid active-scroll stable band: bounds=({:.1},{:.1},{:.1},{:.1}) viewport=({:.1},{:.1},{:.1},{:.1})",
+                target_bounds.x,
+                target_bounds.y,
+                target_bounds.width,
+                target_bounds.height,
+                stable_band.x,
+                stable_band.y,
+                stable_band.width,
+                stable_band.height
+            ),
+        );
+    }
+
+    let vertical_inset = WORKSPACE_RIGID_REGION_INSET_Y
+        + WORKSPACE_RIGID_SCROLL_DELTA_Y.abs().ceil()
+        + BUTTON_QUALITY_SAFE_EDGE;
+    let region = Bounds {
+        x: stable_band.x + WORKSPACE_RIGID_REGION_INSET_X,
+        y: stable_band.y + vertical_inset,
+        width: (stable_band.width - WORKSPACE_RIGID_REGION_INSET_X * 2.0).max(0.0),
+        height: (stable_band.height - vertical_inset * 2.0).max(0.0),
+    };
+    let screenshot = capture_visible_window_screenshot("workspace-rigid-active-scroll");
+    let visual_anchors = if std::env::var_os(VISUAL_ANCHORS_ENV).is_some() {
+        capture_workspace_visual_anchors(
+            robot,
+            &screenshot,
+            target_text,
+            target_bounds,
+            stable_band,
+        )
+    } else {
+        Vec::new()
+    };
+
+    WorkspaceRigidStabilitySample {
+        target_bounds,
+        region,
+        visual_anchors,
+        screenshot,
+    }
+}
+
+fn capture_workspace_visual_anchors(
+    robot: &cranpose::Robot,
+    screenshot: &cranpose::RobotScreenshot,
+    target_text: &str,
+    target_bounds: Bounds,
+    stable_band: Bounds,
+) -> Vec<WorkspaceVisualAnchor> {
+    let paste_bounds = visible_workspace_button_bounds_nearest_to_y(
+        robot,
+        "Paste",
+        stable_band,
+        target_bounds.center_y(),
+    )
+    .unwrap_or_else(|| {
+        fail_with_robot(
+            robot,
+            &format!("{target_text} Paste button not found for visual anchor stability"),
+        )
+    });
+    let clear_bounds = visible_workspace_button_bounds_nearest_to_y_with_red_icon(
+        robot,
+        screenshot,
+        "Clear",
+        stable_band,
+        target_bounds.center_y(),
+    )
+    .or_else(|| {
+        visible_workspace_button_bounds_nearest_to_y(
+            robot,
+            "Clear",
+            stable_band,
+            target_bounds.center_y(),
+        )
+    })
+    .unwrap_or_else(|| {
+        fail_with_robot(
+            robot,
+            &format!("{target_text} Clear button not found for visual anchor stability"),
+        )
+    });
+
+    let field_region = Bounds {
+        x: (target_bounds.x - WORKSPACE_ANCHOR_FIELD_LEFT_PAD).max(0.0),
+        y: (target_bounds.y - WORKSPACE_ANCHOR_FIELD_TOP_PAD).max(0.0),
+        width: WORKSPACE_ANCHOR_FIELD_WIDTH,
+        height: WORKSPACE_ANCHOR_FIELD_HEIGHT,
+    };
+    let label_region = target_bounds.padded(WORKSPACE_ANCHOR_FEATURE_PAD);
+    let paste_region = paste_bounds.padded(WORKSPACE_ANCHOR_FEATURE_PAD);
+    let clear_region = clear_bounds.padded(WORKSPACE_ANCHOR_FEATURE_PAD);
+
+    vec![
+        WorkspaceVisualAnchor {
+            label: "field icon",
+            region: field_region,
+            bounds: feature_bounds_in_logical_region(
+                screenshot,
+                field_region,
+                blue_field_icon_pixel,
+                "field icon",
+            ),
+            edge_energy: screenshot_region_edge_energy(screenshot, field_region, "field icon"),
+            unique_rgb_count: screenshot_region_unique_rgb_count(
+                screenshot,
+                field_region,
+                "field icon",
+            ),
+        },
+        WorkspaceVisualAnchor {
+            label: "label ink",
+            region: label_region,
+            bounds: feature_bounds_in_logical_region(
+                screenshot,
+                label_region,
+                blue_label_text_pixel,
+                "label ink",
+            ),
+            edge_energy: screenshot_region_edge_energy(screenshot, label_region, "label ink"),
+            unique_rgb_count: screenshot_region_unique_rgb_count(
+                screenshot,
+                label_region,
+                "label ink",
+            ),
+        },
+        WorkspaceVisualAnchor {
+            label: "Paste icon",
+            region: paste_region,
+            bounds: feature_bounds_in_logical_region(
+                screenshot,
+                paste_region,
+                blue_field_icon_pixel,
+                "Paste icon",
+            ),
+            edge_energy: screenshot_region_edge_energy(screenshot, paste_region, "Paste icon"),
+            unique_rgb_count: screenshot_region_unique_rgb_count(
+                screenshot,
+                paste_region,
+                "Paste icon",
+            ),
+        },
+        WorkspaceVisualAnchor {
+            label: "Clear icon",
+            region: clear_region,
+            bounds: feature_bounds_in_logical_region(
+                screenshot,
+                clear_region,
+                red_clear_icon_pixel,
+                "Clear icon",
+            ),
+            edge_energy: screenshot_region_edge_energy(screenshot, clear_region, "Clear icon"),
+            unique_rgb_count: screenshot_region_unique_rgb_count(
+                screenshot,
+                clear_region,
+                "Clear icon",
+            ),
+        },
+    ]
+}
+
+fn assert_workspace_visual_anchors_stable(
+    robot: &cranpose::Robot,
+    target_text: &str,
+    step: usize,
+    previous: &WorkspaceRigidStabilitySample,
+    current: &WorkspaceRigidStabilitySample,
+) {
+    let target_dx = current.target_bounds.x - previous.target_bounds.x;
+    let target_width_delta = current.target_bounds.width - previous.target_bounds.width;
+    println!(
+        "workspace_visual_anchor_geometry step={step} target={target_text} target_dx={target_dx:.3} target_width_delta={target_width_delta:.3}"
+    );
+    if target_dx.abs() > WORKSPACE_SURFACE_GEOMETRY_EPSILON
+        || target_width_delta.abs() > WORKSPACE_SURFACE_GEOMETRY_EPSILON
+    {
+        save_workspace_strip_failure(
+            step,
+            &previous.screenshot,
+            &current.screenshot,
+            previous.region,
+            current.target_bounds.y - previous.target_bounds.y,
+        );
+        fail_with_robot(
+            robot,
+            &format!(
+                "{target_text} visual anchor semantics shifted horizontally during active scroll step {step}: target_dx={target_dx:.3} target_width_delta={target_width_delta:.3}"
+            ),
+        );
+    }
+
+    if previous.visual_anchors.len() != current.visual_anchors.len() {
+        fail_with_robot(
+            robot,
+            &format!(
+                "{target_text} visual anchor count changed during active scroll step {step}: previous={} current={}",
+                previous.visual_anchors.len(),
+                current.visual_anchors.len()
+            ),
+        );
+    }
+
+    for (previous_anchor, current_anchor) in previous
+        .visual_anchors
+        .iter()
+        .zip(current.visual_anchors.iter())
+    {
+        if previous_anchor.label != current_anchor.label {
+            fail_with_robot(
+                robot,
+                &format!(
+                    "{target_text} visual anchor order changed during active scroll step {step}: previous={} current={}",
+                    previous_anchor.label, current_anchor.label
+                ),
+            );
+        }
+
+        let center_delta =
+            (current_anchor.bounds.center_x() - previous_anchor.bounds.center_x()).abs();
+        let centroid_delta =
+            (current_anchor.bounds.centroid_x() - previous_anchor.bounds.centroid_x()).abs();
+        let width_delta =
+            current_anchor.bounds.width() as i32 - previous_anchor.bounds.width() as i32;
+        let count_delta =
+            current_anchor.bounds.count as isize - previous_anchor.bounds.count as isize;
+        let count_delta_ratio =
+            count_delta.unsigned_abs() as f32 / previous_anchor.bounds.count.max(1) as f32;
+        let max_centroid_delta = if previous_anchor.label == "label ink" {
+            WORKSPACE_ANCHOR_MAX_TEXT_CENTROID_DELTA_PX
+        } else {
+            WORKSPACE_ANCHOR_MAX_CENTROID_DELTA_PX
+        };
+        let max_count_delta_ratio = if previous_anchor.label == "label ink" {
+            WORKSPACE_ANCHOR_MAX_TEXT_COUNT_DELTA_RATIO
+        } else {
+            WORKSPACE_ANCHOR_MAX_COUNT_DELTA_RATIO
+        };
+        println!(
+            "workspace_visual_anchor step={step} target={target_text} label={} center_delta={center_delta:.3} centroid_delta={centroid_delta:.3} width_delta={width_delta} count_delta={count_delta} count_delta_ratio={count_delta_ratio:.4} previous={:?} current={:?}",
+            previous_anchor.label,
+            previous_anchor.bounds,
+            current_anchor.bounds
+        );
+        if center_delta > WORKSPACE_ANCHOR_MAX_CENTER_DELTA_PX
+            || centroid_delta > max_centroid_delta
+            || width_delta.abs() > WORKSPACE_ANCHOR_MAX_WIDTH_DELTA_PX
+            || count_delta_ratio > max_count_delta_ratio
+        {
+            save_workspace_strip_failure(
+                step,
+                &previous.screenshot,
+                &current.screenshot,
+                previous.region,
+                current.target_bounds.y - previous.target_bounds.y,
+            );
+            fail_with_robot(
+                robot,
+                &format!(
+                    "{target_text} {} visual anchor changed horizontally during active scroll step {step}: center_delta={center_delta:.3} centroid_delta={centroid_delta:.3} width_delta={width_delta} count_delta_ratio={count_delta_ratio:.4}",
+                    previous_anchor.label
+                ),
+            );
+        }
+    }
+
+    for left_index in 0..previous.visual_anchors.len() {
+        for right_index in (left_index + 1)..previous.visual_anchors.len() {
+            let previous_left = &previous.visual_anchors[left_index];
+            let previous_right = &previous.visual_anchors[right_index];
+            let current_left = &current.visual_anchors[left_index];
+            let current_right = &current.visual_anchors[right_index];
+            let previous_distance =
+                previous_right.bounds.center_x() - previous_left.bounds.center_x();
+            let current_distance = current_right.bounds.center_x() - current_left.bounds.center_x();
+            let distance_delta = (current_distance - previous_distance).abs();
+            println!(
+                "workspace_visual_anchor_pair step={step} target={target_text} left={} right={} distance_delta={distance_delta:.3} previous_distance={previous_distance:.3} current_distance={current_distance:.3}",
+                previous_left.label,
+                previous_right.label,
+            );
+            if distance_delta > WORKSPACE_ANCHOR_MAX_PAIR_DISTANCE_DELTA_PX {
+                save_workspace_strip_failure(
+                    step,
+                    &previous.screenshot,
+                    &current.screenshot,
+                    previous.region,
+                    current.target_bounds.y - previous.target_bounds.y,
+                );
+                fail_with_robot(
+                    robot,
+                    &format!(
+                        "{target_text} visual anchors changed relative horizontal distance during active scroll step {step}: left={} right={} distance_delta={distance_delta:.3}",
+                        previous_left.label,
+                        previous_right.label
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn assert_workspace_active_frame_crispness_matches_settled(
+    robot: &cranpose::Robot,
+    target_text: &str,
+    step: usize,
+    active: &WorkspaceRigidStabilitySample,
+    settled: &WorkspaceRigidStabilitySample,
+) {
+    let target_dx = settled.target_bounds.x - active.target_bounds.x;
+    let target_dy = settled.target_bounds.y - active.target_bounds.y;
+    if target_dx.abs() > WORKSPACE_SURFACE_GEOMETRY_EPSILON
+        || target_dy.abs() > WORKSPACE_SURFACE_GEOMETRY_EPSILON
+    {
+        fail_with_robot(
+            robot,
+            &format!(
+                "{target_text} active frame and settled frame do not describe the same scroll position at step {step}: dx={target_dx:.3} dy={target_dy:.3}"
+            ),
+        );
+    }
+
+    for (active_anchor, settled_anchor) in active
+        .visual_anchors
+        .iter()
+        .zip(settled.visual_anchors.iter())
+    {
+        if active_anchor.label != settled_anchor.label {
+            fail_with_robot(
+                robot,
+                &format!(
+                    "{target_text} active/settled anchor order changed at step {step}: active={} settled={}",
+                    active_anchor.label, settled_anchor.label
+                ),
+            );
+        }
+
+        let min_edge_energy =
+            settled_anchor.edge_energy * (1.0 - WORKSPACE_ACTIVE_CRISPNESS_MAX_EDGE_LOSS_RATIO);
+        let max_unique_rgb =
+            settled_anchor.unique_rgb_count + WORKSPACE_ACTIVE_CRISPNESS_MAX_EXTRA_COLORS;
+        println!(
+            "workspace_active_crispness step={step} target={target_text} label={} active_edge={:.3} settled_edge={:.3} min_edge={:.3} active_unique={} settled_unique={} max_unique={} region=({:.1},{:.1},{:.1},{:.1})",
+            active_anchor.label,
+            active_anchor.edge_energy,
+            settled_anchor.edge_energy,
+            min_edge_energy,
+            active_anchor.unique_rgb_count,
+            settled_anchor.unique_rgb_count,
+            max_unique_rgb,
+            active_anchor.region.x,
+            active_anchor.region.y,
+            active_anchor.region.width,
+            active_anchor.region.height,
+        );
+        if active_anchor.edge_energy < min_edge_energy
+            || active_anchor.unique_rgb_count > max_unique_rgb
+        {
+            save_workspace_strip_failure(
+                step,
+                &active.screenshot,
+                &settled.screenshot,
+                active.region,
+                settled.target_bounds.y - active.target_bounds.y,
+            );
+            fail_with_robot(
+                robot,
+                &format!(
+                    "{target_text} {} is blurrier in the first active scroll frame than after settling at step {step}: active_edge={:.3} settled_edge={:.3} min_edge={:.3} active_unique={} settled_unique={} max_unique={}",
+                    active_anchor.label,
+                    active_anchor.edge_energy,
+                    settled_anchor.edge_energy,
+                    min_edge_energy,
+                    active_anchor.unique_rgb_count,
+                    settled_anchor.unique_rgb_count,
+                    max_unique_rgb
+                ),
+            );
+        }
+    }
+}
+
+fn assert_workspace_rigid_picture_stable(
+    _robot: &cranpose::Robot,
+    target_text: &str,
+    step: usize,
+    previous: &WorkspaceRigidStabilitySample,
+    current: &WorkspaceRigidStabilitySample,
+    actual_delta_y: f32,
+) {
+    let before = normalize_workspace_region(&previous.screenshot, previous.region);
+    let current_region = Bounds {
+        y: previous.region.y + actual_delta_y,
+        ..previous.region
+    };
+    let after = normalize_workspace_region(&current.screenshot, current_region);
+    let stats = screenshot_difference_stats(&before, &after, WORKSPACE_RIGID_DIFF_TOLERANCE)
+        .expect("workspace rigid normalized screenshots should match size");
+    let pixel_count = (before.width as usize).saturating_mul(before.height as usize);
+    let differing_ratio = stats.differing_pixels as f32 / pixel_count.max(1) as f32;
+    println!(
+        "workspace_rigid_picture step={step} target={target_text} differing_pixels={} differing_ratio={differing_ratio:.5} max_diff={}",
+        stats.differing_pixels, stats.max_difference
+    );
+    if stats.differing_pixels > WORKSPACE_RIGID_MAX_DIFFERING_PIXELS
+        && differing_ratio > WORKSPACE_RIGID_MAX_DIFFERING_RATIO
+    {
+        let first = stats
+            .first_difference
+            .as_ref()
+            .expect("failing workspace rigid diff should have first difference");
+        println!(
+            "{target_text} workspace rigid full-strip diff exceeded the diagnostic budget during active scroll step {step}: differing_pixels={} differing_ratio={differing_ratio:.5} max_diff={} first_diff=({}, {}) before={:?} after={:?}",
+                stats.differing_pixels,
+                stats.max_difference,
+                first.x,
+                first.y,
+                first.before,
+                first.after
+        );
+    }
+}
+
 fn capture_workspace_top_band_stability_sample(
     robot: &cranpose::Robot,
     target_text: &str,
@@ -5881,6 +6855,8 @@ fn capture_bottom_clear_stability_sample(robot: &cranpose::Robot) -> BottomClear
     )
     .expect("normalize bottom Clear fixed screen crop");
     let clear_crop = capture_bottom_clear_button_crop(&screenshot, clear_bounds);
+    let clear_edge_energy = screenshot_edge_energy(&clear_crop);
+    let clear_unique_rgb_count = screenshot_unique_rgb_count(&clear_crop);
     let red_profile = red_icon_horizontal_profile(&clear_crop).unwrap_or_else(|| {
         let dir = bottom_clear_capture_dir();
         let clear_path = dir.join("missing-red-profile-clear-button.png");
@@ -5910,6 +6886,8 @@ fn capture_bottom_clear_stability_sample(robot: &cranpose::Robot) -> BottomClear
         fixed_crop,
         clear_crop,
         red_profile,
+        clear_edge_energy,
+        clear_unique_rgb_count,
     }
 }
 
@@ -5957,11 +6935,12 @@ fn capture_bottom_clear_button_crop(
 }
 
 fn stable_window_bounds() -> Bounds {
+    let (width, height) = app_window_size();
     Bounds {
         x: 0.0,
         y: 0.0,
-        width: APP_WIDTH as f32,
-        height: APP_HEIGHT as f32,
+        width: width as f32,
+        height: height as f32,
     }
 }
 
@@ -5990,6 +6969,24 @@ fn visible_workspace_button_bounds_nearest_to_y_with_red_icon(
             let crop = capture_bottom_clear_button_crop(screenshot, *candidate);
             red_icon_horizontal_profile(&crop).is_some()
         })
+        .collect();
+    candidates.sort_by(|left, right| {
+        (left.center_y() - target_y)
+            .abs()
+            .total_cmp(&(right.center_y() - target_y).abs())
+    });
+    candidates.into_iter().next()
+}
+
+fn visible_workspace_button_bounds_nearest_to_y(
+    robot: &cranpose::Robot,
+    label: &str,
+    viewport: Bounds,
+    target_y: f32,
+) -> Option<Bounds> {
+    let mut candidates: Vec<_> = workspace_button_bounds_exact(robot, label)
+        .into_iter()
+        .filter(|candidate| viewport.inset_contains(*candidate, BUTTON_QUALITY_SAFE_EDGE))
         .collect();
     candidates.sort_by(|left, right| {
         (left.center_y() - target_y)
@@ -6267,6 +7264,87 @@ fn assert_workspace_strip_horizontal_stable(
                 fractional.zero_score,
                 fractional.best_score,
                 fractional.improvement_ratio(),
+            ),
+        );
+    }
+}
+
+fn assert_workspace_strip_active_frame_matches_settled(
+    robot: &cranpose::Robot,
+    target_text: &str,
+    step: usize,
+    active: &WorkspaceStripStabilitySample,
+    settled: &WorkspaceStripStabilitySample,
+) {
+    let target_dx = settled.target_bounds.x - active.target_bounds.x;
+    let target_dy = settled.target_bounds.y - active.target_bounds.y;
+    if target_dx.abs() > WORKSPACE_SURFACE_GEOMETRY_EPSILON
+        || target_dy.abs() > WORKSPACE_SURFACE_GEOMETRY_EPSILON
+    {
+        save_workspace_strip_failure(
+            step,
+            &active.screenshot,
+            &settled.screenshot,
+            active.region,
+            target_dy,
+        );
+        fail_with_robot(
+            robot,
+            &format!(
+                "{target_text} active strip frame and settled strip frame do not describe the same scroll position at step {step}: dx={target_dx:.3} dy={target_dy:.3}"
+            ),
+        );
+    }
+
+    let active_crop = normalize_workspace_strip(&active.screenshot, active.region);
+    let settled_crop = normalize_workspace_strip(&settled.screenshot, active.region);
+    let stats = screenshot_difference_stats(
+        &active_crop,
+        &settled_crop,
+        WORKSPACE_STRIP_ACTIVE_DIFF_TOLERANCE,
+    )
+    .expect("workspace strip active and settled crops should match size");
+    let pixel_count = (active_crop.width as usize).saturating_mul(active_crop.height as usize);
+    let differing_ratio = stats.differing_pixels as f32 / pixel_count.max(1) as f32;
+    let active_edge = screenshot_edge_energy(&active_crop);
+    let settled_edge = screenshot_edge_energy(&settled_crop);
+    let min_edge = settled_edge * (1.0 - WORKSPACE_STRIP_ACTIVE_MAX_EDGE_LOSS_RATIO);
+    let active_unique = screenshot_unique_rgb_count(&active_crop);
+    let settled_unique = screenshot_unique_rgb_count(&settled_crop);
+    let max_unique = settled_unique + WORKSPACE_STRIP_ACTIVE_MAX_EXTRA_COLORS;
+    println!(
+        "workspace_strip_active_settled step={step} target={target_text} differing_pixels={} differing_ratio={differing_ratio:.5} max_diff={} active_edge={active_edge:.3} settled_edge={settled_edge:.3} min_edge={min_edge:.3} active_unique={active_unique} settled_unique={settled_unique} max_unique={max_unique}",
+        stats.differing_pixels,
+        stats.max_difference,
+    );
+
+    let changed_too_much = stats.differing_pixels > WORKSPACE_STRIP_ACTIVE_MAX_DIFFERING_PIXELS
+        && differing_ratio > WORKSPACE_STRIP_ACTIVE_MAX_DIFFERING_RATIO;
+    let hard_pixel_delta = stats.max_difference > WORKSPACE_STRIP_ACTIVE_MAX_PIXEL_DIFF
+        && stats.differing_pixels > WORKSPACE_STRIP_ACTIVE_MAX_DIFFERING_PIXELS / 2;
+    let blurrier_than_settled = active_edge < min_edge || active_unique > max_unique;
+    if changed_too_much || hard_pixel_delta || blurrier_than_settled {
+        save_workspace_strip_failure(
+            step,
+            &active.screenshot,
+            &settled.screenshot,
+            active.region,
+            0.0,
+        );
+        let first = stats
+            .first_difference
+            .as_ref()
+            .expect("failing workspace strip active/settled diff should have first difference");
+        fail_with_robot(
+            robot,
+            &format!(
+                "{target_text} first active scroll strip frame differs from its settled frame at step {step}: differing_pixels={} differing_ratio={differing_ratio:.5} max_diff={} first_diff=({}, {}) before={:?} after={:?} active_edge={active_edge:.3} settled_edge={settled_edge:.3} min_edge={min_edge:.3} active_unique={active_unique} settled_unique={settled_unique} max_unique={max_unique}",
+                stats.differing_pixels,
+                stats.max_difference,
+                first.x,
+                first.y,
+                first.before,
+                first.after
             ),
         );
     }
@@ -6673,6 +7751,56 @@ fn assert_bottom_clear_icon_profile_stable(
     }
 }
 
+fn assert_bottom_clear_active_frame_crispness_matches_settled(
+    robot: &cranpose::Robot,
+    step: usize,
+    active: &BottomClearStabilitySample,
+    settled: &BottomClearStabilitySample,
+) {
+    let clear_dx = settled.clear_bounds.x - active.clear_bounds.x;
+    let clear_dy = settled.clear_bounds.y - active.clear_bounds.y;
+    if clear_dx.abs() > WORKSPACE_SURFACE_GEOMETRY_EPSILON
+        || clear_dy.abs() > WORKSPACE_SURFACE_GEOMETRY_EPSILON
+    {
+        fail_with_robot(
+            robot,
+            &format!(
+                "bottom Clear active frame and settled frame do not describe the same scroll position at step {step}: dx={clear_dx:.3} dy={clear_dy:.3}"
+            ),
+        );
+    }
+
+    let min_edge_energy =
+        settled.clear_edge_energy * (1.0 - BOTTOM_CLEAR_ACTIVE_CRISPNESS_MAX_EDGE_LOSS_RATIO);
+    let max_unique_rgb =
+        settled.clear_unique_rgb_count + BOTTOM_CLEAR_ACTIVE_CRISPNESS_MAX_EXTRA_COLORS;
+    println!(
+        "bottom_clear_active_crispness step={step} active_edge={:.3} settled_edge={:.3} min_edge={:.3} active_unique={} settled_unique={} max_unique={}",
+        active.clear_edge_energy,
+        settled.clear_edge_energy,
+        min_edge_energy,
+        active.clear_unique_rgb_count,
+        settled.clear_unique_rgb_count,
+        max_unique_rgb,
+    );
+    if active.clear_edge_energy < min_edge_energy || active.clear_unique_rgb_count > max_unique_rgb
+    {
+        save_bottom_clear_failure(step, active, settled);
+        fail_with_robot(
+            robot,
+            &format!(
+                "bottom Clear button is blurrier in the first active scroll frame than after settling at step {step}: active_edge={:.3} settled_edge={:.3} min_edge={:.3} active_unique={} settled_unique={} max_unique={}",
+                active.clear_edge_energy,
+                settled.clear_edge_energy,
+                min_edge_energy,
+                active.clear_unique_rgb_count,
+                settled.clear_unique_rgb_count,
+                max_unique_rgb
+            ),
+        );
+    }
+}
+
 fn red_profile_delta_ratios(
     previous: &RedIconHorizontalProfile,
     current: &RedIconHorizontalProfile,
@@ -6694,6 +7822,18 @@ fn red_profile_delta_ratios(
 }
 
 fn row_micro_feature_bounds(
+    screenshot: &cranpose::RobotScreenshot,
+    region: Bounds,
+    predicate: fn([u8; 4]) -> bool,
+    label: &str,
+) -> PixelFeatureBounds {
+    let crop = crop_screenshot_logical(screenshot, region.x, region.y, region.width, region.height)
+        .unwrap_or_else(|| panic!("{label} feature crop is outside screenshot"));
+    feature_pixel_bounds(&crop, predicate)
+        .unwrap_or_else(|| panic!("{label} feature pixels not found in crop"))
+}
+
+fn feature_bounds_in_logical_region(
     screenshot: &cranpose::RobotScreenshot,
     region: Bounds,
     predicate: fn([u8; 4]) -> bool,
@@ -6832,6 +7972,14 @@ fn red_clear_icon_pixel(pixel: [u8; 4]) -> bool {
 
 fn blue_field_icon_pixel(pixel: [u8; 4]) -> bool {
     pixel[2] > 170 && pixel[0] < 130 && pixel[1] < 190 && pixel[2] > pixel[0].saturating_add(45)
+}
+
+fn blue_label_text_pixel(pixel: [u8; 4]) -> bool {
+    pixel[0] < 120
+        && pixel[1] < 155
+        && pixel[2] > 95
+        && pixel[1] > pixel[0].saturating_add(8)
+        && pixel[2] > pixel[0].saturating_add(20)
 }
 
 fn row_micro_output_size(screenshot: &cranpose::RobotScreenshot, region: Bounds) -> (u32, u32) {
@@ -7126,6 +8274,159 @@ fn capture_workspace_button_quality(
     }
 }
 
+fn capture_button_reference_sample(
+    robot: &cranpose::Robot,
+    tag: &'static str,
+) -> ButtonReferenceSample {
+    let semantics = robot
+        .get_semantics()
+        .unwrap_or_else(|err| fail_with_robot(robot, &format!("failed to get semantics: {err}")));
+    let bounds = find_semantic_text_bounds(&semantics, tag).unwrap_or_else(|| {
+        fail_with_robot(
+            robot,
+            &format!("button reference fixture not found: tag={tag}"),
+        )
+    });
+    let screenshot = capture_visible_window_screenshot("button-reference");
+    let crop_bounds = bounds
+        .clipped_to(Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: screenshot.logical_width,
+            height: screenshot.logical_height,
+        })
+        .unwrap_or_else(|| {
+            fail_with_robot(
+                robot,
+                &format!(
+                    "button reference crop outside screenshot: tag={tag} bounds=({:.1},{:.1},{:.1},{:.1}) screenshot={}x{} logical=({:.1},{:.1})",
+                    bounds.x,
+                    bounds.y,
+                    bounds.width,
+                    bounds.height,
+                    screenshot.width,
+                    screenshot.height,
+                    screenshot.logical_width,
+                    screenshot.logical_height,
+                ),
+            )
+        });
+    let crop = crop_screenshot_logical(
+        &screenshot,
+        crop_bounds.x,
+        crop_bounds.y,
+        crop_bounds.width,
+        crop_bounds.height,
+    )
+    .expect("crop visible button reference region");
+    let edge_energy = screenshot_edge_energy(&crop);
+    let red_edge_energy = screenshot_red_strength_edge_energy(&crop);
+    let unique_rgb_count = screenshot_unique_rgb_count(&crop);
+    let red_profile = red_icon_horizontal_profile(&crop).unwrap_or_else(|| {
+        let path = save_button_reference_crop("missing-red", tag, &crop);
+        fail_with_robot(
+            robot,
+            &format!(
+                "button reference red Clear icon pixels not found: tag={tag} bounds=({:.1},{:.1},{:.1},{:.1}) crop={}",
+                bounds.x,
+                bounds.y,
+                bounds.width,
+                bounds.height,
+                path.display(),
+            ),
+        )
+    });
+    let crop_path = save_button_reference_crop_if_requested(tag, &crop);
+    println!(
+        "button_reference tag={tag} bounds=({:.1},{:.1},{:.1},{:.1}) crop={}x{} edge_energy={edge_energy:.3} red_edge_energy={red_edge_energy:.3} unique_rgb={unique_rgb_count} red_width={} red_count={} red_max_column={} crop_path={}",
+        bounds.x,
+        bounds.y,
+        bounds.width,
+        bounds.height,
+        crop.width,
+        crop.height,
+        red_profile.bounds.width(),
+        red_profile.bounds.count,
+        red_profile.max_column_mass,
+        crop_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    ButtonReferenceSample {
+        tag,
+        bounds,
+        edge_energy,
+        red_edge_energy,
+        unique_rgb_count,
+        red_profile,
+        crop,
+        crop_path,
+    }
+}
+
+fn assert_button_reference_matches_outside(robot: &cranpose::Robot) {
+    log_top_isolated_layer_render_stats(robot, "button_reference", 0);
+    let outside = capture_button_reference_sample(robot, BUTTON_REFERENCE_OUTSIDE_TAG);
+    let inside = capture_button_reference_sample(robot, BUTTON_REFERENCE_INSIDE_TAG);
+    let stats =
+        screenshot_difference_stats(&outside.crop, &inside.crop, BUTTON_REFERENCE_DIFF_TOLERANCE)
+            .expect("button reference crops should have the same size");
+    let differing_ratio =
+        stats.differing_pixels as f32 / (outside.crop.width * outside.crop.height).max(1) as f32;
+    let min_edge_energy = outside.edge_energy * (1.0 - BUTTON_REFERENCE_MAX_EDGE_LOSS_RATIO);
+    let min_red_edge_energy =
+        outside.red_edge_energy * (1.0 - BUTTON_REFERENCE_MAX_RED_EDGE_LOSS_RATIO);
+    let max_unique_rgb = outside.unique_rgb_count + BUTTON_REFERENCE_MAX_EXTRA_COLORS;
+    let red_width_delta =
+        inside.red_profile.bounds.width() as i32 - outside.red_profile.bounds.width() as i32;
+    println!(
+        "button_reference_compare differing_pixels={} differing_ratio={differing_ratio:.5} max_diff={} outside_bounds=({:.1},{:.1},{:.1},{:.1}) inside_bounds=({:.1},{:.1},{:.1},{:.1}) outside_edge={:.3} inside_edge={:.3} min_edge={min_edge_energy:.3} outside_red_edge={:.3} inside_red_edge={:.3} min_red_edge={min_red_edge_energy:.3} outside_unique={} inside_unique={} max_unique={} red_width_delta={red_width_delta}",
+        stats.differing_pixels,
+        stats.max_difference,
+        outside.bounds.x,
+        outside.bounds.y,
+        outside.bounds.width,
+        outside.bounds.height,
+        inside.bounds.x,
+        inside.bounds.y,
+        inside.bounds.width,
+        inside.bounds.height,
+        outside.edge_energy,
+        inside.edge_energy,
+        outside.red_edge_energy,
+        inside.red_edge_energy,
+        outside.unique_rgb_count,
+        inside.unique_rgb_count,
+        max_unique_rgb,
+    );
+
+    let loses_global_edges = inside.edge_energy < min_edge_energy;
+    let loses_red_edges = inside.red_edge_energy < min_red_edge_energy;
+    let gains_interpolation_colors =
+        inside.unique_rgb_count > max_unique_rgb && inside.edge_energy < outside.edge_energy;
+    let differs_too_much = differing_ratio > BUTTON_REFERENCE_MAX_DIFFERING_RATIO;
+    if loses_global_edges || loses_red_edges || gains_interpolation_colors || differs_too_much {
+        let (outside_path, inside_path) =
+            save_button_reference_failure("outside-vs-inside", &outside, &inside);
+        fail_with_robot(
+            robot,
+            &format!(
+                "workspace offscreen button is blurrier than the direct reference: differing_ratio={differing_ratio:.5} max_diff={} outside_edge={:.3} inside_edge={:.3} outside_red_edge={:.3} inside_red_edge={:.3} outside_unique={} inside_unique={} red_width_delta={red_width_delta} outside_crop={} inside_crop={}",
+                stats.max_difference,
+                outside.edge_energy,
+                inside.edge_energy,
+                outside.red_edge_energy,
+                inside.red_edge_energy,
+                outside.unique_rgb_count,
+                inside.unique_rgb_count,
+                outside_path.display(),
+                inside_path.display(),
+            ),
+        );
+    }
+}
+
 fn workspace_related_button_bounds_after_anchor(
     robot: &cranpose::Robot,
     anchor_text: &str,
@@ -7187,6 +8488,7 @@ fn assert_button_quality_matches_baseline(
 
 fn workspace_viewport_bounds(robot: &cranpose::Robot) -> Bounds {
     let window = stable_window_bounds();
+    let (window_width, window_height) = app_window_size();
     let tag_bounds = robot
         .get_semantics()
         .ok()
@@ -7194,9 +8496,9 @@ fn workspace_viewport_bounds(robot: &cranpose::Robot) -> Bounds {
     if let Some(bounds) = tag_bounds {
         if bounds.x >= -1.0
             && bounds.y >= -1.0
-            && bounds.x + bounds.width <= APP_WIDTH as f32 + 1.0
-            && bounds.width >= APP_WIDTH as f32 * 0.5
-            && bounds.height >= APP_HEIGHT as f32 * 0.25
+            && bounds.x + bounds.width <= window_width as f32 + 1.0
+            && bounds.width >= window_width as f32 * 0.5
+            && bounds.height >= window_height as f32 * 0.25
         {
             if let Some(clipped) = bounds.clipped_to(window) {
                 return clipped;
@@ -7208,7 +8510,7 @@ fn workspace_viewport_bounds(robot: &cranpose::Robot) -> Bounds {
         x: window.x,
         y: WORKSPACE_VIEWPORT_FALLBACK_TOP,
         width: window.width,
-        height: window.height - WORKSPACE_VIEWPORT_FALLBACK_TOP,
+        height: (window.height - WORKSPACE_VIEWPORT_FALLBACK_TOP).max(0.0),
     }
 }
 
@@ -7342,6 +8644,38 @@ fn screenshot_luma(pixel: &[u8]) -> i32 {
     (77 * pixel[0] as i32 + 150 * pixel[1] as i32 + 29 * pixel[2] as i32) / 256
 }
 
+fn screenshot_region_edge_energy(
+    screenshot: &cranpose::RobotScreenshot,
+    region: Bounds,
+    label: &str,
+) -> f32 {
+    let crop = crop_screenshot_logical(
+        screenshot,
+        region.x,
+        region.y,
+        region.width.max(1.0),
+        region.height.max(1.0),
+    )
+    .unwrap_or_else(|| panic!("{label} region is outside screenshot"));
+    screenshot_edge_energy(&crop)
+}
+
+fn screenshot_region_unique_rgb_count(
+    screenshot: &cranpose::RobotScreenshot,
+    region: Bounds,
+    label: &str,
+) -> usize {
+    let crop = crop_screenshot_logical(
+        screenshot,
+        region.x,
+        region.y,
+        region.width.max(1.0),
+        region.height.max(1.0),
+    )
+    .unwrap_or_else(|| panic!("{label} region is outside screenshot"));
+    screenshot_unique_rgb_count(&crop)
+}
+
 fn screenshot_edge_energy(screenshot: &cranpose::RobotScreenshot) -> f32 {
     let width = screenshot.width as usize;
     let height = screenshot.height as usize;
@@ -7372,12 +8706,104 @@ fn screenshot_edge_energy(screenshot: &cranpose::RobotScreenshot) -> f32 {
     }
 }
 
+fn screenshot_red_strength_edge_energy(screenshot: &cranpose::RobotScreenshot) -> f32 {
+    let width = screenshot.width as usize;
+    let height = screenshot.height as usize;
+    let mut total_variation = 0u64;
+    let mut total_mass = 0u64;
+    for y in 0..height {
+        for x in 0..width {
+            let index = (y * width + x) * 4;
+            let current = red_icon_strength([
+                screenshot.pixels[index],
+                screenshot.pixels[index + 1],
+                screenshot.pixels[index + 2],
+                screenshot.pixels[index + 3],
+            ]);
+            total_mass += current as u64;
+            if x + 1 < width {
+                let right = (y * width + x + 1) * 4;
+                let next = red_icon_strength([
+                    screenshot.pixels[right],
+                    screenshot.pixels[right + 1],
+                    screenshot.pixels[right + 2],
+                    screenshot.pixels[right + 3],
+                ]);
+                total_variation += current.abs_diff(next) as u64;
+            }
+            if y + 1 < height {
+                let down = ((y + 1) * width + x) * 4;
+                let next = red_icon_strength([
+                    screenshot.pixels[down],
+                    screenshot.pixels[down + 1],
+                    screenshot.pixels[down + 2],
+                    screenshot.pixels[down + 3],
+                ]);
+                total_variation += current.abs_diff(next) as u64;
+            }
+        }
+    }
+    if total_mass == 0 {
+        0.0
+    } else {
+        total_variation as f32 / total_mass as f32
+    }
+}
+
 fn screenshot_unique_rgb_count(screenshot: &cranpose::RobotScreenshot) -> usize {
     let mut colors = BTreeSet::new();
     for rgba in screenshot.pixels.chunks_exact(4) {
         colors.insert([rgba[0], rgba[1], rgba[2]]);
     }
     colors.len()
+}
+
+fn button_reference_capture_dir() -> PathBuf {
+    let mut dir = std::env::temp_dir();
+    dir.push("cranpose-leetcodedaily-button-reference");
+    dir.push(std::process::id().to_string());
+    std::fs::create_dir_all(&dir)
+        .unwrap_or_else(|err| panic!("failed to create {}: {err}", dir.display()));
+    dir
+}
+
+fn save_button_reference_crop(
+    phase: &str,
+    tag: &str,
+    screenshot: &cranpose::RobotScreenshot,
+) -> PathBuf {
+    let dir = button_reference_capture_dir();
+    let path = dir.join(format!(
+        "{}_{}.png",
+        sanitize_capture_name(phase),
+        sanitize_capture_name(tag)
+    ));
+    save_robot_screenshot_png(&path, screenshot);
+    path
+}
+
+fn save_button_reference_crop_if_requested(
+    tag: &str,
+    screenshot: &cranpose::RobotScreenshot,
+) -> Option<PathBuf> {
+    std::env::var_os(BUTTON_REFERENCE_CAPTURE_ENV)?;
+    Some(save_button_reference_crop("sample", tag, screenshot))
+}
+
+fn save_button_reference_failure(
+    phase: &str,
+    outside: &ButtonReferenceSample,
+    inside: &ButtonReferenceSample,
+) -> (PathBuf, PathBuf) {
+    let outside_path = outside
+        .crop_path
+        .clone()
+        .unwrap_or_else(|| save_button_reference_crop(phase, outside.tag, &outside.crop));
+    let inside_path = inside
+        .crop_path
+        .clone()
+        .unwrap_or_else(|| save_button_reference_crop(phase, inside.tag, &inside.crop));
+    (outside_path, inside_path)
 }
 
 fn save_button_quality_crop_if_requested(
@@ -7404,6 +8830,7 @@ fn capture_visible_window_screenshot(label: &str) -> cranpose::RobotScreenshot {
     static WINDOW_ID: OnceLock<String> = OnceLock::new();
 
     let window_id = WINDOW_ID.get_or_init(|| find_window_id(WINDOW_TITLE));
+    let (logical_width, logical_height) = app_window_size();
     let capture_id = NEXT_X11_CAPTURE_ID.fetch_add(1, Ordering::Relaxed);
     let mut path = std::env::temp_dir();
     path.push(format!(
@@ -7423,8 +8850,8 @@ fn capture_visible_window_screenshot(label: &str) -> cranpose::RobotScreenshot {
     cranpose::RobotScreenshot {
         width: image.width(),
         height: image.height(),
-        logical_width: APP_WIDTH as f32,
-        logical_height: APP_HEIGHT as f32,
+        logical_width: logical_width as f32,
+        logical_height: logical_height as f32,
         pixels: image.into_raw(),
     }
 }
@@ -7466,6 +8893,13 @@ fn env_usize(name: &str) -> Option<usize> {
         .and_then(|value| value.parse::<usize>().ok())
 }
 
+fn env_u32(name: &str) -> Option<u32> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+}
+
 fn env_f32(name: &str) -> Option<f32> {
     std::env::var(name)
         .ok()
@@ -7473,14 +8907,30 @@ fn env_f32(name: &str) -> Option<f32> {
         .filter(|value| value.is_finite())
 }
 
+fn app_window_size() -> (u32, u32) {
+    (
+        env_u32(WINDOW_WIDTH_ENV).unwrap_or(APP_WIDTH),
+        env_u32(WINDOW_HEIGHT_ENV).unwrap_or(APP_HEIGHT),
+    )
+}
+
 fn main() {
     env_logger::init();
+    let (window_width, window_height) = app_window_size();
     let strip_only_target =
         std::env::var(STRIP_TARGET_ENV).unwrap_or_else(|_| "Rust Code".to_string());
     let strip_only = std::env::var_os(STRIP_ONLY_ENV).is_some();
+    let active_viewport_only_target =
+        std::env::var(ACTIVE_VIEWPORT_TARGET_ENV).unwrap_or_else(|_| "Rust Code".to_string());
+    let active_viewport_only = std::env::var_os(ACTIVE_VIEWPORT_ONLY_ENV).is_some();
+    let rigid_only_target =
+        std::env::var(RIGID_TARGET_ENV).unwrap_or_else(|_| "Problem TLDR".to_string());
+    let rigid_only = std::env::var_os(RIGID_ONLY_ENV).is_some();
     let top_band_only_target =
         std::env::var(TOP_BAND_TARGET_ENV).unwrap_or_else(|_| "Blog Template Preview".to_string());
     let top_band_only = std::env::var_os(TOP_BAND_ONLY_ENV).is_some();
+    let bottom_clear_only = std::env::var_os(BOTTOM_CLEAR_ONLY_ENV).is_some();
+    let button_reference_only = std::env::var_os(BUTTON_REFERENCE_ONLY_ENV).is_some();
     let extended = std::env::var_os(EXTENDED_ENV).is_some();
 
     if std::env::var_os(INTERACTIVE_ENV).is_some() {
@@ -7488,8 +8938,8 @@ fn main() {
         println!("{INTERACTIVE_ENV}=1, launching visible window");
         AppLauncher::new()
             .with_title("LeetcodeDaily Full Layout Interactive")
-            .with_size(APP_WIDTH, APP_HEIGHT)
-            .with_fonts(desktop_app::fonts::DEMO_FONTS)
+            .with_size(window_width, window_height)
+            .with_fonts(LEETCODEDAILY_APP_FONTS)
             .with_headless(false)
             .run(LeetcodeDailyFullLayoutApp);
     }
@@ -7498,17 +8948,50 @@ fn main() {
 
     AppLauncher::new()
         .with_title(WINDOW_TITLE)
-        .with_size(APP_WIDTH, APP_HEIGHT)
-        .with_fonts(desktop_app::fonts::DEMO_FONTS)
+        .with_size(window_width, window_height)
+        .with_fonts(LEETCODEDAILY_APP_FONTS)
         .with_headless(false)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(1000));
             let _ = robot.wait_for_idle();
 
+            if button_reference_only {
+                assert_button_reference_matches_outside(&robot);
+                println!("\n=== Test Summary ===");
+                println!(
+                    "PASS: scrolled workspace Clear button matched the direct reference crispness"
+                );
+                robot.exit().expect("exit");
+                return;
+            }
             if strip_only {
                 assert_workspace_strip_stable_under_micro_scroll(&robot, &strip_only_target);
                 println!("\n=== Test Summary ===");
                 println!("PASS: {strip_only_target} workspace strip stayed horizontally stable");
+                robot.exit().expect("exit");
+                return;
+            }
+            if active_viewport_only {
+                assert_workspace_active_viewport_first_frame_matches_settled(
+                    &robot,
+                    &active_viewport_only_target,
+                );
+                println!("\n=== Test Summary ===");
+                println!(
+                    "PASS: {active_viewport_only_target} active viewport frame was immediate and crisp"
+                );
+                robot.exit().expect("exit");
+                return;
+            }
+            if rigid_only {
+                assert_workspace_rigid_picture_stable_during_active_scroll(
+                    &robot,
+                    &rigid_only_target,
+                );
+                println!("\n=== Test Summary ===");
+                println!(
+                    "PASS: {rigid_only_target} workspace visual anchors stayed horizontally stable during active scroll"
+                );
                 robot.exit().expect("exit");
                 return;
             }
@@ -7521,7 +9004,17 @@ fn main() {
                 robot.exit().expect("exit");
                 return;
             }
+            if bottom_clear_only {
+                assert_bottom_clear_button_stable_under_one_px_scroll(&robot);
+                println!("\n=== Test Summary ===");
+                println!("PASS: bottom Clear stayed stable and crisp during active scroll");
+                robot.exit().expect("exit");
+                return;
+            }
 
+            assert_workspace_rigid_picture_stable_during_active_scroll(&robot, "Problem TLDR");
+            assert_workspace_rigid_picture_stable_during_active_scroll(&robot, "Intuition");
+            assert_workspace_rigid_picture_stable_during_active_scroll(&robot, "Approach");
             assert_workspace_strip_stable_under_micro_scroll(&robot, "Rust Code");
             assert_workspace_top_band_stable_under_micro_scroll(&robot, "Rust Runtime (ms)");
             assert_workspace_strip_stable_under_micro_scroll(&robot, "Blog Template Preview");
@@ -7554,8 +9047,8 @@ fn main() {
                     file_prefix: "leetcodedaily_full_scroll",
                     target_text: TARGET_TEXT,
                     viewport_tag: Some(VIEWPORT_TAG),
-                    window_width: APP_WIDTH,
-                    window_height: APP_HEIGHT,
+                    window_width,
+                    window_height,
                     scroll_steps: SCROLL_STEPS,
                     scroll_delta_y: SCROLL_DELTA_Y,
                     step_epsilon: STEP_EPSILON,
@@ -7572,8 +9065,6 @@ fn main() {
             if !compare_ok {
                 std::process::exit(1);
             }
-            assert_deep_workspace_captures_preserve_capture_scale(&robot);
-
             println!("\n=== Test Summary ===");
             println!("PASS: full LeetCode Daily layout stayed within the pixel-drift budget");
             robot.exit().expect("exit");

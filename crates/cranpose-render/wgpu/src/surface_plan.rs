@@ -56,6 +56,7 @@ pub(crate) struct TranslationRenderContext {
     pub(crate) inherited_content_translation: bool,
     pub(crate) translated_content_axes: TranslatedContentAxes,
     pub(crate) surface_capture_active: bool,
+    pub(crate) local_picture_capture_active: bool,
 }
 
 pub(crate) struct LayerSurfaceRequest<'a> {
@@ -332,11 +333,7 @@ pub(crate) fn effective_surface_requirements(
     let translated_text_material = contains_translated_content
         && !surface_capture_active
         && effective.contains(SurfaceRequirement::TextMaterialMask);
-    let translated_isolated_pixel_surface = !requirements.contains_backdrop_content
-        && (contains_translated_content || surface_capture_active)
-        && effective.contains(SurfaceRequirement::PixelStableComposite)
-        && effective.has_isolating_requirement();
-    if translated_text_material || translated_isolated_pixel_surface {
+    if translated_text_material {
         effective.insert(SurfaceRequirement::MotionStableCapture);
     }
     effective
@@ -362,9 +359,6 @@ pub(crate) fn layer_surface_requirements_cached(
 
     let effective_isolation = effective_layer_isolation(&layer.graphics_layer);
     let mut surface_requirements = SurfaceRequirementSet::default();
-    if layer.translated_content_context && layer.motion_context_animated && layer.clip_to_bounds {
-        surface_requirements.insert(SurfaceRequirement::MotionStableCapture);
-    }
     if layer.isolation.explicit_offscreen
         || layer.graphics_layer.compositing_strategy == CompositingStrategy::Offscreen
     {
@@ -453,8 +447,7 @@ pub(crate) fn layer_surface_requirements_cached(
         surface_requirements.insert(SurfaceRequirement::NonTranslationTransform);
     }
 
-    if has_pixel_sensitive_content && direct_translation.is_some() && !layer.motion_context_animated
-    {
+    if has_pixel_sensitive_content && direct_translation.is_some() {
         surface_requirements.insert(SurfaceRequirement::PixelStableComposite);
     }
 
@@ -478,7 +471,7 @@ mod tests {
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::scene::EffectLayer;
-    use crate::surface_requirements::{SurfaceRequirement, MOTION_STABLE_SURFACE_SCALE_MULTIPLIER};
+    use crate::surface_requirements::SurfaceRequirement;
     use cranpose_render_common::graph::{
         CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
         PrimitivePhase, ProjectiveTransform, RenderNode,
@@ -587,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn inherited_translated_isolated_pixel_surface_uses_motion_stable_capture() {
+    fn inherited_translated_isolated_pixel_surface_uses_pixel_stable_composite() {
         let mut layer = test_layer(Rect {
             x: 0.0,
             y: 0.0,
@@ -628,10 +621,10 @@ mod tests {
             .surface_requirements
             .contains(SurfaceRequirement::MotionStableCapture));
         let effective = effective_surface_requirements(true, false, requirements);
-        assert!(effective.contains(SurfaceRequirement::MotionStableCapture));
+        assert!(!effective.contains(SurfaceRequirement::MotionStableCapture));
         assert_eq!(
             layer_surface_target_scale(true, false, requirements, 2.0),
-            2.0 * MOTION_STABLE_SURFACE_SCALE_MULTIPLIER
+            2.0
         );
         assert_eq!(
             composite_sample_mode_for_requirements(true, false, requirements),
@@ -640,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_descendant_isolated_pixel_surface_uses_motion_stable_capture() {
+    fn translated_descendant_isolated_pixel_surface_uses_pixel_stable_composite() {
         let image = ImageBitmap::from_rgba8(1, 1, vec![255, 255, 255, 255]).expect("image");
         let mut scrolled_content = test_layer(Rect {
             x: 0.0,
@@ -697,9 +690,9 @@ mod tests {
         assert!(!requirements
             .surface_requirements
             .contains(SurfaceRequirement::MotionStableCapture));
-        assert!(effective_surface_requirements(false, false, requirements)
+        assert!(!effective_surface_requirements(false, false, requirements)
             .contains(SurfaceRequirement::MotionStableCapture));
-        assert!(effective_surface_requirements(false, true, requirements)
+        assert!(!effective_surface_requirements(false, true, requirements)
             .contains(SurfaceRequirement::MotionStableCapture));
         assert_eq!(
             layer_surface_target_scale(false, false, requirements, 2.0),
@@ -811,7 +804,7 @@ mod tests {
     }
 
     #[test]
-    fn active_translated_clip_layer_outside_capture_uses_motion_stable_scale() {
+    fn active_translated_clip_layer_outside_capture_stays_direct() {
         let mut layer = test_layer(Rect {
             x: 0.0,
             y: 0.0,
@@ -824,21 +817,21 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(requirements
+        assert!(!requirements
             .surface_requirements
             .contains(SurfaceRequirement::MotionStableCapture));
         assert_eq!(
             composite_sample_mode_for_requirements(true, false, requirements),
-            CompositeSampleMode::Box4
+            CompositeSampleMode::Linear
         );
         assert_eq!(
             layer_surface_target_scale(true, false, requirements, 9.0),
-            9.0 * MOTION_STABLE_SURFACE_SCALE_MULTIPLIER
+            9.0
         );
     }
 
     #[test]
-    fn active_translated_clip_layer_inside_capture_keeps_parent_scale() {
+    fn active_translated_clip_layer_inside_capture_stays_direct() {
         let mut layer = test_layer(Rect {
             x: 0.0,
             y: 0.0,
@@ -851,12 +844,12 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(requirements
+        assert!(!requirements
             .surface_requirements
             .contains(SurfaceRequirement::MotionStableCapture));
         assert_eq!(
             composite_sample_mode_for_requirements(true, true, requirements),
-            CompositeSampleMode::Box4
+            CompositeSampleMode::Linear
         );
         assert_eq!(
             layer_surface_target_scale(true, true, requirements, 9.0),

@@ -18,8 +18,11 @@ use super::{inspector_metadata, Modifier, Point, PointerEventKind};
 use crate::current_density;
 use crate::fling_animation::FlingAnimation;
 use crate::fling_animation::MIN_FLING_VELOCITY;
-use crate::schedule_draw_repass;
-use crate::scroll::{ScrollElement, ScrollMotionContext, ScrollState};
+use crate::render_state::schedule_modifier_slices_repass;
+use crate::scroll::{
+    scroll_motion_context_for_key, ScrollElement, ScrollMotionContext, ScrollMotionContextKey,
+    ScrollState,
+};
 use cranpose_core::{current_runtime_handle, NodeId};
 use cranpose_foundation::{
     velocity_tracker::ASSUME_STOPPED_MS, DelegatableNode, ModifierNode, ModifierNodeElement,
@@ -607,7 +610,7 @@ impl ModifierNode for MotionContextAnimatedNode {
             let callback_id = self
                 .motion_context
                 .add_invalidate_callback(Box::new(move || {
-                    schedule_draw_repass(node_id);
+                    schedule_modifier_slices_repass(node_id);
                 }));
             self.invalidation_callback_id = Some(callback_id);
         }
@@ -671,7 +674,7 @@ impl ModifierNodeElement for MotionContextAnimatedElement {
             let callback_id = node
                 .motion_context
                 .add_invalidate_callback(Box::new(move || {
-                    schedule_draw_repass(node_id);
+                    schedule_modifier_slices_repass(node_id);
                 }));
             node.invalidation_callback_id = Some(callback_id);
         }
@@ -885,7 +888,11 @@ fn scroll_impl(
 ) -> Modifier {
     // Create local gesture state - each scroll modifier instance is independent
     let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
-    let motion_context = ScrollMotionContext::new();
+    let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
+        state_id: state.id(),
+        is_vertical,
+        reverse_scrolling,
+    });
 
     // Set up pointer input handler
     let scroll_state = state.clone();
@@ -1006,14 +1013,12 @@ impl Modifier {
 fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: bool) -> Modifier {
     let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
     let list_state = state;
-    let motion_context = ScrollMotionContext::new();
-
-    // Note: Layout invalidation callback is registered in LazyColumnImpl/LazyRowImpl
-    // after the node is created, using schedule_layout_repass(node_id) for O(subtree)
-    // performance instead of request_layout_invalidation() which is O(entire app).
-
-    // Use a unique key per LazyListState
-    let state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
+    let state_id = state.inner_ptr() as usize;
+    let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
+        state_identity: state_id,
+        is_vertical,
+        reverse_scrolling,
+    });
     let key = (state_id, is_vertical, reverse_scrolling);
     let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(
         state_id,

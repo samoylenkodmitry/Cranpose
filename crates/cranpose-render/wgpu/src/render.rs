@@ -5876,8 +5876,7 @@ mod tests {
     }
 
     #[test]
-    fn estimate_layer_surface_rect_keeps_hidden_leading_horizontal_scroll_content_for_motion_stable_capture(
-    ) {
+    fn estimate_layer_surface_rect_clips_active_horizontal_scroll_content() {
         let mut layer = test_layer(
             Rect {
                 x: 0.0,
@@ -5908,16 +5907,16 @@ mod tests {
         assert_eq!(
             estimate_layer_surface_rect(&layer),
             Rect {
-                x: -24.0,
+                x: 0.0,
                 y: 0.0,
-                width: 144.0,
+                width: 120.0,
                 height: 72.0,
             }
         );
     }
 
     #[test]
-    fn estimate_layer_surface_rect_keeps_hidden_leading_scroll_content_for_motion_stable_capture() {
+    fn estimate_layer_surface_rect_clips_active_vertical_scroll_content() {
         let mut layer = test_layer(
             Rect {
                 x: 0.0,
@@ -5949,15 +5948,54 @@ mod tests {
             estimate_layer_surface_rect(&layer),
             Rect {
                 x: 0.0,
-                y: -24.0,
+                y: 0.0,
                 width: 120.0,
-                height: 96.0,
+                height: 72.0,
             }
         );
     }
 
     #[test]
-    fn estimate_layer_surface_rect_preserves_hidden_leading_without_trailing_scroll_content() {
+    fn estimate_layer_surface_rect_keeps_shallow_scroll_capture_origin_stable() {
+        fn shallow_scroll_surface_rect(content_y: f32) -> Rect {
+            let mut layer = test_layer(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 120.0,
+                    height: 72.0,
+                },
+                vec![RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                            rect: Rect {
+                                x: 0.0,
+                                y: content_y,
+                                width: 120.0,
+                                height: 200.0,
+                            },
+                            brush: Brush::solid(Color::WHITE),
+                        },
+                        clip: None,
+                    }),
+                })],
+            );
+            layer.translated_content_context = true;
+            layer.motion_context_animated = true;
+            layer.clip_to_bounds = true;
+            estimate_layer_surface_rect(&layer)
+        }
+
+        assert_eq!(
+            shallow_scroll_surface_rect(-24.0),
+            shallow_scroll_surface_rect(-25.0),
+            "shallow scroll capture bounds must not move the offscreen surface origin on adjacent scroll positions"
+        );
+    }
+
+    #[test]
+    fn estimate_layer_surface_rect_clips_active_xy_scroll_content() {
         let mut layer = test_layer(
             Rect {
                 x: 0.0,
@@ -5988,16 +6026,16 @@ mod tests {
         assert_eq!(
             estimate_layer_surface_rect(&layer),
             Rect {
-                x: -16.0,
-                y: -24.0,
-                width: 136.0,
-                height: 96.0,
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 72.0,
             }
         );
     }
 
     #[test]
-    fn estimate_layer_surface_rect_bounds_deep_hidden_leading_scroll_content() {
+    fn estimate_layer_surface_rect_clips_deep_hidden_active_scroll_content() {
         let mut layer = test_layer(
             Rect {
                 x: 0.0,
@@ -6029,10 +6067,49 @@ mod tests {
             estimate_layer_surface_rect(&layer),
             Rect {
                 x: 0.0,
-                y: -176.0,
+                y: 0.0,
                 width: 120.0,
-                height: 288.0,
+                height: 72.0,
             }
+        );
+    }
+
+    #[test]
+    fn estimate_layer_surface_rect_keeps_deep_scroll_capture_origin_stable() {
+        fn deep_scroll_surface_rect(content_y: f32) -> Rect {
+            let mut layer = test_layer(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 120.0,
+                    height: 72.0,
+                },
+                vec![RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                            rect: Rect {
+                                x: 0.0,
+                                y: content_y,
+                                width: 120.0,
+                                height: 1400.0,
+                            },
+                            brush: Brush::solid(Color::WHITE),
+                        },
+                        clip: None,
+                    }),
+                })],
+            );
+            layer.translated_content_context = true;
+            layer.motion_context_animated = true;
+            layer.clip_to_bounds = true;
+            estimate_layer_surface_rect(&layer)
+        }
+
+        assert_eq!(
+            deep_scroll_surface_rect(-1200.0),
+            deep_scroll_surface_rect(-1201.0),
+            "deep scroll capture bounds must not re-phase the offscreen surface origin on adjacent scroll positions"
         );
     }
 
@@ -6077,9 +6154,9 @@ mod tests {
                 None,
             ),
             Some(Rect {
-                x: -48.0,
-                y: -200.0,
-                width: 168.0,
+                x: -360.0,
+                y: -216.0,
+                width: 480.0,
                 height: 288.0,
             })
         );
@@ -6123,9 +6200,9 @@ mod tests {
             ),
             Some(Rect {
                 x: -96.0,
-                y: -80.0,
+                y: -300.0,
                 width: 296.0,
-                height: 180.0,
+                height: 400.0,
             })
         );
     }
@@ -6171,9 +6248,9 @@ mod tests {
             ),
             Some(Rect {
                 x: -96.0,
-                y: -80.0,
+                y: -300.0,
                 width: 296.0,
-                height: 180.0,
+                height: 400.0,
             })
         );
     }
@@ -6452,7 +6529,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_text_effect_layer_uses_box4_composite_resolve() {
+    fn translated_plain_text_uses_bounded_snap_effect_layer() {
         let root = pure_text_leaf_root(true, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
@@ -6461,13 +6538,16 @@ mod tests {
 
         assert_eq!(collected.child_layers.len(), 0);
         assert_eq!(collected.scene.texts.len(), 1);
-        assert_eq!(collected.scene.effect_layers.len(), 1);
-        assert!(collected.scene.effect_layers[0]
-            .requirements
-            .contains(SurfaceRequirement::MotionStableCapture));
         assert_eq!(
-            collected.scene.effect_layers[0].effect, None,
-            "translated plain text should isolate only the glyph draw, not apply a post-effect"
+            collected.scene.texts[0].snap_anchor,
+            Some(SnapAnchor::rigid(Point::new(11.4, 23.6))),
+            "translated plain text should use the same content-origin snap phase while active"
+        );
+        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert_eq!(
+            collected.scene.effect_layers[0].snap_anchor,
+            Some(SnapAnchor::rigid(Point::new(11.4, 23.6))),
+            "translated plain text's bounded local picture should composite at the same snap phase"
         );
     }
 
@@ -6719,7 +6799,7 @@ mod tests {
     }
 
     #[test]
-    fn animated_translated_content_text_leaf_defers_snap_to_motion_stable_capture() {
+    fn animated_translated_content_text_leaf_uses_bounded_content_snap() {
         let root = snapped_text_leaf_root(true, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
@@ -6732,24 +6812,22 @@ mod tests {
         assert_eq!(collected.scene.images.len(), 1);
         assert_eq!(collected.scene.texts.len(), 1);
         assert_eq!(collected.scene.effect_layers.len(), 1);
-        assert!(collected.scene.effect_layers[0]
-            .requirements
-            .contains(SurfaceRequirement::MotionStableCapture));
+        let expected_anchor = Some(SnapAnchor::rigid(Point::new(14.25, 16.5)));
         assert_eq!(
-            collected.scene.effect_layers[0].snap_anchor, None,
-            "active scroll local-picture surfaces must not quantize the moving content phase"
+            collected.scene.effect_layers[0].snap_anchor, expected_anchor,
+            "active translated leaf capture should keep the content-origin snap phase"
         );
         assert_eq!(
-            collected.scene.shapes[0].snap_anchor, None,
-            "active scroll shapes must render in motion-stable capture space instead of taking a rigid screen snap"
+            collected.scene.shapes[0].snap_anchor, expected_anchor,
+            "active scroll shapes should render with the same content-origin snap phase as settled content"
         );
         assert_eq!(
-            collected.scene.images[0].snap_anchor, None,
-            "active scroll images must render in motion-stable capture space instead of taking a rigid screen snap"
+            collected.scene.images[0].snap_anchor, expected_anchor,
+            "active scroll images should render with the same content-origin snap phase as settled content"
         );
         assert_eq!(
-            collected.scene.texts[0].snap_anchor, None,
-            "active scroll text must render in motion-stable capture space instead of taking a rigid screen snap"
+            collected.scene.texts[0].snap_anchor, expected_anchor,
+            "active scroll text should render with the same content-origin snap phase as settled content"
         );
     }
 
@@ -6832,7 +6910,7 @@ mod tests {
     }
 
     #[test]
-    fn animated_translated_content_surface_composite_does_not_rigid_snap_child_surface() {
+    fn animated_translated_content_surface_composite_uses_scroll_content_snap_anchor() {
         let mut root = translated_content_local_surface_root();
         let scroll_offset = Point::new(0.0, -18.5);
         let Some(RenderNode::Layer(translated_content)) = root.children.get_mut(0) else {
@@ -6858,8 +6936,9 @@ mod tests {
 
         assert_eq!(collected.child_layers.len(), 1);
         assert_eq!(
-            collected.child_layers[0].snap_anchor, None,
-            "animated scrolled descendants must not quantize their composite phase while the content is moving"
+            collected.child_layers[0].snap_anchor,
+            Some(SnapAnchor::rigid(Point::new(14.25, -2.0))),
+            "animated scrolled descendants should composite with the same content-origin snap phase"
         );
     }
 
@@ -6881,6 +6960,10 @@ mod tests {
             collect_layer_contents(&layer, None, None, &mut rect_cache, &mut requirements_cache);
 
         assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert_eq!(
+            composite_sample_mode_for_effect_layer(&collected.scene.effect_layers[0]),
+            CompositeSampleMode::Box4
+        );
         assert_eq!(
             collected.scene.effect_layers[0].snap_anchor,
             Some(SnapAnchor::rigid(Point::new(0.0, -18.5))),
@@ -6912,6 +6995,7 @@ mod tests {
             TranslationRenderContext {
                 inherited_content_translation: false,
                 surface_capture_active: true,
+                local_picture_capture_active: true,
                 ..TranslationRenderContext::default()
             },
             &mut rect_cache,
@@ -6950,6 +7034,7 @@ mod tests {
             TranslationRenderContext {
                 inherited_content_translation: false,
                 surface_capture_active: true,
+                local_picture_capture_active: true,
                 ..TranslationRenderContext::default()
             },
             &mut rect_cache,
@@ -6972,6 +7057,45 @@ mod tests {
             10.0
         );
         assert!(collected.scene.effect_layers[0].effect.is_some());
+    }
+
+    #[test]
+    fn translated_viewport_surface_does_not_add_plain_local_picture_capture() {
+        let mut layer = text_layer_with_style(
+            AnnotatedString::from("shadow"),
+            TextStyle::from_span_style(SpanStyle {
+                shadow: Some(Shadow {
+                    color: Color::BLACK,
+                    offset: Point::new(1.0, 2.0),
+                    blur_radius: 3.0,
+                }),
+                ..SpanStyle::default()
+            }),
+        );
+        layer.translated_content_context = true;
+        layer.motion_context_animated = true;
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected = collect_layer_contents_with_translation_context(
+            &layer,
+            None,
+            None,
+            TranslationRenderContext {
+                surface_capture_active: true,
+                ..TranslationRenderContext::default()
+            },
+            &mut rect_cache,
+            &mut requirements_cache,
+        );
+
+        assert_eq!(
+            collected.scene.effect_layers.len(),
+            0,
+            "plain translated content inside a viewport surface should not be captured again"
+        );
+        assert_eq!(collected.scene.shadow_draws.len(), 1);
+        assert_eq!(collected.scene.texts.len(), 1);
     }
 
     #[test]
@@ -7001,6 +7125,26 @@ mod tests {
 
         assert_eq!(collected.scene.texts.len(), 1);
         assert_eq!(collected.scene.texts[0].snap_anchor, None);
+    }
+
+    #[test]
+    fn animated_translated_pure_text_uses_bounded_content_snap() {
+        let root = pure_text_leaf_root(true, true);
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        let expected_anchor = Some(SnapAnchor::rigid(Point::new(11.4, 23.6)));
+        assert_eq!(collected.child_layers.len(), 0);
+        assert_eq!(collected.scene.texts.len(), 1);
+        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert_eq!(collected.scene.texts[0].snap_anchor, expected_anchor);
+        assert_eq!(
+            collected.scene.effect_layers[0].snap_anchor,
+            expected_anchor
+        );
     }
 
     #[test]
