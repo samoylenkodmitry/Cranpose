@@ -1,9 +1,10 @@
 //! Robot test: full LeetCode Daily Composer layout scroll stability repro for issue #269.
 
+mod perf_robot_stats;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
 
-use cranpose::AppLauncher;
+use cranpose::{fps_stats, AppLauncher};
 use cranpose_core::{remember, useState, MutableState};
 use cranpose_foundation::{
     text::{TextFieldLineLimits, TextFieldState},
@@ -21,12 +22,13 @@ use cranpose_ui::{
 };
 use cranpose_ui::{widgets::BasicTextFieldWithOptions, Column, ColumnSpec};
 use image::{imageops::FilterType, ImageBuffer, RgbaImage};
+use perf_robot_stats::{print_render_summary, RenderStatsAccumulator};
 use scroll_stability_external_helpers::{run_scroll_stability_capture, ScrollStabilityConfig};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
 
 const APP_WIDTH: u32 = 1100;
@@ -177,6 +179,11 @@ const BOTTOM_CLEAR_ACTIVE_CRISPNESS_SETTLE_FRAMES: u32 = 8;
 const BOTTOM_CLEAR_ACTIVE_CRISPNESS_MAX_EDGE_LOSS_RATIO: f32 = 0.04;
 const BOTTOM_CLEAR_ACTIVE_CRISPNESS_MAX_EXTRA_COLORS: usize = 48;
 const RENDER_STATS_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_SCROLL_RENDER_STATS";
+const PERF_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_PERF";
+const PERF_DURATION_SECS_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_PERF_DURATION_SECS";
+const PERF_MIN_FPS_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_PERF_MIN_FPS";
+const PERF_SCROLL_DELTA_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_PERF_SCROLL_DELTA";
+const PERF_SCENARIO_NAME: &str = "leetcodedaily_full_layout_scroll";
 const INTERACTIVE_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_INTERACTIVE";
 const EXTENDED_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_EXTENDED";
 const WINDOW_WIDTH_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_WINDOW_WIDTH";
@@ -8900,6 +8907,13 @@ fn env_u32(name: &str) -> Option<u32> {
         .filter(|value| *value > 0)
 }
 
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+}
+
 fn env_f32(name: &str) -> Option<f32> {
     std::env::var(name)
         .ok()
@@ -8912,6 +8926,87 @@ fn app_window_size() -> (u32, u32) {
         env_u32(WINDOW_WIDTH_ENV).unwrap_or(APP_WIDTH),
         env_u32(WINDOW_HEIGHT_ENV).unwrap_or(APP_HEIGHT),
     )
+}
+
+fn run_leetcodedaily_perf_probe(robot: &cranpose::Robot) {
+    let duration_secs = env_u64(PERF_DURATION_SECS_ENV).unwrap_or(5);
+    let min_fps = env_f32(PERF_MIN_FPS_ENV).unwrap_or(120.0);
+    let scroll_delta = env_f32(PERF_SCROLL_DELTA_ENV).unwrap_or(-8.0);
+
+    scroll_workspace_text_into_view_between(
+        robot,
+        TARGET_TEXT,
+        TARGET_MIN_CENTER_Y,
+        TARGET_MAX_CENTER_Y,
+        80,
+    );
+    std::thread::sleep(Duration::from_millis(250));
+    let _ = robot.wait_for_idle();
+
+    let start_stats = fps_stats();
+    let start = Instant::now();
+    let duration = Duration::from_secs(duration_secs);
+    let mut render_stats = RenderStatsAccumulator::default();
+    let mut iterations = 0u64;
+    let mut direction = 1.0f32;
+
+    while start.elapsed() < duration {
+        if let Err(err) = robot.mouse_scroll(0.0, scroll_delta * direction) {
+            fail_with_robot(robot, &format!("perf scroll failed: {err}"));
+        }
+        if robot.wait_for_idle().is_err() {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        match robot.get_render_stats() {
+            Ok(Some(stats)) => render_stats.record(stats),
+            Ok(None) => {}
+            Err(err) => fail_with_robot(robot, &format!("failed to read render stats: {err}")),
+        }
+        iterations = iterations.saturating_add(1);
+        if iterations % 80 == 0 {
+            direction = -direction;
+        }
+    }
+
+    let elapsed_secs = start.elapsed().as_secs_f32();
+    let end_stats = fps_stats();
+    let total_frames = end_stats
+        .frame_count
+        .saturating_sub(start_stats.frame_count);
+    let fps = if elapsed_secs > 0.0 {
+        total_frames as f32 / elapsed_secs
+    } else {
+        0.0
+    };
+    let avg_ms = if total_frames > 0 {
+        elapsed_secs * 1000.0 / total_frames as f32
+    } else {
+        0.0
+    };
+
+    print_render_summary(PERF_SCENARIO_NAME, render_stats);
+    println!(
+        "PERF_FPS_SUMMARY scenario={} fps={:.1} avg_frame_ms={:.2} total_frames={} rolling_fps={:.1} rolling_avg_frame_ms={:.2} recompositions={} recompositions_per_second={}",
+        PERF_SCENARIO_NAME,
+        fps,
+        avg_ms,
+        total_frames,
+        end_stats.fps,
+        end_stats.avg_ms,
+        end_stats.recompositions,
+        end_stats.recomps_per_second,
+    );
+    println!(
+        "PERF_SCENARIO_COMPLETE scenario={} iterations={}",
+        PERF_SCENARIO_NAME, iterations
+    );
+
+    if fps < min_fps {
+        fail_with_robot(
+            robot,
+            &format!("{PERF_SCENARIO_NAME} FPS must be at least {min_fps:.1}, got {fps:.1}"),
+        );
+    }
 }
 
 fn main() {
@@ -8932,6 +9027,7 @@ fn main() {
     let bottom_clear_only = std::env::var_os(BOTTOM_CLEAR_ONLY_ENV).is_some();
     let button_reference_only = std::env::var_os(BUTTON_REFERENCE_ONLY_ENV).is_some();
     let extended = std::env::var_os(EXTENDED_ENV).is_some();
+    let perf_only = std::env::var_os(PERF_ENV).is_some();
 
     if std::env::var_os(INTERACTIVE_ENV).is_some() {
         println!("=== Interactive LeetcodeDaily Full Layout ===");
@@ -8954,6 +9050,12 @@ fn main() {
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(1000));
             let _ = robot.wait_for_idle();
+
+            if perf_only {
+                run_leetcodedaily_perf_probe(&robot);
+                robot.exit().expect("exit");
+                return;
+            }
 
             if button_reference_only {
                 assert_button_reference_matches_outside(&robot);

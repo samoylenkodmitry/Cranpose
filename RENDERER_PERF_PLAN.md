@@ -39,5 +39,23 @@ Goal: every robot/perf scenario must sustain at least 120 FPS, including the hea
 
 ## Status
 
-- Verified renderer cleanup is ready to commit.
-- Next step: run `perf_robot_cpu.sh`, `perf_robot_heap.sh`, and relevant focused robot/perf scenarios, then record the first measured bottleneck here.
+- Checkpoint `008d630c` committed the first renderer draw-update cleanup.
+- `perf_robot_cpu.sh`/symbol-heavy profiling is not safe on this no-swap machine; it caused an OOM reboot. Use stripped `release-fast` robot binaries for iteration, then full verification before commit.
+- Built-in robot perf harness after the current renderer changes:
+  - `lazy_list_scroll`: 1552.2 FPS.
+  - `text_heavy_scroll`: 1682.8 FPS.
+  - `backdrop_blur`: 1793.0 FPS.
+  - `opaque_scene`: 6505.5 FPS.
+- Heavy LeetCodeDaily full-layout scroll:
+  - Baseline with redundant identity alpha mask still active: 98.5 FPS, 66 blur passes/sample, 135 offscreen acquires/sample.
+  - After identity alpha-mask no-op: 103.9 FPS, 66 blur passes/sample, 134 offscreen acquires/sample.
+  - After translation-invariant shape-shadow surface cache: 196.1 FPS, 0 blur passes/sample, 1 offscreen acquire/sample.
+- The current highest remaining renderer bottleneck is composite submit count. LeetCodeDaily still reports 175 submits/sample because cached offscreen composites use immediate command submissions. The proper next renderer architecture work is a batched/dynamic-uniform composite path, not a demo-specific shortcut.
+
+## Current Checkpoint Scope
+
+- Make identity rounded alpha masks a no-op at modifier construction time.
+- Add an opt-in LeetCodeDaily perf probe without changing the demo layout/content.
+- Share robot perf render-stat accumulation across perf examples.
+- Cache translated, text-free shape-shadow surfaces by normalized content hash, pixel size, scale, and blur radius.
+- Batch shape-only shadow miss rendering into one encoder before caching the blurred surface.

@@ -1234,6 +1234,31 @@ fn rounded_alpha_mask_modifier_sets_render_effect_shader() {
 }
 
 #[test]
+fn rounded_alpha_mask_identity_is_noop() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let modifier = Modifier::empty().rounded_alpha_mask(280.0, 120.0, 0.0, 0.0);
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut found_layer = false;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if node.as_any().downcast_ref::<GraphicsLayerNode>().is_some() {
+                found_layer = true;
+            }
+        },
+    );
+
+    assert!(
+        !found_layer,
+        "identity rounded_alpha_mask should not add a layer"
+    );
+}
+
+#[test]
 fn rounded_corners_records_corner_shape_without_background() {
     let shape = RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0);
     let modifier = Modifier::empty().rounded_corner_shape(shape);
