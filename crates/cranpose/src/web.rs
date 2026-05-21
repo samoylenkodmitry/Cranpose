@@ -25,6 +25,15 @@ enum WebBackendPreference {
     Gl,
 }
 
+#[derive(Debug)]
+struct BrowserDisplayHandle;
+
+impl wgpu::rwh::HasDisplayHandle for BrowserDisplayHandle {
+    fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+        Ok(wgpu::rwh::DisplayHandle::web())
+    }
+}
+
 /// Runs a web Compose application with wgpu rendering.
 ///
 /// Called by `AppLauncher::run_web()`. This is the framework-level
@@ -70,7 +79,8 @@ pub async fn run(
     }
 
     let backend_preference = requested_web_backend(&window);
-    let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    let mut instance_desc =
+        wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
     instance_desc.backends = instance_backends(backend_preference);
     let instance = match backend_preference {
         WebBackendPreference::Auto => {
