@@ -16,6 +16,7 @@ use cranpose_render_common::primitive_emit::{
     ShapeDrawParams,
 };
 use cranpose_render_common::Brush;
+use cranpose_render_common::RenderScene;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
 #[cfg(test)]
@@ -2044,6 +2045,43 @@ pub(crate) fn render_from_applier(
     else {
         return;
     };
+    collect_hits_from_graph(
+        &graph.root,
+        cranpose_render_common::graph::ProjectiveTransform::identity(),
+        scene,
+        None,
+    );
+    scene.replace_graph(graph);
+}
+
+pub(crate) fn update_from_applier(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+    scene: &mut Scene,
+    scale: f32,
+    dirty_nodes: &[NodeId],
+) {
+    let updated = scene.graph.as_mut().is_some_and(|graph| {
+        cranpose_render_common::scene_builder::update_graph_from_applier(
+            applier,
+            graph,
+            dirty_nodes,
+            scale,
+        )
+    });
+    if !updated {
+        scene.clear();
+        render_from_applier(applier, root, scene, scale);
+        return;
+    }
+
+    scene.hits.clear();
+    scene.node_index.clear();
+    scene.next_hit_z = 0;
+    let graph = scene
+        .graph
+        .take()
+        .expect("updated scene graph should remain available");
     collect_hits_from_graph(
         &graph.root,
         cranpose_render_common::graph::ProjectiveTransform::identity(),

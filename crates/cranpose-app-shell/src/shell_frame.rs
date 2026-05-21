@@ -223,14 +223,14 @@ where
         }
     }
 
-    fn refresh_draw_repasses(&mut self) {
+    fn refresh_draw_repasses(&mut self) -> Vec<NodeId> {
         let dirty_nodes = take_draw_repass_nodes();
         if dirty_nodes.is_empty() {
-            return;
+            return dirty_nodes;
         }
 
         let Some(layout_tree) = self.layout_tree.as_mut() else {
-            return;
+            return dirty_nodes;
         };
 
         let dirty_set: HashSet<NodeId> = dirty_nodes.into_iter().collect();
@@ -242,6 +242,7 @@ where
             &refresh_scope,
             &dirty_set,
         );
+        dirty_set.into_iter().collect()
     }
 
     pub(crate) fn run_render_phase(&mut self) {
@@ -252,17 +253,18 @@ where
         // Tick cursor blink timer - only marks dirty when visibility state changes
         let cursor_blink_dirty = cranpose_ui::tick_cursor_blink();
 
-        let render_only_dirty = render_dirty || cursor_blink_dirty;
+        let render_only_dirty = (render_dirty && !draw_repass_pending) || cursor_blink_dirty;
         // Pointer invalidations can replace hit-test handler closures inside modifier nodes.
         // The scene caches those closures, so it must be rebuilt to avoid dispatching stale input.
+        let scene_dirty = self.scene_dirty;
         let needs_scene_rebuild =
-            self.scene_dirty || draw_repass_pending || render_only_dirty || pointer_dirty;
+            scene_dirty || draw_repass_pending || render_only_dirty || pointer_dirty;
 
         if !needs_scene_rebuild {
             return;
         }
         self.scene_dirty = false;
-        self.refresh_draw_repasses();
+        let draw_dirty_nodes = self.refresh_draw_repasses();
         let viewport_size = Size {
             width: self.viewport.0,
             height: self.viewport.1,
@@ -271,10 +273,22 @@ where
         // Use new direct traversal rendering
         if let Some(root) = self.composition.root() {
             let mut applier = self.composition.applier_mut();
-            if let Err(err) =
+            let rebuild_result = if !draw_dirty_nodes.is_empty()
+                && !render_only_dirty
+                && !pointer_dirty
+                && !scene_dirty
+            {
+                self.renderer.update_scene_from_applier(
+                    &mut applier,
+                    root,
+                    viewport_size,
+                    &draw_dirty_nodes,
+                )
+            } else {
                 self.renderer
                     .rebuild_scene_from_applier(&mut applier, root, viewport_size)
-            {
+            };
+            if let Err(err) = rebuild_result {
                 // Fallback to clearing scene on error
                 log::error!("renderer rebuild failed: {err:?}");
                 self.renderer.scene_mut().clear();

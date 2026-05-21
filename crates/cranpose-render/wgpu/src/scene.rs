@@ -72,6 +72,20 @@ pub(crate) struct ImageDraw {
     pub motion_context_animated: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DrawOpKind {
+    Shape(usize),
+    Image(usize),
+    Text(usize),
+    Shadow(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DrawOp {
+    pub z_index: usize,
+    pub kind: DrawOpKind,
+}
+
 /// A shadow that requires GPU blur processing.
 #[derive(Clone)]
 pub(crate) struct ShadowDraw {
@@ -124,6 +138,7 @@ pub(crate) struct CompositorScene {
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub shadow_draws: Vec<ShadowDraw>,
+    pub draw_ops: Vec<DrawOp>,
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
     pub next_z: usize,
@@ -136,6 +151,7 @@ impl CompositorScene {
             images: Vec::new(),
             texts: Vec::new(),
             shadow_draws: Vec::new(),
+            draw_ops: Vec::new(),
             effect_layers: Vec::new(),
             backdrop_layers: Vec::new(),
             next_z: 0,
@@ -147,6 +163,7 @@ impl CompositorScene {
         self.images.clear();
         self.texts.clear();
         self.shadow_draws.clear();
+        self.draw_ops.clear();
         self.effect_layers.clear();
         self.backdrop_layers.clear();
         self.next_z = 0;
@@ -184,6 +201,7 @@ impl CompositorScene {
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
+        let index = self.shapes.len();
         self.shapes.push(DrawShape {
             rect,
             local_rect,
@@ -194,6 +212,10 @@ impl CompositorScene {
             z_index,
             clip,
             blend_mode,
+        });
+        self.draw_ops.push(DrawOp {
+            z_index,
+            kind: DrawOpKind::Shape(index),
         });
     }
 
@@ -214,6 +236,7 @@ impl CompositorScene {
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
+        let index = self.images.len();
         self.images.push(ImageDraw {
             rect,
             local_rect,
@@ -228,6 +251,10 @@ impl CompositorScene {
             blend_mode,
             src_rect,
             motion_context_animated,
+        });
+        self.draw_ops.push(DrawOp {
+            z_index,
+            kind: DrawOpKind::Image(index),
         });
     }
 
@@ -246,6 +273,7 @@ impl CompositorScene {
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
+        let index = self.texts.len();
         self.texts.push(TextDraw {
             node_id,
             rect,
@@ -260,13 +288,22 @@ impl CompositorScene {
             z_index,
             clip,
         });
+        self.draw_ops.push(DrawOp {
+            z_index,
+            kind: DrawOpKind::Text(index),
+        });
     }
 
     pub fn push_shadow_draw(&mut self, mut draw: ShadowDraw) {
         let z_index = self.next_z;
         self.next_z += 1;
+        let index = self.shadow_draws.len();
         draw.z_index = z_index;
         self.shadow_draws.push(draw);
+        self.draw_ops.push(DrawOp {
+            z_index,
+            kind: DrawOpKind::Shadow(index),
+        });
     }
 
     #[allow(clippy::too_many_arguments)]

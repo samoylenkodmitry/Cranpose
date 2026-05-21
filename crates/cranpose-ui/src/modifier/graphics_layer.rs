@@ -312,6 +312,11 @@ impl Modifier {
         corner_radius: f32,
         edge_feather: f32,
     ) -> Self {
+        let has_radius = corner_radius.is_finite() && corner_radius > 0.0;
+        let has_feather = edge_feather.is_finite() && edge_feather > 0.0;
+        if !has_radius && !has_feather {
+            return self;
+        }
         let layer = GraphicsLayer {
             render_effect: Some(rounded_alpha_mask_effect(
                 area_width,

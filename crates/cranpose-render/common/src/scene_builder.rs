@@ -67,6 +67,100 @@ pub fn build_graph_from_applier(
     })
 }
 
+pub fn update_graph_from_applier(
+    applier: &mut MemoryApplier,
+    graph: &mut RenderGraph,
+    dirty_nodes: &[NodeId],
+    scale: f32,
+) -> bool {
+    if dirty_nodes.is_empty() {
+        return true;
+    }
+
+    let mut updated = false;
+    for &node_id in dirty_nodes {
+        if graph.root.node_id == Some(node_id) {
+            let Some(root) = build_layer_node_from_applier(applier, node_id, scale, false) else {
+                return false;
+            };
+            graph.root = root;
+            updated = true;
+            continue;
+        }
+
+        let inherited_translated_content_context = graph.root.translated_content_context;
+        match replace_layer_from_applier(
+            applier,
+            &mut graph.root,
+            node_id,
+            inherited_translated_content_context,
+        ) {
+            Some(true) => updated = true,
+            Some(false) => return false,
+            None => return false,
+        }
+    }
+
+    if updated {
+        graph.root.recompute_raster_cache_hashes();
+    }
+    true
+}
+
+fn replace_layer_from_applier(
+    applier: &mut MemoryApplier,
+    parent: &mut LayerNode,
+    node_id: NodeId,
+    inherited_translated_content_context: bool,
+) -> Option<bool> {
+    let child_inherited_translated_content_context =
+        inherited_translated_content_context || parent.translated_content_context;
+
+    for child in &mut parent.children {
+        let RenderNode::Layer(child_layer) = child else {
+            continue;
+        };
+
+        if child_layer.node_id == Some(node_id) {
+            let old_transform = child_layer.transform_to_parent;
+            let Some(mut replacement) = build_layer_node_from_applier_internal(
+                applier,
+                node_id,
+                parent.motion_context_animated,
+                child_inherited_translated_content_context,
+            ) else {
+                return Some(false);
+            };
+            replacement.transform_to_parent = old_transform;
+            **child_layer = replacement;
+            parent.has_hit_targets = parent.hit_test.is_some()
+                || parent.children.iter().any(|child| match child {
+                    RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
+                    RenderNode::Primitive(_) => false,
+                });
+            return Some(true);
+        }
+
+        if let Some(updated) = replace_layer_from_applier(
+            applier,
+            child_layer,
+            node_id,
+            child_inherited_translated_content_context,
+        ) {
+            if updated {
+                parent.has_hit_targets = parent.hit_test.is_some()
+                    || parent.children.iter().any(|child| match child {
+                        RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
+                        RenderNode::Primitive(_) => false,
+                    });
+            }
+            return Some(updated);
+        }
+    }
+
+    None
+}
+
 fn build_layer_node(
     snapshot: BuildNodeSnapshot,
     _root_scale: f32,
@@ -690,6 +784,7 @@ fn resolve_text_horizontal_offset(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
@@ -738,6 +833,16 @@ mod tests {
                 RenderNode::Layer(child_layer) => collect_text_labels(child_layer, labels),
             }
         }
+    }
+
+    fn find_layer_by_node_id(layer: &LayerNode, node_id: NodeId) -> Option<&LayerNode> {
+        if layer.node_id == Some(node_id) {
+            return Some(layer);
+        }
+        layer.children.iter().find_map(|child| match child {
+            RenderNode::Layer(child_layer) => find_layer_by_node_id(child_layer, node_id),
+            RenderNode::Primitive(_) => None,
+        })
     }
 
     fn find_translated_content_offset(layer: &LayerNode) -> Option<Point> {
@@ -1022,6 +1127,99 @@ mod tests {
         assert!(
             graph_has_runtime_shader_effect(&graph.root),
             "rounded_corners().clip_to_bounds() must build a shaped mask effect for descendants"
+        );
+    }
+
+    #[test]
+    fn update_graph_from_applier_replaces_dirty_child_layer() {
+        let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<String>>>> =
+            Rc::new(RefCell::new(None));
+        let child_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+        let state_holder_for_comp = state_holder.clone();
+        let child_id_holder_for_comp = child_id_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let label = cranpose_core::useState(|| "before".to_string());
+            *state_holder_for_comp.borrow_mut() = Some(label);
+            let child_id_holder_for_content = child_id_holder_for_comp.clone();
+            cranpose_ui::Box(
+                Modifier::empty().size_points(240.0, 80.0),
+                cranpose_ui::BoxSpec::default(),
+                move || {
+                    let child_id = Text(label, Modifier::empty(), TextStyle::default());
+                    *child_id_holder_for_content.borrow_mut() = Some(child_id);
+                    Text("stable", Modifier::empty(), TextStyle::default());
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 80.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        let child_id = child_id_holder
+            .borrow()
+            .expect("text child id should be captured");
+        let initial_transform = find_layer_by_node_id(&graph.root, child_id)
+            .expect("text child layer")
+            .transform_to_parent;
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let label = state_holder
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("label state should be captured");
+        label.set_value("after".to_string());
+        composition
+            .process_invalid_scopes()
+            .expect("text recomposition");
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("updated layout");
+        let child_id = child_id_holder
+            .borrow()
+            .expect("text child id should remain captured");
+
+        assert!(
+            update_graph_from_applier(&mut applier, &mut graph, &[child_id], 1.0),
+            "dirty child should be replaceable from retained applier state"
+        );
+        applier.clear_runtime_handle();
+
+        let mut labels = Vec::new();
+        collect_text_labels(&graph.root, &mut labels);
+        assert!(
+            labels.iter().any(|label| label == "after"),
+            "updated graph should contain refreshed child text, got {labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|label| label == "before"),
+            "updated graph should not retain stale child text, got {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|label| label == "stable"),
+            "sibling content should remain present, got {labels:?}"
+        );
+        assert_eq!(
+            find_layer_by_node_id(&graph.root, child_id)
+                .expect("updated text child layer")
+                .transform_to_parent,
+            initial_transform,
+            "draw-only child replacement must preserve the retained parent placement transform"
         );
     }
 

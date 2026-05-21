@@ -4,8 +4,8 @@ use crate::pipeline::{
     scene_emission_counts, SceneEmissionCounts,
 };
 use crate::scene::{
-    BackdropLayer, CompositorScene, DrawShape, EffectLayer, ImageDraw, ShadowDraw, SnapAnchor,
-    TextDraw,
+    BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
+    ShadowDraw, SnapAnchor, TextDraw,
 };
 use crate::surface_plan::{
     composite_sample_mode_for_requirements, effective_surface_requirements, layer_cache_key,
@@ -1210,6 +1210,7 @@ pub(crate) struct SceneWindowSource<'a> {
     pub(crate) images: &'a [ImageDraw],
     pub(crate) texts: &'a [TextDraw],
     pub(crate) shadow_draws: &'a [ShadowDraw],
+    pub(crate) draw_ops: &'a [DrawOp],
     pub(crate) effect_layers: &'a [EffectLayer],
     pub(crate) backdrop_layers: &'a [BackdropLayer],
 }
@@ -1225,30 +1226,63 @@ pub(crate) fn build_scene_window(
     window_rect: Rect,
 ) -> CompositorScene {
     let mut scene = CompositorScene::new();
-    scene.shapes = source
-        .shapes
-        .iter()
-        .filter(|shape| shape.z_index >= z_start && shape.z_index < z_end)
-        .cloned()
-        .collect();
-    scene.images = source
-        .images
-        .iter()
-        .filter(|image| image.z_index >= z_start && image.z_index < z_end)
-        .cloned()
-        .collect();
-    scene.texts = source
-        .texts
-        .iter()
-        .filter(|text| text.z_index >= z_start && text.z_index < z_end)
-        .cloned()
-        .collect();
-    scene.shadow_draws = source
-        .shadow_draws
-        .iter()
-        .filter(|shadow| shadow.z_index >= z_start && shadow.z_index < z_end)
-        .cloned()
-        .collect();
+    let mut shape_map = vec![None; source.shapes.len()];
+    for (source_index, shape) in source.shapes.iter().enumerate() {
+        if shape.z_index >= z_start && shape.z_index < z_end {
+            shape_map[source_index] = Some(scene.shapes.len());
+            scene.shapes.push(shape.clone());
+        }
+    }
+    let mut image_map = vec![None; source.images.len()];
+    for (source_index, image) in source.images.iter().enumerate() {
+        if image.z_index >= z_start && image.z_index < z_end {
+            image_map[source_index] = Some(scene.images.len());
+            scene.images.push(image.clone());
+        }
+    }
+    let mut text_map = vec![None; source.texts.len()];
+    for (source_index, text) in source.texts.iter().enumerate() {
+        if text.z_index >= z_start && text.z_index < z_end {
+            text_map[source_index] = Some(scene.texts.len());
+            scene.texts.push(text.clone());
+        }
+    }
+    let mut shadow_map = vec![None; source.shadow_draws.len()];
+    for (source_index, shadow) in source.shadow_draws.iter().enumerate() {
+        if shadow.z_index >= z_start && shadow.z_index < z_end {
+            shadow_map[source_index] = Some(scene.shadow_draws.len());
+            scene.shadow_draws.push(shadow.clone());
+        }
+    }
+    for op in source.draw_ops {
+        if op.z_index < z_start || op.z_index >= z_end {
+            continue;
+        }
+        let kind = match op.kind {
+            DrawOpKind::Shape(index) => shape_map
+                .get(index)
+                .copied()
+                .flatten()
+                .map(DrawOpKind::Shape),
+            DrawOpKind::Image(index) => image_map
+                .get(index)
+                .copied()
+                .flatten()
+                .map(DrawOpKind::Image),
+            DrawOpKind::Text(index) => text_map.get(index).copied().flatten().map(DrawOpKind::Text),
+            DrawOpKind::Shadow(index) => shadow_map
+                .get(index)
+                .copied()
+                .flatten()
+                .map(DrawOpKind::Shadow),
+        };
+        if let Some(kind) = kind {
+            scene.draw_ops.push(DrawOp {
+                z_index: op.z_index,
+                kind,
+            });
+        }
+    }
     scene.effect_layers = source
         .effect_layers
         .iter()
