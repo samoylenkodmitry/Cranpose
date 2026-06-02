@@ -215,6 +215,7 @@ struct CargoBinaryOptions {
     profile: String,
     target: Option<String>,
     manifest_path: Option<PathBuf>,
+    patch_workspace_cranpose: bool,
 }
 
 impl Default for CargoBinaryOptions {
@@ -225,6 +226,7 @@ impl Default for CargoBinaryOptions {
             profile: "release".to_owned(),
             target: None,
             manifest_path: None,
+            patch_workspace_cranpose: false,
         }
     }
 }
@@ -281,6 +283,9 @@ impl BinarySizeOptions {
                 "--max-bytes" => {
                     let value = required_value(args, &mut index, "--max-bytes")?;
                     options.max_bytes = Some(parse_u64_option("--max-bytes", &value)?);
+                }
+                "--patch-workspace-cranpose" => {
+                    options.binary.patch_workspace_cranpose = true;
                 }
                 "--no-build" => options.build = false,
                 other => return Err(format!("unknown binary-size option `{other}`")),
@@ -358,7 +363,7 @@ fn print_bundle_usage() {
 
 fn print_binary_size_usage() {
     eprintln!(
-        "usage: cargo xtask binary-size [--manifest-path path] [--package desktop-app] [--bin desktop-app] [--profile release] [--max-bytes N] [--no-build]"
+        "usage: cargo xtask binary-size [--manifest-path path] [--package desktop-app] [--bin desktop-app] [--profile release] [--max-bytes N] [--patch-workspace-cranpose] [--no-build]"
     );
 }
 
@@ -408,7 +413,7 @@ fn bundle_macos(options: BundleMacosOptions) -> Result<(), String> {
     let workspace = workspace_root()?;
     let binary_options = bundle_binary_options(&options);
     if options.build {
-        build_binary(&binary_options)?;
+        build_binary(&workspace, &binary_options)?;
     }
 
     let binary = built_binary_path(&workspace, &binary_options);
@@ -431,7 +436,7 @@ fn bundle_macos(options: BundleMacosOptions) -> Result<(), String> {
 fn report_binary_size(options: BinarySizeOptions) -> Result<(), String> {
     let workspace = workspace_root()?;
     if options.build {
-        build_binary(&options.binary)?;
+        build_binary(&workspace, &options.binary)?;
     }
 
     let binary = built_binary_path(&workspace, &options.binary);
@@ -468,6 +473,7 @@ fn bundle_binary_options(options: &BundleMacosOptions) -> CargoBinaryOptions {
         profile: options.profile.clone(),
         target: options.target.clone(),
         manifest_path: None,
+        patch_workspace_cranpose: false,
     }
 }
 
@@ -519,11 +525,14 @@ fn unescape_json_string(value: &str) -> String {
     out
 }
 
-fn build_binary(options: &CargoBinaryOptions) -> Result<(), String> {
+fn build_binary(workspace: &Path, options: &CargoBinaryOptions) -> Result<(), String> {
     let mut command = Command::new("cargo");
     command.arg("build");
     if let Some(manifest_path) = options.manifest_path.as_deref() {
         command.arg("--manifest-path").arg(manifest_path);
+    }
+    if options.patch_workspace_cranpose {
+        add_workspace_cranpose_patches(&mut command, workspace);
     }
     command.args([
         "-p",
@@ -545,6 +554,46 @@ fn build_binary(options: &CargoBinaryOptions) -> Result<(), String> {
     } else {
         Err(format!("cargo build failed with status {status}"))
     }
+}
+
+const WORKSPACE_CRANPOSE_PATCHES: &[(&str, &str)] = &[
+    ("cranpose", "crates/cranpose"),
+    ("cranpose-animation", "crates/cranpose-animation"),
+    ("cranpose-app-shell", "crates/cranpose-app-shell"),
+    ("cranpose-core", "crates/cranpose-core"),
+    ("cranpose-foundation", "crates/cranpose-foundation"),
+    ("cranpose-macros", "crates/cranpose-macros"),
+    (
+        "cranpose-platform-android",
+        "crates/cranpose-platform/android",
+    ),
+    (
+        "cranpose-platform-desktop-winit",
+        "crates/cranpose-platform/desktop-winit",
+    ),
+    ("cranpose-platform-web", "crates/cranpose-platform/web"),
+    ("cranpose-render-common", "crates/cranpose-render/common"),
+    ("cranpose-render-pixels", "crates/cranpose-render/pixels"),
+    ("cranpose-render-wgpu", "crates/cranpose-render/wgpu"),
+    ("cranpose-runtime-std", "crates/cranpose-runtime-std"),
+    ("cranpose-services", "crates/cranpose-services"),
+    ("cranpose-ui", "crates/cranpose-ui"),
+    ("cranpose-ui-graphics", "crates/cranpose-ui-graphics"),
+    ("cranpose-ui-layout", "crates/cranpose-ui-layout"),
+];
+
+fn add_workspace_cranpose_patches(command: &mut Command, workspace: &Path) {
+    for (package, relative_path) in WORKSPACE_CRANPOSE_PATCHES {
+        let package_path = workspace.join(relative_path);
+        command.arg("--config").arg(format!(
+            "patch.crates-io.{package}.path=\"{}\"",
+            escape_toml_string(&package_path.display().to_string())
+        ));
+    }
+}
+
+fn escape_toml_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn built_binary_path(workspace: &Path, options: &CargoBinaryOptions) -> PathBuf {
@@ -1274,6 +1323,7 @@ mod tests {
             "apps/isolated-demo/Cargo.toml".into(),
             "--max-bytes".into(),
             "29360128".into(),
+            "--patch-workspace-cranpose".into(),
             "--no-build".into(),
         ])
         .expect("binary-size options parse");
@@ -1289,6 +1339,7 @@ mod tests {
             Some(Path::new("apps/isolated-demo/Cargo.toml"))
         );
         assert_eq!(options.max_bytes, Some(29_360_128));
+        assert!(options.binary.patch_workspace_cranpose);
         assert!(!options.build);
     }
 

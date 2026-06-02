@@ -315,8 +315,9 @@ fn binary_size_budget_targets_minimal_isolated_app() {
         workflow.contains("--package isolated-demo")
             && workflow.contains("--bin isolated-demo")
             && workflow.contains("--profile release-small")
+            && workflow.contains("--patch-workspace-cranpose")
             && workflow.contains("--max-bytes 29360128"),
-        "release-small binary-size gate must measure the minimal isolated app, not the feature-rich desktop demo"
+        "release-small binary-size gate must measure the minimal isolated app with local Cranpose patches before the release version is published"
     );
 }
 

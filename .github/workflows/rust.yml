@@ -95,6 +95,7 @@ jobs:
           --package isolated-demo
           --bin isolated-demo
           --profile release-small
+          --patch-workspace-cranpose
           --max-bytes 29360128
 
   feature-smoke:
