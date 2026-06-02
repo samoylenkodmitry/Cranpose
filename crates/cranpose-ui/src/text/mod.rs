@@ -9,6 +9,7 @@ pub mod unit;
 
 pub use annotated_string::{AnnotatedString, LinkAnnotation, RangeStyle, StringAnnotation};
 
+pub use crate::text_layout_result::TextLayoutResult;
 pub use decoration::{Shadow, TextDecoration};
 pub use font::{
     FileBackedFontFamily, FontFamily, FontFile, FontStyle, FontSynthesis, FontWeight,

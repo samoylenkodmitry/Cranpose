@@ -61,7 +61,9 @@ impl<'a> BoundsAdjuster<'a> {
             return;
         }
 
-        let last = items.last().unwrap();
+        let Some(last) = items.last() else {
+            return;
+        };
         let last_item_end = last.offset + last.main_axis_size;
         let viewport_end = self.effective_viewport_size - self.config.after_content_padding;
 
@@ -142,6 +144,17 @@ mod tests {
 
         // Items should be pushed down so last item ends at 500
         assert_eq!(items[1].offset + items[1].main_axis_size, 500.0);
+    }
+
+    #[test]
+    fn test_clamp_empty_items_is_noop() {
+        let config = LazyListMeasureConfig::default();
+        let adjuster = BoundsAdjuster::new(&config, 5, 500.0);
+        let mut items = Vec::new();
+
+        adjuster.clamp(&mut items);
+
+        assert!(items.is_empty());
     }
 
     #[test]

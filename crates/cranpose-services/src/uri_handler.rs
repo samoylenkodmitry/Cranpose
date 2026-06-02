@@ -15,6 +15,11 @@ pub enum UriHandlerError {
     PopupBlocked(String),
     #[error("Opening external links is not supported on this platform: {0}")]
     UnsupportedPlatform(String),
+    #[error("{operation} requires cranpose-services feature `{feature}`")]
+    UnsupportedFeature {
+        operation: &'static str,
+        feature: &'static str,
+    },
 }
 
 pub trait UriHandler {
@@ -27,13 +32,17 @@ struct PlatformUriHandler;
 
 impl UriHandler for PlatformUriHandler {
     fn open_uri(&self, uri: &str) -> Result<(), UriHandlerError> {
-        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+        #[cfg(all(
+            not(target_arch = "wasm32"),
+            not(target_os = "android"),
+            feature = "uri-native"
+        ))]
         {
             open::that(uri).map_err(|err| UriHandlerError::OpenFailed(format!("{:?}", err)))?;
             Ok(())
         }
 
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", feature = "uri-web"))]
         {
             let window = web_sys::window().ok_or(UriHandlerError::NoWindow)?;
             let opened = window
@@ -46,10 +55,41 @@ impl UriHandler for PlatformUriHandler {
             }
         }
 
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", feature = "uri-android"))]
         {
             webbrowser::open(uri).map_err(|err| UriHandlerError::OpenFailed(err.to_string()))?;
             Ok(())
+        }
+
+        #[cfg(all(
+            not(target_arch = "wasm32"),
+            not(target_os = "android"),
+            not(feature = "uri-native")
+        ))]
+        {
+            let _ = uri;
+            Err(UriHandlerError::UnsupportedFeature {
+                operation: "native URI opening",
+                feature: "uri-native",
+            })
+        }
+
+        #[cfg(all(target_arch = "wasm32", not(feature = "uri-web")))]
+        {
+            let _ = uri;
+            Err(UriHandlerError::UnsupportedFeature {
+                operation: "web URI opening",
+                feature: "uri-web",
+            })
+        }
+
+        #[cfg(all(target_os = "android", not(feature = "uri-android")))]
+        {
+            let _ = uri;
+            Err(UriHandlerError::UnsupportedFeature {
+                operation: "Android URI opening",
+                feature: "uri-android",
+            })
         }
     }
 }
@@ -65,15 +105,8 @@ pub fn local_uri_handler() -> CompositionLocal<UriHandlerRef> {
 
     LOCAL_URI_HANDLER.with(|cell| {
         let mut local = cell.borrow_mut();
-        if local.is_none() {
-            *local = Some(compositionLocalOfWithPolicy(
-                default_uri_handler,
-                Rc::ptr_eq,
-            ));
-        }
         local
-            .as_ref()
-            .expect("Uri handler composition local must be initialized")
+            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_uri_handler, Rc::ptr_eq))
             .clone()
     })
 }
@@ -108,6 +141,26 @@ mod tests {
     fn default_uri_handler_can_be_created() {
         let handler = default_uri_handler();
         assert_eq!(Rc::strong_count(&handler), 1);
+    }
+
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(target_os = "android"),
+        not(feature = "uri-native")
+    ))]
+    #[test]
+    fn default_uri_handler_reports_disabled_native_uri_feature() {
+        let error = default_uri_handler()
+            .open_uri("https://example.com")
+            .expect_err("native URI opening should be feature-gated");
+
+        assert!(matches!(
+            error,
+            UriHandlerError::UnsupportedFeature {
+                feature: "uri-native",
+                ..
+            }
+        ));
     }
 
     #[test]

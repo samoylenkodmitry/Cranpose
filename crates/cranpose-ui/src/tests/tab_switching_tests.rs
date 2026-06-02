@@ -71,7 +71,10 @@ fn composition_layout_texts(composition: &mut Composition<MemoryApplier>) -> Vec
     .expect("measure layout for tab switching test");
     applier.clear_runtime_handle();
     let mut texts = Vec::new();
-    collect(measurements.layout_tree().root(), &mut texts);
+    let layout_tree = measurements
+        .layout_tree()
+        .expect("tab switching test requested a layout tree");
+    collect(layout_tree.root(), &mut texts);
     texts
 }
 
@@ -302,6 +305,7 @@ fn wrapped_tab_switching_host(active_tab: MutableState<i32>) {
 
 #[test]
 fn tab_switching_restores_conditional_layout_nodes() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
@@ -355,6 +359,7 @@ fn tab_switching_restores_conditional_layout_nodes() {
 
 #[test]
 fn scrollable_tab_host_preserves_content_across_mixed_switches() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(3i32, runtime.clone());
@@ -399,6 +404,7 @@ fn scrollable_tab_host_preserves_content_across_mixed_switches() {
 
 #[test]
 fn restored_wrapped_counter_tab_updates_after_mixed_tab_walk() {
+    let _app_context = crate::render_state::app_context_test_scope();
     RESTORED_COUNTER_STATE.with(|slot| slot.borrow_mut().take());
     RESTORED_POINTER_STATE.with(|slot| slot.borrow_mut().take());
 
@@ -468,6 +474,7 @@ fn restored_wrapped_counter_tab_updates_after_mixed_tab_walk() {
 
 #[test]
 fn tab_switching_multiple_toggle_cycles_stays_responsive() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
@@ -505,6 +512,7 @@ fn tab_switching_multiple_toggle_cycles_stays_responsive() {
 
 #[test]
 fn tab_switching_layout_pass_handles_conditional_nodes() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
@@ -691,6 +699,7 @@ fn keyed_tab_switcher(active: MutableState<RecursiveDemoTab>, depth_state: Mutab
 
 #[test]
 fn recursive_layout_nodes_preserve_extent() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
@@ -761,6 +770,7 @@ fn recursive_layout_nodes_preserve_extent() {
 
 #[test]
 fn recursive_layout_updates_keep_all_branches() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let depth_state = MutableState::with_runtime(2usize, runtime.clone());
@@ -803,6 +813,7 @@ fn recursive_layout_updates_keep_all_branches() {
 
 #[test]
 fn tab_switching_recursive_layout_preserves_branches() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(RecursiveDemoTab::Counter, runtime.clone());
@@ -861,6 +872,7 @@ fn tab_switching_recursive_layout_preserves_branches() {
 
 #[test]
 fn recursive_layout_depth_decrease_then_increase_restores_branches() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let depth_state = MutableState::with_runtime(3usize, runtime.clone());
@@ -919,6 +931,7 @@ fn recursive_layout_depth_decrease_then_increase_restores_branches() {
 
 #[test]
 fn tab_switching_node_vec_does_not_grow_unboundedly() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
@@ -973,6 +986,7 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
 
 #[test]
 fn depth_cycling_node_vec_does_not_grow_unboundedly() {
+    let _app_context = crate::render_state::app_context_test_scope();
     const MIN_DEPTH: usize = 3;
     const MAX_DEPTH: usize = 5;
     const DEPTH_CYCLES: usize = 2;

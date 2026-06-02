@@ -89,6 +89,11 @@ pub(crate) struct PayloadAnchor {
 }
 
 impl PayloadAnchor {
+    pub(crate) const INVALID: Self = Self {
+        id: 0,
+        generation: 0,
+    };
+
     pub(crate) fn new(id: usize, generation: u32) -> Self {
         Self {
             id: checked_usize_to_u32(id, "payload anchor id"),
@@ -145,7 +150,6 @@ pub(crate) enum GroupStartKind {
 /// Result of starting a group.
 pub(crate) struct GroupStart<G> {
     pub(crate) group: G,
-    #[cfg(test)]
     pub(crate) anchor: AnchorId,
     pub(crate) scope_id: Option<ScopeId>,
     pub(crate) kind: GroupStartKind,
@@ -250,22 +254,33 @@ pub(crate) struct DetachedSubtree {
 }
 
 impl DetachedSubtree {
+    #[cfg(test)]
     fn root(&self) -> &GroupRecord {
         self.groups
             .first()
             .expect("detached subtree must contain a root group")
     }
 
+    #[cfg(test)]
     pub(crate) fn root_key(&self) -> GroupKey {
         self.root().key
     }
 
+    pub(crate) fn root_key_checked(&self) -> Option<GroupKey> {
+        self.groups.first().map(|group| group.key)
+    }
+
+    #[cfg(test)]
     pub(crate) fn root_parent_anchor(&self) -> AnchorId {
         self.root().parent_anchor
     }
 
+    pub(crate) fn root_parent_anchor_checked(&self) -> Option<AnchorId> {
+        self.groups.first().map(|group| group.parent_anchor)
+    }
+
     pub(crate) fn root_scope_id(&self) -> Option<ScopeId> {
-        self.root().scope_id
+        self.groups.first().and_then(|group| group.scope_id)
     }
 
     pub(crate) fn node_ids_iter(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -299,16 +314,29 @@ impl DetachedSubtree {
         root_nodes: &mut Vec<NodeId>,
         context: &'static str,
     ) {
+        let original_len = root_nodes.len();
         self.collect_root_nodes_into(root_nodes);
-        assert!(
-            self.node_count() == 0 || !root_nodes.is_empty(),
-            "detached subtree nodes must expose root metadata during {context}",
-        );
+        if self.node_count() == 0 {
+            return;
+        }
         let node_ids = self.node_ids_iter().collect::<HashSet<_>>();
-        assert!(
-            root_nodes.iter().all(|id| node_ids.contains(id)),
-            "detached subtree root ids must belong to the subtree node set during {context}",
+        let collected_roots = &root_nodes[original_len..];
+        if collected_roots.is_empty() {
+            log::error!(
+                "detached subtree nodes did not expose root metadata during {context}; falling back to every detached node"
+            );
+            root_nodes.extend(self.node_ids_iter());
+            return;
+        }
+        if collected_roots.iter().all(|id| node_ids.contains(id)) {
+            return;
+        }
+
+        log::error!(
+            "detached subtree root ids included nodes outside the detached subtree during {context}; falling back to every detached node"
         );
+        root_nodes.truncate(original_len);
+        root_nodes.extend(self.node_ids_iter());
     }
 
     pub(crate) fn group_count(&self) -> usize {
@@ -349,40 +377,14 @@ impl DetachedSubtree {
         self.set_node_lifecycle(NodeLifecycle::Active);
     }
 
-    pub(crate) fn assert_root_key(&self, expected: GroupKey, context: &'static str) {
-        assert_eq!(
-            self.root_key(),
-            expected,
-            "{context}: detached subtree root key mismatch"
-        );
-    }
-
-    pub(crate) fn assert_root_parent_detached(&self, context: &'static str) {
-        assert!(
-            !self.root_parent_anchor().is_valid(),
-            "{context}: detached subtree root parent must be detached"
-        );
-    }
-
-    pub(crate) fn assert_node_lifecycle(&self, expected: NodeLifecycle, context: &'static str) {
-        for node in &self.nodes {
-            assert_eq!(
-                node.lifecycle, expected,
-                "{context}: detached subtree node lifecycle mismatch"
-            );
-        }
-    }
-
-    pub(crate) fn assert_nodes_restore_ready(&self, context: &'static str) {
-        for node in &self.nodes {
-            assert!(
-                matches!(
-                    node.lifecycle,
-                    NodeLifecycle::Active | NodeLifecycle::RetainedDetached
-                ),
-                "{context}: detached subtree node lifecycle mismatch"
-            );
-        }
+    pub(crate) fn first_node_lifecycle_mismatch(
+        &self,
+        expected: NodeLifecycle,
+    ) -> Option<(NodeId, NodeLifecycle)> {
+        self.nodes
+            .iter()
+            .find(|node| node.lifecycle != expected)
+            .map(|node| (node.id, node.lifecycle))
     }
 
     fn set_node_lifecycle(&mut self, lifecycle: NodeLifecycle) {
@@ -405,6 +407,17 @@ pub(crate) struct FinishGroupResult {
     pub(crate) direct_nodes: Vec<NodeId>,
     pub(crate) root_nodes: Vec<NodeId>,
     pub(crate) was_skipped: bool,
+}
+
+impl FinishGroupResult {
+    pub(in crate::slot) fn empty() -> Self {
+        Self {
+            detached_children: Vec::new(),
+            direct_nodes: Vec::new(),
+            root_nodes: Vec::new(),
+            was_skipped: false,
+        }
+    }
 }
 
 impl PayloadRecord {

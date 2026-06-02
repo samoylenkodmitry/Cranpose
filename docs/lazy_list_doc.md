@@ -16,7 +16,7 @@ Virtualized lazy layouts for Cranpose with 1:1 API and architecture parity with 
 | LazyListIntervalContent | OK | Matches JC interval model. |
 | SlotReusePool | OK | Removed; SubcomposeState is single source of truth. |
 | Lifecycle (compose/dispose) | OK | Dispose non-retained slots immediately. `dispose_or_reuse_starting_from_index` matches JC. |
-| PrefetchScheduler | WIP | Implemented in `LazyListState` and `prefetch.rs`. Needs validation of idle-time execution in Rust async context. |
+| PrefetchScheduler | OK | Queue selection is unit-tested in `prefetch.rs`; `LazyColumn`/`LazyRow` synchronously precompose queued items during measure. Cranpose does not currently have a separate idle prefetch executor. |
 | Scrollable constraints | OK | LazyList asserts on infinite constraints (JC parity). |
 | measure_lazy_list | OK | JC scroll/backfill flow + visible/beyond-bounds separation. Logic verified against `LazyListMeasure.kt`. |
 | canScrollForward/Backward | OK | Parity. |
@@ -73,7 +73,7 @@ Virtualized lazy layouts for Cranpose with 1:1 API and architecture parity with 
 
 4.  **Performance & Correctness**:
     *   **Subcompose Slot Management**: Strong alignment with JC. `SlotId` (u64) adaptation is valid.
-    *   **Prefetch Execution**: Logic exists but needs verification of idle-time execution behavior in the Rust runtime.
+    *   **Prefetch Execution**: Prefetch is a synchronous precompose step inside lazy-list measurement, so it is covered by normal lazy layout and robot passes. A separate frame-budgeted idle prefetch executor would be a new architecture change, not the current behavior.
     *   **Infinite Constraint Handling**: Correctly handles infinite constraints (horizontal/vertical separation) similar to JC.
 
 ---
@@ -85,7 +85,7 @@ Key JC behavior to match (sources above):
 -   **Slot Reuse**: Owned by `SubcomposeState` (aligned).
 -   **Content Types**: `ContentTypeReusePolicy` implements per-type caps and compatibility (aligned).
 -   **Immediate Disposal**: Slots not retained are disposed immediately (aligned).
--   **Prefetching**: Logic exists, validation of "idle" behavior pending.
+-   **Prefetching**: Queue selection is implemented in `PrefetchScheduler`; precompose execution currently happens inside lazy-list measure.
 -   **Structure**: Lazy measure logic (`measure_lazy_list`) closely follows `LazyListMeasure.kt` (aligned).
 
 ---
@@ -112,7 +112,7 @@ Workspace verification:
 cargo fmt
 cargo test --workspace
 cargo clippy --workspace
-cargo tree --duplicates
+cargo xtask dependency-budget
 ```
 
 Last verified: 2026-01-05 (Code review and Architecture validation performed)

@@ -1,8 +1,7 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_foundation::{PointerEvent, PointerEventKind};
@@ -12,7 +11,41 @@ use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};
 use crate::graph::{ProjectiveTransform, RenderGraph};
 use crate::{HitTestTarget, RenderScene};
 
-static LIVE_MODIFIER_SLICE_LOOKUP_MISS_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub struct RenderDiagnostics {
+    reported_warnings: RefCell<HashSet<&'static str>>,
+    live_modifier_slice_lookup_miss_count: Cell<usize>,
+}
+
+impl RenderDiagnostics {
+    pub fn new() -> Self {
+        Self {
+            reported_warnings: RefCell::new(HashSet::new()),
+            live_modifier_slice_lookup_miss_count: Cell::new(0),
+        }
+    }
+
+    pub fn claim_warning_once(&self, key: &'static str) -> bool {
+        self.reported_warnings.borrow_mut().insert(key)
+    }
+
+    pub fn record_live_modifier_slice_lookup_miss(&self) {
+        self.live_modifier_slice_lookup_miss_count.set(
+            self.live_modifier_slice_lookup_miss_count
+                .get()
+                .saturating_add(1),
+        );
+    }
+
+    pub fn live_modifier_slice_lookup_miss_count(&self) -> usize {
+        self.live_modifier_slice_lookup_miss_count.get()
+    }
+}
+
+impl Default for RenderDiagnostics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Clone)]
 pub enum ClickAction {
@@ -59,11 +92,55 @@ pub struct HitRegion {
     pub z_index: usize,
     pub hit_clip_bounds: Option<Rect>,
     pub hit_clips: Vec<HitClip>,
+    diagnostics: Rc<RenderDiagnostics>,
+}
+
+struct HitRegionInit {
+    node_id: NodeId,
+    capture_path: Vec<NodeId>,
+    geometry: HitGeometry,
+    shape: Option<RoundedCornerShape>,
+    click_actions: Vec<ClickAction>,
+    pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
+    z_index: usize,
+    diagnostics: Rc<RenderDiagnostics>,
 }
 
 impl HitRegion {
-    pub fn live_modifier_slice_lookup_miss_count() -> usize {
-        LIVE_MODIFIER_SLICE_LOOKUP_MISS_COUNT.load(Ordering::Relaxed)
+    fn with_diagnostics(init: HitRegionInit) -> Self {
+        let HitRegionInit {
+            node_id,
+            capture_path,
+            geometry,
+            shape,
+            click_actions,
+            pointer_inputs,
+            z_index,
+            diagnostics,
+        } = init;
+        let HitGeometry {
+            rect,
+            quad,
+            local_bounds,
+            world_to_local,
+            hit_clip_bounds,
+            hit_clips,
+        } = geometry;
+        Self {
+            node_id,
+            capture_path,
+            rect,
+            quad,
+            local_bounds,
+            world_to_local,
+            shape,
+            click_actions,
+            pointer_inputs,
+            z_index,
+            hit_clip_bounds,
+            hit_clips,
+            diagnostics,
+        }
     }
 
     fn contains(&self, x: f32, y: f32) -> bool {
@@ -188,7 +265,7 @@ impl HitTestTarget for HitRegion {
             return;
         }
 
-        LIVE_MODIFIER_SLICE_LOOKUP_MISS_COUNT.fetch_add(1, Ordering::Relaxed);
+        self.diagnostics.record_live_modifier_slice_lookup_miss();
         self.dispatch_cached_handlers(event);
     }
 }
@@ -198,6 +275,7 @@ pub struct Scene {
     pub hits: Vec<HitRegion>,
     pub next_hit_z: usize,
     pub node_index: HashMap<NodeId, usize>,
+    diagnostics: Rc<RenderDiagnostics>,
 }
 
 impl Scene {
@@ -207,7 +285,12 @@ impl Scene {
             hits: Vec::new(),
             next_hit_z: 0,
             node_index: HashMap::new(),
+            diagnostics: Rc::new(RenderDiagnostics::new()),
         }
+    }
+
+    pub fn diagnostics(&self) -> &RenderDiagnostics {
+        self.diagnostics.as_ref()
     }
 
     pub fn push_hit(
@@ -226,28 +309,16 @@ impl Scene {
         let z_index = self.next_hit_z;
         self.next_hit_z += 1;
         let hit_index = self.hits.len();
-        let HitGeometry {
-            rect,
-            quad,
-            local_bounds,
-            world_to_local,
-            hit_clip_bounds,
-            hit_clips,
-        } = geometry;
-        self.hits.push(HitRegion {
+        self.hits.push(HitRegion::with_diagnostics(HitRegionInit {
             node_id,
             capture_path,
-            rect,
-            quad,
-            local_bounds,
-            world_to_local,
+            geometry,
             shape,
             click_actions,
             pointer_inputs,
             z_index,
-            hit_clip_bounds,
-            hit_clips,
-        });
+            diagnostics: Rc::clone(&self.diagnostics),
+        }));
         self.node_index.insert(node_id, hit_index);
     }
 
@@ -391,6 +462,10 @@ mod tests {
         }
     }
 
+    fn test_diagnostics() -> Rc<RenderDiagnostics> {
+        Rc::new(RenderDiagnostics::new())
+    }
+
     fn make_handler(counter: Rc<Cell<u32>>, consume: bool) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
             counter.set(counter.get() + 1);
@@ -497,32 +572,28 @@ mod tests {
     }
 
     #[test]
+    fn render_diagnostics_claim_each_warning_key_once() {
+        let diagnostics = RenderDiagnostics::new();
+
+        assert!(diagnostics.claim_warning_once("pixels.effect-fallback"));
+        assert!(!diagnostics.claim_warning_once("pixels.effect-fallback"));
+        assert!(diagnostics.claim_warning_once("pixels.blend-fallback"));
+    }
+
+    #[test]
     fn dispatch_stops_after_event_consumed() {
         let count_first = Rc::new(Cell::new(0));
         let count_second = Rc::new(Cell::new(0));
 
-        let hit = HitRegion {
+        let hit = HitRegion::with_diagnostics(HitRegionInit {
             node_id: 1,
             capture_path: vec![1],
-            rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            quad: rect_to_quad(Rect {
+            geometry: hit_geometry_for_rect(Rect {
                 x: 0.0,
                 y: 0.0,
                 width: 50.0,
                 height: 50.0,
             }),
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            world_to_local: ProjectiveTransform::identity(),
             shape: None,
             click_actions: Vec::new(),
             pointer_inputs: vec![
@@ -530,9 +601,8 @@ mod tests {
                 make_handler(count_second.clone(), false),
             ],
             z_index: 0,
-            hit_clip_bounds: None,
-            hit_clips: Vec::new(),
-        };
+            diagnostics: test_diagnostics(),
+        });
 
         let event = PointerEvent::new(
             PointerEventKind::Down,
@@ -553,35 +623,21 @@ mod tests {
             click_count_for_handler.set(click_count_for_handler.get() + 1);
         })));
 
-        let hit = HitRegion {
+        let hit = HitRegion::with_diagnostics(HitRegionInit {
             node_id: 1,
             capture_path: vec![1],
-            rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            quad: rect_to_quad(Rect {
+            geometry: hit_geometry_for_rect(Rect {
                 x: 0.0,
                 y: 0.0,
                 width: 50.0,
                 height: 50.0,
             }),
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            world_to_local: ProjectiveTransform::identity(),
             shape: None,
             click_actions: vec![click_action],
             pointer_inputs: Vec::new(),
             z_index: 0,
-            hit_clip_bounds: None,
-            hit_clips: Vec::new(),
-        };
+            diagnostics: test_diagnostics(),
+        });
 
         hit.dispatch(PointerEvent::new(
             PointerEventKind::Down,
@@ -605,35 +661,21 @@ mod tests {
             local_positions_for_handler.borrow_mut().push(point);
         }));
 
-        let hit = HitRegion {
+        let hit = HitRegion::with_diagnostics(HitRegionInit {
             node_id: 1,
             capture_path: vec![1],
-            rect: Rect {
-                x: 10.0,
-                y: 12.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            quad: rect_to_quad(Rect {
+            geometry: hit_geometry_for_rect(Rect {
                 x: 10.0,
                 y: 12.0,
                 width: 50.0,
                 height: 50.0,
             }),
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            world_to_local: ProjectiveTransform::translation(-10.0, -12.0),
             shape: None,
             click_actions: vec![click_action],
             pointer_inputs: Vec::new(),
             z_index: 0,
-            hit_clip_bounds: None,
-            hit_clips: Vec::new(),
-        };
+            diagnostics: test_diagnostics(),
+        });
 
         hit.dispatch(PointerEvent::new(
             PointerEventKind::Down,
@@ -652,35 +694,21 @@ mod tests {
             click_count_for_handler.set(click_count_for_handler.get() + 1);
         })));
 
-        let hit = HitRegion {
+        let hit = HitRegion::with_diagnostics(HitRegionInit {
             node_id: 1,
             capture_path: vec![1],
-            rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            quad: rect_to_quad(Rect {
+            geometry: hit_geometry_for_rect(Rect {
                 x: 0.0,
                 y: 0.0,
                 width: 50.0,
                 height: 50.0,
             }),
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            world_to_local: ProjectiveTransform::identity(),
             shape: None,
             click_actions: vec![click_action],
             pointer_inputs: vec![Rc::new(|event: PointerEvent| event.consume())],
             z_index: 0,
-            hit_clip_bounds: None,
-            hit_clips: Vec::new(),
-        };
+            diagnostics: test_diagnostics(),
+        });
 
         hit.dispatch(PointerEvent::new(
             PointerEventKind::Down,
@@ -749,25 +777,28 @@ mod tests {
         let world_to_local = ProjectiveTransform::from_rect_to_quad(local_bounds, quad)
             .inverse()
             .expect("translated quad should be invertible");
-        let hit = HitRegion {
+        let hit = HitRegion::with_diagnostics(HitRegionInit {
             node_id: 1,
             capture_path: vec![1],
-            rect: Rect {
-                x: 20.0,
-                y: 10.0,
-                width: 40.0,
-                height: 20.0,
+            geometry: HitGeometry {
+                rect: Rect {
+                    x: 20.0,
+                    y: 10.0,
+                    width: 40.0,
+                    height: 20.0,
+                },
+                quad,
+                local_bounds,
+                world_to_local,
+                hit_clip_bounds: None,
+                hit_clips: Vec::new(),
             },
-            quad,
-            local_bounds,
-            world_to_local,
             shape: None,
             click_actions: vec![click_action],
             pointer_inputs: Vec::new(),
             z_index: 0,
-            hit_clip_bounds: None,
-            hit_clips: Vec::new(),
-        };
+            diagnostics: test_diagnostics(),
+        });
 
         hit.dispatch(PointerEvent::new(
             PointerEventKind::Down,
@@ -782,38 +813,25 @@ mod tests {
     fn dispatch_with_applier_counts_live_modifier_slice_lookup_misses() {
         let handler_calls = Rc::new(Cell::new(0));
         let handler_calls_for_handler = Rc::clone(&handler_calls);
-        let hit = HitRegion {
+        let diagnostics = test_diagnostics();
+        let hit = HitRegion::with_diagnostics(HitRegionInit {
             node_id: 42,
             capture_path: vec![42],
-            rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            quad: rect_to_quad(Rect {
+            geometry: hit_geometry_for_rect(Rect {
                 x: 0.0,
                 y: 0.0,
                 width: 50.0,
                 height: 50.0,
             }),
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 50.0,
-                height: 50.0,
-            },
-            world_to_local: ProjectiveTransform::identity(),
             shape: None,
             click_actions: Vec::new(),
             pointer_inputs: vec![Rc::new(move |_event: PointerEvent| {
                 handler_calls_for_handler.set(handler_calls_for_handler.get() + 1);
             })],
             z_index: 0,
-            hit_clip_bounds: None,
-            hit_clips: Vec::new(),
-        };
-        let misses_before = HitRegion::live_modifier_slice_lookup_miss_count();
+            diagnostics: Rc::clone(&diagnostics),
+        });
+        let misses_before = diagnostics.live_modifier_slice_lookup_miss_count();
         let mut applier = MemoryApplier::new();
 
         hit.dispatch_with_applier(
@@ -827,7 +845,7 @@ mod tests {
 
         assert_eq!(handler_calls.get(), 1);
         assert_eq!(
-            HitRegion::live_modifier_slice_lookup_miss_count(),
+            diagnostics.live_modifier_slice_lookup_miss_count(),
             misses_before + 1
         );
     }

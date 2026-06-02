@@ -21,9 +21,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-static NEXT_SCROLL_STATE_ID: AtomicU64 = AtomicU64::new(1);
 const SCROLL_MOTION_ACTIVE_FRAME_COUNT: u8 = 6;
 
 /// State object for scroll position tracking.
@@ -39,8 +37,6 @@ pub struct ScrollState {
 }
 
 pub(crate) struct ScrollStateInner {
-    /// Unique ID for debugging
-    id: u64,
     /// Current scroll offset in pixels.
     /// Uses MutableState<f32> for reactivity - Composables can observe this value.
     /// Layout reads use get_non_reactive() to avoid triggering recomposition.
@@ -50,7 +46,8 @@ pub(crate) struct ScrollStateInner {
     max_value: RefCell<f32>,
     /// Callbacks to invalidate layout when scroll value changes
     /// Using HashMap to allow multiple listeners (e.g. real node + clones)
-    invalidate_callbacks: RefCell<std::collections::HashMap<u64, Box<dyn Fn()>>>,
+    invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
+    next_invalidate_callback_id: Cell<u64>,
     /// Tracks whether we need to invalidate once a callback is registered.
     pending_invalidation: Cell<bool>,
 }
@@ -58,14 +55,12 @@ pub(crate) struct ScrollStateInner {
 impl ScrollState {
     /// Creates a new ScrollState with the given initial scroll position.
     pub fn new(initial: f32) -> Self {
-        let id = NEXT_SCROLL_STATE_ID.fetch_add(1, Ordering::Relaxed);
-
         Self {
             inner: Rc::new(ScrollStateInner {
-                id,
                 value: ownedMutableStateOf(initial),
                 max_value: RefCell::new(0.0),
-                invalidate_callbacks: RefCell::new(std::collections::HashMap::new()),
+                invalidate_callbacks: RefCell::new(HashMap::new()),
+                next_invalidate_callback_id: Cell::new(1),
                 pending_invalidation: Cell::new(false),
             }),
         }
@@ -73,7 +68,7 @@ impl ScrollState {
 
     /// Get the unique ID of this ScrollState
     pub fn id(&self) -> u64 {
-        self.inner.id
+        Rc::as_ptr(&self.inner) as usize as u64
     }
 
     /// Gets the current scroll position in pixels (reactive - triggers recomposition).
@@ -109,16 +104,7 @@ impl ScrollState {
             // Use MutableState::set which triggers snapshot observers for reactive updates
             self.inner.value.set(new_value);
 
-            // Trigger layout invalidation callbacks
-            let callbacks = self.inner.invalidate_callbacks.borrow();
-            if callbacks.is_empty() {
-                // Defer invalidation until a node registers a callback.
-                self.inner.pending_invalidation.set(true);
-            } else {
-                for callback in callbacks.values() {
-                    callback();
-                }
-            }
+            self.invalidate();
         }
 
         actual_delta
@@ -136,30 +122,22 @@ impl ScrollState {
 
         self.inner.value.set(clamped);
 
-        // Trigger layout invalidation callbacks
-        let callbacks = self.inner.invalidate_callbacks.borrow();
-        if callbacks.is_empty() {
-            self.inner.pending_invalidation.set(true);
-        } else {
-            for callback in callbacks.values() {
-                callback();
-            }
-        }
+        self.invalidate();
     }
 
     /// Adds an invalidation callback and returns its ID
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        static NEXT_CALLBACK_ID: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(1);
-        let id = NEXT_CALLBACK_ID.fetch_add(1, Ordering::Relaxed);
+        let id = self.inner.next_invalidate_callback_id.get();
+        self.inner
+            .next_invalidate_callback_id
+            .set(id.saturating_add(1));
+        let callback: Rc<dyn Fn()> = Rc::from(callback);
         self.inner
             .invalidate_callbacks
             .borrow_mut()
-            .insert(id, callback);
+            .insert(id, Rc::clone(&callback));
         if self.inner.pending_invalidation.replace(false) {
-            if let Some(callback) = self.inner.invalidate_callbacks.borrow().get(&id) {
-                callback();
-            }
+            callback();
         }
         id
     }
@@ -167,6 +145,20 @@ impl ScrollState {
     /// Removes an invalidation callback by ID
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
         self.inner.invalidate_callbacks.borrow_mut().remove(&id);
+    }
+
+    fn invalidate(&self) {
+        let callbacks: Vec<Rc<dyn Fn()>> = {
+            let callbacks = self.inner.invalidate_callbacks.borrow();
+            if callbacks.is_empty() {
+                self.inner.pending_invalidation.set(true);
+                return;
+            }
+            callbacks.values().cloned().collect()
+        };
+        for callback in callbacks {
+            callback();
+        }
     }
 }
 
@@ -192,18 +184,24 @@ pub(crate) enum ScrollMotionContextKey {
 struct ScrollMotionContextInner {
     active: Cell<bool>,
     generation: Cell<u64>,
-    invalidate_callbacks: RefCell<std::collections::HashMap<u64, Box<dyn Fn()>>>,
+    invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
+    next_invalidate_callback_id: Cell<u64>,
     pending_invalidation: Cell<bool>,
 }
 
-thread_local! {
-    static SCROLL_MOTION_CONTEXTS: RefCell<HashMap<ScrollMotionContextKey, Weak<ScrollMotionContextInner>>> =
-        RefCell::new(HashMap::new());
+pub(crate) struct ScrollMotionContextStore {
+    contexts: RefCell<HashMap<ScrollMotionContextKey, Weak<ScrollMotionContextInner>>>,
 }
 
-pub(crate) fn scroll_motion_context_for_key(key: ScrollMotionContextKey) -> ScrollMotionContext {
-    SCROLL_MOTION_CONTEXTS.with(|contexts| {
-        let mut contexts = contexts.borrow_mut();
+impl ScrollMotionContextStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            contexts: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn context_for_key(&self, key: ScrollMotionContextKey) -> ScrollMotionContext {
+        let mut contexts = self.contexts.borrow_mut();
         if let Some(inner) = contexts.get(&key).and_then(Weak::upgrade) {
             return ScrollMotionContext { inner };
         }
@@ -212,7 +210,11 @@ pub(crate) fn scroll_motion_context_for_key(key: ScrollMotionContextKey) -> Scro
         contexts.insert(key, Rc::downgrade(&context.inner));
         contexts.retain(|_, weak| weak.strong_count() > 0);
         context
-    })
+    }
+}
+
+pub(crate) fn scroll_motion_context_for_key(key: ScrollMotionContextKey) -> ScrollMotionContext {
+    crate::render_state::with_scroll_motion_context_store(|store| store.context_for_key(key))
 }
 
 impl ScrollMotionContext {
@@ -221,7 +223,8 @@ impl ScrollMotionContext {
             inner: Rc::new(ScrollMotionContextInner {
                 active: Cell::new(false),
                 generation: Cell::new(0),
-                invalidate_callbacks: RefCell::new(std::collections::HashMap::new()),
+                invalidate_callbacks: RefCell::new(HashMap::new()),
+                next_invalidate_callback_id: Cell::new(1),
                 pending_invalidation: Cell::new(false),
             }),
         }
@@ -260,16 +263,17 @@ impl ScrollMotionContext {
     }
 
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        static NEXT_CALLBACK_ID: AtomicU64 = AtomicU64::new(1);
-        let id = NEXT_CALLBACK_ID.fetch_add(1, Ordering::Relaxed);
+        let id = self.inner.next_invalidate_callback_id.get();
+        self.inner
+            .next_invalidate_callback_id
+            .set(id.saturating_add(1));
+        let callback: Rc<dyn Fn()> = Rc::from(callback);
         self.inner
             .invalidate_callbacks
             .borrow_mut()
-            .insert(id, callback);
+            .insert(id, Rc::clone(&callback));
         if self.inner.pending_invalidation.replace(false) {
-            if let Some(callback) = self.inner.invalidate_callbacks.borrow().get(&id) {
-                callback();
-            }
+            callback();
         }
         id
     }
@@ -316,12 +320,15 @@ impl ScrollMotionContext {
     }
 
     fn invalidate(&self) {
-        let callbacks = self.inner.invalidate_callbacks.borrow();
-        if callbacks.is_empty() {
-            self.inner.pending_invalidation.set(true);
-            return;
-        }
-        for callback in callbacks.values() {
+        let callbacks: Vec<Rc<dyn Fn()>> = {
+            let callbacks = self.inner.invalidate_callbacks.borrow();
+            if callbacks.is_empty() {
+                self.inner.pending_invalidation.set(true);
+                return;
+            }
+            callbacks.values().cloned().collect()
+        };
+        for callback in callbacks {
             callback();
         }
     }
@@ -563,10 +570,6 @@ impl LayoutModifierNode for ScrollNode {
 
     fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
         measurable.max_intrinsic_height(width)
-    }
-
-    fn create_measurement_proxy(&self) -> Option<Box<dyn cranpose_foundation::MeasurementProxy>> {
-        None
     }
 }
 

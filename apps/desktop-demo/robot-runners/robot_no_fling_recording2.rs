@@ -2,7 +2,6 @@
 
 use cranpose::AppLauncher;
 use cranpose_testing::{bounds_span, collect_tab_bounds, detect_tab_axis, root_bounds, TabAxis};
-use cranpose_ui::{last_fling_velocity, reset_last_fling_velocity};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -63,7 +62,10 @@ fn main() {
 
             let _ = robot.mouse_move(start_x, start_y);
             std::thread::sleep(Duration::from_millis(20));
-            reset_last_fling_velocity();
+            if let Err(err) = robot.reset_last_fling_velocity() {
+                eprintln!("✗ Failed to reset fling velocity: {err}");
+                std::process::exit(1);
+            }
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(10));
 
@@ -76,7 +78,13 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(8));
             }
             let _ = robot.mouse_up();
-            let measured_velocity = last_fling_velocity();
+            let measured_velocity = match robot.last_fling_velocity() {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("✗ Failed to query fling velocity: {err}");
+                    std::process::exit(1);
+                }
+            };
 
             std::thread::sleep(Duration::from_millis(60));
             let tabs_after_drag = collect_tab_bounds(&robot, &tab_labels);

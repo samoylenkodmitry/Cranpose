@@ -259,14 +259,13 @@ impl<A: Applier + 'static> Composition<A> {
 
             root_render_replays += 1;
             if root_render_replays > ROOT_RENDER_REPLAY_LIMIT {
-                debug_assert!(
-                    false,
-                    "root render replay exceeded {ROOT_RENDER_REPLAY_LIMIT} iterations — reentrant render bug"
-                );
                 log::error!(
                     "root render replay looped past {ROOT_RENDER_REPLAY_LIMIT} iterations; breaking to keep UI responsive"
                 );
-                return Ok(true);
+                return Err(NodeError::RecompositionLimitExceeded {
+                    operation: "root render replay",
+                    limit: ROOT_RENDER_REPLAY_LIMIT,
+                });
             }
 
             self.render_root_pass(key, content)?;
@@ -363,14 +362,13 @@ impl<A: Applier + 'static> Composition<A> {
         loop {
             loop_count += 1;
             if loop_count > ROOT_RENDER_REPLAY_LIMIT {
-                debug_assert!(
-                    false,
-                    "process_invalid_scopes exceeded {ROOT_RENDER_REPLAY_LIMIT} iterations — reentrant recomposition bug (a scope keeps re-invalidating)"
-                );
                 log::error!(
                     "process_invalid_scopes looped past {ROOT_RENDER_REPLAY_LIMIT} iterations; breaking to keep UI responsive"
                 );
-                break;
+                return Err(NodeError::RecompositionLimitExceeded {
+                    operation: "process_invalid_scopes",
+                    limit: ROOT_RENDER_REPLAY_LIMIT,
+                });
             }
             runtime_handle.drain_ui();
             let pending = runtime_handle.take_invalidated_scopes();

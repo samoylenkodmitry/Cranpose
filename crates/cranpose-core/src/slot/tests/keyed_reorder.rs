@@ -80,6 +80,180 @@ fn keyed_sibling_reorder_preserves_values_and_anchors() {
 }
 
 #[test]
+fn keyed_sibling_reorder_repairs_expected_child_span_before_search() {
+    const PARENT_KEY: Key = 400_001;
+    const STATIC_KEY: Key = 400_002;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (first_anchor, second_anchor) = harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        let second = begin_keyed(session, STATIC_KEY, 2, None);
+        let second_result = session.finish_group_body();
+        assert!(second_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        (first.anchor, second.anchor)
+    });
+    harness.finish_pass();
+
+    let first_index = harness.table.current_group_index(first_anchor);
+    harness.table.groups[first_index].subtree_len = 2;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let moved_anchor = harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let moved = begin_keyed(session, STATIC_KEY, 2, None);
+        assert_eq!(
+            moved.kind,
+            GroupStartKind::Moved,
+            "later keyed sibling search should repair the expected child's stale subtree span"
+        );
+        let moved_result = session.finish_group_body();
+        assert!(moved_result.detached_children.is_empty());
+        session.end_group();
+
+        let reused = begin_keyed(session, STATIC_KEY, 1, None);
+        assert_eq!(reused.kind, GroupStartKind::Reused);
+        let reused_result = session.finish_group_body();
+        assert!(reused_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        moved.anchor
+    });
+    harness.finish_pass();
+
+    assert_eq!(moved_anchor, second_anchor);
+    let anchors: Vec<_> = harness
+        .table
+        .groups
+        .iter()
+        .map(|group| group.anchor)
+        .collect();
+    assert_eq!(
+        anchors,
+        vec![
+            harness.table.group_anchor_at_index(0),
+            second_anchor,
+            first_anchor
+        ]
+    );
+    assert_eq!(
+        harness.table.groups[2].subtree_len, 1,
+        "the stale first-child span should be repaired while reordering"
+    );
+}
+
+#[test]
+fn keyed_sibling_reorder_repairs_scanned_sibling_spans_before_advancing() {
+    const PARENT_KEY: Key = 400_003;
+    const STATIC_KEY: Key = 400_004;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (first_anchor, second_anchor, third_anchor) = harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        let second = begin_keyed(session, STATIC_KEY, 2, None);
+        let second_result = session.finish_group_body();
+        assert!(second_result.detached_children.is_empty());
+        session.end_group();
+
+        let third = begin_keyed(session, STATIC_KEY, 3, None);
+        let third_result = session.finish_group_body();
+        assert!(third_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        (first.anchor, second.anchor, third.anchor)
+    });
+    harness.finish_pass();
+
+    let second_index = harness.table.current_group_index(second_anchor);
+    harness.table.groups[second_index].subtree_len = 2;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let moved_anchor = harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        let moved = begin_keyed(session, STATIC_KEY, 3, None);
+        assert_eq!(
+            moved.kind,
+            GroupStartKind::Moved,
+            "later keyed sibling scan should repair stale spans before advancing"
+        );
+        let moved_result = session.finish_group_body();
+        assert!(moved_result.detached_children.is_empty());
+        session.end_group();
+
+        let first = begin_keyed(session, STATIC_KEY, 1, None);
+        assert_eq!(first.kind, GroupStartKind::Reused);
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        let second = begin_keyed(session, STATIC_KEY, 2, None);
+        assert_eq!(second.kind, GroupStartKind::Reused);
+        let second_result = session.finish_group_body();
+        assert!(second_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        moved.anchor
+    });
+    harness.finish_pass();
+
+    assert_eq!(moved_anchor, third_anchor);
+    let anchors: Vec<_> = harness
+        .table
+        .groups
+        .iter()
+        .map(|group| group.anchor)
+        .collect();
+    assert_eq!(
+        anchors,
+        vec![
+            harness.table.group_anchor_at_index(0),
+            third_anchor,
+            first_anchor,
+            second_anchor
+        ]
+    );
+    assert_eq!(
+        harness.table.groups[3].subtree_len, 1,
+        "the scanned sibling's stale span should be repaired"
+    );
+}
+
+#[test]
 fn debug_stats_report_subtree_move_work_spans() {
     const PARENT_KEY: Key = 402;
     const STATIC_KEY: Key = 403;

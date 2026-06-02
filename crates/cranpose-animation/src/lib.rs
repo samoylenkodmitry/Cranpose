@@ -2,6 +2,7 @@
 //!
 //! This crate provides animation primitives including tweens, springs, and easing functions.
 
+#![deny(unsafe_code)]
 #![allow(non_snake_case)]
 
 pub mod animation;

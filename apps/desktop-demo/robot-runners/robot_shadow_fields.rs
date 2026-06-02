@@ -3,6 +3,8 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_shadow_fields --features robot-app`
 
+mod output_paths;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
@@ -27,7 +29,6 @@ const SHADOW_LABEL_TO_RECT_Y: f32 = 20.0;
 const NONE_LABEL_TO_SHADOW_LABEL_X: f32 = 86.0;
 const SHADOW_RING_MARGIN: f32 = 40.0;
 const SHADOW_RING_MIN_PIXELS: usize = 180;
-const OUTPUT_DIR: &str = "/tmp/cranpose_robot_shadow_fields";
 
 fn changed_pixel_count_in_ring(
     before: &cranpose::RobotScreenshot,
@@ -306,10 +307,11 @@ fn main() {
             );
             let net_ring_changed = raw_ring_changed.saturating_sub(baseline_ring_noise);
 
-            let _ = fs::create_dir_all(OUTPUT_DIR);
-            let before_path = Path::new(OUTPUT_DIR).join("shadow_before.png");
-            let after_path = Path::new(OUTPUT_DIR).join("shadow_after.png");
-            let diff_path = Path::new(OUTPUT_DIR).join("shadow_diff.png");
+            let output_dir = output_paths::diagnostic_path("cranpose_robot_shadow_fields");
+            let _ = fs::create_dir_all(&output_dir);
+            let before_path = output_dir.join("shadow_before.png");
+            let after_path = output_dir.join("shadow_after.png");
+            let diff_path = output_dir.join("shadow_diff.png");
             if let Err(err) = save_png(&before_path, &base_b) {
                 println!("WARN: {}", err);
             }

@@ -1,11 +1,9 @@
 //! Modifier node scaffolding for Cranpose.
 //!
-//! This module defines the foundational pieces of the future
-//! `Modifier.Node` system described in the project roadmap. It introduces
-//! traits for modifier nodes and their contexts as well as a light-weight
-//! chain container that can reconcile nodes across updates. The
-//! implementation focuses on the core runtime plumbing so UI crates can
-//! begin migrating without expanding the public API surface.
+//! This module defines the foundational pieces of the Cranpose
+//! `Modifier.Node` system. It introduces traits for modifier nodes and their
+//! contexts as well as a lightweight chain container that reconciles nodes
+//! across updates.
 
 use std::any::{type_name, Any, TypeId};
 use std::cell::{Cell, RefCell};
@@ -14,8 +12,8 @@ use std::hash::{Hash, Hasher};
 use std::ops::{BitOr, BitOrAssign};
 use std::rc::Rc;
 
+use cranpose_core::collections::map::HashMap;
 use cranpose_core::hash::default;
-use rustc_hash::FxHashMap;
 
 pub use cranpose_ui_graphics::DrawScope;
 pub use cranpose_ui_graphics::Size;
@@ -504,35 +502,6 @@ pub trait LayoutModifierNode: ModifierNode {
     fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
         0.0
     }
-
-    /// Creates a measurement proxy for this node that can perform measurement
-    /// without holding a borrow to the modifier chain.
-    ///
-    /// This method enables custom layout modifiers to work with the coordinator
-    /// chain while respecting Rust's borrow checker constraints. The proxy
-    /// should capture a snapshot of the node's current configuration.
-    ///
-    /// The default implementation returns `None`, which causes the coordinator
-    /// to use a passthrough strategy that delegates directly to the wrapped
-    /// content.
-    ///
-    /// # Example
-    ///
-    /// ```text
-    /// impl LayoutModifierNode for MyCustomLayoutNode {
-    ///     fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
-    ///         Some(Box::new(MyCustomLayoutProxy {
-    ///             // Snapshot node configuration here
-    ///             padding: self.padding,
-    ///         }))
-    ///     }
-    /// }
-    /// ```
-    fn create_measurement_proxy(
-        &self,
-    ) -> Option<Box<dyn crate::measurement_proxy::MeasurementProxy>> {
-        None
-    }
 }
 
 /// Marker trait for draw-specific modifier nodes.
@@ -672,6 +641,8 @@ pub struct SemanticsConfiguration {
     pub content_description: Option<String>,
     pub is_button: bool,
     pub is_clickable: bool,
+    pub is_editable_text: bool,
+    pub text_selection: Option<crate::text::TextRange>,
 }
 
 impl SemanticsConfiguration {
@@ -681,6 +652,10 @@ impl SemanticsConfiguration {
         }
         self.is_button |= other.is_button;
         self.is_clickable |= other.is_clickable;
+        self.is_editable_text |= other.is_editable_text;
+        if let Some(selection) = other.text_selection {
+            self.text_selection = Some(selection);
+        }
     }
 }
 
@@ -739,12 +714,6 @@ pub trait ModifierNodeElement: fmt::Debug + Hash + PartialEq + 'static {
         false
     }
 }
-
-/// Transitional alias so existing call sites that refer to `ModifierElement`
-/// keep compiling while the ecosystem migrates to `ModifierNodeElement`.
-pub trait ModifierElement: ModifierNodeElement {}
-
-impl<T> ModifierElement for T where T: ModifierNodeElement {}
 
 /// Capability flags indicating which specialized traits a modifier node implements.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -873,6 +842,8 @@ pub trait AnyModifierElement: fmt::Debug {
 
     fn create_node(&self) -> Box<dyn ModifierNode>;
 
+    fn can_update_node(&self, node: &dyn ModifierNode) -> bool;
+
     fn update_node(&self, node: &mut dyn ModifierNode);
 
     fn key(&self) -> Option<u64>;
@@ -937,12 +908,14 @@ where
         Box::new(self.element.create())
     }
 
+    fn can_update_node(&self, node: &dyn ModifierNode) -> bool {
+        node.as_any().is::<E::Node>()
+    }
+
     fn update_node(&self, node: &mut dyn ModifierNode) {
-        let typed = node
-            .as_any_mut()
-            .downcast_mut::<E::Node>()
-            .expect("modifier node type mismatch");
-        self.element.update(typed);
+        if let Some(typed) = node.as_any_mut().downcast_mut::<E::Node>() {
+            self.element.update(typed);
+        }
     }
 
     fn key(&self) -> Option<u64> {
@@ -1062,6 +1035,7 @@ impl<'a> std::iter::FusedIterator for ModifierChainIter<'a> {}
 #[derive(Debug)]
 struct ModifierNodeEntry {
     element_type: TypeId,
+    node_type: TypeId,
     key: Option<u64>,
     hash_code: u64,
     element: DynModifierElement,
@@ -1072,6 +1046,7 @@ struct ModifierNodeEntry {
 impl ModifierNodeEntry {
     fn new(
         element_type: TypeId,
+        node_type: TypeId,
         key: Option<u64>,
         element: DynModifierElement,
         node: Box<dyn ModifierNode>,
@@ -1082,6 +1057,7 @@ impl ModifierNodeEntry {
         let node_rc = Rc::new(RefCell::new(node));
         let entry = Self {
             element_type,
+            node_type,
             key,
             hash_code,
             element,
@@ -1266,37 +1242,44 @@ impl Default for ModifierNodeChain {
 ///
 /// This avoids O(n²) complexity by pre-building hash maps that allow constant-time
 /// lookups for matching entries by key, hash, or type.
-/// Uses FxHashMap for faster hashing of TypeId keys.
 struct EntryIndex {
-    /// Map (TypeId, key) → index for keyed entries
-    keyed: FxHashMap<(TypeId, u64), Vec<usize>>,
-    /// Map (TypeId, hash) → indices for unkeyed entries with specific hash
-    hashed: FxHashMap<(TypeId, u64), Vec<usize>>,
-    /// Map TypeId → indices for all unkeyed entries of that type
-    typed: FxHashMap<TypeId, Vec<usize>>,
+    /// Map (element type, node type, key) to keyed entries.
+    keyed: HashMap<(TypeId, TypeId, u64), Vec<usize>>,
+    /// Map (element type, node type, hash) to unkeyed entries with specific hash.
+    hashed: HashMap<(TypeId, TypeId, u64), Vec<usize>>,
+    /// Map (element type, node type) to unkeyed entries.
+    typed: HashMap<(TypeId, TypeId), Vec<usize>>,
+}
+
+struct EntryMatchQuery<'a> {
+    element_type: TypeId,
+    node_type: TypeId,
+    key: Option<u64>,
+    hash_code: u64,
+    element: &'a DynModifierElement,
 }
 
 impl EntryIndex {
     fn build(entries: &[ModifierNodeEntry]) -> Self {
-        let mut keyed = FxHashMap::default();
-        let mut hashed = FxHashMap::default();
-        let mut typed = FxHashMap::default();
+        let mut keyed = HashMap::default();
+        let mut hashed = HashMap::default();
+        let mut typed = HashMap::default();
 
         for (i, entry) in entries.iter().enumerate() {
             if let Some(key_value) = entry.key {
                 // Keyed entry
                 keyed
-                    .entry((entry.element_type, key_value))
+                    .entry((entry.element_type, entry.node_type, key_value))
                     .or_insert_with(Vec::new)
                     .push(i);
             } else {
                 // Unkeyed entry - add to both hash and type indices
                 hashed
-                    .entry((entry.element_type, entry.hash_code))
+                    .entry((entry.element_type, entry.node_type, entry.hash_code))
                     .or_insert_with(Vec::new)
                     .push(i);
                 typed
-                    .entry(entry.element_type)
+                    .entry((entry.element_type, entry.node_type))
                     .or_insert_with(Vec::new)
                     .push(i);
             }
@@ -1312,21 +1295,21 @@ impl EntryIndex {
     /// Find the best matching entry for reuse.
     ///
     /// Matching priority (from highest to lowest):
-    /// 1. Keyed match: same type + same key
-    /// 2. Exact match: same type + no key + same hash + equals_element
-    /// 3. Type match: same type + no key (will require update)
+    /// 1. Keyed match: same element type, node type, and key.
+    /// 2. Exact match: same retained identity, no key, same hash, and equal element.
+    /// 3. Retained identity match without equality, which requires update.
     fn find_match(
         &self,
         entries: &[ModifierNodeEntry],
         used: &[bool],
-        element_type: TypeId,
-        key: Option<u64>,
-        hash_code: u64,
-        element: &DynModifierElement,
+        query: EntryMatchQuery<'_>,
     ) -> Option<usize> {
-        if let Some(key_value) = key {
+        if let Some(key_value) = query.key {
             // Priority 1: Keyed lookup - O(1)
-            if let Some(candidates) = self.keyed.get(&(element_type, key_value)) {
+            if let Some(candidates) =
+                self.keyed
+                    .get(&(query.element_type, query.node_type, key_value))
+            {
                 for &i in candidates {
                     if !used[i] {
                         return Some(i);
@@ -1335,16 +1318,24 @@ impl EntryIndex {
             }
         } else {
             // Priority 2: Exact match (hash + equality) - O(1) lookup + O(k) equality checks
-            if let Some(candidates) = self.hashed.get(&(element_type, hash_code)) {
+            if let Some(candidates) =
+                self.hashed
+                    .get(&(query.element_type, query.node_type, query.hash_code))
+            {
                 for &i in candidates {
-                    if !used[i] && entries[i].element.as_ref().equals_element(element.as_ref()) {
+                    if !used[i]
+                        && entries[i]
+                            .element
+                            .as_ref()
+                            .equals_element(query.element.as_ref())
+                    {
                         return Some(i);
                     }
                 }
             }
 
             // Priority 3: Type match only - O(1) lookup + O(k) scan
-            if let Some(candidates) = self.typed.get(&element_type) {
+            if let Some(candidates) = self.typed.get(&(query.element_type, query.node_type)) {
                 for &i in candidates {
                     if !used[i] {
                         return Some(i);
@@ -1435,13 +1426,24 @@ impl ModifierNodeChain {
             if fast_path_failed_at.is_none() && idx < old_len {
                 let entry = &mut self.entries[idx];
                 let same_type = entry.element_type == element.element_type();
+                let same_node_type = entry.node_type == element.node_type();
                 let same_key = entry.key == element.key();
                 let same_hash = entry.hash_code == element.hash_code();
 
                 // Fast path requires same type, key, AND hash to ensure we're not
                 // breaking reordering semantics (where elements can move positions)
                 let positional_update = element.requires_update();
-                if same_type && same_key && (same_hash || positional_update) {
+                if same_type && same_node_type && same_key && (same_hash || positional_update) {
+                    let can_update_node = {
+                        let node_borrow = entry.node.borrow();
+                        element.can_update_node(&**node_borrow)
+                    };
+                    if !can_update_node {
+                        fast_path_failed_at = Some(idx);
+                        self.scratch_elements.push(element.clone());
+                        continue;
+                    }
+
                     // Fast path: element matches at same position
                     let same_element = entry.element.as_ref().equals_element(element.as_ref());
                     let capabilities = element.capabilities();
@@ -1524,6 +1526,7 @@ impl ModifierNodeChain {
         for (new_pos, element) in self.scratch_elements.drain(..).enumerate() {
             self.scratch_final_slots.push(None);
             let element_type = element.element_type();
+            let node_type = element.node_type();
             let key = element.key();
             let hash_code = element.hash_code();
             let capabilities = element.capabilities();
@@ -1532,17 +1535,41 @@ impl ModifierNodeChain {
             let matched_idx = index.find_match(
                 &old_entries,
                 &self.scratch_old_used,
-                element_type,
-                key,
-                hash_code,
-                &element,
+                EntryMatchQuery {
+                    element_type,
+                    node_type,
+                    key,
+                    hash_code,
+                    element: &element,
+                },
             );
 
             if let Some(idx) = matched_idx {
                 // Reuse existing entry
+                let entry = &mut old_entries[idx];
+                let can_update_node = {
+                    let node_borrow = entry.node.borrow();
+                    element.can_update_node(&**node_borrow)
+                };
+                if !can_update_node {
+                    let replacement = ModifierNodeEntry::new(
+                        element_type,
+                        node_type,
+                        key,
+                        element.clone(),
+                        element.create_node(),
+                        hash_code,
+                        capabilities,
+                    );
+                    attach_node_tree(&mut **replacement.node.borrow_mut(), context);
+                    element.update_node(&mut **replacement.node.borrow_mut());
+                    request_auto_invalidations(context, capabilities);
+                    self.scratch_final_slots[new_pos] = Some(replacement);
+                    continue;
+                }
+
                 self.scratch_old_used[idx] = true;
                 self.scratch_match_order[idx] = Some(new_pos);
-                let entry = &mut old_entries[idx];
                 let moved = idx != new_pos;
 
                 // Check if element actually changed
@@ -1572,6 +1599,7 @@ impl ModifierNodeChain {
                 // Always update metadata
                 entry.key = key;
                 entry.element_type = element_type;
+                entry.node_type = node_type;
                 entry.capabilities = capabilities;
                 entry
                     .node
@@ -1582,6 +1610,7 @@ impl ModifierNodeChain {
                 // Create new entry
                 let entry = ModifierNodeEntry::new(
                     element_type,
+                    node_type,
                     key,
                     element.clone(),
                     element.create_node(),
@@ -1598,9 +1627,12 @@ impl ModifierNodeChain {
         // Place matched entries in their new positions
         for (i, entry) in old_entries.into_iter().enumerate() {
             if self.scratch_old_used[i] {
-                let pos = self.scratch_match_order[i]
-                    .expect("Missing match order for used modifier entry");
-                self.scratch_final_slots[pos] = Some(entry);
+                if let Some(pos) = self.scratch_match_order[i] {
+                    self.scratch_final_slots[pos] = Some(entry);
+                } else {
+                    request_auto_invalidations(context, entry.capabilities);
+                    detach_node_tree(&mut **entry.node.borrow_mut());
+                }
             } else {
                 request_auto_invalidations(context, entry.capabilities);
                 detach_node_tree(&mut **entry.node.borrow_mut());
@@ -1610,8 +1642,11 @@ impl ModifierNodeChain {
         // Append processed entries to self.entries
         self.entries.reserve(self.scratch_final_slots.len());
         for slot in self.scratch_final_slots.drain(..) {
-            let entry = slot.expect("Missing modifier entry for reconciled position");
-            self.entries.push(entry);
+            if let Some(entry) = slot {
+                self.entries.push(entry);
+            } else {
+                log::error!("modifier reconciliation produced an empty final slot");
+            }
         }
 
         debug_assert_eq!(

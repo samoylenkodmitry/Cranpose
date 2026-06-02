@@ -1,39 +1,75 @@
 //! FPS monitoring for performance tracking.
-//!
-//! Designed for reactive systems (non-busy-loop):
-//! - Tracks actual rendered frames, not idle time
-//! - Separately tracks recompositions
-//! - Provides stats meaningful for optimization
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::RwLock;
 use web_time::Instant;
 
-/// Global FPS tracker singleton
-static FPS_TRACKER: RwLock<Option<FpsTracker>> = RwLock::new(None);
-
-/// Global recomposition counter (can be incremented from anywhere)
-static RECOMPOSITION_COUNT: AtomicU64 = AtomicU64::new(0);
-
-/// Number of frames to average for FPS calculation
 const FRAME_HISTORY_SIZE: usize = 60;
 
-/// Tracks frame times to calculate FPS.
-pub struct FpsTracker {
-    /// Timestamps of recent frames
+#[derive(Debug)]
+pub(crate) struct FpsMonitor {
+    tracker: FpsTracker,
+    recomposition_count: u64,
+}
+
+impl FpsMonitor {
+    pub(crate) fn new() -> Self {
+        Self {
+            tracker: FpsTracker::new(),
+            recomposition_count: 0,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_frame(&mut self) {
+        self.tracker.record_frame(self.recomposition_count);
+    }
+
+    pub(crate) fn record_frame_work(
+        &mut self,
+        frame_started_at: Instant,
+        frame_finished_at: Instant,
+    ) {
+        self.tracker.record_frame_work(
+            frame_started_at,
+            frame_finished_at,
+            self.recomposition_count,
+        );
+    }
+
+    pub(crate) fn record_recomposition(&mut self) {
+        self.recomposition_count = self.recomposition_count.saturating_add(1);
+    }
+
+    pub(crate) fn reset_stats(&mut self) {
+        self.tracker.reset(self.recomposition_count);
+    }
+
+    pub(crate) fn current_fps(&self) -> f32 {
+        self.tracker.last_fps
+    }
+
+    pub(crate) fn stats(&self) -> FpsStats {
+        self.tracker.stats(self.recomposition_count)
+    }
+}
+
+impl Default for FpsMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug)]
+struct FpsTracker {
     frame_times: VecDeque<Instant>,
-    /// Cached FPS value
+    frame_intervals_ms: VecDeque<f32>,
+    frame_work_ms: VecDeque<f32>,
     last_fps: f32,
-    /// Total frames rendered
     frame_count: u64,
-    /// Rolling average of frame duration in ms
-    avg_frame_ms: f32,
-    /// Last recomposition count seen (for delta)
+    intervals: FrameIntervalStats,
+    work: FrameIntervalStats,
     last_recomp_count: u64,
-    /// Recompositions in last second
     recomps_per_second: u64,
-    /// Time of last recomp/sec calculation
     last_recomp_calc: Instant,
 }
 
@@ -41,124 +77,330 @@ impl FpsTracker {
     fn new() -> Self {
         Self {
             frame_times: VecDeque::with_capacity(FRAME_HISTORY_SIZE + 1),
+            frame_intervals_ms: VecDeque::with_capacity(FRAME_HISTORY_SIZE),
+            frame_work_ms: VecDeque::with_capacity(FRAME_HISTORY_SIZE),
             last_fps: 0.0,
             frame_count: 0,
-            avg_frame_ms: 0.0,
+            intervals: FrameIntervalStats::default(),
+            work: FrameIntervalStats::default(),
             last_recomp_count: 0,
             recomps_per_second: 0,
             last_recomp_calc: Instant::now(),
         }
     }
 
-    fn record_frame(&mut self) {
+    #[cfg(test)]
+    fn record_frame(&mut self, recomposition_count: u64) {
         let now = Instant::now();
+        self.record_frame_work(now, now, recomposition_count);
+    }
 
-        self.frame_times.push_back(now);
+    #[cfg(test)]
+    fn record_frame_at(&mut self, now: Instant, recomposition_count: u64) {
+        self.record_frame_work(now, now, recomposition_count);
+    }
+
+    fn reset(&mut self, recomposition_count: u64) {
+        self.frame_times.clear();
+        self.frame_intervals_ms.clear();
+        self.frame_work_ms.clear();
+        self.last_fps = 0.0;
+        self.frame_count = 0;
+        self.intervals = FrameIntervalStats::default();
+        self.work = FrameIntervalStats::default();
+        self.last_recomp_count = recomposition_count;
+        self.recomps_per_second = 0;
+        self.last_recomp_calc = Instant::now();
+    }
+
+    fn record_frame_work(
+        &mut self,
+        frame_started_at: Instant,
+        frame_finished_at: Instant,
+        recomposition_count: u64,
+    ) {
+        if let Some(previous) = self.frame_times.back() {
+            let interval_ms = frame_started_at.duration_since(*previous).as_secs_f32() * 1000.0;
+            self.frame_intervals_ms.push_back(interval_ms);
+            while self.frame_intervals_ms.len() > FRAME_HISTORY_SIZE {
+                self.frame_intervals_ms.pop_front();
+            }
+            self.intervals = FrameIntervalStats::from_samples(&self.frame_intervals_ms);
+            self.last_fps = if self.intervals.avg_ms > 0.0 {
+                1000.0 / self.intervals.avg_ms
+            } else {
+                0.0
+            };
+        }
+
+        let work_ms = frame_finished_at
+            .duration_since(frame_started_at)
+            .as_secs_f32()
+            * 1000.0;
+        self.frame_work_ms.push_back(work_ms);
+        while self.frame_work_ms.len() > FRAME_HISTORY_SIZE {
+            self.frame_work_ms.pop_front();
+        }
+        self.work = FrameIntervalStats::from_samples(&self.frame_work_ms);
+
+        self.frame_times.push_back(frame_started_at);
         self.frame_count += 1;
 
-        // Keep only recent frames
-        while self.frame_times.len() > FRAME_HISTORY_SIZE {
+        while self.frame_times.len() > FRAME_HISTORY_SIZE + 1 {
             self.frame_times.pop_front();
         }
 
-        // Calculate FPS from frame history
-        if self.frame_times.len() >= 2 {
-            let first = self.frame_times.front().unwrap();
-            let last = self.frame_times.back().unwrap();
-            let duration = last.duration_since(*first).as_secs_f32();
-            if duration > 0.0 {
-                self.last_fps = (self.frame_times.len() - 1) as f32 / duration;
-                self.avg_frame_ms = duration * 1000.0 / (self.frame_times.len() - 1) as f32;
-            }
-        }
-
-        // Calculate recompositions per second (update every second)
-        let elapsed = now.duration_since(self.last_recomp_calc).as_secs_f32();
+        let elapsed = frame_finished_at
+            .duration_since(self.last_recomp_calc)
+            .as_secs_f32();
         if elapsed >= 1.0 {
-            let current_recomp = RECOMPOSITION_COUNT.load(Ordering::Relaxed);
-            self.recomps_per_second = current_recomp - self.last_recomp_count;
-            self.last_recomp_count = current_recomp;
-            self.last_recomp_calc = now;
+            self.recomps_per_second = recomposition_count.saturating_sub(self.last_recomp_count);
+            self.last_recomp_count = recomposition_count;
+            self.last_recomp_calc = frame_finished_at;
         }
     }
 
-    fn stats(&self) -> FpsStats {
+    fn stats(&self, recomposition_count: u64) -> FpsStats {
         FpsStats {
             fps: self.last_fps,
-            avg_ms: self.avg_frame_ms,
+            avg_ms: self.intervals.avg_ms,
+            latest_ms: self.intervals.latest_ms,
+            min_ms: self.intervals.min_ms,
+            max_ms: self.intervals.max_ms,
+            p95_ms: self.intervals.p95_ms,
+            p99_ms: self.intervals.p99_ms,
+            work_avg_ms: self.work.avg_ms,
+            work_p95_ms: self.work.p95_ms,
+            work_max_ms: self.work.max_ms,
+            interval_count: self.intervals.count,
+            missed_120hz_budget: self.intervals.missed_120hz_budget,
+            missed_60hz_budget: self.intervals.missed_60hz_budget,
+            stalled_50ms_frames: self.intervals.stalled_50ms_frames,
             frame_count: self.frame_count,
-            recompositions: RECOMPOSITION_COUNT.load(Ordering::Relaxed),
+            recompositions: recomposition_count,
             recomps_per_second: self.recomps_per_second,
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct FrameIntervalStats {
+    count: u32,
+    latest_ms: f32,
+    avg_ms: f32,
+    min_ms: f32,
+    max_ms: f32,
+    p95_ms: f32,
+    p99_ms: f32,
+    missed_120hz_budget: u32,
+    missed_60hz_budget: u32,
+    stalled_50ms_frames: u32,
+}
+
+impl FrameIntervalStats {
+    const FRAME_120HZ_MS: f32 = 1000.0 / 120.0;
+    const FRAME_60HZ_MS: f32 = 1000.0 / 60.0;
+    const STALL_MS: f32 = 50.0;
+
+    fn from_samples(samples: &VecDeque<f32>) -> Self {
+        let count = samples.len();
+        if count == 0 {
+            return Self::default();
+        }
+
+        let mut sorted = [0.0f32; FRAME_HISTORY_SIZE];
+        let mut sum = 0.0f32;
+        let mut min_ms = f32::INFINITY;
+        let mut max_ms = 0.0f32;
+        let mut missed_120hz_budget = 0u32;
+        let mut missed_60hz_budget = 0u32;
+        let mut stalled_50ms_frames = 0u32;
+
+        for (index, interval_ms) in samples.iter().copied().enumerate() {
+            sorted[index] = interval_ms;
+            sum += interval_ms;
+            min_ms = min_ms.min(interval_ms);
+            max_ms = max_ms.max(interval_ms);
+            if interval_ms > Self::FRAME_120HZ_MS {
+                missed_120hz_budget = missed_120hz_budget.saturating_add(1);
+            }
+            if interval_ms > Self::FRAME_60HZ_MS {
+                missed_60hz_budget = missed_60hz_budget.saturating_add(1);
+            }
+            if interval_ms > Self::STALL_MS {
+                stalled_50ms_frames = stalled_50ms_frames.saturating_add(1);
+            }
+        }
+
+        let sorted = &mut sorted[..count];
+        sorted.sort_by(|a, b| a.total_cmp(b));
+
+        Self {
+            count: count as u32,
+            latest_ms: samples.back().copied().unwrap_or_default(),
+            avg_ms: sum / count as f32,
+            min_ms,
+            max_ms,
+            p95_ms: nearest_rank_percentile(sorted, 95),
+            p99_ms: nearest_rank_percentile(sorted, 99),
+            missed_120hz_budget,
+            missed_60hz_budget,
+            stalled_50ms_frames,
+        }
+    }
+}
+
+fn nearest_rank_percentile(sorted_samples: &[f32], percentile: usize) -> f32 {
+    if sorted_samples.is_empty() {
+        return 0.0;
+    }
+    let rank = sorted_samples
+        .len()
+        .saturating_mul(percentile)
+        .div_ceil(100)
+        .saturating_sub(1);
+    sorted_samples[rank.min(sorted_samples.len() - 1)]
+}
+
 /// Frame statistics snapshot.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FpsStats {
-    /// Current FPS (frames per second)
+    /// Current FPS in frames per second.
     pub fps: f32,
-    /// Average frame time in milliseconds
+    /// Average frame time in milliseconds.
     pub avg_ms: f32,
-    /// Total frame count since start
+    /// Last recorded frame interval in milliseconds.
+    pub latest_ms: f32,
+    /// Minimum frame interval in the rolling history.
+    pub min_ms: f32,
+    /// Maximum frame interval in the rolling history.
+    pub max_ms: f32,
+    /// 95th percentile frame interval in the rolling history.
+    pub p95_ms: f32,
+    /// 99th percentile frame interval in the rolling history.
+    pub p99_ms: f32,
+    /// Average measured AppShell frame work in milliseconds.
+    pub work_avg_ms: f32,
+    /// 95th percentile measured AppShell frame work in milliseconds.
+    pub work_p95_ms: f32,
+    /// Maximum measured AppShell frame work in milliseconds.
+    pub work_max_ms: f32,
+    /// Number of frame intervals in the rolling history.
+    pub interval_count: u32,
+    /// Rolling count of intervals above the 120 Hz frame budget.
+    pub missed_120hz_budget: u32,
+    /// Rolling count of intervals above the 60 Hz frame budget.
+    pub missed_60hz_budget: u32,
+    /// Rolling count of intervals above 50 ms.
+    pub stalled_50ms_frames: u32,
+    /// Total frame count since monitor creation.
     pub frame_count: u64,
-    /// Total recomposition count since start
+    /// Total recomposition count since monitor creation.
     pub recompositions: u64,
-    /// Recompositions in the last second
+    /// Recompositions in the last second.
     pub recomps_per_second: u64,
 }
 
-/// Initialize the FPS tracker. Call once at app startup.
-pub fn init_fps_tracker() {
-    let mut tracker = FPS_TRACKER.write().unwrap();
-    *tracker = Some(FpsTracker::new());
-}
+#[cfg(test)]
+mod tests {
+    use super::{nearest_rank_percentile, FpsMonitor, FpsTracker};
+    use std::time::Duration;
 
-/// Record a frame. Call once per frame in the render loop.
-pub fn record_frame() {
-    if let Ok(mut tracker) = FPS_TRACKER.write() {
-        if let Some(ref mut t) = *tracker {
-            t.record_frame();
-        }
+    #[test]
+    fn monitors_do_not_share_recomposition_or_frame_counts() {
+        let mut first = FpsMonitor::new();
+        let mut second = FpsMonitor::new();
+
+        first.record_recomposition();
+        first.record_recomposition();
+        first.record_frame();
+        second.record_frame();
+
+        let first_stats = first.stats();
+        let second_stats = second.stats();
+
+        assert_eq!(first_stats.recompositions, 2);
+        assert_eq!(second_stats.recompositions, 0);
+        assert_eq!(first_stats.frame_count, 1);
+        assert_eq!(second_stats.frame_count, 1);
     }
-}
 
-/// Increment the recomposition counter. Call when a scope is recomposed.
-pub fn record_recomposition() {
-    RECOMPOSITION_COUNT.fetch_add(1, Ordering::Relaxed);
-}
+    #[test]
+    fn nearest_rank_percentile_reports_tail_samples() {
+        let samples = [1.0, 2.0, 3.0, 40.0];
 
-/// Get current FPS.
-pub fn current_fps() -> f32 {
-    if let Ok(tracker) = FPS_TRACKER.read() {
-        if let Some(ref t) = *tracker {
-            return t.last_fps;
-        }
+        assert_eq!(nearest_rank_percentile(&samples, 50), 2.0);
+        assert_eq!(nearest_rank_percentile(&samples, 95), 40.0);
+        assert_eq!(nearest_rank_percentile(&samples, 99), 40.0);
     }
-    0.0
-}
 
-/// Get detailed frame statistics.
-pub fn fps_stats() -> FpsStats {
-    if let Ok(tracker) = FPS_TRACKER.read() {
-        if let Some(ref t) = *tracker {
-            return t.stats();
+    #[test]
+    fn frame_stats_report_pacing_jank_not_just_average_fps() {
+        let mut tracker = FpsTracker::new();
+        let start = web_time::Instant::now();
+        let offsets = [0u64, 8, 16, 24, 64, 72];
+
+        for offset in offsets {
+            tracker.record_frame_at(start + Duration::from_millis(offset), 0);
         }
+
+        let stats = tracker.stats(0);
+
+        assert_eq!(stats.interval_count, 5);
+        assert_eq!(stats.frame_count, offsets.len() as u64);
+        assert!((stats.latest_ms - 8.0).abs() < 0.1);
+        assert!((stats.max_ms - 40.0).abs() < 0.1);
+        assert!((stats.p95_ms - 40.0).abs() < 0.1);
+        assert_eq!(stats.missed_120hz_budget, 1);
+        assert_eq!(stats.missed_60hz_budget, 1);
+        assert_eq!(stats.stalled_50ms_frames, 0);
+        assert!(
+            stats.fps > 60.0,
+            "average FPS can stay plausible while the p95 frame is bad"
+        );
     }
-    FpsStats::default()
-}
 
-/// Format FPS as a display string.
-pub fn fps_display() -> String {
-    let stats = fps_stats();
-    format!("{:.0} FPS ({:.1}ms)", stats.fps, stats.avg_ms)
-}
+    #[test]
+    fn frame_stats_report_frame_work_separately_from_pacing_gaps() {
+        let mut tracker = FpsTracker::new();
+        let start = web_time::Instant::now();
+        let starts = [0u64, 40, 80];
+        let work = [2u64, 3, 4];
 
-/// Format detailed stats as a display string.
-pub fn fps_display_detailed() -> String {
-    let stats = fps_stats();
-    format!(
-        "{:.0} FPS | {:.1}ms | recomp: {}/s",
-        stats.fps, stats.avg_ms, stats.recomps_per_second
-    )
+        for (start_offset, work_ms) in starts.into_iter().zip(work) {
+            let frame_start = start + Duration::from_millis(start_offset);
+            let frame_end = frame_start + Duration::from_millis(work_ms);
+            tracker.record_frame_work(frame_start, frame_end, 0);
+        }
+
+        let stats = tracker.stats(0);
+
+        assert!((stats.p95_ms - 40.0).abs() < 0.1);
+        assert!((stats.work_avg_ms - 3.0).abs() < 0.1);
+        assert!((stats.work_p95_ms - 4.0).abs() < 0.1);
+        assert!((stats.work_max_ms - 4.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn reset_stats_drops_idle_gap_before_measurement_window() {
+        let mut tracker = FpsTracker::new();
+        let start = web_time::Instant::now();
+
+        tracker.record_frame_at(start, 3);
+        tracker.record_frame_at(start + Duration::from_secs(4), 3);
+        assert!(tracker.stats(3).max_ms > 3000.0);
+
+        tracker.reset(3);
+        tracker.record_frame_at(start + Duration::from_secs(4) + Duration::from_millis(8), 3);
+        tracker.record_frame_at(
+            start + Duration::from_secs(4) + Duration::from_millis(16),
+            3,
+        );
+
+        let stats = tracker.stats(3);
+        assert_eq!(stats.frame_count, 2);
+        assert_eq!(stats.interval_count, 1);
+        assert!((stats.max_ms - 8.0).abs() < 0.1);
+        assert_eq!(stats.recomps_per_second, 0);
+    }
 }

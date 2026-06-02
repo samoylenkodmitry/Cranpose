@@ -60,8 +60,9 @@ ensure_local_temp_root() {
         return 0
     fi
 
-    mkdir -p /tmp/cranpose >/dev/null 2>&1 || return 1
-    printf '%s\n' "/tmp/cranpose"
+    temp_root="$PWD/.cranpose-tmp"
+    mkdir -p "$temp_root" >/dev/null 2>&1 || return 1
+    printf '%s\n' "$temp_root"
 }
 
 enable_local_tmpdir() {
@@ -96,7 +97,9 @@ create_local_temp_dir() {
         fi
     fi
 
-    mktemp -d "/tmp/${prefix}.XXXXXX"
+    temp_root="$PWD/.cranpose-tmp"
+    mkdir -p "$temp_root" >/dev/null 2>&1 || return 1
+    mktemp -d "$temp_root/${prefix}.XXXXXX"
 }
 
 local_cargo_build_jobs_default() {
@@ -115,6 +118,38 @@ enable_local_cargo_job_limit() {
     fi
 
     export CARGO_BUILD_JOBS="${CRANPOSE_BUILD_JOBS:-$(local_cargo_build_jobs_default)}"
+}
+
+local_gradle_user_home() {
+    if [ -n "${CRANPOSE_GRADLE_USER_HOME:-}" ]; then
+        printf '%s\n' "$CRANPOSE_GRADLE_USER_HOME"
+        return 0
+    fi
+
+    if [ -n "${XDG_CACHE_HOME:-}" ]; then
+        printf '%s\n' "$XDG_CACHE_HOME/gradle"
+        return 0
+    fi
+
+    printf '%s\n' "$HOME/.cache/gradle"
+}
+
+enable_local_gradle_home() {
+    local gradle_home
+
+    if is_ci_env; then
+        return 0
+    fi
+    if [ "${CRANPOSE_USE_LOCAL_GRADLE_HOME:-1}" = "0" ]; then
+        return 0
+    fi
+    if [ -n "${GRADLE_USER_HOME:-}" ]; then
+        return 0
+    fi
+
+    gradle_home="$(local_gradle_user_home)"
+    mkdir -p "$gradle_home" >/dev/null 2>&1 || return 1
+    export GRADLE_USER_HOME="$gradle_home"
 }
 
 host_cpu_min_mhz() {

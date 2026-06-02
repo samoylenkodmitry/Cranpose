@@ -3,7 +3,6 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_markdown_scrollbar --features robot-app`
 
-use cranpose::fps_stats;
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::{local_http_client, HttpClient, HttpClientRef, HttpFuture};
@@ -405,10 +404,23 @@ fn main() {
                 println!("holding for {}s to collect perf samples...", hold_secs);
                 std::thread::sleep(Duration::from_secs(hold_secs));
             }
-            let stats = fps_stats();
+            let stats = robot.fps_stats().expect("read robot FPS stats");
             println!(
-                "fps_summary: fps={:.1} frame_ms={:.2} recompositions={} recomps_per_sec={} total_frames={}",
-                stats.fps, stats.avg_ms, stats.recompositions, stats.recomps_per_second, stats.frame_count
+                "fps_summary: fps={:.1} frame_ms={:.2} p95_ms={:.2} p99_ms={:.2} max_ms={:.2} work_avg_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} missed_60hz={} stalls_50ms={} recompositions={} recomps_per_sec={} total_frames={}",
+                stats.fps,
+                stats.avg_ms,
+                stats.p95_ms,
+                stats.p99_ms,
+                stats.max_ms,
+                stats.work_avg_ms,
+                stats.work_p95_ms,
+                stats.work_max_ms,
+                stats.missed_120hz_budget,
+                stats.missed_60hz_budget,
+                stats.stalled_50ms_frames,
+                stats.recompositions,
+                stats.recomps_per_second,
+                stats.frame_count
             );
             std::thread::sleep(Duration::from_millis(600));
             let _ = robot.exit();

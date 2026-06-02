@@ -105,8 +105,18 @@ fn drain_all(composition: &mut Composition<MemoryApplier>) -> Result<(), NodeErr
     Ok(())
 }
 
+fn app_context_scope() -> (
+    std::rc::Rc<cranpose_ui::AppContext>,
+    cranpose_ui::AppContextScope,
+) {
+    let context = cranpose_ui::AppContext::new();
+    let scope = context.enter_scope();
+    (context, scope)
+}
+
 #[test]
 fn async_runtime_freezes_without_conditional_key() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
 
@@ -166,12 +176,13 @@ fn async_runtime_freezes_without_conditional_key() {
 
     assert!(
         after > before,
-        "frames should continue increasing after forward flip without manual with_key workaround (before {before}, after {after})"
+        "frames should continue increasing after forward flip without manual key stabilization (before {before}, after {after})"
     );
 }
 
 #[test]
 fn async_runtime_tab_content_renders_static_states() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
 
@@ -214,6 +225,7 @@ fn async_runtime_tab_content_renders_static_states() {
 
 #[test]
 fn async_runtime_engine_stable_progress_does_not_self_invalidate() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
 
@@ -241,6 +253,7 @@ fn async_runtime_engine_stable_progress_does_not_self_invalidate() {
 
 #[test]
 fn async_runtime_test_content_does_not_grow_slots_across_cycle() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
 
@@ -290,6 +303,7 @@ fn async_runtime_test_content_does_not_grow_slots_across_cycle() {
 
 #[test]
 fn scrollable_async_runtime_does_not_grow_slots_across_cycle() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
 
@@ -340,6 +354,7 @@ fn scrollable_async_runtime_does_not_grow_slots_across_cycle() {
 
 #[test]
 fn combined_app_starting_on_async_does_not_grow_slots_across_cycle() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
 
     let mut composition = Composition::new(MemoryApplier::new());

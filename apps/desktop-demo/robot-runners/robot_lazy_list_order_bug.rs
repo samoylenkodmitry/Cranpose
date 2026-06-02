@@ -71,7 +71,7 @@ fn main() {
                         let mut found = Vec::new();
                         find_items(elem, &mut found);
                         // Sort by Y position to get visual order
-                        found.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                        found.sort_by(|a, b| a.1.total_cmp(&b.1));
                         items.extend(found.iter().map(|(n, _)| *n));
                     }
                 }

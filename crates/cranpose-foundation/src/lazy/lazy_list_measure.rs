@@ -5,27 +5,18 @@
 //! position and viewport size.
 
 use super::bounds_adjuster::BoundsAdjuster;
+use super::diagnostics;
 use super::item_measurer::ItemMeasurer;
 use super::lazy_list_measured_item::{LazyListMeasureResult, LazyListMeasuredItem};
 use super::lazy_list_state::{LazyListLayoutInfo, LazyListState};
 use super::scroll_position_resolver::ScrollPositionResolver;
 use super::viewport::ViewportHandler;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 
 /// Default estimated item size for scroll calculations.
 /// Used when no measured sizes are cached.
 /// 48.0 is a common list item height (Material Design list tile).
 pub const DEFAULT_ITEM_SIZE_ESTIMATE: f32 = 48.0;
-
-static LAZY_MEASURE_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
-static LAZY_MEASURE_CYCLE_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-fn lazy_measure_telemetry_enabled() -> bool {
-    *LAZY_MEASURE_TELEMETRY_ENABLED
-        .get_or_init(|| std::env::var_os("CRANPOSE_LAZY_MEASURE_TELEMETRY").is_some())
-}
 
 /// Configuration for lazy list measurement.
 #[derive(Clone, Debug)]
@@ -221,6 +212,7 @@ where
 
     // 3. Measure items (visible + beyond-bounds buffer)
     let pre_measured_queue = VecDeque::from(pre_measured);
+    let telemetry_enabled = diagnostics::telemetry_enabled();
     let mut measurer = ItemMeasurer::new(
         &mut measure_item,
         config,
@@ -228,7 +220,8 @@ where
         effective_viewport_size,
         measure_state.average_item_size,
         pre_measured_queue,
-    );
+    )
+    .with_telemetry_pass_id(telemetry_enabled.then(|| state.next_item_measure_pass_id()));
     let measurement_pass = measurer.measure_all(first_index, first_offset);
     let measurement_start_index = measurement_pass.start_index;
     let measurement_start_offset = measurement_pass.start_offset;
@@ -306,8 +299,8 @@ where
         state.update_scroll_position(final_first_index, final_scroll_offset);
     }
 
-    if lazy_measure_telemetry_enabled() {
-        let cycle_id = LAZY_MEASURE_CYCLE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    if telemetry_enabled {
+        let cycle_id = state.next_measure_cycle_id();
         log::warn!(
             "[lazy-measure-telemetry] cycle={} input_first_index={} input_first_offset={:.2} normalized_first_index={} normalized_first_offset={:.2} final_first_index={} final_first_offset={:.2} measured_visible={} total_measured={} unresolved_pass={} actual_first_visible={} timed_out={} viewport_filled={}",
             cycle_id,

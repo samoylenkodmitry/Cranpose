@@ -5,7 +5,7 @@
 //! custom shader effects that need to capture a subtree's rendered output.
 
 use crate::gpu_stats::FrameStats;
-use std::cell::RefCell;
+use std::cell::OnceCell;
 
 /// A GPU texture that can serve as both a render target and a texture source.
 pub(crate) struct OffscreenTarget {
@@ -16,13 +16,28 @@ pub(crate) struct OffscreenTarget {
     pub height: u32,
     /// Lazily-cached bind group for sampling this target as a texture.
     /// Valid as long as the underlying texture is alive (i.e. while this target exists).
-    cached_bind_group: RefCell<Option<wgpu::BindGroup>>,
+    cached_bind_group: OnceCell<wgpu::BindGroup>,
 }
 
 impl OffscreenTarget {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self::new_labeled(device, format, width, height, "Offscreen Target")
+    }
+
+    pub(crate) fn new_labeled(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        label: &'static str,
+    ) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Offscreen Target"),
+            label: Some(label),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -41,7 +56,7 @@ impl OffscreenTarget {
             view,
             width,
             height,
-            cached_bind_group: RefCell::new(None),
+            cached_bind_group: OnceCell::new(),
         }
     }
 
@@ -63,28 +78,22 @@ impl OffscreenTarget {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
-    ) -> std::cell::Ref<'_, wgpu::BindGroup> {
-        {
-            let mut slot = self.cached_bind_group.borrow_mut();
-            if slot.is_none() {
-                *slot = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Offscreen Texture Bind Group (cached)"),
-                    layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&self.view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(sampler),
-                        },
-                    ],
-                }));
-            }
-        }
-        std::cell::Ref::map(self.cached_bind_group.borrow(), |opt| {
-            opt.as_ref().expect("bind group was just populated")
+    ) -> &wgpu::BindGroup {
+        self.cached_bind_group.get_or_init(|| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Offscreen Texture Bind Group (cached)"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&self.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
         })
     }
 }

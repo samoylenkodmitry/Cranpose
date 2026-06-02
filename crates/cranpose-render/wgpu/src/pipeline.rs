@@ -18,11 +18,14 @@ use cranpose_render_common::primitive_emit::{
 use cranpose_render_common::Brush;
 use cranpose_render_common::RenderScene;
 #[cfg(test)]
+use cranpose_ui::measure_text;
+#[cfg(test)]
 use cranpose_ui::prepare_text_layout;
 #[cfg(test)]
 use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign};
 use cranpose_ui::text::{TextDecoration, TextDrawStyle, TextStyle};
-use cranpose_ui::{layout_text, measure_text, LayoutBox, TextLayoutOptions};
+use cranpose_ui::text_layout_result::TextLayoutResult;
+use cranpose_ui::{layout_text, LayoutBox, TextLayoutOptions};
 #[cfg(test)]
 use cranpose_ui::{EdgeInsets, TextOverflow};
 use cranpose_ui_graphics::{
@@ -267,6 +270,26 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(brush.rgb * out_alpha, out_alpha);
 }
 "#;
+
+pub(crate) trait TextLayoutResolver {
+    fn layout_text(
+        &mut self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> TextLayoutResult;
+}
+
+pub(crate) struct UiTextLayoutResolver;
+
+impl TextLayoutResolver for UiTextLayoutResolver {
+    fn layout_text(
+        &mut self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> TextLayoutResult {
+        layout_text(text, style)
+    }
+}
 
 #[cfg(test)]
 fn pad_clip_rect(rect: Rect) -> Rect {
@@ -1229,6 +1252,7 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
 #[allow(clippy::too_many_arguments)]
 fn emit_text_style_draws<S: TextStyleDrawSink>(
     sink: &mut S,
+    text_layout: &mut impl TextLayoutResolver,
     node_id: NodeId,
     rect: Rect,
     text_rect: Rect,
@@ -1304,17 +1328,6 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         );
     }
 
-    push_text_decorations(
-        sink,
-        rect,
-        shifted_text_rect,
-        content_layer,
-        text,
-        text_style,
-        &text_brush,
-        text_clip,
-    );
-
     let has_span_foreground_overrides = text_has_span_foreground_overrides(text);
     if has_span_foreground_overrides
         && push_span_gpu_text_material_draws(
@@ -1331,6 +1344,17 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             text_clip,
         )
     {
+        push_text_decorations(
+            sink,
+            text_layout,
+            rect,
+            shifted_text_rect,
+            content_layer,
+            text,
+            text_style,
+            &text_brush,
+            text_clip,
+        );
         return;
     }
 
@@ -1395,6 +1419,17 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
                     SurfaceRequirement::TextMaterialMask,
                 ]),
             );
+            push_text_decorations(
+                sink,
+                text_layout,
+                rect,
+                shifted_text_rect,
+                content_layer,
+                text,
+                text_style,
+                &text_brush,
+                text_clip,
+            );
             return;
         }
     }
@@ -1409,6 +1444,18 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         font_size,
         text_scale,
         options,
+        text_clip,
+    );
+
+    push_text_decorations(
+        sink,
+        text_layout,
+        rect,
+        shifted_text_rect,
+        content_layer,
+        text,
+        text_style,
+        &text_brush,
         text_clip,
     );
 }
@@ -1442,6 +1489,7 @@ fn push_text_draw<S: TextStyleDrawSink>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn push_text_style_draws(
     scene: &mut CompositorScene,
+    text_layout: &mut impl TextLayoutResolver,
     node_id: NodeId,
     rect: Rect,
     text_rect: Rect,
@@ -1454,6 +1502,7 @@ pub(crate) fn push_text_style_draws(
 ) {
     emit_text_style_draws(
         scene,
+        text_layout,
         node_id,
         rect,
         text_rect,
@@ -1569,8 +1618,10 @@ pub(crate) fn push_translated_text_style_draws(
 ) {
     let counts = scene_emission_counts(scene);
     let z_start = scene.current_z();
+    let mut text_layout = UiTextLayoutResolver;
     emit_text_style_draws(
         scene,
+        &mut text_layout,
         node_id,
         rect,
         text_rect,
@@ -1612,8 +1663,10 @@ pub(crate) fn estimate_text_style_draw_bounds(
     text_clip: Option<Rect>,
 ) -> Option<Rect> {
     let mut collector = TextBoundsCollector::default();
+    let mut text_layout = UiTextLayoutResolver;
     emit_text_style_draws(
         &mut collector,
+        &mut text_layout,
         node_id,
         rect,
         text_rect,
@@ -1630,6 +1683,7 @@ pub(crate) fn estimate_text_style_draw_bounds(
 #[allow(clippy::too_many_arguments)]
 fn push_text_decorations<S: TextStyleDrawSink>(
     sink: &mut S,
+    text_layout: &mut impl TextLayoutResolver,
     rect: Rect,
     text_rect: Rect,
     content_layer: &GraphicsLayer,
@@ -1642,11 +1696,12 @@ fn push_text_decorations<S: TextStyleDrawSink>(
         return;
     }
 
-    let layout = layout_text(annotated_text, global_style);
+    let layout = text_layout.layout_text(annotated_text, global_style);
     let mut segments =
         decoration_segments_from_glyph_layouts(annotated_text, global_style, &layout);
     if segments.is_empty() {
-        segments = decoration_segments_from_logical_lines(annotated_text, global_style);
+        segments =
+            decoration_segments_from_logical_lines(text_layout, annotated_text, global_style);
     }
 
     for segment in segments {
@@ -1670,12 +1725,12 @@ fn push_text_decorations<S: TextStyleDrawSink>(
         let segment_x = text_rect.x + segment.x_start;
 
         if decoration.contains(TextDecoration::UNDERLINE) {
-            let underline_rect = Rect {
-                x: segment_x,
-                y: line_top + line_height - thickness * 1.35,
-                width: span_width,
-                height: thickness,
-            };
+            let underline_rect = text_decoration_rect(
+                segment_x,
+                line_top + line_height - thickness * 1.35,
+                span_width,
+                thickness,
+            );
             let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
             sink.push_shape(
                 transformed,
@@ -1687,15 +1742,24 @@ fn push_text_decorations<S: TextStyleDrawSink>(
         }
 
         if decoration.contains(TextDecoration::LINE_THROUGH) {
-            let strike_rect = Rect {
-                x: segment_x,
-                y: line_top + line_height * 0.52 - thickness * 0.5,
-                width: span_width,
-                height: thickness,
-            };
+            let strike_rect = text_decoration_rect(
+                segment_x,
+                line_top + line_height * 0.52 - thickness * 0.5,
+                span_width,
+                thickness,
+            );
             let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
             sink.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
         }
+    }
+}
+
+fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
+    Rect {
+        x,
+        y,
+        width,
+        height: thickness.ceil().max(1.0),
     }
 }
 
@@ -1723,6 +1787,8 @@ struct DecorationVisualSegment {
     line_index: usize,
     line_top: f32,
     line_height: f32,
+    logical_start: usize,
+    logical_end: usize,
     x_start: f32,
     x_end: f32,
     span_style: cranpose_ui::text::SpanStyle,
@@ -1786,8 +1852,19 @@ fn decoration_segments_from_glyph_layouts(
             let same_vertical_band =
                 (last.line_top - glyph.y).abs() <= DECORATION_SEGMENT_MERGE_EPSILON;
             let touching = glyph_start_x <= last.x_end + DECORATION_SEGMENT_MERGE_EPSILON;
-            if same_line && same_style && same_vertical_band && touching {
+            let contiguous_text_range = decoration_ranges_share_contiguous_run(
+                text,
+                last.logical_start,
+                last.logical_end,
+                start,
+                end,
+            );
+            if same_line && same_style && same_vertical_band && (touching || contiguous_text_range)
+            {
+                last.x_start = last.x_start.min(glyph_start_x);
                 last.x_end = last.x_end.max(glyph_end_x);
+                last.logical_start = last.logical_start.min(start);
+                last.logical_end = last.logical_end.max(end);
                 last.line_height = last.line_height.max(glyph.height.max(1.0));
                 continue;
             }
@@ -1797,6 +1874,8 @@ fn decoration_segments_from_glyph_layouts(
             line_index: glyph.line_index,
             line_top: glyph.y,
             line_height: glyph.height.max(1.0),
+            logical_start: start,
+            logical_end: end,
             x_start: glyph_start_x,
             x_end: glyph_end_x,
             span_style: merged_style,
@@ -1807,10 +1886,14 @@ fn decoration_segments_from_glyph_layouts(
 }
 
 fn decoration_segments_from_logical_lines(
+    text_layout: &mut impl TextLayoutResolver,
     text: &cranpose_ui::text::AnnotatedString,
     global_style: &TextStyle,
 ) -> Vec<DecorationVisualSegment> {
-    let line_height = measure_text(text, global_style).line_height.max(1.0);
+    let line_height = text_layout
+        .layout_text(text, global_style)
+        .line_height
+        .max(1.0);
     let mut line_top = 0.0;
     let mut line_index = 0usize;
     let mut segments: Vec<DecorationVisualSegment> = Vec::new();
@@ -1828,7 +1911,8 @@ fn decoration_segments_from_logical_lines(
                 merged_span_style_for_range(&line, &global_style.span_style, start, end);
             let mut span_text_style = global_style.clone();
             span_text_style.span_style = merged_style.clone();
-            let span_width = measure_text(&line.subsequence(start..end), &span_text_style)
+            let span_width = text_layout
+                .layout_text(&line.subsequence(start..end), &span_text_style)
                 .width
                 .max(0.0);
 
@@ -1849,6 +1933,8 @@ fn decoration_segments_from_logical_lines(
                 let touching = x_start <= last.x_end + DECORATION_SEGMENT_MERGE_EPSILON;
                 if same_line && same_style && touching {
                     last.x_end = last.x_end.max(x_end);
+                    last.logical_start = last.logical_start.min(start);
+                    last.logical_end = last.logical_end.max(end);
                     current_offset += span_width;
                     continue;
                 }
@@ -1858,6 +1944,8 @@ fn decoration_segments_from_logical_lines(
                 line_index,
                 line_top,
                 line_height,
+                logical_start: start,
+                logical_end: end,
                 x_start,
                 x_end,
                 span_style: merged_style,
@@ -1869,6 +1957,37 @@ fn decoration_segments_from_logical_lines(
     }
 
     segments
+}
+
+fn half_open_ranges_touch_or_overlap(
+    first_start: usize,
+    first_end: usize,
+    second_start: usize,
+    second_end: usize,
+) -> bool {
+    first_start <= second_end && second_start <= first_end
+}
+
+fn decoration_ranges_share_contiguous_run(
+    text: &cranpose_ui::text::AnnotatedString,
+    first_start: usize,
+    first_end: usize,
+    second_start: usize,
+    second_end: usize,
+) -> bool {
+    if half_open_ranges_touch_or_overlap(first_start, first_end, second_start, second_end) {
+        return true;
+    }
+
+    let source = text.text.as_str();
+    let gap = if first_end <= second_start {
+        source.get(first_end..second_start)
+    } else if second_end <= first_start {
+        source.get(second_end..first_start)
+    } else {
+        None
+    };
+    gap.is_some_and(|gap| gap.chars().all(char::is_whitespace))
 }
 
 fn split_annotated_lines_for_decorations(
@@ -2028,12 +2147,7 @@ fn resolve_text_horizontal_offset(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// New Architecture: Direct LayoutNode Tree Rendering
-// ═══════════════════════════════════════════════════════════════════════════
-
 /// Renders the scene by traversing the LayoutNode tree directly via Applier.
-/// This eliminates the need for per-frame LayoutTree reconstruction.
 pub(crate) fn render_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
@@ -2078,10 +2192,10 @@ pub(crate) fn update_from_applier(
     scene.hits.clear();
     scene.node_index.clear();
     scene.next_hit_z = 0;
-    let graph = scene
-        .graph
-        .take()
-        .expect("updated scene graph should remain available");
+    let Some(graph) = scene.graph.take() else {
+        render_from_applier(applier, root, scene, scale);
+        return;
+    };
     collect_hits_from_graph(
         &graph.root,
         cranpose_render_common::graph::ProjectiveTransform::identity(),
@@ -2326,6 +2440,58 @@ mod tests {
                 glyph_layouts,
             },
         )
+    }
+
+    fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
+        let app_context = cranpose_ui::AppContext::new();
+        app_context.enter(block)
+    }
+
+    fn prepare_text_layout_for_test(
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> cranpose_ui::text::PreparedTextLayout {
+        with_test_app_context(|| prepare_text_layout(text, style, options, max_width))
+    }
+
+    fn measure_text_for_test(
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> cranpose_ui::TextMetrics {
+        with_test_app_context(|| measure_text(text, style))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_text_style_draws_for_test(
+        scene: &mut Scene,
+        node_id: NodeId,
+        rect: Rect,
+        text_rect: Rect,
+        content_layer: &GraphicsLayer,
+        text: &cranpose_ui::text::AnnotatedString,
+        text_style: &TextStyle,
+        font_size: f32,
+        options: TextLayoutOptions,
+        text_clip: Option<Rect>,
+    ) {
+        with_test_app_context(|| {
+            let mut text_layout = UiTextLayoutResolver;
+            push_text_style_draws(
+                scene,
+                &mut text_layout,
+                node_id,
+                rect,
+                text_rect,
+                content_layer,
+                text,
+                text_style,
+                font_size,
+                options,
+                text_clip,
+            )
+        });
     }
 
     fn scene_bounds_for_test(scene: &Scene) -> Option<Rect> {
@@ -2702,7 +2868,7 @@ mod tests {
         let options = cranpose_ui::TextLayoutOptions::default();
         let content_width = 130.0;
 
-        let wrapped_by_content = prepare_text_layout(
+        let wrapped_by_content = prepare_text_layout_for_test(
             &cranpose_ui::text::AnnotatedString::from(text),
             &style,
             options,
@@ -2716,7 +2882,7 @@ mod tests {
 
         let measure_width =
             resolve_text_measure_width(content_width, padding, Some(180.0), options);
-        let prepared = prepare_text_layout(
+        let prepared = prepare_text_layout_for_test(
             &cranpose_ui::text::AnnotatedString::from(text),
             &style,
             options,
@@ -2748,7 +2914,7 @@ mod tests {
         let content_width = 130.0;
         let measure_width =
             resolve_text_measure_width(content_width, padding, Some(180.0), options);
-        let prepared = prepare_text_layout(
+        let prepared = prepare_text_layout_for_test(
             &cranpose_ui::text::AnnotatedString::from(text),
             &style,
             options,
@@ -2822,7 +2988,7 @@ mod tests {
             height: 200.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             7 as NodeId,
             rect,
@@ -2887,7 +3053,7 @@ mod tests {
             height: 28.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             7 as NodeId,
             rect,
@@ -2951,7 +3117,7 @@ mod tests {
             height: 48.0,
         });
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             31 as NodeId,
             rect,
@@ -2964,17 +3130,19 @@ mod tests {
             clip,
         );
 
-        let estimated = estimate_text_style_draw_bounds(
-            31 as NodeId,
-            rect,
-            rect,
-            &GraphicsLayer::default(),
-            &text,
-            &style,
-            14.0,
-            TextLayoutOptions::default(),
-            clip,
-        );
+        let estimated = with_test_app_context(|| {
+            estimate_text_style_draw_bounds(
+                31 as NodeId,
+                rect,
+                rect,
+                &GraphicsLayer::default(),
+                &text,
+                &style,
+                14.0,
+                TextLayoutOptions::default(),
+                clip,
+            )
+        });
 
         assert_eq!(estimated, scene_bounds_for_test(&scene));
     }
@@ -3000,7 +3168,7 @@ mod tests {
             height: 28.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             7 as NodeId,
             rect,
@@ -3015,6 +3183,63 @@ mod tests {
 
         assert_eq!(scene.shapes.len(), 2, "underline + line-through expected");
         assert_eq!(scene.texts.len(), 1, "main text expected");
+    }
+
+    #[test]
+    fn push_text_style_draws_preserves_subpixel_decoration_y() {
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = cranpose_ui::text::AnnotatedString::from("Underlined");
+        let base_rect = Rect {
+            x: 8.0,
+            y: 10.10,
+            width: 180.0,
+            height: 28.0,
+        };
+        let shifted_rect = Rect {
+            y: 10.45,
+            ..base_rect
+        };
+
+        let mut base_scene = Scene::new();
+        let mut shifted_scene = Scene::new();
+        push_text_style_draws_for_test(
+            &mut base_scene,
+            70 as NodeId,
+            base_rect,
+            base_rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+        push_text_style_draws_for_test(
+            &mut shifted_scene,
+            71 as NodeId,
+            shifted_rect,
+            shifted_rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(base_scene.shapes.len(), 1);
+        assert_eq!(shifted_scene.shapes.len(), 1);
+        let delta = shifted_scene.shapes[0].rect.y - base_scene.shapes[0].rect.y;
+        assert!(
+            (delta - 0.35).abs() < 0.001,
+            "text decoration y must move by the same fractional delta as the text; got {delta}"
+        );
     }
 
     #[test]
@@ -3035,18 +3260,20 @@ mod tests {
             height: 28.0,
         };
 
-        push_translated_text_style_draws(
-            &mut scene,
-            71 as NodeId,
-            rect,
-            rect,
-            &GraphicsLayer::default(),
-            &cranpose_ui::text::AnnotatedString::from("Decorated"),
-            &style,
-            14.0,
-            TextLayoutOptions::default(),
-            None,
-        );
+        with_test_app_context(|| {
+            push_translated_text_style_draws(
+                &mut scene,
+                71 as NodeId,
+                rect,
+                rect,
+                &GraphicsLayer::default(),
+                &cranpose_ui::text::AnnotatedString::from("Decorated"),
+                &style,
+                14.0,
+                TextLayoutOptions::default(),
+                None,
+            )
+        });
 
         assert_eq!(
             scene.shapes.len(),
@@ -3101,7 +3328,7 @@ mod tests {
             height: 72.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             22 as NodeId,
             rect,
@@ -3115,7 +3342,7 @@ mod tests {
         );
 
         assert_eq!(scene.shapes.len(), 3, "one underline per visual line");
-        let line_height = measure_text(&text, &style).line_height.max(1.0);
+        let line_height = measure_text_for_test(&text, &style).line_height.max(1.0);
         let mut ys: Vec<f32> = scene.shapes.iter().map(|shape| shape.rect.y).collect();
         ys.sort_by(|a, b| a.total_cmp(b));
         assert!(ys[1] > ys[0], "second underline should be below first line");
@@ -3317,6 +3544,108 @@ mod tests {
     }
 
     #[test]
+    fn decoration_segments_from_glyph_layouts_bridge_letter_spacing_gaps() {
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = cranpose_ui::text::AnnotatedString::from("AB");
+        let layout = synthetic_text_layout(
+            "AB",
+            12.0,
+            vec![LineLayout {
+                start_offset: 0,
+                end_offset: 2,
+                y: 0.0,
+                height: 12.0,
+            }],
+            vec![
+                GlyphLayout {
+                    line_index: 0,
+                    start_offset: 0,
+                    end_offset: 1,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 9.0,
+                    height: 12.0,
+                },
+                GlyphLayout {
+                    line_index: 0,
+                    start_offset: 1,
+                    end_offset: 2,
+                    x: 14.0,
+                    y: 0.0,
+                    width: 9.0,
+                    height: 12.0,
+                },
+            ],
+        );
+
+        let segments = decoration_segments_from_glyph_layouts(&text, &style, &layout);
+        assert_eq!(
+            segments.len(),
+            1,
+            "letter spacing must not split one decorated run into dashed line segments"
+        );
+        assert!((segments[0].x_start - 0.0).abs() < f32::EPSILON);
+        assert!((segments[0].x_end - 23.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn decoration_segments_from_glyph_layouts_bridge_whitespace_gaps() {
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = cranpose_ui::text::AnnotatedString::from("A B");
+        let layout = synthetic_text_layout(
+            "A B",
+            12.0,
+            vec![LineLayout {
+                start_offset: 0,
+                end_offset: 3,
+                y: 0.0,
+                height: 12.0,
+            }],
+            vec![
+                GlyphLayout {
+                    line_index: 0,
+                    start_offset: 0,
+                    end_offset: 1,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 9.0,
+                    height: 12.0,
+                },
+                GlyphLayout {
+                    line_index: 0,
+                    start_offset: 2,
+                    end_offset: 3,
+                    x: 18.0,
+                    y: 0.0,
+                    width: 9.0,
+                    height: 12.0,
+                },
+            ],
+        );
+
+        let segments = decoration_segments_from_glyph_layouts(&text, &style, &layout);
+        assert_eq!(
+            segments.len(),
+            1,
+            "whitespace inside one decorated run must not break line-through geometry"
+        );
+        assert!((segments[0].x_start - 0.0).abs() < f32::EPSILON);
+        assert!((segments[0].x_end - 27.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn push_text_style_draws_resolves_decoration_brush_with_span_alpha_and_layer_alpha() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle::default();
@@ -3341,7 +3670,7 @@ mod tests {
             ..Default::default()
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             23 as NodeId,
             rect,
@@ -3394,7 +3723,7 @@ mod tests {
         };
         let text = cranpose_ui::text::AnnotatedString::from("Shifted");
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut base_scene,
             24 as NodeId,
             rect,
@@ -3406,7 +3735,7 @@ mod tests {
             TextLayoutOptions::default(),
             None,
         );
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut shifted_scene,
             25 as NodeId,
             rect,
@@ -3445,7 +3774,7 @@ mod tests {
             height: 28.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             7 as NodeId,
             rect,
@@ -3487,7 +3816,7 @@ mod tests {
             height: 28.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             7 as NodeId,
             rect,
@@ -3503,7 +3832,7 @@ mod tests {
         assert_eq!(
             scene.texts.len(),
             1,
-            "gradient text should use glyphon text mask"
+            "gradient text should use raster text mask"
         );
         assert_eq!(
             scene.effect_layers.len(),
@@ -3563,7 +3892,7 @@ mod tests {
             height: 32.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             13 as NodeId,
             rect,
@@ -3620,7 +3949,7 @@ mod tests {
             height: 32.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             8 as NodeId,
             rect,
@@ -3705,7 +4034,7 @@ mod tests {
             ..Default::default()
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             18 as NodeId,
             rect,
@@ -3777,7 +4106,7 @@ mod tests {
             height: 32.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             12 as NodeId,
             rect,
@@ -3863,7 +4192,7 @@ mod tests {
             height: 32.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             19 as NodeId,
             rect,
@@ -3938,7 +4267,7 @@ mod tests {
             height: 32.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             20 as NodeId,
             rect,
@@ -4051,7 +4380,7 @@ mod tests {
             height: 32.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             21 as NodeId,
             rect,
@@ -4069,7 +4398,7 @@ mod tests {
         assert_eq!(
             scene.effect_layers.len(),
             0,
-            "solid color spans use cosmic-text per-glyph colors, no GPU shader needed"
+            "solid color spans use software text raster colors, no GPU shader needed"
         );
         assert!(
             scene.texts[0]
@@ -4079,7 +4408,7 @@ mod tests {
                 .filter(|span| span.item.color == Some(Color::RED))
                 .count()
                 >= 1,
-            "span colors should be preserved for cosmic-text per-glyph rendering"
+            "span colors should be preserved for software text raster rendering"
         );
     }
 
@@ -4102,7 +4431,7 @@ mod tests {
             height: 32.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             24 as NodeId,
             rect,
@@ -4120,7 +4449,7 @@ mod tests {
         assert_eq!(
             scene.effect_layers.len(),
             0,
-            "solid color span overrides use cosmic-text per-glyph colors, no GPU shader needed"
+            "solid color span overrides use software text raster colors, no GPU shader needed"
         );
         assert!(
             scene.texts[0]
@@ -4128,7 +4457,7 @@ mod tests {
                 .span_styles
                 .iter()
                 .any(|span| span.item.color == Some(Color::RED)),
-            "span color should be preserved in the text for cosmic-text per-glyph rendering"
+            "span color should be preserved in the text for software text raster rendering"
         );
     }
 
@@ -4157,7 +4486,7 @@ mod tests {
             height: 32.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             25 as NodeId,
             rect,
@@ -4213,7 +4542,7 @@ mod tests {
             height: 56.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             26 as NodeId,
             rect,
@@ -4231,7 +4560,7 @@ mod tests {
         assert_eq!(
             scene.effect_layers.len(),
             0,
-            "solid color spans use cosmic-text per-glyph colors, no GPU shader needed"
+            "solid color spans use software text raster colors, no GPU shader needed"
         );
         let red_ranges: Vec<_> = scene.texts[0]
             .text
@@ -4265,7 +4594,7 @@ mod tests {
             max_lines: usize::MAX,
             min_lines: 1,
         };
-        let prepared = prepare_text_layout(&source_text, &style, options, Some(64.0));
+        let prepared = prepare_text_layout_for_test(&source_text, &style, options, Some(64.0));
         assert!(
             prepared.text.text.contains('\n'),
             "test setup should produce wrapped multiline text: {:?}",
@@ -4278,7 +4607,7 @@ mod tests {
             height: 96.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             27 as NodeId,
             rect,
@@ -4296,7 +4625,7 @@ mod tests {
         assert_eq!(
             scene.effect_layers.len(),
             0,
-            "solid color spans use cosmic-text per-glyph colors, no GPU shader needed"
+            "solid color spans use software text raster colors, no GPU shader needed"
         );
         assert!(
             scene.texts[0]
@@ -4304,7 +4633,7 @@ mod tests {
                 .span_styles
                 .iter()
                 .any(|span| span.item.color == Some(Color::RED)),
-            "span color should be preserved for cosmic-text per-glyph rendering"
+            "span color should be preserved for software text raster rendering"
         );
     }
 
@@ -4328,7 +4657,7 @@ mod tests {
             });
 
         let mut static_scene = Scene::new();
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut static_scene,
             9 as NodeId,
             base_rect,
@@ -4342,7 +4671,7 @@ mod tests {
         );
 
         let mut animated_scene = Scene::new();
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut animated_scene,
             10 as NodeId,
             base_rect,
@@ -4390,7 +4719,7 @@ mod tests {
         };
 
         let mut static_scene = Scene::new();
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut static_scene,
             22 as NodeId,
             base_rect,
@@ -4404,7 +4733,7 @@ mod tests {
         );
 
         let mut animated_scene = Scene::new();
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut animated_scene,
             23 as NodeId,
             base_rect,
@@ -4472,7 +4801,7 @@ mod tests {
             },
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
             11 as NodeId,
             base_rect,
@@ -4492,7 +4821,7 @@ mod tests {
         assert_eq!(
             scene.texts.len(),
             1,
-            "gradient should emit a glyphon mask text draw"
+            "gradient should emit a raster mask text draw"
         );
         assert_eq!(
             scene.effect_layers.len(),
@@ -4533,7 +4862,7 @@ mod tests {
         let content_width = 130.0;
         let measure_width =
             resolve_text_measure_width(content_width, padding, Some(180.0), options);
-        let prepared = prepare_text_layout(
+        let prepared = prepare_text_layout_for_test(
             &cranpose_ui::text::AnnotatedString::from(text),
             &style,
             options,

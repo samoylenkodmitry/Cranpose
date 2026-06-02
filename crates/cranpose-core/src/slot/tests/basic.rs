@@ -10,6 +10,60 @@ fn slot_v2_empty_table_validates() {
 }
 
 #[test]
+fn group_generation_counter_wraps_without_aborting() {
+    let mut harness = SlotHarness::new();
+    harness.table.set_next_group_generation_for_test(u32::MAX);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let generations = harness.session(|session| {
+        let first = begin_unkeyed(session, 9_001, None);
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        let second = begin_unkeyed(session, 9_002, None);
+        let second_result = session.finish_group_body();
+        assert!(second_result.detached_children.is_empty());
+        session.end_group();
+
+        (first.group.generation(), second.group.generation())
+    });
+    harness.finish_pass();
+
+    assert_eq!(generations, (u32::MAX, 1));
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
+fn group_scope_lookup_for_missing_index_returns_none() {
+    let table = SlotTable::new();
+
+    assert_eq!(table.group_scope_id_at_index(usize::MAX), None);
+}
+
+#[test]
+fn group_subtree_len_for_missing_index_returns_zero() {
+    let table = SlotTable::new();
+
+    assert_eq!(table.group_subtree_len_at_index(usize::MAX), 0);
+}
+
+#[test]
+fn group_insertion_rejects_exhausted_anchor_ids_without_mutating() {
+    let mut table = SlotTable::new();
+    table.set_next_group_anchor_for_test(u32::MAX as usize + 1);
+
+    let anchor = table.insert_new_group(
+        ChildCursor::new(AnchorId::INVALID, 0),
+        GroupKey::new(9_003, None, 0),
+    );
+
+    assert_eq!(anchor, AnchorId::INVALID);
+    assert_eq!(table.group_count(), 0);
+    assert_eq!(table.validate(), Ok(()));
+}
+
+#[test]
 fn first_composition_records_group_value_and_node() {
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
@@ -112,6 +166,62 @@ fn slot_write_session_exposes_semantic_operations() {
     });
     harness.finish_pass();
     assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
+fn empty_group_stack_finish_skip_and_end_are_noops() {
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+
+    harness.session(|session| {
+        session.skip_group();
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        assert!(result.direct_nodes.is_empty());
+        assert!(result.root_nodes.is_empty());
+        assert!(!result.was_skipped);
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    assert_eq!(harness.table.validate(), Ok(()));
+    assert_eq!(harness.table.group_count(), 0);
+}
+
+#[test]
+fn value_slots_without_active_group_record_recovery_groups() {
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+
+    let (first, second) = harness.session(|session| {
+        (
+            session.value_slot_with_kind(PayloadKind::Internal, || 11_i32),
+            session.value_slot_with_kind(PayloadKind::Internal, || 22_i32),
+        )
+    });
+    harness.finish_pass();
+
+    assert_eq!(harness.table.validate(), Ok(()));
+    assert_eq!(*harness.table.read_value::<i32>(first), 11);
+    assert_eq!(*harness.table.read_value::<i32>(second), 22);
+    assert_eq!(harness.table.group_count(), 2);
+    assert_eq!(harness.table.total_payload_count(), 2);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (first_again, second_again) = harness.session(|session| {
+        (
+            session.value_slot_with_kind(PayloadKind::Internal, || 111_i32),
+            session.value_slot_with_kind(PayloadKind::Internal, || 222_i32),
+        )
+    });
+    harness.finish_pass();
+
+    assert_eq!(first_again, first);
+    assert_eq!(second_again, second);
+    assert_eq!(*harness.table.read_value::<i32>(first_again), 11);
+    assert_eq!(*harness.table.read_value::<i32>(second_again), 22);
+    assert_eq!(harness.table.group_count(), 2);
+    assert_eq!(harness.table.total_payload_count(), 2);
 }
 
 #[test]

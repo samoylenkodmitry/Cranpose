@@ -47,6 +47,9 @@ impl Measurable for TestMeasurable {
 /// Test that complex modifier chains preserve ordering and are measured correctly
 #[test]
 fn test_complex_modifier_chain_ordering() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn content() {
         // Create a complex chain: padding -> size -> offset -> padding
@@ -93,6 +96,9 @@ fn test_complex_modifier_chain_ordering() {
 /// Test that modifier chains are properly updated during recomposition
 #[test]
 fn test_modifier_chain_recomposition() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn content(use_large_padding: bool) {
         let padding = if use_large_padding { 20.0 } else { 5.0 };
@@ -134,6 +140,9 @@ fn test_modifier_chain_recomposition() {
 /// Test performance with many modifiers in a single chain
 #[test]
 fn test_large_modifier_chain_performance() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn content() {
         // Build a very long modifier chain
@@ -170,6 +179,9 @@ fn test_large_modifier_chain_performance() {
 /// Test that many items with modifiers can be rendered efficiently
 #[test]
 fn test_many_items_with_modifiers() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn list(item_count: usize) {
         Column(Modifier::empty(), ColumnSpec::default(), move || {
@@ -225,6 +237,9 @@ fn test_many_items_with_modifiers() {
 /// Test that modifier chains work correctly in nested layouts
 #[test]
 fn test_nested_layouts_with_modifiers() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn nested_content() {
         Column(
@@ -277,6 +292,9 @@ fn test_nested_layouts_with_modifiers() {
 /// Test recomposition with changing list sizes
 #[test]
 fn test_dynamic_list_recomposition() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn dynamic_list(count: usize) {
         Column(Modifier::empty(), ColumnSpec::default(), move || {
@@ -335,6 +353,9 @@ fn test_dynamic_list_recomposition() {
 /// Test that modifiers work correctly with text nodes
 #[test]
 fn test_text_with_modifiers() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn styled_text() {
         Text(
@@ -361,6 +382,9 @@ fn test_text_with_modifiers() {
 /// Test complex real-world UI pattern: Card list
 #[test]
 fn test_card_list_pattern() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn card(title: &'static str, description: &'static str) {
         ComposeBox(
@@ -412,6 +436,9 @@ fn test_card_list_pattern() {
 /// Stress test: Rapidly changing modifiers
 #[test]
 fn test_rapid_modifier_changes() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn animated(frame: i32) {
         ComposeBox(
@@ -452,6 +479,9 @@ fn test_rapid_modifier_changes() {
 /// Test that padding modifier composes correctly
 #[test]
 fn test_padding_affects_size() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn padded_box() {
         ComposeBox(
@@ -481,6 +511,9 @@ fn test_padding_affects_size() {
 /// Test that offset modifier composes correctly
 #[test]
 fn test_offset_affects_placement_not_size() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn offset_box() {
         ComposeBox(
@@ -510,6 +543,9 @@ fn test_offset_affects_placement_not_size() {
 /// Test that nested padding modifiers compose correctly
 #[test]
 fn test_nested_padding_accumulation() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn nested_padding() {
         ComposeBox(
@@ -545,6 +581,9 @@ fn test_nested_padding_accumulation() {
 /// Test that modifier order is preserved: padding before vs after size
 #[test]
 fn test_modifier_order_padding_size() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn padding_then_size() {
         ComposeBox(
@@ -599,6 +638,9 @@ fn test_modifier_order_padding_size() {
 /// Test that offset composes correctly with size modifier
 #[test]
 fn test_offset_not_double_applied() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn single_offset() {
         ComposeBox(
@@ -629,6 +671,9 @@ fn test_offset_not_double_applied() {
 /// This demonstrates proper modifier chain ordering matching Jetpack Compose
 #[test]
 fn test_complex_chain_actual_measurements() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     #[composable]
     fn complex_chain() {
         ComposeBox(
@@ -670,6 +715,9 @@ fn test_complex_chain_actual_measurements() {
 /// Test that padding actually adds the correct number of pixels
 #[test]
 fn test_padding_math_validation() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -707,6 +755,9 @@ fn test_padding_math_validation() {
 /// Test asymmetric padding with different values per side
 #[test]
 fn test_asymmetric_padding_math() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -749,6 +800,9 @@ fn test_asymmetric_padding_math() {
 /// Test that size modifier enforces exact dimensions
 #[test]
 fn test_size_modifier_math() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -784,6 +838,9 @@ fn test_size_modifier_math() {
 /// Test chained padding: padding -> padding should accumulate
 #[test]
 fn test_chained_padding_accumulation() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -826,6 +883,9 @@ fn test_chained_padding_accumulation() {
 /// Test padding + size interaction: order matters
 #[test]
 fn test_padding_size_order_math() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut context = BasicModifierNodeContext::new();
     let measurable = TestMeasurable {
         width: 50.0,
@@ -871,6 +931,9 @@ fn test_padding_size_order_math() {
 /// Test offset modifier doesn't affect measured size
 #[test]
 fn test_offset_doesnt_affect_size() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -907,6 +970,9 @@ fn test_offset_doesnt_affect_size() {
 /// This validates the entire modifier pipeline with real math
 #[test]
 fn test_complex_modifier_chain_math() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -962,6 +1028,9 @@ fn test_complex_modifier_chain_math() {
 /// Test modifier reuse across updates preserves identity
 #[test]
 fn test_modifier_reuse_pointer_identity() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 

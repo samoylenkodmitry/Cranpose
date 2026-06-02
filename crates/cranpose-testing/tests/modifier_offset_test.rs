@@ -7,6 +7,9 @@ use cranpose_ui::*;
 
 #[test]
 fn test_padding_affects_child_position() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         // Box with padding - child should be offset by padding amount
         Box(Modifier::empty().padding(20.0), BoxSpec::default(), || {
@@ -63,6 +66,9 @@ fn test_padding_affects_child_position() {
 
 #[test]
 fn test_offset_modifier_affects_position() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         Column(Modifier::empty(), ColumnSpec::default(), || {
             // First box - no offset
@@ -123,6 +129,9 @@ fn test_offset_modifier_affects_position() {
 
 #[test]
 fn test_padding_and_offset_combined() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         Box(
             Modifier::empty().padding(10.0).offset(20.0, 30.0),
@@ -188,6 +197,9 @@ fn test_padding_and_offset_combined() {
 
 #[test]
 fn test_no_double_offset_application() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // This test verifies that offsets aren't applied twice
     // (once during measure, once during place)
     let mut composition = run_test_composition(|| {
@@ -253,6 +265,9 @@ fn test_no_double_offset_application() {
 
 #[test]
 fn test_nested_padding_accumulates() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         Box(Modifier::empty().padding(10.0), BoxSpec::default(), || {
             Box(Modifier::empty().padding(5.0), BoxSpec::default(), || {

@@ -2,7 +2,10 @@ use crate::text_layout_result::TextLayoutResult;
 use cranpose_core::NodeId;
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::{hash_map::Entry, HashMap, VecDeque};
+use std::hash::Hash;
 use std::ops::Range;
+use std::rc::Rc;
 
 use super::layout_options::{TextLayoutOptions, TextOverflow};
 use super::paragraph::{Hyphens, LineBreak};
@@ -15,6 +18,7 @@ const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 const AUTO_HYPHEN_MIN_SEGMENT_CHARS: usize = 2;
 const AUTO_HYPHEN_MIN_TRAILING_CHARS: usize = 3;
 const AUTO_HYPHEN_PREFERRED_TRAILING_CHARS: usize = 4;
+const TEXT_SERVICE_CACHE_CAPACITY: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextMetrics {
@@ -269,18 +273,217 @@ impl TextMeasurer for MonospacedTextMeasurer {
     }
 }
 
-thread_local! {
-    static TEXT_MEASURER: RefCell<Box<dyn TextMeasurer>> = RefCell::new(Box::new(MonospacedTextMeasurer));
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TextBaseCacheKey {
+    node_id: Option<NodeId>,
+    text_hash: u64,
+    style_hash: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TextOptionsCacheKey {
+    base: TextBaseCacheKey,
+    options: TextLayoutOptions,
+    max_width_bits: Option<u32>,
+}
+
+struct BoundedTextCache<K, V> {
+    capacity: usize,
+    entries: HashMap<K, V>,
+    order: VecDeque<K>,
+}
+
+impl<K, V> BoundedTextCache<K, V>
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+{
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+    }
+
+    fn get(&self, key: &K) -> Option<V> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        match self.entries.entry(key.clone()) {
+            Entry::Occupied(mut entry) => {
+                entry.insert(value);
+                return;
+            }
+            Entry::Vacant(_) => {}
+        }
+        if self.entries.len() == self.capacity {
+            while let Some(evicted) = self.order.pop_front() {
+                if self.entries.remove(&evicted).is_some() {
+                    break;
+                }
+            }
+        }
+        self.order.push_back(key.clone());
+        self.entries.insert(key, value);
+    }
+}
+
+pub(crate) struct TextService {
+    measurer: RefCell<Rc<dyn TextMeasurer>>,
+    metrics_cache: RefCell<BoundedTextCache<TextBaseCacheKey, TextMetrics>>,
+    options_metrics_cache: RefCell<BoundedTextCache<TextOptionsCacheKey, TextMetrics>>,
+    prepared_cache: RefCell<BoundedTextCache<TextOptionsCacheKey, PreparedTextLayout>>,
+    layout_cache: RefCell<BoundedTextCache<TextBaseCacheKey, TextLayoutResult>>,
+}
+
+impl TextService {
+    pub(crate) fn new() -> Self {
+        Self::from_measurer(Rc::new(MonospacedTextMeasurer))
+    }
+
+    pub(crate) fn from_measurer(measurer: Rc<dyn TextMeasurer>) -> Self {
+        Self {
+            measurer: RefCell::new(measurer),
+            metrics_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
+            options_metrics_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
+            prepared_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
+            layout_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
+        }
+    }
+
+    pub(crate) fn set_measurer(&self, measurer: Rc<dyn TextMeasurer>) {
+        *self.measurer.borrow_mut() = measurer;
+        self.clear_caches();
+    }
+
+    pub(crate) fn current_measurer(&self) -> Rc<dyn TextMeasurer> {
+        Rc::clone(&self.measurer.borrow())
+    }
+
+    pub(crate) fn with_measurer<R>(&self, f: impl FnOnce(&dyn TextMeasurer) -> R) -> R {
+        let measurer = self.current_measurer();
+        f(&*measurer)
+    }
+
+    pub(crate) fn measure(
+        &self,
+        node_id: Option<NodeId>,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> TextMetrics {
+        let key = text_base_cache_key(node_id, text, style);
+        if let Some(metrics) = self.metrics_cache.borrow().get(&key) {
+            return metrics;
+        }
+        let metrics = self.with_measurer(|m| m.measure_for_node(node_id, text, style));
+        self.metrics_cache.borrow_mut().insert(key, metrics);
+        metrics
+    }
+
+    pub(crate) fn measure_with_options(
+        &self,
+        node_id: Option<NodeId>,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> TextMetrics {
+        let key = text_options_cache_key(node_id, text, style, options.normalized(), max_width);
+        if let Some(metrics) = self.options_metrics_cache.borrow().get(&key) {
+            return metrics;
+        }
+        let metrics = self.with_measurer(|m| {
+            m.measure_with_options_for_node(node_id, text, style, options.normalized(), max_width)
+        });
+        self.options_metrics_cache.borrow_mut().insert(key, metrics);
+        metrics
+    }
+
+    pub(crate) fn prepare_with_options(
+        &self,
+        node_id: Option<NodeId>,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> PreparedTextLayout {
+        let key = text_options_cache_key(node_id, text, style, options.normalized(), max_width);
+        if let Some(prepared) = self.prepared_cache.borrow().get(&key) {
+            return prepared;
+        }
+        let prepared = self.with_measurer(|m| {
+            m.prepare_with_options_for_node(node_id, text, style, options.normalized(), max_width)
+        });
+        self.prepared_cache
+            .borrow_mut()
+            .insert(key, prepared.clone());
+        self.options_metrics_cache
+            .borrow_mut()
+            .insert(key, prepared.metrics);
+        prepared
+    }
+
+    pub(crate) fn layout(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> TextLayoutResult {
+        let key = text_base_cache_key(None, text, style);
+        if let Some(layout) = self.layout_cache.borrow().get(&key) {
+            return layout;
+        }
+        let layout = self.with_measurer(|m| m.layout(text, style));
+        self.layout_cache.borrow_mut().insert(key, layout.clone());
+        layout
+    }
+
+    fn clear_caches(&self) {
+        self.metrics_cache.borrow_mut().clear();
+        self.options_metrics_cache.borrow_mut().clear();
+        self.prepared_cache.borrow_mut().clear();
+        self.layout_cache.borrow_mut().clear();
+    }
+}
+
+fn text_base_cache_key(
+    node_id: Option<NodeId>,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+) -> TextBaseCacheKey {
+    TextBaseCacheKey {
+        node_id,
+        text_hash: text.render_hash(),
+        style_hash: style.measurement_hash(),
+    }
+}
+
+fn text_options_cache_key(
+    node_id: Option<NodeId>,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+) -> TextOptionsCacheKey {
+    TextOptionsCacheKey {
+        base: text_base_cache_key(node_id, text, style),
+        options: options.normalized(),
+        max_width_bits: normalize_max_width(max_width).map(f32::to_bits),
+    }
 }
 
 pub fn set_text_measurer<M: TextMeasurer>(measurer: M) {
-    TEXT_MEASURER.with(|m| {
-        *m.borrow_mut() = Box::new(measurer);
-    });
+    crate::render_state::set_current_text_measurer(Rc::new(measurer));
 }
 
 pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
-    TEXT_MEASURER.with(|m| m.borrow().measure(text, style))
+    crate::render_state::with_text_service(|service| service.measure(None, text, style))
 }
 
 pub fn measure_text_for_node(
@@ -288,7 +491,7 @@ pub fn measure_text_for_node(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
 ) -> TextMetrics {
-    TEXT_MEASURER.with(|m| m.borrow().measure_for_node(node_id, text, style))
+    crate::render_state::with_text_service(|service| service.measure(node_id, text, style))
 }
 
 pub fn measure_text_with_options(
@@ -297,9 +500,8 @@ pub fn measure_text_with_options(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> TextMetrics {
-    TEXT_MEASURER.with(|m| {
-        m.borrow()
-            .measure_with_options(text, style, options.normalized(), max_width)
+    crate::render_state::with_text_service(|service| {
+        service.measure_with_options(None, text, style, options.normalized(), max_width)
     })
 }
 
@@ -310,14 +512,8 @@ pub fn measure_text_with_options_for_node(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> TextMetrics {
-    TEXT_MEASURER.with(|m| {
-        m.borrow().measure_with_options_for_node(
-            node_id,
-            text,
-            style,
-            options.normalized(),
-            max_width,
-        )
+    crate::render_state::with_text_service(|service| {
+        service.measure_with_options(node_id, text, style, options.normalized(), max_width)
     })
 }
 
@@ -327,9 +523,8 @@ pub fn prepare_text_layout(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> PreparedTextLayout {
-    TEXT_MEASURER.with(|m| {
-        m.borrow()
-            .prepare_with_options(text, style, options.normalized(), max_width)
+    crate::render_state::with_text_service(|service| {
+        service.prepare_with_options(None, text, style, options.normalized(), max_width)
     })
 }
 
@@ -340,14 +535,8 @@ pub fn prepare_text_layout_for_node(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> PreparedTextLayout {
-    TEXT_MEASURER.with(|m| {
-        m.borrow().prepare_with_options_for_node(
-            node_id,
-            text,
-            style,
-            options.normalized(),
-            max_width,
-        )
+    crate::render_state::with_text_service(|service| {
+        service.prepare_with_options(node_id, text, style, options.normalized(), max_width)
     })
 }
 
@@ -357,7 +546,7 @@ pub fn get_offset_for_position(
     x: f32,
     y: f32,
 ) -> usize {
-    TEXT_MEASURER.with(|m| m.borrow().get_offset_for_position(text, style, x, y))
+    crate::render_state::with_text_measurer(|m| m.get_offset_for_position(text, style, x, y))
 }
 
 pub fn get_cursor_x_for_offset(
@@ -365,11 +554,11 @@ pub fn get_cursor_x_for_offset(
     style: &TextStyle,
     offset: usize,
 ) -> f32 {
-    TEXT_MEASURER.with(|m| m.borrow().get_cursor_x_for_offset(text, style, offset))
+    crate::render_state::with_text_measurer(|m| m.get_cursor_x_for_offset(text, style, offset))
 }
 
 pub fn layout_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult {
-    TEXT_MEASURER.with(|m| m.borrow().layout(text, style))
+    crate::render_state::with_text_service(|service| service.layout(text, style))
 }
 
 fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
@@ -1519,6 +1708,7 @@ mod tests {
     use super::*;
     use crate::text::{Hyphens, LineBreak, ParagraphStyle, TextUnit};
     use crate::text_layout_result::TextLayoutResult;
+    use std::cell::Cell;
 
     struct ContractBreakMeasurer {
         retreat: usize,
@@ -1582,6 +1772,116 @@ mod tests {
         }
     }
 
+    struct CountingTextMeasurer {
+        measure_calls: Rc<Cell<usize>>,
+        layout_calls: Rc<Cell<usize>>,
+    }
+
+    impl CountingTextMeasurer {
+        fn new(measure_calls: Rc<Cell<usize>>, layout_calls: Rc<Cell<usize>>) -> Self {
+            Self {
+                measure_calls,
+                layout_calls,
+            }
+        }
+    }
+
+    impl TextMeasurer for CountingTextMeasurer {
+        fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+            self.measure_calls.set(self.measure_calls.get() + 1);
+            MonospacedTextMeasurer.measure(text, style)
+        }
+
+        fn get_offset_for_position(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            x: f32,
+            y: f32,
+        ) -> usize {
+            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+        }
+
+        fn get_cursor_x_for_offset(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            offset: usize,
+        ) -> f32 {
+            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+        }
+
+        fn layout(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+        ) -> TextLayoutResult {
+            self.layout_calls.set(self.layout_calls.get() + 1);
+            MonospacedTextMeasurer.layout(text, style)
+        }
+    }
+
+    #[test]
+    fn text_service_routes_measurement_through_current_measurer() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let service = TextService::from_measurer(Rc::new(MonospacedTextMeasurer));
+        let text = crate::text::AnnotatedString::from("abc");
+        let style = TextStyle::default();
+
+        let metrics = service.with_measurer(|measurer| measurer.measure(&text, &style));
+
+        assert!(metrics.width > 0.0);
+        assert!(metrics.height > 0.0);
+    }
+
+    #[test]
+    fn text_service_caches_metrics_and_layouts_per_context() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let measure_calls = Rc::new(Cell::new(0));
+        let layout_calls = Rc::new(Cell::new(0));
+        let service = TextService::from_measurer(Rc::new(CountingTextMeasurer::new(
+            Rc::clone(&measure_calls),
+            Rc::clone(&layout_calls),
+        )));
+        let text = crate::text::AnnotatedString::from("cached text");
+        let style = TextStyle::default();
+
+        let first_metrics = service.measure(Some(7), &text, &style);
+        let second_metrics = service.measure(Some(7), &text, &style);
+        let first_layout = service.layout(&text, &style);
+        let second_layout = service.layout(&text, &style);
+
+        assert_eq!(first_metrics, second_metrics);
+        assert_eq!(first_layout.width, second_layout.width);
+        assert_eq!(measure_calls.get(), 1);
+        assert_eq!(layout_calls.get(), 1);
+    }
+
+    #[test]
+    fn text_service_clears_caches_when_measurer_changes() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let first_measure_calls = Rc::new(Cell::new(0));
+        let second_measure_calls = Rc::new(Cell::new(0));
+        let layout_calls = Rc::new(Cell::new(0));
+        let service = TextService::from_measurer(Rc::new(CountingTextMeasurer::new(
+            Rc::clone(&first_measure_calls),
+            Rc::clone(&layout_calls),
+        )));
+        let text = crate::text::AnnotatedString::from("cached text");
+        let style = TextStyle::default();
+
+        let _ = service.measure(None, &text, &style);
+        let _ = service.measure(None, &text, &style);
+        service.set_measurer(Rc::new(CountingTextMeasurer::new(
+            Rc::clone(&second_measure_calls),
+            Rc::clone(&layout_calls),
+        )));
+        let _ = service.measure(None, &text, &style);
+
+        assert_eq!(first_measure_calls.get(), 1);
+        assert_eq!(second_measure_calls.get(), 1);
+    }
+
     fn style_with_line_break(line_break: LineBreak) -> TextStyle {
         TextStyle {
             span_style: crate::text::SpanStyle {
@@ -1617,6 +1917,7 @@ mod tests {
 
     #[test]
     fn text_layout_options_wraps_and_limits_lines() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(10.0),
@@ -1644,6 +1945,7 @@ mod tests {
 
     #[test]
     fn text_layout_options_end_ellipsis_applies() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(10.0),
@@ -1670,6 +1972,7 @@ mod tests {
 
     #[test]
     fn text_layout_options_visible_keeps_full_text() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(10.0),
@@ -1696,6 +1999,7 @@ mod tests {
 
     #[test]
     fn text_layout_options_respects_min_lines() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(10.0),
@@ -1721,6 +2025,7 @@ mod tests {
 
     #[test]
     fn text_layout_options_middle_ellipsis_for_single_line() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(10.0),
@@ -1747,6 +2052,7 @@ mod tests {
 
     #[test]
     fn text_layout_options_scale_down_fits_without_rewriting_text() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(20.0),
@@ -1780,6 +2086,7 @@ mod tests {
 
     #[test]
     fn text_layout_options_scale_down_scales_root_shadow() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(20.0),
@@ -1821,6 +2128,7 @@ mod tests {
 
     #[test]
     fn text_layout_options_scale_down_stops_at_minimum_and_clips() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(20.0),
@@ -1852,6 +2160,7 @@ mod tests {
 
     #[test]
     fn scale_annotated_font_sizes_borrows_when_spans_need_no_scaling() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let plain = crate::text::AnnotatedString::from("plain");
         assert!(matches!(
             scale_annotated_font_sizes(&plain, 0.5),
@@ -1874,6 +2183,7 @@ mod tests {
 
     #[test]
     fn scale_annotated_font_sizes_scales_span_shadow_geometry() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let text = crate::text::annotated_string::Builder::new()
             .push_style(crate::text::SpanStyle {
                 shadow: Some(crate::text::Shadow {
@@ -1902,6 +2212,7 @@ mod tests {
 
     #[test]
     fn text_layout_options_does_not_wrap_on_tiny_width_delta() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(10.0),
@@ -1934,6 +2245,7 @@ mod tests {
 
     #[test]
     fn line_break_mode_changes_wrap_strategy_contract() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let text = "This is an example text";
         let options = TextLayoutOptions {
             overflow: TextOverflow::Clip,
@@ -1977,6 +2289,7 @@ mod tests {
 
     #[test]
     fn hyphens_mode_changes_wrap_strategy_contract() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let text = "Transformation";
         let options = TextLayoutOptions {
             overflow: TextOverflow::Clip,
@@ -2014,6 +2327,7 @@ mod tests {
 
     #[test]
     fn hyphens_auto_uses_measurer_hyphen_contract_when_valid() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let text = "Transformation";
         let style = style_with_hyphens(Hyphens::Auto);
         let options = TextLayoutOptions {
@@ -2039,6 +2353,7 @@ mod tests {
 
     #[test]
     fn hyphens_auto_falls_back_when_measurer_hyphen_contract_is_invalid() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let text = "Transformation";
         let style = style_with_hyphens(Hyphens::Auto);
         let options = TextLayoutOptions {
@@ -2064,6 +2379,7 @@ mod tests {
 
     #[test]
     fn transformed_text_keeps_span_ranges_within_display_bounds() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(10.0),
@@ -2098,6 +2414,7 @@ mod tests {
 
     #[test]
     fn wrapped_text_splits_styles_around_inserted_newlines() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(10.0),
@@ -2130,6 +2447,7 @@ mod tests {
 
     #[test]
     fn mixed_font_size_segments_wrap_without_truncation() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
                 font_size: TextUnit::Sp(14.0),

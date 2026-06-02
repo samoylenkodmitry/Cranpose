@@ -24,7 +24,9 @@ impl Composer {
                     debug_scope_label(self.scope.id()),
                 );
                 self.scope.mark_recomposed();
-                self.composer.flush_pending_commands_if_large();
+                if let Err(err) = self.composer.flush_pending_commands_if_large() {
+                    log::error!("mid-recomposition command flush failed: {err}");
+                }
             }
         }
 

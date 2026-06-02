@@ -29,11 +29,12 @@ where
     }
 
     pub(crate) fn process_frame(&mut self) {
-        // Record frame for FPS tracking
-        fps_monitor::record_frame();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.process_frame_in_context());
+    }
 
-        #[cfg(debug_assertions)]
-        let _frame_start = Instant::now();
+    pub(crate) fn process_frame_in_context(&mut self) {
+        let frame_start = Instant::now();
 
         self.run_layout_phase();
 
@@ -46,33 +47,24 @@ where
         let _after_dispatch = Instant::now();
 
         self.run_render_phase();
+        self.fps_monitor
+            .record_frame_work(frame_start, Instant::now());
     }
 
     pub(crate) fn run_layout_phase(&mut self) {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.run_layout_phase_in_context());
+    }
+
+    fn run_layout_phase_in_context(&mut self) {
         let has_scoped_repasses = cranpose_ui::has_pending_layout_repasses();
 
-        // ═══════════════════════════════════════════════════════════════════════════════
-        // GLOBAL LAYOUT INVALIDATION (rare fallback for true global events)
-        // ═══════════════════════════════════════════════════════════════════════════════
-        // This is the "nuclear option" - invalidates ALL layout caches across the entire app.
-        //
-        // WHEN THIS SHOULD FIRE:
-        //   ✓ Window/viewport resize
-        //   ✓ Global font scale or density changes
-        //   ✓ Debug toggles that affect layout globally
-        //
-        // WHEN THIS SHOULD *NOT* FIRE:
-        //   ✗ Scroll (use schedule_layout_repass instead)
-        //   ✗ Single widget updates (use schedule_layout_repass instead)
-        //   ✗ Any local layout change (use schedule_layout_repass instead)
-        //
-        // If you see this firing frequently during normal interactions,
-        // someone is abusing request_layout_invalidation() - investigate!
+        // Global layout invalidation is reserved for app-wide inputs such as
+        // viewport, density, font-scale, or debug layout changes. Normal node
+        // updates should arrive through scoped repasses.
         let invalidation_requested = take_layout_invalidation();
 
         if invalidation_requested && !has_scoped_repasses {
-            // Invalidate all caches (O(app size) - expensive!)
-            // This is internal-only API, only accessible via the internal path
             cranpose_ui::layout::invalidate_all_layout_caches();
 
             // Mark root as needing layout AND measure so tree_needs_layout() returns true
@@ -246,6 +238,11 @@ where
     }
 
     pub(crate) fn run_render_phase(&mut self) {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.run_render_phase_in_context());
+    }
+
+    fn run_render_phase_in_context(&mut self) {
         let render_dirty = take_render_invalidation();
         let pointer_dirty = take_pointer_invalidation();
         take_focus_invalidation();
@@ -307,10 +304,15 @@ where
     fn build_dev_overlay_text(&mut self, viewport_size: Size) -> String {
         self.dev_overlay_controls.clear();
 
-        let stats = fps_monitor::fps_stats();
+        let stats = self.fps_monitor.stats();
         let mut text = format!(
-            "{:.0} FPS | {:.1}ms | {} recomp/s",
-            stats.fps, stats.avg_ms, stats.recomps_per_second
+            "{:.0} FPS | avg {:.1}ms | p95 {:.1}ms | work {:.1}ms | max {:.1}ms | {} recomp/s",
+            stats.fps,
+            stats.avg_ms,
+            stats.p95_ms,
+            stats.work_p95_ms,
+            stats.max_ms,
+            stats.recomps_per_second
         );
 
         if !self.dev_options.frame_pacing_controls {

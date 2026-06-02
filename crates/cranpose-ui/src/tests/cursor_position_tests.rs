@@ -1,11 +1,12 @@
 //! Tests for cursor draw command position in text fields.
 
-use crate::modifier::collect_modifier_slices;
-use crate::text::TextStyle;
+use crate::modifier::{collect_modifier_slices, collect_semantics_from_chain};
+use crate::text::{SpanStyle, TextStyle, TextUnit};
 use crate::text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
 use cranpose_core::{DefaultScheduler, Runtime};
-use cranpose_foundation::text::{TextFieldState, TextRange};
+use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
 use cranpose_foundation::{modifier_element, BasicModifierNodeContext, ModifierNodeChain};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
@@ -28,9 +29,54 @@ fn focused_text_field_chain(state: TextFieldState, style: TextStyle) -> Modifier
     chain
 }
 
+fn element_hash(element: &TextFieldElement) -> u64 {
+    let mut hasher = cranpose_core::hash::default::new();
+    element.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[test]
+fn text_field_element_hash_tracks_style_and_line_limits() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = TextFieldState::new("same");
+        let base = TextFieldElement::new(state.clone(), TextStyle::default());
+        let styled = TextFieldElement::new(
+            state.clone(),
+            TextStyle::from_span_style(SpanStyle {
+                font_size: TextUnit::Sp(18.0),
+                ..SpanStyle::default()
+            }),
+        );
+        let single_line = TextFieldElement::new(state, TextStyle::default())
+            .with_line_limits(TextFieldLineLimits::SingleLine);
+
+        assert_ne!(element_hash(&base), element_hash(&styled));
+        assert_ne!(element_hash(&base), element_hash(&single_line));
+    });
+}
+
+#[test]
+fn text_field_semantics_expose_editable_selection_state() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = TextFieldState::with_selection("Hello World", TextRange::new(1, 5));
+        let chain = focused_text_field_chain(state, TextStyle::default());
+        let semantics = collect_semantics_from_chain(&chain).expect("text field semantics");
+
+        assert_eq!(
+            semantics.content_description.as_deref(),
+            Some("Hello World")
+        );
+        assert!(semantics.is_editable_text);
+        assert_eq!(semantics.text_selection, Some(TextRange::new(1, 5)));
+    });
+}
+
 /// Test that cursor draw command is created when text field is focused.
 #[test]
 fn cursor_draw_command_created_when_focused() {
+    let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = TextFieldState::new("Hello");
         let style = TextStyle::default();
@@ -50,6 +96,7 @@ fn cursor_draw_command_created_when_focused() {
 /// Test that cursor x position matches the width of text before cursor.
 #[test]
 fn cursor_x_position_matches_text_width() {
+    let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = TextFieldState::new("Hello");
         // Cursor should be at end (position 5)
@@ -99,6 +146,7 @@ fn cursor_x_position_matches_text_width() {
 /// Test that cursor position is 0 for empty text.
 #[test]
 fn cursor_at_start_for_empty_text() {
+    let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = TextFieldState::new("");
         let style = TextStyle::default();
@@ -132,6 +180,7 @@ fn cursor_at_start_for_empty_text() {
 /// Test that selection draw command is created when text is selected.
 #[test]
 fn selection_draw_command_created_when_selected() {
+    let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = TextFieldState::with_selection("Hello World", TextRange::new(0, 5));
         let style = TextStyle::default();
@@ -183,6 +232,7 @@ fn selection_draw_command_created_when_selected() {
 /// Test that cursor Y position is at 0 without any padding.
 #[test]
 fn cursor_y_position_at_zero_without_padding() {
+    let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = TextFieldState::new("Test");
         let style = TextStyle::default();

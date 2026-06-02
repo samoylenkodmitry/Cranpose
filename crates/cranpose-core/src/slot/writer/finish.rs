@@ -10,10 +10,12 @@ impl SlotTable {
         state: &mut SlotWriteSessionState,
     ) -> Vec<DetachedSubtree> {
         let (parent_anchor, next_child_index) = {
-            let frame = state
-                .group_stack
-                .last()
-                .expect("detach_unvisited_children requires an active group");
+            let Some(frame) = state.group_stack.last() else {
+                log::error!(
+                    "slot writer detach_unvisited_children called with an empty group stack"
+                );
+                return Vec::new();
+            };
             (frame.group_anchor, frame.next_child_index)
         };
         let cursor = ChildCursor::new(parent_anchor, next_child_index);
@@ -28,17 +30,12 @@ impl SlotTable {
         state: &mut SlotWriteSessionState,
     ) -> FinishGroupResult {
         let (group_anchor, payload_cursor, node_cursor, was_skipped) = {
-            let frame = state
-                .group_stack
-                .last_mut()
-                .expect("finish_group_body requires an active group");
+            let Some(frame) = state.group_stack.last_mut() else {
+                log::error!("slot writer finish_group_body called with an empty group stack");
+                return FinishGroupResult::empty();
+            };
             if !frame.mark_body_finished() {
-                return FinishGroupResult {
-                    detached_children: Vec::new(),
-                    direct_nodes: Vec::new(),
-                    root_nodes: Vec::new(),
-                    was_skipped: false,
-                };
+                return FinishGroupResult::empty();
             }
 
             (

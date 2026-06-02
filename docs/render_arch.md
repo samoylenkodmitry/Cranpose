@@ -156,7 +156,8 @@ The renderer branch is not considered done unless this bar is green:
 - `cargo fmt`
 - `cargo test > 1.tmp 2>&1`
 - `cargo clippy > 2.tmp 2>&1`
-- `cargo tree --duplicates`
+- `cargo xtask dependency-budget`
+- `cargo xtask binary-size --package isolated-demo --bin isolated-demo --profile release-small --max-bytes 29360128`
 - `apps/desktop-demo/build-web.sh`
 - `apps/android-demo/android/./gradlew :app:assembleRelease`
 - `./run_robot_test.sh --sequential`
@@ -165,7 +166,7 @@ When a renderer change touches crispness, placement, or screenshot correctness,
 the review loop also includes:
 
 1. run `robot_renderer_micro_contract`
-2. inspect `/tmp/cranpose_renderer_micro_contract.png`
+2. inspect the readback and presented-window images under `CRANPOSE_ROBOT_OUTPUT_DIR` or `TMPDIR`
 3. use `robot_measure_shaders` visual-compare mode when a full demo surface is
    needed
 4. compare logical output against `docs/render-reference/main_renderer_micro_contract.png`, not raw PNG size alone

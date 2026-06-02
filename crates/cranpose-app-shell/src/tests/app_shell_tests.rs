@@ -12,7 +12,7 @@ use cranpose_ui::{
     PointerInputScope, Rect, RenderOp, Row, RowSpec, ScrollState, Size, Text, TextStyle,
     VerticalAlignment,
 };
-use cranpose_ui_graphics::{DrawPrimitive, GraphicsLayer, Point, RoundedCornerShape};
+use cranpose_ui_graphics::{DrawPrimitive, GraphicsLayer, Point, RenderEffect, RoundedCornerShape};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -20,11 +20,13 @@ use std::time::Duration;
 
 fn test_guard() -> MutexGuard<'static, ()> {
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    TEST_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("test lock poisoned")
+    match TEST_LOCK.get_or_init(|| Mutex::new(())).lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
+
+fn reset_public_render_state_for_test() {}
 
 fn layout_tree_texts(tree: &cranpose_ui::LayoutTree) -> Vec<String> {
     fn collect(node: &cranpose_ui::LayoutBox, out: &mut Vec<String>) {
@@ -140,6 +142,18 @@ thread_local! {
 
 thread_local! {
     static APP_SHELL_FRAME_TIME_RECORDS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+thread_local! {
+    static APP_SHELL_INITIAL_DENSITIES: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellCaptureInitialDensity() {
+    APP_SHELL_INITIAL_DENSITIES.with(|densities| {
+        densities.borrow_mut().push(cranpose_ui::current_density());
+    });
 }
 
 #[composable]
@@ -519,6 +533,80 @@ impl RenderScene for RecordingScene {
 }
 
 #[derive(Clone)]
+struct AppContextProbeHitTarget {
+    node_id: cranpose_core::NodeId,
+    densities: Rc<RefCell<Vec<f32>>>,
+}
+
+impl HitTestTarget for AppContextProbeHitTarget {
+    fn dispatch(&self, _event: PointerEvent) {
+        self.densities
+            .borrow_mut()
+            .push(cranpose_ui::current_density());
+    }
+
+    fn node_id(&self) -> cranpose_core::NodeId {
+        self.node_id
+    }
+
+    fn capture_path(&self) -> Vec<cranpose_core::NodeId> {
+        vec![self.node_id]
+    }
+}
+
+struct AppContextProbeScene {
+    target: AppContextProbeHitTarget,
+}
+
+impl RenderScene for AppContextProbeScene {
+    type HitTarget = AppContextProbeHitTarget;
+
+    fn clear(&mut self) {}
+
+    fn hit_test(&self, _x: f32, _y: f32) -> Vec<Self::HitTarget> {
+        vec![self.target.clone()]
+    }
+
+    fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget> {
+        (node_id == self.target.node_id).then(|| self.target.clone())
+    }
+}
+
+struct AppContextProbeRenderer {
+    scene: AppContextProbeScene,
+}
+
+impl Renderer for AppContextProbeRenderer {
+    type Scene = AppContextProbeScene;
+    type Error = ();
+
+    fn scene(&self) -> &Self::Scene {
+        &self.scene
+    }
+
+    fn scene_mut(&mut self) -> &mut Self::Scene {
+        &mut self.scene
+    }
+
+    fn rebuild_scene(
+        &mut self,
+        _layout_tree: &LayoutTree,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        _applier: &mut cranpose_core::MemoryApplier,
+        _root: cranpose_core::NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
 struct MutableRecordingScene {
     hits: Rc<RefCell<Vec<RecordingHitTarget>>>,
 }
@@ -547,14 +635,143 @@ impl RenderScene for MutableRecordingScene {
     }
 }
 
+struct FixedWidthTextMeasurer(f32);
+
+impl cranpose_ui::TextMeasurer for FixedWidthTextMeasurer {
+    fn measure(
+        &self,
+        _text: &cranpose_ui::text::AnnotatedString,
+        _style: &cranpose_ui::TextStyle,
+    ) -> cranpose_ui::TextMetrics {
+        cranpose_ui::TextMetrics {
+            width: self.0,
+            height: 1.0,
+            line_height: 1.0,
+            line_count: 1,
+        }
+    }
+
+    fn get_offset_for_position(
+        &self,
+        _text: &cranpose_ui::text::AnnotatedString,
+        _style: &cranpose_ui::TextStyle,
+        _x: f32,
+        _y: f32,
+    ) -> usize {
+        0
+    }
+
+    fn get_cursor_x_for_offset(
+        &self,
+        _text: &cranpose_ui::text::AnnotatedString,
+        _style: &cranpose_ui::TextStyle,
+        _offset: usize,
+    ) -> f32 {
+        self.0
+    }
+
+    fn layout(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        _style: &cranpose_ui::TextStyle,
+    ) -> cranpose_ui::TextLayoutResult {
+        cranpose_ui::TextLayoutResult::monospaced(&text.text, self.0, 1.0)
+    }
+}
+
+struct CountingFixedWidthTextMeasurer {
+    width: f32,
+    measure_calls: Rc<Cell<usize>>,
+}
+
+impl CountingFixedWidthTextMeasurer {
+    fn new(width: f32, measure_calls: Rc<Cell<usize>>) -> Self {
+        Self {
+            width,
+            measure_calls,
+        }
+    }
+}
+
+impl cranpose_ui::TextMeasurer for CountingFixedWidthTextMeasurer {
+    fn measure(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::TextStyle,
+    ) -> cranpose_ui::TextMetrics {
+        self.measure_calls.set(self.measure_calls.get() + 1);
+        FixedWidthTextMeasurer(self.width).measure(text, style)
+    }
+
+    fn get_offset_for_position(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::TextStyle,
+        x: f32,
+        y: f32,
+    ) -> usize {
+        FixedWidthTextMeasurer(self.width).get_offset_for_position(text, style, x, y)
+    }
+
+    fn get_cursor_x_for_offset(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::TextStyle,
+        offset: usize,
+    ) -> f32 {
+        FixedWidthTextMeasurer(self.width).get_cursor_x_for_offset(text, style, offset)
+    }
+
+    fn layout(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::TextStyle,
+    ) -> cranpose_ui::TextLayoutResult {
+        FixedWidthTextMeasurer(self.width).layout(text, style)
+    }
+}
+
 #[derive(Default)]
 struct TestRenderer {
     scene: TestScene,
+    text_width: Option<f32>,
+    text_measure_calls: Option<Rc<Cell<usize>>>,
+}
+
+impl TestRenderer {
+    fn with_text_width(width: f32) -> Self {
+        Self {
+            scene: TestScene,
+            text_width: Some(width),
+            text_measure_calls: None,
+        }
+    }
+
+    fn with_counting_text_width(width: f32, measure_calls: Rc<Cell<usize>>) -> Self {
+        Self {
+            scene: TestScene,
+            text_width: Some(width),
+            text_measure_calls: Some(measure_calls),
+        }
+    }
 }
 
 impl Renderer for TestRenderer {
     type Scene = TestScene;
     type Error = ();
+
+    fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
+        if let Some(text_width) = self.text_width {
+            if let Some(measure_calls) = self.text_measure_calls.clone() {
+                app_context.set_text_measurer(CountingFixedWidthTextMeasurer::new(
+                    text_width,
+                    measure_calls,
+                ));
+            } else {
+                app_context.set_text_measurer(FixedWidthTextMeasurer(text_width));
+            }
+        }
+    }
 
     fn scene(&self) -> &Self::Scene {
         &self.scene
@@ -580,6 +797,247 @@ impl Renderer for TestRenderer {
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+}
+
+#[test]
+fn two_app_shells_do_not_share_density_or_render_invalidations() {
+    let _guard = test_guard();
+    reset_public_render_state_for_test();
+
+    let mut first = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    let mut second = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+
+    first.update();
+    second.update();
+    assert!(!first.needs_redraw());
+    assert!(!second.needs_redraw());
+
+    first.set_density(2.0);
+    assert_eq!(first.debug_current_density(), 2.0);
+    assert_eq!(second.debug_current_density(), 1.0);
+    assert!(first.needs_redraw());
+    assert!(first.frame_schedule().needs_frame);
+    assert!(!second.needs_redraw());
+    assert!(!second.frame_schedule().needs_frame);
+
+    first.update();
+    assert!(!first.needs_redraw());
+    assert!(!first.frame_schedule().needs_frame);
+
+    first.set_frame_pacing_mode(FramePacingMode::Hard60);
+    assert!(first.needs_redraw());
+    assert!(first.frame_schedule().needs_frame);
+    assert!(!second.needs_redraw());
+}
+
+#[test]
+fn app_shell_initial_composition_uses_constructor_density() {
+    let _guard = test_guard();
+    APP_SHELL_INITIAL_DENSITIES.with(|densities| densities.borrow_mut().clear());
+
+    let shell = AppShell::new_with_size_and_density(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        AppShellCaptureInitialDensity,
+        (1600, 900),
+        (800.0, 450.0),
+        2.0,
+    );
+
+    assert_eq!(shell.debug_current_density(), 2.0);
+    let observed = APP_SHELL_INITIAL_DENSITIES.with(|densities| densities.borrow().clone());
+    assert!(
+        !observed.is_empty(),
+        "initial composition should read density during shell construction"
+    );
+    assert!(
+        observed.iter().all(|density| *density == 2.0),
+        "initial composition densities should all use constructor density, got {observed:?}"
+    );
+}
+
+#[test]
+fn app_shell_scene_rebuilds_after_backdrop_effect_state_change() {
+    let _guard = test_guard();
+    APP_SHELL_BACKDROP_RADIUS_STATE.with(|slot| {
+        slot.borrow_mut().take();
+    });
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_backdrop_radius_content,
+    );
+
+    shell.update();
+    let initial_radii = graph_backdrop_blur_radii(
+        &shell
+            .scene()
+            .graph
+            .as_ref()
+            .expect("initial graph should be built")
+            .root,
+    );
+    assert_eq!(initial_radii, vec![0.0]);
+
+    let radius = APP_SHELL_BACKDROP_RADIUS_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("radius state should be registered");
+    radius.set_value(18.0);
+    shell.update();
+
+    let updated_radii = graph_backdrop_blur_radii(
+        &shell
+            .scene()
+            .graph
+            .as_ref()
+            .expect("updated graph should be built")
+            .root,
+    );
+    assert_eq!(updated_radii, vec![18.0]);
+}
+
+#[test]
+fn two_app_shells_do_not_share_fps_stats() {
+    let _guard = test_guard();
+    reset_public_render_state_for_test();
+
+    let mut first = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    let second = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+
+    let first_start = first.fps_stats().frame_count;
+    let second_start = second.fps_stats().frame_count;
+
+    first.update_at_frame_time_nanos(16_000_000);
+    first.update_at_frame_time_nanos(32_000_000);
+
+    assert_eq!(first.fps_stats().frame_count, first_start + 2);
+    assert_eq!(second.fps_stats().frame_count, second_start);
+}
+
+#[test]
+fn two_app_shells_do_not_share_text_measurers() {
+    let _guard = test_guard();
+    reset_public_render_state_for_test();
+
+    let first = AppShell::new(
+        TestRenderer::with_text_width(11.0),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    let second = AppShell::new(
+        TestRenderer::with_text_width(29.0),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    let text = cranpose_ui::text::AnnotatedString::from("same text");
+    let style = cranpose_ui::TextStyle::default();
+
+    let first_width =
+        first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
+    let second_width =
+        second.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
+    let first_width_again =
+        first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
+
+    assert_eq!(first_width, 11.0);
+    assert_eq!(second_width, 29.0);
+    assert_eq!(first_width_again, 11.0);
+}
+
+#[test]
+fn two_app_shells_have_independent_text_caches() {
+    let _guard = test_guard();
+    reset_public_render_state_for_test();
+
+    let first_calls = Rc::new(Cell::new(0));
+    let second_calls = Rc::new(Cell::new(0));
+    let first = AppShell::new(
+        TestRenderer::with_counting_text_width(11.0, Rc::clone(&first_calls)),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    let second = AppShell::new(
+        TestRenderer::with_counting_text_width(29.0, Rc::clone(&second_calls)),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    let text = cranpose_ui::text::AnnotatedString::from("same cached text");
+    let style = cranpose_ui::TextStyle::default();
+
+    let first_width =
+        first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
+    let first_width_again =
+        first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
+    let second_width =
+        second.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
+    let second_width_again =
+        second.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
+    let first_width_after_second =
+        first.debug_enter_app_context(|| cranpose_ui::measure_text(&text, &style).width);
+
+    assert_eq!(first_width, 11.0);
+    assert_eq!(first_width_again, 11.0);
+    assert_eq!(second_width, 29.0);
+    assert_eq!(second_width_again, 29.0);
+    assert_eq!(first_width_after_second, 11.0);
+    assert_eq!(
+        first_calls.get(),
+        1,
+        "first shell should reuse its own text cache and not be invalidated by measuring in the second shell"
+    );
+    assert_eq!(
+        second_calls.get(),
+        1,
+        "second shell should populate and reuse an independent text cache"
+    );
+}
+
+#[test]
+fn pointer_dispatch_enters_shell_app_context() {
+    let _guard = test_guard();
+    reset_public_render_state_for_test();
+
+    let densities = Rc::new(RefCell::new(Vec::new()));
+    let scene = AppContextProbeScene {
+        target: AppContextProbeHitTarget {
+            node_id: 1,
+            densities: densities.clone(),
+        },
+    };
+    let renderer = AppContextProbeRenderer { scene };
+    let mut shell = AppShell::new(renderer, location_key(file!(), line!(), column!()), || {});
+
+    shell.set_density(2.5);
+    assert!(shell.set_cursor(12.0, 24.0));
+
+    let observed = densities.borrow();
+    assert!(
+        !observed.is_empty(),
+        "pointer dispatch should reach the probe target"
+    );
+    assert!(
+        observed
+            .iter()
+            .all(|density| density.to_bits() == 2.5f32.to_bits()),
+        "pointer dispatch observed densities {observed:?}",
+    );
 }
 
 struct ScrollDispatchRenderer {
@@ -925,6 +1383,67 @@ impl Renderer for HitGraphRenderer {
     }
 }
 
+thread_local! {
+    static APP_SHELL_BACKDROP_RADIUS_STATE: RefCell<Option<MutableState<f32>>> =
+        const { RefCell::new(None) };
+}
+
+#[composable]
+fn app_shell_backdrop_radius_content() {
+    let radius = useState(|| 0.0f32);
+    APP_SHELL_BACKDROP_RADIUS_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(radius);
+    });
+
+    Box(
+        Modifier::empty()
+            .size_points(128.0, 96.0)
+            .draw_behind(|scope| {
+                scope.draw_rect(Brush::solid(Color::from_rgba_u8(30, 40, 60, 255)));
+            }),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .absolute_offset(16.0, 16.0)
+                    .size_points(96.0, 56.0)
+                    .graphics_layer_value(GraphicsLayer {
+                        render_effect: Some(RenderEffect::blur(0.0)),
+                        ..GraphicsLayer::default()
+                    }),
+                BoxSpec::default(),
+                move || {
+                    Box(
+                        Modifier::empty()
+                            .absolute_offset(40.0, 12.0)
+                            .size_points(42.0, 30.0)
+                            .backdrop_effect(RenderEffect::blur(radius.get())),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        },
+    );
+}
+
+fn graph_backdrop_blur_radii(layer: &cranpose_render_common::graph::LayerNode) -> Vec<f32> {
+    fn collect(layer: &cranpose_render_common::graph::LayerNode, out: &mut Vec<f32>) {
+        if let Some(RenderEffect::Blur { radius_x, .. }) = &layer.graphics_layer.backdrop_effect {
+            out.push(*radius_x);
+        }
+        for child in &layer.children {
+            if let cranpose_render_common::graph::RenderNode::Layer(child_layer) = child {
+                collect(child_layer, out);
+            }
+        }
+    }
+
+    let mut radii = Vec::new();
+    collect(layer, &mut radii);
+    radii
+}
+
 #[composable]
 fn tabbed_progress_content() {
     let progress = useState(|| 0.6f32);
@@ -1210,19 +1729,40 @@ fn draw_observed_width_app(width_state: cranpose_core::MutableState<f32>) {
     );
 }
 
-struct DeleteSurroundingHandler {
+#[derive(Default)]
+struct TextFieldDispatchProbe {
+    pasted_text: RefCell<Option<String>>,
+    cut_in_event_handler: Cell<bool>,
+    cut_in_applied_snapshot: Cell<bool>,
+    paste_in_event_handler: Cell<bool>,
+    paste_in_applied_snapshot: Cell<bool>,
+    preedit_text: RefCell<Option<(String, Option<(usize, usize)>)>>,
+    preedit_in_event_handler: Cell<bool>,
+    preedit_in_applied_snapshot: Cell<bool>,
     last_delete: Cell<Option<(usize, usize)>>,
+    delete_in_event_handler: Cell<bool>,
+    delete_in_applied_snapshot: Cell<bool>,
 }
 
-impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for DeleteSurroundingHandler {
+impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for TextFieldDispatchProbe {
     fn handle_key(&self, _event: &cranpose_ui::KeyEvent) -> bool {
         false
     }
 
-    fn insert_text(&self, _text: &str) {}
+    fn insert_text(&self, text: &str) {
+        self.pasted_text.replace(Some(text.to_string()));
+        self.paste_in_event_handler
+            .set(cranpose_core::in_event_handler());
+        self.paste_in_applied_snapshot
+            .set(cranpose_core::in_applied_snapshot());
+    }
 
     fn delete_surrounding(&self, before_bytes: usize, after_bytes: usize) {
         self.last_delete.set(Some((before_bytes, after_bytes)));
+        self.delete_in_event_handler
+            .set(cranpose_core::in_event_handler());
+        self.delete_in_applied_snapshot
+            .set(cranpose_core::in_applied_snapshot());
     }
 
     fn copy_selection(&self) -> Option<String> {
@@ -1230,10 +1770,20 @@ impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for DeleteSurroundin
     }
 
     fn cut_selection(&self) -> Option<String> {
-        None
+        self.cut_in_event_handler
+            .set(cranpose_core::in_event_handler());
+        self.cut_in_applied_snapshot
+            .set(cranpose_core::in_applied_snapshot());
+        Some("cut text".to_string())
     }
 
-    fn set_composition(&self, _text: &str, _cursor: Option<(usize, usize)>) {}
+    fn set_composition(&self, text: &str, cursor: Option<(usize, usize)>) {
+        self.preedit_text.replace(Some((text.to_string(), cursor)));
+        self.preedit_in_event_handler
+            .set(cranpose_core::in_event_handler());
+        self.preedit_in_applied_snapshot
+            .set(cranpose_core::in_applied_snapshot());
+    }
 }
 
 #[test]
@@ -1273,15 +1823,54 @@ fn ime_delete_surrounding_marks_dirty() {
     assert!(!shell.needs_redraw());
 
     let focus_flag = Rc::new(RefCell::new(false));
-    let handler = Rc::new(DeleteSurroundingHandler {
-        last_delete: Cell::new(None),
-    });
+    let handler = Rc::new(TextFieldDispatchProbe::default());
 
-    cranpose_ui::text_field_focus::request_focus(focus_flag, handler.clone());
+    shell.debug_enter_app_context(|| {
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+    });
     assert!(shell.on_ime_delete_surrounding(2, 1));
     assert_eq!(handler.last_delete.get(), Some((2, 1)));
     assert!(shell.needs_redraw());
-    cranpose_ui::text_field_focus::clear_focus();
+    shell.debug_enter_app_context(cranpose_ui::text_field_focus::clear_focus);
+}
+
+#[test]
+fn text_mutation_platform_events_run_inside_event_and_applied_snapshot_scopes() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.update();
+
+    let focus_flag = Rc::new(RefCell::new(false));
+    let handler = Rc::new(TextFieldDispatchProbe::default());
+
+    shell.debug_enter_app_context(|| {
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+    });
+
+    assert!(shell.on_paste("hello"));
+    assert_eq!(handler.pasted_text.borrow().as_deref(), Some("hello"));
+    assert!(handler.paste_in_event_handler.get());
+    assert!(handler.paste_in_applied_snapshot.get());
+
+    assert_eq!(shell.on_cut().as_deref(), Some("cut text"));
+    assert!(handler.cut_in_event_handler.get());
+    assert!(handler.cut_in_applied_snapshot.get());
+
+    assert!(shell.on_ime_preedit("preedit", Some((1, 4))));
+    assert_eq!(
+        handler.preedit_text.borrow().as_ref(),
+        Some(&("preedit".to_string(), Some((1, 4))))
+    );
+    assert!(handler.preedit_in_event_handler.get());
+    assert!(handler.preedit_in_applied_snapshot.get());
+
+    assert!(shell.on_ime_delete_surrounding(2, 1));
+    assert_eq!(handler.last_delete.get(), Some((2, 1)));
+    assert!(handler.delete_in_event_handler.get());
+    assert!(handler.delete_in_applied_snapshot.get());
+
+    shell.debug_enter_app_context(cranpose_ui::text_field_focus::clear_focus);
 }
 
 #[test]
@@ -1830,10 +2419,13 @@ fn draw_repass_updates_render_data_without_layout() {
         .expect("width state should be captured");
     width_state.set(120.0);
 
-    shell
-        .composition
-        .process_invalid_scopes()
-        .expect("recompose after width change");
+    let app_context = Rc::clone(&shell.app_context);
+    app_context.enter(|| {
+        shell
+            .composition
+            .process_invalid_scopes()
+            .expect("recompose after width change");
+    });
     shell.run_render_phase();
     assert!(
         shell.layout_tree.is_some(),
@@ -2084,7 +2676,8 @@ fn render_invalidation_without_scene_changes_rebuilds_scene() {
     shell.update();
     rebuilds.set(0);
 
-    cranpose_ui::request_render_invalidation();
+    let app_context = Rc::clone(&shell.app_context);
+    app_context.enter(cranpose_ui::request_render_invalidation);
     shell.run_render_phase();
 
     assert_eq!(
@@ -2116,8 +2709,11 @@ fn pointer_invalidation_without_scene_changes_rebuilds_scene() {
             node.mark_needs_pointer_pass();
         })
         .expect("expected layout root node");
-    cranpose_ui::schedule_pointer_repass(root);
-    cranpose_ui::request_pointer_invalidation();
+    let app_context = Rc::clone(&shell.app_context);
+    app_context.enter(|| {
+        cranpose_ui::schedule_pointer_repass(root);
+        cranpose_ui::request_pointer_invalidation();
+    });
 
     shell.process_frame();
 
@@ -2159,8 +2755,11 @@ fn focus_invalidation_without_scene_changes_skips_rebuild() {
             node.mark_needs_focus_sync();
         })
         .expect("expected layout root node");
-    cranpose_ui::schedule_focus_invalidation(root);
-    cranpose_ui::request_focus_invalidation();
+    let app_context = Rc::clone(&shell.app_context);
+    app_context.enter(|| {
+        cranpose_ui::schedule_focus_invalidation(root);
+        cranpose_ui::request_focus_invalidation();
+    });
 
     shell.process_frame();
 

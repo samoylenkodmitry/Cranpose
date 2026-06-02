@@ -101,13 +101,17 @@ impl Future for NextFrame {
                 drop(state);
                 let state = Rc::downgrade(&self.state);
                 let registration = self.clock.with_frame_nanos(move |time| {
-                    if let Some(state) = state.upgrade() {
+                    let Some(state) = state.upgrade() else {
+                        return;
+                    };
+                    let (registration, waker) = {
                         let mut state = state.borrow_mut();
                         state.time = Some(time);
-                        state.registration.take();
-                        if let Some(waker) = state.waker.take() {
-                            waker.wake();
-                        }
+                        (state.registration.take(), state.waker.take())
+                    };
+                    drop(registration);
+                    if let Some(waker) = waker {
+                        waker.wake();
                     }
                 });
                 self.state.borrow_mut().registration = Some(registration);
@@ -154,5 +158,63 @@ impl Drop for FrameCallbackRegistration {
         if let Some(id) = self.id.take() {
             self.runtime.cancel_frame_callback(id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DefaultScheduler, Runtime};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+
+    thread_local! {
+        static REENTRANT_NEXT_FRAME_STATE: RefCell<Option<Rc<RefCell<NextFrameState>>>> =
+            const { RefCell::new(None) };
+    }
+
+    struct BorrowNextFrameStateOnWake;
+
+    impl Wake for BorrowNextFrameStateOnWake {
+        fn wake(self: Arc<Self>) {
+            REENTRANT_NEXT_FRAME_STATE.with(|slot| {
+                let state = slot.borrow();
+                let Some(state) = state.as_ref() else {
+                    return;
+                };
+                let _time = state.borrow().time;
+            });
+        }
+    }
+
+    #[test]
+    fn next_frame_wakes_after_releasing_state_borrow() {
+        let runtime = Runtime::new(Arc::new(DefaultScheduler));
+        let handle = runtime.handle();
+        let clock = runtime.frame_clock();
+        let mut next_frame = Box::pin(clock.next_frame());
+
+        REENTRANT_NEXT_FRAME_STATE.with(|slot| {
+            *slot.borrow_mut() = Some(Rc::clone(&next_frame.state));
+        });
+
+        let waker = Waker::from(Arc::new(BorrowNextFrameStateOnWake));
+        let mut context = Context::from_waker(&waker);
+        assert_eq!(next_frame.as_mut().poll(&mut context), Poll::Pending);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            handle.drain_frame_callbacks(123);
+        }));
+
+        REENTRANT_NEXT_FRAME_STATE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+
+        assert!(
+            result.is_ok(),
+            "next_frame must release its state borrow before waking the task"
+        );
+        assert_eq!(next_frame.as_mut().poll(&mut context), Poll::Ready(123));
     }
 }

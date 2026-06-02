@@ -1,6 +1,6 @@
 use cranpose_ui::{
-    collect_slices_from_modifier, Color, ColorFilter, GraphicsLayer, LayerShape, Modifier,
-    RenderEffect, RoundedCornerShape, TransformOrigin,
+    collect_slices_from_modifier, AppContext, Color, ColorFilter, GraphicsLayer, LayerShape,
+    Modifier, RenderEffect, RoundedCornerShape, TransformOrigin,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -102,24 +102,28 @@ fn stacked_tint_modifiers_compose_in_graphics_layer() {
 
 #[test]
 fn graphics_layer_state_writes_auto_request_render_invalidation() {
-    let runtime =
-        cranpose_core::runtime::Runtime::new(Arc::new(cranpose_core::runtime::DefaultScheduler));
-    let x_state = cranpose_core::MutableState::with_runtime(10.0f32, runtime.handle());
+    let app_context = AppContext::new();
+    app_context.enter(|| {
+        let runtime = cranpose_core::runtime::Runtime::new(Arc::new(
+            cranpose_core::runtime::DefaultScheduler,
+        ));
+        let x_state = cranpose_core::MutableState::with_runtime(10.0f32, runtime.handle());
 
-    let modifier = Modifier::empty().graphics_layer(move || GraphicsLayer {
-        translation_x: x_state.get(),
-        ..Default::default()
+        let modifier = Modifier::empty().graphics_layer(move || GraphicsLayer {
+            translation_x: x_state.get(),
+            ..Default::default()
+        });
+        let slices = collect_slices_from_modifier(&modifier);
+
+        let _ = cranpose_ui::take_render_invalidation();
+        let layer = slices.graphics_layer().expect("layer expected");
+        assert!((layer.translation_x - 10.0).abs() < 1e-6);
+
+        x_state.set(42.0);
+        assert!(cranpose_ui::take_render_invalidation());
+        let updated = slices.graphics_layer().expect("layer expected");
+        assert!((updated.translation_x - 42.0).abs() < 1e-6);
     });
-    let slices = collect_slices_from_modifier(&modifier);
-
-    let _ = cranpose_ui::take_render_invalidation();
-    let layer = slices.graphics_layer().expect("layer expected");
-    assert!((layer.translation_x - 10.0).abs() < 1e-6);
-
-    x_state.set(42.0);
-    assert!(cranpose_ui::take_render_invalidation());
-    let updated = slices.graphics_layer().expect("layer expected");
-    assert!((updated.translation_x - 42.0).abs() < 1e-6);
 }
 
 #[test]

@@ -164,6 +164,23 @@ pub trait MeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult;
 
+    /// Runs measurement into caller-owned placement storage.
+    ///
+    /// The default preserves the public [`MeasurePolicy::measure`] contract for custom
+    /// policies. Built-in policies override this to avoid allocating a fresh placement
+    /// vector on every measure pass.
+    fn measure_into(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        placements: &mut Vec<Placement>,
+    ) -> Size {
+        let result = self.measure(measurables, constraints);
+        placements.clear();
+        placements.extend(result.placements);
+        result.size
+    }
+
     /// Computes the minimum intrinsic width of this policy.
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32;
 

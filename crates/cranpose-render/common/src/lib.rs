@@ -1,5 +1,9 @@
 //! Common rendering contracts shared between renderer backends.
 
+#![deny(unsafe_code)]
+
+pub mod bounded_lru_cache;
+pub mod brush_sampling;
 pub mod font_layout;
 pub mod geometry;
 pub mod graph;
@@ -88,6 +92,13 @@ pub trait RenderScene {
 pub trait Renderer {
     type Scene: RenderScene;
     type Error;
+
+    /// Installs renderer-provided app services into the target AppContext.
+    ///
+    /// AppShell calls this before the first composition pass.
+    /// Renderers that provide text measurement or other per-app services should install
+    /// them here rather than as constructor side effects.
+    fn attach_app_context_services(&mut self, _app_context: &cranpose_ui::AppContext) {}
 
     fn scene(&self) -> &Self::Scene;
     fn scene_mut(&mut self) -> &mut Self::Scene;

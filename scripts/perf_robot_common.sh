@@ -3,6 +3,8 @@
 readonly DEFAULT_PERF_SCENARIOS=(
     lazy_list_scroll
     text_heavy_scroll
+    markdown_scroll
+    markdown_viewer_scroll
     backdrop_blur
     opaque_scene
 )
@@ -10,7 +12,7 @@ readonly DEFAULT_PERF_SCENARIOS=(
 is_valid_perf_scenario() {
     local scenario="$1"
     case "$scenario" in
-        lazy_list_scroll|text_heavy_scroll|backdrop_blur|opaque_scene)
+        lazy_list_scroll|text_heavy_scroll|markdown_scroll|markdown_viewer_scroll|backdrop_blur|opaque_scene)
             return 0
             ;;
         *)
@@ -54,6 +56,12 @@ append_perf_summary_block() {
         memory_line=$(extract_perf_summary_line "PERF_MEMORY_SUMMARY" "$log_file")
         local fps_line
         fps_line=$(extract_perf_summary_line "PERF_FPS_SUMMARY" "$log_file")
+        local fps_budget_line
+        fps_budget_line=$(extract_perf_summary_line "PERF_FPS_BUDGET" "$log_file")
+        local p95_budget_line
+        p95_budget_line=$(extract_perf_summary_line "PERF_FRAME_P95_BUDGET" "$log_file")
+        local stall_budget_line
+        stall_budget_line=$(extract_perf_summary_line "PERF_STALL_BUDGET" "$log_file")
         local complete_line
         complete_line=$(extract_perf_summary_line "PERF_SCENARIO_COMPLETE" "$log_file")
 
@@ -73,6 +81,18 @@ append_perf_summary_block() {
             echo "$fps_line"
         else
             echo "PERF_FPS_SUMMARY missing"
+        fi
+
+        if [[ -n "$fps_budget_line" ]]; then
+            echo "$fps_budget_line"
+        fi
+
+        if [[ -n "$p95_budget_line" ]]; then
+            echo "$p95_budget_line"
+        fi
+
+        if [[ -n "$stall_budget_line" ]]; then
+            echo "$stall_budget_line"
         fi
 
         if [[ -n "$complete_line" ]]; then

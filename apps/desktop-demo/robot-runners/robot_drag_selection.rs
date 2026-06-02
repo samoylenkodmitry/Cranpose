@@ -85,11 +85,10 @@ fn main() {
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(50));
 
-                // Check focus - note: has_focused_field() may not work in robot context
-                let focused = cranpose_ui::has_focused_field();
+                let focused = robot.has_focused_text_field().unwrap_or(false);
                 println!("  • Field focused (has_focused_field): {}", focused);
                 if !focused {
-                    println!("    (Note: has_focused_field() may return false in robot tests due to thread-local storage)");
+                    println!("    (Note: app-thread focus query returned false)");
                 }
 
                 // Drag across (3 steps)
@@ -105,11 +104,13 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(100));
 
-                // Verify still focused - note: has_focused_field() may not work in robot context
-                let still_focused = cranpose_ui::has_focused_field();
-                println!("  • Still focused after drag (has_focused_field): {}", still_focused);
+                let still_focused = robot.has_focused_text_field().unwrap_or(false);
+                println!(
+                    "  • Still focused after drag (has_focused_field): {}",
+                    still_focused
+                );
                 if !still_focused {
-                    println!("    (Note: has_focused_field() may return false in robot tests due to thread-local storage)");
+                    println!("    (Note: app-thread focus query returned false)");
                 }
 
                 println!("\n✓ PASS: Click-drag selection test completed");

@@ -1,4 +1,6 @@
-use crate::effect_renderer::{CompositeSampleMode, RoundedCompositeMask};
+use crate::effect_renderer::{
+    CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
+};
 use crate::normalized_scene::CollectedLayer;
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{
@@ -54,8 +56,9 @@ pub(crate) struct DevicePixelBounds {
 
 pub(crate) trait SurfaceExecutionBackend {
     fn max_texture_dim(&self) -> u32;
-    fn acquire_offscreen(&mut self, width: u32, height: u32) -> OffscreenTarget;
-    fn release_offscreen(&mut self, target: OffscreenTarget);
+    fn acquire_retained_surface(&mut self, width: u32, height: u32) -> OffscreenTarget;
+    fn acquire_frame_surface(&mut self, width: u32, height: u32) -> OffscreenTarget;
+    fn release_frame_surface(&mut self, target: OffscreenTarget);
     fn release_layer_surface_target(&mut self, target: LayerSurfaceTexture);
     fn cached_layer_surface(
         &mut self,
@@ -78,13 +81,14 @@ pub(crate) trait SurfaceExecutionBackend {
     fn layer_surface_requirements(&mut self, layer: &LayerNode) -> LayerSurfaceRequirements;
     fn collect_layer_contents_with_translation_context<'a>(
         &mut self,
+        text_state: &mut TextSystemState,
         layer: &'a LayerNode,
         inherited_clip: Option<Rect>,
         inherited_translated_snap_anchor: Option<SnapAnchor>,
         translation_context: TranslationRenderContext,
     ) -> CollectedLayer<'a>;
     fn clear_target_view_with_load_op(
-        &self,
+        &mut self,
         target_view: &wgpu::TextureView,
         load_op: wgpu::LoadOp<wgpu::Color>,
     );
@@ -136,13 +140,6 @@ pub(crate) trait SurfaceExecutionBackend {
         height: u32,
         root_scale: f32,
     );
-    fn composite_to_view(
-        &mut self,
-        source: &OffscreenTarget,
-        dest_view: &wgpu::TextureView,
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        sample_mode: CompositeSampleMode,
-    );
     #[allow(clippy::too_many_arguments)]
     fn composite_to_view_projective(
         &mut self,
@@ -158,6 +155,12 @@ pub(crate) trait SurfaceExecutionBackend {
         blend_mode: BlendMode,
         sample_mode: CompositeSampleMode,
     );
+    fn composite_projective_surfaces_to_view(
+        &mut self,
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        composites: &[ProjectiveSurfaceComposite<'_>],
+    );
     #[allow(clippy::too_many_arguments)]
     fn composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
         &mut self,
@@ -171,18 +174,24 @@ pub(crate) trait SurfaceExecutionBackend {
         dest_viewport: Option<(f32, f32, f32, f32)>,
         sample_mode: CompositeSampleMode,
     );
-    fn apply_effect(
+    #[allow(clippy::too_many_arguments)]
+    fn apply_effect_and_composite_to_view(
         &mut self,
         source: &OffscreenTarget,
-        dest_view: &wgpu::TextureView,
         effect: &RenderEffect,
         effect_rect: [f32; 4],
-    );
+        dest_view: &wgpu::TextureView,
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        blend_mode: BlendMode,
+        dest_viewport: Option<(f32, f32, f32, f32)>,
+        sample_mode: CompositeSampleMode,
+    ) -> Result<(), String>;
     #[allow(clippy::too_many_arguments)]
     fn apply_shader_and_composite_to_view(
         &mut self,
         source: &OffscreenTarget,
-        intermediate: &OffscreenTarget,
         shader: &RuntimeShader,
         effect_rect: [f32; 4],
         dest_view: &wgpu::TextureView,
@@ -193,6 +202,40 @@ pub(crate) trait SurfaceExecutionBackend {
         dest_viewport: Option<(f32, f32, f32, f32)>,
         sample_mode: CompositeSampleMode,
     );
+    #[allow(clippy::too_many_arguments)]
+    fn apply_shader_and_composite_to_view_projective(
+        &mut self,
+        source: &OffscreenTarget,
+        shader: &RuntimeShader,
+        effect_rect: [f32; 4],
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        source_size: (f32, f32),
+        inverse_matrix: [[f32; 3]; 3],
+        dest_bounds: [[f32; 2]; 4],
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        blend_mode: BlendMode,
+        sample_mode: CompositeSampleMode,
+    );
+    #[allow(clippy::too_many_arguments)]
+    fn apply_effect_and_composite_to_view_projective(
+        &mut self,
+        source: &OffscreenTarget,
+        effect: &RenderEffect,
+        effect_rect: [f32; 4],
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        source_size: (f32, f32),
+        inverse_matrix: [[f32; 3]; 3],
+        dest_bounds: [[f32; 2]; 4],
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        blend_mode: BlendMode,
+        sample_mode: CompositeSampleMode,
+    ) -> Result<(), String>;
     fn is_render_effect_supported(&self, effect: &RenderEffect) -> bool;
     fn warn_unsupported_effect_once(&self);
     fn record_layer_cache_miss(&self, width: u32, height: u32);

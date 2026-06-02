@@ -43,6 +43,9 @@ fn simple_button_app(clicked_count: MutableState<i32>) {
 
 #[test]
 fn test_button_creates_valid_composition() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // This test verifies that Button widgets can be created within a composition.
     // The Button widget should internally apply Modifier.clickable() to connect
     // the on_click handler to the pointer input system.
@@ -148,6 +151,9 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
 
 #[test]
 fn test_multiple_buttons_in_composition() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // Test that multiple buttons can coexist and each has its own click handler
 
     let mut rule = ComposeTestRule::new();

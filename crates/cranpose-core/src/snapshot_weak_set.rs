@@ -192,6 +192,14 @@ mod tests {
             self.head.read().unwrap().clone()
         }
 
+        fn try_readable_record(
+            &self,
+            snapshot_id: SnapshotId,
+            invalid: &SnapshotIdSet,
+        ) -> Option<Rc<crate::state::StateRecord>> {
+            Some(self.readable_record(snapshot_id, invalid))
+        }
+
         fn readable_record(
             &self,
             _snapshot_id: SnapshotId,

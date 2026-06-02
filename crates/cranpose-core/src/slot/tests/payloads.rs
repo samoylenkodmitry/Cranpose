@@ -15,6 +15,13 @@ fn compose_single_i32_value_slot(harness: &mut SlotHarness, key: Key, value: i32
 }
 
 #[test]
+fn slot_storage_ids_do_not_use_process_global_counter() {
+    let source = include_str!("../table.rs");
+    assert!(!source.contains("NEXT_SLOT_STORAGE_ID"));
+    assert!(!source.contains("fetch_add(1, Ordering::Relaxed)"));
+}
+
+#[test]
 fn payload_records_store_semantic_payload_kinds() {
     let mut harness = SlotHarness::new();
 
@@ -62,6 +69,244 @@ fn payload_records_store_semantic_payload_kinds() {
             super::PayloadKind::Internal,
         ]
     );
+}
+
+#[test]
+fn payload_cleanup_with_stale_owner_anchor_does_not_panic() {
+    const GROUP_KEY: Key = 52_001;
+
+    let mut harness = SlotHarness::new();
+    let _slot = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 17);
+    let owner = harness.table.payload_owner_at(0, 0);
+
+    harness.table.anchors.mark_detached(owner);
+
+    assert!(harness
+        .table
+        .remove_payload_tail_at_cursor(owner, 0)
+        .is_empty());
+    harness
+        .table
+        .refresh_group_payload_anchor_locations(owner, 0);
+
+    assert_eq!(harness.table.total_payload_count(), 1);
+}
+
+#[test]
+fn payload_segment_insert_rejects_out_of_range_offset_without_mutating() {
+    let owner = AnchorId::new(1);
+    let mut groups = vec![GroupRecord {
+        key: GroupKey::new(52_002, None, 0),
+        parent_anchor: AnchorId::INVALID,
+        depth: 0,
+        subtree_len: 1,
+        payload_start: 0,
+        payload_len: 1,
+        node_start: 0,
+        node_len: 0,
+        subtree_node_count: 0,
+        generation: 0,
+        anchor: owner,
+        scope_id: None,
+    }];
+    let mut payloads = vec![17_i32];
+
+    crate::slot::segments::insert_group_segment_item::<crate::slot::segments::PayloadSegment, _>(
+        &mut groups,
+        &mut payloads,
+        0,
+        usize::MAX,
+        23_i32,
+    );
+
+    assert_eq!(payloads, vec![17_i32]);
+    assert_eq!(groups[0].payload_len, 1);
+}
+
+#[test]
+fn value_payload_insertion_rejects_exhausted_anchor_ids_without_mutating() {
+    const GROUP_KEY: Key = 52_003;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    let owner = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        session
+            .state
+            .group_stack
+            .last()
+            .expect("test group frame should be active")
+            .group_anchor
+    });
+    harness
+        .table
+        .set_next_payload_anchor_for_test(u32::MAX as usize + 1);
+
+    let payload = harness
+        .table
+        .insert_value_payload(owner, 0, PayloadKind::Internal, 17_i32);
+
+    assert_eq!(payload, PayloadAnchor::INVALID);
+    assert!(harness.table.group_payload_records_at(0).is_empty());
+    assert_eq!(harness.table.total_payload_count(), 0);
+    let result = harness.session(|session| {
+        let result = session.finish_group_body();
+        session.end_group();
+        result
+    });
+    assert!(result.detached_children.is_empty());
+    harness.finish_pass();
+}
+
+#[test]
+fn payload_range_with_mismatched_owner_is_ignored() {
+    const PARENT_KEY: Key = 52_011;
+    const FIRST_CHILD_KEY: Key = 52_012;
+    const SECOND_CHILD_KEY: Key = 52_013;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let (first_slot, second_slot) = harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        begin_unkeyed(session, FIRST_CHILD_KEY, None);
+        let first_slot = session.value_slot_with_kind(PayloadKind::Internal, || 17_i32);
+        let first_result = session.finish_group_body();
+        assert!(first_result.detached_children.is_empty());
+        session.end_group();
+
+        begin_unkeyed(session, SECOND_CHILD_KEY, None);
+        let second_slot = session.value_slot_with_kind(PayloadKind::Internal, || 29_i32);
+        let second_result = session.finish_group_body();
+        assert!(second_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+
+        (first_slot, second_slot)
+    });
+    harness.finish_pass();
+
+    let first_owner = harness.table.groups[1].anchor;
+    let second_range = harness.table.group_payload_subrange_at(2, 0, 1);
+
+    let removed = harness
+        .table
+        .remove_payload_range(first_owner, second_range);
+
+    assert!(removed.is_empty());
+    assert_eq!(harness.table.total_payload_count(), 2);
+    assert_eq!(*harness.table.read_value::<i32>(first_slot), 17);
+    assert_eq!(*harness.table.read_value::<i32>(second_slot), 29);
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
+fn payload_range_outside_current_group_segment_is_ignored() {
+    const GROUP_KEY: Key = 52_014;
+
+    let mut harness = SlotHarness::new();
+    let slot = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 17);
+    let owner = harness.table.groups[0].anchor;
+    let stale_range = crate::slot::GroupPayloadRange::from_range(
+        crate::slot::ranges::GroupItemRange::new(0, crate::slot::PayloadRange::new(0, 2), 0, 2),
+        0,
+    );
+
+    let removed = harness.table.remove_payload_range(owner, stale_range);
+
+    assert!(removed.is_empty());
+    assert_eq!(harness.table.total_payload_count(), 1);
+    assert_eq!(*harness.table.read_value::<i32>(slot), 17);
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
+fn payload_tail_cleanup_repairs_corrupt_group_payload_len() {
+    const GROUP_KEY: Key = 52_002;
+
+    let mut harness = SlotHarness::new();
+    let original = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 17);
+    harness.table.groups[0].payload_len = 2;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let reused = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 99_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+
+    assert_eq!(reused, original);
+    assert_eq!(harness.table.groups[0].payload_len, 1);
+    assert_eq!(harness.table.total_payload_count(), 1);
+    assert_eq!(*harness.table.read_value::<i32>(reused), 17);
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
+fn payload_subrange_with_corrupt_segment_start_is_empty() {
+    const GROUP_KEY: Key = 52_003;
+
+    let mut harness = SlotHarness::new();
+    let _slot = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 17);
+
+    harness.table.groups[0].payload_start = u32::MAX;
+
+    let range = harness.table.group_payload_subrange_at(0, 0, 1);
+
+    assert!(range.is_empty());
+    assert_eq!(harness.table.total_payload_count(), 1);
+}
+
+#[test]
+fn payload_location_refresh_ignores_corrupt_group_payload_range() {
+    const GROUP_KEY: Key = 52_004;
+
+    let mut harness = SlotHarness::new();
+    let _slot = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 17);
+    let owner = harness.table.payload_owner_at(0, 0);
+
+    harness.table.groups[0].payload_start = u32::MAX;
+
+    harness
+        .table
+        .refresh_group_payload_anchor_locations(owner, 0);
+    assert!(harness.table.group_payload_records_at(0).is_empty());
+    assert_eq!(harness.table.total_payload_count(), 1);
+}
+
+#[test]
+fn value_payload_reuses_after_corrupt_group_payload_start_repair() {
+    const GROUP_KEY: Key = 52_005;
+
+    let mut harness = SlotHarness::new();
+    let _slot = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 17);
+
+    harness.table.groups[0].payload_start = u32::MAX;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let repaired = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 99_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+
+    assert_eq!(*harness.table.read_value::<i32>(repaired), 17);
+    assert_eq!(harness.table.groups[0].payload_len, 1);
+    assert_eq!(harness.table.groups[0].payload_start, 0);
+    assert_eq!(harness.table.total_payload_count(), 1);
+    assert_eq!(harness.table.validate(), Ok(()));
 }
 
 #[test]
@@ -337,8 +582,7 @@ fn same_table_value_slot_read_write_respects_storage_identity() {
 }
 
 #[test]
-#[should_panic(expected = "value slot belongs to a different slot table")]
-fn cross_table_value_slot_read_panics_before_anchor_resolution() {
+fn cross_table_value_slot_read_reports_foreign_table_before_anchor_resolution() {
     let mut first = SlotHarness::new();
     let first_slot = compose_single_i32_value_slot(&mut first, 18, 55);
 
@@ -347,11 +591,19 @@ fn cross_table_value_slot_read_panics_before_anchor_resolution() {
 
     assert_eq!(first_slot.anchor(), second_slot.anchor());
     assert_ne!(first_slot.storage_id(), second_slot.storage_id());
-    let _ = second.table.read_value::<i32>(first_slot);
+    assert_eq!(
+        second.table.try_read_value::<i32>(first_slot),
+        Err(ValueSlotError::ForeignTable {
+            table_storage_id: second.table.storage_id(),
+            slot_storage_id: first_slot.storage_id(),
+        })
+    );
+    assert_eq!(*first.table.read_value::<i32>(first_slot), 55);
+    assert_eq!(*second.table.read_value::<i32>(second_slot), 89);
 }
 
 #[test]
-fn cross_table_value_slot_write_does_not_alias_matching_anchor() {
+fn cross_table_value_slot_write_reports_foreign_table_before_anchor_resolution() {
     let mut first = SlotHarness::new();
     let first_slot = compose_single_i32_value_slot(&mut first, 21, 55);
 
@@ -360,12 +612,12 @@ fn cross_table_value_slot_write_does_not_alias_matching_anchor() {
 
     assert_eq!(first_slot.anchor(), second_slot.anchor());
     assert_ne!(first_slot.storage_id(), second_slot.storage_id());
-    let cross_table_write = panic::catch_unwind(AssertUnwindSafe(|| {
-        second.table.write_value(first_slot, 144_i32);
-    }));
-    assert!(
-        cross_table_write.is_err(),
-        "cross-table value-slot writes must fail before touching matching anchors"
+    assert_eq!(
+        second.table.try_write_value(first_slot, 144_i32),
+        Err(ValueSlotError::ForeignTable {
+            table_storage_id: second.table.storage_id(),
+            slot_storage_id: first_slot.storage_id(),
+        })
     );
     assert_eq!(*first.table.read_value::<i32>(first_slot), 55);
     assert_eq!(*second.table.read_value::<i32>(second_slot), 89);
@@ -437,6 +689,45 @@ fn value_slot_type_replacement_advances_generation() {
         stale_read.is_err(),
         "replaced value slot handles must fail instead of reading the replacement"
     );
+}
+
+#[test]
+fn value_slot_type_replacement_recovers_stale_payload_anchor_record() {
+    const GROUP_KEY: Key = 58;
+
+    let mut harness = SlotHarness::new();
+    let first_slot = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 7);
+    let stale_anchor = harness.table.payload_anchor_at(0, 0);
+    assert_eq!(first_slot.anchor(), stale_anchor);
+    assert!(harness.table.payload_anchors.invalidate(stale_anchor));
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let second_slot = harness.session(|session| {
+        begin_unkeyed(session, GROUP_KEY, None);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 11_u32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+
+    assert_ne!(
+        second_slot.anchor(),
+        stale_anchor,
+        "stale payload anchor records must be replaced with a fresh active anchor"
+    );
+    assert_eq!(
+        harness.table.payload_anchor_active_location(stale_anchor),
+        None
+    );
+    assert_eq!(
+        harness
+            .table
+            .payload_anchor_active_location(second_slot.anchor()),
+        Some((harness.table.payload_owner_at(0, 0), 0))
+    );
+    assert_eq!(*harness.table.read_value::<u32>(second_slot), 11);
 }
 
 #[test]

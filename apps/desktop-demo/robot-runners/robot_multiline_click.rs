@@ -8,7 +8,7 @@
 
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use cranpose_ui::{measure_text, TextStyle};
+use cranpose_ui::TextStyle;
 use desktop_app::app;
 use std::time::Duration;
 
@@ -109,11 +109,17 @@ fn main() {
                 let _ = robot.exit();
                 return;
             };
-            let line_height = measure_text(
+            let line_height = match robot.measure_text(
                 &cranpose::text::AnnotatedString::from("A"),
                 &TextStyle::default(),
-            )
-            .line_height;
+            ) {
+                Ok(metrics) => metrics.line_height,
+                Err(err) => {
+                    println!("✗ FAIL: Could not measure text through robot context: {err}");
+                    let _ = robot.exit();
+                    return;
+                }
+            };
             let lines = 3.0_f32;
             let extra_height = (th - line_height * lines).max(0.0);
             let padding_top = extra_height / 2.0;

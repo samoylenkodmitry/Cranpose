@@ -1,19 +1,12 @@
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 //! High level utilities for running Cranpose applications with minimal boilerplate.
 
-#[cfg(not(any(
-    feature = "desktop",
-    feature = "android",
-    feature = "web",
-    feature = "ios"
-)))]
+#[cfg(all(feature = "ios", target_os = "ios"))]
 compile_error!(
-    "cranpose must be built with at least one of `desktop`, `android`, `web`, or `ios` features."
+    "cranpose iOS support requires a real UIKit/CAMetalLayer backend and is unavailable."
 );
-
-#[cfg(not(any(feature = "renderer-pixels", feature = "renderer-wgpu")))]
-compile_error!("cranpose requires either `renderer-pixels` or `renderer-wgpu` feature.");
 
 #[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
 mod android_host_window;
@@ -21,6 +14,8 @@ mod android_host_window;
 mod android_jni;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_overlay_window;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+mod android_surface;
 mod launcher;
 mod native_window;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
@@ -36,9 +31,23 @@ pub use native_window::{
     WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
     WindowResizeDirection, WindowState,
 };
-#[cfg(feature = "renderer-wgpu")]
+#[cfg(all(
+    feature = "renderer-wgpu",
+    any(
+        feature = "desktop",
+        all(feature = "android", target_os = "android"),
+        all(feature = "web", target_arch = "wasm32")
+    )
+))]
 mod present_mode;
-#[cfg(feature = "renderer-wgpu")]
+#[cfg(all(
+    feature = "renderer-wgpu",
+    any(
+        feature = "desktop",
+        all(feature = "android", target_os = "android"),
+        all(feature = "web", target_arch = "wasm32")
+    )
+))]
 mod wgpu_surface;
 
 /// Re-export framework services (HTTP, URI, etc.) from the dedicated services crate.
@@ -93,14 +102,6 @@ pub mod web;
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
 pub use desktop::{Robot, RobotScreenshot, SemanticElement, SemanticRect};
 
-/// FPS monitoring API - use these to track frame rate for performance optimization.
-///
-/// - `current_fps()` - Get current FPS value
-/// - `fps_stats()` - Get detailed frame statistics (avg ms, recomps/sec)
-/// - `fps_display()` - Get formatted FPS string for display
-/// - `fps_display_detailed()` - Get detailed stats string
+/// Development frame pacing and FPS statistics types.
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
-pub use cranpose_app_shell::{
-    current_fps, fps_display, fps_display_detailed, fps_stats, DevOptions, FpsStats,
-    FramePacingMode,
-};
+pub use cranpose_app_shell::{DevOptions, FpsStats, FramePacingMode};

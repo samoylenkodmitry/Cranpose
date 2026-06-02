@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::task::{Context, Poll, Waker};
 use std::thread::ThreadId;
@@ -24,7 +24,7 @@ enum UiMessage {
     Invoke { id: u64, value: Box<dyn Any + Send> },
 }
 
-type UiContinuation = Box<dyn Fn(Box<dyn Any>) + 'static>;
+type UiContinuation = Box<dyn Fn(Box<dyn Any>) -> bool + 'static>;
 type UiContinuationMap = HashMap<u64, UiContinuation>;
 
 struct TypedStateCell<T: Clone + 'static> {
@@ -101,17 +101,8 @@ impl StateArena {
     ) -> StateId {
         let (slot, generation) = {
             let mut inner = self.inner.borrow_mut();
-            match inner.free.pop() {
-                Some(slot) => {
-                    let entry = inner
-                        .cells
-                        .get_mut(slot as usize)
-                        .expect("state slot missing");
-                    debug_assert!(entry.cell.is_none(), "reused state slot must be empty");
-                    entry.generation = entry.generation.wrapping_add(1);
-                    (slot, entry.generation)
-                }
-                None => {
+            loop {
+                let Some(slot) = inner.free.pop() else {
                     let slot = inner.cells.len() as u32;
                     inner.cells.push(StateArenaSlot {
                         generation: 0,
@@ -119,8 +110,20 @@ impl StateArena {
                         watcher_cell: None,
                         lease: None,
                     });
-                    (slot, 0)
+                    break (slot, 0);
+                };
+
+                let Some(entry) = inner.cells.get_mut(slot as usize) else {
+                    continue;
+                };
+                if entry.cell.is_some() {
+                    continue;
                 }
+
+                entry.watcher_cell = None;
+                entry.lease = None;
+                entry.generation = entry.generation.wrapping_add(1);
+                break (slot, entry.generation);
             }
         };
         let id = StateId::new(slot, generation);
@@ -240,13 +243,11 @@ impl StateArena {
     pub(crate) fn register_lease(&self, id: StateId, lease: &Rc<StateHandleLease>) {
         let mut inner = self.inner.borrow_mut();
         let Some(slot) = inner.cells.get_mut(id.slot_index()) else {
-            panic!("state slot missing");
+            return;
         };
-        assert_eq!(
-            slot.generation,
-            id.generation(),
-            "state generation mismatch"
-        );
+        if slot.generation != id.generation() {
+            return;
+        }
         slot.lease = Some(Rc::downgrade(lease));
     }
 
@@ -289,8 +290,11 @@ pub struct RuntimeId(u32);
 
 impl RuntimeId {
     fn next() -> Self {
-        static NEXT_RUNTIME_ID: AtomicU32 = AtomicU32::new(1);
-        Self(NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed))
+        NEXT_RUNTIME_ID.with(|next| {
+            let id = next.get();
+            next.set(id.wrapping_add(1));
+            Self(id)
+        })
     }
 }
 
@@ -311,14 +315,20 @@ impl UiDispatcherInner {
 
     fn post(&self, task: impl FnOnce() + Send + 'static) {
         self.pending.fetch_add(1, Ordering::SeqCst);
-        let _ = self.tx.send(UiMessage::Task(Box::new(task)));
-        self.scheduler.schedule_frame();
+        if self.tx.send(UiMessage::Task(Box::new(task))).is_ok() {
+            self.scheduler.schedule_frame();
+        } else {
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
     fn post_invoke(&self, id: u64, value: Box<dyn Any + Send>) {
         self.pending.fetch_add(1, Ordering::SeqCst);
-        let _ = self.tx.send(UiMessage::Invoke { id, value });
-        self.scheduler.schedule_frame();
+        if self.tx.send(UiMessage::Invoke { id, value }).is_ok() {
+            self.scheduler.schedule_frame();
+        } else {
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
     fn has_pending(&self) -> bool {
@@ -338,8 +348,21 @@ impl<'a> PendingGuard<'a> {
 
 impl<'a> Drop for PendingGuard<'a> {
     fn drop(&mut self) {
-        let previous = self.counter.fetch_sub(1, Ordering::SeqCst);
-        debug_assert!(previous > 0, "UI dispatcher pending count underflowed");
+        let mut current = self.counter.load(Ordering::SeqCst);
+        loop {
+            if current == 0 {
+                return;
+            }
+            match self.counter.compare_exchange(
+                current,
+                current - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return,
+                Err(next) => current = next,
+            }
+        }
     }
 }
 
@@ -388,6 +411,7 @@ struct RuntimeInner {
     task_waker: RefCell<Option<Waker>>,
     state_arena: StateArena,
     external_state_owners: RefCell<HashMap<StateId, Rc<StateHandleLease>>>,
+    live_recompose_scope_count: Cell<usize>,
     runtime_id: RuntimeId,
 }
 
@@ -419,13 +443,13 @@ impl RuntimeInner {
             task_waker: RefCell::new(None),
             state_arena: StateArena::default(),
             external_state_owners: RefCell::new(HashMap::default()),
+            live_recompose_scope_count: Cell::new(0),
             runtime_id: RuntimeId::next(),
         }
     }
 
     fn init_task_waker(this: &Rc<Self>) {
-        let weak = Rc::downgrade(this);
-        let waker = RuntimeTaskWaker::new(weak).into_waker();
+        let waker = RuntimeTaskWaker::new(this).into_waker();
         *this.task_waker.borrow_mut() = Some(waker);
     }
 
@@ -483,6 +507,20 @@ impl RuntimeInner {
 
     fn has_invalid_scopes(&self) -> bool {
         !self.invalid_scopes.borrow().is_empty()
+    }
+
+    fn increment_live_recompose_scope_count(&self) {
+        self.live_recompose_scope_count
+            .set(self.live_recompose_scope_count.get().saturating_add(1));
+    }
+
+    fn decrement_live_recompose_scope_count(&self) {
+        self.live_recompose_scope_count
+            .set(self.live_recompose_scope_count.get().saturating_sub(1));
+    }
+
+    fn live_recompose_scope_count(&self) -> usize {
+        self.live_recompose_scope_count.get()
     }
 
     fn has_frame_callbacks(&self) -> bool {
@@ -613,14 +651,14 @@ impl RuntimeInner {
         self.ui_conts.borrow_mut().insert(
             id,
             Box::new(move |value: Box<dyn Any>| {
-                let slot = callback
-                    .borrow_mut()
-                    .take()
-                    .expect("UI continuation invoked more than once");
-                let value = value
-                    .downcast::<T>()
-                    .expect("UI continuation type mismatch");
+                let Ok(value) = value.downcast::<T>() else {
+                    return false;
+                };
+                let Some(slot) = callback.borrow_mut().take() else {
+                    return true;
+                };
                 slot(*value);
+                true
             }),
         );
         id
@@ -632,9 +670,12 @@ impl RuntimeInner {
             self.ui_thread_id,
             "UI continuation invoked off the runtime thread",
         );
-        if let Some(callback) = self.ui_conts.borrow_mut().remove(&id) {
+        let callback = { self.ui_conts.borrow_mut().remove(&id) };
+        if let Some(callback) = callback {
             let value: Box<dyn Any> = value;
-            callback(value);
+            if !callback(value) {
+                self.ui_conts.borrow_mut().insert(id, callback);
+            }
         }
     }
 
@@ -936,10 +977,12 @@ impl RuntimeHandle {
     }
 
     pub(crate) fn with_state_arena<R>(&self, f: impl FnOnce(&StateArena) -> R) -> R {
-        self.inner
-            .upgrade()
-            .map(|inner| f(&inner.state_arena))
+        self.try_with_state_arena(f)
             .unwrap_or_else(|| panic!("runtime dropped"))
+    }
+
+    pub(crate) fn try_with_state_arena<R>(&self, f: impl FnOnce(&StateArena) -> R) -> Option<R> {
+        self.inner.upgrade().map(|inner| f(&inner.state_arena))
     }
 
     fn release_state_immediate(&self, id: StateId) {
@@ -949,11 +992,13 @@ impl RuntimeHandle {
     }
 
     pub fn state_arena_stats(&self) -> (usize, usize) {
-        self.with_state_arena(StateArena::stats)
+        self.try_with_state_arena(StateArena::stats)
+            .unwrap_or_default()
     }
 
     pub fn state_arena_debug_stats(&self) -> StateArenaDebugStats {
-        self.with_state_arena(StateArena::debug_stats)
+        self.try_with_state_arena(StateArena::debug_stats)
+            .unwrap_or_default()
     }
 
     pub fn debug_stats(&self) -> RuntimeDebugStats {
@@ -1123,6 +1168,25 @@ impl RuntimeHandle {
             .unwrap_or(false)
     }
 
+    pub(crate) fn increment_live_recompose_scope_count(&self) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.increment_live_recompose_scope_count();
+        }
+    }
+
+    pub(crate) fn decrement_live_recompose_scope_count(&self) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.decrement_live_recompose_scope_count();
+        }
+    }
+
+    fn live_recompose_scope_count(&self) -> usize {
+        self.inner
+            .upgrade()
+            .map(|inner| inner.live_recompose_scope_count())
+            .unwrap_or_default()
+    }
+
     #[doc(hidden)]
     pub fn debug_invalid_scope_ids(&self) -> Vec<usize> {
         self.inner
@@ -1168,19 +1232,27 @@ pub(crate) struct FrameCallbackEntry {
     callback: Option<Box<dyn FnOnce(u64) + 'static>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct RuntimeTaskWaker {
     scheduler: Arc<dyn RuntimeScheduler>,
 }
 
+#[cfg(target_arch = "wasm32")]
+struct RuntimeTaskWaker {
+    runtime_id: RuntimeId,
+}
+
 impl RuntimeTaskWaker {
-    fn new(inner: Weak<RuntimeInner>) -> Self {
-        // Extract the Arc<RuntimeScheduler> which IS Send+Sync
-        // This way we can wake the runtime without storing the Rc::Weak
-        let scheduler = inner
-            .upgrade()
-            .map(|rc| rc.scheduler.clone())
-            .expect("RuntimeInner dropped before waker created");
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new(inner: &RuntimeInner) -> Self {
+        let scheduler = inner.scheduler.clone();
         Self { scheduler }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn new(inner: &RuntimeInner) -> Self {
+        let runtime_id = inner.runtime_id;
+        Self { runtime_id }
     }
 
     fn into_waker(self) -> Waker {
@@ -1189,12 +1261,23 @@ impl RuntimeTaskWaker {
 }
 
 impl futures_task::ArcWake for RuntimeTaskWaker {
+    #[cfg(not(target_arch = "wasm32"))]
     fn wake_by_ref(arc_self: &Arc<Self>) {
         arc_self.scheduler.schedule_frame();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        REGISTERED_RUNTIMES.with(|registry| {
+            if let Some(handle) = registry.borrow().get(&arc_self.runtime_id).cloned() {
+                handle.schedule();
+            }
+        });
     }
 }
 
 thread_local! {
+    static NEXT_RUNTIME_ID: Cell<u32> = const { Cell::new(1) };
     static ACTIVE_RUNTIMES: RefCell<Vec<RuntimeHandle>> = const { RefCell::new(Vec::new()) };
     static LAST_RUNTIME: RefCell<Option<RuntimeHandle>> = const { RefCell::new(None) };
     static REGISTERED_RUNTIMES: RefCell<HashMap<RuntimeId, RuntimeHandle>> = RefCell::new(HashMap::default());
@@ -1225,6 +1308,16 @@ pub fn current_runtime_handle() -> Option<RuntimeHandle> {
 
 pub(crate) fn runtime_handle_by_id(id: RuntimeId) -> Option<RuntimeHandle> {
     REGISTERED_RUNTIMES.with(|registry| registry.borrow().get(&id).cloned())
+}
+
+pub(crate) fn live_recompose_scope_count() -> usize {
+    REGISTERED_RUNTIMES.with(|registry| {
+        registry
+            .borrow()
+            .values()
+            .map(RuntimeHandle::live_recompose_scope_count)
+            .sum()
+    })
 }
 
 pub fn debug_runtime_thread_local_stats() -> RuntimeThreadLocalDebugStats {
@@ -1323,13 +1416,157 @@ pub fn schedule_frame() {
         handle.schedule();
         return;
     }
-    panic!("no runtime available to schedule frame");
+    log::debug!(
+        target: "cranpose::runtime",
+        "ignoring frame request without an active runtime",
+    );
 }
 
 /// Schedule an in-place node update using the most recently active runtime.
 pub fn schedule_node_update(
     update: impl FnOnce(&mut dyn Applier) -> Result<(), NodeError> + 'static,
 ) {
-    let handle = current_runtime_handle().expect("no runtime available to schedule node update");
-    handle.enqueue_node_update(Command::callback(update));
+    if let Some(handle) = current_runtime_handle() {
+        handle.enqueue_node_update(Command::callback(update));
+    } else {
+        drop(update);
+        log::debug!(
+            target: "cranpose::runtime",
+            "ignoring node update request without an active runtime",
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_arena_alloc_skips_free_slot_outside_cell_storage() {
+        let runtime = TestRuntime::new();
+        let arena = StateArena::default();
+        let first = arena.alloc(1_i32, runtime.handle());
+        arena.inner.borrow_mut().free.push(u32::MAX);
+
+        let second = arena.alloc(2_i32, runtime.handle());
+
+        assert_eq!(first.slot(), 0);
+        assert_eq!(second.slot(), 1);
+        assert!(arena.get_typed_opt::<i32>(first).is_some());
+        assert!(arena.get_typed_opt::<i32>(second).is_some());
+    }
+
+    #[test]
+    fn state_arena_alloc_skips_occupied_free_slot() {
+        let runtime = TestRuntime::new();
+        let arena = StateArena::default();
+        let first = arena.alloc(1_i32, runtime.handle());
+        arena.inner.borrow_mut().free.push(first.slot());
+
+        let second = arena.alloc(2_i32, runtime.handle());
+
+        assert_ne!(first.slot(), second.slot());
+        assert_eq!(second.slot(), 1);
+        assert!(arena.get_typed_opt::<i32>(first).is_some());
+        assert!(arena.get_typed_opt::<i32>(second).is_some());
+    }
+
+    #[test]
+    fn state_arena_register_lease_ignores_stale_id() {
+        let runtime = TestRuntime::new();
+        let arena = StateArena::default();
+        let stale_id = StateId::new(99, 0);
+        let lease = Rc::new(StateHandleLease {
+            id: stale_id,
+            runtime: runtime.handle(),
+        });
+
+        arena.register_lease(stale_id, &lease);
+
+        assert!(arena.retain_lease(stale_id).is_none());
+    }
+
+    #[test]
+    fn ui_continuation_type_mismatch_is_ignored_until_matching_payload() {
+        let runtime = TestRuntime::new();
+        let handle = runtime.handle();
+        let received = Rc::new(Cell::new(None));
+        let received_for_continuation = Rc::clone(&received);
+        let cont_id = handle
+            .register_ui_cont(move |value: u32| {
+                received_for_continuation.set(Some(value));
+            })
+            .expect("test runtime is alive");
+
+        handle.dispatcher().post_invoke(cont_id, "wrong payload");
+        handle.drain_ui();
+
+        assert_eq!(received.get(), None);
+        assert_eq!(handle.debug_stats().ui_conts_len, 1);
+
+        handle.dispatcher().post_invoke(cont_id, 42_u32);
+        handle.drain_ui();
+
+        assert_eq!(received.get(), Some(42));
+        assert_eq!(handle.debug_stats().ui_conts_len, 0);
+    }
+
+    #[test]
+    fn ui_dispatcher_failed_send_does_not_leave_pending_work() {
+        let runtime = Runtime::new(Arc::new(TestScheduler));
+        let dispatcher = runtime.handle().dispatcher();
+
+        drop(runtime);
+
+        assert!(!dispatcher.has_pending());
+        dispatcher.post(|| {});
+        assert!(!dispatcher.has_pending());
+        dispatcher.post_invoke(404, 12_u32);
+        assert!(!dispatcher.has_pending());
+    }
+
+    #[test]
+    fn pending_guard_does_not_wrap_on_underflow() {
+        let counter = AtomicUsize::new(0);
+
+        {
+            let _guard = PendingGuard::new(&counter);
+        }
+
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn pending_guard_decrements_pending_count() {
+        let counter = AtomicUsize::new(2);
+
+        {
+            let _guard = PendingGuard::new(&counter);
+        }
+
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn schedule_frame_without_runtime_is_ignored() {
+        let ok = std::thread::spawn(|| std::panic::catch_unwind(super::schedule_frame).is_ok())
+            .join()
+            .expect("test thread should join");
+
+        assert!(ok);
+    }
+
+    #[test]
+    fn schedule_node_update_without_runtime_is_ignored() {
+        let ok = std::thread::spawn(|| {
+            std::panic::catch_unwind(|| {
+                super::schedule_node_update(|_| Ok(()));
+            })
+            .is_ok()
+        })
+        .join()
+        .expect("test thread should join");
+
+        assert!(ok);
+    }
 }

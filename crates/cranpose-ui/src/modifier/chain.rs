@@ -75,7 +75,7 @@ impl ModifierChainHandle {
 
     /// Reconciles the underlying [`ModifierNodeChain`] with the elements stored in `modifier`.
     pub fn update(&mut self, modifier: &Modifier) -> Vec<ModifierInvalidation> {
-        let mut resolver = |_: ModifierLocalToken| None;
+        let mut resolver = |_: &ModifierLocalToken| None;
         self.update_with_resolver(modifier, &mut resolver)
     }
 
@@ -203,7 +203,7 @@ impl ModifierChainHandle {
 
     pub fn resolve_modifier_local(
         &self,
-        token: ModifierLocalToken,
+        token: &ModifierLocalToken,
     ) -> Option<ResolvedModifierLocal> {
         self.modifier_locals.borrow().resolve(token)
     }

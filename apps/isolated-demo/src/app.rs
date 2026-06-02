@@ -29,8 +29,8 @@ pub(crate) fn IsolatedDemoApp() {
         Modifier::empty().fill_max_size().padding(24.0),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(16.0)),
         move || {
-            Text(TITLE, Modifier::empty());
-            Text(SUBTITLE, Modifier::empty());
+            Text(TITLE, Modifier::empty(), TextStyle::default());
+            Text(SUBTITLE, Modifier::empty(), TextStyle::default());
 
             Row(
                 Modifier::empty(),
@@ -47,7 +47,11 @@ pub(crate) fn IsolatedDemoApp() {
                         {
                             let counter = counter;
                             move || {
-                                Text(format!("Count: {}", counter.value()), Modifier::empty());
+                                Text(
+                                    format!("Count: {}", counter.value()),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
                             }
                         },
                     );
@@ -70,6 +74,7 @@ pub(crate) fn IsolatedDemoApp() {
                                         "Accent: Off"
                                     },
                                     Modifier::empty(),
+                                    TextStyle::default(),
                                 );
                             }
                         },
@@ -91,7 +96,11 @@ pub(crate) fn IsolatedDemoApp() {
                     .background(accent_color),
                 BoxSpec::default().content_alignment(Alignment::CENTER),
                 move || {
-                    Text("Tap the accent button to swap themes", Modifier::empty());
+                    Text(
+                        "Tap the accent button to swap themes",
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
                 },
             );
         },

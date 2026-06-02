@@ -23,17 +23,140 @@ fn reset_snapshot_runtime() -> TestRuntimeGuard {
 }
 
 #[test]
-fn location_key_debug_registry_detects_collisions() {
+fn debug_scope_env_flag_is_not_process_cached() {
+    let source = include_str!("../debug_trace.rs");
+    let once_lock = ["Once", "Lock"].concat();
+    let tracking_static = ["static ", "DEBUG_SCOPE_TRACKING"].concat();
+
+    assert!(
+        !source.contains(&once_lock) && !source.contains(&tracking_static),
+        "debug scope env flag must not be latched in a process-global cache"
+    );
+}
+
+#[test]
+fn state_chain_assert_env_flag_is_not_process_cached() {
+    let source = include_str!("../state.rs");
+    let once_lock = ["Once", "Lock"].concat();
+    let check_static = ["static ", "CHECK"].concat();
+
+    assert!(
+        !source.contains(&once_lock) && !source.contains(&check_static),
+        "state chain assertion env flag must not be latched in a process-global cache"
+    );
+}
+
+#[test]
+fn core_diagnostic_env_flags_are_not_process_cached() {
+    let source = include_str!("../lib.rs");
+
+    assert!(
+        !source.contains("OnceLock<bool>") && !source.contains("get_or_init(|| std::env::var_os"),
+        "core diagnostic env flags must be read at the diagnostic boundary"
+    );
+}
+
+#[test]
+fn location_key_debug_state_is_not_process_global() {
+    let source = include_str!("../lib.rs");
+    assert!(!source.contains("location_key_registry() -> &'static"));
+    assert!(!source.contains("location_key_collision_count() -> &'static"));
+}
+
+#[test]
+fn composition_local_keys_do_not_use_process_global_counter() {
+    let lib_source = include_str!("../lib.rs");
+    let local_source = include_str!("../composition_locals.rs");
+
+    assert!(!lib_source.contains("NEXT_LOCAL_KEY"));
+    assert!(!lib_source.contains("next_local_key"));
+    assert!(!local_source.contains("next_local_key"));
+}
+
+#[test]
+fn composition_local_key_identity_is_retained_per_local() {
+    let first = compositionLocalOf(|| 1_i32);
+    let first_clone = first.clone();
+    let second = compositionLocalOf(|| 1_i32);
+    let static_first = staticCompositionLocalOf(|| 1_i32);
+    let static_first_clone = static_first.clone();
+    let static_second = staticCompositionLocalOf(|| 1_i32);
+
+    assert_eq!(first.key, first_clone.key);
+    assert_ne!(first.key, second.key);
+    assert_eq!(static_first.key, static_first_clone.key);
+    assert_ne!(static_first.key, static_second.key);
+}
+
+#[test]
+fn recompose_scope_live_count_is_runtime_owned() {
+    let lib_source = include_str!("../lib.rs");
+    let debug_source = include_str!("../debug_trace.rs");
+
+    assert!(!lib_source.contains("LIVE_RECOMPOSE_SCOPE_COUNT"));
+    assert!(!debug_source.contains("LIVE_RECOMPOSE_SCOPE_COUNT"));
+}
+
+#[test]
+fn recompose_scope_live_count_tracks_runtime_owned_scopes() {
+    let before = debug_live_recompose_scope_count();
+    let runtime = runtime::TestRuntime::new();
+    let scope = RecomposeScope::new(runtime.handle());
+
+    assert_eq!(debug_live_recompose_scope_count(), before + 1);
+
+    drop(scope);
+    assert_eq!(debug_live_recompose_scope_count(), before);
+}
+
+#[test]
+fn runtime_ids_do_not_use_process_global_counter() {
+    let source = include_str!("../runtime.rs");
+    assert!(!source.contains("AtomicU32"));
+    assert!(!source.contains("fetch_add(1, Ordering::Relaxed)"));
+}
+
+#[test]
+fn recompose_scope_ids_do_not_use_process_global_counter() {
+    let source = include_str!("../lib.rs");
+    assert!(!source.contains("NEXT_SCOPE_ID"));
+    assert!(!source.contains("next_scope_id"));
+}
+
+#[test]
+fn recompose_scope_id_is_retained_scope_identity() {
+    let runtime = runtime::TestRuntime::new();
+    let first = RecomposeScope::new(runtime.handle());
+    let first_clone = first.clone();
+    let second = RecomposeScope::new(runtime.handle());
+
+    assert_eq!(first.id(), first_clone.id());
+    assert_ne!(first.id(), second.id());
+}
+
+#[test]
+fn location_key_debug_registry_reports_collisions_without_panicking() {
     let forced_key = Key::MAX - 17;
+    let collision_count_before = location_key_debug_collision_count_for_test();
     register_location_key_debug_info_for_test(forced_key, "forced-collision-first.rs", 10, 20);
 
-    let panic = std::panic::catch_unwind(|| {
+    let result = std::panic::catch_unwind(|| {
         register_location_key_debug_info_for_test(forced_key, "forced-collision-second.rs", 30, 40);
     });
     assert!(
-        panic.is_err(),
-        "debug collision tracking must reject different call sites with the same location key",
+        result.is_ok(),
+        "debug collision tracking must report different call sites with the same location key without panicking",
     );
+    assert_eq!(
+        location_key_debug_collision_count_for_test(),
+        collision_count_before + 1
+    );
+
+    let registered = location_key_debug_info_for_test(forced_key)
+        .expect("first debug location should remain registered");
+    assert_eq!(registered.file, "forced-collision-first.rs");
+    assert_eq!(registered.line, 10);
+    assert_eq!(registered.column, 20);
 }
 
 #[test]

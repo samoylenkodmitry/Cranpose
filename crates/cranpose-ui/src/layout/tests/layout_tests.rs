@@ -196,12 +196,14 @@ impl MeasurePolicy for MutableLeafPolicy {
 
 #[test]
 fn clamp_dimension_respects_infinite_max() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let clamped = clamp_dimension(50.0, 10.0, f32::INFINITY);
     assert_eq!(clamped, 50.0);
 }
 
 #[test]
 fn layout_measure_respects_parent_constraints_for_weighted_nodes() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let seen = Rc::new(RefCell::new(None));
     let policy = RecordingPolicy {
         seen: Rc::clone(&seen),
@@ -224,12 +226,9 @@ fn layout_measure_respects_parent_constraints_for_weighted_nodes() -> Result<(),
     Ok(())
 }
 
-// Note: Weight distribution tests removed - weights are not yet implemented
-// in the new MeasurePolicy-based system. They were part of the old
-// ColumnNode/RowNode implementation that has been replaced.
-
 #[test]
 fn resolve_dimension_applies_explicit_points() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let size = resolve_dimension(
         10.0,
         DimensionConstraint::Points(20.0),
@@ -243,6 +242,7 @@ fn resolve_dimension_applies_explicit_points() {
 
 #[test]
 fn align_helpers_respect_available_space() {
+    let _app_context = crate::render_state::app_context_test_scope();
     assert_eq!(
         align_horizontal(HorizontalAlignment::CenterHorizontally, 100.0, 40.0),
         30.0
@@ -250,15 +250,13 @@ fn align_helpers_respect_available_space() {
     assert_eq!(align_vertical(VerticalAlignment::Bottom, 50.0, 10.0), 40.0);
 }
 
-// Note: box_respects_child_alignment test removed - it tested the old BoxNode
-// implementation. Box now uses LayoutNode with BoxMeasurePolicy.
-
 // ============================================================================
 // SELECTIVE MEASURE/LAYOUT TESTS
 // ============================================================================
 
 #[test]
 fn new_layout_node_starts_dirty() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     assert!(node.needs_measure(), "New node should need measure");
     assert!(node.needs_layout(), "New node should need layout");
@@ -266,6 +264,7 @@ fn new_layout_node_starts_dirty() {
 
 #[test]
 fn mark_needs_measure_sets_both_flags() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     node.clear_needs_measure();
     node.clear_needs_layout();
@@ -286,6 +285,7 @@ fn mark_needs_measure_sets_both_flags() {
 
 #[test]
 fn mark_needs_layout_only_sets_layout_flag() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     node.clear_needs_measure();
     node.clear_needs_layout();
@@ -303,6 +303,7 @@ fn mark_needs_layout_only_sets_layout_flag() {
 
 #[test]
 fn set_modifier_marks_dirty() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     node.clear_needs_measure();
     node.clear_needs_layout();
@@ -325,6 +326,7 @@ fn set_modifier_marks_dirty() {
 
 #[test]
 fn draw_only_modifier_update_marks_redraw_without_measure() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut node = LayoutNode::new(
         Modifier::empty().background(Color::RED),
         Rc::new(MaxSizePolicy),
@@ -356,6 +358,7 @@ fn draw_only_modifier_update_marks_redraw_without_measure() {
 
 #[test]
 fn set_measure_policy_marks_dirty() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     node.clear_needs_measure();
     node.clear_needs_layout();
@@ -373,6 +376,7 @@ fn set_measure_policy_marks_dirty() {
 
 #[test]
 fn insert_child_marks_dirty() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
     let child = applier.create(Box::new(LayoutNode::new(
         Modifier::empty(),
@@ -400,6 +404,7 @@ fn insert_child_marks_dirty() -> Result<(), NodeError> {
 
 #[test]
 fn remove_child_marks_dirty() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
     let child = applier.create(Box::new(LayoutNode::new(
         Modifier::empty(),
@@ -428,6 +433,7 @@ fn remove_child_marks_dirty() -> Result<(), NodeError> {
 
 #[test]
 fn selective_measure_uses_cache_when_not_dirty() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     let node_id = applier.create(Box::new(node));
@@ -473,6 +479,7 @@ fn selective_measure_uses_cache_when_not_dirty() -> Result<(), NodeError> {
 
 #[test]
 fn selective_measure_remeasures_when_dirty() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     let node_id = applier.create(Box::new(node));
@@ -512,6 +519,7 @@ fn selective_measure_remeasures_when_dirty() -> Result<(), NodeError> {
 
 #[test]
 fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     let node_id = applier.create(Box::new(node));
@@ -557,6 +565,7 @@ fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
 
 #[test]
 fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     let node_id = applier.create(Box::new(node));
@@ -600,7 +609,78 @@ fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
 }
 
 #[test]
+fn cache_epoch_is_isolated_by_app_context() -> Result<(), NodeError> {
+    let first_context = crate::render_state::AppContext::new();
+    let second_context = crate::render_state::AppContext::new();
+    let mut first_applier = MemoryApplier::new();
+    let mut second_applier = MemoryApplier::new();
+
+    let first_node = first_context.enter(|| {
+        let node_id = first_applier.create(Box::new(LayoutNode::new(
+            Modifier::empty(),
+            Rc::new(MaxSizePolicy),
+        )));
+        measure_layout(
+            &mut first_applier,
+            node_id,
+            Size {
+                width: 100.0,
+                height: 100.0,
+            },
+        )?;
+        Ok::<_, NodeError>(node_id)
+    })?;
+    let first_epoch = first_applier
+        .with_node::<LayoutNode, _>(first_node, |node| node.cache_handles().epoch())?;
+
+    second_context.enter(|| {
+        let second_node = second_applier.create(Box::new(LayoutNode::new(
+            Modifier::empty(),
+            Rc::new(MaxSizePolicy),
+        )));
+        for _ in 0..4 {
+            second_applier.with_node::<LayoutNode, _>(second_node, |node| {
+                node.mark_needs_measure();
+            })?;
+            measure_layout(
+                &mut second_applier,
+                second_node,
+                Size {
+                    width: 100.0,
+                    height: 100.0,
+                },
+            )?;
+        }
+        Ok::<_, NodeError>(())
+    })?;
+
+    first_context.enter(|| {
+        first_applier.with_node::<LayoutNode, _>(first_node, |node| {
+            node.mark_needs_measure();
+        })?;
+        measure_layout(
+            &mut first_applier,
+            first_node,
+            Size {
+                width: 100.0,
+                height: 100.0,
+            },
+        )
+    })?;
+    let next_first_epoch = first_applier
+        .with_node::<LayoutNode, _>(first_node, |node| node.cache_handles().epoch())?;
+
+    assert_eq!(
+        next_first_epoch,
+        first_epoch + 1,
+        "layout cache epochs from another AppContext must not advance this context"
+    );
+    Ok(())
+}
+
+#[test]
 fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
     // Create a tree: root -> child_a, child_b
@@ -666,6 +746,7 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
 
 #[test]
 fn scoped_layout_repass_remeasures_only_dirty_subtree() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let _guard = crate::render_state::render_state_test_guard();
     crate::reset_render_state_for_tests();
     let dirty_size = Rc::new(Cell::new(Size::new(10.0, 10.0)));
@@ -780,6 +861,7 @@ fn scoped_layout_repass_remeasures_only_dirty_subtree() -> Result<(), NodeError>
 
 #[test]
 fn scoped_layout_repass_remeasures_dirty_subcompose_child() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let _guard = crate::render_state::render_state_test_guard();
     crate::reset_render_state_for_tests();
 
@@ -893,6 +975,7 @@ fn scoped_layout_repass_remeasures_dirty_subcompose_child() -> Result<(), NodeEr
 
 #[test]
 fn measure_layout_consumes_pending_scoped_repass_for_dirty_child() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let _guard = crate::render_state::render_state_test_guard();
     crate::reset_render_state_for_tests();
 
@@ -974,6 +1057,7 @@ fn measure_layout_consumes_pending_scoped_repass_for_dirty_child() -> Result<(),
 
 #[test]
 fn measure_layout_consumes_pending_scoped_repass_for_subcompose_child() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let _guard = crate::render_state::render_state_test_guard();
     crate::reset_render_state_for_tests();
 
@@ -1050,6 +1134,7 @@ fn measure_layout_consumes_pending_scoped_repass_for_subcompose_child() -> Resul
 
 #[test]
 fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
     let leaf_id = applier.create(Box::new(LayoutNode::new(
@@ -1071,8 +1156,12 @@ fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), Node
     let guard = ApplierSlotGuard::new(&mut applier);
     let applier_host = guard.host();
     let slots_handle = guard.slots_handle();
-    let mut builder =
-        LayoutBuilder::new_with_epoch(Rc::clone(&applier_host), 1, Rc::clone(&slots_handle));
+    let mut builder = LayoutBuilder::new_with_epoch(
+        Rc::clone(&applier_host),
+        1,
+        Rc::clone(&slots_handle),
+        FrameLayoutArena::default(),
+    );
 
     builder.measure_node(
         root_id,
@@ -1086,20 +1175,195 @@ fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), Node
 
     let state = builder.state.borrow();
     assert!(
-        state.tmp_measurables.available_count() >= 2,
-        "nested measurement should retain multiple measurable scratch vecs"
-    );
-    assert!(
-        state.tmp_records.available_count() >= 2,
+        state.frame_arena.tmp_records.available_count() >= 2,
         "nested measurement should retain multiple record scratch vecs"
     );
     assert!(
-        state.tmp_child_ids.available_count() >= 2,
+        state.frame_arena.tmp_child_ids.available_count() >= 2,
         "nested measurement should retain multiple child-id scratch vecs"
     );
     assert!(
-        state.tmp_layout_node_data.available_count() >= 2,
+        state.frame_arena.tmp_layout_node_data.available_count() >= 2,
         "nested measurement should retain multiple modifier scratch vecs"
+    );
+    assert!(
+        state.frame_arena.tmp_placements.available_count() >= 2,
+        "nested measurement should retain multiple placement scratch vecs"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn measure_layout_returns_frame_arena_after_retained_child_measure() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+
+    let leaf_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 10.0,
+        })),
+    )));
+
+    let mut child = LayoutNode::new(Modifier::empty().padding(2.0), Rc::new(VerticalStackPolicy));
+    child.children.push(leaf_id);
+    let child_id = applier.create(Box::new(child));
+
+    let mut root = LayoutNode::new(Modifier::empty().padding(4.0), Rc::new(VerticalStackPolicy));
+    root.children.push(child_id);
+    let root_id = applier.create(Box::new(root));
+
+    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+
+    assert!(
+        crate::render_state::layout_frame_arena_placement_scratch_count() >= 2,
+        "measure_layout must return pooled frame scratch to the AppContext after retained child measurement"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn layout_reuses_child_measurables_across_measure_passes() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+
+    let leaf_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 10.0,
+        })),
+    )));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(leaf_id);
+    let root_id = applier.create(Box::new(root));
+
+    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let first_stats =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| node.mark_needs_measure())?;
+    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let second_stats =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
+
+    assert_eq!(first_stats.child_ids, vec![leaf_id]);
+    assert_eq!(first_stats.child_measurable_count, 1);
+    assert_eq!(
+        first_stats.child_state_ptrs, second_stats.child_state_ptrs,
+        "layout should retain child measure state across repeated measure passes"
+    );
+    assert_eq!(
+        first_stats.child_measurable_ptrs, second_stats.child_measurable_ptrs,
+        "layout should retain child measurable wrappers across repeated measure passes"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn layout_reconciles_child_measurables_by_child_identity() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+
+    let first_child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 10.0,
+        })),
+    )));
+    let second_child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 20.0,
+            height: 10.0,
+        })),
+    )));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(first_child);
+    root.children.push(second_child);
+    let root_id = applier.create(Box::new(root));
+
+    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let initial_stats =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| {
+        node.children = vec![second_child, first_child];
+        node.mark_needs_measure();
+    })?;
+    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let reordered_stats =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
+
+    assert_eq!(initial_stats.child_ids, vec![first_child, second_child]);
+    assert_eq!(reordered_stats.child_ids, vec![second_child, first_child]);
+    assert_eq!(
+        reordered_stats.child_state_ptrs,
+        vec![
+            initial_stats.child_state_ptrs[1],
+            initial_stats.child_state_ptrs[0]
+        ],
+        "child measure states should follow child ids when order changes"
+    );
+    assert_eq!(
+        reordered_stats.child_measurable_ptrs,
+        vec![
+            initial_stats.child_measurable_ptrs[1],
+            initial_stats.child_measurable_ptrs[0]
+        ],
+        "child measurable wrappers should follow child ids when order changes"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn layout_reuses_modifier_coordinator_chain_until_modifier_identity_changes(
+) -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+
+    let root_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty().padding(4.0),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 10.0,
+        })),
+    )));
+
+    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let first_stats =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| node.mark_needs_measure())?;
+    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let second_stats =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
+
+    assert_eq!(first_stats.coordinator_node_count, 1);
+    assert_eq!(
+        first_stats.coordinator_node_ptrs, second_stats.coordinator_node_ptrs,
+        "layout should retain the modifier coordinator chain across repeated measure passes"
+    );
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| {
+        node.set_modifier(Modifier::empty().width(40.0));
+    })?;
+    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let changed_stats =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
+
+    assert_eq!(changed_stats.coordinator_node_count, 1);
+    assert_ne!(
+        first_stats.coordinator_node_ptrs, changed_stats.coordinator_node_ptrs,
+        "changing the layout modifier identity should reconcile the retained coordinator chain"
     );
 
     Ok(())
@@ -1107,6 +1371,7 @@ fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), Node
 
 #[test]
 fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     use super::bubble_layout_dirty;
     let mut applier = MemoryApplier::new();
 
@@ -1160,6 +1425,7 @@ fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
 
 #[test]
 fn parent_tracking_basic() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
     // Create parent and child
@@ -1199,6 +1465,7 @@ fn parent_tracking_basic() -> Result<(), NodeError> {
 
 #[test]
 fn dirty_bubbling_to_root() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     use super::bubble_layout_dirty;
 
     let mut applier = MemoryApplier::new();
@@ -1270,6 +1537,7 @@ fn dirty_bubbling_to_root() -> Result<(), NodeError> {
 
 #[test]
 fn tree_needs_layout_api() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     use super::{bubble_layout_dirty, tree_needs_layout};
 
     let mut applier = MemoryApplier::new();
@@ -1330,6 +1598,7 @@ fn tree_needs_layout_api() -> Result<(), NodeError> {
 
 #[test]
 fn tree_needs_layout_supports_subcompose_root_nodes() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     use super::tree_needs_layout;
     use crate::subcompose_layout::{MeasurePolicy, SubcomposeLayoutNode};
 
@@ -1368,6 +1637,7 @@ fn tree_needs_layout_supports_subcompose_root_nodes() -> Result<(), NodeError> {
 
 #[test]
 fn tree_needs_semantics_supports_subcompose_root_nodes() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     use super::tree_needs_semantics;
     use crate::subcompose_layout::{MeasurePolicy, SubcomposeLayoutNode};
 
@@ -1405,6 +1675,7 @@ fn tree_needs_semantics_supports_subcompose_root_nodes() -> Result<(), NodeError
 
 #[test]
 fn bubbling_reaches_clean_ancestors_above_dirty_intermediate() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     use super::bubble_layout_dirty;
 
     let mut applier = MemoryApplier::new();
@@ -1467,6 +1738,7 @@ fn bubbling_reaches_clean_ancestors_above_dirty_intermediate() -> Result<(), Nod
 
 #[test]
 fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     use super::bubble_layout_dirty;
     use crate::modifier::Modifier;
 
@@ -1543,6 +1815,7 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
 
 #[test]
 fn flex_parent_data_uses_resolved_weight() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
     let layout_node = LayoutNode::new(
         Modifier::empty().columnWeight(1.0, true),
@@ -1552,19 +1825,19 @@ fn flex_parent_data_uses_resolved_weight() {
     let node_id = applier.create(Box::new(layout_node));
     let applier_host = Rc::new(ConcreteApplierHost::new(applier));
 
-    let measurable = LayoutChildMeasurable::new(
-        Rc::clone(&applier_host),
+    let state = LayoutChildMeasureState::new(node_id);
+    state.configure(LayoutChildMeasureConfig {
+        applier: Rc::clone(&applier_host),
         node_id,
-        Rc::new(RefCell::new(None)),
-        Rc::new(RefCell::new(None)),
-        Rc::new(RefCell::new(None)),
-        None,
+        error: Rc::new(RefCell::new(None)),
+        runtime_handle: None,
         cache,
-        1,
-        false,
-        None,
-        None, // layout_state
-    );
+        cache_epoch: 1,
+        force_remeasure: false,
+        measure_handle: None,
+        layout_state: None,
+    });
+    let measurable = LayoutChildMeasurable::new(state);
 
     let parent_data = measurable
         .flex_parent_data()
@@ -1575,6 +1848,7 @@ fn flex_parent_data_uses_resolved_weight() {
 
 #[test]
 fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::layout::SemanticsRole;
 
     let mut applier = MemoryApplier::new();
@@ -1615,6 +1889,7 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 
 #[test]
 fn measure_layout_can_skip_semantics_until_consumer_is_enabled() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
     let node = LayoutNode::new(
@@ -1660,6 +1935,7 @@ fn measure_layout_can_skip_semantics_until_consumer_is_enabled() -> Result<(), N
 #[test]
 fn measure_layout_debug_allocation_stats_cover_layout_semantics_and_modifier_storage(
 ) -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
     let root_id = applier.create(Box::new(LayoutNode::new(
@@ -1720,7 +1996,10 @@ fn measure_layout_debug_allocation_stats_cover_layout_semantics_and_modifier_sto
     assert!(stats.semantics_action_capacity >= stats.semantics_action_count);
     assert!(stats.semantics_heap_bytes >= stats.semantics_description_bytes);
 
-    let layout_only_stats = measurements.layout_tree().debug_allocation_stats();
+    let layout_only_stats = measurements
+        .layout_tree()
+        .expect("debug allocation test requested a layout tree")
+        .debug_allocation_stats();
     assert_eq!(layout_only_stats.layout_box_count, 3);
     assert_eq!(layout_only_stats.semantics_node_count, 0);
 
@@ -1729,6 +2008,7 @@ fn measure_layout_debug_allocation_stats_cover_layout_semantics_and_modifier_sto
 
 #[test]
 fn semantics_tree_matches_with_and_without_layout_tree() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     fn build_fixture() -> Result<(MemoryApplier, NodeId), NodeError> {
         let mut applier = MemoryApplier::new();
 
@@ -1785,7 +2065,7 @@ fn semantics_tree_matches_with_and_without_layout_tree() -> Result<(), NodeError
     .expect("semantics with layout tree");
 
     let (mut live_node_applier, live_node_root) = build_fixture()?;
-    let live_nodes = super::measure_layout_with_options(
+    let live_node_measurements = super::measure_layout_with_options(
         &mut live_node_applier,
         live_node_root,
         Size::new(100.0, 100.0),
@@ -1793,10 +2073,12 @@ fn semantics_tree_matches_with_and_without_layout_tree() -> Result<(), NodeError
             collect_semantics: true,
             build_layout_tree: false,
         },
-    )?
-    .semantics_tree()
-    .cloned()
-    .expect("semantics from live nodes");
+    )?;
+    assert!(live_node_measurements.layout_tree().is_none());
+    let live_nodes = live_node_measurements
+        .semantics_tree()
+        .cloned()
+        .expect("semantics from live nodes");
 
     assert_eq!(with_layout_tree, live_nodes);
 
@@ -1805,6 +2087,7 @@ fn semantics_tree_matches_with_and_without_layout_tree() -> Result<(), NodeError
 
 #[test]
 fn semantics_configuration_merges_multiple_modifiers() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
     // Chain multiple semantics modifiers
@@ -1836,6 +2119,7 @@ fn semantics_configuration_merges_multiple_modifiers() -> Result<(), NodeError> 
 
 #[test]
 fn semantics_only_updates_do_not_trigger_layout() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
     // Create a node with semantics
@@ -1905,6 +2189,7 @@ impl MeasurePolicy for PanickingMeasurePolicy {
 
 #[test]
 fn measure_layout_panic_preserves_applier_and_slots() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
     let mut applier = MemoryApplier::new();
@@ -1977,7 +2262,35 @@ fn measure_layout_panic_preserves_applier_and_slots() {
 }
 
 #[test]
+fn measure_layout_panic_returns_frame_arena_after_retained_child_binding() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let mut applier = MemoryApplier::new();
+
+    let panicking_child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(PanickingMeasurePolicy),
+    )));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(panicking_child);
+    let root_id = applier.create(Box::new(root));
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let _ = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0));
+    }));
+
+    assert!(result.is_err(), "child measure should panic");
+    assert!(
+        crate::render_state::layout_frame_arena_placement_scratch_count() >= 1,
+        "layout cleanup must return frame scratch to AppContext after child-measure panic"
+    );
+}
+
+#[test]
 fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
     // Create a valid tree with multiple nodes

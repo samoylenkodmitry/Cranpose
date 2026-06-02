@@ -10,13 +10,13 @@
 
 <img width="1536" height="1024" alt="ChatGPT Image Jan 18, 2026, 10_53_13 AM" src="https://github.com/user-attachments/assets/2ce48dfe-a048-4b9d-8812-a0e4534691f8" />
 
-Cranpose is a declarative UI framework for Rust, inspired by Jetpack Compose. It enables developers to build user interfaces for Desktop (Linux, macOS, Windows), Android, iOS, and Web (WASM) from a single Rust codebase.
+Cranpose is a declarative UI framework for Rust, inspired by Jetpack Compose. It targets Desktop (Linux, macOS, Windows), Android, and Web (WASM) from a single Rust codebase. iOS is not a supported backend until a real UIKit/CAMetalLayer platform crate exists.
 
 The composition runtime uses Slot Table V2: active groups live in preorder group, payload, and node tables, while inactive retained branches are explicit detached subtrees. Gap-table notes are historical rationale only; the active slot-table specification is [`docs/cranpose_slot_table_v2_design.md`](docs/cranpose_slot_table_v2_design.md).
 
 ## Quick Start via Isolated Demo
 
-To get started, we recommend using the **Isolated Demo** template found in `apps/isolated-demo`. This project is pre-configured with the necessary dependencies and build scripts for all supported platforms.
+To get started, use the **Isolated Demo** template found in `apps/isolated-demo`. This project is pre-configured with the dependencies and build scripts for the implemented platforms.
 
 ```bash
 # Clone the repository
@@ -116,14 +116,14 @@ fn TodoApp() {
 
 | Platform | Backend | Status |
 |---|---|---|
-| Linux x86_64 | Vulkan via wgpu | Supported |
-| macOS aarch64 | Metal via wgpu | Supported |
-| Windows x86_64 | DX12/Vulkan via wgpu | Supported |
-| Android | Vulkan/GLES via wgpu | Supported |
-| iOS | Metal via wgpu | Supported |
-| Web (WASM) | WebGPU/WebGL2 via wgpu | Supported |
+| Linux x86_64 | Vulkan via wgpu | Supported and actively tested |
+| macOS aarch64 | Metal via wgpu | Experimental packaging; renderer path implemented |
+| Windows x86_64 | DX12/Vulkan via wgpu | Experimental; not continuously tested |
+| Android | Vulkan/GLES via wgpu | Experimental; release APK build is checked |
+| iOS | UIKit/CAMetalLayer backend | Unavailable |
+| Web (WASM) | WebGPU/WebGL2 via wgpu | Experimental; demo build is checked |
 
-Pre-built binaries for all platforms are available on the [Releases](https://github.com/samoylenkodmitry/Cranpose/releases) page.
+Release artifacts are available on the [Releases](https://github.com/samoylenkodmitry/Cranpose/releases) page for the platforms that have published builds.
 
 ## Building
 
@@ -135,6 +135,18 @@ cd apps/isolated-demo
 cargo run --features desktop,renderer-wgpu
 ```
 
+macOS `.app` bundles are built through the workspace task runner:
+
+```bash
+cargo xtask bundle-macos \
+  --package desktop-app \
+  --bin desktop-app \
+  --app-name "Cranpose Demo" \
+  --bundle-id io.cranpose.demo
+```
+
+Pass `--resources <dir>` to copy bundle resources into `Contents/Resources`, and `--sign-identity <id>` to run the explicit codesign step.
+
 ### Android
 ```bash
 # Prerequisites: cargo install cargo-ndk
@@ -143,7 +155,7 @@ cd apps/isolated-demo/android
 ```
 
 ### iOS
-Open `apps/isolated-demo/ios/CranposeIsolatedDemo.xcodeproj` in Xcode, then build and run on a simulator or device. The Xcode project invokes `cargo build` via a build phase script.
+iOS is unavailable. The `ios` cargo feature is reserved for the real platform backend and does not alias desktop.
 
 ### Web (WASM)
 ```bash
@@ -151,6 +163,19 @@ Open `apps/isolated-demo/ios/CranposeIsolatedDemo.xcodeproj` in Xcode, then buil
 cd apps/isolated-demo
 ./build-web.sh
 python3 -m http.server 8080
+```
+
+## Verification Gates
+
+The core workspace gates are:
+
+```bash
+cargo fmt --check
+cargo test
+cargo clippy
+cargo build --workspace --no-default-features
+cargo xtask dependency-budget
+cargo xtask binary-size --package isolated-demo --bin isolated-demo --profile release-small --max-bytes 29360128
 ```
 
 See [`apps/isolated-demo/README.md`](apps/isolated-demo/README.md) for full details.

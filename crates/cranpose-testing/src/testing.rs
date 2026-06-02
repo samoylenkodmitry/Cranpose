@@ -2,7 +2,7 @@ use cranpose_core::{
     location_key, ApplierGuard, Composition, Key, MemoryApplier, NodeError, NodeId, RuntimeHandle,
     ROOT_RENDER_REPLAY_LIMIT,
 };
-use cranpose_ui::{request_render_invalidation, reset_render_state_for_tests};
+use cranpose_ui::{request_render_invalidation, reset_render_state_for_tests, AppContext};
 
 #[cfg(test)]
 use cranpose_core::{
@@ -12,6 +12,7 @@ use cranpose_core::{
 use std::cell::Cell;
 #[cfg(test)]
 use std::rc::Rc;
+use std::rc::Rc as StdRc;
 
 /// Headless harness for exercising compositions in tests.
 ///
@@ -20,6 +21,8 @@ use std::rc::Rc;
 /// an in-memory applier and exposes helpers for driving recomposition and
 /// draining frame callbacks without requiring a windowing backend.
 pub struct ComposeTestRule {
+    _scope: cranpose_ui::AppContextScope,
+    app_context: StdRc<AppContext>,
     composition: Composition<MemoryApplier>,
     content: Option<Box<dyn FnMut()>>, // Stored user content for reuse across recompositions.
     initial_root_key: Key,
@@ -28,8 +31,12 @@ pub struct ComposeTestRule {
 impl ComposeTestRule {
     /// Create a new test rule backed by the default in-memory applier.
     pub fn new() -> Self {
-        reset_render_state_for_tests();
+        let app_context = AppContext::new();
+        app_context.enter(reset_render_state_for_tests);
+        let scope = app_context.enter_scope();
         Self {
+            _scope: scope,
+            app_context,
             composition: Composition::new(MemoryApplier::new()),
             content: None,
             initial_root_key: location_key(file!(), line!(), column!()),
@@ -55,22 +62,31 @@ impl ComposeTestRule {
     /// Drain scheduled frame callbacks at the supplied timestamp and process
     /// any resulting work until the composition becomes idle.
     pub fn advance_frame(&mut self, frame_time_nanos: u64) -> Result<(), NodeError> {
-        let handle = self.composition.runtime_handle();
-        handle.drain_frame_callbacks(frame_time_nanos);
-        self.pump_until_idle()
+        let app_context = StdRc::clone(&self.app_context);
+        app_context.enter(|| {
+            let handle = self.composition.runtime_handle();
+            handle.drain_frame_callbacks(frame_time_nanos);
+            self.pump_until_idle_in_context()
+        })
     }
 
     /// Drive the composition until there are no pending renders, invalidated
     /// scopes, or enqueued node mutations remaining.
     pub fn pump_until_idle(&mut self) -> Result<(), NodeError> {
+        let app_context = StdRc::clone(&self.app_context);
+        app_context.enter(|| self.pump_until_idle_in_context())
+    }
+
+    fn pump_until_idle_in_context(&mut self) -> Result<(), NodeError> {
         let mut i = 0;
         loop {
             let mut progressed = false;
             i += 1;
             if i > ROOT_RENDER_REPLAY_LIMIT {
-                panic!(
-                    "pump_until_idle exceeded {ROOT_RENDER_REPLAY_LIMIT} iterations — reentrant render or recomposition bug"
-                );
+                return Err(NodeError::RecompositionLimitExceeded {
+                    operation: "pump_until_idle",
+                    limit: ROOT_RENDER_REPLAY_LIMIT,
+                });
             }
 
             if self.composition.should_render() {
@@ -132,21 +148,28 @@ impl ComposeTestRule {
         self.composition.root()
     }
 
+    pub fn with_app_context<R>(&self, block: impl FnOnce() -> R) -> R {
+        self.app_context.enter(block)
+    }
+
     /// Gain mutable access to the raw composition for advanced scenarios.
     pub fn composition(&mut self) -> &mut Composition<MemoryApplier> {
         &mut self.composition
     }
 
     fn render(&mut self) -> Result<(), NodeError> {
-        let key = self.root_key();
-        if let Some(content) = self.content.as_mut() {
-            self.composition.render(key, &mut **content)?;
-            self.drain_root_render_requests()?;
-            // After composition runs, request render invalidation
-            // so that tests can detect when content has changed
-            request_render_invalidation();
-        }
-        Ok(())
+        let app_context = StdRc::clone(&self.app_context);
+        app_context.enter(|| {
+            let key = self.root_key();
+            if let Some(content) = self.content.as_mut() {
+                self.composition.render(key, &mut **content)?;
+                self.drain_root_render_requests()?;
+                // After composition runs, request render invalidation
+                // so that tests can detect when content has changed
+                request_render_invalidation();
+            }
+            Ok(())
+        })
     }
 
     fn drain_root_render_requests(&mut self) -> Result<(), NodeError> {
@@ -158,14 +181,18 @@ impl ComposeTestRule {
             let content = self
                 .content
                 .as_mut()
-                .expect("root render replay requires installed content");
+                .ok_or(NodeError::RecompositionLimitExceeded {
+                    operation: "root render replay",
+                    limit: ROOT_RENDER_REPLAY_LIMIT,
+                })?;
             self.composition.render(key, &mut **content)?;
             request_render_invalidation();
         }
 
-        panic!(
-            "root render replay exceeded {ROOT_RENDER_REPLAY_LIMIT} iterations — reentrant render bug"
-        );
+        Err(NodeError::RecompositionLimitExceeded {
+            operation: "root render replay",
+            limit: ROOT_RENDER_REPLAY_LIMIT,
+        })
     }
 }
 

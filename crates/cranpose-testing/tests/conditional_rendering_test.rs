@@ -68,6 +68,9 @@ fn conditional_inside_closure_app(counter: MutableState<i32>) {
 
 #[test]
 fn test_conditional_inside_closure_works() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // This shows the CORRECT pattern that should always work
 
     let mut rule = ComposeTestRule::new();
@@ -98,6 +101,9 @@ fn test_conditional_inside_closure_works() {
 /// This test documents the exact issue from the demo app
 #[test]
 fn test_demo_app_pattern_analysis() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     eprintln!("\n========================================");
     eprintln!("Demo App Bug Analysis");
     eprintln!("========================================\n");

@@ -102,6 +102,33 @@ fn composition_local_default_value_used_outside_provider() {
 }
 
 #[test]
+fn malformed_composition_local_entry_falls_back_to_default() {
+    thread_local! {
+        static READ_VALUE: Cell<i32> = const { Cell::new(0) };
+    }
+
+    let local_counter = compositionLocalOf(|| 31);
+    let mut composition = test_composition();
+
+    #[composable]
+    fn reader(local_counter: CompositionLocal<i32>) {
+        READ_VALUE.with(|slot| slot.set(local_counter.current()));
+    }
+
+    composition
+        .render(2_031, || {
+            let malformed = crate::composition_locals::malformed_composition_local_for_test(
+                &local_counter,
+                Rc::new(String::from("wrong")) as Rc<dyn std::any::Any>,
+            );
+            CompositionLocalProvider(vec![malformed], || reader(local_counter.clone()));
+        })
+        .expect("compose malformed local provider");
+
+    assert_eq!(READ_VALUE.with(|slot| slot.get()), 31);
+}
+
+#[test]
 fn composition_local_simple_subscription_test() {
     // Simplified test to verify basic subscription behavior
     thread_local! {
@@ -473,6 +500,33 @@ fn static_composition_local_default_value_used_outside_provider() {
 }
 
 #[test]
+fn malformed_static_composition_local_entry_falls_back_to_default() {
+    thread_local! {
+        static READ_VALUE: Cell<i32> = const { Cell::new(0) };
+    }
+
+    let local_counter = staticCompositionLocalOf(|| 37);
+    let mut composition = test_composition();
+
+    #[composable]
+    fn reader(local_counter: StaticCompositionLocal<i32>) {
+        READ_VALUE.with(|slot| slot.set(local_counter.current()));
+    }
+
+    composition
+        .render(2_037, || {
+            let malformed = crate::composition_locals::malformed_static_composition_local_for_test(
+                &local_counter,
+                Rc::new(String::from("wrong")) as Rc<dyn std::any::Any>,
+            );
+            CompositionLocalProvider(vec![malformed], || reader(local_counter.clone()));
+        })
+        .expect("compose malformed static local provider");
+
+    assert_eq!(READ_VALUE.with(|slot| slot.get()), 37);
+}
+
+#[test]
 fn cranpose_with_reuse_skips_then_recomposes() {
     thread_local! {
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -835,6 +889,30 @@ fn render_stable_reaches_fixpoint_when_internal_invalid_scope_processing_request
         RENDER_COUNT.with(|count| count.get()),
         2,
         "render_stable() must replay the root content until the composition reaches a stable fixpoint",
+    );
+}
+
+#[test]
+fn render_stable_reports_root_render_replay_limit_without_panicking() {
+    let mut composition = test_composition();
+    let root_key = location_key(file!(), line!(), column!());
+
+    let mut render = || {
+        let value = useState(|| 0usize);
+        let current = value.value();
+        SideEffect(move || {
+            value.set_value(current + 1);
+        });
+    };
+
+    let result = composition.render_stable(root_key, &mut render);
+
+    assert_eq!(
+        result,
+        Err(NodeError::RecompositionLimitExceeded {
+            operation: "root render replay",
+            limit: ROOT_RENDER_REPLAY_LIMIT,
+        })
     );
 }
 

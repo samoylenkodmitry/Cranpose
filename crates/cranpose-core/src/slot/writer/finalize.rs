@@ -9,6 +9,11 @@ impl SlotWriteSession<'_> {
         &mut self,
         applier: &mut dyn Applier,
     ) -> Result<Vec<DetachedSubtree>, NodeError> {
+        for subtree in self.state.drain_rejected_restore_subtrees() {
+            self.table.invalidate_detached_subtree_anchors(&subtree);
+            dispose_detached_subtree_now(applier, &subtree)?;
+            self.lifecycle.queue_subtree_disposal(subtree);
+        }
         while !self.state.group_stack.is_empty() {
             let result = self.finish_group_body();
             for subtree in result.detached_children {

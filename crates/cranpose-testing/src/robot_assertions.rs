@@ -9,6 +9,7 @@ use cranpose_ui_graphics::Rect;
 ///
 /// The metric line is printed in a stable machine-readable form:
 /// `{metric} stage=<stage> fps=<fps> avg_ms=<ms> frames=<count> ...`.
+#[cfg(feature = "desktop-robot")]
 pub fn assert_robot_fps_over(
     robot: &cranpose::Robot,
     metric: &str,
@@ -17,13 +18,22 @@ pub fn assert_robot_fps_over(
     frames: u32,
 ) -> cranpose::FpsStats {
     robot.pump_frames(frames).expect("pump robot frames");
-    let stats = cranpose::fps_stats();
+    let stats = robot.fps_stats().expect("read robot FPS stats");
     println!(
-        "{} stage={} fps={:.1} avg_ms={:.2} frames={} recompositions={} recomps_per_second={}",
+        "{} stage={} fps={:.1} avg_ms={:.2} p95_ms={:.2} p99_ms={:.2} max_ms={:.2} work_avg_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} missed_60hz={} stalls_50ms={} frames={} recompositions={} recomps_per_second={}",
         metric,
         stage,
         stats.fps,
         stats.avg_ms,
+        stats.p95_ms,
+        stats.p99_ms,
+        stats.max_ms,
+        stats.work_avg_ms,
+        stats.work_p95_ms,
+        stats.work_max_ms,
+        stats.missed_120hz_budget,
+        stats.missed_60hz_budget,
+        stats.stalled_50ms_frames,
         stats.frame_count,
         stats.recompositions,
         stats.recomps_per_second

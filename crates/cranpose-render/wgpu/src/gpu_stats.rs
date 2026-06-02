@@ -3,6 +3,7 @@
 //! Counters are always collected so tests and perf harnesses can assert them.
 //! Setting `CRANPOSE_GPU_STATS=1` prints a summary line every 60 frames to stderr.
 
+use crate::frame_graph::FrameCommandStats;
 use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use std::cell::{Cell, RefCell};
 
@@ -167,9 +168,14 @@ impl Default for IsolatedLayerStat {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FrameStatsSnapshot {
     pub submits: u32,
+    pub encoder_count: u32,
+    pub submit_count: u32,
+    pub pass_count: u32,
     pub offscreen_acquires: u32,
     pub offscreen_news: u32,
     pub offscreen_total_bytes: u64,
+    pub transient_texture_bytes: u64,
+    pub retained_texture_bytes: u64,
     pub upload_bytes: u64,
     pub isolated_layer_renders: u32,
     pub isolated_layer_pixels: u64,
@@ -196,6 +202,21 @@ pub struct FrameStatsSnapshot {
 }
 
 impl FrameStatsSnapshot {
+    pub(crate) fn with_command_stats_added(mut self, stats: FrameCommandStats) -> Self {
+        self.submits = self.submits.saturating_add(stats.submit_count);
+        self.encoder_count = self.encoder_count.saturating_add(stats.encoder_count);
+        self.submit_count = self.submit_count.saturating_add(stats.submit_count);
+        self.pass_count = self.pass_count.saturating_add(stats.pass_count);
+        self.transient_texture_bytes = self
+            .transient_texture_bytes
+            .saturating_add(stats.transient_texture_bytes);
+        self.retained_texture_bytes = self
+            .retained_texture_bytes
+            .max(stats.retained_texture_bytes);
+        self.upload_bytes = self.upload_bytes.saturating_add(stats.upload_bytes);
+        self
+    }
+
     pub fn top_isolated_layers(self) -> impl Iterator<Item = IsolatedLayerStat> {
         self.top_isolated_layers
             .into_iter()
@@ -215,25 +236,29 @@ impl FrameStatsSnapshot {
     fn print(self, frame_count: u64) {
         let mb = self.offscreen_total_bytes as f64 / (1024.0 * 1024.0);
         let upload_mb = self.upload_bytes as f64 / (1024.0 * 1024.0);
+        let retained_mb = self.retained_texture_bytes as f64 / (1024.0 * 1024.0);
         let pool_mb = self.offscreen_pool_bytes as f64 / (1024.0 * 1024.0);
         let layer_cache_hit_mpx = self.layer_cache_hit_pixels as f64 / 1_000_000.0;
         let layer_cache_miss_mpx = self.layer_cache_miss_pixels as f64 / 1_000_000.0;
         let layer_cache_mb = self.layer_cache_bytes as f64 / (1024.0 * 1024.0);
         let isolated_layer_mpx = self.isolated_layer_pixels as f64 / 1_000_000.0;
         eprintln!(
-            "[GPU f#{}] submits={} | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) | \
+            "[GPU f#{}] encoders={} submits={} passes={} | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) retained={:.1}MB | \
              uploads={:.2}MB | \
              isolated_layers={} area={:.2}MP | \
              layer_cache: hit={} miss={} {:.1}% evict={} hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) | \
              blur={} composite={} effect={} | shape={} image={} text={} | \
              caches: text_pool={} img={} txt={}",
             frame_count,
-            self.submits,
+            self.encoder_count,
+            self.submit_count,
+            self.pass_count,
             self.offscreen_acquires,
             self.offscreen_news,
             mb,
             self.offscreen_pool_size,
             pool_mb,
+            retained_mb,
             upload_mb,
             self.isolated_layer_renders,
             isolated_layer_mpx,
@@ -276,6 +301,12 @@ impl FrameStatsSnapshot {
 #[derive(Default)]
 pub(crate) struct FrameStats {
     pub submits: Cell<u32>,
+    pub command_encoder_count: Cell<u32>,
+    pub command_submit_count: Cell<u32>,
+    pub command_pass_count: Cell<u32>,
+    pub command_transient_texture_bytes: Cell<u64>,
+    pub command_retained_texture_bytes: Cell<u64>,
+    pub command_upload_bytes: Cell<u64>,
     pub offscreen_acquires: Cell<u32>,
     pub offscreen_news: Cell<u32>,
     pub offscreen_total_bytes: Cell<u64>,
@@ -306,8 +337,39 @@ pub(crate) struct FrameStats {
 }
 
 impl FrameStats {
-    pub fn bump_submits(&self) {
-        self.submits.set(self.submits.get() + 1);
+    pub fn record_command_stats(&self, stats: FrameCommandStats) {
+        self.submits
+            .set(self.submits.get().saturating_add(stats.submit_count));
+        self.command_encoder_count.set(
+            self.command_encoder_count
+                .get()
+                .saturating_add(stats.encoder_count),
+        );
+        self.command_submit_count.set(
+            self.command_submit_count
+                .get()
+                .saturating_add(stats.submit_count),
+        );
+        self.command_pass_count.set(
+            self.command_pass_count
+                .get()
+                .saturating_add(stats.pass_count),
+        );
+        self.command_transient_texture_bytes.set(
+            self.command_transient_texture_bytes
+                .get()
+                .saturating_add(stats.transient_texture_bytes),
+        );
+        self.command_retained_texture_bytes.set(
+            self.command_retained_texture_bytes
+                .get()
+                .max(stats.retained_texture_bytes),
+        );
+        self.command_upload_bytes.set(
+            self.command_upload_bytes
+                .get()
+                .saturating_add(stats.upload_bytes),
+        );
     }
 
     pub fn record_offscreen_acquire(&self, width: u32, height: u32, is_new: bool) {
@@ -387,12 +449,36 @@ impl FrameStats {
     }
 
     pub fn snapshot(&self) -> FrameStatsSnapshot {
+        let pass_count = self
+            .blur_passes
+            .get()
+            .saturating_add(self.composite_passes.get())
+            .saturating_add(self.effect_applies.get())
+            .saturating_add(self.shape_passes.get())
+            .saturating_add(self.image_passes.get())
+            .saturating_add(self.text_passes.get());
+        let retained_texture_bytes = self
+            .offscreen_pool_bytes
+            .get()
+            .saturating_add(self.layer_cache_bytes.get());
         FrameStatsSnapshot {
             submits: self.submits.get(),
+            encoder_count: self.command_encoder_count.get(),
+            submit_count: self.command_submit_count.get(),
+            pass_count: self.command_pass_count.get().saturating_add(pass_count),
             offscreen_acquires: self.offscreen_acquires.get(),
             offscreen_news: self.offscreen_news.get(),
             offscreen_total_bytes: self.offscreen_total_bytes.get(),
-            upload_bytes: self.upload_bytes.get(),
+            transient_texture_bytes: self
+                .offscreen_total_bytes
+                .get()
+                .saturating_add(self.command_transient_texture_bytes.get()),
+            retained_texture_bytes: retained_texture_bytes
+                .saturating_add(self.command_retained_texture_bytes.get()),
+            upload_bytes: self
+                .upload_bytes
+                .get()
+                .saturating_add(self.command_upload_bytes.get()),
             isolated_layer_renders: self.isolated_layer_renders.get(),
             isolated_layer_pixels: self.isolated_layer_pixels.get(),
             layer_cache_hits: self.layer_cache_hits.get(),
@@ -420,6 +506,12 @@ impl FrameStats {
 
     pub fn reset(&self) {
         self.submits.set(0);
+        self.command_encoder_count.set(0);
+        self.command_submit_count.set(0);
+        self.command_pass_count.set(0);
+        self.command_transient_texture_bytes.set(0);
+        self.command_retained_texture_bytes.set(0);
+        self.command_upload_bytes.set(0);
         self.offscreen_acquires.set(0);
         self.offscreen_news.set(0);
         self.offscreen_total_bytes.set(0);
@@ -494,13 +586,9 @@ impl FrameStats {
 }
 
 pub(crate) fn gpu_stats_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("CRANPOSE_GPU_STATS")
-            .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-            .unwrap_or(false)
-    })
+    std::env::var("CRANPOSE_GPU_STATS")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -511,6 +599,18 @@ mod tests {
     fn layer_cache_counters_accumulate_and_reset() {
         let stats = FrameStats::default();
         stats.record_upload_bytes(512);
+        stats.record_command_stats(FrameCommandStats {
+            encoder_count: 1,
+            submit_count: 1,
+            pass_count: 0,
+            transient_texture_bytes: 256,
+            retained_texture_bytes: 128,
+            upload_bytes: 64,
+        });
+        stats.bump_shapes();
+        stats.blur_passes.set(1);
+        stats.offscreen_total_bytes.set(1024);
+        stats.offscreen_pool_bytes.set(2048);
         stats.record_layer_cache_hit(10, 20);
         stats.record_layer_cache_hit(3, 4);
         stats.record_layer_cache_miss(5, 6);
@@ -541,7 +641,12 @@ mod tests {
 
         assert_eq!(snapshot.isolated_layer_renders, 1);
         assert_eq!(snapshot.isolated_layer_pixels, 56);
-        assert_eq!(snapshot.upload_bytes, 512);
+        assert_eq!(snapshot.upload_bytes, 576);
+        assert_eq!(snapshot.encoder_count, 1);
+        assert_eq!(snapshot.submit_count, 1);
+        assert_eq!(snapshot.pass_count, 2);
+        assert_eq!(snapshot.transient_texture_bytes, 1280);
+        assert_eq!(snapshot.retained_texture_bytes, 2176);
         assert_eq!(snapshot.layer_cache_hits, 2);
         assert_eq!(snapshot.layer_cache_misses, 1);
         let top_layers = snapshot.top_isolated_layers().collect::<Vec<_>>();
@@ -561,6 +666,71 @@ mod tests {
         assert_eq!(stats.isolated_layer_renders.get(), 0);
         assert_eq!(stats.isolated_layer_pixels.get(), 0);
         assert_eq!(stats.top_isolated_layer_count.get(), 0);
+    }
+
+    #[test]
+    fn command_stats_accumulate_and_reset() {
+        let stats = FrameStats::default();
+
+        stats.record_command_stats(FrameCommandStats {
+            encoder_count: 2,
+            submit_count: 2,
+            pass_count: 5,
+            transient_texture_bytes: 1024,
+            retained_texture_bytes: 2048,
+            upload_bytes: 512,
+        });
+        stats.bump_shapes();
+
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.submits, 2);
+        assert_eq!(snapshot.encoder_count, 2);
+        assert_eq!(snapshot.submit_count, 2);
+        assert_eq!(snapshot.pass_count, 6);
+        assert_eq!(snapshot.transient_texture_bytes, 1024);
+        assert_eq!(snapshot.retained_texture_bytes, 2048);
+        assert_eq!(snapshot.upload_bytes, 512);
+
+        stats.reset();
+        let reset = stats.snapshot();
+        assert_eq!(reset.submits, 0);
+        assert_eq!(reset.encoder_count, 0);
+        assert_eq!(reset.submit_count, 0);
+        assert_eq!(reset.pass_count, 0);
+        assert_eq!(reset.transient_texture_bytes, 0);
+        assert_eq!(reset.retained_texture_bytes, 0);
+        assert_eq!(reset.upload_bytes, 0);
+    }
+
+    #[test]
+    fn snapshot_adds_explicit_readback_command_stats() {
+        let stats = FrameStats::default();
+        stats.record_command_stats(FrameCommandStats {
+            encoder_count: 1,
+            submit_count: 1,
+            pass_count: 2,
+            transient_texture_bytes: 128,
+            retained_texture_bytes: 512,
+            upload_bytes: 64,
+        });
+        let snapshot = stats
+            .snapshot()
+            .with_command_stats_added(FrameCommandStats {
+                encoder_count: 1,
+                submit_count: 1,
+                pass_count: 1,
+                transient_texture_bytes: 0,
+                retained_texture_bytes: 0,
+                upload_bytes: 0,
+            });
+
+        assert_eq!(snapshot.submits, 2);
+        assert_eq!(snapshot.encoder_count, 2);
+        assert_eq!(snapshot.submit_count, 2);
+        assert_eq!(snapshot.pass_count, 3);
+        assert_eq!(snapshot.transient_texture_bytes, 128);
+        assert_eq!(snapshot.retained_texture_bytes, 512);
+        assert_eq!(snapshot.upload_bytes, 64);
     }
 
     #[test]

@@ -101,6 +101,7 @@ fn run_subcompose_measure(
 
 #[test]
 fn row_with_alignment_updates_node_fields() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = run_test_composition(|| {
         Row(
             Modifier::empty(),
@@ -121,6 +122,7 @@ fn row_with_alignment_updates_node_fields() {
 
 #[test]
 fn column_with_alignment_updates_node_fields() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = run_test_composition(|| {
         Column(
             Modifier::empty(),
@@ -546,6 +548,7 @@ fn settle_scroll_recomposition(
 
 #[test]
 fn layout_column_produces_expected_measurements() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     let text_id: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
@@ -605,6 +608,7 @@ fn layout_column_produces_expected_measurements() {
 
 #[test]
 fn modifier_offset_translates_layout() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     let text_id: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
@@ -655,6 +659,7 @@ fn modifier_offset_translates_layout() {
 
 #[test]
 fn box_with_constraints_composes_different_content() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let record = Rc::new(RefCell::new(Vec::new()));
     let record_capture = Rc::clone(&record);
@@ -702,6 +707,7 @@ fn box_with_constraints_composes_different_content() {
 
 #[test]
 fn box_with_constraints_reacts_to_constraint_changes() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let invocations = Rc::new(Cell::new(0));
     let invocations_capture = Rc::clone(&invocations);
@@ -732,6 +738,7 @@ fn box_with_constraints_reacts_to_constraint_changes() {
 
 #[test]
 fn box_with_constraints_reinstalls_slot_root_callback_after_recompose() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let value = cranpose_core::MutableState::with_runtime(0_i32, runtime);
@@ -793,6 +800,7 @@ fn box_with_constraints_reinstalls_slot_root_callback_after_recompose() {
 
 #[test]
 fn box_with_constraints_measures_children_with_finite_constraints() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let recorded = Rc::new(RefCell::new(Vec::new()));
     composition
@@ -828,6 +836,7 @@ fn box_with_constraints_measures_children_with_finite_constraints() {
 
 #[test]
 fn box_with_constraints_restores_conditional_branch_after_toggle() {
+    let _app_context = crate::render_state::app_context_test_scope();
     assert_box_with_constraints_branch_toggle(
         "Stories",
         "Thread",
@@ -853,6 +862,7 @@ fn box_with_constraints_restores_conditional_branch_after_toggle() {
 
 #[test]
 fn box_with_constraints_restores_conditional_composable_branch_after_toggle() {
+    let _app_context = crate::render_state::app_context_test_scope();
     assert_box_with_constraints_branch_toggle(
         "Stories",
         "Thread",
@@ -878,6 +888,7 @@ fn box_with_constraints_restores_conditional_composable_branch_after_toggle() {
 
 #[test]
 fn box_with_constraints_restores_conditional_lazy_list_branch_after_toggle() {
+    let _app_context = crate::render_state::app_context_test_scope();
     assert_box_with_constraints_branch_toggle(
         "Stories",
         "Thread",
@@ -904,6 +915,7 @@ fn box_with_constraints_restores_conditional_lazy_list_branch_after_toggle() {
 
 #[test]
 fn box_with_constraints_restored_lazy_list_branch_keeps_host_generation_during_scroll() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
@@ -1001,6 +1013,7 @@ fn box_with_constraints_restored_lazy_list_branch_keeps_host_generation_during_s
 
 #[test]
 fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_generation_during_scroll() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
@@ -1101,6 +1114,7 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_generation
 
 #[test]
 fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_during_status_recompose() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
@@ -1185,6 +1199,7 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_during_sta
 
 #[test]
 fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_during_scroll() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
@@ -1285,6 +1300,7 @@ fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_
 
 #[test]
 fn box_with_constraints_restores_weighted_layout_branch_after_toggle() {
+    let _app_context = crate::render_state::app_context_test_scope();
     assert_box_with_constraints_branch_toggle(
         "Top stories",
         "Thread body",
@@ -1312,6 +1328,7 @@ fn box_with_constraints_restores_weighted_layout_branch_after_toggle() {
 
 #[test]
 fn test_fill_max_width_respects_parent_bounds() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
 
@@ -1451,6 +1468,7 @@ fn test_fill_max_width_respects_parent_bounds() {
 
 #[test]
 fn test_fill_max_width_with_background_and_double_padding() {
+    let _app_context = crate::render_state::app_context_test_scope();
     // This test reproduces the exact structure from counter_app line 784:
     // Row with fill_max_width() + padding + background + padding again
     let mut composition = Composition::new(MemoryApplier::new());
@@ -1606,6 +1624,7 @@ fn test_fill_max_width_with_background_and_double_padding() {
 
 #[test]
 fn fill_max_width_tracks_bounded_parent_width() {
+    let _app_context = crate::render_state::app_context_test_scope();
     // Testing the issue where a child with fill_max_width() causes
     // its parent (which should wrap content) to also fill parent
     let mut composition = Composition::new(MemoryApplier::new());
@@ -1728,6 +1747,7 @@ fn fill_max_width_tracks_bounded_parent_width() {
 
 #[test]
 fn wrap_column_with_fill_child_uses_bounded_width() {
+    let _app_context = crate::render_state::app_context_test_scope();
     const EPSILON: f32 = 1e-3;
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -1859,6 +1879,7 @@ fn wrap_column_with_fill_child_uses_bounded_width() {
 
 #[test]
 fn fill_child_respects_explicit_parent_width() {
+    let _app_context = crate::render_state::app_context_test_scope();
     const EPSILON: f32 = 1e-3;
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -1953,6 +1974,7 @@ fn fill_child_respects_explicit_parent_width() {
 
 #[test]
 fn fill_max_height_child_clamps_to_parent() {
+    let _app_context = crate::render_state::app_context_test_scope();
     const EPSILON: f32 = 1e-3;
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -2052,6 +2074,7 @@ fn fill_max_height_child_clamps_to_parent() {
 
 #[test]
 fn modifier_chain_text_with_padding() {
+    let _app_context = crate::render_state::app_context_test_scope();
     // Verify that text with padding modifier measures correctly
     // This tests the core fix: padding should wrap text, not text wrap padding
     let mut composition = Composition::new(MemoryApplier::new());
@@ -2102,6 +2125,7 @@ fn modifier_chain_text_with_padding() {
 
 #[test]
 fn modifier_chain_size_enforcement() {
+    let _app_context = crate::render_state::app_context_test_scope();
     // Verify that size modifier enforces exact size
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
@@ -2159,6 +2183,7 @@ fn modifier_chain_size_enforcement() {
 
 #[test]
 fn modifier_chain_padding_then_size() {
+    let _app_context = crate::render_state::app_context_test_scope();
     // Jetpack Compose behavior: padding(10).size(100, 80)
     // Modifiers apply right-to-left: size is inner, padding is outer
     // Result: padding adds to size, giving 120x100 (100+20, 80+20)
@@ -2217,6 +2242,7 @@ fn modifier_chain_padding_then_size() {
 
 #[test]
 fn modifier_chain_size_then_padding() {
+    let _app_context = crate::render_state::app_context_test_scope();
     // Jetpack Compose behavior: size(100, 80).padding(10)
     // Modifiers apply right-to-left: padding is inner, size is outer
     // Result: size constrains to 100x80 (padding is inside)

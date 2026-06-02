@@ -40,7 +40,7 @@ fn svg_painter_renders_through_image_composable() {
         layout
     };
 
-    let scene = HeadlessRenderer::new().render(&layout);
+    let scene = composition.with_app_context(|| HeadlessRenderer::new().render(&layout));
     assert!(scene.operations().iter().any(|op| {
         matches!(
             op,

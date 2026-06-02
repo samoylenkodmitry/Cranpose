@@ -15,6 +15,18 @@ use cranpose_ui_graphics::{
 use std::cell::Cell;
 use std::rc::Rc;
 
+#[test]
+fn modifier_debug_env_flag_is_not_process_cached() {
+    let source = include_str!("../mod.rs");
+    let once_lock = ["Once", "Lock"].concat();
+    let env_debug = ["static ", "ENV_DEBUG"].concat();
+
+    assert!(
+        !source.contains(&once_lock) && !source.contains(&env_debug),
+        "modifier debug env flag must not be latched in a process-global cache"
+    );
+}
+
 struct DensityGuard(f32);
 
 impl DensityGuard {
@@ -33,6 +45,7 @@ impl Drop for DensityGuard {
 
 #[test]
 fn padding_nodes_resolve_padding_values() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty()
         .padding(4.0)
         .then(Modifier::empty().padding_horizontal(2.0))
@@ -53,6 +66,7 @@ fn padding_nodes_resolve_padding_values() {
 
 #[test]
 fn fill_max_size_sets_fraction_constraints() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().fill_max_size_fraction(0.75);
     let props = modifier.resolved_modifiers().layout_properties();
     assert_eq!(props.width(), DimensionConstraint::Fraction(0.75));
@@ -61,6 +75,7 @@ fn fill_max_size_sets_fraction_constraints() {
 
 #[test]
 fn weight_tracks_fill_flag() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().weight_with_fill(2.0, false);
     let props = modifier.resolved_modifiers().layout_properties();
     let weight = props.weight().expect("weight to be recorded");
@@ -69,7 +84,26 @@ fn weight_tracks_fill_flag() {
 }
 
 #[test]
+fn from_element_exposes_custom_modifier_nodes() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let modifier = Modifier::from_element(TestFingerprintElement {
+        id: 7,
+        capabilities: NodeCapabilities::DRAW,
+        always_update: false,
+    });
+    let mut handle = ModifierChainHandle::new();
+
+    handle.update(&modifier);
+
+    assert!(handle.has_draw_nodes());
+    assert!(handle
+        .chain()
+        .has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Draw));
+}
+
+#[test]
 fn offset_accumulates_across_chain() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty()
         .offset(4.0, 6.0)
         .then(Modifier::empty().absolute_offset(-1.5, 2.5))
@@ -80,6 +114,7 @@ fn offset_accumulates_across_chain() {
 
 #[test]
 fn lazy_scroll_modifier_keeps_motion_context_inactive_at_rest() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut list_state = None;
     let _composition = crate::run_test_composition(|| {
         list_state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
@@ -95,6 +130,7 @@ fn lazy_scroll_modifier_keeps_motion_context_inactive_at_rest() {
 
 #[test]
 fn regular_scroll_modifier_keeps_translated_content_context_active_at_rest() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut state = None;
     let _composition = crate::run_test_composition(|| {
         state = Some(crate::ScrollState::new(12.0));
@@ -108,6 +144,7 @@ fn regular_scroll_modifier_keeps_translated_content_context_active_at_rest() {
 
 #[test]
 fn lazy_scroll_modifier_keeps_translated_content_context_active_at_rest() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut list_state = None;
     let _composition = crate::run_test_composition(|| {
         list_state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
@@ -123,6 +160,7 @@ fn lazy_scroll_modifier_keeps_translated_content_context_active_at_rest() {
 
 #[test]
 fn modifier_slices_debug_stats_report_counts_and_capacities() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty()
         .background(Color::rgba(0.2, 0.4, 0.6, 1.0))
         .clickable(|_| {});
@@ -141,6 +179,7 @@ fn modifier_slices_debug_stats_report_counts_and_capacities() {
 
 #[test]
 fn then_short_circuits_empty_modifiers() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let padding = Modifier::empty().padding(4.0);
     assert_eq!(Modifier::empty().then(padding.clone()), padding);
 
@@ -150,6 +189,7 @@ fn then_short_circuits_empty_modifiers() {
 
 #[test]
 fn structural_eq_ignores_always_update_elements() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier_a = Modifier::empty().draw_behind({
         let width = 24.0;
         move |_scope| {
@@ -169,6 +209,7 @@ fn structural_eq_ignores_always_update_elements() {
 
 #[test]
 fn incremental_single_fingerprints_match_full_pass() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let elements = vec![
         test_fingerprint_element(1, NodeCapabilities::LAYOUT, false),
         test_fingerprint_element(2, NodeCapabilities::DRAW, false),
@@ -184,6 +225,7 @@ fn incremental_single_fingerprints_match_full_pass() {
 
 #[test]
 fn modifiers_built_incrementally_match_from_parts() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let elements = vec![
         test_fingerprint_element(10, NodeCapabilities::LAYOUT, false),
         test_fingerprint_element(11, NodeCapabilities::DRAW, false),
@@ -201,6 +243,7 @@ fn modifiers_built_incrementally_match_from_parts() {
 
 #[test]
 fn required_size_sets_explicit_constraints() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().required_size(Size {
         width: 32.0,
         height: 18.0,
@@ -216,6 +259,7 @@ fn required_size_sets_explicit_constraints() {
 
 #[test]
 fn alignment_modifiers_record_values() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty()
         .align(Alignment::BOTTOM_END)
         .alignInColumn(HorizontalAlignment::CenterHorizontally)
@@ -231,6 +275,7 @@ fn alignment_modifiers_record_values() {
 
 #[test]
 fn graphics_layer_modifier_creates_node() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier::ModifierChainHandle;
     use crate::modifier_nodes::GraphicsLayerNode;
 
@@ -260,6 +305,7 @@ fn graphics_layer_modifier_creates_node() {
 
 #[test]
 fn backdrop_effect_modifier_creates_graphics_layer_with_backdrop_effect() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let modifier = Modifier::empty().backdrop_effect(RenderEffect::blur(8.0));
@@ -286,6 +332,7 @@ fn backdrop_effect_modifier_creates_graphics_layer_with_backdrop_effect() {
 
 #[test]
 fn backdrop_blur_clips_backdrop_to_bounds() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let _density = DensityGuard::set(2.0);
     let modifier = Modifier::empty().backdrop_blur(Dp(12.0));
     let slices = collect_slices_from_modifier(&modifier);
@@ -308,6 +355,7 @@ fn backdrop_blur_clips_backdrop_to_bounds() {
 
 #[test]
 fn glass_material_applies_blur_tint_and_shape() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let _density = DensityGuard::set(1.5);
     let tint = Color::from_rgba_u8(245, 253, 255, 150);
     let shape = RoundedCornerShape::uniform(18.0);
@@ -348,6 +396,7 @@ fn glass_material_applies_blur_tint_and_shape() {
 
 #[test]
 fn graphics_layer_reads_latest_value_without_recomposition() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let alpha = Rc::new(Cell::new(0.25f32));
@@ -384,6 +433,7 @@ fn graphics_layer_reads_latest_value_without_recomposition() {
 
 #[test]
 fn shader_background_wraps_runtime_shader_as_backdrop_effect() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let modifier = Modifier::empty().shader_background(RuntimeShader::new(
@@ -422,6 +472,7 @@ fn shader_background_wraps_runtime_shader_as_backdrop_effect() {
 
 #[test]
 fn color_filter_modifier_sets_graphics_layer_filter() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let filter = ColorFilter::tint(Color::from_rgba_u8(128, 200, 255, 128));
@@ -445,6 +496,7 @@ fn color_filter_modifier_sets_graphics_layer_filter() {
 
 #[test]
 fn tint_modifier_is_color_filter_tint_alias() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let tint = Color::from_rgba_u8(10, 20, 30, 200);
@@ -468,6 +520,7 @@ fn tint_modifier_is_color_filter_tint_alias() {
 
 #[test]
 fn compositing_strategy_modifier_sets_graphics_layer_strategy() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let modifier = Modifier::empty().compositing_strategy(CompositingStrategy::Offscreen);
@@ -490,6 +543,7 @@ fn compositing_strategy_modifier_sets_graphics_layer_strategy() {
 
 #[test]
 fn layer_blend_mode_modifier_sets_graphics_layer_mode() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let modifier = Modifier::empty().layer_blend_mode(BlendMode::DstOut);
@@ -512,6 +566,7 @@ fn layer_blend_mode_modifier_sets_graphics_layer_mode() {
 
 #[test]
 fn blur_with_edge_treatment_sets_expected_render_effect() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let modifier =
@@ -545,6 +600,7 @@ fn blur_with_edge_treatment_sets_expected_render_effect() {
 
 #[test]
 fn blur_with_default_edge_treatment_enables_rect_clip() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let modifier = Modifier::empty().blur(Dp(0.0));
@@ -570,6 +626,7 @@ fn blur_with_default_edge_treatment_enables_rect_clip() {
 
 #[test]
 fn blur_unbounded_zero_radius_is_noop() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier =
         Modifier::empty().blur_with_edge_treatment(Dp(0.0), BlurredEdgeTreatment::UNBOUNDED);
     let slices = super::collect_slices_from_modifier(&modifier);
@@ -578,6 +635,7 @@ fn blur_unbounded_zero_radius_is_noop() {
 
 #[test]
 fn graphics_layer_params_sets_scale_axes_and_alpha() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let modifier = Modifier::empty().graphics_layer_params(
@@ -646,6 +704,7 @@ fn graphics_layer_params_sets_scale_axes_and_alpha() {
 
 #[test]
 fn graphics_layer_block_applies_configuration() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let modifier = Modifier::empty().graphics_layer_block(|layer| {
@@ -688,6 +747,7 @@ fn graphics_layer_block_applies_configuration() {
 
 #[test]
 fn graphics_layer_block_tracks_state_changes_without_recomposition() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let elevation = Rc::new(Cell::new(2.0f32));
     let modifier = Modifier::empty().graphics_layer_block({
         let elevation = elevation.clone();
@@ -705,6 +765,7 @@ fn graphics_layer_block_tracks_state_changes_without_recomposition() {
 
 #[test]
 fn shadow_defaults_match_compose_behavior() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().shadow(6.0);
     let slices = super::collect_slices_from_modifier(&modifier);
     let layer = slices
@@ -720,6 +781,7 @@ fn shadow_defaults_match_compose_behavior() {
 
 #[test]
 fn shadow_with_allows_zero_elevation_clipping_and_custom_colors() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().shadow_with(
         0.0,
         LayerShape::Rounded(RoundedCornerShape::uniform(11.0)),
@@ -750,6 +812,7 @@ fn shadow_with_allows_zero_elevation_clipping_and_custom_colors() {
 
 #[test]
 fn shadow_with_zero_elevation_and_no_clip_is_noop() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().shadow_with(
         0.0,
         LayerShape::Rectangle,
@@ -868,6 +931,7 @@ fn first_inner_cutout_x(primitives: &[DrawPrimitive]) -> Option<f32> {
 
 #[test]
 fn drop_shadow_static_emits_behind_primitives() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().drop_shadow_value(
         LayerShape::Rounded(RoundedCornerShape::uniform(8.0)),
         Shadow {
@@ -901,6 +965,7 @@ fn drop_shadow_static_emits_behind_primitives() {
 
 #[test]
 fn drop_shadow_closure_tracks_runtime_values() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let spread = Rc::new(Cell::new(0.0f32));
     let modifier = Modifier::empty().drop_shadow(LayerShape::Rectangle, {
         let spread = spread.clone();
@@ -933,6 +998,7 @@ fn drop_shadow_closure_tracks_runtime_values() {
 
 #[test]
 fn drop_shadow_high_radius_emits_single_blurred_shadow_primitive() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().drop_shadow(LayerShape::Rectangle, |scope| {
         scope.radius = 40.0;
         scope.alpha = 0.85;
@@ -960,6 +1026,7 @@ fn drop_shadow_high_radius_emits_single_blurred_shadow_primitive() {
 
 #[test]
 fn inner_shadow_emits_overlay_with_dst_out_cutout() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().inner_shadow(LayerShape::Rectangle, |scope| {
         scope.radius = 14.0;
         scope.offset = Point::new(5.0, -3.0);
@@ -984,6 +1051,7 @@ fn inner_shadow_emits_overlay_with_dst_out_cutout() {
 
 #[test]
 fn inner_shadow_large_radius_keeps_fill_and_cutout_pairs_balanced() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().inner_shadow(
         LayerShape::Rounded(RoundedCornerShape::uniform(10.0)),
         |scope| {
@@ -1032,6 +1100,7 @@ fn inner_shadow_large_radius_keeps_fill_and_cutout_pairs_balanced() {
 
 #[test]
 fn inner_shadow_static_uses_density_for_dp_offset() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let _density = DensityGuard::set(2.0);
 
     let modifier = Modifier::empty().inner_shadow_value(
@@ -1059,6 +1128,7 @@ fn inner_shadow_static_uses_density_for_dp_offset() {
 
 #[test]
 fn inner_shadow_cutout_alpha_remains_opaque_for_hole_mask() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().inner_shadow(LayerShape::Rectangle, |scope| {
         scope.radius = 12.0;
         scope.offset = Point::new(4.0, 3.0);
@@ -1089,6 +1159,7 @@ fn inner_shadow_cutout_alpha_remains_opaque_for_hole_mask() {
 
 #[test]
 fn drop_shadow_emits_primitives() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().drop_shadow(LayerShape::Rectangle, |scope| {
         scope.radius = 8.0;
         scope.spread = 2.0;
@@ -1106,6 +1177,7 @@ fn drop_shadow_emits_primitives() {
 
 #[test]
 fn drop_shadow_value_alias_uses_static_shadow() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().drop_shadow_value(
         LayerShape::Rectangle,
         Shadow {
@@ -1131,6 +1203,7 @@ fn drop_shadow_value_alias_uses_static_shadow() {
 
 #[test]
 fn inner_shadow_emits_primitives() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().inner_shadow(LayerShape::Rectangle, |scope| {
         scope.radius = 10.0;
         scope.offset = Point::new(3.0, 1.0);
@@ -1148,6 +1221,7 @@ fn inner_shadow_emits_primitives() {
 
 #[test]
 fn inner_shadow_value_alias_uses_static_shadow() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().inner_shadow_value(
         LayerShape::Rectangle,
         Shadow {
@@ -1173,6 +1247,7 @@ fn inner_shadow_value_alias_uses_static_shadow() {
 
 #[test]
 fn gradient_cut_mask_modifier_sets_render_effect_shader() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let spec = GradientCutMaskSpec {
@@ -1207,6 +1282,7 @@ fn gradient_cut_mask_modifier_sets_render_effect_shader() {
 
 #[test]
 fn rounded_alpha_mask_modifier_sets_render_effect_shader() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let modifier = Modifier::empty().rounded_alpha_mask(280.0, 120.0, 14.0, 8.0);
@@ -1235,6 +1311,7 @@ fn rounded_alpha_mask_modifier_sets_render_effect_shader() {
 
 #[test]
 fn rounded_alpha_mask_identity_is_noop() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let modifier = Modifier::empty().rounded_alpha_mask(280.0, 120.0, 0.0, 0.0);
@@ -1260,6 +1337,7 @@ fn rounded_alpha_mask_identity_is_noop() {
 
 #[test]
 fn rounded_corners_records_corner_shape_without_background() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let shape = RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0);
     let modifier = Modifier::empty().rounded_corner_shape(shape);
     let slices = collect_slices_from_modifier(&modifier);
@@ -1269,6 +1347,7 @@ fn rounded_corners_records_corner_shape_without_background() {
 
 #[test]
 fn gradient_fade_dst_out_modifier_sets_render_effect_shader() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let spec = GradientFadeMaskSpec {
@@ -1302,6 +1381,7 @@ fn gradient_fade_dst_out_modifier_sets_render_effect_shader() {
 
 #[test]
 fn collect_inspector_records_include_weight_and_pointer_input_metadata() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty()
         .padding(2.0)
         .then(Modifier::empty().weight_with_fill(3.5, false))
@@ -1338,6 +1418,7 @@ fn collect_inspector_records_include_weight_and_pointer_input_metadata() {
 
 #[test]
 fn semantics_modifier_populates_inspector_metadata() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().semantics(|config: &mut SemanticsConfiguration| {
         config.content_description = Some("Submit".into());
         config.is_button = true;
@@ -1360,6 +1441,7 @@ fn semantics_modifier_populates_inspector_metadata() {
 
 #[test]
 fn inspector_snapshot_includes_delegate_depth_and_capabilities() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().padding(4.0).then(
         Modifier::with_element(TestDelegatingElement)
             .with_inspector_metadata(inspector_metadata("delegating", |info| {
@@ -1389,6 +1471,7 @@ fn inspector_snapshot_includes_delegate_depth_and_capabilities() {
 
 #[test]
 fn modifier_chain_trace_runs_only_when_debug_flag_set() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().padding(1.0);
     let mut handle = ModifierChainHandle::new();
     let invocations = std::sync::Arc::new(std::sync::Mutex::new(0usize));
@@ -1410,6 +1493,43 @@ fn modifier_chain_trace_runs_only_when_debug_flag_set() {
     }
 
     assert_eq!(*invocations.lock().unwrap(), 1);
+}
+
+#[test]
+fn modifier_chain_trace_is_app_context_owned() {
+    let first_context = crate::render_state::AppContext::new();
+    let second_context = crate::render_state::AppContext::new();
+    let first_invocations = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let second_invocations = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+
+    let _first_guard = first_context.enter(|| {
+        let invocations = first_invocations.clone();
+        crate::debug::install_modifier_chain_trace(move |_nodes| {
+            *invocations.lock().unwrap() += 1;
+        })
+    });
+    let _second_guard = second_context.enter(|| {
+        let invocations = second_invocations.clone();
+        crate::debug::install_modifier_chain_trace(move |_nodes| {
+            *invocations.lock().unwrap() += 1;
+        })
+    });
+
+    let modifier = Modifier::empty().padding(1.0);
+    let mut first_handle = ModifierChainHandle::new();
+    first_handle.set_debug_logging(true);
+    let mut second_handle = ModifierChainHandle::new();
+    second_handle.set_debug_logging(true);
+
+    first_context.enter(|| {
+        let _ = first_handle.update(&modifier);
+    });
+    second_context.enter(|| {
+        let _ = second_handle.update(&modifier);
+    });
+
+    assert_eq!(*first_invocations.lock().unwrap(), 1);
+    assert_eq!(*second_invocations.lock().unwrap(), 1);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

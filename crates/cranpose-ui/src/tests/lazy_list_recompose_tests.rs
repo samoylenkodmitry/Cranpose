@@ -209,6 +209,7 @@ fn SelectableScrolledLazyList(selected_index: MutableState<usize>) {
 
 #[test]
 fn lazy_list_item_recomposes_on_state_change() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let label_state = MutableState::with_runtime(0u32, runtime.clone());
@@ -279,6 +280,7 @@ fn ThemedLazyList(theme_state: MutableState<bool>) {
 
 #[test]
 fn lazy_list_item_recomposes_when_composable_parent_capture_changes() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let theme_state = MutableState::with_runtime(false, runtime.clone());
@@ -311,6 +313,7 @@ fn lazy_list_item_recomposes_when_composable_parent_capture_changes() {
 
 #[test]
 fn scrolled_lazy_list_scoped_row_recompose_does_not_ghost_old_rows() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_index = MutableState::with_runtime(usize::MAX, runtime);
@@ -462,6 +465,7 @@ fn GrowingLazyList(item_count: MutableState<usize>) {
 
 #[test]
 fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let item_count = MutableState::with_runtime(2usize, runtime.clone());
@@ -526,6 +530,7 @@ fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
 
 #[test]
 fn scroll_to_item_invalidates_indicator_scope_and_updates_visible_index_text() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     LAST_LAZY_STATE.with(|cell| {
         *cell.borrow_mut() = None;
@@ -586,6 +591,7 @@ fn scroll_to_item_invalidates_indicator_scope_and_updates_visible_index_text() {
 
 #[test]
 fn scroll_to_item_updates_child_indicator_scope() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     LAST_LAZY_STATE.with(|cell| cell.borrow_mut().take());

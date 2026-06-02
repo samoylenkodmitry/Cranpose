@@ -1,7 +1,4 @@
-//! UI primitives - re-exported from widgets module
-//!
-//! This module maintains backward compatibility by re-exporting all
-//! widget components. New code should import from `crate::widgets` directly.
+//! UI primitives re-exported from the widgets module.
 
 #![allow(non_snake_case)]
 

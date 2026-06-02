@@ -393,6 +393,12 @@ mod tests {
         }
     }
 
+    fn app_context_scope() -> (Rc<cranpose_ui::AppContext>, cranpose_ui::AppContextScope) {
+        let context = cranpose_ui::AppContext::new();
+        let scope = context.enter_scope();
+        (context, scope)
+    }
+
     fn render_texts(composition: &mut Composition<MemoryApplier>, root: NodeId) -> Vec<String> {
         let handle = composition.runtime_handle();
         let mut applier = composition.applier_mut();
@@ -596,6 +602,7 @@ mod tests {
 
     #[test]
     fn lazy_list_with_scrollbar_restores_hidden_branch() {
+        let (_app_context, _app_context_scope) = app_context_scope();
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
         let show_thread = MutableState::with_runtime(false, runtime.clone());
@@ -667,6 +674,7 @@ mod tests {
 
     #[test]
     fn lazy_list_with_scrollbar_restores_keyed_items_branch() {
+        let (_app_context, _app_context_scope) = app_context_scope();
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
         let show_thread = MutableState::with_runtime(false, runtime.clone());
@@ -760,6 +768,7 @@ mod tests {
 
     #[test]
     fn lazy_list_with_scrollbar_restores_after_keyed_branch_cycle() {
+        let (_app_context, _app_context_scope) = app_context_scope();
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
         let show_thread = MutableState::with_runtime(false, runtime.clone());
@@ -855,6 +864,7 @@ mod tests {
 
     #[test]
     fn lazy_list_with_scrollbar_restored_branch_keeps_host_during_scroll_and_status_recompose() {
+        let (_app_context, _app_context_scope) = app_context_scope();
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
         let show_thread = MutableState::with_runtime(false, runtime.clone());
@@ -926,6 +936,7 @@ mod tests {
 
     #[test]
     fn lazy_list_with_scrollbar_restored_branch_keeps_host_during_repeated_scrolls() {
+        let (_app_context, _app_context_scope) = app_context_scope();
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
         let show_thread = MutableState::with_runtime(false, runtime.clone());

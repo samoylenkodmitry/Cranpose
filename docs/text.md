@@ -1,6 +1,6 @@
 # Text Parity Tracker
 
-Last Updated: 2026-02-23
+Last Updated: 2026-05-25
 
 This document tracks API and behavior parity between Cranpose text rendering and Jetpack Compose text.
 
@@ -24,6 +24,7 @@ Cranpose implementation anchors:
 - `crates/cranpose-ui/src/text/style.rs`
 - `crates/cranpose-ui/src/text/measure.rs`
 - `crates/cranpose-ui/src/text_modifier_node.rs`
+- `crates/cranpose-render/common/src/software_text_raster.rs`
 - `crates/cranpose-render/pixels/src/draw.rs`
 - `crates/cranpose-render/pixels/src/pipeline.rs`
 - `crates/cranpose-render/wgpu/src/lib.rs`
@@ -51,13 +52,62 @@ Cranpose implementation anchors:
 | Style-aware text measurement caching | ALIGNED | Cache keys include style hash (not only text/font size). |
 | Overflow handling (`Clip`, `Ellipsis`, `StartEllipsis`, `MiddleEllipsis`, `Visible`) | PARTIAL | Implemented in fallback measurer/path and now width-clamped to content bounds in render pipelines; parity with platform line-breaking engines is not exact. |
 | Multiline cursor/offset mapping | PARTIAL | Fixed in pixels measurer for Y-based line selection; broader shaping-cluster parity still pending. |
-| Font fallback/resolver behavior | PARTIAL | `wgpu` now uses a shared resolver for measurement + render (`TypefaceRequest` cache, named-family fallback to canonical loaded families, file-backed and loaded-typeface path resolution, wasm-safe path handling, generic fallback seeding, and embedded fallback font bootstrap). Full Compose fallback-chain parity remains ongoing. |
+| Font fallback/resolver behavior | PARTIAL | Measurement and render share the `cranpose-render-common` software font set. The WGPU renderer resolves the same font set for text images and installs a `SoftwareTextMeasurer` into the owning `AppContext`; full Compose fallback-chain parity remains ongoing. |
 | Glyph shaping and bidi parity | GAP | Current backend behavior is good but not yet a strict equivalent of Compose/Skia text shaping behavior in all scripts. |
 | `lineHeightStyle` exact trim/alignment mode semantics | PARTIAL | Modeled and carried through style; full rendering semantics are not fully enforced yet. |
 | `lineBreak`, `hyphens`, `textMotion` rendering impact | ALIGNED | `lineBreak` differentiates `Simple` (greedy) from `Heading`/`Paragraph` (word-balance-aware with different last-line penalties); `Hyphens::Auto` injects correct dictionary-based line splits without mutating source text content across embedded locales; and `textMotion` fractionally offsets sampling natively. Compose-exact platform shaping/hinting behavior remains approximate. |
 | `baselineShift`, `textGeometricTransform`, `localeList`, `fontFeatureSettings` rendering impact | PARTIAL | `baselineShift` now affects rendered Y position in both pixels and wgpu pipelines. Other knobs remain partially applied/stored. |
 | `TextDecoration` rendering (`Underline`, `LineThrough`) | PARTIAL | Decoration lines now render in both pipelines. Geometry is Compose-like but still approximate versus platform paragraph engines. |
-| Non-solid brush foreground behavior | PARTIAL | `wgpu` renders plain-text gradient fill and stroke via one GPU material shader over a glyph mask, with no style-based software fallback path. `pixels` remains software-rendered. |
+| Non-solid brush foreground behavior | PARTIAL | `wgpu` still supports GPU material/effect paths for text effects, and now also shares the common software raster backend for text-image paths so pixels and WGPU use the same metrics, font-size normalization, and glyph raster contracts. `pixels` remains software-rendered. |
+
+## 2026-05-25 Architecture Refresh
+
+The renderer and text stack now use one in-tree software text backend for
+measurement, layout, cursor mapping, and rasterization:
+
+- `cranpose-render-common::software_text_raster` owns font metadata parsing,
+  `ab_glyph` scale normalization, metrics, layout, cursor mapping, and
+  rasterization.
+- The pixels renderer delegates text metrics and rasterization to that common
+  backend.
+- The WGPU renderer owns a `SoftwareTextFontSet`, installs a
+  `SoftwareTextMeasurer` into the target `AppContext`, and uses the same font
+  set when rasterizing text-image paths.
+- The default merged font is normalized from `unitsPerEm` and ascender/descender
+  metrics before entering `ab_glyph`, keeping a requested logical font size at
+  the same visual scale as the renderer baseline.
+- Software line-box placement centers the font's natural vertical metrics
+  inside the requested line height, so external X11 captures no longer show
+  13-14 px text boxes where `origin/main` shows 19-20 px boxes.
+- Missing bold and semibold faces are synthesized by the shared backend when
+  `FontSynthesis` allows weight synthesis. Measurement, layout, cursor mapping,
+  and rasterization apply the same synthesized advance and glyph expansion, so
+  fallback font weight does not change hit testing or line-box size.
+- Static text image draws in both pixels and WGPU are blitted from the snapped
+  raster origin. `TextMotion::Animated` still keeps fractional placement, but
+  static text shadows and decorations no longer rasterize at one phase and then
+  resample at another.
+
+The regression guard for the visual scale issue is:
+
+- `software_text_metrics_keep_requested_font_size_for_default_font`
+- `software_text_font_set_resolves_requested_weight`
+- `rasterized_default_text_fills_expected_visual_height`
+- `software_text_synthesizes_missing_bold_weight`
+- `rasterized_synthetic_bold_adds_ink_without_changing_line_box`
+- `wgpu_renderer_matches_shared_render_contracts`
+- `pixels_renderer_matches_shared_render_contracts`
+- WGPU/pixels shared render-contract refresh after the scale correction
+- `robot_presented_window_geometry`, which captures the real X11 window and
+  asserts exact physical marker bounds at the viewport origin, top-right,
+  bottom-left, and center
+- External X11 branch comparisons:
+  `/home/s/.cache/cranpose/x11-comparison/desktop-demo-origin-main-text-synthesis-check-4/`
+  and
+  `/home/s/.cache/cranpose/x11-comparison/leetcodedaily-origin-main-isolated-home-text-synthesis-check-4/`
+  Both latest branch comparisons captured matching outer window dimensions
+  between `origin/main` and the current checkout; the dedicated geometry robot
+  proves the current presented scene is not globally scaled down.
 
 ## Phase-1 Parity Contract Matrix
 
@@ -151,8 +201,11 @@ This section is a context handoff for the next implementation chat.
 - `build_gpu_text_effect(...)`: packs brush + draw-mode uniforms for runtime shader execution.
 - `GPU_TEXT_BRUSH_EFFECT_SHADER`: now evaluates fill and stroke from one shader contract.
 - `push_text_style_draws(...)`: text style routing now chooses glyph draw or glyph-mask+effect, never software image fallback.
-- `crates/cranpose-render/wgpu/src/lib.rs`: no `wgpu` software text raster module remains.
-- `crates/cranpose-render/pixels/src/draw.rs`: software raster blit sizing fix remains in place for pixels backend.
+- `crates/cranpose-render/wgpu/src/lib.rs`: WGPU owns the shared
+  `SoftwareTextFontSet` and installs a `SoftwareTextMeasurer` into the target
+  `AppContext`.
+- `crates/cranpose-render/common/src/software_text_raster.rs`: shared software font, measurement, layout, cursor mapping, and raster APIs used by the pixels and WGPU backends.
+- `crates/cranpose-render/pixels/src/draw.rs`: software raster blit sizing fix remains in place while delegating text font/layout/raster ownership to render-common.
 
 ### Known open gaps
 
@@ -166,19 +219,26 @@ This section is a context handoff for the next implementation chat.
 
 Target:
 
-- Software text raster is runtime-only in `pixels` renderer.
-- `wgpu` text uses one GPU text-material execution model for fill/stroke/gradient in runtime paths.
+- Software text raster is owned by `cranpose-render-common` and used by the
+  `pixels` and `wgpu` renderers.
+- `wgpu` text-image paths use the same font metrics and raster contracts as the
+  shared text measurer attached to `AppContext`.
+- GPU text-material paths remain renderer-owned effects rather than a separate
+  measurement stack.
 
 Current checkpoint:
 
-- `wgpu` runtime has no `software_text_raster` references.
-- `wgpu` text style routing does not use `scene.push_image(...)`.
+- `wgpu` runtime references `software_text_raster` intentionally through
+  `SoftwareTextFontSet`, `SoftwareTextMeasurer`, `measure_text_with_font`, and
+  `rasterize_text_to_image`.
+- `wgpu` text style routing avoids a second text-measurement implementation.
 - Plain text and span text without paint overrides already use GPU material masking.
 - `push_text_decorations(...)` now consumes measured glyph-run visual boxes from layout data, with logical-line fallback only when glyph boxes are unavailable.
 
 Non-negotiable invariants:
 
-- `crates/cranpose-render/wgpu/src` must stay free of runtime software raster hooks.
+- `crates/cranpose-render/wgpu/src` must not own a second text measurement or
+  rasterization stack.
 - Style differences (fill/stroke/gradient/alpha) must be encoded as GPU material state, not renderer path switching.
 - Any span case not yet materialized must still stay on GPU glyph draw path and never fallback to software image text.
 
@@ -228,7 +288,7 @@ Done gate:
 - `cargo test -p cranpose-render-wgpu` passes.
 - `apps/desktop-demo/build-web.sh` passes.
 - `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passes.
-- `./run_robot_test.sh` passes.
+- `./run_robot_test.sh --sequential` passes.
 
 Execution order:
 
@@ -255,7 +315,7 @@ Branch: text
 Primary doc: docs/text.md
 
 Current state:
-- wgpu runtime has no software text raster module and no software text image fallback routing.
+- wgpu runtime uses cranpose-render-common software text font/raster APIs for shared text-image paths and AppContext measurement.
 - Plain text + span paint overrides are on GPU material batching (glyph mask + runtime shader effects).
 - Decorations are generated from measured glyph-run visual boxes (`layout_text(...)` glyph layouts), with logical-line fallback only if glyph boxes are unavailable.
 - Decoration parity gap tracked in docs is resolved on this branch.
@@ -273,11 +333,11 @@ Latest validation snapshot:
 - cargo test -p cranpose-ui text_layout_result -- --nocapture passed
 - apps/desktop-demo/build-web.sh passed
 - (cd apps/android-demo/android && ./gradlew :app:assembleRelease) passed
-- ./run_robot_test.sh --sequential passed (77/77)
-- rg -n "software_text_raster|rasterize_text_to_image|requires_rasterized_glyph_path" crates/cranpose-render/wgpu/src -g'*.rs' returned no matches
+- ./run_robot_test.sh --sequential passed (102/102)
+- rg -n "software_text_raster|rasterize_text_to_image|requires_rasterized_glyph_path" crates/cranpose-render/wgpu/src -g'*.rs' returns only the intentional shared backend references.
 
 Hard invariants:
-- crates/cranpose-render/wgpu/src must not reference software text raster hooks.
+- crates/cranpose-render/wgpu/src must not own a second text measurement/raster stack.
 - Style differences (fill/stroke/gradient/alpha) must remain GPU material state, not route switching.
 - No `scene.push_image(...)` text fallback in wgpu text style routing.
 
@@ -289,7 +349,7 @@ Next priority (pre-alpha):
 
 Primary done gates for this cycle:
 - Mixed-bidi/wrapped-line stress tests pass in `wgpu` material batching with stable visual ordering/continuity.
-- Font resolver/fallback design is implemented (not stubbed), wired into measurement + render paths, and validated on desktop/web/android.
+- Font resolver/fallback design is implemented, wired into measurement + render paths, and validated on desktop/web/android.
 - Full mandatory verification commands pass after each major checkpoint.
 
 Useful anchors:
@@ -347,8 +407,8 @@ Tests to add/update:
 - `cargo test -p cranpose-ui text_layout_result -- --nocapture` passed.
 - `apps/desktop-demo/build-web.sh` passed.
 - `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passed.
-- `./run_robot_test.sh --sequential` passed (`77`/`77`).
-- `rg -n "software_text_raster|rasterize_text_to_image|requires_rasterized_glyph_path" crates/cranpose-render/wgpu/src -g'*.rs'` returned no matches.
+- `./run_robot_test.sh --sequential` passed (`101`/`101`).
+- `rg -n "software_text_raster|rasterize_text_to_image|requires_rasterized_glyph_path" crates/cranpose-render/wgpu/src -g'*.rs'` returns only the intentional shared backend references.
 
 ### Branch working set at snapshot time
 
@@ -386,10 +446,10 @@ It exercises:
 cargo fmt
 cargo test > 1.tmp 2>&1
 cargo clippy > 2.tmp 2>&1
-cargo tree --duplicates
+cargo xtask dependency-budget
 
 # platform checks
 (cd apps/android-demo/android && ./gradlew :app:assembleRelease)
 apps/desktop-demo/build-web.sh
-./run_robot_test.sh
+./run_robot_test.sh --sequential
 ```

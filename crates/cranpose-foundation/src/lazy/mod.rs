@@ -41,6 +41,7 @@
 //! ```
 
 mod bounds_adjuster;
+mod diagnostics;
 mod item_measurer;
 mod item_provider;
 mod lazy_list_layout_info;

@@ -2,9 +2,7 @@ use super::*;
 
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 fn debug_scope_label_env_enabled() -> bool {
-    use std::sync::OnceLock;
-    static DEBUG_SCOPE_TRACKING: OnceLock<bool> = OnceLock::new();
-    *DEBUG_SCOPE_TRACKING.get_or_init(|| std::env::var_os("CRANPOSE_DEBUG_SCOPE_LABELS").is_some())
+    std::env::var_os("CRANPOSE_DEBUG_SCOPE_LABELS").is_some()
 }
 
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -107,12 +105,12 @@ pub fn debug_scope_invalidation_sources(scope_id: usize) -> Vec<String> {
 
 #[doc(hidden)]
 pub fn debug_live_recompose_scope_count() -> usize {
-    LIVE_RECOMPOSE_SCOPE_COUNT.load(Ordering::Relaxed)
+    crate::runtime::live_recompose_scope_count()
 }
 
 #[doc(hidden)]
 pub fn debug_recompose_scope_registry_stats() -> RecomposeScopeRegistryDebugStats {
-    let live = LIVE_RECOMPOSE_SCOPE_COUNT.load(Ordering::Relaxed);
+    let live = crate::runtime::live_recompose_scope_count();
     RecomposeScopeRegistryDebugStats {
         len: live,
         capacity: live,

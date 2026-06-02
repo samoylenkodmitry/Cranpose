@@ -103,13 +103,13 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
         );
     }
 
-    let pushes_pointer_input_ancestor = layer
+    let pointer_input_ancestor = layer
         .hit_test
         .as_ref()
-        .is_some_and(|hit| !hit.pointer_inputs.is_empty())
-        && layer.node_id.is_some();
-    if pushes_pointer_input_ancestor {
-        pointer_input_ancestors.push(layer.node_id.expect("checked above"));
+        .filter(|hit| !hit.pointer_inputs.is_empty())
+        .and(layer.node_id);
+    if let Some(node_id) = pointer_input_ancestor {
+        pointer_input_ancestors.push(node_id);
     }
 
     for child in &layer.children {
@@ -125,7 +125,7 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
         }
     }
 
-    if pushes_pointer_input_ancestor {
+    if pointer_input_ancestor.is_some() {
         let _ = pointer_input_ancestors.pop();
     }
 

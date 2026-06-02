@@ -1,29 +1,184 @@
 use cranpose_ui::text::TextStyle;
+#[cfg(feature = "text-hyphenation")]
 use hyphenation::{Hyphenator, Language, Load, Standard};
+#[cfg(feature = "text-hyphenation")]
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+#[cfg(feature = "text-hyphenation")]
+use std::path::Path;
+#[cfg(feature = "text-hyphenation")]
+use std::sync::RwLock;
 
+#[cfg(feature = "text-hyphenation")]
 const MIN_SEGMENT_CHARS: usize = 2;
 
-fn get_dictionary(language: Language) -> Option<Standard> {
-    static DICTIONARIES: OnceLock<RwLock<HashMap<Language, Standard>>> = OnceLock::new();
-    let cache = DICTIONARIES.get_or_init(|| RwLock::new(HashMap::new()));
+#[cfg(feature = "text-hyphenation")]
+#[derive(thiserror::Error, Debug)]
+pub enum HyphenationDictionaryError {
+    #[error("Unsupported hyphenation locale: {0}")]
+    UnsupportedLocale(String),
+    #[error("Failed to load hyphenation dictionary for {locale}: {message}")]
+    LoadFailed { locale: String, message: String },
+    #[error("Hyphenation dictionary cache is unavailable")]
+    CacheUnavailable,
+}
 
-    if let Ok(read_guard) = cache.read() {
-        if let Some(dict) = read_guard.get(&language) {
-            return Some(dict.clone());
+#[cfg(feature = "text-hyphenation")]
+pub struct HyphenationDictionaryStore {
+    dictionaries: RwLock<HashMap<Language, Standard>>,
+}
+
+#[cfg(feature = "text-hyphenation")]
+impl Default for HyphenationDictionaryStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "text-hyphenation")]
+impl HyphenationDictionaryStore {
+    pub fn new() -> Self {
+        Self {
+            dictionaries: RwLock::new(HashMap::new()),
         }
     }
 
-    // Load if not in cache
-    match Standard::from_embedded(language) {
-        Ok(dict) => {
-            if let Ok(mut write_guard) = cache.write() {
-                write_guard.insert(language, dict.clone());
+    pub fn register_dictionary_path(
+        &self,
+        locale: &str,
+        path: impl AsRef<Path>,
+    ) -> Result<(), HyphenationDictionaryError> {
+        let language = resolve_language_tag(locale)
+            .ok_or_else(|| HyphenationDictionaryError::UnsupportedLocale(locale.to_string()))?;
+        let dictionary = Standard::from_path(language, path).map_err(|err| {
+            HyphenationDictionaryError::LoadFailed {
+                locale: locale.to_string(),
+                message: err.to_string(),
             }
-            Some(dict)
+        })?;
+        self.store_dictionary(language, dictionary)
+    }
+
+    pub fn register_dictionary_reader(
+        &self,
+        locale: &str,
+        reader: &mut impl std::io::Read,
+    ) -> Result<(), HyphenationDictionaryError> {
+        let language = resolve_language_tag(locale)
+            .ok_or_else(|| HyphenationDictionaryError::UnsupportedLocale(locale.to_string()))?;
+        let dictionary = Standard::from_reader(language, reader).map_err(|err| {
+            HyphenationDictionaryError::LoadFailed {
+                locale: locale.to_string(),
+                message: err.to_string(),
+            }
+        })?;
+        self.store_dictionary(language, dictionary)
+    }
+
+    fn store_dictionary(
+        &self,
+        language: Language,
+        dictionary: Standard,
+    ) -> Result<(), HyphenationDictionaryError> {
+        let mut write_guard = self
+            .dictionaries
+            .write()
+            .map_err(|_| HyphenationDictionaryError::CacheUnavailable)?;
+        write_guard.insert(language, dictionary);
+        Ok(())
+    }
+
+    fn get_dictionary(&self, language: Language) -> Option<Standard> {
+        if let Ok(read_guard) = self.dictionaries.read() {
+            if let Some(dict) = read_guard.get(&language) {
+                return Some(dict.clone());
+            }
         }
-        Err(_) => None,
+
+        #[cfg(feature = "text-hyphenation-embedded")]
+        {
+            if let Ok(dict) = Standard::from_embedded(language) {
+                let _ = self.store_dictionary(language, dict.clone());
+                return Some(dict);
+            }
+        }
+
+        None
+    }
+
+    pub fn choose_auto_hyphen_break(
+        &self,
+        line: &str,
+        style: &TextStyle,
+        segment_start_char: usize,
+        measured_break_char: usize,
+    ) -> Option<usize> {
+        if line.is_empty() || measured_break_char <= segment_start_char {
+            return None;
+        }
+
+        let language = resolve_hyphenation_language(style)?;
+
+        let dictionary = self.get_dictionary(language)?;
+        let boundaries = char_boundaries(line);
+        let char_count = boundaries.len().saturating_sub(1);
+
+        if measured_break_char == 0 || measured_break_char >= char_count {
+            return None;
+        }
+        if !is_break_inside_word(line, &boundaries, measured_break_char) {
+            return None;
+        }
+
+        let (word_start, word_end) = word_bounds(line, &boundaries, measured_break_char);
+        let word = &line[boundaries[word_start]..boundaries[word_end]];
+        if word.is_empty() {
+            return None;
+        }
+
+        let max_local_break = measured_break_char.saturating_sub(word_start);
+        let min_local_break = segment_start_char
+            .saturating_sub(word_start)
+            .saturating_add(MIN_SEGMENT_CHARS);
+
+        if min_local_break > max_local_break {
+            return None;
+        }
+
+        let hyphenated = dictionary.hyphenate(word);
+        for break_byte in hyphenated.breaks.into_iter().rev() {
+            if !word.is_char_boundary(break_byte) {
+                continue;
+            }
+            let local_break_chars = word[..break_byte].chars().count();
+            if local_break_chars < min_local_break || local_break_chars > max_local_break {
+                continue;
+            }
+            return Some(word_start + local_break_chars);
+        }
+
+        None
+    }
+}
+
+#[cfg(not(feature = "text-hyphenation"))]
+#[derive(Default)]
+pub struct HyphenationDictionaryStore;
+
+#[cfg(not(feature = "text-hyphenation"))]
+impl HyphenationDictionaryStore {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn choose_auto_hyphen_break(
+        &self,
+        line: &str,
+        _style: &TextStyle,
+        segment_start_char: usize,
+        measured_break_char: usize,
+    ) -> Option<usize> {
+        let _ = (self, line, segment_start_char, measured_break_char);
+        None
     }
 }
 
@@ -33,53 +188,15 @@ pub fn choose_auto_hyphen_break(
     segment_start_char: usize,
     measured_break_char: usize,
 ) -> Option<usize> {
-    if line.is_empty() || measured_break_char <= segment_start_char {
-        return None;
-    }
-
-    let language = resolve_hyphenation_language(style)?;
-
-    let dictionary = get_dictionary(language)?;
-    let boundaries = char_boundaries(line);
-    let char_count = boundaries.len().saturating_sub(1);
-
-    if measured_break_char == 0 || measured_break_char >= char_count {
-        return None;
-    }
-    if !is_break_inside_word(line, &boundaries, measured_break_char) {
-        return None;
-    }
-
-    let (word_start, word_end) = word_bounds(line, &boundaries, measured_break_char);
-    let word = &line[boundaries[word_start]..boundaries[word_end]];
-    if word.is_empty() {
-        return None;
-    }
-
-    let max_local_break = measured_break_char.saturating_sub(word_start);
-    let min_local_break = segment_start_char
-        .saturating_sub(word_start)
-        .saturating_add(MIN_SEGMENT_CHARS);
-
-    if min_local_break > max_local_break {
-        return None;
-    }
-
-    let hyphenated = dictionary.hyphenate(word);
-    for break_byte in hyphenated.breaks.into_iter().rev() {
-        if !word.is_char_boundary(break_byte) {
-            continue;
-        }
-        let local_break_chars = word[..break_byte].chars().count();
-        if local_break_chars < min_local_break || local_break_chars > max_local_break {
-            continue;
-        }
-        return Some(word_start + local_break_chars);
-    }
-
-    None
+    HyphenationDictionaryStore::new().choose_auto_hyphen_break(
+        line,
+        style,
+        segment_start_char,
+        measured_break_char,
+    )
 }
 
+#[cfg(feature = "text-hyphenation")]
 fn resolve_hyphenation_language(style: &TextStyle) -> Option<Language> {
     let Some(locale_list) = style.span_style.locale_list.as_ref() else {
         return Some(Language::EnglishUS);
@@ -88,9 +205,17 @@ fn resolve_hyphenation_language(style: &TextStyle) -> Option<Language> {
         return Some(Language::EnglishUS);
     }
 
-    // Check first matching locale
     let primary_locale = locale_list.locales().first()?;
-    let normalized = primary_locale.trim().replace('_', "-").to_ascii_lowercase();
+    resolve_language_tag(primary_locale)
+}
+
+#[cfg(feature = "text-hyphenation")]
+fn resolve_language_tag(locale: &str) -> Option<Language> {
+    if locale.trim().is_empty() {
+        return Some(Language::EnglishUS);
+    }
+
+    let normalized = locale.trim().replace('_', "-").to_ascii_lowercase();
 
     if normalized.starts_with("en-gb") {
         return Some(Language::EnglishGB);
@@ -141,6 +266,7 @@ fn resolve_hyphenation_language(style: &TextStyle) -> Option<Language> {
     None
 }
 
+#[cfg(feature = "text-hyphenation")]
 fn char_boundaries(text: &str) -> Vec<usize> {
     let mut out = Vec::with_capacity(text.chars().count() + 1);
     out.push(0);
@@ -153,6 +279,7 @@ fn char_boundaries(text: &str) -> Vec<usize> {
     out
 }
 
+#[cfg(feature = "text-hyphenation")]
 fn is_break_inside_word(line: &str, boundaries: &[usize], break_idx: usize) -> bool {
     if break_idx == 0 || break_idx >= boundaries.len() - 1 {
         return false;
@@ -162,6 +289,7 @@ fn is_break_inside_word(line: &str, boundaries: &[usize], break_idx: usize) -> b
     !prev.chars().all(char::is_whitespace) && !next.chars().all(char::is_whitespace)
 }
 
+#[cfg(feature = "text-hyphenation")]
 fn word_bounds(line: &str, boundaries: &[usize], anchor: usize) -> (usize, usize) {
     let mut start = anchor;
     while start > 0 {
@@ -183,7 +311,18 @@ fn word_bounds(line: &str, boundaries: &[usize], anchor: usize) -> (usize, usize
     (start, end)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "text-hyphenation")))]
+mod disabled_tests {
+    use super::*;
+
+    #[test]
+    fn auto_hyphenation_without_dictionary_feature_returns_none() {
+        let break_idx = choose_auto_hyphen_break("Transformation", &TextStyle::default(), 8, 12);
+        assert_eq!(break_idx, None);
+    }
+}
+
+#[cfg(all(test, feature = "text-hyphenation-embedded"))]
 mod tests {
     use super::*;
     use cranpose_ui::text::{LocaleList, SpanStyle, TextStyle};

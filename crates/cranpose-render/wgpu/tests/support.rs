@@ -3,15 +3,25 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
+use cranpose_ui::AppContext;
 
 pub static TEST_FONT: &[u8] =
     include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
 
 static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+fn lock_gpu_test() -> MutexGuard<'static, ()> {
+    GPU_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub struct LockedRenderer {
     _lock: MutexGuard<'static, ()>,
+    app_context: std::rc::Rc<AppContext>,
     renderer: WgpuRenderer,
 }
 
@@ -29,17 +39,81 @@ impl DerefMut for LockedRenderer {
     }
 }
 
+impl LockedRenderer {
+    pub fn render_current_scene_to_texture(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<RenderStatsSnapshot, String> {
+        self.app_context.enter(|| {
+            let device = self
+                .renderer
+                .try_device()
+                .ok_or_else(|| "renderer GPU device was not initialized".to_string())?;
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("WGPU contract render target"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8UnormSrgb,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.renderer
+                .render(&view, width, height)
+                .map_err(|err| format!("{err:?}"))?;
+            self.renderer
+                .last_frame_stats()
+                .ok_or_else(|| "renderer did not publish frame stats".to_string())
+        })
+    }
+
+    pub fn capture_frame(&mut self, width: u32, height: u32) -> Result<CapturedFrame, String> {
+        self.app_context.enter(|| {
+            self.renderer
+                .capture_frame(width, height)
+                .map_err(|err| format!("{err:?}"))
+        })
+    }
+
+    pub fn capture_frame_with_scale(
+        &mut self,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Result<CapturedFrame, String> {
+        self.app_context.enter(|| {
+            self.renderer
+                .capture_frame_with_scale(width, height, root_scale)
+                .map_err(|err| format!("{err:?}"))
+        })
+    }
+
+    pub fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
+        self.app_context.enter(|| self.renderer.last_frame_stats())
+    }
+}
+
 pub fn headless_renderer() -> Result<LockedRenderer, String> {
-    let lock = GPU_TEST_LOCK.lock().expect("GPU test lock poisoned");
-    let renderer = create_headless_renderer()?;
+    let lock = lock_gpu_test();
+    let mut renderer = create_headless_renderer()?;
+    let app_context = AppContext::new();
+    renderer.attach_app_context_services(&app_context);
     Ok(LockedRenderer {
         _lock: lock,
+        app_context,
         renderer,
     })
 }
 
 pub fn headless_renderer_parts() -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
-    let lock = GPU_TEST_LOCK.lock().expect("GPU test lock poisoned");
+    let lock = lock_gpu_test();
     let renderer = create_headless_renderer()?;
     Ok((lock, renderer))
 }

@@ -17,6 +17,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+#[cfg(all(
+    feature = "desktop",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+use std::rc::Weak;
 
 /// A stable identifier for a declarative operating-system window.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -631,6 +637,13 @@ type NativeWindowOwner = Rc<()>;
 type NativeWindowDragHandler = Rc<dyn Fn() -> bool>;
 type NativeWindowResizeHandler = Rc<dyn Fn(WindowResizeDirection)>;
 
+#[derive(Clone, Default)]
+struct NativeWindowDispatchContext {
+    drag_handler: Option<NativeWindowDragHandler>,
+    resize_handler: Option<NativeWindowResizeHandler>,
+    surface_origin: Option<Point>,
+}
+
 #[cfg(all(
     feature = "desktop",
     feature = "renderer-wgpu",
@@ -653,16 +666,93 @@ pub(crate) struct NativeWindowRequest {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+struct NativeWindowRegistration {
+    key: NativeWindowKey,
+    options: NativeWindowOptions,
+    events: NativeWindowEvents,
+    state: Option<WindowState>,
+    group: Option<NativeWindowGroupMembership>,
+    content: NativeWindowContent,
+    owner: NativeWindowOwner,
+}
+
+#[cfg(all(
+    feature = "desktop",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[derive(Default)]
+pub(crate) struct NativeWindowRegistry {
+    windows: RefCell<HashMap<NativeWindowKey, NativeWindowRequest>>,
+    next_revision: Cell<u64>,
+}
+
+#[cfg(all(
+    feature = "desktop",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+impl NativeWindowRegistry {
+    fn requests(&self) -> Vec<NativeWindowRequest> {
+        self.windows.borrow().values().cloned().collect()
+    }
+
+    fn has_requests(&self) -> bool {
+        !self.windows.borrow().is_empty()
+    }
+
+    #[cfg(test)]
+    fn clear(&self) {
+        self.windows.borrow_mut().clear();
+    }
+
+    fn register(&self, registration: NativeWindowRegistration) {
+        let revision = self.next_revision();
+        let key = registration.key;
+        self.windows.borrow_mut().insert(
+            key,
+            NativeWindowRequest {
+                key,
+                options: registration.options,
+                events: registration.events,
+                state: registration.state,
+                group: registration.group,
+                content: registration.content,
+                revision,
+                owner: registration.owner,
+            },
+        );
+    }
+
+    fn unregister(&self, key: NativeWindowKey, owner: NativeWindowOwner) {
+        let mut windows = self.windows.borrow_mut();
+        if windows
+            .get(&key)
+            .is_some_and(|request| Rc::ptr_eq(&request.owner, &owner))
+        {
+            windows.remove(&key);
+        }
+    }
+
+    fn next_revision(&self) -> u64 {
+        let current = self.next_revision.get().max(1);
+        self.next_revision.set(current.wrapping_add(1).max(1));
+        current
+    }
+}
+
+#[cfg(all(
+    feature = "desktop",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
 thread_local! {
-    static NATIVE_WINDOWS: RefCell<HashMap<NativeWindowKey, NativeWindowRequest>> =
-        RefCell::new(HashMap::new());
-    static NEXT_NATIVE_WINDOW_REVISION: Cell<u64> = const { Cell::new(1) };
+    static CURRENT_NATIVE_WINDOW_REGISTRY: RefCell<Vec<Weak<NativeWindowRegistry>>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 thread_local! {
-    static CURRENT_NATIVE_WINDOW_DRAG: RefCell<Option<NativeWindowDragHandler>> = const { RefCell::new(None) };
-    static CURRENT_NATIVE_WINDOW_RESIZE: RefCell<Option<NativeWindowResizeHandler>> = const { RefCell::new(None) };
-    static CURRENT_NATIVE_WINDOW_SURFACE_ORIGIN: RefCell<Option<Point>> = const { RefCell::new(None) };
+    static CURRENT_NATIVE_WINDOW_DISPATCH: RefCell<Vec<NativeWindowDispatchContext>> = const { RefCell::new(Vec::new()) };
     #[cfg(all(
         feature = "desktop",
         feature = "renderer-wgpu",
@@ -783,26 +873,18 @@ fn NativeWindowWithEvents(
 /// This returns `true` when a desktop native window is currently dispatching the
 /// pointer event and the request was forwarded to the platform window.
 fn request_native_window_drag() -> bool {
-    CURRENT_NATIVE_WINDOW_DRAG.with(|slot| {
-        let handler = slot.borrow().clone();
-        if let Some(handler) = handler {
-            handler()
-        } else {
-            false
-        }
-    })
+    current_native_window_dispatch_context()
+        .and_then(|context| context.drag_handler)
+        .is_some_and(|handler| handler())
 }
 
 fn request_native_window_resize(direction: WindowResizeDirection) -> bool {
-    CURRENT_NATIVE_WINDOW_RESIZE.with(|slot| {
-        let handler = slot.borrow().clone();
-        if let Some(handler) = handler {
+    current_native_window_dispatch_context()
+        .and_then(|context| context.resize_handler)
+        .is_some_and(|handler| {
             handler(direction);
             true
-        } else {
-            false
-        }
-    })
+        })
 }
 
 /// Returns the desktop-space origin of the current native window surface while
@@ -810,7 +892,7 @@ fn request_native_window_resize(direction: WindowResizeDirection) -> bool {
 ///
 /// This is `None` for inline content and outside native-window input dispatch.
 pub fn current_native_window_surface_origin() -> Option<Point> {
-    CURRENT_NATIVE_WINDOW_SURFACE_ORIGIN.with(|slot| *slot.borrow())
+    current_native_window_dispatch_context().and_then(|context| context.surface_origin)
 }
 
 #[cfg(all(
@@ -818,8 +900,25 @@ pub fn current_native_window_surface_origin() -> Option<Point> {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-pub(crate) fn native_window_requests() -> Vec<NativeWindowRequest> {
-    NATIVE_WINDOWS.with(|windows| windows.borrow().values().cloned().collect())
+pub(crate) fn with_native_window_registry<R>(
+    registry: &Rc<NativeWindowRegistry>,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct RegistryGuard;
+
+    impl Drop for RegistryGuard {
+        fn drop(&mut self) {
+            CURRENT_NATIVE_WINDOW_REGISTRY.with(|stack| {
+                stack.borrow_mut().pop();
+            });
+        }
+    }
+
+    CURRENT_NATIVE_WINDOW_REGISTRY.with(|stack| {
+        stack.borrow_mut().push(Rc::downgrade(registry));
+    });
+    let _guard = RegistryGuard;
+    f()
 }
 
 #[cfg(all(
@@ -827,8 +926,19 @@ pub(crate) fn native_window_requests() -> Vec<NativeWindowRequest> {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-pub(crate) fn has_native_window_requests() -> bool {
-    NATIVE_WINDOWS.with(|windows| !windows.borrow().is_empty())
+fn current_native_window_registry() -> Option<Rc<NativeWindowRegistry>> {
+    CURRENT_NATIVE_WINDOW_REGISTRY.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        loop {
+            match stack.last().and_then(Weak::upgrade) {
+                Some(registry) => return Some(registry),
+                None if stack.is_empty() => return None,
+                None => {
+                    stack.pop();
+                }
+            }
+        }
+    })
 }
 
 #[cfg(all(
@@ -836,8 +946,57 @@ pub(crate) fn has_native_window_requests() -> bool {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-pub(crate) fn clear_native_window_requests() {
-    NATIVE_WINDOWS.with(|windows| windows.borrow_mut().clear());
+pub(crate) fn native_window_requests(registry: &NativeWindowRegistry) -> Vec<NativeWindowRequest> {
+    registry.requests()
+}
+
+#[cfg(all(
+    feature = "desktop",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+pub(crate) fn has_native_window_requests(registry: &NativeWindowRegistry) -> bool {
+    registry.has_requests()
+}
+
+#[cfg(all(
+    test,
+    feature = "desktop",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+pub(crate) fn clear_native_window_requests(registry: &NativeWindowRegistry) {
+    registry.clear();
+}
+
+fn current_native_window_dispatch_context() -> Option<NativeWindowDispatchContext> {
+    CURRENT_NATIVE_WINDOW_DISPATCH.with(|stack| stack.borrow().last().cloned())
+}
+
+#[cfg(all(
+    feature = "desktop",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+fn with_native_window_dispatch_context<R>(
+    context: NativeWindowDispatchContext,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct DispatchContextGuard;
+
+    impl Drop for DispatchContextGuard {
+        fn drop(&mut self) {
+            CURRENT_NATIVE_WINDOW_DISPATCH.with(|stack| {
+                stack.borrow_mut().pop();
+            });
+        }
+    }
+
+    CURRENT_NATIVE_WINDOW_DISPATCH.with(|stack| {
+        stack.borrow_mut().push(context);
+    });
+    let _guard = DispatchContextGuard;
+    f()
 }
 
 #[cfg(all(
@@ -850,27 +1009,10 @@ pub(crate) fn with_native_window_drag_handler<R>(
     resize_handler: NativeWindowResizeHandler,
     f: impl FnOnce() -> R,
 ) -> R {
-    struct WindowHandlerGuard;
-
-    impl Drop for WindowHandlerGuard {
-        fn drop(&mut self) {
-            CURRENT_NATIVE_WINDOW_DRAG.with(|slot| {
-                *slot.borrow_mut() = None;
-            });
-            CURRENT_NATIVE_WINDOW_RESIZE.with(|slot| {
-                *slot.borrow_mut() = None;
-            });
-        }
-    }
-
-    CURRENT_NATIVE_WINDOW_DRAG.with(|slot| {
-        *slot.borrow_mut() = Some(handler);
-    });
-    CURRENT_NATIVE_WINDOW_RESIZE.with(|slot| {
-        *slot.borrow_mut() = Some(resize_handler);
-    });
-    let _guard = WindowHandlerGuard;
-    f()
+    let mut context = current_native_window_dispatch_context().unwrap_or_default();
+    context.drag_handler = Some(handler);
+    context.resize_handler = Some(resize_handler);
+    with_native_window_dispatch_context(context, f)
 }
 
 #[cfg(all(
@@ -882,23 +1024,9 @@ pub(crate) fn with_native_window_surface_origin<R>(
     origin: Option<Point>,
     f: impl FnOnce() -> R,
 ) -> R {
-    struct SurfaceOriginGuard(Option<Point>);
-
-    impl Drop for SurfaceOriginGuard {
-        fn drop(&mut self) {
-            CURRENT_NATIVE_WINDOW_SURFACE_ORIGIN.with(|slot| {
-                *slot.borrow_mut() = self.0;
-            });
-        }
-    }
-
-    let previous = CURRENT_NATIVE_WINDOW_SURFACE_ORIGIN.with(|slot| {
-        let previous = *slot.borrow();
-        *slot.borrow_mut() = origin;
-        previous
-    });
-    let _guard = SurfaceOriginGuard(previous);
-    f()
+    let mut context = current_native_window_dispatch_context().unwrap_or_default();
+    context.surface_origin = origin;
+    with_native_window_dispatch_context(context, f)
 }
 
 #[cfg(all(
@@ -947,21 +1075,20 @@ fn register_native_window(
     content: NativeWindowContent,
     owner: NativeWindowOwner,
 ) {
-    let revision = next_native_window_revision();
-    NATIVE_WINDOWS.with(|windows| {
-        windows.borrow_mut().insert(
-            key,
-            NativeWindowRequest {
-                key,
-                options,
-                events,
-                state,
-                group,
-                content,
-                revision,
-                owner,
-            },
+    let Some(registry) = current_native_window_registry() else {
+        log::error!(
+            "native window declaration {key:?} ignored because no native-window registry is active"
         );
+        return;
+    };
+    registry.register(NativeWindowRegistration {
+        key,
+        options,
+        events,
+        state,
+        group,
+        content,
+        owner,
     });
 }
 
@@ -971,28 +1098,13 @@ fn register_native_window(
     not(target_arch = "wasm32")
 ))]
 fn unregister_native_window(key: NativeWindowKey, owner: NativeWindowOwner) {
-    NATIVE_WINDOWS.with(|windows| {
-        let mut windows = windows.borrow_mut();
-        if windows
-            .get(&key)
-            .is_some_and(|request| Rc::ptr_eq(&request.owner, &owner))
-        {
-            windows.remove(&key);
-        }
-    });
-}
-
-#[cfg(all(
-    feature = "desktop",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn next_native_window_revision() -> u64 {
-    NEXT_NATIVE_WINDOW_REVISION.with(|revision| {
-        let current = revision.get();
-        revision.set(current.wrapping_add(1).max(1));
-        current
-    })
+    let Some(registry) = current_native_window_registry() else {
+        log::error!(
+            "native window declaration {key:?} could not unregister because no native-window registry is active"
+        );
+        return;
+    };
+    registry.unregister(key, owner);
 }
 
 fn hash_id(id: &'static str) -> u64 {
@@ -1151,7 +1263,7 @@ impl WindowGraphState {
             .move_mode
             .moves_attached_component(session.dragged);
         let mut component = if moves_attached {
-            attached_component(&group_windows, session.dragged, group.policy.attach_epsilon)
+            session.captured.iter().map(|window| window.id).collect()
         } else {
             vec![session.dragged]
         };
@@ -1509,8 +1621,9 @@ mod tests {
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
-    fn reset_request_test_state() {
-        clear_native_window_requests();
+    fn with_request_test_registry<R>(f: impl FnOnce(&Rc<NativeWindowRegistry>) -> R) -> R {
+        let registry = Rc::new(NativeWindowRegistry::default());
+        with_native_window_registry(&registry, || f(&registry))
     }
 
     #[cfg(all(
@@ -1518,8 +1631,17 @@ mod tests {
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
-    fn request_exists(key: NativeWindowKey) -> bool {
-        native_window_requests()
+    fn reset_request_test_state(registry: &NativeWindowRegistry) {
+        clear_native_window_requests(registry);
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn request_exists(registry: &NativeWindowRegistry, key: NativeWindowKey) -> bool {
+        native_window_requests(registry)
             .into_iter()
             .any(|request| request.key == key)
     }
@@ -1529,16 +1651,107 @@ mod tests {
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
-    fn request_test_composition() -> (
-        cranpose_core::Runtime,
-        cranpose_core::Composition<cranpose_core::MemoryApplier>,
-    ) {
+    #[test]
+    fn native_window_requests_are_isolated_by_registry() {
+        let first_registry = Rc::new(NativeWindowRegistry::default());
+        let second_registry = Rc::new(NativeWindowRegistry::default());
+        let first_key = WindowId::from_static("first-registry-window");
+        let second_key = WindowId::from_static("second-registry-window");
+        let first_owner = Rc::new(());
+        let second_owner = Rc::new(());
+        let first_content = Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+        let second_content = Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+
+        with_native_window_registry(&first_registry, || {
+            register_native_window(
+                first_key,
+                NativeWindowOptions::new("first", 80.0, 40.0),
+                NativeWindowEvents::default(),
+                None,
+                None,
+                first_content,
+                first_owner,
+            );
+        });
+        with_native_window_registry(&second_registry, || {
+            register_native_window(
+                second_key,
+                NativeWindowOptions::new("second", 90.0, 45.0),
+                NativeWindowEvents::default(),
+                None,
+                None,
+                second_content,
+                second_owner,
+            );
+        });
+
+        let first_requests = native_window_requests(&first_registry);
+        let second_requests = native_window_requests(&second_registry);
+
+        assert_eq!(first_requests.len(), 1);
+        assert_eq!(first_requests[0].key, first_key);
+        assert_eq!(second_requests.len(), 1);
+        assert_eq!(second_requests[0].key, second_key);
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    struct RequestTestComposition {
+        _context: Rc<cranpose_ui::AppContext>,
+        _scope: cranpose_ui::AppContextScope,
+        runtime: cranpose_core::Runtime,
+        composition: cranpose_core::Composition<cranpose_core::MemoryApplier>,
+        registry: Rc<NativeWindowRegistry>,
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    impl RequestTestComposition {
+        fn with_registry<R>(
+            &mut self,
+            f: impl FnOnce(&mut cranpose_core::Composition<cranpose_core::MemoryApplier>) -> R,
+        ) -> R {
+            let registry = Rc::clone(&self.registry);
+            with_native_window_registry(&registry, || f(&mut self.composition))
+        }
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn test_app_context_scope() -> (Rc<cranpose_ui::AppContext>, cranpose_ui::AppContextScope) {
+        let context = cranpose_ui::AppContext::new();
+        let scope = context.enter_scope();
+        (context, scope)
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn request_test_composition() -> RequestTestComposition {
+        let (context, scope) = test_app_context_scope();
         let runtime = cranpose_core::Runtime::new(Arc::new(cranpose_core::DefaultScheduler));
         let composition = cranpose_core::Composition::with_runtime(
             cranpose_core::MemoryApplier::new(),
             runtime.clone(),
         );
-        (runtime, composition)
+        RequestTestComposition {
+            _context: context,
+            _scope: scope,
+            runtime,
+            composition,
+            registry: Rc::new(NativeWindowRegistry::default()),
+        }
     }
 
     #[cfg(all(
@@ -1622,27 +1835,30 @@ mod tests {
     ))]
     #[test]
     fn native_window_request_survives_unrelated_scoped_recompose() {
-        reset_request_test_state();
-
-        let (runtime, mut composition) = request_test_composition();
-        let counter = cranpose_core::MutableState::with_runtime(0i32, runtime.handle());
+        let mut test = request_test_composition();
+        reset_request_test_state(&test.registry);
+        let counter = cranpose_core::MutableState::with_runtime(0i32, test.runtime.handle());
         let key = WindowId::from_static("persistent-request");
         let root_key = cranpose_core::location_key(file!(), line!(), column!());
-        composition
-            .render_stable(root_key, || PersistentRequestRoot(counter))
-            .expect("initial persistent native-window request render");
-        assert!(request_exists(key));
+        test.with_registry(|composition| {
+            composition
+                .render_stable(root_key, || PersistentRequestRoot(counter))
+                .expect("initial persistent native-window request render");
+        });
+        assert!(request_exists(&test.registry, key));
 
         counter.set(1);
-        composition
-            .reconcile(root_key, || PersistentRequestRoot(counter))
-            .expect("persistent native-window request reconcile");
+        test.with_registry(|composition| {
+            composition
+                .reconcile(root_key, || PersistentRequestRoot(counter))
+                .expect("persistent native-window request reconcile");
+        });
 
         assert!(
-            request_exists(key),
+            request_exists(&test.registry, key),
             "unchanged native-window declarations must stay registered when only a sibling scope recomposes"
         );
-        clear_native_window_requests();
+        clear_native_window_requests(&test.registry);
     }
 
     #[cfg(all(
@@ -1652,27 +1868,30 @@ mod tests {
     ))]
     #[test]
     fn native_window_request_unregisters_when_conditional_declaration_is_removed() {
-        reset_request_test_state();
-
-        let (runtime, mut composition) = request_test_composition();
-        let show = cranpose_core::MutableState::with_runtime(true, runtime.handle());
+        let mut test = request_test_composition();
+        reset_request_test_state(&test.registry);
+        let show = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
         let key = WindowId::from_static("conditional-request");
         let root_key = cranpose_core::location_key(file!(), line!(), column!());
-        composition
-            .render_stable(root_key, || ConditionalRequestRoot(show))
-            .expect("initial conditional native-window request render");
-        assert!(request_exists(key));
+        test.with_registry(|composition| {
+            composition
+                .render_stable(root_key, || ConditionalRequestRoot(show))
+                .expect("initial conditional native-window request render");
+        });
+        assert!(request_exists(&test.registry, key));
 
         show.set(false);
-        composition
-            .reconcile(root_key, || ConditionalRequestRoot(show))
-            .expect("conditional native-window request reconcile");
+        test.with_registry(|composition| {
+            composition
+                .reconcile(root_key, || ConditionalRequestRoot(show))
+                .expect("conditional native-window request reconcile");
+        });
 
         assert!(
-            !request_exists(key),
+            !request_exists(&test.registry, key),
             "removed native-window declarations must unregister through their disposable owner"
         );
-        clear_native_window_requests();
+        clear_native_window_requests(&test.registry);
     }
 
     #[cfg(all(
@@ -1682,27 +1901,30 @@ mod tests {
     ))]
     #[test]
     fn native_window_request_unregisters_when_keyed_branch_is_replaced() {
-        reset_request_test_state();
-
-        let (runtime, mut composition) = request_test_composition();
-        let show = cranpose_core::MutableState::with_runtime(true, runtime.handle());
+        let mut test = request_test_composition();
+        reset_request_test_state(&test.registry);
+        let show = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
         let key = WindowId::from_static("keyed-replacement-request");
         let root_key = cranpose_core::location_key(file!(), line!(), column!());
-        composition
-            .render_stable(root_key, || KeyedReplacementRequestRoot(show))
-            .expect("initial keyed native-window request render");
-        assert!(request_exists(key));
+        test.with_registry(|composition| {
+            composition
+                .render_stable(root_key, || KeyedReplacementRequestRoot(show))
+                .expect("initial keyed native-window request render");
+        });
+        assert!(request_exists(&test.registry, key));
 
         show.set(false);
-        composition
-            .reconcile(root_key, || KeyedReplacementRequestRoot(show))
-            .expect("keyed native-window request reconcile");
+        test.with_registry(|composition| {
+            composition
+                .reconcile(root_key, || KeyedReplacementRequestRoot(show))
+                .expect("keyed native-window request reconcile");
+        });
 
         assert!(
-            !request_exists(key),
+            !request_exists(&test.registry, key),
             "keyed branch replacement must unregister native-window declarations from the inactive branch"
         );
-        clear_native_window_requests();
+        clear_native_window_requests(&test.registry);
     }
 
     #[test]
@@ -1873,10 +2095,53 @@ mod tests {
         not(target_arch = "wasm32")
     ))]
     #[test]
+    fn native_window_drag_handler_restores_outer_scope_after_nested_scope() {
+        let outer_resize_calls = Rc::new(Cell::new(0));
+        let inner_resize_calls = Rc::new(Cell::new(0));
+        let outer_resize_handler: NativeWindowResizeHandler = {
+            let outer_resize_calls = Rc::clone(&outer_resize_calls);
+            Rc::new(move |_| outer_resize_calls.set(outer_resize_calls.get() + 1))
+        };
+        let inner_resize_handler: NativeWindowResizeHandler = {
+            let inner_resize_calls = Rc::clone(&inner_resize_calls);
+            Rc::new(move |_| inner_resize_calls.set(inner_resize_calls.get() + 1))
+        };
+
+        with_native_window_drag_handler(Rc::new(|| true), outer_resize_handler, || {
+            assert!(request_native_window_drag());
+            assert!(request_native_window_resize(
+                WindowResizeDirection::SouthEast
+            ));
+
+            with_native_window_drag_handler(Rc::new(|| false), inner_resize_handler, || {
+                assert!(!request_native_window_drag());
+                assert!(request_native_window_resize(
+                    WindowResizeDirection::NorthWest
+                ));
+            });
+
+            assert!(request_native_window_drag());
+            assert!(request_native_window_resize(
+                WindowResizeDirection::SouthEast
+            ));
+        });
+
+        assert!(!request_native_window_drag());
+        assert_eq!(outer_resize_calls.get(), 2);
+        assert_eq!(inner_resize_calls.get(), 1);
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[test]
     fn drag_area_callbacks_follow_accepted_native_drag_lifecycle() {
         use cranpose_ui::{collect_slices_from_modifier, PointerEvent};
         use std::cell::Cell;
 
+        let (_app_context, _app_context_scope) = test_app_context_scope();
         let started = Rc::new(Cell::new(0));
         let finished = Rc::new(Cell::new(0));
         let modifier = Modifier::empty().window_drag_area_with_callbacks(
@@ -2183,6 +2448,67 @@ mod tests {
         not(target_arch = "wasm32")
     ))]
     #[test]
+    fn graph_release_uses_drag_start_component_for_attached_windows() {
+        let main = WindowId::from_static("main");
+        let group = graph_group(WindowAttachPolicy::default());
+        let start = vec![
+            graph_node(
+                "main",
+                Point::new(100.0, 100.0),
+                Size::new(100.0, 50.0),
+                &group,
+            ),
+            graph_node(
+                "equalizer",
+                Point::new(100.0, 150.0),
+                Size::new(100.0, 50.0),
+                &group,
+            ),
+            graph_node(
+                "playlist",
+                Point::new(200.0, 150.0),
+                Size::new(100.0, 50.0),
+                &group,
+            ),
+        ];
+        let finish_with_peer_position_lag = vec![
+            graph_node(
+                "main",
+                Point::new(112.0, 100.0),
+                Size::new(100.0, 50.0),
+                &group,
+            ),
+            graph_node(
+                "equalizer",
+                Point::new(112.0, 150.0),
+                Size::new(100.0, 50.0),
+                &group,
+            ),
+            graph_node(
+                "playlist",
+                Point::new(216.0, 150.0),
+                Size::new(100.0, 50.0),
+                &group,
+            ),
+        ];
+
+        let mut graph = WindowGraphState::default();
+        graph.start_drag(&start, main);
+
+        assert!(
+            graph
+                .finish_drag(&finish_with_peer_position_lag)
+                .is_empty(),
+            "release snapping must not drop a start-captured peer from the moving component because OS move events arrived out of phase"
+        );
+    }
+
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    #[test]
     fn graph_cancel_drag_discards_active_capture_without_release_moves() {
         let main = WindowId::from_static("main");
         let group = graph_group(WindowAttachPolicy::default());
@@ -2274,46 +2600,48 @@ mod tests {
     ))]
     #[test]
     fn registry_replaces_native_window_declarations_by_key() {
-        clear_native_window_requests();
+        with_request_test_registry(|registry| {
+            clear_native_window_requests(registry);
 
-        let key = NativeWindowKey::from_static("visibility-update");
-        let owner = test_owner();
-        let content: NativeWindowContent =
-            Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let key = NativeWindowKey::from_static("visibility-update");
+            let owner = test_owner();
+            let content: NativeWindowContent =
+                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
 
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0).with_visible(true),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            Rc::clone(&content),
-            Rc::clone(&owner),
-        );
-        let initial_revision = native_window_requests()
-            .into_iter()
-            .next()
-            .expect("first native window request")
-            .revision;
+            register_native_window(
+                key,
+                NativeWindowOptions::new("Panel", 100.0, 50.0).with_visible(true),
+                NativeWindowEvents::new(),
+                None,
+                None,
+                Rc::clone(&content),
+                Rc::clone(&owner),
+            );
+            let initial_revision = native_window_requests(registry)
+                .into_iter()
+                .next()
+                .expect("first native window request")
+                .revision;
 
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0).with_visible(false),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            content,
-            owner,
-        );
+            register_native_window(
+                key,
+                NativeWindowOptions::new("Panel", 100.0, 50.0).with_visible(false),
+                NativeWindowEvents::new(),
+                None,
+                None,
+                content,
+                owner,
+            );
 
-        let requests = native_window_requests();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].key, key);
-        assert_ne!(requests[0].revision, initial_revision);
-        assert!(!requests[0].options.visible);
+            let requests = native_window_requests(registry);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].key, key);
+            assert_ne!(requests[0].revision, initial_revision);
+            assert!(!requests[0].options.visible);
 
-        clear_native_window_requests();
-        assert!(native_window_requests().is_empty());
+            clear_native_window_requests(registry);
+            assert!(native_window_requests(registry).is_empty());
+        });
     }
 
     #[cfg(all(
@@ -2323,48 +2651,50 @@ mod tests {
     ))]
     #[test]
     fn registry_revisions_change_on_each_declaration() {
-        clear_native_window_requests();
+        with_request_test_registry(|registry| {
+            clear_native_window_requests(registry);
 
-        let key = NativeWindowKey::from_static("content-update");
-        let owner = test_owner();
-        let first_content: NativeWindowContent =
-            Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
-        let second_content: NativeWindowContent =
-            Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let key = NativeWindowKey::from_static("content-update");
+            let owner = test_owner();
+            let first_content: NativeWindowContent =
+                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let second_content: NativeWindowContent =
+                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
 
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            first_content,
-            Rc::clone(&owner),
-        );
-        let first_revision = native_window_requests()
-            .into_iter()
-            .next()
-            .expect("first native window request")
-            .revision;
+            register_native_window(
+                key,
+                NativeWindowOptions::new("Panel", 100.0, 50.0),
+                NativeWindowEvents::new(),
+                None,
+                None,
+                first_content,
+                Rc::clone(&owner),
+            );
+            let first_revision = native_window_requests(registry)
+                .into_iter()
+                .next()
+                .expect("first native window request")
+                .revision;
 
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            second_content,
-            owner,
-        );
-        let second_revision = native_window_requests()
-            .into_iter()
-            .next()
-            .expect("second native window request")
-            .revision;
+            register_native_window(
+                key,
+                NativeWindowOptions::new("Panel", 100.0, 50.0),
+                NativeWindowEvents::new(),
+                None,
+                None,
+                second_content,
+                owner,
+            );
+            let second_revision = native_window_requests(registry)
+                .into_iter()
+                .next()
+                .expect("second native window request")
+                .revision;
 
-        assert_ne!(first_revision, second_revision);
+            assert_ne!(first_revision, second_revision);
 
-        clear_native_window_requests();
+            clear_native_window_requests(registry);
+        });
     }
 
     #[cfg(all(
@@ -2374,46 +2704,48 @@ mod tests {
     ))]
     #[test]
     fn registry_revisions_change_when_same_content_is_updated() {
-        clear_native_window_requests();
+        with_request_test_registry(|registry| {
+            clear_native_window_requests(registry);
 
-        let key = NativeWindowKey::from_static("same-content-update");
-        let owner = test_owner();
-        let content: NativeWindowContent =
-            Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let key = NativeWindowKey::from_static("same-content-update");
+            let owner = test_owner();
+            let content: NativeWindowContent =
+                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
 
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            Rc::clone(&content),
-            Rc::clone(&owner),
-        );
-        let first_revision = native_window_requests()
-            .into_iter()
-            .next()
-            .expect("first native window request")
-            .revision;
+            register_native_window(
+                key,
+                NativeWindowOptions::new("Panel", 100.0, 50.0),
+                NativeWindowEvents::new(),
+                None,
+                None,
+                Rc::clone(&content),
+                Rc::clone(&owner),
+            );
+            let first_revision = native_window_requests(registry)
+                .into_iter()
+                .next()
+                .expect("first native window request")
+                .revision;
 
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            content,
-            owner,
-        );
-        let second_revision = native_window_requests()
-            .into_iter()
-            .next()
-            .expect("second native window request")
-            .revision;
+            register_native_window(
+                key,
+                NativeWindowOptions::new("Panel", 100.0, 50.0),
+                NativeWindowEvents::new(),
+                None,
+                None,
+                content,
+                owner,
+            );
+            let second_revision = native_window_requests(registry)
+                .into_iter()
+                .next()
+                .expect("second native window request")
+                .revision;
 
-        assert_ne!(first_revision, second_revision);
+            assert_ne!(first_revision, second_revision);
 
-        clear_native_window_requests();
+            clear_native_window_requests(registry);
+        });
     }
 
     #[cfg(all(
@@ -2423,46 +2755,48 @@ mod tests {
     ))]
     #[test]
     fn unregister_ignores_stale_owner_after_redeclaration() {
-        clear_native_window_requests();
+        with_request_test_registry(|registry| {
+            clear_native_window_requests(registry);
 
-        let key = NativeWindowKey::from_static("reattach-window");
-        let stale_owner = test_owner();
-        let current_owner = test_owner();
-        let first_content: NativeWindowContent =
-            Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
-        let second_content: NativeWindowContent =
-            Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let key = NativeWindowKey::from_static("reattach-window");
+            let stale_owner = test_owner();
+            let current_owner = test_owner();
+            let first_content: NativeWindowContent =
+                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let second_content: NativeWindowContent =
+                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
 
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            Rc::clone(&first_content),
-            Rc::clone(&stale_owner),
-        );
+            register_native_window(
+                key,
+                NativeWindowOptions::new("Panel", 100.0, 50.0),
+                NativeWindowEvents::new(),
+                None,
+                None,
+                Rc::clone(&first_content),
+                Rc::clone(&stale_owner),
+            );
 
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            Rc::clone(&second_content),
-            Rc::clone(&current_owner),
-        );
-        unregister_native_window(key, stale_owner);
+            register_native_window(
+                key,
+                NativeWindowOptions::new("Panel", 100.0, 50.0),
+                NativeWindowEvents::new(),
+                None,
+                None,
+                Rc::clone(&second_content),
+                Rc::clone(&current_owner),
+            );
+            unregister_native_window(key, stale_owner);
 
-        let requests = native_window_requests();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].key, key);
-        assert!(Rc::ptr_eq(&requests[0].content, &second_content));
+            let requests = native_window_requests(registry);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].key, key);
+            assert!(Rc::ptr_eq(&requests[0].content, &second_content));
 
-        unregister_native_window(key, current_owner);
-        assert!(native_window_requests().is_empty());
+            unregister_native_window(key, current_owner);
+            assert!(native_window_requests(registry).is_empty());
 
-        clear_native_window_requests();
+            clear_native_window_requests(registry);
+        });
     }
 
     #[cfg(all(
@@ -2472,48 +2806,50 @@ mod tests {
     ))]
     #[test]
     fn clear_does_not_reuse_same_content_revision() {
-        clear_native_window_requests();
+        with_request_test_registry(|registry| {
+            clear_native_window_requests(registry);
 
-        let key = NativeWindowKey::from_static("remove-window");
-        let owner = test_owner();
-        let content: NativeWindowContent =
-            Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let key = NativeWindowKey::from_static("remove-window");
+            let owner = test_owner();
+            let content: NativeWindowContent =
+                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
 
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            Rc::clone(&content),
-            Rc::clone(&owner),
-        );
-        let first_revision = native_window_requests()
-            .into_iter()
-            .next()
-            .expect("registered native window request")
-            .revision;
+            register_native_window(
+                key,
+                NativeWindowOptions::new("Panel", 100.0, 50.0),
+                NativeWindowEvents::new(),
+                None,
+                None,
+                Rc::clone(&content),
+                Rc::clone(&owner),
+            );
+            let first_revision = native_window_requests(registry)
+                .into_iter()
+                .next()
+                .expect("registered native window request")
+                .revision;
 
-        clear_native_window_requests();
-        assert!(native_window_requests().is_empty());
+            clear_native_window_requests(registry);
+            assert!(native_window_requests(registry).is_empty());
 
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            content,
-            owner,
-        );
-        let second_revision = native_window_requests()
-            .into_iter()
-            .next()
-            .expect("registered native window request after cleanup")
-            .revision;
+            register_native_window(
+                key,
+                NativeWindowOptions::new("Panel", 100.0, 50.0),
+                NativeWindowEvents::new(),
+                None,
+                None,
+                content,
+                owner,
+            );
+            let second_revision = native_window_requests(registry)
+                .into_iter()
+                .next()
+                .expect("registered native window request after cleanup")
+                .revision;
 
-        assert_ne!(first_revision, second_revision);
+            assert_ne!(first_revision, second_revision);
 
-        clear_native_window_requests();
+            clear_native_window_requests(registry);
+        });
     }
 }

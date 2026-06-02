@@ -318,7 +318,7 @@ pub fn find_clickables_in_range(
     for elem in elements {
         search(elem, &mut tabs, min_y, max_y);
     }
-    tabs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    tabs.sort_by(|a, b| a.1.total_cmp(&b.1));
     tabs
 }
 
@@ -840,13 +840,31 @@ pub fn screenshot_pixel(screenshot: &cranpose::RobotScreenshot, x: u32, y: u32) 
     if x >= screenshot.width || y >= screenshot.height {
         return None;
     }
-    let index = ((y * screenshot.width + x) * 4) as usize;
-    Some([
-        screenshot.pixels[index],
-        screenshot.pixels[index + 1],
-        screenshot.pixels[index + 2],
-        screenshot.pixels[index + 3],
-    ])
+    let index = screenshot_pixel_offset(screenshot, x, y)?;
+    let pixel = screenshot.pixels.get(index..index + 4)?;
+    Some([pixel[0], pixel[1], pixel[2], pixel[3]])
+}
+
+fn screenshot_pixel_offset(
+    screenshot: &cranpose::RobotScreenshot,
+    x: u32,
+    y: u32,
+) -> Option<usize> {
+    let width = usize::try_from(screenshot.width).ok()?;
+    let x = usize::try_from(x).ok()?;
+    let y = usize::try_from(y).ok()?;
+    y.checked_mul(width)?.checked_add(x)?.checked_mul(4)
+}
+
+fn expected_screenshot_pixel_bytes(screenshot: &cranpose::RobotScreenshot) -> Option<usize> {
+    let width = usize::try_from(screenshot.width).ok()?;
+    let height = usize::try_from(screenshot.height).ok()?;
+    width.checked_mul(height)?.checked_mul(4)
+}
+
+fn screenshot_pixel_storage_complete(screenshot: &cranpose::RobotScreenshot) -> bool {
+    expected_screenshot_pixel_bytes(screenshot)
+        .is_some_and(|expected| screenshot.pixels.len() >= expected)
 }
 
 pub fn sample_screenshot_pixel_logical(
@@ -860,11 +878,11 @@ pub fn sample_screenshot_pixel_logical(
         return None;
     }
 
-    Some(sample_screenshot_pixel_bilinear(
+    sample_screenshot_pixel_bilinear(
         screenshot,
         logical_to_screenshot_x(screenshot, x),
         logical_to_screenshot_y(screenshot, y),
-    ))
+    )
 }
 
 pub fn logical_region_to_pixel_bounds(
@@ -1021,10 +1039,8 @@ pub fn screenshot_difference_stats(
 
     for y in 0..before.height {
         for x in 0..before.width {
-            let before_pixel =
-                screenshot_pixel(before, x, y).expect("screenshot bounds checked by loop");
-            let after_pixel =
-                screenshot_pixel(after, x, y).expect("screenshot bounds checked by loop");
+            let before_pixel = screenshot_pixel(before, x, y)?;
+            let after_pixel = screenshot_pixel(after, x, y)?;
             let difference = pixel_difference(before_pixel, after_pixel);
             if difference > difference_tolerance {
                 differing_pixels += 1;
@@ -1056,14 +1072,20 @@ pub fn changed_pixel_count(
     after: &cranpose::RobotScreenshot,
     channel_threshold: u8,
 ) -> usize {
-    if before.width != after.width || before.height != after.height {
+    let Some(expected_len) = expected_screenshot_pixel_bytes(before) else {
+        return usize::MAX;
+    };
+    if before.width != after.width
+        || before.height != after.height
+        || !screenshot_pixel_storage_complete(before)
+        || !screenshot_pixel_storage_complete(after)
+    {
         return usize::MAX;
     }
 
-    before
-        .pixels
+    before.pixels[..expected_len]
         .chunks_exact(4)
-        .zip(after.pixels.chunks_exact(4))
+        .zip(after.pixels[..expected_len].chunks_exact(4))
         .filter(|(a, b)| {
             a[0].abs_diff(b[0]) > channel_threshold
                 || a[1].abs_diff(b[1]) > channel_threshold
@@ -1082,6 +1104,8 @@ pub fn changed_pixel_count_in_region(
 ) -> usize {
     if before.width != after.width
         || before.height != after.height
+        || !screenshot_pixel_storage_complete(before)
+        || !screenshot_pixel_storage_complete(after)
         || (screenshot_scale_x(before) - screenshot_scale_x(after)).abs() > f32::EPSILON
         || (screenshot_scale_y(before) - screenshot_scale_y(after)).abs() > f32::EPSILON
     {
@@ -1114,7 +1138,7 @@ fn sample_screenshot_pixel_bilinear(
     screenshot: &cranpose::RobotScreenshot,
     x: f32,
     y: f32,
-) -> [u8; 4] {
+) -> Option<[u8; 4]> {
     let max_x = screenshot.width.saturating_sub(1) as f32;
     let max_y = screenshot.height.saturating_sub(1) as f32;
     let source_x = (x - 0.5).clamp(0.0, max_x);
@@ -1125,10 +1149,10 @@ fn sample_screenshot_pixel_bilinear(
     let y1 = (y0 + 1).min(screenshot.height.saturating_sub(1));
     let tx = source_x - x0 as f32;
     let ty = source_y - y0 as f32;
-    let top_left = screenshot_pixel(screenshot, x0, y0).expect("bilinear x0/y0 in bounds");
-    let top_right = screenshot_pixel(screenshot, x1, y0).expect("bilinear x1/y0 in bounds");
-    let bottom_left = screenshot_pixel(screenshot, x0, y1).expect("bilinear x0/y1 in bounds");
-    let bottom_right = screenshot_pixel(screenshot, x1, y1).expect("bilinear x1/y1 in bounds");
+    let top_left = screenshot_pixel(screenshot, x0, y0)?;
+    let top_right = screenshot_pixel(screenshot, x1, y0)?;
+    let bottom_left = screenshot_pixel(screenshot, x0, y1)?;
+    let bottom_right = screenshot_pixel(screenshot, x1, y1)?;
 
     let lerp_channel = |index: usize| {
         let top = top_left[index] as f32 * (1.0 - tx) + top_right[index] as f32 * tx;
@@ -1136,12 +1160,12 @@ fn sample_screenshot_pixel_bilinear(
         (top * (1.0 - ty) + bottom * ty).round() as u8
     };
 
-    [
+    Some([
         lerp_channel(0),
         lerp_channel(1),
         lerp_channel(2),
         lerp_channel(3),
-    ]
+    ])
 }
 
 fn pixel_difference(before: [u8; 4], after: [u8; 4]) -> u32 {
@@ -1316,6 +1340,8 @@ mod tests {
             role: role.to_string(),
             text: text.map(ToString::to_string),
             clickable,
+            editable_text: false,
+            text_selection: None,
             bounds: SemanticRect {
                 x: bounds.0,
                 y: bounds.1,
@@ -1411,6 +1437,43 @@ mod tests {
     }
 
     #[test]
+    fn find_clickables_in_range_handles_nan_x_without_panicking() {
+        let malformed = semantic_element(
+            "Layout",
+            None,
+            true,
+            (f32::NAN, 20.0, 80.0, 30.0),
+            vec![semantic_element(
+                "Text",
+                Some("Malformed"),
+                false,
+                (f32::NAN, 24.0, 60.0, 18.0),
+                vec![],
+            )],
+        );
+        let finite = semantic_element(
+            "Layout",
+            None,
+            true,
+            (12.0, 20.0, 80.0, 30.0),
+            vec![semantic_element(
+                "Text",
+                Some("Finite"),
+                false,
+                (16.0, 24.0, 60.0, 18.0),
+                vec![],
+            )],
+        );
+
+        let clickables = find_clickables_in_range(&[malformed, finite], 0.0, 40.0);
+
+        assert_eq!(clickables.len(), 2);
+        assert_eq!(clickables[0].0, "Finite");
+        assert_eq!(clickables[1].0, "Malformed");
+        assert!(clickables[1].1.is_nan());
+    }
+
+    #[test]
     fn find_button_exact_requires_full_text_match() {
         let exact_button = semantic_element(
             "Button",
@@ -1468,6 +1531,20 @@ mod tests {
             pixels: vec![1, 2, 3, 4, 5, 6, 7, 8],
         };
         assert_eq!(screenshot_pixel(&screenshot, 1, 0), Some([5, 6, 7, 8]));
+    }
+
+    #[test]
+    fn screenshot_pixel_rejects_truncated_storage() {
+        let screenshot = RobotScreenshot {
+            width: 2,
+            height: 1,
+            logical_width: 2.0,
+            logical_height: 1.0,
+            pixels: vec![1, 2, 3, 4, 5, 6, 7],
+        };
+
+        assert_eq!(screenshot_pixel(&screenshot, 1, 0), None);
+        assert_eq!(sample_screenshot_pixel_logical(&screenshot, 1.0, 0.0), None);
     }
 
     #[test]
@@ -1590,6 +1667,31 @@ mod tests {
                 after: [4, 8, 3, 200],
                 difference: 55,
             })
+        );
+    }
+
+    #[test]
+    fn screenshot_difference_stats_rejects_truncated_storage() {
+        let before = RobotScreenshot {
+            width: 2,
+            height: 1,
+            logical_width: 2.0,
+            logical_height: 1.0,
+            pixels: vec![10, 20, 30, 255, 1, 2, 3],
+        };
+        let after = RobotScreenshot {
+            width: 2,
+            height: 1,
+            logical_width: 2.0,
+            logical_height: 1.0,
+            pixels: vec![10, 20, 30, 255, 4, 8, 3, 200],
+        };
+
+        assert_eq!(screenshot_difference_stats(&before, &after, 3), None);
+        assert_eq!(changed_pixel_count(&before, &after, 3), usize::MAX);
+        assert_eq!(
+            changed_pixel_count_in_region(&before, &after, (0.0, 0.0, 2.0, 1.0), 3),
+            usize::MAX
         );
     }
 }

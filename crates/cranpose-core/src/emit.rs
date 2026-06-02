@@ -59,7 +59,7 @@ impl Composer {
         };
 
         // If we have a matching node with correct generation, advance cursor and reuse it
-        if let Some(id) = existing_id {
+        if let (Some(id), Some(slot_gen)) = (existing_id, existing_generation) {
             if type_matches && gen_matches {
                 let scope_debug = self
                     .current_recranpose_scope()
@@ -74,8 +74,6 @@ impl Composer {
                 );
                 self.commands_mut().push(Command::update_node::<N>(id));
                 self.attach_to_parent(id);
-                let slot_gen =
-                    existing_generation.expect("reused node must keep its slot generation");
                 let parent_id = self.recorded_node_parent(id);
                 let recorded = self.with_slot_session_mut(|slots| {
                     slots.record_node_with_parent(id, slot_gen, parent_id)
@@ -88,8 +86,22 @@ impl Composer {
                         debug_assert_eq!(recorded_id, id);
                         debug_assert_eq!(generation, slot_gen);
                     }
-                    NodeSlotUpdate::Inserted { .. } | NodeSlotUpdate::Replaced { .. } => {
-                        panic!("reused node recording must keep the same node identity");
+                    NodeSlotUpdate::Inserted { .. } => {
+                        log::warn!(
+                            target: "cranpose::compose::emit",
+                            "slot writer inserted node #{id} while reusing the same node identity",
+                        );
+                    }
+                    NodeSlotUpdate::Replaced {
+                        old_id,
+                        old_generation,
+                        ..
+                    } => {
+                        log::warn!(
+                            target: "cranpose::compose::emit",
+                            "slot writer replaced node #{old_id} while reusing node #{id}",
+                        );
+                        self.queue_replaced_slot_node_removal(old_id, old_generation);
                     }
                 }
                 self.core.last_node_reused.set(Some(true));
@@ -105,11 +117,15 @@ impl Composer {
                 EmittedNode::Fresh(node) => applier.create(node),
                 EmittedNode::Recycled(recycled) => {
                     let (stable_id, node, warm_origin) = recycled.into_parts();
-                    applier
-                        .insert_with_id(stable_id, node)
-                        .expect("recycled stable id should be available");
-                    applier.set_recycled_node_origin(stable_id, warm_origin);
-                    stable_id
+                    let insertion = applier.insert_recycled_node_or_create(stable_id, node);
+                    if let Some(error) = insertion.fallback_error.as_ref() {
+                        log::warn!(
+                            target: "cranpose::compose::emit",
+                            "discarding stale recycled stable id #{stable_id}: {error}",
+                        );
+                    }
+                    applier.set_recycled_node_origin(insertion.id, warm_origin);
+                    insertion.id
                 }
             };
             let gen = applier.node_generation(id);
@@ -152,7 +168,10 @@ impl Composer {
                 self.queue_replaced_slot_node_removal(old_id, old_generation);
             }
             NodeSlotUpdate::Reused { .. } => {
-                panic!("fresh or replacement node recording must not report normal reuse");
+                log::warn!(
+                    target: "cranpose::compose::emit",
+                    "slot writer reported reuse for newly emitted node #{id}",
+                );
             }
         }
         self.core.last_node_reused.set(Some(false));
@@ -171,21 +190,23 @@ impl Composer {
         self.emit_node_box::<N>(|applier| {
             let key = TypeId::of::<N>();
             if let Some(mut recycled) = applier.take_recycled_node(key) {
-                let typed = recycled
-                    .node_mut()
-                    .as_any_mut()
-                    .downcast_mut::<N>()
-                    .expect("recycled node type mismatch");
-                reset(typed);
-                EmittedNode::Recycled(recycled)
-            } else {
-                let node = Box::new(init());
-                applier.record_fresh_recyclable_creation(key);
-                if let Some(shell) = node.rehouse_for_recycle() {
-                    applier.seed_recycled_node_shell(key, node.recycle_pool_limit(), shell);
+                if let Some(typed) = recycled.node_mut().as_any_mut().downcast_mut::<N>() {
+                    reset(typed);
+                    return EmittedNode::Recycled(recycled);
                 }
-                EmittedNode::Fresh(node)
+                log::warn!(
+                    target: "cranpose::compose::emit",
+                    "discarding recycled node shell with mismatched type for {}",
+                    std::any::type_name::<N>(),
+                );
             }
+
+            let node = Box::new(init());
+            applier.record_fresh_recyclable_creation(key);
+            if let Some(shell) = node.rehouse_for_recycle() {
+                applier.seed_recycled_node_shell(key, node.recycle_pool_limit(), shell);
+            }
+            EmittedNode::Fresh(node)
         })
     }
 
@@ -213,9 +234,9 @@ impl Composer {
                 parent_stack.pop();
                 self.set_root(None);
             } else {
-                let frame = parent_stack
-                    .last_mut()
-                    .expect("active parent frame should remain available");
+                let Some(frame) = parent_stack.last_mut() else {
+                    return;
+                };
                 let attach_mode = frame.attach_mode;
                 if parent_id == id {
                     return;

@@ -1,9 +1,21 @@
+#[path = "output_paths.rs"]
+mod output_paths;
+
 use crate::text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
-use cranpose_testing::{find_in_semantics, find_text_in_semantics, print_semantics_with_bounds};
+use cranpose_testing::{find_in_semantics, find_text_exact, print_semantics_with_bounds};
 use image::{ImageBuffer, RgbaImage};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ActiveFrameConfig {
+    pub pump_frames_after_scroll: u32,
+    pub settle_frames_after_capture: u32,
+    pub max_capture_attempts: usize,
+    pub sleep_between_attempts_ms: u64,
+    pub min_improvement_ratio: f32,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ScrollStabilityConfig {
@@ -24,6 +36,7 @@ pub(crate) struct ScrollStabilityConfig {
     pub compare_stabilized_guard_px: u32,
     pub compare_viewport_inset_px: u32,
     pub render_stats_env: Option<&'static str>,
+    pub active_frame: Option<ActiveFrameConfig>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -61,21 +74,55 @@ pub(crate) fn run_scroll_stability_capture(
         crop.trim_left_px, crop.trim_right_px, crop.trim_top_px, crop.trim_bottom_px
     );
 
-    let mut previous_bounds = find_text_in_semantics(robot, config.target_text)
+    let mut previous_bounds = find_exact_target_in_semantics(robot, config.target_text)
         .unwrap_or_else(|| fail_with_semantics(robot, "target text must be visible"));
 
     let mut capture_paths = Vec::with_capacity(config.scroll_steps);
+    let mut active_capture_paths = Vec::new();
     let mut internal_capture_paths = internal_diagnostic
         .as_ref()
         .map(|_| Vec::with_capacity(config.scroll_steps));
+    let mut previous_presented = if config.active_frame.is_some() {
+        let path = output_dir.join(format!("{}_active_base.png", config.file_prefix));
+        let screenshot = capture_x11_window_screenshot(
+            &window_id,
+            &path,
+            config.window_width,
+            config.window_height,
+        );
+        active_capture_paths.push(path);
+        Some(screenshot)
+    } else {
+        None
+    };
 
     for step in 0..config.scroll_steps {
-        previous_bounds =
-            scroll_once_and_expect_target_delta(robot, config, previous_bounds, step, "step");
+        if let Some(active_config) = config.active_frame {
+            let previous_screenshot = previous_presented
+                .as_ref()
+                .expect("active frame capture has a previous screenshot");
+            let active = ActiveFrameRun {
+                robot,
+                config,
+                active_config,
+                window_id: &window_id,
+                output_dir: &output_dir,
+                crop,
+            }
+            .scroll_once(previous_screenshot, previous_bounds, step);
+            previous_bounds = active.bounds;
+            capture_paths.push(active.settled_path);
+            active_capture_paths.extend(active.active_paths);
+            previous_presented = Some(active.settled_screenshot);
+        } else {
+            previous_bounds =
+                scroll_once_and_expect_target_delta(robot, config, previous_bounds, step, "step");
 
-        let screenshot_path = output_dir.join(format!("{}_step{step:02}.png", config.file_prefix));
-        take_x11_screenshot(&window_id, screenshot_path.to_str().expect("utf8 path"));
-        capture_paths.push(screenshot_path);
+            let screenshot_path =
+                output_dir.join(format!("{}_step{step:02}.png", config.file_prefix));
+            take_x11_screenshot(&window_id, screenshot_path.to_str().expect("utf8 path"));
+            capture_paths.push(screenshot_path);
+        }
         if let Some(env_name) = config.render_stats_env {
             if std::env::var_os(env_name).is_some() {
                 log_render_stats(robot, step);
@@ -101,6 +148,7 @@ pub(crate) fn run_scroll_stability_capture(
         println!("internal diagnostic compare_ok={internal_ok}");
     }
     cleanup_capture_paths(&capture_paths);
+    cleanup_capture_paths(&active_capture_paths);
     if let Some(paths) = internal_capture_paths.as_ref() {
         cleanup_capture_paths(paths);
     }
@@ -131,7 +179,7 @@ pub(crate) fn run_internal_scroll_stability_capture(
         crop.trim_left_px, crop.trim_right_px, crop.trim_top_px, crop.trim_bottom_px
     );
 
-    let mut previous_bounds = find_text_in_semantics(robot, config.target_text)
+    let mut previous_bounds = find_exact_target_in_semantics(robot, config.target_text)
         .unwrap_or_else(|| fail_with_semantics(robot, "target text must be visible"));
 
     let mut capture_paths = Vec::with_capacity(config.scroll_steps);
@@ -165,8 +213,16 @@ fn scroll_once_and_expect_target_delta(
     step: usize,
     label: &str,
 ) -> (f32, f32, f32, f32) {
-    let anchor_x = previous_bounds.0 + previous_bounds.2 * 0.5;
-    let anchor_y = previous_bounds.1 + previous_bounds.3 * 0.5;
+    let anchor_x =
+        (previous_bounds.0 + previous_bounds.2 * 0.5).clamp(1.0, config.window_width as f32 - 1.0);
+    let anchor_center_y = previous_bounds.1 + previous_bounds.3 * 0.5;
+    let anchor_min_y = config.fallback_trim_top_px as f32 + 1.0;
+    let anchor_max_y = config.window_height as f32 - config.fallback_trim_bottom_px as f32 - 1.0;
+    let anchor_y = if anchor_min_y < anchor_max_y {
+        anchor_center_y.clamp(anchor_min_y, anchor_max_y)
+    } else {
+        anchor_center_y.clamp(1.0, config.window_height as f32 - 1.0)
+    };
     robot.mouse_move(anchor_x, anchor_y).expect("move cursor");
     std::thread::sleep(Duration::from_millis(30));
     robot
@@ -175,7 +231,7 @@ fn scroll_once_and_expect_target_delta(
     std::thread::sleep(Duration::from_millis(150));
     let _ = robot.wait_for_idle();
 
-    let current_bounds = find_text_in_semantics(robot, config.target_text)
+    let current_bounds = find_exact_target_in_semantics(robot, config.target_text)
         .unwrap_or_else(|| fail_with_semantics(robot, "target text must stay visible"));
     let actual_delta = current_bounds.1 - previous_bounds.1;
     println!(
@@ -188,6 +244,284 @@ fn scroll_once_and_expect_target_delta(
         config.scroll_delta_y,
     );
     current_bounds
+}
+
+#[derive(Debug)]
+struct ActiveFrameCapture {
+    bounds: (f32, f32, f32, f32),
+    settled_screenshot: cranpose::RobotScreenshot,
+    settled_path: PathBuf,
+    active_paths: Vec<PathBuf>,
+}
+
+struct ActiveFrameRun<'a> {
+    robot: &'a cranpose::Robot,
+    config: ScrollStabilityConfig,
+    active_config: ActiveFrameConfig,
+    window_id: &'a str,
+    output_dir: &'a Path,
+    crop: CompareCrop,
+}
+
+impl ActiveFrameRun<'_> {
+    fn scroll_once(
+        &self,
+        previous_screenshot: &cranpose::RobotScreenshot,
+        previous_bounds: (f32, f32, f32, f32),
+        step: usize,
+    ) -> ActiveFrameCapture {
+        let config = self.config;
+        let active_config = self.active_config;
+        let anchor_x = (previous_bounds.0 + previous_bounds.2 * 0.5)
+            .clamp(1.0, config.window_width as f32 - 1.0);
+        let anchor_center_y = previous_bounds.1 + previous_bounds.3 * 0.5;
+        let anchor_min_y = config.fallback_trim_top_px as f32 + 1.0;
+        let anchor_max_y =
+            config.window_height as f32 - config.fallback_trim_bottom_px as f32 - 1.0;
+        let anchor_y = if anchor_min_y < anchor_max_y {
+            anchor_center_y.clamp(anchor_min_y, anchor_max_y)
+        } else {
+            anchor_center_y.clamp(1.0, config.window_height as f32 - 1.0)
+        };
+        self.robot
+            .mouse_move(anchor_x, anchor_y)
+            .expect("move cursor");
+        std::thread::sleep(Duration::from_millis(30));
+        self.robot
+            .mouse_scroll(0.0, config.scroll_delta_y)
+            .expect("1px scroll should succeed");
+
+        let mut active_paths = Vec::new();
+        let mut moved = None;
+        let attempts = active_config.max_capture_attempts.max(1);
+        for attempt in 0..attempts {
+            if attempt == 0 {
+                self.robot
+                    .pump_frames(active_config.pump_frames_after_scroll)
+                    .expect("active scroll frame pump should succeed");
+            } else {
+                self.robot
+                    .pump_frames(1)
+                    .expect("follow-up active scroll frame pump should succeed");
+                std::thread::sleep(Duration::from_millis(
+                    active_config.sleep_between_attempts_ms,
+                ));
+            }
+
+            let path = self.output_dir.join(format!(
+                "{}_active_step{step:02}_attempt{attempt:02}.png",
+                config.file_prefix
+            ));
+            let active_screenshot = capture_x11_window_screenshot(
+                self.window_id,
+                &path,
+                config.window_width,
+                config.window_height,
+            );
+            let report = active_frame_movement_report(
+                previous_screenshot,
+                &active_screenshot,
+                self.crop,
+                config,
+                active_config,
+            );
+            println!(
+                "active_frame step={step} attempt={attempt} expected_dy_px={} zero_score={} expected_score={} improvement_ratio={:.4}",
+                report.expected_dy_px,
+                report.zero_score,
+                report.expected_score,
+                report.improvement_ratio,
+            );
+            active_paths.push(path);
+            if report.moved {
+                moved = Some((active_screenshot, report));
+                break;
+            }
+            moved = Some((active_screenshot, report));
+        }
+
+        let Some((_active_screenshot, report)) = moved else {
+            unreachable!("active frame capture always runs at least one attempt");
+        };
+        if !report.moved {
+            fail_with_semantics(
+                self.robot,
+                &format!(
+                    "presented Markdown frame did not move after active scroll step {step}: expected_dy_px={} zero_score={} expected_score={} improvement_ratio={:.4}",
+                    report.expected_dy_px,
+                    report.zero_score,
+                    report.expected_score,
+                    report.improvement_ratio,
+                ),
+            );
+        }
+
+        if active_config.settle_frames_after_capture > 0 {
+            self.robot
+                .pump_frames(active_config.settle_frames_after_capture)
+                .expect("settle frame pump should succeed");
+        }
+        std::thread::sleep(Duration::from_millis(150));
+        let _ = self.robot.wait_for_idle();
+
+        let current_bounds = find_exact_target_in_semantics(self.robot, config.target_text)
+            .unwrap_or_else(|| fail_with_semantics(self.robot, "target text must stay visible"));
+        let actual_delta = current_bounds.1 - previous_bounds.1;
+        println!(
+            "step {step}: target_y={:.2} delta={:.2}",
+            current_bounds.1, actual_delta
+        );
+        assert!(
+            (actual_delta - config.scroll_delta_y).abs() <= config.step_epsilon,
+            "expected exact scroll delta {:.3}, got delta_y={actual_delta:.3} at step {step}",
+            config.scroll_delta_y,
+        );
+
+        let settled_path = self
+            .output_dir
+            .join(format!("{}_step{step:02}.png", config.file_prefix));
+        let settled_screenshot = capture_x11_window_screenshot(
+            self.window_id,
+            &settled_path,
+            config.window_width,
+            config.window_height,
+        );
+
+        ActiveFrameCapture {
+            bounds: current_bounds,
+            settled_screenshot,
+            settled_path,
+            active_paths,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveFrameMovementReport {
+    expected_dy_px: i32,
+    zero_score: u64,
+    expected_score: u64,
+    improvement_ratio: f32,
+    moved: bool,
+}
+
+fn active_frame_movement_report(
+    previous: &cranpose::RobotScreenshot,
+    active: &cranpose::RobotScreenshot,
+    crop: CompareCrop,
+    config: ScrollStabilityConfig,
+    active_config: ActiveFrameConfig,
+) -> ActiveFrameMovementReport {
+    assert_eq!(previous.width, active.width, "active capture width changed");
+    assert_eq!(
+        previous.height, active.height,
+        "active capture height changed"
+    );
+    let scale_y = active.height as f32 / config.window_height.max(1) as f32;
+    let expected_dy_px = (-config.scroll_delta_y * scale_y).round() as i32;
+    assert_ne!(
+        expected_dy_px, 0,
+        "active frame movement needs a non-zero physical scroll delta"
+    );
+    let zero_score = vertical_alignment_score(previous, active, crop, 0)
+        .expect("zero active-frame alignment crop should be valid");
+    let expected_score = vertical_alignment_score(previous, active, crop, expected_dy_px)
+        .expect("expected active-frame alignment crop should be valid");
+    let improvement_ratio = if zero_score == 0 {
+        0.0
+    } else {
+        zero_score.saturating_sub(expected_score) as f32 / zero_score as f32
+    };
+    let moved =
+        expected_score < zero_score && improvement_ratio >= active_config.min_improvement_ratio;
+    ActiveFrameMovementReport {
+        expected_dy_px,
+        zero_score,
+        expected_score,
+        improvement_ratio,
+        moved,
+    }
+}
+
+fn vertical_alignment_score(
+    reference: &cranpose::RobotScreenshot,
+    candidate: &cranpose::RobotScreenshot,
+    crop: CompareCrop,
+    dy: i32,
+) -> Option<u64> {
+    if reference.width != candidate.width || reference.height != candidate.height {
+        return None;
+    }
+    let width = reference.width as i32;
+    let height = reference.height as i32;
+    let left = crop.trim_left_px as i32;
+    let right = width - crop.trim_right_px as i32;
+    let (ref_top, ref_bottom, cand_top, cand_bottom) = if dy >= 0 {
+        (
+            crop.trim_top_px as i32 + dy,
+            height - crop.trim_bottom_px as i32,
+            crop.trim_top_px as i32,
+            height - crop.trim_bottom_px as i32 - dy,
+        )
+    } else {
+        let shift = -dy;
+        (
+            crop.trim_top_px as i32,
+            height - crop.trim_bottom_px as i32 - shift,
+            crop.trim_top_px as i32 + shift,
+            height - crop.trim_bottom_px as i32,
+        )
+    };
+    if left < 0
+        || right <= left
+        || ref_top < 0
+        || cand_top < 0
+        || ref_bottom <= ref_top
+        || cand_bottom <= cand_top
+        || ref_bottom > height
+        || cand_bottom > height
+        || ref_bottom - ref_top != cand_bottom - cand_top
+    {
+        return None;
+    }
+
+    let width_usize = reference.width as usize;
+    let mut score = 0u64;
+    for y in 0..(ref_bottom - ref_top) as usize {
+        let ref_y = ref_top as usize + y;
+        let cand_y = cand_top as usize + y;
+        for x in left as usize..right as usize {
+            let ref_index = (ref_y * width_usize + x) * 4;
+            let cand_index = (cand_y * width_usize + x) * 4;
+            for channel in 0..4 {
+                score = score.saturating_add(
+                    reference.pixels[ref_index + channel]
+                        .abs_diff(candidate.pixels[cand_index + channel])
+                        as u64,
+                );
+            }
+        }
+    }
+    Some(score)
+}
+
+fn capture_x11_window_screenshot(
+    window_id: &str,
+    path: &Path,
+    logical_width: u32,
+    logical_height: u32,
+) -> cranpose::RobotScreenshot {
+    take_x11_screenshot(window_id, path.to_str().expect("utf8 path"));
+    let image = image::open(path)
+        .unwrap_or_else(|err| panic!("failed to read X11 screenshot {}: {err}", path.display()))
+        .to_rgba8();
+    cranpose::RobotScreenshot {
+        width: image.width(),
+        height: image.height(),
+        logical_width: logical_width as f32,
+        logical_height: logical_height as f32,
+        pixels: image.into_raw(),
+    }
 }
 
 #[allow(dead_code)]
@@ -270,6 +604,13 @@ fn wait_for_semantics_text_exact(
     None
 }
 
+fn find_exact_target_in_semantics(
+    robot: &cranpose::Robot,
+    text: &str,
+) -> Option<(f32, f32, f32, f32)> {
+    find_in_semantics(robot, |elem| find_text_exact(elem, text))
+}
+
 fn find_text_exact_local(
     elem: &cranpose::SemanticElement,
     text: &str,
@@ -300,10 +641,9 @@ fn fail_with_semantics(robot: &cranpose::Robot, message: &str) -> ! {
 }
 
 fn prepare_named_output_dir(output_name: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push("cranpose-scroll-stability");
-    path.push(output_name);
-    let path = unique_process_dir(path);
+    let path = unique_process_dir(
+        output_paths::diagnostic_path("cranpose-scroll-stability").join(output_name),
+    );
     std::fs::create_dir_all(&path)
         .unwrap_or_else(|err| panic!("failed to create {}: {err}", path.display()));
     path
@@ -464,5 +804,82 @@ fn log_render_stats(robot: &cranpose::Robot, step: usize) {
         }
         Ok(None) => println!("render_stats step={step} unavailable"),
         Err(err) => println!("render_stats step={step} error={err}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        active_frame_movement_report, ActiveFrameConfig, CompareCrop, ScrollStabilityConfig,
+    };
+
+    fn screenshot_from_row_values(row_values: &[u8], width: u32) -> cranpose::RobotScreenshot {
+        let mut pixels = Vec::with_capacity(row_values.len() * width as usize * 4);
+        for value in row_values {
+            for _ in 0..width {
+                pixels.extend_from_slice(&[*value, 0, 0, 255]);
+            }
+        }
+        cranpose::RobotScreenshot {
+            width,
+            height: row_values.len() as u32,
+            logical_width: width as f32,
+            logical_height: row_values.len() as f32,
+            pixels,
+        }
+    }
+
+    fn test_config(scroll_delta_y: f32) -> ScrollStabilityConfig {
+        ScrollStabilityConfig {
+            window_title: "test",
+            output_name: "test",
+            file_prefix: "test",
+            target_text: "target",
+            viewport_tag: None,
+            window_width: 3,
+            window_height: 4,
+            scroll_steps: 2,
+            scroll_delta_y,
+            step_epsilon: 0.05,
+            fallback_trim_top_px: 0,
+            fallback_trim_bottom_px: 0,
+            compare_search_offset_px: 4,
+            compare_max_adjacent_score: 0,
+            compare_stabilized_guard_px: 0,
+            compare_viewport_inset_px: 0,
+            render_stats_env: None,
+            active_frame: None,
+        }
+    }
+
+    #[test]
+    fn active_frame_report_uses_inverse_scroll_delta_to_align_moved_content() {
+        let previous = screenshot_from_row_values(&[10, 20, 30, 40], 3);
+        let candidate_moved_up = screenshot_from_row_values(&[20, 30, 40, 40], 3);
+        let crop = CompareCrop {
+            trim_top_px: 0,
+            trim_bottom_px: 0,
+            trim_left_px: 0,
+            trim_right_px: 0,
+            logical_window_space: false,
+        };
+        let report = active_frame_movement_report(
+            &previous,
+            &candidate_moved_up,
+            crop,
+            test_config(-1.0),
+            ActiveFrameConfig {
+                pump_frames_after_scroll: 1,
+                settle_frames_after_capture: 0,
+                max_capture_attempts: 1,
+                sleep_between_attempts_ms: 0,
+                min_improvement_ratio: 0.05,
+            },
+        );
+
+        assert_eq!(report.expected_dy_px, 1);
+        assert_eq!(report.expected_score, 0);
+        assert!(report.zero_score > report.expected_score);
+        assert!(report.moved);
     }
 }

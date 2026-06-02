@@ -1,5 +1,7 @@
 //! Robot contract for image atlas isolation and rested scroll sharpness.
 
+mod output_paths;
+
 use cranpose::AppLauncher;
 use cranpose_testing::crop_screenshot_logical;
 use cranpose_ui::{
@@ -13,7 +15,6 @@ use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 320;
 const WINDOW_HEIGHT: u32 = 170;
-const SCREENSHOT_PATH: &str = "/tmp/cranpose_render_crispness_contract.png";
 const CAPTURE_SCALE: f32 = 1.25;
 
 const ATLAS_X: f32 = 20.0;
@@ -23,11 +24,12 @@ const STATIC_X: f32 = 20.0;
 const STATIC_Y: f32 = 86.4;
 const SCROLLED_X: f32 = 170.4;
 const SCROLLED_Y: f32 = 86.4;
+const INITIAL_SCROLL: f32 = 1.0;
 const BLOCK_W: f32 = 104.0;
 const BLOCK_H: f32 = 52.0;
 const SCROLL_COMPARE_TOP: f32 = 1.0;
 const SCROLL_COMPARE_H: f32 = BLOCK_H - 2.0;
-const GRID_COMPARE_TOP: f32 = 25.6;
+const GRID_COMPARE_TOP: f32 = 26.4;
 const GRID_COMPARE_H: f32 = 20.0;
 
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
@@ -117,6 +119,10 @@ fn unique_rgb_count(screenshot: &cranpose::RobotScreenshot) -> usize {
     colors.len()
 }
 
+fn snapped_content_origin_y() -> f32 {
+    ((SCROLLED_Y - INITIAL_SCROLL) * CAPTURE_SCALE).round() / CAPTURE_SCALE
+}
+
 fn draw_control_pattern(scope: &mut dyn DrawScope) {
     let size = scope.size();
     scope.draw_rect(Brush::solid(Color::from_rgb_u8(15, 21, 30)));
@@ -178,7 +184,7 @@ fn CrispControlBlock(modifier: Modifier) {
 fn RenderCrispnessContractApp() {
     let atlas = cranpose_core::remember(atlas_bitmap).with(|bitmap| bitmap.clone());
     let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(1.0)).with(|state| state.clone());
+        cranpose_core::remember(|| ScrollState::new(INITIAL_SCROLL)).with(|state| state.clone());
 
     Box(
         Modifier::empty()
@@ -253,8 +259,9 @@ fn main() {
             let screenshot = robot
                 .screenshot_with_scale(CAPTURE_SCALE)
                 .unwrap_or_else(|err| fail(&robot, &format!("failed to capture screenshot: {err}")));
-            let output_path = Path::new(SCREENSHOT_PATH);
-            if let Err(err) = save_png(output_path, &screenshot) {
+            let output_path =
+                output_paths::diagnostic_path("cranpose_render_crispness_contract.png");
+            if let Err(err) = save_png(&output_path, &screenshot) {
                 fail(&robot, &err);
             }
             println!("SCREENSHOT_PATH={}", output_path.display());
@@ -286,7 +293,7 @@ fn main() {
             let scrolled_crop = crop_screenshot_logical(
                 &screenshot,
                 SCROLLED_X,
-                SCROLLED_Y,
+                snapped_content_origin_y() + SCROLL_COMPARE_TOP,
                 BLOCK_W,
                 SCROLL_COMPARE_H,
             )
@@ -304,7 +311,7 @@ fn main() {
             let scrolled_grid_crop = crop_screenshot_logical(
                 &screenshot,
                 SCROLLED_X,
-                SCROLLED_Y - 1.0 + GRID_COMPARE_TOP,
+                snapped_content_origin_y() + GRID_COMPARE_TOP,
                 BLOCK_W,
                 GRID_COMPARE_H,
             )

@@ -1,4 +1,4 @@
-//! Global focus manager for text fields.
+//! Focus manager for text fields.
 //!
 //! This module tracks which text field currently has focus, ensuring only one
 //! text field is focused at a time. When a new field requests focus, the
@@ -6,9 +6,6 @@
 //!
 //! O(1) key dispatch: The focused field's handler is stored for direct invocation,
 //! avoiding O(N) tree scans on every keystroke.
-//!
-//! ARCHITECTURE: Uses thread-local storage as the single source of truth for focus
-//! state. This is correct for single-threaded UI frameworks like this one.
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -34,12 +31,114 @@ pub trait FocusedTextFieldHandler {
     fn set_composition(&self, text: &str, cursor: Option<(usize, usize)>);
 }
 
-// Thread-local for focus state - the SINGLE source of truth for focus.
-// This is correct for single-threaded UI frameworks.
-thread_local! {
-    static FOCUSED_FIELD: RefCell<Option<Weak<RefCell<bool>>>> = const { RefCell::new(None) };
-    // O(1) handler for key dispatch - avoids tree scan
-    static FOCUSED_HANDLER: RefCell<Option<Rc<dyn FocusedTextFieldHandler>>> = const { RefCell::new(None) };
+pub(crate) struct TextFieldFocusState {
+    focused_field: RefCell<Option<Weak<RefCell<bool>>>>,
+    focused_handler: RefCell<Option<Rc<dyn FocusedTextFieldHandler>>>,
+}
+
+impl TextFieldFocusState {
+    pub(crate) fn new() -> Self {
+        Self {
+            focused_field: RefCell::new(None),
+            focused_handler: RefCell::new(None),
+        }
+    }
+
+    fn request_focus(
+        &self,
+        is_focused: Rc<RefCell<bool>>,
+        handler: Rc<dyn FocusedTextFieldHandler>,
+    ) {
+        let mut current = self.focused_field.borrow_mut();
+
+        if let Some(ref weak) = *current {
+            if let Some(old_focused) = weak.upgrade() {
+                *old_focused.borrow_mut() = false;
+            }
+        }
+
+        *is_focused.borrow_mut() = true;
+        *current = Some(Rc::downgrade(&is_focused));
+        *self.focused_handler.borrow_mut() = Some(handler);
+    }
+
+    fn clear_focus(&self) {
+        let mut current = self.focused_field.borrow_mut();
+
+        if let Some(ref weak) = *current {
+            if let Some(focused) = weak.upgrade() {
+                *focused.borrow_mut() = false;
+            }
+        }
+
+        *current = None;
+        *self.focused_handler.borrow_mut() = None;
+    }
+
+    fn has_focused_field(&self) -> bool {
+        let mut current = self.focused_field.borrow_mut();
+        if let Some(ref weak) = *current {
+            if weak.upgrade().is_some() {
+                return true;
+            }
+            *current = None;
+            *self.focused_handler.borrow_mut() = None;
+            crate::cursor_animation::stop_cursor_blink();
+        }
+        false
+    }
+
+    fn focused_handler(&self) -> Option<Rc<dyn FocusedTextFieldHandler>> {
+        if !self.has_focused_field() {
+            return None;
+        }
+        self.focused_handler.borrow().as_ref().cloned()
+    }
+
+    fn dispatch_key_event(&self, event: &KeyEvent) -> bool {
+        if let Some(handler) = self.focused_handler() {
+            handler.handle_key(event)
+        } else {
+            false
+        }
+    }
+
+    fn dispatch_paste(&self, text: &str) -> bool {
+        if let Some(handler) = self.focused_handler() {
+            handler.insert_text(text);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn dispatch_delete_surrounding(&self, before_bytes: usize, after_bytes: usize) -> bool {
+        if let Some(handler) = self.focused_handler() {
+            handler.delete_surrounding(before_bytes, after_bytes);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn dispatch_copy(&self) -> Option<String> {
+        self.focused_handler()
+            .and_then(|handler| handler.copy_selection())
+    }
+
+    fn dispatch_cut(&self) -> Option<String> {
+        self.focused_handler()
+            .and_then(|handler| handler.cut_selection())
+    }
+
+    fn dispatch_ime_preedit(&self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        if let Some(handler) = self.focused_handler() {
+            handler.set_composition(text, cursor);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Requests focus for a text field.
@@ -48,25 +147,7 @@ thread_local! {
 /// The provided `is_focused` handle should be the field's focus state.
 /// The handler is stored for O(1) key dispatch.
 pub fn request_focus(is_focused: Rc<RefCell<bool>>, handler: Rc<dyn FocusedTextFieldHandler>) {
-    FOCUSED_FIELD.with(|current| {
-        let mut current = current.borrow_mut();
-
-        // Unfocus the previously focused field (if any and still alive)
-        if let Some(ref weak) = *current {
-            if let Some(old_focused) = weak.upgrade() {
-                *old_focused.borrow_mut() = false;
-            }
-        }
-
-        // Set the new field as focused
-        *is_focused.borrow_mut() = true;
-        *current = Some(Rc::downgrade(&is_focused));
-    });
-
-    // Store handler for O(1) dispatch
-    FOCUSED_HANDLER.with(|h| {
-        *h.borrow_mut() = Some(handler);
-    });
+    crate::render_state::with_text_field_focus(|state| state.request_focus(is_focused, handler));
 
     // Start cursor blink animation (timer-based, not continuous redraw)
     crate::cursor_animation::start_cursor_blink();
@@ -78,22 +159,7 @@ pub fn request_focus(is_focused: Rc<RefCell<bool>>, handler: Rc<dyn FocusedTextF
 
 /// Clears focus from the currently focused text field.
 pub fn clear_focus() {
-    FOCUSED_FIELD.with(|current| {
-        let mut current = current.borrow_mut();
-
-        if let Some(ref weak) = *current {
-            if let Some(focused) = weak.upgrade() {
-                *focused.borrow_mut() = false;
-            }
-        }
-
-        *current = None;
-    });
-
-    // Clear handler
-    FOCUSED_HANDLER.with(|h| {
-        *h.borrow_mut() = None;
-    });
+    crate::render_state::with_text_field_focus(|state| state.clear_focus());
 
     // Stop cursor blink animation
     crate::cursor_animation::stop_cursor_blink();
@@ -104,23 +170,7 @@ pub fn clear_focus() {
 /// Returns true if any text field currently has focus.
 /// Checks weak ref liveness and clears stale focus state.
 pub fn has_focused_field() -> bool {
-    FOCUSED_FIELD.with(|current| {
-        let mut borrow = current.borrow_mut();
-        if let Some(ref weak) = *borrow {
-            if weak.upgrade().is_some() {
-                return true;
-            }
-            // Weak ref is dead - clean up to prevent stuck-true
-            *borrow = None;
-            // Clear handler too
-            FOCUSED_HANDLER.with(|h| {
-                *h.borrow_mut() = None;
-            });
-            // Also stop cursor blink since focus is lost
-            crate::cursor_animation::stop_cursor_blink();
-        }
-        false
-    })
+    crate::render_state::with_text_field_focus(|state| state.has_focused_field())
 }
 
 // ============================================================================
@@ -130,77 +180,40 @@ pub fn has_focused_field() -> bool {
 /// Dispatches a key event to the focused text field. Returns true if consumed.
 /// O(1) operation using stored handler.
 pub fn dispatch_key_event(event: &KeyEvent) -> bool {
-    FOCUSED_HANDLER.with(|h| {
-        if let Some(handler) = h.borrow().as_ref() {
-            handler.handle_key(event)
-        } else {
-            false
-        }
-    })
+    crate::render_state::with_text_field_focus(|state| state.dispatch_key_event(event))
 }
 
 /// Inserts text into the focused text field (paste operation).
 /// O(1) operation using stored handler.
 pub fn dispatch_paste(text: &str) -> bool {
-    FOCUSED_HANDLER.with(|h| {
-        if let Some(handler) = h.borrow().as_ref() {
-            handler.insert_text(text);
-            true
-        } else {
-            false
-        }
-    })
+    crate::render_state::with_text_field_focus(|state| state.dispatch_paste(text))
 }
 
 /// Deletes text surrounding the cursor or selection.
 /// O(1) operation using stored handler.
 pub fn dispatch_delete_surrounding(before_bytes: usize, after_bytes: usize) -> bool {
-    FOCUSED_HANDLER.with(|h| {
-        if let Some(handler) = h.borrow().as_ref() {
-            handler.delete_surrounding(before_bytes, after_bytes);
-            true
-        } else {
-            false
-        }
+    crate::render_state::with_text_field_focus(|state| {
+        state.dispatch_delete_surrounding(before_bytes, after_bytes)
     })
 }
 
 /// Copies selection from focused text field.
 /// O(1) operation using stored handler.
 pub fn dispatch_copy() -> Option<String> {
-    FOCUSED_HANDLER.with(|h| {
-        if let Some(handler) = h.borrow().as_ref() {
-            handler.copy_selection()
-        } else {
-            None
-        }
-    })
+    crate::render_state::with_text_field_focus(|state| state.dispatch_copy())
 }
 
 /// Cuts selection from focused text field (copy + delete).
 /// O(1) operation using stored handler.
 pub fn dispatch_cut() -> Option<String> {
-    FOCUSED_HANDLER.with(|h| {
-        if let Some(handler) = h.borrow().as_ref() {
-            handler.cut_selection()
-        } else {
-            None
-        }
-    })
+    crate::render_state::with_text_field_focus(|state| state.dispatch_cut())
 }
 
 /// Dispatches IME preedit (composition) state to the focused text field.
 /// O(1) operation using stored handler.
 /// Returns true if a text field was focused and received the event.
 pub fn dispatch_ime_preedit(text: &str, cursor: Option<(usize, usize)>) -> bool {
-    FOCUSED_HANDLER.with(|h| {
-        if let Some(handler) = h.borrow().as_ref() {
-            handler.set_composition(text, cursor);
-            true
-        } else {
-            false
-        }
-    })
+    crate::render_state::with_text_field_focus(|state| state.dispatch_ime_preedit(text, cursor))
 }
 
 #[cfg(test)]
@@ -231,6 +244,7 @@ mod tests {
 
     #[test]
     fn request_focus_sets_flag() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let focus = Rc::new(RefCell::new(false));
         request_focus(focus.clone(), mock_handler());
         assert!(*focus.borrow());
@@ -239,6 +253,7 @@ mod tests {
 
     #[test]
     fn request_focus_clears_previous() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let focus1 = Rc::new(RefCell::new(false));
         let focus2 = Rc::new(RefCell::new(false));
 
@@ -253,6 +268,7 @@ mod tests {
 
     #[test]
     fn clear_focus_unfocuses_current() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let focus = Rc::new(RefCell::new(false));
         request_focus(focus.clone(), mock_handler());
         assert!(*focus.borrow());
@@ -261,43 +277,135 @@ mod tests {
         assert!(!*focus.borrow());
     }
 
-    struct DeleteHandler {
+    #[derive(Default)]
+    struct DispatchRecordingHandler {
+        key_count: Cell<usize>,
+        insert_count: Cell<usize>,
+        delete_count: Cell<usize>,
+        copy_count: Cell<usize>,
+        cut_count: Cell<usize>,
+        preedit_count: Cell<usize>,
         last_delete: Cell<Option<(usize, usize)>>,
     }
 
-    impl FocusedTextFieldHandler for DeleteHandler {
-        fn handle_key(&self, _: &KeyEvent) -> bool {
-            false
+    impl DispatchRecordingHandler {
+        fn bump(cell: &Cell<usize>) {
+            cell.set(cell.get() + 1);
         }
 
-        fn insert_text(&self, _: &str) {}
+        fn total_calls(&self) -> usize {
+            self.key_count.get()
+                + self.insert_count.get()
+                + self.delete_count.get()
+                + self.copy_count.get()
+                + self.cut_count.get()
+                + self.preedit_count.get()
+        }
+    }
+
+    impl FocusedTextFieldHandler for DispatchRecordingHandler {
+        fn handle_key(&self, _: &KeyEvent) -> bool {
+            Self::bump(&self.key_count);
+            true
+        }
+
+        fn insert_text(&self, _: &str) {
+            Self::bump(&self.insert_count);
+        }
 
         fn delete_surrounding(&self, before_bytes: usize, after_bytes: usize) {
+            Self::bump(&self.delete_count);
             self.last_delete.set(Some((before_bytes, after_bytes)));
         }
 
         fn copy_selection(&self) -> Option<String> {
-            None
+            Self::bump(&self.copy_count);
+            Some("copy".to_string())
         }
 
         fn cut_selection(&self) -> Option<String> {
-            None
+            Self::bump(&self.cut_count);
+            Some("cut".to_string())
         }
 
-        fn set_composition(&self, _: &str, _: Option<(usize, usize)>) {}
+        fn set_composition(&self, _: &str, _: Option<(usize, usize)>) {
+            Self::bump(&self.preedit_count);
+        }
     }
 
     #[test]
     fn dispatch_delete_surrounding_calls_handler() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let focus = Rc::new(RefCell::new(false));
-        let handler = Rc::new(DeleteHandler {
-            last_delete: Cell::new(None),
-        });
+        let handler = Rc::new(DispatchRecordingHandler::default());
 
-        request_focus(focus, handler.clone());
+        request_focus(Rc::clone(&focus), handler.clone());
         assert!(dispatch_delete_surrounding(3, 1));
         assert_eq!(handler.last_delete.get(), Some((3, 1)));
 
         clear_focus();
+    }
+
+    #[test]
+    fn dispatch_clears_stale_focus_owner_before_invoking_handler() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let handler = Rc::new(DispatchRecordingHandler::default());
+
+        {
+            let focus = Rc::new(RefCell::new(false));
+            request_focus(Rc::clone(&focus), handler.clone());
+            assert!(has_focused_field());
+        }
+
+        let key_event = KeyEvent::key_down(crate::key_event::KeyCode::A, "a");
+
+        assert!(!dispatch_key_event(&key_event));
+        assert!(!dispatch_paste("stale paste"));
+        assert!(!dispatch_delete_surrounding(2, 1));
+        assert_eq!(dispatch_copy(), None);
+        assert_eq!(dispatch_cut(), None);
+        assert!(!dispatch_ime_preedit("preedit", Some((1, 1))));
+        assert!(!has_focused_field());
+        assert_eq!(
+            handler.total_calls(),
+            0,
+            "stale focused-field handlers must not receive input"
+        );
+    }
+
+    #[test]
+    fn text_field_focus_is_scoped_by_app_context() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let first = crate::render_state::AppContext::new_with_density(1.0);
+        let second = crate::render_state::AppContext::new_with_density(1.0);
+        let first_focus = Rc::new(RefCell::new(false));
+        let second_focus = Rc::new(RefCell::new(false));
+
+        first.enter(|| {
+            request_focus(first_focus.clone(), mock_handler());
+            assert!(has_focused_field());
+            assert!(*first_focus.borrow());
+        });
+
+        second.enter(|| {
+            assert!(!has_focused_field());
+            request_focus(second_focus.clone(), mock_handler());
+            assert!(has_focused_field());
+            assert!(*second_focus.borrow());
+        });
+
+        first.enter(|| {
+            assert!(has_focused_field());
+            assert!(*first_focus.borrow());
+            clear_focus();
+            assert!(!has_focused_field());
+            assert!(!*first_focus.borrow());
+        });
+
+        second.enter(|| {
+            assert!(has_focused_field());
+            assert!(*second_focus.borrow());
+            clear_focus();
+        });
     }
 }

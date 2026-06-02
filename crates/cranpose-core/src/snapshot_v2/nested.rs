@@ -50,25 +50,22 @@ impl NestedReadonlySnapshot {
             NestedReadonlySnapshot::new(
                 self.state.id.get(),
                 self.state.invalid.borrow().clone(),
-                self.state.read_observer.clone(),
+                self.state.read_observer.borrow().clone(),
                 Weak::new(),
             )
         }
     }
 
     pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
-        let previous = current_snapshot();
-        set_current_snapshot(Some(AnySnapshot::NestedReadonly(self.clone())));
-        let result = f();
-        set_current_snapshot(previous);
-        result
+        enter_snapshot_scope(AnySnapshot::NestedReadonly(self.clone()), f)
     }
 
     pub fn take_nested_snapshot(
         &self,
         read_observer: Option<ReadObserver>,
     ) -> Arc<NestedReadonlySnapshot> {
-        let merged_observer = merge_read_observers(read_observer, self.state.read_observer.clone());
+        let merged_observer =
+            merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
 
         NestedReadonlySnapshot::new(
             self.state.id.get(),
@@ -170,26 +167,23 @@ impl NestedMutableSnapshot {
             MutableSnapshot::new(
                 self.state.id.get(),
                 self.state.invalid.borrow().clone(),
-                self.state.read_observer.clone(),
-                self.state.write_observer.clone(),
+                self.state.read_observer.borrow().clone(),
+                self.state.write_observer.borrow().clone(),
                 self.base_parent_id,
             )
         }
     }
 
     pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
-        let previous = current_snapshot();
-        set_current_snapshot(Some(AnySnapshot::NestedMutable(self.clone())));
-        let result = f();
-        set_current_snapshot(previous);
-        result
+        enter_snapshot_scope(AnySnapshot::NestedMutable(self.clone()), f)
     }
 
     pub fn take_nested_snapshot(
         &self,
         read_observer: Option<ReadObserver>,
     ) -> Arc<ReadonlySnapshot> {
-        let merged_observer = merge_read_observers(read_observer, self.state.read_observer.clone());
+        let merged_observer =
+            merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
 
         ReadonlySnapshot::new(
             self.state.id.get(),
@@ -278,8 +272,10 @@ impl NestedMutableSnapshot {
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
     ) -> Arc<NestedMutableSnapshot> {
-        let merged_read = merge_read_observers(read_observer, self.state.read_observer.clone());
-        let merged_write = merge_write_observers(write_observer, self.state.write_observer.clone());
+        let merged_read =
+            merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
+        let merged_write =
+            merge_write_observers(write_observer, self.state.write_observer.borrow().clone());
 
         // Get parent's current state BEFORE allocating child
         let parent_id = self.state.id.get();
@@ -425,6 +421,13 @@ mod tests {
             fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 mock_state_record()
             }
+            fn try_readable_record(
+                &self,
+                snapshot_id: crate::snapshot_id_set::SnapshotId,
+                invalid: &SnapshotIdSet,
+            ) -> Option<Rc<crate::state::StateRecord>> {
+                Some(self.readable_record(snapshot_id, invalid))
+            }
             fn readable_record(
                 &self,
                 _snapshot_id: crate::snapshot_id_set::SnapshotId,
@@ -470,6 +473,13 @@ mod tests {
             }
             fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 mock_state_record()
+            }
+            fn try_readable_record(
+                &self,
+                snapshot_id: crate::snapshot_id_set::SnapshotId,
+                invalid: &SnapshotIdSet,
+            ) -> Option<Rc<crate::state::StateRecord>> {
+                Some(self.readable_record(snapshot_id, invalid))
             }
             fn readable_record(
                 &self,

@@ -1,6 +1,13 @@
 use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
 use std::cell::RefCell;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    feature = "system-theme"
+))]
+use std::process::Command;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemTheme {
@@ -12,16 +19,14 @@ pub fn default_system_theme() -> SystemTheme {
     #[cfg(all(
         not(target_arch = "wasm32"),
         not(target_os = "android"),
-        not(target_os = "ios")
+        not(target_os = "ios"),
+        feature = "system-theme"
     ))]
     {
-        match dark_light::detect() {
-            Ok(dark_light::Mode::Dark) => SystemTheme::Dark,
-            _ => SystemTheme::Light,
-        }
+        detect_native_system_theme().unwrap_or(SystemTheme::Light)
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", feature = "system-theme-web"))]
     {
         web_sys::window()
             .and_then(|window| {
@@ -40,10 +45,157 @@ pub fn default_system_theme() -> SystemTheme {
             .unwrap_or(SystemTheme::Light)
     }
 
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "ios",
+        all(
+            not(target_arch = "wasm32"),
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(feature = "system-theme")
+        ),
+        all(target_arch = "wasm32", not(feature = "system-theme-web"))
+    ))]
     {
         SystemTheme::Light
     }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    feature = "system-theme"
+))]
+fn detect_native_system_theme() -> Option<SystemTheme> {
+    detect_env_theme().or_else(detect_platform_theme)
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    feature = "system-theme"
+))]
+fn detect_env_theme() -> Option<SystemTheme> {
+    ["GTK_THEME", "QT_STYLE_OVERRIDE", "XDG_CURRENT_DESKTOP"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .find_map(|value| theme_from_text(&value))
+}
+
+#[cfg(all(
+    target_os = "linux",
+    not(target_arch = "wasm32"),
+    feature = "system-theme"
+))]
+fn detect_platform_theme() -> Option<SystemTheme> {
+    command_stdout(
+        "gsettings",
+        &["get", "org.gnome.desktop.interface", "color-scheme"],
+    )
+    .and_then(|value| theme_from_text(&value))
+    .or_else(|| {
+        command_stdout(
+            "gsettings",
+            &["get", "org.gnome.desktop.interface", "gtk-theme"],
+        )
+        .and_then(|value| theme_from_text(&value))
+    })
+    .or_else(|| {
+        command_stdout(
+            "kreadconfig6",
+            &["--group", "General", "--key", "ColorScheme"],
+        )
+        .and_then(|value| theme_from_text(&value))
+    })
+    .or_else(|| {
+        command_stdout(
+            "kreadconfig5",
+            &["--group", "General", "--key", "ColorScheme"],
+        )
+        .and_then(|value| theme_from_text(&value))
+    })
+}
+
+#[cfg(all(target_os = "macos", feature = "system-theme"))]
+fn detect_platform_theme() -> Option<SystemTheme> {
+    command_stdout("defaults", &["read", "-g", "AppleInterfaceStyle"])
+        .and_then(|value| theme_from_text(&value))
+}
+
+#[cfg(all(target_os = "windows", feature = "system-theme"))]
+fn detect_platform_theme() -> Option<SystemTheme> {
+    command_stdout(
+        "reg",
+        &[
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            "/v",
+            "AppsUseLightTheme",
+        ],
+    )
+    .and_then(|value| theme_from_windows_registry(&value))
+}
+
+#[cfg(all(
+    not(target_os = "linux"),
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    feature = "system-theme"
+))]
+fn detect_platform_theme() -> Option<SystemTheme> {
+    None
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    feature = "system-theme"
+))]
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    feature = "system-theme"
+))]
+fn theme_from_text(value: &str) -> Option<SystemTheme> {
+    let value = value.to_ascii_lowercase();
+    if value.contains("dark") {
+        Some(SystemTheme::Dark)
+    } else if value.contains("light") || value.contains("default") {
+        Some(SystemTheme::Light)
+    } else {
+        None
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "system-theme"))]
+fn theme_from_windows_registry(value: &str) -> Option<SystemTheme> {
+    value.lines().find_map(|line| {
+        if !line.contains("AppsUseLightTheme") {
+            return None;
+        }
+        if line.contains("0x0") {
+            Some(SystemTheme::Dark)
+        } else if line.contains("0x1") {
+            Some(SystemTheme::Light)
+        } else {
+            None
+        }
+    })
 }
 
 pub fn local_system_theme() -> CompositionLocal<SystemTheme> {
@@ -53,12 +205,8 @@ pub fn local_system_theme() -> CompositionLocal<SystemTheme> {
 
     LOCAL_SYSTEM_THEME.with(|cell| {
         let mut local = cell.borrow_mut();
-        if local.is_none() {
-            *local = Some(compositionLocalOf(default_system_theme));
-        }
         local
-            .as_ref()
-            .expect("System theme composition local must be initialized")
+            .get_or_insert_with(|| compositionLocalOf(default_system_theme))
             .clone()
     })
 }
@@ -153,5 +301,18 @@ mod tests {
         }
 
         assert_eq!(*captured.borrow(), Some(true));
+    }
+
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        feature = "system-theme"
+    ))]
+    #[test]
+    fn theme_from_text_reads_common_native_values() {
+        assert_eq!(theme_from_text("'prefer-dark'"), Some(SystemTheme::Dark));
+        assert_eq!(theme_from_text("Breeze Light"), Some(SystemTheme::Light));
+        assert_eq!(theme_from_text("Adwaita"), None);
     }
 }

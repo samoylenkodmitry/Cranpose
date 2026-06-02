@@ -8,6 +8,9 @@ use cranpose_ui::*;
 
 #[test]
 fn test_modifier_chain_length_after_updates() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // This test verifies that the modifier chain has the correct number of nodes
     // after various updates
     let mut composition = run_test_composition(|| {
@@ -33,6 +36,9 @@ fn test_modifier_chain_length_after_updates() {
 
 #[test]
 fn test_modifier_value_changes_propagate_to_layout() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // Test that when a modifier value changes, the layout reflects the new value
 
     let run_with_padding = |p: f32| {
@@ -64,6 +70,9 @@ fn test_modifier_value_changes_propagate_to_layout() {
 
 #[test]
 fn test_modifier_chain_adds_node() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // Test adding a modifier to the chain
     let mut composition = run_test_composition(|| {
         Box(Modifier::empty().padding(8.0), BoxSpec::default(), || {});
@@ -93,6 +102,9 @@ fn test_modifier_chain_adds_node() {
 
 #[test]
 fn test_modifier_chain_removes_node() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // Test removing a modifier from the chain
     let mut composition = run_test_composition(|| {
         Box(
@@ -122,6 +134,9 @@ fn test_modifier_chain_removes_node() {
 
 #[test]
 fn test_modifier_order_change() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // Test that changing modifier order works correctly
     let mut composition = run_test_composition(|| {
         Box(
@@ -191,6 +206,9 @@ fn test_modifier_order_change() {
 
 #[test]
 fn test_complex_modifier_chain_updates() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // Cycle through different modifier configurations
     let build_modifier = |step: i32| match step {
         0 => Modifier::empty().padding(5.0),

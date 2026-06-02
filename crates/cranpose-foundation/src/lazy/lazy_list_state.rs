@@ -11,20 +11,13 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::OnceLock;
 
 use cranpose_core::{MutableState, NodeId};
 use cranpose_macros::composable;
 
+use super::diagnostics;
 use super::nearest_range::NearestRangeState;
 use super::prefetch::{PrefetchScheduler, PrefetchStrategy};
-
-static LAZY_MEASURE_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
-
-fn lazy_measure_telemetry_enabled() -> bool {
-    *LAZY_MEASURE_TELEMETRY_ENABLED
-        .get_or_init(|| std::env::var_os("CRANPOSE_LAZY_MEASURE_TELEMETRY").is_some())
-}
 
 const MAX_PENDING_SCROLL_DELTA: f32 = 2000.0;
 const ITEM_SIZE_CACHE_CAPACITY: usize = 100;
@@ -304,6 +297,8 @@ struct LazyListStateInner {
     /// Running average of measured item sizes for estimation.
     average_item_size: f32,
     total_measured_items: usize,
+    next_measure_cycle_id: u64,
+    next_item_measure_pass_id: u64,
 
     /// Prefetch scheduler for pre-composing items.
     prefetch_scheduler: PrefetchScheduler,
@@ -370,6 +365,8 @@ pub fn remember_lazy_list_state_with_position(
             item_size_lru: std::collections::VecDeque::new(),
             average_item_size: super::DEFAULT_ITEM_SIZE_ESTIMATE,
             total_measured_items: 0,
+            next_measure_cycle_id: 1,
+            next_item_measure_pass_id: 1,
             prefetch_scheduler: PrefetchScheduler::new(),
             prefetch_strategy: PrefetchStrategy::default(),
             last_scroll_direction: 0.0,
@@ -589,7 +586,7 @@ impl LazyListState {
         if !self.inner.is_alive() {
             return;
         }
-        if lazy_measure_telemetry_enabled() {
+        if diagnostics::telemetry_enabled() {
             log::warn!(
                 "[lazy-measure-telemetry] scroll_to_item request index={} offset={:.2}",
                 index,
@@ -642,7 +639,7 @@ impl LazyListState {
                 if pending_before.abs() > 0.001 && pending_before.signum() == delta.signum() {
                     inner.scroll_to_be_consumed = 0.0;
                 }
-                if lazy_measure_telemetry_enabled() {
+                if diagnostics::telemetry_enabled() {
                     log::warn!(
                         "[lazy-measure-telemetry] dispatch_scroll_delta blocked_by_bounds delta={:.2} pending_before={:.2} pending_after={:.2}",
                         delta,
@@ -666,7 +663,7 @@ impl LazyListState {
                 && delta.abs() > 0.001
                 && pending.signum() != delta.signum();
             if reverse_input {
-                if lazy_measure_telemetry_enabled() {
+                if diagnostics::telemetry_enabled() {
                     log::warn!(
                         "[lazy-measure-telemetry] dispatch_scroll_delta direction_change pending={:.2} new_delta={:.2}",
                         pending,
@@ -683,7 +680,7 @@ impl LazyListState {
             inner.scroll_to_be_consumed = inner
                 .scroll_to_be_consumed
                 .clamp(-MAX_PENDING_SCROLL_DELTA, MAX_PENDING_SCROLL_DELTA);
-            if lazy_measure_telemetry_enabled() {
+            if diagnostics::telemetry_enabled() {
                 log::warn!(
                     "[lazy-measure-telemetry] dispatch_scroll_delta delta={:.2} pending={:.2}",
                     delta,
@@ -733,6 +730,28 @@ impl LazyListState {
             pending_scroll_to,
             average_item_size,
         }
+    }
+
+    pub(crate) fn next_measure_cycle_id(&self) -> u64 {
+        self.inner
+            .try_with(|rc| {
+                let mut inner = rc.borrow_mut();
+                let id = inner.next_measure_cycle_id;
+                inner.next_measure_cycle_id = inner.next_measure_cycle_id.saturating_add(1);
+                id
+            })
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn next_item_measure_pass_id(&self) -> u64 {
+        self.inner
+            .try_with(|rc| {
+                let mut inner = rc.borrow_mut();
+                let id = inner.next_item_measure_pass_id;
+                inner.next_item_measure_pass_id = inner.next_item_measure_pass_id.saturating_add(1);
+                id
+            })
+            .unwrap_or(0)
     }
 
     fn record_item_size_sample(inner: &mut LazyListStateInner, size: f32) {
@@ -1163,6 +1182,8 @@ pub mod test_helpers {
             item_size_lru: std::collections::VecDeque::new(),
             average_item_size: super::super::DEFAULT_ITEM_SIZE_ESTIMATE,
             total_measured_items: 0,
+            next_measure_cycle_id: 1,
+            next_item_measure_pass_id: 1,
             prefetch_scheduler: PrefetchScheduler::new(),
             prefetch_strategy: PrefetchStrategy::default(),
             last_scroll_direction: 0.0,
@@ -1212,6 +1233,22 @@ mod tests {
             offset,
             size,
         }
+    }
+
+    #[test]
+    fn lazy_measure_telemetry_ids_are_state_owned() {
+        with_test_runtime(|| {
+            let first = new_lazy_list_state();
+            let second = new_lazy_list_state();
+
+            assert_eq!(first.next_measure_cycle_id(), 1);
+            assert_eq!(first.next_measure_cycle_id(), 2);
+            assert_eq!(second.next_measure_cycle_id(), 1);
+
+            assert_eq!(first.next_item_measure_pass_id(), 1);
+            assert_eq!(first.next_item_measure_pass_id(), 2);
+            assert_eq!(second.next_item_measure_pass_id(), 1);
+        });
     }
 
     #[test]

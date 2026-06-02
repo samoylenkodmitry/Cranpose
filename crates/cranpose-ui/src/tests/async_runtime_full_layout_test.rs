@@ -292,6 +292,7 @@ fn drain_all<A: cranpose_core::Applier + 'static>(
 
 #[test]
 fn async_runtime_full_layout_freezes_after_forward_flip() {
+    let _app_context = crate::render_state::app_context_test_scope();
     // Setup composition
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();

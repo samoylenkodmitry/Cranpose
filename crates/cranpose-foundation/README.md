@@ -23,21 +23,41 @@ Creating a custom modifier involves defining a `ModifierNode` and a fluent build
 
 ```rust
 use cranpose::prelude::*;
+use std::hash::{Hash, Hasher};
 
 // 1. Define the Node
-struct MyModifierNode;
+struct MyModifierNode {
+    state: NodeState,
+}
+
+impl DelegatableNode for MyModifierNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
 
 impl ModifierNode for MyModifierNode {}
 
 // 2. Define the Element (Factory)
+#[derive(Debug, PartialEq)]
 struct MyModifierElement;
 
-impl ModifierElement<MyModifierNode> for MyModifierElement {
-    fn create(&self) -> MyModifierNode {
-        MyModifierNode
+impl Hash for MyModifierElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        "MyModifierElement".hash(state);
     }
-    
-    fn update(&self, _node: &mut MyModifierNode) {
+}
+
+impl ModifierNodeElement for MyModifierElement {
+    type Node = MyModifierNode;
+
+    fn create(&self) -> Self::Node {
+        MyModifierNode {
+            state: NodeState::new(),
+        }
+    }
+
+    fn update(&self, _node: &mut Self::Node) {
         // Update node properties if needed
     }
 }
@@ -49,7 +69,7 @@ trait MyModifierExt {
 
 impl MyModifierExt for Modifier {
     fn my_custom_modifier(self) -> Modifier {
-        self.then(MyModifierElement)
+        self.then(Modifier::from_element(MyModifierElement))
     }
 }
 ```

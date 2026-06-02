@@ -5,7 +5,8 @@ use super::geometry::{
     snap_delta_for_anchor, snap_motion_stable_dest_quad, surface_pixel_rect, surface_target_size,
     target_quad, visible_layer_rect,
 };
-use crate::effect_renderer::CompositeSampleMode;
+use crate::effect_renderer::{CompositeSampleMode, ProjectiveSurfaceComposite};
+use crate::layer_surface_cache::MAX_LAYER_SURFACE_CACHE_BYTES;
 use crate::normalized_scene::{
     build_scene_window, collected_layer_bounds, filtered_effect_layer_index,
     motion_stable_capture_bounds, resolved_child_surface_composite, resolved_layer_surface_rect,
@@ -13,9 +14,7 @@ use crate::normalized_scene::{
     TranslateBy,
 };
 use crate::offscreen::OffscreenTarget;
-use crate::render::{
-    has_backdrop_layer_in_range, scissor_rect_for_rect, CLEAR_COLOR, MAX_LAYER_SURFACE_CACHE_BYTES,
-};
+use crate::render::{has_backdrop_layer_in_range, scissor_rect_for_rect, CLEAR_COLOR};
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawShape, EffectLayer, ImageDraw, ShadowDraw,
     SnapAnchor, TextDraw,
@@ -85,36 +84,80 @@ fn combined_capture_clip(layer_clip: Option<Rect>, capture_clip: Option<Rect>) -
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn copy_surface_region_to_view<B: SurfaceExecutionBackend>(
-    backend: &mut B,
+fn surface_region_projective_composite(
     source: &OffscreenTarget,
     source_rect: Rect,
-    dest_view: &wgpu::TextureView,
-    dest_width: u32,
-    dest_height: u32,
+    dest_size: (u32, u32),
     root_scale: f32,
     load_op: wgpu::LoadOp<wgpu::Color>,
-) -> Result<(), String> {
+) -> Result<ProjectiveSurfaceComposite<'_>, String> {
     let source_pixel_rect = surface_pixel_rect(source_rect, root_scale);
-    let dest_quad = target_quad(dest_width, dest_height);
+    let dest_quad = target_quad(dest_size.0, dest_size.1);
     let inverse = ProjectiveTransform::from_rect_to_quad(source_pixel_rect, dest_quad)
         .inverse()
         .ok_or_else(|| "surface region transform is not invertible".to_string())?;
-    backend.composite_to_view_projective(
+    Ok(ProjectiveSurfaceComposite {
         source,
-        dest_view,
-        (dest_width, dest_height),
-        (source.width as f32, source.height as f32),
-        inverse.matrix(),
-        dest_quad,
-        1.0,
+        source_size: (source.width as f32, source.height as f32),
+        inverse_matrix: inverse.matrix(),
+        dest_bounds: dest_quad,
+        alpha: 1.0,
         load_op,
-        None,
-        BlendMode::SrcOver,
-        CompositeSampleMode::Linear,
-    );
+        scissor: None,
+        blend_mode: BlendMode::SrcOver,
+        sample_mode: CompositeSampleMode::Linear,
+    })
+}
+
+fn copy_projective_backdrop_inputs_to_view<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    backdrop_underlay: Option<&OffscreenTarget>,
+    target: &OffscreenTarget,
+    source_rect: Rect,
+    dest_view: &wgpu::TextureView,
+    dest_size: (u32, u32),
+    root_scale: f32,
+) -> Result<(), String> {
+    if let Some(underlay) = backdrop_underlay {
+        let underlay_composite = surface_region_projective_composite(
+            underlay,
+            source_rect,
+            dest_size,
+            root_scale,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        )?;
+        let target_composite = surface_region_projective_composite(
+            target,
+            source_rect,
+            dest_size,
+            root_scale,
+            wgpu::LoadOp::Load,
+        )?;
+        let composites = [underlay_composite, target_composite];
+        backend.composite_projective_surfaces_to_view(dest_view, dest_size, &composites);
+    } else {
+        let target_composite = surface_region_projective_composite(
+            target,
+            source_rect,
+            dest_size,
+            root_scale,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        )?;
+        let composites = [target_composite];
+        backend.composite_projective_surfaces_to_view(dest_view, dest_size, &composites);
+    }
     Ok(())
+}
+
+fn flush_pending_clear<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    target_view: &wgpu::TextureView,
+    next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+) {
+    if matches!(*next_load_op, wgpu::LoadOp::Clear(_)) {
+        backend.clear_target_view_with_load_op(target_view, *next_load_op);
+        *next_load_op = wgpu::LoadOp::Load;
+    }
 }
 
 fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
@@ -127,7 +170,7 @@ fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
 ) -> OffscreenTarget {
     let (width, height) =
         surface_target_size(child_logical_rect, root_scale, backend.max_texture_dim());
-    let underlay = backend.acquire_offscreen(width, height);
+    let underlay = backend.acquire_frame_surface(width, height);
     let child_source_rect = Rect {
         x: 0.0,
         y: 0.0,
@@ -139,41 +182,43 @@ fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
         scaled_quad(child_dest_quad, root_scale),
     );
     let dest_quad = target_quad(width, height);
-    let mut next_load_op = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+    let parent_composite = ProjectiveSurfaceComposite {
+        source: parent_target,
+        source_size: (parent_target.width as f32, parent_target.height as f32),
+        inverse_matrix: transform.matrix(),
+        dest_bounds: dest_quad,
+        alpha: 1.0,
+        load_op: if parent_underlay.is_some() {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        },
+        scissor: None,
+        blend_mode: BlendMode::SrcOver,
+        sample_mode: CompositeSampleMode::Linear,
+    };
 
     if let Some(ancestor_underlay) = parent_underlay {
-        backend.composite_to_view_projective(
-            ancestor_underlay,
-            &underlay.view,
-            (width, height),
-            (
+        let ancestor_composite = ProjectiveSurfaceComposite {
+            source: ancestor_underlay,
+            source_size: (
                 ancestor_underlay.width as f32,
                 ancestor_underlay.height as f32,
             ),
-            transform.matrix(),
-            dest_quad,
-            1.0,
-            next_load_op,
-            None,
-            BlendMode::SrcOver,
-            CompositeSampleMode::Linear,
-        );
-        next_load_op = wgpu::LoadOp::Load;
+            inverse_matrix: transform.matrix(),
+            dest_bounds: dest_quad,
+            alpha: 1.0,
+            load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            scissor: None,
+            blend_mode: BlendMode::SrcOver,
+            sample_mode: CompositeSampleMode::Linear,
+        };
+        let composites = [ancestor_composite, parent_composite];
+        backend.composite_projective_surfaces_to_view(&underlay.view, (width, height), &composites);
+    } else {
+        let composites = [parent_composite];
+        backend.composite_projective_surfaces_to_view(&underlay.view, (width, height), &composites);
     }
-
-    backend.composite_to_view_projective(
-        parent_target,
-        &underlay.view,
-        (width, height),
-        (parent_target.width as f32, parent_target.height as f32),
-        transform.matrix(),
-        dest_quad,
-        1.0,
-        next_load_op,
-        None,
-        BlendMode::SrcOver,
-        CompositeSampleMode::Linear,
-    );
 
     underlay
 }
@@ -213,13 +258,13 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     next_load_op,
                 )?;
                 next_load_op = wgpu::LoadOp::Load;
-            } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
-                backend.clear_target_view_with_load_op(surface_view, next_load_op);
-                next_load_op = wgpu::LoadOp::Load;
             }
 
             let resolved_child = resolved_child_surface_composite(&child);
 
+            if !resolved_child.shadow_draws.is_empty() {
+                flush_pending_clear(backend, surface_view, &mut next_load_op);
+            }
             for shadow in &resolved_child.shadow_draws {
                 backend.render_shadow_draw(
                     text_state,
@@ -260,17 +305,19 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 root_scale,
                 child_surface.sample_mode,
             );
+            let composite_load_op = next_load_op;
             composite_layer_surface_to_view(
                 backend,
                 &child_surface,
                 surface_view,
                 (width, height),
                 dest_quad,
-                wgpu::LoadOp::Load,
+                composite_load_op,
                 child
                     .visual_clip
                     .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height)),
             )?;
+            next_load_op = wgpu::LoadOp::Load;
             backend.release_layer_surface_target(child_surface.target);
             cursor_z = child.z_index.saturating_add(1);
         }
@@ -478,7 +525,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     effective_translated_content_axes: TranslatedContentAxes,
     translation_context: TranslationRenderContext,
 ) -> Result<OffscreenTarget, String> {
-    let target = backend.acquire_offscreen(width, height);
+    let target = backend.acquire_retained_surface(width, height);
     let mut cursor_z = 0usize;
     let mut next_load_op = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
     for child in child_layers {
@@ -503,9 +550,6 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 next_load_op,
             )?;
             next_load_op = wgpu::LoadOp::Load;
-        } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
-            backend.clear_target_view_with_load_op(&target.view, next_load_op);
-            next_load_op = wgpu::LoadOp::Load;
         }
 
         let resolved_child = resolved_child_surface_composite(&child);
@@ -517,6 +561,9 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
         } else {
             resolved_child.dest_quad
         };
+        if child.needs_nested_underlay {
+            flush_pending_clear(backend, &target.view, &mut next_load_op);
+        }
         let child_underlay = child.needs_nested_underlay.then(|| {
             create_projected_child_underlay(
                 backend,
@@ -548,6 +595,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
         )?;
 
         if let Some(backdrop) = &child_surface.backdrop {
+            flush_pending_clear(backend, &target.view, &mut next_load_op);
             apply_backdrop_layer_to_target(
                 backend,
                 &target,
@@ -564,6 +612,9 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             )?;
         }
 
+        if !resolved_child.shadow_draws.is_empty() {
+            flush_pending_clear(backend, &target.view, &mut next_load_op);
+        }
         for shadow in &resolved_child.shadow_draws {
             backend.render_shadow_draw(
                 text_state,
@@ -586,20 +637,22 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             target_scale,
             child_surface.sample_mode,
         );
+        let composite_load_op = next_load_op;
         composite_layer_surface_to_view(
             backend,
             &child_surface,
             &target.view,
             (width, height),
             dest_quad,
-            wgpu::LoadOp::Load,
+            composite_load_op,
             child
                 .visual_clip
                 .and_then(|clip| scissor_rect_for_rect(clip, target_scale, width, height)),
         )?;
+        next_load_op = wgpu::LoadOp::Load;
         backend.release_layer_surface_target(child_surface.target);
         if let Some(underlay) = child_underlay {
-            backend.release_offscreen(underlay);
+            backend.release_frame_surface(underlay);
         }
         cursor_z = child.z_index.saturating_add(1);
     }
@@ -652,6 +705,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         scene: mut local_scene,
         child_layers,
     } = backend.collect_layer_contents_with_translation_context(
+        text_state,
         layer,
         None,
         None,
@@ -824,19 +878,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         let mut deferred_effect = None;
         if let Some(effect) = isolation.as_ref().and_then(|params| params.effect.as_ref()) {
             if backend.is_render_effect_supported(effect) {
-                if matches!(effect, RenderEffect::Shader { .. }) {
-                    deferred_effect = Some(effect.clone());
-                } else {
-                    let effected = backend.acquire_offscreen(width, height);
-                    backend.apply_effect(
-                        target.target(),
-                        &effected.view,
-                        effect,
-                        local_effect_pixel_rect(width, height),
-                    );
-                    backend.release_layer_surface_target(target);
-                    target = LayerSurfaceTexture::Owned(effected);
-                }
+                deferred_effect = Some(effect.clone());
             } else {
                 backend.warn_unsupported_effect_once();
             }
@@ -852,24 +894,29 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             .unwrap_or(BlendMode::SrcOver);
         let backdrop = layer.backdrop().cloned();
 
-        if let Some((cache_key, logical_rect)) = cache_candidate {
-            if let LayerSurfaceTexture::Owned(owned_target) = target {
-                if offscreen_byte_size(owned_target.width, owned_target.height)
-                    <= MAX_LAYER_SURFACE_CACHE_BYTES
-                {
-                    let cached_target =
-                        backend.insert_cached_layer_surface(cache_key, owned_target, logical_rect);
-                    return Ok(LayerSurface {
-                        target: LayerSurfaceTexture::Cached(cached_target),
-                        logical_rect,
-                        composite_alpha,
-                        blend_mode,
-                        backdrop,
-                        deferred_effect: None,
-                        sample_mode: composite_sample_mode,
-                    });
+        if deferred_effect.is_none() {
+            if let Some((cache_key, logical_rect)) = cache_candidate {
+                if let LayerSurfaceTexture::Owned(owned_target) = target {
+                    if offscreen_byte_size(owned_target.width, owned_target.height)
+                        <= MAX_LAYER_SURFACE_CACHE_BYTES
+                    {
+                        let cached_target = backend.insert_cached_layer_surface(
+                            cache_key,
+                            owned_target,
+                            logical_rect,
+                        );
+                        return Ok(LayerSurface {
+                            target: LayerSurfaceTexture::Cached(cached_target),
+                            logical_rect,
+                            composite_alpha,
+                            blend_mode,
+                            backdrop,
+                            deferred_effect: None,
+                            sample_mode: composite_sample_mode,
+                        });
+                    }
+                    target = LayerSurfaceTexture::Owned(owned_target);
                 }
-                target = LayerSurfaceTexture::Owned(owned_target);
             }
         }
 
@@ -966,43 +1013,18 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
         return Err("effect layer window index is missing".to_string());
     };
 
-    let source = backend.acquire_offscreen(effect_width, effect_height);
+    let source = backend.acquire_frame_surface(effect_width, effect_height);
     let layer_underlay = if has_nested_backdrop {
-        let underlay = backend.acquire_offscreen(effect_width, effect_height);
-
-        if let Some(existing_underlay) = backdrop_underlay {
-            copy_surface_region_to_view(
-                backend,
-                existing_underlay,
-                visible_rect,
-                &underlay.view,
-                effect_width,
-                effect_height,
-                effect_root_scale,
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            )?;
-            copy_surface_region_to_view(
-                backend,
-                target,
-                visible_rect,
-                &underlay.view,
-                effect_width,
-                effect_height,
-                effect_root_scale,
-                wgpu::LoadOp::Load,
-            )?;
-        } else {
-            copy_surface_region_to_view(
-                backend,
-                target,
-                visible_rect,
-                &underlay.view,
-                effect_width,
-                effect_height,
-                effect_root_scale,
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            )?;
-        }
+        let underlay = backend.acquire_frame_surface(effect_width, effect_height);
+        copy_projective_backdrop_inputs_to_view(
+            backend,
+            backdrop_underlay,
+            target,
+            visible_rect,
+            &underlay.view,
+            (effect_width, effect_height),
+            effect_root_scale,
+        )?;
         Some(underlay)
     } else {
         None
@@ -1029,7 +1051,7 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     );
 
     if let Some(underlay) = layer_underlay {
-        backend.release_offscreen(underlay);
+        backend.release_frame_surface(underlay);
     }
 
     render_result?;
@@ -1053,21 +1075,25 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
             layer.blend_mode,
             sample_mode,
         );
-        backend.release_offscreen(source);
+        backend.release_frame_surface(source);
         return composite_result;
     }
 
-    let dest = backend.acquire_offscreen(effect_width, effect_height);
-    let mut composited_effect_to_target = false;
     let Some(effect) = &layer.effect else {
-        unreachable!("effect-free layers return before allocating a destination surface");
+        backend.release_frame_surface(source);
+        return Err("effect layer destination requested without render effect".to_string());
     };
     if backend.is_render_effect_supported(effect) {
-        if let RenderEffect::Shader { shader } = effect {
-            if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
+        if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
+            let dest_viewport = Some(composite_dest_viewport(
+                dest_rect,
+                effect_width,
+                effect_height,
+                sample_mode,
+            ));
+            if let RenderEffect::Shader { shader } = effect {
                 backend.apply_shader_and_composite_to_view(
                     &source,
-                    &dest,
                     shader,
                     local_effect_pixel_rect(effect_width, effect_height),
                     &target.view,
@@ -1075,45 +1101,54 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
                     wgpu::LoadOp::Load,
                     Some(scissor),
                     layer.blend_mode,
-                    Some(composite_dest_viewport(
-                        dest_rect,
-                        effect_width,
-                        effect_height,
-                        sample_mode,
-                    )),
+                    dest_viewport,
                     sample_mode,
                 );
-                composited_effect_to_target = true;
             } else {
-                backend.apply_effect(
+                backend.apply_effect_and_composite_to_view(
                     &source,
-                    &dest.view,
                     effect,
                     local_effect_pixel_rect(effect_width, effect_height),
-                );
+                    &target.view,
+                    layer.composite_alpha,
+                    wgpu::LoadOp::Load,
+                    Some(scissor),
+                    layer.blend_mode,
+                    dest_viewport,
+                    sample_mode,
+                )?;
             }
         } else {
-            backend.apply_effect(
+            let source_rect = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: effect_width as f32,
+                height: effect_height as f32,
+            };
+            let inverse = ProjectiveTransform::from_rect_to_quad(source_rect, dest_quad)
+                .inverse()
+                .ok_or_else(|| "effect layer transform is not invertible".to_string())?;
+            backend.apply_effect_and_composite_to_view_projective(
                 &source,
-                &dest.view,
                 effect,
                 local_effect_pixel_rect(effect_width, effect_height),
-            );
+                &target.view,
+                (width, height),
+                (source_rect.width, source_rect.height),
+                inverse.matrix(),
+                dest_quad,
+                layer.composite_alpha,
+                wgpu::LoadOp::Load,
+                Some(scissor),
+                layer.blend_mode,
+                sample_mode,
+            )?;
         }
     } else {
         backend.warn_unsupported_effect_once();
-        backend.composite_to_view(
-            &source,
-            &dest.view,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            CompositeSampleMode::Linear,
-        );
-    }
-
-    if !composited_effect_to_target {
         composite_surface_to_view(
             backend,
-            &dest,
+            &source,
             &target.view,
             (width, height),
             dest_quad,
@@ -1125,8 +1160,7 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
         )?;
     }
 
-    backend.release_offscreen(source);
-    backend.release_offscreen(dest);
+    backend.release_frame_surface(source);
     Ok(())
 }
 
@@ -1154,83 +1188,57 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
     );
     let (backdrop_width, backdrop_height) =
         surface_target_size(visible_rect, backdrop_scale, backend.max_texture_dim());
-    let snapshot = backend.acquire_offscreen(backdrop_width, backdrop_height);
-    if let Some(underlay) = backdrop_underlay {
-        copy_surface_region_to_view(
-            backend,
-            underlay,
-            visible_rect,
-            &snapshot.view,
-            backdrop_width,
-            backdrop_height,
-            backdrop_scale,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-        )?;
-        copy_surface_region_to_view(
-            backend,
-            target,
-            visible_rect,
-            &snapshot.view,
-            backdrop_width,
-            backdrop_height,
-            backdrop_scale,
-            wgpu::LoadOp::Load,
-        )?;
-    } else {
-        copy_surface_region_to_view(
-            backend,
-            target,
-            visible_rect,
-            &snapshot.view,
-            backdrop_width,
-            backdrop_height,
-            backdrop_scale,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-        )?;
-    }
+    let snapshot = backend.acquire_frame_surface(backdrop_width, backdrop_height);
+    copy_projective_backdrop_inputs_to_view(
+        backend,
+        backdrop_underlay,
+        target,
+        visible_rect,
+        &snapshot.view,
+        (backdrop_width, backdrop_height),
+        backdrop_scale,
+    )?;
 
-    let dest = backend.acquire_offscreen(backdrop_width, backdrop_height);
+    let dest_viewport = Some((
+        visible_rect.x * root_scale,
+        visible_rect.y * root_scale,
+        backdrop_width as f32,
+        backdrop_height as f32,
+    ));
     if backend.is_render_effect_supported(&layer.effect) {
-        backend.apply_effect(
+        backend.apply_effect_and_composite_to_view(
             &snapshot,
-            &dest.view,
             &layer.effect,
             local_effect_pixel_rect(backdrop_width, backdrop_height),
-        );
+            &target.view,
+            1.0,
+            wgpu::LoadOp::Load,
+            Some(scissor),
+            BlendMode::SrcOver,
+            dest_viewport,
+            CompositeSampleMode::Linear,
+        )?;
     } else {
         backend.warn_unsupported_effect_once();
-        backend.composite_to_view(
+        backend.composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
             &snapshot,
-            &dest.view,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            &target.view,
+            1.0,
+            wgpu::LoadOp::Load,
+            Some(scissor),
+            None,
+            BlendMode::SrcOver,
+            dest_viewport,
             CompositeSampleMode::Linear,
         );
     }
 
-    backend.composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
-        &dest,
-        &target.view,
-        1.0,
-        wgpu::LoadOp::Load,
-        Some(scissor),
-        None,
-        BlendMode::SrcOver,
-        Some((
-            visible_rect.x * root_scale,
-            visible_rect.y * root_scale,
-            backdrop_width as f32,
-            backdrop_height as f32,
-        )),
-        CompositeSampleMode::Linear,
-    );
-
-    backend.release_offscreen(snapshot);
-    backend.release_offscreen(dest);
+    backend.release_frame_surface(snapshot);
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-fn composite_surface_to_view<B: SurfaceExecutionBackend>(
+pub(crate) fn composite_surface_to_view<B: SurfaceExecutionBackend>(
     backend: &mut B,
     source: &OffscreenTarget,
     dest_view: &wgpu::TextureView,
@@ -1298,13 +1306,60 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
     scissor: Option<(u32, u32, u32, u32)>,
 ) -> Result<(), String> {
     let source = surface.target.target();
-    if let Some(RenderEffect::Shader { shader }) = &surface.deferred_effect {
-        if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
-            let intermediate = backend.acquire_offscreen(source.width, source.height);
-            backend.apply_shader_and_composite_to_view(
+    if let Some(effect) = &surface.deferred_effect {
+        if let RenderEffect::Shader { shader } = effect {
+            if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
+                backend.apply_shader_and_composite_to_view(
+                    source,
+                    shader,
+                    local_effect_pixel_rect(source.width, source.height),
+                    dest_view,
+                    surface.composite_alpha,
+                    load_op,
+                    scissor,
+                    surface.blend_mode,
+                    Some(composite_dest_viewport(
+                        dest_rect,
+                        source.width,
+                        source.height,
+                        surface.sample_mode,
+                    )),
+                    surface.sample_mode,
+                );
+                return Ok(());
+            }
+
+            let source_rect = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: source.width as f32,
+                height: source.height as f32,
+            };
+            let inverse = ProjectiveTransform::from_rect_to_quad(source_rect, dest_quad)
+                .inverse()
+                .ok_or_else(|| "shader child layer transform is not invertible".to_string())?;
+            backend.apply_shader_and_composite_to_view_projective(
                 source,
-                &intermediate,
                 shader,
+                local_effect_pixel_rect(source.width, source.height),
+                dest_view,
+                viewport,
+                (source_rect.width, source_rect.height),
+                inverse.matrix(),
+                dest_quad,
+                surface.composite_alpha,
+                load_op,
+                scissor,
+                surface.blend_mode,
+                surface.sample_mode,
+            );
+            return Ok(());
+        }
+
+        if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
+            backend.apply_effect_and_composite_to_view(
+                source,
+                effect,
                 local_effect_pixel_rect(source.width, source.height),
                 dest_view,
                 surface.composite_alpha,
@@ -1318,36 +1373,35 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
                     surface.sample_mode,
                 )),
                 surface.sample_mode,
-            );
-            backend.release_offscreen(intermediate);
+            )?;
             return Ok(());
         }
 
-        let intermediate = backend.acquire_offscreen(source.width, source.height);
-        let effect = surface
-            .deferred_effect
-            .as_ref()
-            .expect("deferred effect was just matched");
-        backend.apply_effect(
+        let source_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: source.width as f32,
+            height: source.height as f32,
+        };
+        let inverse = ProjectiveTransform::from_rect_to_quad(source_rect, dest_quad)
+            .inverse()
+            .ok_or_else(|| "effect child layer transform is not invertible".to_string())?;
+        backend.apply_effect_and_composite_to_view_projective(
             source,
-            &intermediate.view,
             effect,
             local_effect_pixel_rect(source.width, source.height),
-        );
-        let result = composite_surface_to_view(
-            backend,
-            &intermediate,
             dest_view,
             viewport,
+            (source_rect.width, source_rect.height),
+            inverse.matrix(),
             dest_quad,
             surface.composite_alpha,
             load_op,
             scissor,
             surface.blend_mode,
             surface.sample_mode,
-        );
-        backend.release_offscreen(intermediate);
-        return result;
+        )?;
+        return Ok(());
     }
 
     composite_surface_to_view(

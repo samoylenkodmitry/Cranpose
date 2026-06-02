@@ -46,18 +46,35 @@ pub(in crate::slot) fn checked_u32_delta(
     min: u32,
     field: &'static str,
 ) -> u32 {
-    let updated = match delta {
-        CheckedU32Delta::Add(delta) => value
-            .checked_add(delta)
-            .unwrap_or_else(|| panic_u32_delta_overflow(field, value, delta)),
-        CheckedU32Delta::Sub(delta) => value
-            .checked_sub(delta)
-            .unwrap_or_else(|| panic_u32_delta_below_min(field, value, -i64::from(delta), min)),
-    };
-    if updated < min {
-        panic_u32_delta_below_min(field, value, delta.as_i64(), min);
+    if let Some(updated) = try_checked_u32_delta(value, delta, min) {
+        return updated;
     }
-    updated
+    match delta {
+        CheckedU32Delta::Add(delta) => {
+            value
+                .checked_add(delta)
+                .unwrap_or_else(|| panic_u32_delta_overflow(field, value, delta));
+        }
+        CheckedU32Delta::Sub(delta) => {
+            value
+                .checked_sub(delta)
+                .unwrap_or_else(|| panic_u32_delta_below_min(field, value, -i64::from(delta), min));
+        }
+    }
+    panic_u32_delta_below_min(field, value, delta.as_i64(), min);
+}
+
+#[inline]
+pub(in crate::slot) fn try_checked_u32_delta(
+    value: u32,
+    delta: CheckedU32Delta,
+    min: u32,
+) -> Option<u32> {
+    let updated = match delta {
+        CheckedU32Delta::Add(delta) => value.checked_add(delta)?,
+        CheckedU32Delta::Sub(delta) => value.checked_sub(delta)?,
+    };
+    (updated >= min).then_some(updated)
 }
 
 #[cold]
@@ -121,6 +138,26 @@ mod tests {
                 "test field"
             ),
             5
+        );
+    }
+
+    #[test]
+    fn try_checked_u32_delta_reports_overflow_without_panicking() {
+        assert_eq!(
+            try_checked_u32_delta(u32::MAX, CheckedU32Delta::from_i64(1, "test field"), 0),
+            None
+        );
+        assert_eq!(
+            try_checked_u32_delta(0, CheckedU32Delta::from_i64(-1, "test field"), 0),
+            None
+        );
+        assert_eq!(
+            try_checked_u32_delta(1, CheckedU32Delta::from_i64(-1, "test field"), 1),
+            None
+        );
+        assert_eq!(
+            try_checked_u32_delta(1, CheckedU32Delta::from_i64(1, "test field"), 0),
+            Some(2)
         );
     }
 

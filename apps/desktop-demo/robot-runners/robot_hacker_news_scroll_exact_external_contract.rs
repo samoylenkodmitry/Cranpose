@@ -66,6 +66,7 @@ fn main() {
                     compare_stabilized_guard_px: COMPARE_STABILIZED_GUARD_PX,
                     compare_viewport_inset_px: COMPARE_VIEWPORT_INSET_PX,
                     render_stats_env: Some(RENDER_STATS_ENV),
+                    active_frame: None,
                 },
                 None,
             );

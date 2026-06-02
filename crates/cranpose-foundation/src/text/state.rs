@@ -357,16 +357,14 @@ impl TextFieldState {
     /// - Cursor position jumps (non-consecutive insert)
     /// - A non-insert operation occurs (delete, paste multi-char, etc.)
     ///
-    /// # Panics
-    ///
-    /// Panics if called while already editing (no concurrent or nested edits).
-    pub fn edit<F>(&self, f: F)
+    /// Returns `false` if another edit is already in progress.
+    pub fn edit<F>(&self, f: F) -> bool
     where
         F: FnOnce(&mut TextFieldBuffer),
     {
-        // RAII guard ensures is_editing is cleared even on panic
-        let _guard = EditGuard::new(&self.inner)
-            .expect("TextFieldState does not support concurrent or nested editing");
+        let Ok(guard) = EditGuard::new(&self.inner) else {
+            return false;
+        };
 
         // Create buffer from current value
         let current = self.value();
@@ -471,7 +469,7 @@ impl TextFieldState {
 
         // Explicitly drop guard to clear is_editing BEFORE notifying listeners
         // This ensures listeners see clean state and can start new edits if needed
-        drop(_guard);
+        drop(guard);
 
         // Notify listeners outside of borrow
         if changed {
@@ -483,6 +481,7 @@ impl TextFieldState {
                 }
             }
         }
+        true
     }
 
     /// Flushes any pending undo snapshot to the undo stack.
@@ -500,22 +499,22 @@ impl TextFieldState {
     }
 
     /// Sets the text and places cursor at end.
-    pub fn set_text(&self, text: impl Into<String>) {
+    pub fn set_text(&self, text: impl Into<String>) -> bool {
         let text = text.into();
         self.edit(|buffer| {
             buffer.clear();
             buffer.insert(&text);
-        });
+        })
     }
 
     /// Sets the text and selects all.
-    pub fn set_text_and_select_all(&self, text: impl Into<String>) {
+    pub fn set_text_and_select_all(&self, text: impl Into<String>) -> bool {
         let text = text.into();
         self.edit(|buffer| {
             buffer.clear();
             buffer.insert(&text);
             buffer.select_all();
-        });
+        })
     }
 }
 
@@ -589,14 +588,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "concurrent or nested editing")]
-    fn nested_edit_panics() {
+    fn nested_edit_is_rejected() {
         with_test_runtime(|| {
+            use std::cell::Cell;
+            use std::rc::Rc;
+
             let state = TextFieldState::new("Hello");
             let state_clone = state.clone();
-            state.edit(move |_buffer| {
-                state_clone.edit(|_| {}); // This should panic
+            let nested_result = Rc::new(Cell::new(true));
+            let nested_result_for_edit = nested_result.clone();
+            let outer_result = state.edit(move |_buffer| {
+                nested_result_for_edit.set(state_clone.edit(|_| {}));
             });
+            assert!(outer_result);
+            assert!(!nested_result.get());
         });
     }
 

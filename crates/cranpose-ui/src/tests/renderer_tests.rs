@@ -29,6 +29,7 @@ fn compute_layout(composition: &mut Composition<MemoryApplier>, root: NodeId) ->
 
 #[test]
 fn renderer_emits_background_and_text() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
@@ -62,6 +63,7 @@ fn renderer_emits_background_and_text() {
 
 #[test]
 fn renderer_honors_resolved_background_shape() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
@@ -95,6 +97,7 @@ fn renderer_honors_resolved_background_shape() {
 
 #[test]
 fn renderer_translates_draw_commands() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
@@ -209,6 +212,7 @@ fn renderer_translates_draw_commands() {
 
 #[test]
 fn draw_with_content_splits_before_and_after_draw_content() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
@@ -254,6 +258,7 @@ fn draw_with_content_splits_before_and_after_draw_content() {
 
 #[test]
 fn draw_with_content_multiple_markers_keep_only_trailing_overlay() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
@@ -307,6 +312,7 @@ fn draw_with_content_multiple_markers_keep_only_trailing_overlay() {
 
 #[test]
 fn renderer_renders_subcompose_background() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition

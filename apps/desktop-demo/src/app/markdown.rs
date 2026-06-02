@@ -584,6 +584,38 @@ pub fn MarkdownScrollStabilityFixtureTab() {
     );
 }
 
+#[allow(non_snake_case)]
+#[composable]
+pub fn MarkdownScrollStressFixtureTab() {
+    let list_state = remember_lazy_list_state();
+    MarkdownScrollStressFixtureTabWithState(list_state);
+}
+
+#[allow(non_snake_case)]
+#[composable]
+pub fn MarkdownScrollStressFixtureTabWithState(
+    list_state: cranpose_foundation::lazy::LazyListState,
+) {
+    let blocks = cranpose_core::remember(|| {
+        let markdown = markdown_scroll_stress_fixture();
+        Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(&markdown)))
+    })
+    .with(|blocks| blocks.clone());
+
+    Column(
+        Modifier::empty()
+            .padding(16.0)
+            .background(Color(0.06, 0.08, 0.14, 1.0))
+            .rounded_corners(20.0)
+            .padding(16.0)
+            .fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            render_markdown_blocks_with_state(blocks.clone(), list_state);
+        },
+    );
+}
+
 fn scroll_stability_fixture_markdown() -> String {
     let mut markdown = String::from("# Markdown Scroll Stability Fixture\n\n");
     for index in 1..=96 {
@@ -600,6 +632,31 @@ fn scroll_stability_fixture_markdown() -> String {
         } else {
             markdown.push_str(&format!(
                 "Fixture paragraph {index:03} is plain markdown text with enough width to exercise multi-line text layout during exact scrolling."
+            ));
+        }
+        markdown.push_str("\n\n");
+    }
+    markdown
+}
+
+pub fn markdown_scroll_stress_fixture() -> String {
+    let mut markdown = String::from("# Markdown Scroll Stress Fixture\n\n");
+    for index in 1..=420 {
+        if index % 17 == 0 {
+            markdown.push_str(&format!(
+                "### Section {index:03}\n\nThis section heading is followed by a longer paragraph with [linked source material](https://example.com/{index:03}) and enough text to wrap across multiple lines inside the Markdown viewport."
+            ));
+        } else if index % 11 == 0 {
+            markdown.push_str(&format!(
+                "> Quote block {index:03} keeps a distinct visual band while scrolling, with **bold emphasis**, _italic emphasis_, and inline `code` in the same block."
+            ));
+        } else if index % 7 == 0 {
+            markdown.push_str(&format!(
+                "- Line {index:03} combines list indentation, a deterministic URL https://example.com/items/{index:03}, and enough trailing prose to force text measurement cache reuse during fast scroll."
+            ));
+        } else {
+            markdown.push_str(&format!(
+                "Paragraph {index:03} is representative fetched Markdown content with plain text, **strong spans**, _emphasis spans_, inline `tokens`, and wrapping sentences that should scroll at the production frame budget."
             ));
         }
         markdown.push_str("\n\n");
@@ -655,6 +712,15 @@ fn markdown_scrollbar_style() -> LazyScrollbarStyle {
 #[composable]
 fn render_markdown_blocks(blocks: Rc<[MarkdownBlock]>) {
     let list_state = remember_lazy_list_state();
+    render_markdown_blocks_with_state(blocks, list_state);
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn render_markdown_blocks_with_state(
+    blocks: Rc<[MarkdownBlock]>,
+    list_state: cranpose_foundation::lazy::LazyListState,
+) {
     let blocks_for_list = blocks.clone();
     LazyListWithScrollbar(
         Modifier::empty().fill_max_size(),
@@ -819,6 +885,18 @@ mod tests {
     fn empty_input_yields_no_blocks() {
         let blocks = markdown_to_blocks("");
         assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn markdown_scroll_stress_fixture_is_large_representative_content() {
+        let fixture = markdown_scroll_stress_fixture();
+        assert!(fixture.starts_with("# Markdown Scroll Stress Fixture"));
+        assert!(fixture.contains("Paragraph 419"));
+        assert!(fixture.contains("### Section 408"));
+        assert!(
+            fixture.len() > 40_000,
+            "stress fixture should stay large enough to exercise fetched Markdown scrolling"
+        );
     }
 
     #[test]
@@ -1055,6 +1133,26 @@ mod tests {
         assert_eq!(
             link_count, 1,
             "link annotations should be preserved after split"
+        );
+    }
+
+    #[test]
+    fn markdown_scroll_stress_fixture_exercises_many_rendered_blocks() {
+        let markdown = markdown_scroll_stress_fixture();
+        let blocks = split_large_markdown_blocks(markdown_to_blocks(&markdown));
+        let text_blocks = blocks
+            .iter()
+            .filter(|block| matches!(block, MarkdownBlock::Text(_)))
+            .count();
+
+        assert!(markdown.len() > 60_000);
+        assert!(text_blocks >= 420);
+        assert!(
+            blocks.iter().any(|block| match block {
+                MarkdownBlock::Text(annotated) => !annotated.link_annotations.is_empty(),
+                MarkdownBlock::Rule => false,
+            }),
+            "stress fixture must include linked text"
         );
     }
 

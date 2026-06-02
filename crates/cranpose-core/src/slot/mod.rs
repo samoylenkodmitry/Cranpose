@@ -25,7 +25,9 @@ pub(crate) use anchors::AnchorRegistry;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use anchors::AnchorState;
 pub(crate) use checked::checked_usize_to_u32;
-pub(in crate::slot) use checked::{checked_u32_delta, checked_usize_to_i64, CheckedU32Delta};
+pub(in crate::slot) use checked::{
+    checked_u32_delta, checked_usize_to_i64, try_checked_u32_delta, CheckedU32Delta,
+};
 pub(crate) use debug::SlotLifecycleDebugStats;
 pub use debug::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
@@ -45,6 +47,8 @@ pub(in crate::slot) use ranges::{
 pub(crate) use scope_index::ScopeIndex;
 pub use table::SlotTable;
 pub(crate) use table::SlotWriteSession;
+#[cfg(test)]
+pub(crate) use table::ValueSlotError;
 pub(in crate::slot) use types::collect_root_node_ids_from_records_into;
 pub(crate) use types::NodeLifecycle;
 pub(crate) use types::{

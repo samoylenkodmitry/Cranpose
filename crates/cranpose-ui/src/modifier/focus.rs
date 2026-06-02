@@ -211,14 +211,14 @@ impl ModifierNodeElement for FocusTargetElement {
 /// app logic.
 pub struct FocusRequesterNode {
     state: NodeState,
-    requester_id: usize,
+    requester: FocusRequesterToken,
 }
 
 impl FocusRequesterNode {
-    pub fn new(requester_id: usize) -> Self {
+    pub(crate) fn new(requester: FocusRequesterToken) -> Self {
         Self {
             state: NodeState::new(),
-            requester_id,
+            requester,
         }
     }
 }
@@ -244,12 +244,12 @@ impl ModifierNode for FocusRequesterNode {
 /// Creates a modifier that can be used to programmatically request focus.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FocusRequesterElement {
-    requester_id: usize,
+    requester: FocusRequesterToken,
 }
 
 impl FocusRequesterElement {
-    pub fn new(requester_id: usize) -> Self {
-        Self { requester_id }
+    pub(crate) fn new(requester: FocusRequesterToken) -> Self {
+        Self { requester }
     }
 }
 
@@ -257,11 +257,11 @@ impl ModifierNodeElement for FocusRequesterElement {
     type Node = FocusRequesterNode;
 
     fn create(&self) -> Self::Node {
-        FocusRequesterNode::new(self.requester_id)
+        FocusRequesterNode::new(self.requester.clone())
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.requester_id = self.requester_id;
+        node.requester = self.requester.clone();
     }
 
     fn inspector_name(&self) -> &'static str {
@@ -277,22 +277,65 @@ impl ModifierNodeElement for FocusRequesterElement {
 ///
 /// This mirrors Jetpack Compose's FocusRequester class and provides
 /// an API for triggering focus changes from application code.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct FocusRequester {
-    id: usize,
+    token: FocusRequesterToken,
+}
+
+#[derive(Clone)]
+pub(crate) struct FocusRequesterToken(Rc<()>);
+
+impl FocusRequesterToken {
+    fn new() -> Self {
+        Self(Rc::new(()))
+    }
+
+    fn id(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+}
+
+impl std::fmt::Debug for FocusRequesterToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("FocusRequesterToken")
+            .field(&self.id())
+            .finish()
+    }
+}
+
+impl PartialEq for FocusRequesterToken {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for FocusRequesterToken {}
+
+impl Hash for FocusRequesterToken {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Rc::as_ptr(&self.0).hash(state);
+    }
+}
+
+impl Default for FocusRequester {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FocusRequester {
     pub fn new() -> Self {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
         Self {
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            token: FocusRequesterToken::new(),
         }
     }
 
     pub fn id(&self) -> usize {
-        self.id
+        self.token.id()
+    }
+
+    pub(crate) fn token(&self) -> FocusRequesterToken {
+        self.token.clone()
     }
 
     /// Requests focus for components associated with this requester.
@@ -386,6 +429,21 @@ mod tests {
         let req1 = FocusRequester::new();
         let req2 = FocusRequester::new();
         assert_ne!(req1.id(), req2.id());
+    }
+
+    #[test]
+    fn focus_requester_clone_keeps_retained_identity() {
+        let req = FocusRequester::new();
+        let clone = req.clone();
+
+        assert_eq!(req.id(), clone.id());
+    }
+
+    #[test]
+    fn focus_requester_ids_do_not_use_process_global_counter() {
+        let source = include_str!("focus.rs");
+        assert!(!source.contains(concat!("static ", "NEXT_ID")));
+        assert!(!source.contains(concat!("Atomic", "Usize")));
     }
 
     #[test]

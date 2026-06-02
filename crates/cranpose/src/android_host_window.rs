@@ -4,7 +4,7 @@ use cranpose_core::MutableState;
 use cranpose_ui::{composable, Point, Size};
 use std::{
     cell::{Cell, RefCell},
-    rc::Rc,
+    rc::{Rc, Weak},
     time::Duration,
 };
 use thiserror::Error;
@@ -297,15 +297,15 @@ struct AndroidHostWindowStateRegistration {
     revision: u64,
 }
 
-thread_local! {
-    static ANDROID_HOST_WINDOW_STATES: RefCell<Vec<AndroidHostWindowStateRegistration>> =
-        const { RefCell::new(Vec::new()) };
-    static NEXT_ANDROID_HOST_WINDOW_REVISION: Cell<u64> = const { Cell::new(1) };
+#[derive(Default)]
+pub(crate) struct AndroidHostWindowRegistry {
+    states: RefCell<Vec<AndroidHostWindowStateRegistration>>,
+    next_revision: Cell<u64>,
 }
 
-pub(crate) fn latest_android_host_window_request() -> Option<AndroidHostWindowRequest> {
-    ANDROID_HOST_WINDOW_STATES.with(|states| {
-        states
+impl AndroidHostWindowRegistry {
+    fn latest_request(&self) -> Option<AndroidHostWindowRequest> {
+        self.states
             .borrow()
             .iter()
             .filter(|registration| registration.state.request_revision_non_reactive() != 0)
@@ -317,15 +317,97 @@ pub(crate) fn latest_android_host_window_request() -> Option<AndroidHostWindowRe
                 size_revision: registration.state.request_revision_non_reactive(),
                 position_revision: registration.state.position_revision_non_reactive(),
             })
+    }
+
+    fn sync_actual_size(&self, actual: Size) {
+        for registration in self.states.borrow().iter() {
+            registration.state.set_actual_size(actual);
+        }
+    }
+
+    fn register(&self, state: AndroidHostWindowState, owner: Rc<()>) {
+        let revision = self.next_revision();
+        let mut states = self.states.borrow_mut();
+        if let Some(existing) = states
+            .iter_mut()
+            .find(|registration| Rc::ptr_eq(&registration.owner, &owner))
+        {
+            existing.state = state;
+            existing.revision = revision;
+        } else {
+            states.push(AndroidHostWindowStateRegistration {
+                state,
+                owner,
+                revision,
+            });
+        }
+    }
+
+    fn unregister(&self, state: AndroidHostWindowState, owner: Rc<()>) {
+        self.states.borrow_mut().retain(|registration| {
+            !(registration.state == state && Rc::ptr_eq(&registration.owner, &owner))
+        });
+    }
+
+    fn next_revision(&self) -> u64 {
+        let current = self.next_revision.get().max(1);
+        self.next_revision.set(current.wrapping_add(1).max(1));
+        current
+    }
+}
+
+thread_local! {
+    static CURRENT_ANDROID_HOST_WINDOW_REGISTRY: RefCell<Vec<Weak<AndroidHostWindowRegistry>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn with_android_host_window_registry<R>(
+    registry: &Rc<AndroidHostWindowRegistry>,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct RegistryGuard;
+
+    impl Drop for RegistryGuard {
+        fn drop(&mut self) {
+            CURRENT_ANDROID_HOST_WINDOW_REGISTRY.with(|stack| {
+                stack.borrow_mut().pop();
+            });
+        }
+    }
+
+    CURRENT_ANDROID_HOST_WINDOW_REGISTRY.with(|stack| {
+        stack.borrow_mut().push(Rc::downgrade(registry));
+    });
+    let _guard = RegistryGuard;
+    f()
+}
+
+fn current_android_host_window_registry() -> Option<Rc<AndroidHostWindowRegistry>> {
+    CURRENT_ANDROID_HOST_WINDOW_REGISTRY.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        loop {
+            match stack.last().and_then(Weak::upgrade) {
+                Some(registry) => return Some(registry),
+                None if stack.is_empty() => return None,
+                None => {
+                    stack.pop();
+                }
+            }
+        }
     })
 }
 
-pub(crate) fn sync_android_host_window_actual_size(actual: Size) {
-    ANDROID_HOST_WINDOW_STATES.with(|states| {
-        for registration in states.borrow().iter() {
-            registration.state.set_actual_size(actual);
-        }
-    });
+pub(crate) fn latest_android_host_window_request(
+    registry: &AndroidHostWindowRegistry,
+) -> Option<AndroidHostWindowRequest> {
+    registry.latest_request()
+}
+
+pub(crate) fn sync_android_host_window_actual_size(
+    registry: &AndroidHostWindowRegistry,
+    actual: Size,
+) {
+    registry.sync_actual_size(actual);
 }
 
 pub(crate) fn validate_logical_size(size: Size) -> Result<Size, AndroidHostWindowSizeError> {
@@ -365,39 +447,21 @@ pub(crate) fn sizes_match(requested: Size, actual: Size) -> bool {
 }
 
 fn register_android_host_window_state(state: AndroidHostWindowState, owner: Rc<()>) {
-    let revision = next_android_host_window_revision();
-    ANDROID_HOST_WINDOW_STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        if let Some(existing) = states
-            .iter_mut()
-            .find(|registration| Rc::ptr_eq(&registration.owner, &owner))
-        {
-            existing.state = state;
-            existing.revision = revision;
-        } else {
-            states.push(AndroidHostWindowStateRegistration {
-                state,
-                owner,
-                revision,
-            });
-        }
-    });
+    let Some(registry) = current_android_host_window_registry() else {
+        log::error!("Android host-window declaration ignored because no registry is active");
+        return;
+    };
+    registry.register(state, owner);
 }
 
 fn unregister_android_host_window_state(state: AndroidHostWindowState, owner: Rc<()>) {
-    ANDROID_HOST_WINDOW_STATES.with(|states| {
-        states.borrow_mut().retain(|registration| {
-            !(registration.state == state && Rc::ptr_eq(&registration.owner, &owner))
-        });
-    });
-}
-
-fn next_android_host_window_revision() -> u64 {
-    NEXT_ANDROID_HOST_WINDOW_REVISION.with(|revision| {
-        let next = revision.get();
-        revision.set(next.wrapping_add(1));
-        next
-    })
+    let Some(registry) = current_android_host_window_registry() else {
+        log::error!(
+            "Android host-window declaration could not unregister because no registry is active"
+        );
+        return;
+    };
+    registry.unregister(state, owner);
 }
 
 fn logical_dimension_to_physical(logical: f32, density: f32) -> i32 {
@@ -604,18 +668,52 @@ mod tests {
 
     #[test]
     fn latest_request_includes_requested_position() {
+        let registry = Rc::new(AndroidHostWindowRegistry::default());
         let harness = test_state(100.0, 50.0);
         let state = harness.state;
         state.set_position(Point::new(24.0, 36.0)).unwrap();
         let owner = Rc::new(());
-        register_android_host_window_state(state, Rc::clone(&owner));
+        with_android_host_window_registry(&registry, || {
+            register_android_host_window_state(state, Rc::clone(&owner));
+        });
 
-        let request = latest_android_host_window_request().expect("registered request");
+        let request = latest_android_host_window_request(&registry).expect("registered request");
 
         assert_eq!(request.size, Size::new(100.0, 50.0));
         assert_eq!(request.position, Point::new(24.0, 36.0));
         assert_eq!(request.size_revision, 1);
         assert_eq!(request.position_revision, 1);
-        unregister_android_host_window_state(state, owner);
+        with_android_host_window_registry(&registry, || {
+            unregister_android_host_window_state(state, owner);
+        });
+    }
+
+    #[test]
+    fn host_window_requests_are_isolated_by_registry() {
+        let first_registry = Rc::new(AndroidHostWindowRegistry::default());
+        let second_registry = Rc::new(AndroidHostWindowRegistry::default());
+        let first_harness = test_state(100.0, 50.0);
+        let second_harness = test_state(160.0, 80.0);
+        let first = first_harness.state;
+        let second = second_harness.state;
+        let first_owner = Rc::new(());
+        let second_owner = Rc::new(());
+
+        with_android_host_window_registry(&first_registry, || {
+            register_android_host_window_state(first, first_owner);
+        });
+        with_android_host_window_registry(&second_registry, || {
+            register_android_host_window_state(second, second_owner);
+        });
+
+        let first_request =
+            latest_android_host_window_request(&first_registry).expect("first request");
+        let second_request =
+            latest_android_host_window_request(&second_registry).expect("second request");
+
+        assert!(first_request.state == first);
+        assert_eq!(first_request.size, Size::new(100.0, 50.0));
+        assert!(second_request.state == second);
+        assert_eq!(second_request.size, Size::new(160.0, 80.0));
     }
 }

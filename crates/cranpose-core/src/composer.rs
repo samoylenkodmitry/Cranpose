@@ -50,20 +50,62 @@ fn slots_storage_key(host: &Rc<SlotsHost>) -> usize {
     host.storage_key()
 }
 
-fn bind_slots_host_to_runtime_state(state: &Rc<ComposerRuntimeState>, host: &Rc<SlotsHost>) {
+fn bind_slots_host_to_runtime_state(
+    state: &Rc<ComposerRuntimeState>,
+    host: &Rc<SlotsHost>,
+) -> Rc<SlotsHost> {
     if let Some(bound_state) = host.runtime_state() {
         if Rc::ptr_eq(&bound_state, state) {
             state.bind_slots_host(host);
-            return;
+            return Rc::clone(host);
         }
         drop(bound_state);
         if host.rebind_orphaned_runtime_state(state) {
             state.bind_slots_host(host);
-            return;
+            return Rc::clone(host);
         }
-        panic!("slot host already belongs to a different composer runtime state");
+        log::error!(
+            "slot host already belongs to a different composer runtime state; using a fresh slot host"
+        );
+        let replacement = Rc::new(SlotsHost::new(SlotTable::new()));
+        state.bind_slots_host(&replacement);
+        return replacement;
     }
     state.bind_slots_host(host);
+    Rc::clone(host)
+}
+
+struct SlotHostPassGuard {
+    core: Rc<ComposerCore>,
+    host: Rc<SlotsHost>,
+    active: bool,
+}
+
+impl SlotHostPassGuard {
+    fn close(&mut self) {
+        if !self.active {
+            return;
+        }
+        if self.host.has_active_pass() {
+            self.host.abandon_active_pass();
+        }
+        match self.core.slot_hosts.borrow_mut().pop() {
+            Some(host) if Rc::ptr_eq(&host, &self.host) => {}
+            Some(_) => {
+                log::error!("slot host stack mismatch while closing slot host pass");
+            }
+            None => {
+                log::error!("slot host stack underflow while closing slot host pass");
+            }
+        }
+        self.active = false;
+    }
+}
+
+impl Drop for SlotHostPassGuard {
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 pub(crate) struct ComposerRuntimeState {
@@ -144,7 +186,7 @@ impl ComposerRuntimeState {
         &self,
         host: &Rc<SlotsHost>,
         key: RetainKey,
-        preflight: impl FnOnce(&crate::slot::DetachedSubtree),
+        preflight: impl FnOnce(&crate::slot::DetachedSubtree) -> bool,
     ) -> Option<crate::slot::DetachedSubtree> {
         let host_key = slots_storage_key(host);
         let mut retention = self.retention_by_host.borrow_mut();
@@ -415,6 +457,16 @@ pub(crate) struct ComposerCore {
     pub(crate) _not_send: PhantomData<*const ()>,
 }
 
+fn take_subcompose_frame(core: &ComposerCore, operation: &str) -> SubcomposeFrame {
+    match core.subcompose_stack.borrow_mut().pop() {
+        Some(frame) => frame,
+        None => {
+            log::error!("subcompose stack underflow while finishing {operation}");
+            SubcomposeFrame::default()
+        }
+    }
+}
+
 impl ComposerCore {
     pub(crate) fn new(
         shared_state: Rc<ComposerRuntimeState>,
@@ -502,7 +554,7 @@ impl Composer {
         initial_parent_frame: InitialParentFrame,
     ) -> Self {
         shared_state.bind_applier_host(&applier);
-        bind_slots_host_to_runtime_state(&shared_state, &slots);
+        let slots = bind_slots_host_to_runtime_state(&shared_state, &slots);
         let core = Rc::new(ComposerCore::new(
             shared_state,
             slots,
@@ -595,53 +647,11 @@ impl Composer {
         mode: crate::slot::SlotPassMode,
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<(R, SlotPassOutcome), NodeError> {
-        bind_slots_host_to_runtime_state(&self.core.shared_state, &slots);
-        slots.begin_pass(mode);
-        self.core.slot_hosts.borrow_mut().push(Rc::clone(&slots));
-
-        struct Guard {
-            core: Rc<ComposerCore>,
-            host: Rc<SlotsHost>,
-            active: bool,
-        }
-        impl Guard {
-            fn close(&mut self) {
-                if !self.active {
-                    return;
-                }
-                if self.host.has_active_pass() {
-                    self.host.abandon_active_pass();
-                }
-                let host = self
-                    .core
-                    .slot_hosts
-                    .borrow_mut()
-                    .pop()
-                    .expect("slot host underflow");
-                debug_assert!(Rc::ptr_eq(&host, &self.host));
-                self.active = false;
-            }
-        }
-        impl Drop for Guard {
-            fn drop(&mut self) {
-                self.close();
-            }
-        }
-        let mut guard = Guard {
-            core: self.clone_core(),
-            host: Rc::clone(&slots),
-            active: true,
-        };
+        let mut guard = self.begin_slot_host_pass(&slots, mode);
         let result = f(self);
-        let finished = {
-            let mut applier = self.core.applier.borrow_dyn();
-            slots.finish_pass(&mut *applier)
-        }?;
-        self.handle_detached_children_in_host(&slots, None, finished.detached_root_children)?;
-        self.evict_retained_subtrees_for_host(&slots)?;
-        slots.complete_pass_cleanup(&finished.outcome);
+        let outcome = self.finish_slot_host_pass(&guard.host)?;
         guard.close();
-        Ok((result, finished.outcome))
+        Ok((result, outcome))
     }
 
     pub(crate) fn with_slot_host_pass<R>(
@@ -650,8 +660,17 @@ impl Composer {
         mode: crate::slot::SlotPassMode,
         f: impl FnOnce(&Composer) -> R,
     ) -> (R, SlotPassOutcome) {
-        self.try_with_slot_host_pass(slots, mode, f)
-            .expect("slot pass finalization must dispose detached nodes")
+        let mut guard = self.begin_slot_host_pass(&slots, mode);
+        let result = f(self);
+        let outcome = match self.finish_slot_host_pass(&guard.host) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                log::error!("slot host pass finalization failed: {err}");
+                SlotPassOutcome::default()
+            }
+        };
+        guard.close();
+        (result, outcome)
     }
 
     pub(crate) fn with_slot_override<R>(
@@ -660,6 +679,32 @@ impl Composer {
         f: impl FnOnce(&Composer) -> R,
     ) -> (R, SlotPassOutcome) {
         self.with_slot_host_pass(slots, crate::slot::SlotPassMode::Compose, f)
+    }
+
+    fn begin_slot_host_pass(
+        &self,
+        slots: &Rc<SlotsHost>,
+        mode: crate::slot::SlotPassMode,
+    ) -> SlotHostPassGuard {
+        let slots = bind_slots_host_to_runtime_state(&self.core.shared_state, slots);
+        slots.begin_pass(mode);
+        self.core.slot_hosts.borrow_mut().push(Rc::clone(&slots));
+        SlotHostPassGuard {
+            core: self.clone_core(),
+            host: slots,
+            active: true,
+        }
+    }
+
+    fn finish_slot_host_pass(&self, slots: &Rc<SlotsHost>) -> Result<SlotPassOutcome, NodeError> {
+        let finished = {
+            let mut applier = self.core.applier.borrow_dyn();
+            slots.finish_pass(&mut *applier)
+        }?;
+        self.handle_detached_children_in_host(slots, None, finished.detached_root_children)?;
+        self.evict_retained_subtrees_for_host(slots)?;
+        slots.complete_pass_cleanup(&finished.outcome);
+        Ok(finished.outcome)
     }
 
     pub(crate) fn parent_stack(&self) -> RefMut<'_, Vec<ParentFrame>> {
@@ -825,13 +870,12 @@ impl Composer {
         result
     }
 
-    pub(crate) fn flush_pending_commands_if_large(&self) {
+    pub(crate) fn flush_pending_commands_if_large(&self) -> Result<(), NodeError> {
         let queued = self.core.commands.borrow().len();
         if queued < COMMAND_FLUSH_THRESHOLD {
-            return;
+            return Ok(());
         }
         self.apply_pending_commands()
-            .expect("mid-composition command flush failed");
     }
 
     fn with_group_in_active_pass<R>(
@@ -851,7 +895,9 @@ impl Composer {
                 self.scope.mark_recomposed();
                 self.composer
                     .with_slot_session_mut(|slots| slots.end_group());
-                self.composer.flush_pending_commands_if_large();
+                if let Err(err) = self.composer.flush_pending_commands_if_large() {
+                    log::error!("mid-composition command flush failed: {err}");
+                }
             }
         }
 
@@ -868,8 +914,8 @@ impl Composer {
             },
             |subtree| {
                 self.with_slot_session_mut(|slots| {
-                    slots.assert_retained_restore_ready(reserved_key, subtree);
-                });
+                    slots.retained_restore_ready(reserved_key, subtree)
+                })
             },
         );
         let (group, start_scope_id, start_kind) = self.with_slot_session_mut(|slots| {
@@ -1022,6 +1068,11 @@ impl Composer {
         // Retention and disposal must preserve the slot lifecycle contract in
         // docs/SLOT_TABLE_LIFECYCLE.md across the slot table, applier, and scope
         // registry.
+        let Some(root_key) = subtree.root_key_checked() else {
+            log::error!("retention rejected detached subtree without a root group");
+            self.dispose_detached_subtree_in_host(slots_host, subtree)?;
+            return Ok(());
+        };
         let root_detaches = self.detached_root_parent_commands(&subtree, "retention")?;
         self.deactivate_scope_ids(subtree.scope_ids_iter());
         for (root, parent_id) in root_detaches {
@@ -1036,7 +1087,7 @@ impl Composer {
             slots_host,
             RetainKey {
                 parent_scope,
-                key: subtree.root_key(),
+                key: root_key,
             },
             subtree,
         );
@@ -1105,8 +1156,9 @@ impl Composer {
         detached: Vec<crate::slot::DetachedSubtree>,
     ) {
         let host = self.active_slots_host();
-        self.handle_detached_children_in_host(&host, parent_scope, detached)
-            .expect("detached subtree root nodes must be present while closing a group");
+        if let Err(err) = self.handle_detached_children_in_host(&host, parent_scope, detached) {
+            log::error!("detached subtree handling failed while closing a group: {err}");
+        }
     }
 
     fn handle_finished_group_result(
@@ -1130,12 +1182,15 @@ impl Composer {
     pub(crate) fn close_current_group_body_for_scope(&self, scope: &RecomposeScope) {
         let result = self.with_slot_session_mut(|slots| slots.finish_group_body());
         self.handle_finished_group_result(Some(scope.id()), result);
-        let popped = self.scope_stack().pop().expect("scope stack underflow");
-        debug_assert_eq!(
-            popped.id(),
-            scope.id(),
-            "closed scope must match the active scope stack"
-        );
+        if let Some(popped) = self.scope_stack().pop() {
+            debug_assert_eq!(
+                popped.id(),
+                scope.id(),
+                "closed scope must match the active scope stack"
+            );
+        } else {
+            log::error!("scope stack underflow while closing scope {}", scope.id());
+        }
     }
 
     pub fn remember<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
@@ -1242,11 +1297,16 @@ impl Composer {
         let stack = self.core.local_stack.borrow();
         for context in stack.iter().rev() {
             if let Some(entry) = context.values.get(&local.key) {
-                let typed = entry
-                    .clone()
-                    .downcast::<LocalStateEntry<T>>()
-                    .expect("composition local type mismatch");
-                return typed.value();
+                match entry.clone().downcast::<LocalStateEntry<T>>() {
+                    Ok(typed) => return typed.value(),
+                    Err(_) => {
+                        log::error!(
+                            "composition local entry type mismatch for key {}",
+                            local.key
+                        );
+                        return local.default_value();
+                    }
+                }
             }
         }
         local.default_value()
@@ -1259,11 +1319,16 @@ impl Composer {
         let stack = self.core.local_stack.borrow();
         for context in stack.iter().rev() {
             if let Some(entry) = context.values.get(&local.key) {
-                let typed = entry
-                    .clone()
-                    .downcast::<StaticLocalEntry<T>>()
-                    .expect("static composition local type mismatch");
-                return typed.value();
+                match entry.clone().downcast::<StaticLocalEntry<T>>() {
+                    Ok(typed) => return typed.value(),
+                    Err(_) => {
+                        log::error!(
+                            "static composition local entry type mismatch for key {}",
+                            local.key
+                        );
+                        return local.default_value();
+                    }
+                }
             }
         }
         local.default_value()
@@ -1322,8 +1387,7 @@ impl Composer {
         });
 
         let frame = {
-            let mut stack = guard.core.subcompose_stack.borrow_mut();
-            let frame = stack.pop().expect("subcompose stack underflow");
+            let frame = take_subcompose_frame(&guard.core, "subcompose");
             guard.leaked = true;
             frame
         };
@@ -1463,8 +1527,7 @@ impl Composer {
             Ok((output, commands, side_effects, outcome.compacted))
         })?;
         let frame = {
-            let mut stack = guard.core.subcompose_stack.borrow_mut();
-            let frame = stack.pop().expect("subcompose stack underflow");
+            let frame = take_subcompose_frame(&guard.core, "subcompose_slot");
             guard.leaked = true;
             frame
         };

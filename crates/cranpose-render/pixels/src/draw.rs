@@ -1,36 +1,88 @@
-use ab_glyph::{point, Font, FontRef, PxScale, ScaleFont};
-use lru::LruCache;
-use once_cell::sync::Lazy;
 use std::borrow::Borrow;
 use std::hash::{Hash, Hasher};
-use std::num::NonZeroUsize;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
-use cranpose_render_common::font_layout::{
-    glyph_pixel_bounds, layout_line_glyphs, vertical_metrics,
+use cranpose_render_common::bounded_lru_cache::BoundedLruCache;
+use cranpose_render_common::brush_sampling::sample_brush_rgba;
+use cranpose_render_common::graph_scene::RenderDiagnostics;
+use cranpose_render_common::software_text_raster::{
+    cursor_x_for_offset_with_font, default_software_text_font, layout_text_with_font,
+    measure_text_with_font, rasterize_text_to_image, text_offset_for_position_with_font,
+    SoftwareTextFont,
 };
-use cranpose_render_common::software_text_raster::rasterize_text_to_image_with_font;
-use cranpose_render_common::text_hyphenation::choose_auto_hyphen_break as choose_shared_auto_hyphen_break;
+use cranpose_render_common::text_hyphenation::HyphenationDictionaryStore;
 use cranpose_ui::text::TextMotion;
-use cranpose_ui::{Brush, TextMeasurer, TextMetrics};
-use cranpose_ui_graphics::{BlendMode, Color, ColorFilter, Point, Rect, TileMode};
+use cranpose_ui::text_layout_result::TextLayoutResult;
+use cranpose_ui::{TextMeasurer, TextMetrics};
+use cranpose_ui_graphics::{BlendMode, ColorFilter, Point, Rect};
 
 use crate::pipeline;
 use crate::scene::{ImageDraw, RasterScene, Scene, TextDraw};
 use crate::style::point_in_resolved_rounded_rect;
 
-static FONT: Lazy<FontRef<'static>> = Lazy::new(|| {
-    FontRef::try_from_slice(include_bytes!(
-        "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
-    ))
-    .expect("font")
-});
-static REPORTED_UNSUPPORTED_PIXELS_BLEND_MODES: AtomicBool = AtomicBool::new(false);
+#[derive(Clone)]
+pub struct PixelsTextResources {
+    font: Option<SoftwareTextFont>,
+}
+
+impl PixelsTextResources {
+    pub fn default_font() -> Self {
+        Self {
+            font: default_software_text_font(),
+        }
+    }
+
+    fn font(&self) -> Option<&SoftwareTextFont> {
+        self.font.as_ref()
+    }
+}
+
+impl Default for PixelsTextResources {
+    fn default() -> Self {
+        Self::default_font()
+    }
+}
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
+}
+
+fn fallback_char_width(font_size: f32) -> f32 {
+    font_size.max(1.0) * 0.55
+}
+
+fn fallback_line_height(font_size: f32) -> f32 {
+    font_size.max(1.0) * 1.2
+}
+
+fn fallback_text_metrics(text: &str, font_size: f32) -> TextMetrics {
+    let line_height = fallback_line_height(font_size);
+    let mut line_count = 0usize;
+    let mut max_chars = 0usize;
+    for line in text.split('\n') {
+        line_count += 1;
+        max_chars = max_chars.max(line.chars().count());
+    }
+    let line_count = line_count.max(1);
+    TextMetrics {
+        width: max_chars as f32 * fallback_char_width(font_size),
+        height: line_count as f32 * line_height,
+        line_height,
+        line_count,
+    }
+}
+
+fn fallback_cursor_x_for_byte_offset(text: &str, byte_offset: usize, font_size: f32) -> f32 {
+    let clamped = byte_offset.min(text.len());
+    let char_count = if clamped == text.len() {
+        text.chars().count()
+    } else {
+        text.char_indices()
+            .take_while(|(index, _)| *index < clamped)
+            .count()
+    };
+    char_count as f32 * fallback_char_width(font_size)
 }
 
 fn snap_delta_for_anchor(anchor: Point) -> Point {
@@ -38,7 +90,9 @@ fn snap_delta_for_anchor(anchor: Point) -> Point {
 }
 
 pub struct CachedFontTextMeasurer {
+    text_resources: PixelsTextResources,
     cache: Mutex<TextMetricsCache>,
+    hyphenation: HyphenationDictionaryStore,
 }
 
 #[derive(Clone)]
@@ -73,15 +127,13 @@ impl Borrow<str> for TextKey {
 }
 
 struct TextMetricsCache {
-    map: LruCache<TextKey, TextMetrics>,
+    map: BoundedLruCache<TextKey, TextMetrics>,
 }
 
 impl TextMetricsCache {
     fn new(capacity: usize) -> Self {
-        let capped = capacity.max(1);
-        let size = NonZeroUsize::new(capped).unwrap();
         Self {
-            map: LruCache::new(size),
+            map: BoundedLruCache::with_capacity_at_least_one(capacity),
         }
     }
 
@@ -114,10 +166,21 @@ impl TextMetricsCache {
 }
 
 impl CachedFontTextMeasurer {
-    pub(crate) fn new(capacity: usize) -> Self {
+    pub(crate) fn with_text_resources(
+        text_resources: PixelsTextResources,
+        capacity: usize,
+    ) -> Self {
         Self {
+            text_resources,
             cache: Mutex::new(TextMetricsCache::new(capacity)),
+            hyphenation: HyphenationDictionaryStore::new(),
         }
+    }
+
+    fn lock_cache(&self) -> MutexGuard<'_, TextMetricsCache> {
+        self.cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -183,15 +246,6 @@ fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
     style.resolve_font_size(14.0)
 }
 
-fn resolve_line_height(style: &cranpose_ui::text::TextStyle, font_size: f32) -> f32 {
-    style.resolve_line_height(14.0, font_size)
-}
-
-fn resolve_letter_spacing(style: &cranpose_ui::text::TextStyle, font_size: f32) -> f32 {
-    let _ = font_size;
-    style.resolve_letter_spacing(14.0)
-}
-
 impl TextMeasurer for CachedFontTextMeasurer {
     fn measure(
         &self,
@@ -201,11 +255,9 @@ impl TextMeasurer for CachedFontTextMeasurer {
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
         let style_hash = style.measurement_hash();
-        self.cache
-            .lock()
-            .expect("text metrics cache poisoned")
+        self.lock_cache()
             .get_or_measure(text_str, font_size, style_hash, |value, size| {
-                measure_text_impl(value, style, size)
+                measure_text_impl(value, style, size, self.text_resources.font())
             })
     }
 
@@ -221,81 +273,17 @@ impl TextMeasurer for CachedFontTextMeasurer {
             return 0;
         }
 
-        let font_size = resolve_font_size(style);
-        let font = &*FONT;
-        let metrics = vertical_metrics(font, font_size);
-        let origin = point(0.0, metrics.ascent);
-        let line_height = resolve_line_height(style, metrics.natural_line_height);
+        let Some(font) = self.text_resources.font() else {
+            let font_size = resolve_font_size(style);
+            return TextLayoutResult::monospaced(
+                text,
+                fallback_char_width(font_size),
+                fallback_line_height(font_size),
+            )
+            .get_offset_for_x(x);
+        };
 
-        let line_index = (_y / line_height).floor().max(0.0) as usize;
-        let lines: Vec<&str> = text.split('\n').collect();
-        let target_line = line_index.min(lines.len().saturating_sub(1));
-
-        let mut line_start_byte = 0;
-        for line in lines.iter().take(target_line) {
-            line_start_byte += line.len() + 1;
-        }
-
-        let line_text = lines.get(target_line).unwrap_or(&"");
-        if line_text.is_empty() {
-            return line_start_byte;
-        }
-
-        // Find the glyph whose center is closest to x
-        let mut best_offset = 0;
-        let mut best_distance = f32::INFINITY;
-        let mut current_byte_offset = 0;
-
-        for c in line_text.chars() {
-            // Get glyph position for this character
-            let prefix = &line_text[..current_byte_offset];
-            let mut glyph_x = 0.0f32;
-
-            // Measure prefix width to get glyph start position
-            for glyph in layout_line_glyphs(font, prefix, font_size, origin) {
-                if let Some(bounds) = glyph_pixel_bounds(font, &glyph) {
-                    glyph_x = bounds.max_x as f32;
-                }
-            }
-
-            // Get width of current character to find center
-            let char_str = &line_text[current_byte_offset..current_byte_offset + c.len_utf8()];
-            let char_width = {
-                let mut w = 0.0f32;
-                for glyph in layout_line_glyphs(font, char_str, font_size, origin) {
-                    if let Some(bounds) = glyph_pixel_bounds(font, &glyph) {
-                        w = bounds.width() as f32;
-                    }
-                }
-                w.max(font_size * 0.5) // Minimum width for whitespace
-            };
-
-            // Check distance to left edge of character
-            let left_dist = (x - glyph_x).abs();
-            if left_dist < best_distance {
-                best_distance = left_dist;
-                best_offset = current_byte_offset;
-            }
-
-            // Check distance to right edge (= after this character)
-            let right_x = glyph_x + char_width;
-            let right_dist = (x - right_x).abs();
-            if right_dist < best_distance {
-                best_distance = right_dist;
-                best_offset = current_byte_offset + c.len_utf8();
-            }
-
-            current_byte_offset += c.len_utf8();
-        }
-
-        // Also check end of text
-        let total_width = measure_text_impl(line_text, style, font_size).width;
-        let end_dist = (x - total_width).abs();
-        if end_dist < best_distance {
-            best_offset = line_text.len();
-        }
-
-        line_start_byte + best_offset.min(line_text.len())
+        text_offset_for_position_with_font(text, style, x, _y, font)
     }
 
     fn get_cursor_x_for_offset(
@@ -310,10 +298,15 @@ impl TextMeasurer for CachedFontTextMeasurer {
             return 0.0;
         }
 
-        let font_size = resolve_font_size(style);
-        // Measure text up to offset
-        let prefix = &text[..clamped_offset];
-        measure_text_impl(prefix, style, font_size).width
+        let Some(font) = self.text_resources.font() else {
+            return fallback_cursor_x_for_byte_offset(
+                text,
+                clamped_offset,
+                resolve_font_size(style),
+            );
+        };
+
+        cursor_x_for_offset_with_font(text, style, clamped_offset, font)
     }
 
     fn layout(
@@ -321,92 +314,16 @@ impl TextMeasurer for CachedFontTextMeasurer {
         text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
     ) -> cranpose_ui::text_layout_result::TextLayoutResult {
-        let text = text.text.as_str();
-        use cranpose_ui::text_layout_result::{
-            GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
+        let font_size = resolve_font_size(style);
+        let Some(font) = self.text_resources.font() else {
+            return TextLayoutResult::monospaced(
+                text.text.as_str(),
+                fallback_char_width(font_size),
+                fallback_line_height(font_size),
+            );
         };
 
-        let font_size = resolve_font_size(style);
-        let font = &*FONT;
-        let metrics = vertical_metrics(font, font_size);
-        let line_height = resolve_line_height(style, metrics.natural_line_height);
-        let letter_spacing = resolve_letter_spacing(style, font_size);
-        let scaled_font = font.as_scaled(PxScale::from(font_size));
-
-        let mut glyph_x_positions = Vec::new();
-        let mut char_to_byte = Vec::new();
-        let mut glyph_layouts = Vec::new();
-        let mut lines = Vec::new();
-        let mut current_x = 0.0f32;
-        let mut line_start = 0;
-        let mut y = 0.0f32;
-
-        // Build glyph positions
-        let mut iter = text.char_indices().peekable();
-        while let Some((byte_offset, c)) = iter.next() {
-            glyph_x_positions.push(current_x);
-            char_to_byte.push(byte_offset);
-
-            if c == '\n' {
-                lines.push(LineLayout {
-                    start_offset: line_start,
-                    end_offset: byte_offset,
-                    y,
-                    height: line_height,
-                });
-                line_start = byte_offset + 1;
-                y += line_height;
-                current_x = 0.0;
-            } else {
-                // Get glyph advance
-                let glyph_id = scaled_font.glyph_id(c);
-                let glyph_width = scaled_font.h_advance(glyph_id).max(0.0);
-                let glyph_end = byte_offset + c.len_utf8();
-                if glyph_end > byte_offset {
-                    glyph_layouts.push(GlyphLayout {
-                        line_index: lines.len(),
-                        start_offset: byte_offset,
-                        end_offset: glyph_end,
-                        x: current_x,
-                        y,
-                        width: glyph_width,
-                        height: line_height,
-                    });
-                }
-                current_x += scaled_font.h_advance(glyph_id);
-                if let Some((_, next)) = iter.peek() {
-                    if *next != '\n' {
-                        current_x += letter_spacing;
-                    }
-                }
-            }
-        }
-
-        // Add end position
-        glyph_x_positions.push(current_x);
-        char_to_byte.push(text.len());
-
-        // Add final line
-        lines.push(LineLayout {
-            start_offset: line_start,
-            end_offset: text.len(),
-            y,
-            height: line_height,
-        });
-
-        let metrics = measure_text_impl(text, style, font_size);
-        TextLayoutResult::new(
-            text,
-            TextLayoutData {
-                width: metrics.width,
-                height: metrics.height,
-                line_height,
-                glyph_x_positions,
-                char_to_byte,
-                lines,
-                glyph_layouts,
-            },
-        )
+        layout_text_with_font(text.text.as_str(), style, font)
     }
 
     fn choose_auto_hyphen_break(
@@ -416,7 +333,12 @@ impl TextMeasurer for CachedFontTextMeasurer {
         segment_start_char: usize,
         measured_break_char: usize,
     ) -> Option<usize> {
-        choose_shared_auto_hyphen_break(line, style, segment_start_char, measured_break_char)
+        self.hyphenation.choose_auto_hyphen_break(
+            line,
+            style,
+            segment_start_char,
+            measured_break_char,
+        )
     }
 }
 
@@ -424,56 +346,37 @@ fn measure_text_impl(
     text: &str,
     style: &cranpose_ui::text::TextStyle,
     font_size: f32,
+    font: Option<&SoftwareTextFont>,
 ) -> TextMetrics {
-    let font = &*FONT;
-    let metrics = vertical_metrics(font, font_size);
-    let line_height = resolve_line_height(style, metrics.natural_line_height);
-    let letter_spacing = resolve_letter_spacing(style, font_size);
+    let Some(font) = font else {
+        return fallback_text_metrics(text, font_size);
+    };
 
-    // Split by newlines for multiline support
-    let lines: Vec<&str> = text.split('\n').collect();
-    let line_count = lines.len().max(1);
-
-    // Measure max width across all lines
-    let mut max_width: f32 = 0.0;
-    for line in &lines {
-        let origin = point(0.0, metrics.ascent);
-        let mut min_x: f32 = f32::INFINITY;
-        let mut line_max_x: f32 = 0.0;
-        let mut glyph_count = 0_u32;
-
-        for glyph in layout_line_glyphs(font, line, font_size, origin) {
-            glyph_count += 1;
-            if let Some(bounds) = glyph_pixel_bounds(font, &glyph) {
-                min_x = min_x.min(bounds.min_x as f32);
-                line_max_x = line_max_x.max(bounds.max_x as f32);
-            }
-        }
-
-        let line_width = if glyph_count == 0 {
-            0.0
-        } else if min_x.is_infinite() {
-            line_max_x
-        } else {
-            (line_max_x - min_x).max(0.0)
-        };
-        let char_spacing = (line.chars().count().saturating_sub(1) as f32) * letter_spacing;
-        let line_width = (line_width + char_spacing).max(0.0);
-        max_width = max_width.max(line_width);
-    }
-
-    TextMetrics {
-        width: max_width,
-        height: line_count as f32 * line_height,
-        line_height,
-        line_count,
-    }
+    measure_text_with_font(text, style, font_size, font)
 }
 
 pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
+    let text_resources = PixelsTextResources::default();
+    draw_scene_with_text_resources(frame, width, height, scene, &text_resources);
+}
+
+pub fn draw_scene_with_text_resources(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    scene: &Scene,
+    text_resources: &PixelsTextResources,
+) {
     if let Some(graph) = scene.graph.as_ref() {
-        let raster_scene = pipeline::build_raster_scene(graph);
-        draw_raster_scene(frame, width, height, &raster_scene);
+        let raster_scene = pipeline::build_raster_scene(graph, scene.diagnostics());
+        draw_raster_scene(
+            frame,
+            width,
+            height,
+            &raster_scene,
+            scene.diagnostics(),
+            text_resources,
+        );
     } else {
         clear_frame(frame);
     }
@@ -485,7 +388,14 @@ fn clear_frame(frame: &mut [u8]) {
     }
 }
 
-fn draw_raster_scene(frame: &mut [u8], width: u32, height: u32, scene: &RasterScene) {
+fn draw_raster_scene(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    scene: &RasterScene,
+    diagnostics: &RenderDiagnostics,
+    text_resources: &PixelsTextResources,
+) {
     clear_frame(frame);
     let mut ordered_items =
         Vec::with_capacity(scene.shapes.len() + scene.images.len() + scene.texts.len());
@@ -502,9 +412,22 @@ fn draw_raster_scene(frame: &mut [u8], width: u32, height: u32, scene: &RasterSc
 
     for (_, item) in ordered_items {
         match item {
-            RenderItem::Shape(index) => draw_shape(frame, width, height, &scene.shapes[index]),
-            RenderItem::Image(index) => draw_image(frame, width, height, &scene.images[index]),
-            RenderItem::Text(index) => draw_text(frame, width, height, &scene.texts[index]),
+            RenderItem::Shape(index) => {
+                draw_shape(frame, width, height, &scene.shapes[index], diagnostics);
+            }
+            RenderItem::Image(index) => {
+                draw_image(frame, width, height, &scene.images[index], diagnostics);
+            }
+            RenderItem::Text(index) => {
+                draw_text(
+                    frame,
+                    width,
+                    height,
+                    &scene.texts[index],
+                    diagnostics,
+                    text_resources,
+                );
+            }
         }
     }
 }
@@ -516,7 +439,13 @@ enum RenderItem {
     Text(usize),
 }
 
-fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: &crate::scene::DrawShape) {
+fn draw_shape(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    draw: &crate::scene::DrawShape,
+    diagnostics: &RenderDiagnostics,
+) {
     let snap_delta = draw
         .snap_anchor
         .map(snap_delta_for_anchor)
@@ -525,6 +454,24 @@ fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: &crate::scene::Dr
     let clip = draw
         .clip
         .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    let rect = if draw.snap_to_pixel_grid {
+        Rect {
+            x: rect.x.round(),
+            y: rect.y.round(),
+            width: if rect.width > 0.0 {
+                rect.width.ceil().max(1.0)
+            } else {
+                rect.width
+            },
+            height: if rect.height > 0.0 {
+                rect.height.ceil().max(1.0)
+            } else {
+                rect.height
+            },
+        }
+    } else {
+        rect
+    };
     let clip_bounds = match clip_rect_to_bounds(rect, clip, width, height) {
         Some(bounds) => bounds,
         None => return,
@@ -552,18 +499,29 @@ fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: &crate::scene::Dr
                     continue;
                 }
             }
-            let sample = sample_brush(&draw.brush, rect, center_x, center_y);
+            let sample = sample_brush_rgba(&draw.brush, rect, center_x, center_y);
             let alpha = sample[3];
             if alpha <= 0.0 {
                 continue;
             }
             let idx = ((py as u32 * width + px as u32) * 4) as usize;
-            blend_pixel(&mut frame[idx..idx + 4], sample, draw.blend_mode);
+            blend_pixel(
+                &mut frame[idx..idx + 4],
+                sample,
+                draw.blend_mode,
+                diagnostics,
+            );
         }
     }
 }
 
-fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
+fn draw_image(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    draw: &ImageDraw,
+    diagnostics: &RenderDiagnostics,
+) {
     let snap_delta = draw
         .snap_anchor
         .map(snap_delta_for_anchor)
@@ -628,7 +586,12 @@ fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
             }
 
             let dst_idx = ((py as u32 * width + px as u32) * 4) as usize;
-            blend_pixel(&mut frame[dst_idx..dst_idx + 4], sample, draw.blend_mode);
+            blend_pixel(
+                &mut frame[dst_idx..dst_idx + 4],
+                sample,
+                draw.blend_mode,
+                diagnostics,
+            );
         }
     }
 }
@@ -674,16 +637,30 @@ fn sample_image_linear(
     out
 }
 
-fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
+fn draw_text(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    draw: &TextDraw,
+    diagnostics: &RenderDiagnostics,
+    text_resources: &PixelsTextResources,
+) {
     if draw.text.span_styles.is_empty() {
-        draw_text_plain(frame, width, height, draw);
+        draw_text_plain(frame, width, height, draw, diagnostics, text_resources);
         return;
     }
 
-    draw_text_with_span_styles(frame, width, height, draw);
+    draw_text_with_span_styles(frame, width, height, draw, diagnostics, text_resources);
 }
 
-fn draw_text_with_span_styles(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
+fn draw_text_with_span_styles(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    draw: &TextDraw,
+    diagnostics: &RenderDiagnostics,
+    text_resources: &PixelsTextResources,
+) {
     let boundaries = draw.text.span_boundaries();
     let mut cursor_x = draw.rect.x;
     let mut cursor_y = draw.rect.y;
@@ -740,7 +717,14 @@ fn draw_text_with_span_styles(frame: &mut [u8], width: u32, height: u32, draw: &
                     z_index: draw.z_index,
                     clip: draw.clip,
                 };
-                draw_text_plain(frame, width, height, &segment_draw);
+                draw_text_plain(
+                    frame,
+                    width,
+                    height,
+                    &segment_draw,
+                    diagnostics,
+                    text_resources,
+                );
                 cursor_x += metrics.width;
                 current_line_height = current_line_height.max(metrics.line_height.max(1.0));
             }
@@ -754,7 +738,14 @@ fn draw_text_with_span_styles(frame: &mut [u8], width: u32, height: u32, draw: &
     }
 }
 
-fn draw_text_plain(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
+fn draw_text_plain(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    draw: &TextDraw,
+    diagnostics: &RenderDiagnostics,
+    text_resources: &PixelsTextResources,
+) {
     let text_scale = draw.scale.max(0.0);
     if text_scale == 0.0 {
         return;
@@ -797,26 +788,35 @@ fn draw_text_plain(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
         rect
     };
 
-    let Some(image) = rasterize_text_to_image_with_font(
+    let Some(font) = text_resources.font() else {
+        return;
+    };
+
+    let Some(image) = rasterize_text_to_image(
         draw.text.text.as_str(),
         raster_rect,
         &draw.text_style,
         draw.color,
         draw.font_size,
         text_scale,
-        &*FONT,
+        font,
     ) else {
         return;
     };
 
+    let blit_origin = if static_text_motion {
+        Point::new(raster_rect.x, raster_rect.y)
+    } else {
+        Point::new(rect.x, rect.y)
+    };
     let blit_rect = Rect {
-        x: raster_rect.x,
-        y: raster_rect.y,
+        x: blit_origin.x,
+        y: blit_origin.y,
         width: image.width() as f32,
         height: image.height() as f32,
     };
 
-    blit_rasterized_text_image(frame, width, height, blit_rect, clip, &image);
+    blit_rasterized_text_image(frame, width, height, blit_rect, clip, &image, diagnostics);
 }
 
 fn blit_rasterized_text_image(
@@ -826,6 +826,7 @@ fn blit_rasterized_text_image(
     rect: Rect,
     clip: Option<Rect>,
     image: &cranpose_ui_graphics::ImageBitmap,
+    diagnostics: &RenderDiagnostics,
 ) {
     if rect.width <= 0.0 || rect.height <= 0.0 {
         return;
@@ -849,30 +850,38 @@ fn blit_rasterized_text_image(
             let u = ((sample_x - rect.x) / rect.width).clamp(0.0, 1.0);
             let v = ((sample_y - rect.y) / rect.height).clamp(0.0, 1.0);
 
-            let src_x = (u * (img_width - 1) as f32).round() as u32;
-            let src_y = (v * (img_height - 1) as f32).round() as u32;
-            let src_idx = ((src_y * img_width + src_x) * 4) as usize;
-            let src = [
-                src_pixels[src_idx] as f32 / 255.0,
-                src_pixels[src_idx + 1] as f32 / 255.0,
-                src_pixels[src_idx + 2] as f32 / 255.0,
-                src_pixels[src_idx + 3] as f32 / 255.0,
-            ];
+            let src = sample_image_linear(
+                src_pixels,
+                img_width,
+                img_height,
+                u * img_width.saturating_sub(1) as f32,
+                v * img_height.saturating_sub(1) as f32,
+            );
             if src[3] <= 0.0 {
                 continue;
             }
 
             let dst_idx = ((py as u32 * width + px as u32) * 4) as usize;
-            blend_pixel(&mut frame[dst_idx..dst_idx + 4], src, BlendMode::SrcOver);
+            blend_pixel(
+                &mut frame[dst_idx..dst_idx + 4],
+                src,
+                BlendMode::SrcOver,
+                diagnostics,
+            );
         }
     }
 }
 
-fn blend_pixel(dst: &mut [u8], src: [f32; 4], blend_mode: BlendMode) {
+fn blend_pixel(
+    dst: &mut [u8],
+    src: [f32; 4],
+    blend_mode: BlendMode,
+    diagnostics: &RenderDiagnostics,
+) {
     let resolved_blend_mode = if is_blend_mode_supported(blend_mode) {
         blend_mode
     } else {
-        if !REPORTED_UNSUPPORTED_PIXELS_BLEND_MODES.swap(true, Ordering::Relaxed) {
+        if diagnostics.claim_warning_once("pixels.unsupported-blend-mode") {
             log::warn!(
                 "Pixels renderer currently supports BlendMode::SrcOver and BlendMode::DstOut; falling back to SrcOver for unsupported modes"
             );
@@ -900,7 +909,12 @@ fn blend_pixel(dst: &mut [u8], src: [f32; 4], blend_mode: BlendMode) {
             src[2].clamp(0.0, 1.0) * src_alpha + dst_b * (1.0 - src_alpha),
             src_alpha + dst_a * (1.0 - src_alpha),
         ),
-        _ => unreachable!("unsupported blend modes are resolved before blending"),
+        _ => (
+            src[0].clamp(0.0, 1.0) * src_alpha + dst_r * (1.0 - src_alpha),
+            src[1].clamp(0.0, 1.0) * src_alpha + dst_g * (1.0 - src_alpha),
+            src[2].clamp(0.0, 1.0) * src_alpha + dst_b * (1.0 - src_alpha),
+            src_alpha + dst_a * (1.0 - src_alpha),
+        ),
     };
 
     dst[0] = (out_r.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -913,165 +927,48 @@ fn apply_color_filter(sample: [f32; 4], filter: ColorFilter) -> [f32; 4] {
     filter.apply_rgba(sample)
 }
 
-fn color_to_rgba(color: Color) -> [f32; 4] {
-    [
-        color.0.clamp(0.0, 1.0),
-        color.1.clamp(0.0, 1.0),
-        color.2.clamp(0.0, 1.0),
-        color.3.clamp(0.0, 1.0),
-    ]
-}
-
-fn sample_brush(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] {
-    match brush {
-        Brush::Solid(color) => color_to_rgba(*color),
-        Brush::LinearGradient {
-            colors,
-            stops,
-            start,
-            end,
-            tile_mode,
-        } => {
-            let sx = resolve_gradient_point(rect.x, rect.width, start.x);
-            let sy = resolve_gradient_point(rect.y, rect.height, start.y);
-            let ex = resolve_gradient_point(rect.x, rect.width, end.x);
-            let ey = resolve_gradient_point(rect.y, rect.height, end.y);
-            let dx = ex - sx;
-            let dy = ey - sy;
-            let denom = (dx * dx + dy * dy).max(f32::EPSILON);
-            let t = ((x - sx) * dx + (y - sy) * dy) / denom;
-            match normalize_gradient_t(t, *tile_mode) {
-                Some(sample_t) => {
-                    color_to_rgba(interpolate_colors(colors, stops.as_deref(), sample_t))
-                }
-                None => [0.0, 0.0, 0.0, 0.0],
-            }
-        }
-        Brush::RadialGradient {
-            colors,
-            stops,
-            center,
-            radius,
-            tile_mode,
-        } => {
-            let cx = rect.x + center.x;
-            let cy = rect.y + center.y;
-            let radius = (*radius).max(f32::EPSILON);
-            let dx = x - cx;
-            let dy = y - cy;
-            let distance = (dx * dx + dy * dy).sqrt();
-            let t = distance / radius;
-            match normalize_gradient_t(t, *tile_mode) {
-                Some(sample_t) => {
-                    color_to_rgba(interpolate_colors(colors, stops.as_deref(), sample_t))
-                }
-                None => [0.0, 0.0, 0.0, 0.0],
-            }
-        }
-        Brush::SweepGradient {
-            colors,
-            stops,
-            center,
-        } => {
-            let cx = rect.x + center.x;
-            let cy = rect.y + center.y;
-            let dx = x - cx;
-            let dy = y - cy;
-            let angle = dy.atan2(dx);
-            // Map [-PI, PI] to [0, 1]
-            let t = (angle / std::f32::consts::TAU + 0.5).clamp(0.0, 1.0);
-            color_to_rgba(interpolate_colors(colors, stops.as_deref(), t))
-        }
-    }
-}
-
-fn resolve_gradient_point(origin: f32, extent: f32, value: f32) -> f32 {
-    if value.is_finite() {
-        origin + value
-    } else if value.is_sign_positive() {
-        origin + extent
-    } else {
-        origin
-    }
-}
-
-fn normalize_gradient_t(t: f32, tile_mode: TileMode) -> Option<f32> {
-    match tile_mode {
-        TileMode::Clamp => Some(t.clamp(0.0, 1.0)),
-        TileMode::Decal => {
-            if (0.0..=1.0).contains(&t) {
-                Some(t)
-            } else {
-                None
-            }
-        }
-        TileMode::Repeated => Some(t.rem_euclid(1.0)),
-        TileMode::Mirror => {
-            let wrapped = t.rem_euclid(2.0);
-            if wrapped <= 1.0 {
-                Some(wrapped)
-            } else {
-                Some(2.0 - wrapped)
-            }
-        }
-    }
-}
-
-fn interpolate_colors(colors: &[Color], stops: Option<&[f32]>, t: f32) -> Color {
-    if colors.is_empty() {
-        return Color(0.0, 0.0, 0.0, 0.0);
-    }
-    if colors.len() == 1 {
-        return colors[0];
-    }
-    let clamped = t.clamp(0.0, 1.0);
-
-    if let Some(stops) = stops {
-        if stops.len() == colors.len() {
-            if clamped <= stops[0] {
-                return colors[0];
-            }
-            for index in 0..(stops.len() - 1) {
-                let start = stops[index];
-                let end = stops[index + 1];
-                if clamped <= end {
-                    let span = (end - start).max(f32::EPSILON);
-                    let frac = ((clamped - start) / span).clamp(0.0, 1.0);
-                    return lerp_color(colors[index], colors[index + 1], frac);
-                }
-            }
-            return *colors.last().unwrap_or(&colors[0]);
-        }
-    }
-
-    let segments = (colors.len() - 1) as f32;
-    let scaled = clamped * segments;
-    let index = scaled.floor() as usize;
-    if index >= colors.len() - 1 {
-        return *colors.last().unwrap();
-    }
-    let frac = scaled - index as f32;
-    lerp_color(colors[index], colors[index + 1], frac)
-}
-
-fn lerp_color(a: Color, b: Color, t: f32) -> Color {
-    let lerp = |start: f32, end: f32| start + (end - start) * t;
-    Color(
-        lerp(a.0, b.0),
-        lerp(a.1, b.1),
-        lerp(a.2, b.2),
-        lerp(a.3, b.3),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cranpose_render_common::brush_sampling::normalize_gradient_t;
     use cranpose_render_common::graph::{
         CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
         PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
     };
     use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
+    use cranpose_ui::Brush;
+    use cranpose_ui_graphics::{Color, TileMode};
+
+    fn draw_raster_scene_for_test(frame: &mut [u8], width: u32, height: u32, scene: &RasterScene) {
+        let diagnostics = RenderDiagnostics::new();
+        let text_resources = PixelsTextResources::default();
+        draw_raster_scene(frame, width, height, scene, &diagnostics, &text_resources);
+    }
+
+    #[test]
+    fn fallback_text_metrics_cover_empty_and_multiline_text() {
+        let empty = fallback_text_metrics("", 10.0);
+        assert_eq!(empty.line_count, 1);
+        assert_eq!(empty.width, 0.0);
+        assert_eq!(empty.height, fallback_line_height(10.0));
+
+        let multiline = fallback_text_metrics("ab\ncde", 10.0);
+        assert_eq!(multiline.line_count, 2);
+        assert_eq!(multiline.width, 3.0 * fallback_char_width(10.0));
+        assert_eq!(multiline.height, 2.0 * fallback_line_height(10.0));
+    }
+
+    #[test]
+    fn fallback_cursor_position_handles_non_boundary_byte_offsets() {
+        let text = "éx";
+        let width = fallback_char_width(12.0);
+        assert_eq!(fallback_cursor_x_for_byte_offset(text, 0, 12.0), 0.0);
+        assert_eq!(fallback_cursor_x_for_byte_offset(text, 1, 12.0), width);
+        assert_eq!(
+            fallback_cursor_x_for_byte_offset(text, text.len(), 12.0),
+            width * 2.0
+        );
+    }
 
     fn count_non_background_pixels(frame: &[u8], width: u32, height: u32) -> usize {
         count_non_background_pixels_in_band(frame, width, 0, height)
@@ -1103,7 +1000,7 @@ mod tests {
         let width = 360;
         let height = 140;
         let mut frame = vec![0u8; (width * height * 4) as usize];
-        draw_raster_scene(&mut frame, width, height, &raster_scene);
+        draw_raster_scene_for_test(&mut frame, width, height, &raster_scene);
         (width, height, frame)
     }
 
@@ -1189,6 +1086,40 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_blend_mode_falls_back_without_abort() {
+        let diagnostics = RenderDiagnostics::new();
+        let src = [1.0, 0.0, 0.0, 0.5];
+        let mut unsupported = [0, 0, 255, 255];
+        let mut src_over = unsupported;
+
+        blend_pixel(&mut unsupported, src, BlendMode::Multiply, &diagnostics);
+        blend_pixel(&mut src_over, src, BlendMode::SrcOver, &diagnostics);
+
+        assert_eq!(unsupported, src_over);
+    }
+
+    #[test]
+    fn cached_font_text_metrics_cache_recovers_after_poison() {
+        let measurer =
+            CachedFontTextMeasurer::with_text_resources(PixelsTextResources::default(), 8);
+        let text = cranpose_ui::text::AnnotatedString::from("Recovered pixels text");
+
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = measurer
+                .cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            panic!("poison pixels text metrics cache for recovery test");
+        }));
+
+        assert!(poison_result.is_err());
+
+        let metrics = measurer.measure(&text, &cranpose_ui::text::TextStyle::default());
+        assert!(metrics.width > 0.0);
+        assert!(metrics.height > 0.0);
+    }
+
+    #[test]
     fn mirror_tile_mode_reflects_second_interval() {
         assert_eq!(normalize_gradient_t(1.25, TileMode::Mirror), Some(0.75));
         assert_eq!(normalize_gradient_t(1.75, TileMode::Mirror), Some(0.25));
@@ -1219,7 +1150,7 @@ mod tests {
         let width = 220;
         let height = 100;
         let mut frame = vec![0u8; (width * height * 4) as usize];
-        draw_raster_scene(&mut frame, width, height, &raster_scene);
+        draw_raster_scene_for_test(&mut frame, width, height, &raster_scene);
 
         // Find the y-range of all ink pixels (font-agnostic approach).
         let (ink_top, ink_bottom) =
@@ -1322,7 +1253,7 @@ mod tests {
         let width = 220;
         let height = 100;
         let mut frame = vec![0u8; (width * height * 4) as usize];
-        draw_raster_scene(&mut frame, width, height, &raster_scene);
+        draw_raster_scene_for_test(&mut frame, width, height, &raster_scene);
 
         let total_ink = count_non_background_pixels_in_band(&frame, width, 0, height);
         assert_eq!(

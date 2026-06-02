@@ -46,8 +46,7 @@ fn main() {
             let (field_x, field_y, field_w, field_h) = if let Some(pos) =
                 text_input_robot_helpers::wait_for_in_semantics(&robot, |robot| {
                     find_in_semantics(robot, |elem| find_text(elem, "Type here..."))
-                })
-            {
+                }) {
                 pos
             } else {
                 println!("✗ FAIL: Could not find text field");
@@ -97,7 +96,7 @@ fn main() {
             std::thread::sleep(Duration::from_millis(50));
 
             // Check focus after first click
-            let focused_after_click = cranpose_ui::has_focused_field();
+            let focused_after_click = robot.has_focused_text_field().unwrap_or(false);
             println!("  • Focused after single click: {}", focused_after_click);
 
             // Second click (double-click - within 500ms)
@@ -109,13 +108,11 @@ fn main() {
             println!("  • Double-click performed");
 
             // Verify field is still focused
-            let focused_after_double = cranpose_ui::has_focused_field();
+            let focused_after_double = robot.has_focused_text_field().unwrap_or(false);
             println!("  • Focused after double-click: {}", focused_after_double);
 
-            // Note: has_focused_field() may not work reliably in robot test context
-            // due to thread-local storage issues. The actual functionality works fine.
             if !focused_after_double {
-                println!("  (Note: has_focused_field() returned false - this is a test limitation, not a real issue)");
+                println!("  (Note: app-thread focus query returned false)");
             }
             println!("✓ PASS: Double-click completed\n");
 
@@ -146,12 +143,11 @@ fn main() {
             println!("  • Triple-click performed");
 
             // Verify field is still focused
-            let focused_after_triple = cranpose_ui::has_focused_field();
+            let focused_after_triple = robot.has_focused_text_field().unwrap_or(false);
             println!("  • Focused after triple-click: {}", focused_after_triple);
 
-            // Note: has_focused_field() may not work reliably in robot test context
             if !focused_after_triple {
-                println!("  (Note: has_focused_field() returned false - this is a test limitation, not a real issue)");
+                println!("  (Note: app-thread focus query returned false)");
             }
 
             println!("✓ PASS: Triple-click completed\n");

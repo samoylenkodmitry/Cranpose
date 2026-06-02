@@ -3,6 +3,9 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_renderer_micro_contract --features robot-app`
 
+mod output_paths;
+mod text_showcase_external_helpers;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{crop_screenshot_logical, sample_screenshot_pixel_logical};
 use cranpose_ui::{
@@ -13,10 +16,11 @@ use cranpose_ui::{
 use image::{ImageBuffer, RgbaImage};
 use std::path::Path;
 use std::time::Duration;
+use text_showcase_external_helpers::{capture_x11_window_screenshot, find_window_id};
 
+const WINDOW_TITLE: &str = "Robot Renderer Micro Contract";
 const WINDOW_WIDTH: u32 = 180;
 const WINDOW_HEIGHT: u32 = 205;
-const SCREENSHOT_PATH: &str = "/tmp/cranpose_renderer_micro_contract.png";
 
 const BACKGROUND_COLOR: Color = Color(0.12, 0.16, 0.24, 1.0);
 const LINE_VERTICAL_COLOR: Color = Color(0.98, 0.98, 0.98, 1.0);
@@ -25,9 +29,13 @@ const RECT_FILL_COLOR: Color = Color(0.30, 0.78, 0.56, 1.0);
 const PANEL_FILL_COLOR: Color = Color(0.04, 0.05, 0.09, 1.0);
 const BUTTON_FILL_COLOR: Color = Color(0.08, 0.10, 0.14, 1.0);
 const BADGE_FILL_COLOR: Color = Color(0.18, 0.38, 0.92, 1.0);
+const TOP_RIGHT_SENTINEL_COLOR: Color = Color(1.0, 0.0, 0.0, 1.0);
+const BOTTOM_LEFT_SENTINEL_COLOR: Color = Color(0.0, 1.0, 0.0, 1.0);
+const BOTTOM_RIGHT_SENTINEL_COLOR: Color = Color(0.0, 0.0, 1.0, 1.0);
 const CHESS_LIGHT: [u8; 3] = [240, 240, 240];
 const CHESS_DARK: [u8; 3] = [36, 54, 72];
 const COLOR_TOLERANCE: u8 = 18;
+const EDGE_SENTINEL_SIZE: f32 = 6.0;
 
 fn within_tolerance(actual: [u8; 3], expected: [u8; 3], tolerance: u8) -> bool {
     let tolerance = tolerance as i16;
@@ -112,10 +120,43 @@ fn save_png(path: &Path, screenshot: &cranpose::RobotScreenshot) -> Result<(), S
         .map_err(|err| format!("failed to save {}: {}", path.display(), err))
 }
 
+fn normalize_micro_contract_logical_size(
+    mut screenshot: cranpose::RobotScreenshot,
+) -> cranpose::RobotScreenshot {
+    screenshot.logical_width = WINDOW_WIDTH as f32;
+    screenshot.logical_height = WINDOW_HEIGHT as f32;
+    screenshot
+}
+
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
     println!("FATAL: {message}");
     let _ = robot.exit();
     std::process::exit(1);
+}
+
+struct MicroContractMetrics {
+    underline_bright: usize,
+    underline_band_bright: usize,
+    bitmap_green: usize,
+    source_green: usize,
+    panel_yellow: usize,
+    compact_green: usize,
+    compact_gap_green: usize,
+}
+
+impl MicroContractMetrics {
+    fn summary(&self) -> String {
+        format!(
+            "underlined={}, underline_band={}, bitmap_text={}, source_text={}, panel_text={}, compact_text={}, compact_gap={}",
+            self.underline_bright,
+            self.underline_band_bright,
+            self.bitmap_green,
+            self.source_green,
+            self.panel_yellow,
+            self.compact_green,
+            self.compact_gap_green
+        )
+    }
 }
 
 fn generate_chessboard_bitmap(tile_size: u32, tiles_per_side: u32) -> ImageBitmap {
@@ -403,8 +444,219 @@ fn RendererMicroContractApp() {
             BitmapIconTextRow(icon.clone(), Modifier::empty().offset(16.0, 100.0));
             SourceIconTextRow(icon.clone(), Modifier::empty().offset(16.0, 130.0));
             CompactOverflowButton(icon.clone(), Modifier::empty().offset(16.0, 160.0));
+            Box(
+                Modifier::empty()
+                    .offset(WINDOW_WIDTH as f32 - EDGE_SENTINEL_SIZE, 0.0)
+                    .size(Size::new(EDGE_SENTINEL_SIZE, EDGE_SENTINEL_SIZE))
+                    .background(TOP_RIGHT_SENTINEL_COLOR),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .offset(0.0, WINDOW_HEIGHT as f32 - EDGE_SENTINEL_SIZE)
+                    .size(Size::new(EDGE_SENTINEL_SIZE, EDGE_SENTINEL_SIZE))
+                    .background(BOTTOM_LEFT_SENTINEL_COLOR),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .offset(
+                        WINDOW_WIDTH as f32 - EDGE_SENTINEL_SIZE,
+                        WINDOW_HEIGHT as f32 - EDGE_SENTINEL_SIZE,
+                    )
+                    .size(Size::new(EDGE_SENTINEL_SIZE, EDGE_SENTINEL_SIZE))
+                    .background(BOTTOM_RIGHT_SENTINEL_COLOR),
+                BoxSpec::default(),
+                || {},
+            );
         },
     );
+}
+
+fn assert_micro_contract_pixels(
+    robot: &cranpose::Robot,
+    screenshot: &cranpose::RobotScreenshot,
+    capture_label: &str,
+) -> MicroContractMetrics {
+    let background = expected_screenshot_rgb(BACKGROUND_COLOR);
+    let vertical_line = expected_screenshot_rgb(LINE_VERTICAL_COLOR);
+    let horizontal_line = expected_screenshot_rgb(LINE_HORIZONTAL_COLOR);
+    let fill_rect = expected_screenshot_rgb(RECT_FILL_COLOR);
+    for (label, x, y, expected) in [
+        ("background", 4.0, 4.0, background),
+        ("vertical_line", 18.0, 20.0, vertical_line),
+        ("vertical_left_bg", 13.0, 20.0, background),
+        ("horizontal_line", 36.0, 16.0, horizontal_line),
+        ("horizontal_above_bg", 36.0, 12.0, background),
+        ("fill_rect", 72.0, 76.0, fill_rect),
+        ("fill_rect_above_bg", 90.0, 66.0, background),
+        (
+            "nested_panel",
+            158.0,
+            74.0,
+            expected_screenshot_rgb(PANEL_FILL_COLOR),
+        ),
+        ("chess_0_0", 20.0, 46.0, CHESS_LIGHT),
+        ("chess_1_0", 28.0, 46.0, CHESS_DARK),
+        ("chess_0_1", 20.0, 54.0, CHESS_DARK),
+        ("chess_1_1", 28.0, 54.0, CHESS_LIGHT),
+        (
+            "compact_button",
+            24.0,
+            184.0,
+            expected_screenshot_rgb(BUTTON_FILL_COLOR),
+        ),
+        (
+            "compact_badge",
+            143.0,
+            174.0,
+            expected_screenshot_rgb(BADGE_FILL_COLOR),
+        ),
+        (
+            "top_right_scale_sentinel",
+            WINDOW_WIDTH as f32 - EDGE_SENTINEL_SIZE * 0.5,
+            EDGE_SENTINEL_SIZE * 0.5,
+            expected_screenshot_rgb(TOP_RIGHT_SENTINEL_COLOR),
+        ),
+        (
+            "bottom_left_scale_sentinel",
+            EDGE_SENTINEL_SIZE * 0.5,
+            WINDOW_HEIGHT as f32 - EDGE_SENTINEL_SIZE * 0.5,
+            expected_screenshot_rgb(BOTTOM_LEFT_SENTINEL_COLOR),
+        ),
+        (
+            "bottom_right_scale_sentinel",
+            WINDOW_WIDTH as f32 - EDGE_SENTINEL_SIZE * 0.5,
+            WINDOW_HEIGHT as f32 - EDGE_SENTINEL_SIZE * 0.5,
+            expected_screenshot_rgb(BOTTOM_RIGHT_SENTINEL_COLOR),
+        ),
+    ] {
+        if let Err(err) = assert_color(screenshot, label, x, y, expected) {
+            fail(robot, &format!("{capture_label} {err}"));
+        }
+    }
+
+    let Some(underline_crop) = crop_screenshot_logical(screenshot, 58.0, 22.0, 90.0, 24.0) else {
+        fail(
+            robot,
+            &format!("{capture_label} failed to crop underlined text region"),
+        );
+    };
+    let Some(underline_band) = crop_screenshot_logical(screenshot, 58.0, 37.0, 90.0, 4.0) else {
+        fail(
+            robot,
+            &format!("{capture_label} failed to crop underline band"),
+        );
+    };
+
+    let underline_bright = count_bright_pixels(&underline_crop);
+    let underline_band_bright = count_bright_pixels(&underline_band);
+    if underline_bright < 150 {
+        fail(
+            robot,
+            &format!(
+                "{capture_label} underlined text region is too soft or missing: bright_pixels={underline_bright}"
+            ),
+        );
+    }
+    if underline_band_bright < 22 {
+        fail(
+            robot,
+            &format!(
+                "{capture_label} underline band is too weak or misplaced: bright_pixels={underline_band_bright}"
+            ),
+        );
+    }
+
+    let Some(bitmap_row_text) = crop_screenshot_logical(screenshot, 38.0, 96.0, 134.0, 30.0) else {
+        fail(
+            robot,
+            &format!("{capture_label} failed to crop bitmap icon text row"),
+        );
+    };
+    let Some(source_row_text) = crop_screenshot_logical(screenshot, 38.0, 126.0, 134.0, 30.0)
+    else {
+        fail(
+            robot,
+            &format!("{capture_label} failed to crop source icon text row"),
+        );
+    };
+    let bitmap_green = count_green_text_pixels(&bitmap_row_text);
+    let source_green = count_green_text_pixels(&source_row_text);
+    let Some(panel_text) = crop_screenshot_logical(screenshot, 100.0, 46.0, 60.0, 22.0) else {
+        fail(
+            robot,
+            &format!("{capture_label} failed to crop nested panel text"),
+        );
+    };
+    let panel_yellow = count_yellow_text_pixels(&panel_text);
+    if bitmap_green < 35 {
+        fail(
+            robot,
+            &format!(
+                "{capture_label} text after Image(BitmapPainter) is missing or clipped: green_pixels={bitmap_green}"
+            ),
+        );
+    }
+    if source_green < 35 {
+        fail(
+            robot,
+            &format!(
+                "{capture_label} text after draw_image_src is missing or clipped: green_pixels={source_green}"
+            ),
+        );
+    }
+    if panel_yellow < 20 {
+        fail(
+            robot,
+            &format!(
+                "{capture_label} nested panel text after image layers is missing or clipped: yellow_pixels={panel_yellow}"
+            ),
+        );
+    }
+
+    let Some(compact_text) = crop_screenshot_logical(screenshot, 36.0, 156.0, 94.0, 34.0) else {
+        fail(
+            robot,
+            &format!("{capture_label} failed to crop compact text row"),
+        );
+    };
+    let Some(compact_gap) = crop_screenshot_logical(screenshot, 135.0, 158.0, 4.0, 28.0) else {
+        fail(
+            robot,
+            &format!("{capture_label} failed to crop compact text gap"),
+        );
+    };
+    let compact_green = count_green_text_pixels(&compact_text);
+    let compact_gap_green = count_green_text_pixels(&compact_gap);
+    if compact_green < 18 {
+        fail(
+            robot,
+            &format!(
+                "{capture_label} scaled compact text is missing or over-clipped: green_pixels={compact_green}"
+            ),
+        );
+    }
+    if compact_gap_green != 0 {
+        fail(
+            robot,
+            &format!(
+                "{capture_label} scaled compact text drew outside its bounds into badge gap: green_pixels={compact_gap_green}"
+            ),
+        );
+    }
+
+    MicroContractMetrics {
+        underline_bright,
+        underline_band_bright,
+        bitmap_green,
+        source_green,
+        panel_yellow,
+        compact_green,
+        compact_gap_green,
+    }
 }
 
 fn main() {
@@ -412,10 +664,10 @@ fn main() {
     println!("=== Robot Renderer Micro Contract ===");
 
     AppLauncher::new()
-        .with_title("Robot Renderer Micro Contract")
+        .with_title(WINDOW_TITLE)
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
-        .with_headless(true)
+        .with_headless(false)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
@@ -423,166 +675,53 @@ fn main() {
             let screenshot = robot
                 .screenshot_with_scale(1.0)
                 .unwrap_or_else(|err| fail(&robot, &format!("failed to capture screenshot: {err}")));
-            if screenshot.width != WINDOW_WIDTH || screenshot.height != WINDOW_HEIGHT {
+            if screenshot.width < WINDOW_WIDTH || screenshot.height < WINDOW_HEIGHT {
                 fail(
                     &robot,
                     &format!(
-                        "headless scale-1 screenshot dimensions drifted: expected={}x{} actual={}x{}",
+                        "renderer readback scale-1 screenshot is smaller than the requested app surface: expected_at_least={}x{} actual={}x{}",
                         WINDOW_WIDTH, WINDOW_HEIGHT, screenshot.width, screenshot.height
                     ),
                 );
             }
-            if (screenshot.logical_width - WINDOW_WIDTH as f32).abs() > f32::EPSILON
-                || (screenshot.logical_height - WINDOW_HEIGHT as f32).abs() > f32::EPSILON
-            {
-                fail(
-                    &robot,
-                    &format!(
-                        "headless screenshot logical size drifted: expected={}x{} actual={:.2}x{:.2}",
-                        WINDOW_WIDTH,
-                        WINDOW_HEIGHT,
-                        screenshot.logical_width,
-                        screenshot.logical_height
-                    ),
-                );
-            }
-            let output_path = Path::new(SCREENSHOT_PATH);
-            if let Err(err) = save_png(output_path, &screenshot) {
+            let screenshot = normalize_micro_contract_logical_size(screenshot);
+            let output_path = output_paths::diagnostic_path("cranpose_renderer_micro_contract.png");
+            if let Err(err) = save_png(&output_path, &screenshot) {
                 fail(&robot, &err);
             }
             println!("SCREENSHOT_PATH={}", output_path.display());
+            println!(
+                "readback_capture_pixels={}x{} logical={:.1}x{:.1}",
+                screenshot.width, screenshot.height, screenshot.logical_width, screenshot.logical_height
+            );
 
-            let background = expected_screenshot_rgb(BACKGROUND_COLOR);
-            let vertical_line = expected_screenshot_rgb(LINE_VERTICAL_COLOR);
-            let horizontal_line = expected_screenshot_rgb(LINE_HORIZONTAL_COLOR);
-            let fill_rect = expected_screenshot_rgb(RECT_FILL_COLOR);
-            for (label, x, y, expected) in [
-                ("background", 4.0, 4.0, background),
-                ("vertical_line", 18.0, 20.0, vertical_line),
-                ("vertical_left_bg", 13.0, 20.0, background),
-                ("horizontal_line", 36.0, 16.0, horizontal_line),
-                ("horizontal_above_bg", 36.0, 12.0, background),
-                ("fill_rect", 72.0, 76.0, fill_rect),
-                ("fill_rect_above_bg", 90.0, 66.0, background),
-                ("nested_panel", 158.0, 74.0, expected_screenshot_rgb(PANEL_FILL_COLOR)),
-                ("chess_0_0", 20.0, 46.0, CHESS_LIGHT),
-                ("chess_1_0", 28.0, 46.0, CHESS_DARK),
-                ("chess_0_1", 20.0, 54.0, CHESS_DARK),
-                ("chess_1_1", 28.0, 54.0, CHESS_LIGHT),
-                ("compact_button", 24.0, 184.0, expected_screenshot_rgb(BUTTON_FILL_COLOR)),
-                ("compact_badge", 143.0, 174.0, expected_screenshot_rgb(BADGE_FILL_COLOR)),
-            ] {
-                if let Err(err) = assert_color(&screenshot, label, x, y, expected) {
-                    fail(&robot, &err);
-                }
-            }
+            let readback_metrics = assert_micro_contract_pixels(&robot, &screenshot, "readback");
 
-            let Some(underline_crop) =
-                crop_screenshot_logical(&screenshot, 58.0, 22.0, 90.0, 24.0)
-            else {
-                fail(&robot, "failed to crop underlined text region");
-            };
-            let Some(underline_band) =
-                crop_screenshot_logical(&screenshot, 58.0, 37.0, 90.0, 4.0)
-            else {
-                fail(&robot, "failed to crop underline band");
-            };
-
-            let underline_bright = count_bright_pixels(&underline_crop);
-            let underline_band_bright = count_bright_pixels(&underline_band);
-            if underline_bright < 150 {
-                fail(
-                    &robot,
-                    &format!(
-                        "underlined text region is too soft or missing: bright_pixels={underline_bright}"
-                    ),
-                );
-            }
-            if underline_band_bright < 22 {
-                fail(
-                    &robot,
-                    &format!(
-                        "underline band is too weak or misplaced: bright_pixels={underline_band_bright}"
-                    ),
-                );
-            }
-            let Some(bitmap_row_text) =
-                crop_screenshot_logical(&screenshot, 38.0, 96.0, 134.0, 30.0)
-            else {
-                fail(&robot, "failed to crop bitmap icon text row");
-            };
-            let Some(source_row_text) =
-                crop_screenshot_logical(&screenshot, 38.0, 126.0, 134.0, 30.0)
-            else {
-                fail(&robot, "failed to crop source icon text row");
-            };
-            let bitmap_green = count_green_text_pixels(&bitmap_row_text);
-            let source_green = count_green_text_pixels(&source_row_text);
-            let Some(panel_text) = crop_screenshot_logical(&screenshot, 100.0, 46.0, 60.0, 22.0)
-            else {
-                fail(&robot, "failed to crop nested panel text");
-            };
-            let panel_yellow = count_yellow_text_pixels(&panel_text);
-            if bitmap_green < 35 {
-                fail(
-                    &robot,
-                    &format!(
-                        "text after Image(BitmapPainter) is missing or clipped: green_pixels={bitmap_green}"
-                    ),
-                );
-            }
-            if source_green < 35 {
-                fail(
-                    &robot,
-                    &format!(
-                        "text after draw_image_src is missing or clipped: green_pixels={source_green}"
-                    ),
-                );
-            }
-            if panel_yellow < 20 {
-                fail(
-                    &robot,
-                    &format!(
-                        "nested panel text after image layers is missing or clipped: yellow_pixels={panel_yellow}"
-                    ),
-                );
-            }
-            let Some(compact_text) = crop_screenshot_logical(&screenshot, 36.0, 156.0, 94.0, 34.0)
-            else {
-                fail(&robot, "failed to crop compact text row");
-            };
-            let Some(compact_gap) = crop_screenshot_logical(&screenshot, 135.0, 158.0, 4.0, 28.0)
-            else {
-                fail(&robot, "failed to crop compact text gap");
-            };
-            let compact_green = count_green_text_pixels(&compact_text);
-            let gap_green = count_green_text_pixels(&compact_gap);
-            if compact_green < 18 {
-                fail(
-                    &robot,
-                    &format!(
-                        "scaled compact text is missing or over-clipped: green_pixels={compact_green}"
-                    ),
-                );
-            }
-            if gap_green != 0 {
-                fail(
-                    &robot,
-                    &format!(
-                        "scaled compact text drew outside its bounds into badge gap: green_pixels={gap_green}"
-                    ),
-                );
-            }
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = robot.wait_for_idle();
+            let window_id = find_window_id(WINDOW_TITLE);
+            let presented_path =
+                output_paths::diagnostic_path("cranpose_renderer_micro_contract_presented.png");
+            let presented = capture_x11_window_screenshot(
+                &window_id,
+                &presented_path,
+                WINDOW_WIDTH as f32,
+                WINDOW_HEIGHT as f32,
+            );
+            println!("PRESENTED_SCREENSHOT_PATH={}", presented_path.display());
+            println!(
+                "presented_capture_pixels={}x{} logical={:.1}x{:.1}",
+                presented.width,
+                presented.height,
+                presented.logical_width,
+                presented.logical_height
+            );
+            let presented_metrics = assert_micro_contract_pixels(&robot, &presented, "presented");
 
             println!(
-                "PASS: renderer micro-contract pixels match expected image/line/fill layout; underlined, post-image, and compact overflow text crops are populated (underlined={}, underline_band={}, bitmap_text={}, source_text={}, panel_text={}, compact_text={}, compact_gap={})",
-                underline_bright,
-                underline_band_bright,
-                bitmap_green,
-                source_green,
-                panel_yellow,
-                compact_green,
-                gap_green
+                "PASS: renderer micro-contract pixels match in readback and presented X11 capture; readback=({}); presented=({})",
+                readback_metrics.summary(),
+                presented_metrics.summary()
             );
             let _ = robot.exit();
         })

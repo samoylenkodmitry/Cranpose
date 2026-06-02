@@ -9,16 +9,20 @@ use crate::modifier::{Modifier, Rect, Size};
 use crate::widgets::Layout;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{ColorFilter, DrawScope, ImageBitmap, ImageSampling};
-use cranpose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
+use cranpose_ui_layout::{Constraints, MeasurePolicy, MeasureResult, Placement};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(feature = "svg")]
+use std::sync::{Mutex, MutexGuard};
 use thiserror::Error;
 
-pub const DEFAULT_ALPHA: f32 = 1.0;
-const SVG_RASTER_CACHE_LIMIT: usize = 8;
+#[cfg(feature = "svg")]
+#[path = "image_svg.rs"]
+mod image_svg;
 
-static NEXT_SVG_PAINTER_ID: AtomicU64 = AtomicU64::new(1);
+pub const DEFAULT_ALPHA: f32 = 1.0;
+#[cfg(feature = "svg")]
+const SVG_RASTER_CACHE_LIMIT: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ContentScale {
@@ -112,14 +116,9 @@ impl Painter {
         }
     }
 
-    /// Returns the underlying bitmap.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this painter is not backed by an `ImageBitmap`.
-    pub fn bitmap(&self) -> &ImageBitmap {
+    /// Returns the underlying bitmap when this painter is bitmap-backed.
+    pub fn bitmap(&self) -> Option<&ImageBitmap> {
         self.as_bitmap()
-            .expect("Painter::bitmap is only available for BitmapPainter values")
     }
 }
 
@@ -142,6 +141,8 @@ pub fn BitmapPainter(bitmap: ImageBitmap) -> Painter {
 /// Errors returned while parsing or rasterizing an SVG painter.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SvgPainterError {
+    #[error("SVG support is disabled; enable the cranpose-ui `svg` feature")]
+    SvgFeatureDisabled,
     #[error("failed to parse SVG: {0}")]
     Parse(String),
     #[error("SVG raster dimensions must be greater than zero")]
@@ -163,49 +164,57 @@ pub struct SvgPainter {
 }
 
 struct SvgPainterInner {
-    id: u64,
-    tree: resvg::usvg::Tree,
+    #[cfg(feature = "svg")]
+    document: image_svg::SvgDocument,
     intrinsic_size: Size,
+    #[cfg(feature = "svg")]
     cache: Mutex<SvgRasterCache>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg(feature = "svg")]
 struct SvgRasterKey {
     width: u32,
     height: u32,
 }
 
 #[derive(Clone, Debug)]
+#[cfg(feature = "svg")]
 struct SvgRasterEntry {
     key: SvgRasterKey,
     bitmap: ImageBitmap,
 }
 
 #[derive(Default, Debug)]
+#[cfg(feature = "svg")]
 struct SvgRasterCache {
     entries: Vec<SvgRasterEntry>,
 }
 
 impl SvgPainter {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SvgPainterError> {
-        let options = resvg::usvg::Options::default();
-        let tree = resvg::usvg::Tree::from_data(bytes, &options)
-            .map_err(|error| SvgPainterError::Parse(error.to_string()))?;
-        let size = tree.size();
-        let intrinsic_size = Size::new(size.width(), size.height());
+        #[cfg(not(feature = "svg"))]
+        {
+            let _ = bytes;
+            Err(SvgPainterError::SvgFeatureDisabled)
+        }
+        #[cfg(feature = "svg")]
+        {
+            let document = image_svg::parse_svg_document(bytes)?;
+            let intrinsic_size = document.intrinsic_size();
 
-        Ok(Self {
-            inner: Arc::new(SvgPainterInner {
-                id: NEXT_SVG_PAINTER_ID.fetch_add(1, Ordering::Relaxed),
-                tree,
-                intrinsic_size,
-                cache: Mutex::new(SvgRasterCache::default()),
-            }),
-        })
+            Ok(Self {
+                inner: Arc::new(SvgPainterInner {
+                    document,
+                    intrinsic_size,
+                    cache: Mutex::new(SvgRasterCache::default()),
+                }),
+            })
+        }
     }
 
     pub fn id(&self) -> u64 {
-        self.inner.id
+        Arc::as_ptr(&self.inner) as usize as u64
     }
 
     pub fn intrinsic_size(&self) -> Size {
@@ -213,66 +222,62 @@ impl SvgPainter {
     }
 
     pub fn rasterize(&self, pixel_size: Size) -> Result<ImageBitmap, SvgPainterError> {
-        let key = svg_raster_key(pixel_size)?;
-        if let Some(bitmap) = self.cached_bitmap(key)? {
-            return Ok(bitmap);
+        #[cfg(not(feature = "svg"))]
+        {
+            let _ = pixel_size;
+            Err(SvgPainterError::SvgFeatureDisabled)
         }
+        #[cfg(feature = "svg")]
+        {
+            let key = svg_raster_key(pixel_size)?;
+            if let Some(bitmap) = self.cached_bitmap(key)? {
+                return Ok(bitmap);
+            }
 
-        let bitmap = self.rasterize_uncached(key)?;
-        self.cache_bitmap(key, bitmap.clone())?;
-        Ok(bitmap)
+            let bitmap = self.rasterize_uncached(key)?;
+            self.cache_bitmap(key, bitmap.clone())?;
+            Ok(bitmap)
+        }
     }
 
+    #[cfg(feature = "svg")]
     fn cached_bitmap(&self, key: SvgRasterKey) -> Result<Option<ImageBitmap>, SvgPainterError> {
-        let mut cache = self
-            .inner
-            .cache
-            .lock()
-            .map_err(|_| SvgPainterError::RasterCacheUnavailable)?;
+        let mut cache = self.lock_cache();
         Ok(cache.get(key))
     }
 
+    #[cfg(feature = "svg")]
     fn cache_bitmap(&self, key: SvgRasterKey, bitmap: ImageBitmap) -> Result<(), SvgPainterError> {
-        let mut cache = self
-            .inner
-            .cache
-            .lock()
-            .map_err(|_| SvgPainterError::RasterCacheUnavailable)?;
+        let mut cache = self.lock_cache();
         cache.insert(key, bitmap);
         Ok(())
     }
 
+    #[cfg(feature = "svg")]
+    fn lock_cache(&self) -> MutexGuard<'_, SvgRasterCache> {
+        self.inner
+            .cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[cfg(feature = "svg")]
     fn rasterize_uncached(&self, key: SvgRasterKey) -> Result<ImageBitmap, SvgPainterError> {
         (key.width as usize)
             .checked_mul(key.height as usize)
             .and_then(|value| value.checked_mul(4))
             .ok_or(SvgPainterError::RasterDimensionsTooLarge)?;
 
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(key.width, key.height).ok_or(
+        let mut pixmap = tiny_skia::Pixmap::new(key.width, key.height).ok_or(
             SvgPainterError::RasterAllocationFailed {
                 width: key.width,
                 height: key.height,
             },
         )?;
-        let transform = resvg::tiny_skia::Transform::from_scale(
-            key.width as f32 / self.inner.intrinsic_size.width,
-            key.height as f32 / self.inner.intrinsic_size.height,
-        );
-        resvg::render(&self.inner.tree, transform, &mut pixmap.as_mut());
-        let pixels = demultiplied_rgba_pixels(&pixmap);
+        image_svg::rasterize_svg_document(&self.inner.document, &mut pixmap);
+        let pixels = image_svg::demultiplied_rgba_pixels(&pixmap);
         Ok(ImageBitmap::from_rgba8(key.width, key.height, pixels)?)
     }
-}
-
-fn demultiplied_rgba_pixels(pixmap: &resvg::tiny_skia::Pixmap) -> Vec<u8> {
-    pixmap
-        .pixels()
-        .iter()
-        .flat_map(|pixel| {
-            let color = pixel.demultiply();
-            [color.red(), color.green(), color.blue(), color.alpha()]
-        })
-        .collect()
 }
 
 impl std::fmt::Debug for SvgPainter {
@@ -298,6 +303,7 @@ impl Hash for SvgPainter {
     }
 }
 
+#[cfg(feature = "svg")]
 impl SvgRasterCache {
     fn get(&mut self, key: SvgRasterKey) -> Option<ImageBitmap> {
         let position = self.entries.iter().position(|entry| entry.key == key)?;
@@ -360,18 +366,27 @@ impl MeasurePolicy for ImageMeasurePolicy {
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
+        let mut placements = Vec::new();
+        let size = self.measure_into(&[], constraints, &mut placements);
+        MeasureResult::new(size, placements)
+    }
+
+    fn measure_into(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        placements: &mut Vec<Placement>,
+    ) -> Size {
+        placements.clear();
         let iw = self.intrinsic_size.width;
         let ih = self.intrinsic_size.height;
 
         if iw <= 0.0 || ih <= 0.0 {
             let (w, h) = constraints.constrain(0.0, 0.0);
-            return MeasureResult::new(
-                Size {
-                    width: w,
-                    height: h,
-                },
-                vec![],
-            );
+            return Size {
+                width: w,
+                height: h,
+            };
         }
 
         // Clamp each axis to its constraint range.
@@ -392,7 +407,7 @@ impl MeasurePolicy for ImageMeasurePolicy {
             (cw, ch)
         };
 
-        MeasureResult::new(Size { width, height }, vec![])
+        Size { width, height }
     }
 
     fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
@@ -610,6 +625,7 @@ fn draw_svg_painter(
     );
 }
 
+#[cfg(feature = "svg")]
 fn svg_raster_key(pixel_size: Size) -> Result<SvgRasterKey, SvgPainterError> {
     let width = svg_raster_axis(pixel_size.width)?;
     let height = svg_raster_axis(pixel_size.height)?;
@@ -620,6 +636,7 @@ fn svg_raster_key(pixel_size: Size) -> Result<SvgRasterKey, SvgPainterError> {
     Ok(SvgRasterKey { width, height })
 }
 
+#[cfg(feature = "svg")]
 fn svg_raster_axis(value: f32) -> Result<u32, SvgPainterError> {
     if !value.is_finite() || value <= 0.0 {
         return Err(SvgPainterError::InvalidRasterDimensions);
@@ -707,12 +724,14 @@ mod tests {
     use super::*;
     use crate::layout::core::Alignment;
 
+    #[cfg(feature = "svg")]
     const RED_RECT_SVG: &[u8] = br##"
         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="20" viewBox="0 0 10 20">
           <rect x="0" y="0" width="10" height="20" fill="#ff0000"/>
         </svg>
     "##;
 
+    #[cfg(feature = "svg")]
     const TRANSPARENT_CENTER_SVG: &[u8] = br##"
         <svg xmlns="http://www.w3.org/2000/svg" width="4" height="4" viewBox="0 0 4 4">
           <rect x="1" y="1" width="2" height="2" fill="#00ff00"/>
@@ -723,10 +742,23 @@ mod tests {
         ImageBitmap::from_rgba8(4, 2, vec![255; 4 * 2 * 4]).expect("bitmap")
     }
 
+    #[test]
+    fn svg_painter_ids_do_not_use_process_global_counter() {
+        let source = include_str!("image.rs");
+        let svg_counter = ["static ", "NEXT_SVG_PAINTER_ID"].concat();
+
+        assert!(
+            !source.contains(&svg_counter),
+            "SVG painter ids must come from retained painter identity"
+        );
+    }
+
+    #[cfg(feature = "svg")]
     fn cache_test_bitmap(width: u32) -> ImageBitmap {
         ImageBitmap::from_rgba8(width, 1, vec![255; width as usize * 4]).expect("bitmap")
     }
 
+    #[cfg(feature = "svg")]
     fn pixel_at(bitmap: &ImageBitmap, x: u32, y: u32) -> [u8; 4] {
         let offset = ((y * bitmap.width() + x) * 4) as usize;
         let pixels = bitmap.pixels();
@@ -743,16 +775,21 @@ mod tests {
         let bitmap = sample_bitmap();
         let painter = BitmapPainter(bitmap.clone());
         assert_eq!(painter.intrinsic_size(), Size::new(4.0, 2.0));
-        assert_eq!(painter.bitmap(), &bitmap);
+        assert_eq!(painter.bitmap(), Some(&bitmap));
     }
 
     #[test]
+    #[cfg(feature = "svg")]
     fn svg_painter_reports_intrinsic_size() {
         let painter = SvgPainter::from_bytes(RED_RECT_SVG).expect("svg painter");
+        let clone = painter.clone();
         assert_eq!(painter.intrinsic_size(), Size::new(10.0, 20.0));
+        assert_eq!(painter.id(), clone.id());
+        assert_eq!(Painter::from_svg(painter).bitmap(), None);
     }
 
     #[test]
+    #[cfg(feature = "svg")]
     fn svg_painter_rasterizes_requested_dimensions() {
         let painter = SvgPainter::from_bytes(RED_RECT_SVG).expect("svg painter");
         let bitmap = painter
@@ -765,6 +802,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "svg")]
     fn svg_painter_preserves_transparency() {
         let painter = SvgPainter::from_bytes(TRANSPARENT_CENTER_SVG).expect("svg painter");
         let bitmap = painter
@@ -776,6 +814,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "svg")]
     fn svg_painter_reuses_cached_raster_for_same_size() {
         let painter = SvgPainter::from_bytes(RED_RECT_SVG).expect("svg painter");
         let first = painter
@@ -789,6 +828,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "svg")]
     fn svg_raster_cache_evicts_least_recently_used_entry() {
         let mut cache = SvgRasterCache::default();
         let keys: Vec<SvgRasterKey> = (0..SVG_RASTER_CACHE_LIMIT)
@@ -818,6 +858,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "svg")]
     fn svg_painter_rasterizes_distinct_sizes_separately() {
         let painter = SvgPainter::from_bytes(RED_RECT_SVG).expect("svg painter");
         let small = painter
@@ -833,9 +874,49 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "svg")]
+    fn svg_painter_cache_recovers_after_poison() {
+        let painter = SvgPainter::from_bytes(RED_RECT_SVG).expect("svg painter");
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = painter
+                .inner
+                .cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            panic!("poison svg raster cache for recovery test");
+        }));
+
+        assert!(poison_result.is_err());
+
+        let bitmap = painter
+            .rasterize(Size::new(8.0, 8.0))
+            .expect("svg raster cache should recover after poisoning");
+        assert_eq!(bitmap.width(), 8);
+        assert_eq!(bitmap.height(), 8);
+    }
+
+    #[test]
+    fn svg_draw_density_has_no_outside_context_fallback() {
+        let source = include_str!("image.rs");
+        let fallback_call = ["try_current", "_density()", ".unwrap_or"].concat();
+        assert!(
+            !source.contains(&fallback_call),
+            "SVG image drawing must use the active AppContext density"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "svg")]
     fn svg_painter_rejects_invalid_bytes() {
         let err = SvgPainter::from_bytes(b"not svg").expect_err("invalid svg");
         assert!(matches!(err, SvgPainterError::Parse(_)));
+    }
+
+    #[test]
+    #[cfg(not(feature = "svg"))]
+    fn svg_painter_reports_disabled_feature_without_resvg() {
+        let err = SvgPainter::from_bytes(b"not svg").expect_err("svg feature disabled");
+        assert!(matches!(err, SvgPainterError::SvgFeatureDisabled));
     }
 
     #[test]

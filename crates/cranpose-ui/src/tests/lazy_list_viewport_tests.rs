@@ -84,7 +84,8 @@ fn measure_tree(
     applier.set_runtime_handle(handle);
     let layout = measure_layout(&mut applier, root, size)
         .expect("layout measurement")
-        .into_layout_tree();
+        .into_layout_tree()
+        .expect("lazy list viewport test requested a layout tree");
     applier.clear_runtime_handle();
     layout
 }

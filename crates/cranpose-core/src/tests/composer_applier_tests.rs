@@ -1,12 +1,60 @@
 use super::*;
 
 #[test]
-#[should_panic(expected = "cannot transfer SlotsHost table while other host references are alive")]
-fn slots_host_into_table_requires_unique_host_reference() {
+fn slots_host_into_table_reports_live_host_references() {
     let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
     let _held = Rc::clone(&slots_host);
 
-    let _ = slots_host.into_table();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slots_host.into_table()));
+
+    assert!(
+        result.is_ok(),
+        "SlotsHost::into_table should report live references without panicking"
+    );
+    assert_eq!(
+        result.unwrap().err(),
+        Some(NodeError::SlotHostUnavailable {
+            operation: "SlotsHost::into_table",
+            reason: "other host references are alive",
+        })
+    );
+}
+
+#[test]
+fn slots_host_reset_reports_active_pass() {
+    let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    slots_host.begin_pass(crate::slot::SlotPassMode::Compose);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slots_host.reset()));
+
+    slots_host.abandon_active_pass();
+    assert!(
+        result.is_ok(),
+        "SlotsHost::reset should report an active pass without panicking"
+    );
+    assert_eq!(
+        result.unwrap(),
+        Err(NodeError::SlotHostUnavailable {
+            operation: "SlotsHost::reset",
+            reason: "slot pass is active",
+        })
+    );
+}
+
+#[test]
+fn slots_host_begin_pass_while_active_is_noop() {
+    let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    slots_host.begin_pass(crate::slot::SlotPassMode::Compose);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        slots_host.begin_pass(crate::slot::SlotPassMode::Recompose);
+    }));
+
+    slots_host.abandon_active_pass();
+    assert!(
+        result.is_ok(),
+        "SlotsHost::begin_pass should ignore an already active pass without panicking"
+    );
 }
 
 #[test]
@@ -35,11 +83,11 @@ fn slots_host_into_table_does_not_transfer_runtime_state_through_slot_table() {
 }
 
 #[test]
-#[should_panic(expected = "slot host already belongs to a different composer runtime state")]
-fn composer_new_with_shared_state_rejects_mismatched_bound_host() {
+fn composer_new_with_shared_state_quarantines_mismatched_bound_host() {
     let owner_state = Rc::new(crate::composer::ComposerRuntimeState::default());
     let other_state = Rc::new(crate::composer::ComposerRuntimeState::default());
     let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    let original_storage_key = slots_host.storage_key();
     let owner_applier: Rc<dyn ApplierHost> =
         Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
     owner_state.bind_applier_host(&owner_applier);
@@ -49,8 +97,214 @@ fn composer_new_with_shared_state_rejects_mismatched_bound_host() {
     let applier = Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
     let observer = SnapshotStateObserver::new(|callback| callback());
 
-    let _ =
-        Composer::new_with_shared_state(other_state, slots_host, applier, handle, observer, None);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Composer::new_with_shared_state(
+            Rc::clone(&other_state),
+            Rc::clone(&slots_host),
+            applier,
+            handle,
+            observer,
+            None,
+        )
+    }));
+
+    assert!(
+        result.is_ok(),
+        "Composer should quarantine a mismatched SlotsHost without panicking"
+    );
+    let composer = result.unwrap();
+    assert!(!Rc::ptr_eq(&composer.core.slots, &slots_host));
+    assert!(owner_state
+        .host_for_storage_key(original_storage_key)
+        .is_some());
+    assert!(other_state
+        .host_for_storage_key(composer.core.slots.storage_key())
+        .is_some());
+}
+
+struct MismatchedSlotPassFixture {
+    composer: Composer,
+    mismatched_host: Rc<SlotsHost>,
+    owner_state: Rc<crate::composer::ComposerRuntimeState>,
+    other_state: Rc<crate::composer::ComposerRuntimeState>,
+    original_storage_key: usize,
+    _owner_applier: Rc<dyn ApplierHost>,
+    _runtime: Runtime,
+}
+
+fn mismatched_slot_pass_fixture() -> MismatchedSlotPassFixture {
+    let owner_state = Rc::new(crate::composer::ComposerRuntimeState::default());
+    let other_state = Rc::new(crate::composer::ComposerRuntimeState::default());
+    let mismatched_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    let original_storage_key = mismatched_host.storage_key();
+    let owner_applier: Rc<dyn ApplierHost> =
+        Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
+    owner_state.bind_applier_host(&owner_applier);
+    owner_state.bind_slots_host(&mismatched_host);
+
+    let (handle, _runtime) = runtime_handle();
+    let local_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    let applier: Rc<dyn ApplierHost> = Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let composer = Composer::new_with_shared_state(
+        Rc::clone(&other_state),
+        local_host,
+        applier,
+        handle,
+        observer,
+        None,
+    );
+
+    MismatchedSlotPassFixture {
+        composer,
+        mismatched_host,
+        owner_state,
+        other_state,
+        original_storage_key,
+        _owner_applier: owner_applier,
+        _runtime,
+    }
+}
+
+fn inspect_mismatched_slot_pass_host(
+    composer: &Composer,
+    other_state: &Rc<crate::composer::ComposerRuntimeState>,
+    mismatched_host: &Rc<SlotsHost>,
+) -> (usize, bool, bool, bool) {
+    let active_host = composer.active_slots_host();
+    let active_storage_key = active_host.storage_key();
+    let rebound_to_other_state = active_host
+        .runtime_state()
+        .map(|state| Rc::ptr_eq(&state, other_state))
+        .unwrap_or(false);
+    let registered_during_pass = other_state
+        .host_for_storage_key(active_storage_key)
+        .is_some();
+    (
+        active_storage_key,
+        Rc::ptr_eq(&active_host, mismatched_host),
+        rebound_to_other_state,
+        registered_during_pass,
+    )
+}
+
+fn assert_mismatched_slot_pass_uses_replacement(
+    fixture: &MismatchedSlotPassFixture,
+    active_storage_key: usize,
+    used_original_host: bool,
+    rebound_to_other_state: bool,
+    registered_during_pass: bool,
+) {
+    assert!(!used_original_host);
+    assert!(rebound_to_other_state);
+    assert!(registered_during_pass);
+    assert_ne!(active_storage_key, fixture.original_storage_key);
+    assert!(fixture
+        .owner_state
+        .host_for_storage_key(fixture.original_storage_key)
+        .is_some());
+    assert!(!fixture.mismatched_host.has_active_pass());
+    assert!(fixture
+        .mismatched_host
+        .runtime_state()
+        .map(|state| Rc::ptr_eq(&state, &fixture.owner_state))
+        .unwrap_or(false));
+}
+
+#[test]
+fn try_slot_host_pass_quarantines_mismatched_bound_host() {
+    let fixture = mismatched_slot_pass_fixture();
+
+    let (
+        (active_storage_key, used_original_host, rebound_to_other_state, registered_during_pass),
+        _,
+    ) = fixture
+        .composer
+        .try_with_slot_host_pass(
+            Rc::clone(&fixture.mismatched_host),
+            crate::slot::SlotPassMode::Compose,
+            |composer| {
+                inspect_mismatched_slot_pass_host(
+                    composer,
+                    &fixture.other_state,
+                    &fixture.mismatched_host,
+                )
+            },
+        )
+        .expect("replacement slot host pass should finalize");
+
+    assert_mismatched_slot_pass_uses_replacement(
+        &fixture,
+        active_storage_key,
+        used_original_host,
+        rebound_to_other_state,
+        registered_during_pass,
+    );
+}
+
+#[test]
+fn slot_host_pass_wrapper_quarantines_mismatched_bound_host() {
+    let fixture = mismatched_slot_pass_fixture();
+
+    let (
+        (active_storage_key, used_original_host, rebound_to_other_state, registered_during_pass),
+        _,
+    ) = fixture.composer.with_slot_host_pass(
+        Rc::clone(&fixture.mismatched_host),
+        crate::slot::SlotPassMode::Compose,
+        |composer| {
+            inspect_mismatched_slot_pass_host(
+                composer,
+                &fixture.other_state,
+                &fixture.mismatched_host,
+            )
+        },
+    );
+
+    assert_mismatched_slot_pass_uses_replacement(
+        &fixture,
+        active_storage_key,
+        used_original_host,
+        rebound_to_other_state,
+        registered_during_pass,
+    );
+}
+
+#[test]
+fn composer_retention_uses_checked_detached_root_key() {
+    let source = include_str!("../composer.rs");
+
+    assert!(
+        !source.contains("key: subtree.root_key()"),
+        "composer retention must not read detached roots through the strict root_key accessor"
+    );
+}
+
+#[test]
+fn memory_applier_dump_tree_reports_stale_physical_mapping() {
+    let mut applier = MemoryApplier::new();
+    applier.stable_to_physical.insert(42, usize::MAX);
+
+    let tree = applier.dump_tree(Some(42));
+
+    assert!(tree.contains("[42] (missing physical node"));
+}
+
+#[test]
+fn memory_applier_create_routes_generated_high_ids_to_sparse_storage() {
+    struct HighIdNode;
+    impl Node for HighIdNode {}
+
+    let mut applier = MemoryApplier::new();
+    applier.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
+
+    let node_id = applier.create(Box::new(HighIdNode));
+
+    assert_eq!(node_id, MemoryApplier::HIGH_ID_THRESHOLD);
+    assert!(applier.high_id_nodes.contains_key(&node_id));
+    assert_eq!(applier.node_generation(node_id), 0);
+    assert_eq!(applier.debug_stats().high_id_nodes_len, 1);
+    assert_eq!(applier.debug_stats().nodes_len, 0);
 }
 
 #[test]
@@ -95,6 +349,55 @@ fn slot_pass_finalization_error_returns_from_try_pass() {
     );
 
     assert!(matches!(result, Err(NodeError::Missing { id }) if id == node_id));
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
+fn slot_pass_wrapper_returns_body_result_after_finalization_error() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+
+    let node_id = {
+        let (composer, slots_host, applier_host) =
+            setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        let (node_id, _) = composer
+            .try_with_slot_host_pass(
+                Rc::clone(&slots_host),
+                crate::slot::SlotPassMode::Compose,
+                |composer| {
+                    composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                        composer.emit_node(TestDummyNode::default)
+                    })
+                },
+            )
+            .expect("initial slot pass should finalize");
+        let commands = composer.take_commands();
+        drop(composer);
+        teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+        commands
+            .apply(&mut applier)
+            .expect("initial node mount should apply");
+        node_id
+    };
+
+    applier
+        .remove(node_id)
+        .expect("test setup should remove the mounted node");
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    let (result, outcome) = composer.with_slot_host_pass(
+        Rc::clone(&slots_host),
+        crate::slot::SlotPassMode::Compose,
+        |_| 42,
+    );
+
+    assert_eq!(result, 42);
+    assert!(!outcome.compacted);
+    assert!(!outcome.compact_anchor_registry_storage);
+    assert!(!outcome.compact_payload_storage);
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
@@ -485,6 +788,60 @@ fn queued_sync_children_preserves_child_reparented_later_in_same_apply() {
 }
 
 #[test]
+fn command_queue_missing_payload_returns_node_error() {
+    let mut commands = CommandQueue::default();
+    commands.push_tag(CommandTag::RemoveNode);
+
+    let result = commands.apply(&mut test_applier());
+
+    assert!(matches!(
+        result,
+        Err(NodeError::MalformedCommandPayload { tag }) if tag == "RemoveNode"
+    ));
+}
+
+#[test]
+fn command_queue_invalid_sync_children_range_returns_node_error() {
+    let mut commands = CommandQueue::default();
+    commands.sync_children.push(SyncChildrenCommand {
+        parent_id: 1,
+        child_start: 2,
+        child_len: 4,
+    });
+    commands.push_tag(CommandTag::SyncChildren);
+
+    let result = commands.apply(&mut test_applier());
+
+    assert!(matches!(
+        result,
+        Err(NodeError::MalformedCommandPayload { tag }) if tag == "SyncChildren"
+    ));
+}
+
+#[test]
+fn large_mid_composition_flush_returns_command_error() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let (composer, _slots_host, _applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+
+    {
+        let mut commands = composer.commands_mut();
+        for _ in 0..COMMAND_FLUSH_THRESHOLD {
+            commands.push_tag(CommandTag::RemoveNode);
+        }
+    }
+
+    let result = composer.flush_pending_commands_if_large();
+
+    assert!(matches!(
+        result,
+        Err(NodeError::MalformedCommandPayload { tag }) if tag == "RemoveNode"
+    ));
+}
+
+#[test]
 fn emitted_node_replacement_removes_displaced_node() {
     const GROUP_KEY: Key = 58_001;
 
@@ -613,6 +970,145 @@ fn fresh_recyclable_nodes_seed_same_frame_shell_reuse() {
 }
 
 #[test]
+fn recyclable_emit_discards_mismatched_recycled_shell() {
+    #[derive(Default)]
+    struct DesiredNode {
+        initialized: bool,
+        reset_calls: usize,
+    }
+
+    impl Node for DesiredNode {}
+
+    struct WrongNode;
+
+    impl Node for WrongNode {}
+
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let key = std::any::TypeId::of::<DesiredNode>();
+    applier
+        .recycled_nodes
+        .entry(key)
+        .or_default()
+        .push(RecycledNode::from_shell(0, Box::new(WrongNode), true));
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    let (node_id, _) = composer.with_slot_host_pass(
+        Rc::clone(&slots_host),
+        crate::slot::SlotPassMode::Compose,
+        |composer| {
+            composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                composer.emit_recyclable_node(
+                    || DesiredNode {
+                        initialized: true,
+                        reset_calls: 0,
+                    },
+                    |node| {
+                        node.reset_calls += 1;
+                    },
+                )
+            })
+        },
+    );
+    let commands = composer.take_commands();
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+    commands
+        .apply(&mut applier)
+        .expect("fresh fallback node should mount");
+
+    let node = applier
+        .get_mut(node_id)
+        .expect("emitted fallback node should exist")
+        .as_any_mut()
+        .downcast_mut::<DesiredNode>()
+        .expect("fallback node should use the requested node type");
+    assert!(node.initialized);
+    assert_eq!(node.reset_calls, 0);
+    assert_eq!(applier.debug_recycled_node_count_for::<DesiredNode>(), 0);
+}
+
+#[test]
+fn recyclable_emit_creates_fresh_id_when_recycled_stable_id_is_live() {
+    #[derive(Default)]
+    struct DesiredNode {
+        from_recycled_shell: bool,
+        reset_calls: usize,
+    }
+
+    impl Node for DesiredNode {}
+
+    struct ExistingNode;
+
+    impl Node for ExistingNode {}
+
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let live_id = applier.create(Box::new(ExistingNode));
+    let key = std::any::TypeId::of::<DesiredNode>();
+    applier
+        .recycled_nodes
+        .entry(key)
+        .or_default()
+        .push(RecycledNode::from_shell(
+            live_id,
+            Box::new(DesiredNode {
+                from_recycled_shell: true,
+                reset_calls: 0,
+            }),
+            true,
+        ));
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    let (node_id, _) = composer.with_slot_host_pass(
+        Rc::clone(&slots_host),
+        crate::slot::SlotPassMode::Compose,
+        |composer| {
+            composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                composer.emit_recyclable_node(
+                    || DesiredNode {
+                        from_recycled_shell: false,
+                        reset_calls: 0,
+                    },
+                    |node| {
+                        node.reset_calls += 1;
+                    },
+                )
+            })
+        },
+    );
+    let commands = composer.take_commands();
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+    commands
+        .apply(&mut applier)
+        .expect("collision fallback node should mount");
+
+    assert_ne!(node_id, live_id);
+    assert!(
+        applier
+            .get_mut(live_id)
+            .expect("live node should remain active")
+            .as_any_mut()
+            .downcast_mut::<ExistingNode>()
+            .is_some(),
+        "stable-id collision must not replace the live node",
+    );
+    let node = applier
+        .get_mut(node_id)
+        .expect("emitted fallback node should exist")
+        .as_any_mut()
+        .downcast_mut::<DesiredNode>()
+        .expect("fallback node should keep the requested node type");
+    assert!(node.from_recycled_shell);
+    assert_eq!(node.reset_calls, 1);
+}
+
+#[test]
 fn recycled_nodes_reuse_stable_ids_without_growing_stable_id_arena() {
     #[derive(Default)]
     struct RecyclableTestNode;
@@ -649,6 +1145,42 @@ fn recycled_nodes_reuse_stable_ids_without_growing_stable_id_arena() {
     assert_eq!(stats.next_stable_id, next_stable_id_before_remove);
     assert_eq!(stats.stable_generations_len, next_stable_id_before_remove);
     assert_eq!(applier.node_generation(stable_id), 1);
+}
+
+#[test]
+fn insert_with_id_preserves_stable_id_when_reusing_dense_physical_slot() {
+    let mut applier = test_applier();
+    let first = applier.create(Box::new(TestDummyNode));
+    let reused_physical = applier.create(Box::new(TestDummyNode));
+    let third = applier.create(Box::new(TestDummyNode));
+    let inserted_stable_id = 10;
+
+    applier
+        .remove(reused_physical)
+        .expect("remove node to open a dense physical slot");
+    applier
+        .insert_with_id(inserted_stable_id, Box::new(TestDummyNode))
+        .expect("insert explicit stable id into freed physical slot");
+    applier
+        .remove(first)
+        .expect("remove first node before compaction");
+    applier
+        .remove(third)
+        .expect("remove third node before compaction");
+
+    applier.compact();
+
+    assert!(
+        applier.get_mut(inserted_stable_id).is_ok(),
+        "compaction must preserve the explicit stable id"
+    );
+    assert!(
+        matches!(
+            applier.get_mut(reused_physical),
+            Err(NodeError::Missing { id }) if id == reused_physical
+        ),
+        "the removed stable id must not be resurrected by dense-slot metadata"
+    );
 }
 
 #[test]

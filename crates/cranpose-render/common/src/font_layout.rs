@@ -61,6 +61,24 @@ pub fn layout_line_glyphs(
     glyphs
 }
 
+pub fn line_advance_width(font: &impl Font, text: &str, font_size: f32) -> f32 {
+    let scale = PxScale::from(font_size);
+    let scaled_font = font.as_scaled(scale);
+    let mut width = 0.0;
+    let mut previous = None;
+
+    for ch in text.chars() {
+        let glyph_id = scaled_font.glyph_id(ch);
+        if let Some(previous_id) = previous {
+            width += scaled_font.kern(previous_id, glyph_id);
+        }
+        width += scaled_font.h_advance(glyph_id);
+        previous = Some(glyph_id);
+    }
+
+    width.max(0.0)
+}
+
 pub fn align_glyph_to_pixel_grid(mut glyph: Glyph, static_text_motion: bool) -> Glyph {
     if static_text_motion {
         glyph.position.x = glyph.position.x.round();
@@ -127,6 +145,13 @@ mod tests {
         assert_eq!(snapped.position.x, snapped.position.x.round());
         assert_eq!(snapped.position.y, snapped.position.y.round());
         assert!((unchanged.position.y - 13.37).abs() < 1e-3);
+    }
+
+    #[test]
+    fn line_advance_width_uses_font_advances() {
+        let font = test_font();
+        let width = line_advance_width(&font, "Counter App", 18.0);
+        assert!(width > 0.0);
     }
 
     #[test]

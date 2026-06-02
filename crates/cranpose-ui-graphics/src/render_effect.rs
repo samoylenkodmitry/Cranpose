@@ -4,8 +4,7 @@
 //! WGSL shaders (`RuntimeShader`).
 
 use crate::LayerShape;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::Arc;
 
 /// Edge treatment for blur effects at the boundary of the blurred region.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -91,6 +90,21 @@ pub struct RuntimeShader {
     uniforms: Vec<f32>,
 }
 
+/// Error returned when a shader uniform write targets renderer-owned storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum RuntimeShaderUniformError {
+    #[error(
+        "uniform range starting at {index} with width {width} exceeds user uniform range 0..{max_user_uniforms}; slots {reserved_start}..{max_uniforms} are reserved for renderer data"
+    )]
+    OutOfUserRange {
+        index: usize,
+        width: usize,
+        max_user_uniforms: usize,
+        reserved_start: usize,
+        max_uniforms: usize,
+    },
+}
+
 impl RuntimeShader {
     /// Total uniform storage size in floats (64 vec4s = 256 floats).
     ///
@@ -106,7 +120,7 @@ impl RuntimeShader {
     pub fn new(wgsl_source: &str) -> Self {
         let source_hash = hash_shader_source(wgsl_source);
         Self {
-            source: intern_shader_source(wgsl_source, source_hash),
+            source: Arc::<str>::from(wgsl_source),
             source_hash,
             uniforms: Vec::with_capacity(Self::INITIAL_UNIFORM_CAPACITY),
         }
@@ -126,25 +140,68 @@ impl RuntimeShader {
     }
 
     /// Set a single float uniform at the given index.
+    ///
+    /// Invalid renderer-reserved ranges are ignored. Use [`Self::try_set_float`]
+    /// when the caller needs to handle invalid uniform writes explicitly.
     pub fn set_float(&mut self, index: usize, value: f32) {
-        self.ensure_capacity(index + 1);
+        let _ = self.try_set_float(index, value);
+    }
+
+    /// Set a single float uniform at the given index.
+    pub fn try_set_float(
+        &mut self,
+        index: usize,
+        value: f32,
+    ) -> Result<(), RuntimeShaderUniformError> {
+        self.try_ensure_capacity(index, 1)?;
         self.uniforms[index] = value;
+        Ok(())
     }
 
     /// Set a vec2 uniform at the given index (consumes indices `[index, index+1]`).
+    ///
+    /// Invalid renderer-reserved ranges are ignored. Use [`Self::try_set_float2`]
+    /// when the caller needs to handle invalid uniform writes explicitly.
     pub fn set_float2(&mut self, index: usize, x: f32, y: f32) {
-        self.ensure_capacity(index + 2);
+        let _ = self.try_set_float2(index, x, y);
+    }
+
+    /// Set a vec2 uniform at the given index (consumes indices `[index, index+1]`).
+    pub fn try_set_float2(
+        &mut self,
+        index: usize,
+        x: f32,
+        y: f32,
+    ) -> Result<(), RuntimeShaderUniformError> {
+        self.try_ensure_capacity(index, 2)?;
         self.uniforms[index] = x;
         self.uniforms[index + 1] = y;
+        Ok(())
     }
 
     /// Set a vec4 uniform at the given index (consumes indices `[index..index+4]`).
+    ///
+    /// Invalid renderer-reserved ranges are ignored. Use [`Self::try_set_float4`]
+    /// when the caller needs to handle invalid uniform writes explicitly.
     pub fn set_float4(&mut self, index: usize, x: f32, y: f32, z: f32, w: f32) {
-        self.ensure_capacity(index + 4);
+        let _ = self.try_set_float4(index, x, y, z, w);
+    }
+
+    /// Set a vec4 uniform at the given index (consumes indices `[index..index+4]`).
+    pub fn try_set_float4(
+        &mut self,
+        index: usize,
+        x: f32,
+        y: f32,
+        z: f32,
+        w: f32,
+    ) -> Result<(), RuntimeShaderUniformError> {
+        self.try_ensure_capacity(index, 4)?;
         self.uniforms[index] = x;
         self.uniforms[index + 1] = y;
         self.uniforms[index + 2] = z;
         self.uniforms[index + 3] = w;
+        Ok(())
     }
 
     /// Get the WGSL source code.
@@ -170,17 +227,30 @@ impl RuntimeShader {
         self.source_hash
     }
 
-    fn ensure_capacity(&mut self, min_len: usize) {
-        assert!(
-            min_len <= Self::MAX_USER_UNIFORMS,
-            "uniform index {} exceeds user maximum {}; slots {}..{} are reserved for renderer data",
-            min_len - 1,
-            Self::MAX_USER_UNIFORMS - 1,
-            Self::RESERVED_UNIFORM_START,
-            Self::MAX_UNIFORMS - 1
-        );
+    fn try_ensure_capacity(
+        &mut self,
+        index: usize,
+        width: usize,
+    ) -> Result<(), RuntimeShaderUniformError> {
+        let min_len = index
+            .checked_add(width)
+            .ok_or_else(|| Self::uniform_range_error(index, width))?;
+        if min_len > Self::MAX_USER_UNIFORMS {
+            return Err(Self::uniform_range_error(index, width));
+        }
         if self.uniforms.len() < min_len {
             self.uniforms.resize(min_len, 0.0);
+        }
+        Ok(())
+    }
+
+    fn uniform_range_error(index: usize, width: usize) -> RuntimeShaderUniformError {
+        RuntimeShaderUniformError::OutOfUserRange {
+            index,
+            width,
+            max_user_uniforms: Self::MAX_USER_UNIFORMS,
+            reserved_start: Self::RESERVED_UNIFORM_START,
+            max_uniforms: Self::MAX_UNIFORMS,
         }
     }
 }
@@ -204,32 +274,6 @@ fn hash_shader_source(source: &str) -> u64 {
         .fold(FNV_OFFSET_BASIS, |hash, byte| {
             (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
         })
-}
-
-type ShaderSourceInterner = HashMap<u64, Vec<Weak<str>>>;
-
-fn intern_shader_source(source: &str, source_hash: u64) -> Arc<str> {
-    static INTERNER: OnceLock<Mutex<ShaderSourceInterner>> = OnceLock::new();
-
-    let interner = INTERNER.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = interner
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let bucket = guard.entry(source_hash).or_default();
-
-    for weak in bucket.iter() {
-        if let Some(existing) = weak.upgrade() {
-            if existing.as_ref() == source {
-                return existing;
-            }
-        }
-    }
-
-    bucket.retain(|weak| weak.upgrade().is_some());
-
-    let shared = Arc::<str>::from(source);
-    bucket.push(Arc::downgrade(&shared));
-    shared
 }
 
 /// A render effect applied to a graphics layer's rendered content.
@@ -345,17 +389,48 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "uniform index 256 exceeds user maximum 247")]
-    fn runtime_shader_overflow() {
+    fn runtime_shader_try_set_reports_reserved_uniform_slots() {
         let mut shader = RuntimeShader::new("// test");
-        shader.set_float(256, 1.0);
+
+        let err = shader
+            .try_set_float(RuntimeShader::RESERVED_UNIFORM_START, 1.0)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            RuntimeShaderUniformError::OutOfUserRange {
+                index: RuntimeShader::RESERVED_UNIFORM_START,
+                width: 1,
+                max_user_uniforms: RuntimeShader::MAX_USER_UNIFORMS,
+                reserved_start: RuntimeShader::RESERVED_UNIFORM_START,
+                max_uniforms: RuntimeShader::MAX_UNIFORMS,
+            }
+        );
+        assert!(shader.uniforms().is_empty());
+
+        let err = shader
+            .try_set_float4(RuntimeShader::MAX_USER_UNIFORMS - 3, 1.0, 2.0, 3.0, 4.0)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            RuntimeShaderUniformError::OutOfUserRange {
+                index: RuntimeShader::MAX_USER_UNIFORMS - 3,
+                width: 4,
+                max_user_uniforms: RuntimeShader::MAX_USER_UNIFORMS,
+                reserved_start: RuntimeShader::RESERVED_UNIFORM_START,
+                max_uniforms: RuntimeShader::MAX_UNIFORMS,
+            }
+        );
     }
 
     #[test]
-    #[should_panic(expected = "reserved for renderer data")]
-    fn runtime_shader_rejects_reserved_uniform_slots() {
+    fn runtime_shader_setters_ignore_invalid_uniform_slots_without_panicking() {
         let mut shader = RuntimeShader::new("// test");
+        shader.set_float(0, 7.0);
+
         shader.set_float(RuntimeShader::RESERVED_UNIFORM_START, 1.0);
+        shader.set_float4(RuntimeShader::MAX_USER_UNIFORMS - 3, 1.0, 2.0, 3.0, 4.0);
+
+        assert_eq!(shader.uniforms(), &[7.0]);
     }
 
     #[test]
@@ -414,12 +489,25 @@ mod tests {
     }
 
     #[test]
-    fn runtime_shader_new_interns_repeated_sources() {
-        let s1 = RuntimeShader::new("fn fragment() -> vec4<f32> { return vec4<f32>(1.0); }");
-        let s2 = RuntimeShader::new("fn fragment() -> vec4<f32> { return vec4<f32>(1.0); }");
+    fn runtime_shader_from_shared_source_reuses_shared_source() {
+        let source = Arc::<str>::from("fn fragment() -> vec4<f32> { return vec4<f32>(1.0); }");
+        let s1 = RuntimeShader::from_shared_source(source.clone());
+        let s2 = RuntimeShader::from_shared_source(source);
 
         assert!(Arc::ptr_eq(&s1.source, &s2.source));
         assert_eq!(s1.source_hash(), s2.source_hash());
+    }
+
+    #[test]
+    fn runtime_shader_source_storage_has_no_process_global_interner() {
+        let source = include_str!("render_effect.rs");
+        let blocked_static = ["static ", "INTERNER"].concat();
+        let blocked_type = ["ShaderSource", "Interner"].concat();
+
+        assert!(
+            !source.contains(&blocked_static) && !source.contains(&blocked_type),
+            "RuntimeShader source sharing must be explicit via from_shared_source, not a process-global interner"
+        );
     }
 
     #[test]

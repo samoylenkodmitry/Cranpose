@@ -40,6 +40,7 @@ export CRANPOSE_ROBOT_PARALLEL=1
 enable_local_tmpdir
 enable_local_sccache
 enable_local_cargo_job_limit
+enable_local_gradle_home
 
 RUST_LOG_PATTERN="(^error|^warning|error:|warning:|FAILED|failures:|panicked|thread '.*' panicked|test result: FAILED|could not compile|aborting)"
 ANDROID_LOG_PATTERN="(^error|^warning|error:|warning:|FAILED|FAILURE|Exception|What went wrong|BUILD FAILED)"

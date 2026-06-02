@@ -2,7 +2,7 @@
 
 This demo is intentionally **isolated** from the repository workspace and depends only on
 published crates from crates.io. It serves as the starter project template showing how to
-build a Cranpose app for all supported platforms.
+build a Cranpose app for supported platforms.
 
 ## Desktop (Linux/macOS/Windows)
 
@@ -21,14 +21,9 @@ cd apps/isolated-demo/android
 
 ## iOS
 
-Open `ios/CranposeIsolatedDemo.xcodeproj` in Xcode, then build and run on a simulator or
-device. The Xcode project invokes `cargo build` via a build phase script.
-
-```bash
-# Or build the Rust library manually:
-cd apps/isolated-demo
-cargo build --target aarch64-apple-ios-sim --lib --features ios,renderer-wgpu --no-default-features
-```
+iOS is unavailable until Cranpose has a real iOS platform crate with a CAMetalLayer
+surface, CADisplayLink frame driver, UIKit lifecycle bridge, touch/keyboard bridge,
+and safe-area/density updates.
 
 ## Web (WASM)
 

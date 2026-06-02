@@ -104,7 +104,7 @@ impl<T: Clone + 'static> Eq for CompositionLocal<T> {}
 
 impl<T: Clone + 'static> CompositionLocal<T> {
     pub fn provides(&self, value: T) -> ProvidedValue {
-        let key = self.key;
+        let key = self.key.clone();
         let equivalent = Arc::clone(&self.equivalent);
         ProvidedValue {
             key,
@@ -132,6 +132,18 @@ impl<T: Clone + 'static> CompositionLocal<T> {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn malformed_composition_local_for_test<T: Clone + 'static>(
+    local: &CompositionLocal<T>,
+    entry: Rc<dyn Any>,
+) -> ProvidedValue {
+    let key = local.key.clone();
+    ProvidedValue {
+        key,
+        apply: Box::new(move |_| entry.clone()),
+    }
+}
+
 #[allow(non_snake_case)]
 pub fn compositionLocalOf<T: Clone + PartialEq + 'static>(
     default: impl Fn() -> T + 'static,
@@ -145,7 +157,7 @@ pub fn compositionLocalOfWithPolicy<T: Clone + 'static>(
     equivalent: impl Fn(&T, &T) -> bool + Send + Sync + 'static,
 ) -> CompositionLocal<T> {
     CompositionLocal {
-        key: crate::next_local_key(),
+        key: LocalKey::new(),
         default: Rc::new(default),
         equivalent: Arc::new(equivalent),
     }
@@ -177,7 +189,7 @@ impl<T: Clone + 'static> Eq for StaticCompositionLocal<T> {}
 
 impl<T: Clone + 'static> StaticCompositionLocal<T> {
     pub fn provides(&self, value: T) -> ProvidedValue {
-        let key = self.key;
+        let key = self.key.clone();
         ProvidedValue {
             key,
             apply: Box::new(move |composer: &Composer| {
@@ -198,12 +210,24 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn malformed_static_composition_local_for_test<T: Clone + 'static>(
+    local: &StaticCompositionLocal<T>,
+    entry: Rc<dyn Any>,
+) -> ProvidedValue {
+    let key = local.key.clone();
+    ProvidedValue {
+        key,
+        apply: Box::new(move |_| entry.clone()),
+    }
+}
+
 #[allow(non_snake_case)]
 pub fn staticCompositionLocalOf<T: Clone + 'static>(
     default: impl Fn() -> T + 'static,
 ) -> StaticCompositionLocal<T> {
     StaticCompositionLocal {
-        key: crate::next_local_key(),
+        key: LocalKey::new(),
         default: Rc::new(default),
     }
 }

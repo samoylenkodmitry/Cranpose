@@ -13,6 +13,7 @@ description = "Application orchestration shell for Cranpose"
 
 [features]
 default = []
+clipboard-native = ["dep:arboard"]
 test-support = []
 
 [dependencies]
@@ -24,11 +25,10 @@ cranpose-ui-graphics = { workspace = true }
 cranpose-foundation = { workspace = true }
 log = "0.4"
 # WASM-compatible time - web-time is what winit uses internally
-web-time = "1.1"
+web-time = { workspace = true }
 
 [dev-dependencies]
 cranpose-macros = { workspace = true }
 
-# Clipboard support (desktop only - not available on WASM or Android)
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
-arboard = { version = "3.6", default-features = false }
+arboard = { version = "3.6", default-features = false, optional = true }

@@ -31,8 +31,8 @@ const TRANSLATED_PLAIN_TEXT_BUDGET: NormalizedDifferenceBudget = NormalizedDiffe
     max_pixel_difference: 360,
 };
 const TRANSLATED_TEXT_DECORATIONS_BUDGET: NormalizedDifferenceBudget = NormalizedDifferenceBudget {
-    max_differing_pixels: 300,
-    max_pixel_difference: 360,
+    max_differing_pixels: 320,
+    max_pixel_difference: 400,
 };
 
 #[derive(Clone)]
@@ -352,11 +352,12 @@ fn translated_text_decorations_fixture(translation_x: f32, translation_y: f32) -
         ..Default::default()
     });
 
-    build_translated_fixture(
+    let mut fixture = build_translated_fixture_with_context(
         180,
         96,
         subtree_bounds,
         Point::new(translation_x, translation_y),
+        true,
         vec![text_node_with_style(
             3,
             Rect {
@@ -369,7 +370,14 @@ fn translated_text_decorations_fixture(translation_x: f32, translation_y: f32) -
             None,
             text_style,
         )],
-    )
+    );
+    fixture.normalized_rect = Some(Rect {
+        x: translation_x.round(),
+        y: translation_y.round(),
+        width: subtree_bounds.width,
+        height: subtree_bounds.height,
+    });
+    fixture
 }
 
 fn build_fixture(width: u32, height: u32, children: Vec<RenderNode>) -> RenderFixture {

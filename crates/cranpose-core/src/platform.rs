@@ -7,9 +7,16 @@
 /// Schedules work for the Compose runtime.
 ///
 /// Implementations are responsible for triggering frame processing and
-/// executing background tasks on behalf of Compose. They must be safe to
-/// use from multiple threads.
+/// executing background tasks on behalf of Compose.
+#[cfg(not(target_arch = "wasm32"))]
 pub trait RuntimeScheduler: Send + Sync {
+    /// Request that the host schedule a new frame.
+    fn schedule_frame(&self);
+}
+
+/// Schedules work for the Compose runtime on single-threaded wasm hosts.
+#[cfg(target_arch = "wasm32")]
+pub trait RuntimeScheduler {
     /// Request that the host schedule a new frame.
     fn schedule_frame(&self);
 }

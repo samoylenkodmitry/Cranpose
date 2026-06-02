@@ -100,7 +100,7 @@ Users hate when `Ctrl+Z` undoes one character at a time.
     2.  User types whitespace or newline (word break).
     3.  Selection moves explicitly (click/arrow key).
     4.  Non-insert operation occurs (delete, paste).
-*   **Implementation**: `TextFieldState::edit()` tracks `last_edit_time` and manages a `pending_undo_snapshot`. The snapshot is only "committed" to the stack when the batch breaks.
+*   **Implementation**: `TextFieldState::edit()` tracks `last_edit_time` and manages a `pending_undo_snapshot`. The snapshot is only "committed" to the stack when the batch breaks. Nested edit attempts return `false` and leave the active edit unchanged.
 
 ### 2. Platform Clipboard
 *   **Desktop**: Uses `arboard` crate. Copied text is sent to OS clipboard synchronously.

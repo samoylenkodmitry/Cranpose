@@ -871,6 +871,15 @@ mod tests {
             })
     }
 
+    fn build_layer_node_for_test(
+        snapshot: BuildNodeSnapshot,
+        scale: f32,
+        has_external_backdrop_input: bool,
+    ) -> LayerNode {
+        let app_context = cranpose_ui::AppContext::new();
+        app_context.enter(|| build_layer_node(snapshot, scale, has_external_backdrop_input))
+    }
+
     fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
         let child_command = DrawCommand::Behind(Rc::new(|_size: Size| {
             vec![DrawPrimitive::Rect {
@@ -936,8 +945,8 @@ mod tests {
 
     #[test]
     fn parent_translation_changes_layer_transform_but_not_child_local_geometry() {
-        let static_graph = build_layer_node(snapshot_with_translation(0.0), 1.0, false);
-        let moved_graph = build_layer_node(snapshot_with_translation(23.5), 1.0, false);
+        let static_graph = build_layer_node_for_test(snapshot_with_translation(0.0), 1.0, false);
+        let moved_graph = build_layer_node_for_test(snapshot_with_translation(23.5), 1.0, false);
 
         let RenderNode::Layer(static_child) = &static_graph.children[0] else {
             panic!("expected child layer");
@@ -970,8 +979,8 @@ mod tests {
 
     #[test]
     fn stored_content_hash_ignores_parent_translation() {
-        let static_graph = build_layer_node(snapshot_with_translation(0.0), 1.0, false);
-        let moved_graph = build_layer_node(snapshot_with_translation(23.5), 1.0, false);
+        let static_graph = build_layer_node_for_test(snapshot_with_translation(0.0), 1.0, false);
+        let moved_graph = build_layer_node_for_test(snapshot_with_translation(23.5), 1.0, false);
 
         assert_eq!(
             static_graph.target_content_hash(),
@@ -1028,7 +1037,7 @@ mod tests {
             children: vec![child],
         };
 
-        let graph = build_layer_node(parent, 1.0, false);
+        let graph = build_layer_node_for_test(parent, 1.0, false);
         let RenderNode::Layer(child) = &graph.children[0] else {
             panic!("expected child layer");
         };
@@ -1293,7 +1302,7 @@ mod tests {
             children: vec![child],
         };
 
-        let graph = build_layer_node(parent, 1.0, false);
+        let graph = build_layer_node_for_test(parent, 1.0, false);
         let RenderNode::Primitive(behind) = &graph.children[0] else {
             panic!("expected before-children primitive");
         };
@@ -1362,8 +1371,8 @@ mod tests {
             ..parent.clone()
         };
 
-        let static_graph = build_layer_node(parent, 1.0, false);
-        let moved_graph = build_layer_node(moved_parent, 1.0, false);
+        let static_graph = build_layer_node_for_test(parent, 1.0, false);
+        let moved_graph = build_layer_node_for_test(moved_parent, 1.0, false);
 
         assert_ne!(
             static_graph.target_content_hash(),
@@ -1402,8 +1411,8 @@ mod tests {
             ..GraphicsLayer::default()
         });
 
-        let base_graph = build_layer_node(base, 1.0, false);
-        let effected_graph = build_layer_node(effected, 1.0, false);
+        let base_graph = build_layer_node_for_test(base, 1.0, false);
+        let effected_graph = build_layer_node_for_test(effected, 1.0, false);
 
         assert_eq!(
             base_graph.target_content_hash(),
@@ -1446,7 +1455,7 @@ mod tests {
             children: vec![],
         };
 
-        let graph = build_layer_node(snapshot, 1.0, false);
+        let graph = build_layer_node_for_test(snapshot, 1.0, false);
         let RenderNode::Primitive(text_primitive) = &graph.children[0] else {
             panic!("expected text primitive");
         };
@@ -1518,7 +1527,7 @@ mod tests {
             children: vec![child],
         };
 
-        let graph = build_layer_node(parent, 1.0, false);
+        let graph = build_layer_node_for_test(parent, 1.0, false);
         let RenderNode::Layer(child_layer) = &graph.children[0] else {
             panic!("expected child layer");
         };
@@ -1580,7 +1589,7 @@ mod tests {
             children: vec![child],
         };
 
-        let graph = build_layer_node(parent, 1.0, false);
+        let graph = build_layer_node_for_test(parent, 1.0, false);
         let RenderNode::Layer(child_layer) = &graph.children[0] else {
             panic!("expected child layer");
         };
@@ -1652,7 +1661,7 @@ mod tests {
             children: vec![child],
         };
 
-        let graph = build_layer_node(parent, 1.0, false);
+        let graph = build_layer_node_for_test(parent, 1.0, false);
         let RenderNode::Layer(child_layer) = &graph.children[0] else {
             panic!("expected child layer");
         };
@@ -1713,7 +1722,7 @@ mod tests {
             children: vec![child],
         };
 
-        let graph = build_layer_node(parent, 1.0, false);
+        let graph = build_layer_node_for_test(parent, 1.0, false);
         let RenderNode::Layer(child_layer) = &graph.children[0] else {
             panic!("expected child layer");
         };
@@ -1980,7 +1989,7 @@ mod tests {
             children: vec![child],
         };
 
-        let graph = build_layer_node(parent, 1.0, false);
+        let graph = build_layer_node_for_test(parent, 1.0, false);
         let RenderNode::Layer(child_layer) = &graph.children[0] else {
             panic!("expected child layer");
         };

@@ -11,6 +11,7 @@ use crate::subcompose_layout::{
     SubcomposeLayoutScope, SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
 };
 use cranpose_core::{NodeId, SlotId};
+use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{MeasurePolicy, Placement};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -65,16 +66,13 @@ pub fn SubcomposeLayout(
     };
     let policy: Rc<SubcomposeMeasurePolicy> = cranpose_core::remember(move || {
         let policy_cell = policy_cell.clone();
-        let policy: Rc<SubcomposeMeasurePolicy> = Rc::new(move |scope, constraints| {
-            let current = {
-                policy_cell
-                    .borrow()
-                    .as_ref()
-                    .expect("subcompose measure policy should be initialized")
-                    .clone()
-            };
-            current(scope, constraints)
-        });
+        let policy: Rc<SubcomposeMeasurePolicy> =
+            Rc::new(
+                move |scope, constraints| match policy_cell.borrow().as_ref().cloned() {
+                    Some(current) => current(scope, constraints),
+                    None => empty_subcompose_measure_result(constraints),
+                },
+            );
         policy
     })
     .with(|policy| policy.clone());
@@ -91,6 +89,11 @@ pub fn SubcomposeLayout(
         debug_assert!(false, "failed to update SubcomposeLayout node: {err}");
     }
     id
+}
+
+fn empty_subcompose_measure_result(constraints: Constraints) -> MeasureResult {
+    let (width, height) = constraints.constrain(0.0, 0.0);
+    MeasureResult::new(Size { width, height }, Vec::new())
 }
 
 #[composable(no_skip)]
@@ -143,6 +146,7 @@ mod tests {
 
     #[test]
     fn layout_recomposes_when_content_reads_state() {
+        let _app_context = crate::render_state::app_context_test_scope();
         thread_local! {
             static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
         }
@@ -178,5 +182,19 @@ mod tests {
             .expect("layout content recomposition");
 
         INVOCATIONS.with(|calls| assert_eq!(calls.get(), 2));
+    }
+
+    #[test]
+    fn subcompose_missing_policy_cell_measures_empty_layout() {
+        let result = empty_subcompose_measure_result(Constraints {
+            min_width: 12.0,
+            max_width: 120.0,
+            min_height: 8.0,
+            max_height: 90.0,
+        });
+
+        assert_eq!(result.size.width, 12.0);
+        assert_eq!(result.size.height, 8.0);
+        assert!(result.placements.is_empty());
     }
 }

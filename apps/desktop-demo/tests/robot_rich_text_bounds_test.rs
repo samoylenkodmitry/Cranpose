@@ -1,13 +1,12 @@
 use cranpose::prelude::*;
 use cranpose::text::*;
-use cranpose_testing::robot::create_headless_robot_test;
+use cranpose_testing::robot::create_headless_robot_test_with_text_measurer;
 
 #[test]
 fn test_rich_text_bounds() {
-    // Inject the real WGPU text measurer for accurate rich text bounds
-    cranpose_render_wgpu::setup_headless_text_measurer();
+    let text_measurer = cranpose_render_wgpu::headless_text_measurer();
 
-    let mut robot = create_headless_robot_test(800, 600, || {
+    let mut robot = create_headless_robot_test_with_text_measurer(800, 600, text_measurer, || {
         let annotated_text = AnnotatedString::builder()
             .push_style(SpanStyle {
                 font_size: TextUnit::Sp(30.0),
