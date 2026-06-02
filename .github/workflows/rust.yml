@@ -213,19 +213,14 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
-        run: sdkmanager "ndk;27.0.12077973"
+      - name: Install Android SDK packages
+        run: bash scripts/ci/install_android_ndk.sh 27.0.12077973
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
       - name: Build Android release APK
         working-directory: apps/android-demo/android
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: ./gradlew :app:assembleRelease
 
   robot-e2e-build:

@@ -18,6 +18,7 @@ fn workspace_source(path: &str) -> String {
 #[test]
 fn ci_architecture_budget_runs_required_gates() {
     let workflow = workspace_source(".github/workflows/rust.yml");
+    let release_workflow = workspace_source(".github/workflows/release.yml");
     let pages_workflow = workspace_source(".github/workflows/deploy-pages.yml");
 
     assert!(
@@ -68,6 +69,16 @@ fn ci_architecture_budget_runs_required_gates() {
             && pages_workflow.contains("./build-web.sh --release")
             && pages_workflow.contains("actions/upload-pages-artifact@v5"),
         "GitHub Pages deployment must publish the same budgeted optimized WASM produced by build-web.sh --release"
+    );
+    assert!(
+        !workflow.contains("android-actions/setup-android")
+            && !release_workflow.contains("android-actions/setup-android"),
+        "Android CI should install only required SDK packages instead of running the broad setup-android action"
+    );
+    assert!(
+        workflow.contains("bash scripts/ci/install_android_ndk.sh 27.0.12077973")
+            && release_workflow.contains("bash scripts/ci/install_android_ndk.sh 27.0.12077973"),
+        "Android CI and release workflows should share the narrow NDK installer"
     );
 }
 
