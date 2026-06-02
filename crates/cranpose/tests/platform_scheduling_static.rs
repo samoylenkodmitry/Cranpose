@@ -7,12 +7,16 @@ fn crate_source(path: &str) -> String {
 }
 
 fn workspace_source(path: &str) -> String {
+    std::fs::read_to_string(workspace_path(path)).expect("failed to read workspace source file")
+}
+
+fn workspace_path(path: &str) -> PathBuf {
     let cranpose_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace_dir = cranpose_dir
         .parent()
         .and_then(Path::parent)
         .expect("cranpose crate should live under workspace crates directory");
-    std::fs::read_to_string(workspace_dir.join(path)).expect("failed to read workspace source file")
+    workspace_dir.join(path)
 }
 
 #[test]
@@ -80,6 +84,53 @@ fn ci_architecture_budget_runs_required_gates() {
             && release_workflow.contains("bash scripts/ci/install_android_ndk.sh 27.0.12077973"),
         "Android CI and release workflows should share the narrow NDK installer"
     );
+}
+
+#[test]
+fn render_common_package_embeds_crate_owned_text_assets() {
+    let software_text_source =
+        workspace_source("crates/cranpose-render/common/src/software_text_raster.rs");
+    let font_layout_source = workspace_source("crates/cranpose-render/common/src/font_layout.rs");
+    let wgpu_lib_source = workspace_source("crates/cranpose-render/wgpu/src/lib.rs");
+    let wgpu_test_support_source = workspace_source("crates/cranpose-render/wgpu/tests/support.rs");
+
+    for (path, source) in [
+        (
+            "crates/cranpose-render/common/src/software_text_raster.rs",
+            software_text_source.as_str(),
+        ),
+        (
+            "crates/cranpose-render/common/src/font_layout.rs",
+            font_layout_source.as_str(),
+        ),
+        (
+            "crates/cranpose-render/wgpu/src/lib.rs",
+            wgpu_lib_source.as_str(),
+        ),
+        (
+            "crates/cranpose-render/wgpu/tests/support.rs",
+            wgpu_test_support_source.as_str(),
+        ),
+    ] {
+        assert!(
+            !source.contains("apps/desktop-demo/assets"),
+            "{path} must not embed demo-app assets; library crates must package their own fallback fonts"
+        );
+    }
+
+    for path in [
+        "crates/cranpose-render/common/assets/NotoSansMerged.ttf",
+        "crates/cranpose-render/common/assets/NotoSansBold.ttf",
+        "crates/cranpose-render/common/assets/TwemojiMozilla.ttf",
+    ] {
+        let metadata = std::fs::metadata(workspace_path(path)).unwrap_or_else(|error| {
+            panic!("{path} should be packaged with render-common: {error}")
+        });
+        assert!(
+            metadata.len() > 1024,
+            "{path} should contain the fallback font bytes"
+        );
+    }
 }
 
 #[test]

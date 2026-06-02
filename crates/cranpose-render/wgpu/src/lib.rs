@@ -525,7 +525,7 @@ mod tests {
     use std::cell::Cell;
 
     static TEST_FONT: &[u8] =
-        include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
+        cranpose_render_common::software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
 
     struct CountingTextMeasurer {
         inner: SoftwareTextMeasurer,

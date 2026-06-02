@@ -3,13 +3,13 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use cranpose_render_common::software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
 use cranpose_ui::AppContext;
 
-pub static TEST_FONT: &[u8] =
-    include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
+pub static TEST_FONT: &[u8] = DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
 
 static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
 

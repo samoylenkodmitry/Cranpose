@@ -108,10 +108,7 @@ mod tests {
     use ab_glyph::FontRef;
 
     fn test_font() -> FontRef<'static> {
-        FontRef::try_from_slice(include_bytes!(
-            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
-        ))
-        .expect("font")
+        FontRef::try_from_slice(include_bytes!("../assets/NotoSansMerged.ttf")).expect("font")
     }
 
     #[test]

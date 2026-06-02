@@ -27,8 +27,8 @@ const COMPOSE_STROKE_MITER_LIMIT: f32 = 4.0;
 const SHADOW_SIGMA_SCALE: f32 = 0.57735;
 const SHADOW_SIGMA_BIAS: f32 = 0.5;
 const MAX_GAUSSIAN_KERNEL_HALF: i32 = 128;
-const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] =
-    include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
+#[doc(hidden)]
+pub const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SoftwareTextFontError {
@@ -2292,17 +2292,13 @@ mod tests {
     }
 
     fn test_font() -> ab_glyph::FontRef<'static> {
-        ab_glyph::FontRef::try_from_slice(include_bytes!(
-            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
-        ))
-        .expect("font")
+        ab_glyph::FontRef::try_from_slice(include_bytes!("../assets/NotoSansMerged.ttf"))
+            .expect("font")
     }
 
     fn test_software_font() -> SoftwareTextFont {
-        SoftwareTextFont::from_bytes(
-            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf").to_vec(),
-        )
-        .expect("font")
+        SoftwareTextFont::from_bytes(include_bytes!("../assets/NotoSansMerged.ttf").to_vec())
+            .expect("font")
     }
 
     #[test]
@@ -2643,14 +2639,13 @@ mod tests {
 
     #[test]
     fn software_text_font_selection_preserves_first_complete_default_face() {
-        let regular = SoftwareTextFont::from_bytes(
-            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf").to_vec(),
-        )
-        .expect("regular test font should load");
+        let regular =
+            SoftwareTextFont::from_bytes(include_bytes!("../assets/NotoSansMerged.ttf").to_vec())
+                .expect("regular test font should load");
         let font = software_text_font_from_fonts_or_default(&[
-            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"),
-            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansBold.ttf"),
-            include_bytes!("../../../../apps/desktop-demo/assets/TwemojiMozilla.ttf"),
+            include_bytes!("../assets/NotoSansMerged.ttf"),
+            include_bytes!("../assets/NotoSansBold.ttf"),
+            include_bytes!("../assets/TwemojiMozilla.ttf"),
         ])
         .expect("font selection should resolve a test font");
         let style = TextStyle {
@@ -2703,9 +2698,9 @@ mod tests {
     #[test]
     fn software_text_font_set_resolves_requested_weight() {
         let fonts = software_text_font_set_from_fonts_or_default(&[
-            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"),
-            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansBold.ttf"),
-            include_bytes!("../../../../apps/desktop-demo/assets/TwemojiMozilla.ttf"),
+            include_bytes!("../assets/NotoSansMerged.ttf"),
+            include_bytes!("../assets/NotoSansBold.ttf"),
+            include_bytes!("../assets/TwemojiMozilla.ttf"),
         ]);
         let regular = fonts
             .resolve(&TextStyle::default())
