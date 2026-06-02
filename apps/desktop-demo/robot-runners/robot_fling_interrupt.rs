@@ -6,7 +6,6 @@
 use cranpose::AppLauncher;
 use cranpose_testing::exit_with_timeout;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
-use cranpose_ui::reset_last_fling_velocity;
 use desktop_app::app;
 use std::time::Duration;
 
@@ -61,7 +60,11 @@ fn main() {
             for cycle in 0..8 {
                 println!("--- Cycle {} ---", cycle + 1);
 
-                reset_last_fling_velocity();
+                if let Err(err) = robot.reset_last_fling_velocity() {
+                    eprintln!("  Failed to reset fling velocity: {err}");
+                    let _ = robot.exit();
+                    return;
+                }
 
                 // Perform fling gesture
                 let fling_x = 400.0;

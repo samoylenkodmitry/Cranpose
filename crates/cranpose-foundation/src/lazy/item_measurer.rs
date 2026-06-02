@@ -5,8 +5,6 @@
 use super::lazy_list_measure::{LazyListMeasureConfig, DEFAULT_ITEM_SIZE_ESTIMATE};
 use super::lazy_list_measured_item::LazyListMeasuredItem;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 use web_time::{Duration, Instant};
 
 /// Maximum items to measure per pass as a safety limit.
@@ -29,14 +27,6 @@ const DEFAULT_TIME_BUDGET: Duration = Duration::from_millis(50);
 /// Used in addition to time budget to prevent memory exhaustion in extreme cases.
 const MAX_VISIBLE_ITEMS_SAFETY: usize = 10000;
 const MIN_ESTIMATED_ITEM_EXTENT: f32 = 1.0;
-
-static LAZY_MEASURE_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
-static LAZY_MEASURE_PASS_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-fn lazy_measure_telemetry_enabled() -> bool {
-    *LAZY_MEASURE_TELEMETRY_ENABLED
-        .get_or_init(|| std::env::var_os("CRANPOSE_LAZY_MEASURE_TELEMETRY").is_some())
-}
 
 /// Metadata returned from a single lazy list item measurement pass.
 #[derive(Debug)]
@@ -65,6 +55,7 @@ pub struct ItemMeasurer<'a, F> {
     items_count: usize,
     effective_viewport_size: f32,
     average_item_size: f32,
+    telemetry_pass_id: Option<u64>,
 }
 
 impl<'a, F> ItemMeasurer<'a, F>
@@ -87,7 +78,13 @@ where
             items_count,
             effective_viewport_size,
             average_item_size,
+            telemetry_pass_id: None,
         }
+    }
+
+    pub fn with_telemetry_pass_id(mut self, pass_id: Option<u64>) -> Self {
+        self.telemetry_pass_id = pass_id;
+        self
     }
 
     /// Measures all items: visible + beyond-bounds buffer.
@@ -143,8 +140,7 @@ where
             hit_time_budget,
             viewport_filled,
         };
-        if lazy_measure_telemetry_enabled() {
-            let pass_id = LAZY_MEASURE_PASS_COUNTER.fetch_add(1, Ordering::Relaxed);
+        if let Some(pass_id) = self.telemetry_pass_id {
             log::warn!(
                 "[lazy-measure-telemetry] pass={} start_index={} start_offset={:.2} measured_visible={} next_index={} next_offset={:.2} viewport_end={:.2} viewport_filled={} hit_time_budget={} elapsed_ms={:.2}",
                 pass_id,

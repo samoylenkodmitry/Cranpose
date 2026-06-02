@@ -17,11 +17,14 @@
 #                   Write per-shard robot binary tarballs after building
 #   --stage-artifact-shards N
 #                   Number of staged artifact shards (default: 16)
+#   CRANPOSE_ROBOT_KEEP_FAILURE_RESULTS=0
+#                   Remove per-example result artifacts even when the suite fails
 #   --help          Show this help message
 
 LOG_FILE="${CRANPOSE_ROBOT_LOG_FILE:-robot_test.log}"
 SUMMARY_FILE="${CRANPOSE_ROBOT_SUMMARY_FILE:-robot_test_summary.txt}"
 ROBOT_DIR="apps/desktop-demo/robot-runners"
+ROBOT_EXAMPLES_DIR="apps/desktop-demo/examples"
 ROBOT_PROFILE="${CRANPOSE_ROBOT_PROFILE:-robot}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CARGO_RUNNER=("$SCRIPT_DIR/cargo-dev.sh")
@@ -41,6 +44,7 @@ fi
 ROBOT_TEST_TIMEOUT_CAP_SECS="${CRANPOSE_ROBOT_TEST_TIMEOUT_CAP_SECS:-900}"
 ROBOT_TEST_ATTEMPTS="${CRANPOSE_ROBOT_TEST_ATTEMPTS:-1}"
 ROBOT_FAILURE_LOG_LINES="${CRANPOSE_ROBOT_FAILURE_LOG_LINES:-220}"
+ROBOT_KEEP_FAILURE_RESULTS="${CRANPOSE_ROBOT_KEEP_FAILURE_RESULTS:-1}"
 SELECTED_EXAMPLES=()
 SHARD_INDEX=""
 SHARD_COUNT=""
@@ -77,6 +81,7 @@ fi
 enable_local_tmpdir
 enable_local_sccache
 enable_local_cargo_job_limit
+export WINIT_X11_SCALE_FACTOR="${WINIT_X11_SCALE_FACTOR:-1}"
 
 parse_shard_spec() {
     local spec="$1"
@@ -147,6 +152,8 @@ while [[ $# -gt 0 ]]; do
             echo "                  Write per-shard robot binary tarballs after building"
             echo "  --stage-artifact-shards N"
             echo "                  Number of staged artifact shards (default: 16)"
+            echo "  CRANPOSE_ROBOT_KEEP_FAILURE_RESULTS=0"
+            echo "                  Remove per-example result artifacts even when the suite fails"
             echo "  --help          Show this help message"
             exit 0
             ;;
@@ -173,12 +180,15 @@ mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$SUMMARY_FILE")"
 rm -f "$LOG_FILE" "$SUMMARY_FILE"
 
 echo "Cleaning up..."
-# Dynamically discover all robot tests from the robot-runners directory
+# Dynamically discover all robot tests from the robot-runners and examples directories
 # Exclude utility modules (files that don't have a main function)
 EXAMPLES=()
 RUN_EXAMPLES=()
-for file in "$ROBOT_DIR"/robot_*.rs; do
-    if [ -f "$file" ]; then
+for robot_source_dir in "$ROBOT_DIR" "$ROBOT_EXAMPLES_DIR"; do
+    for file in "$robot_source_dir"/robot_*.rs; do
+        if [ ! -f "$file" ]; then
+            continue
+        fi
         # Extract the example name (filename without .rs extension)
         example=$(basename "$file" .rs)
         # Skip utility modules (they don't have fn main)
@@ -186,7 +196,7 @@ for file in "$ROBOT_DIR"/robot_*.rs; do
             continue
         fi
         EXAMPLES+=("$example")
-    fi
+    done
 done
 
 if [ ${#EXAMPLES[@]} -eq 0 ]; then
@@ -334,7 +344,12 @@ echo "============================================" | tee -a "$LOG_FILE"
 # Create temp directory for individual test results
 RESULTS_DIR="$(create_local_temp_dir cranpose-robot-results)"
 cleanup_results_dir() {
+    local status=$?
     if [ -d "$RESULTS_DIR" ]; then
+        if [ "$status" -ne 0 ] && [ "$ROBOT_KEEP_FAILURE_RESULTS" != "0" ]; then
+            echo "Preserving robot result artifacts after status $status: $RESULTS_DIR" | tee -a "$LOG_FILE"
+            return
+        fi
         rm -r -- "$RESULTS_DIR"
     fi
 }
@@ -366,8 +381,11 @@ run_test() {
         robot_text_input)
             timeout_secs=120
             ;;
-        robot_text_scroll_exact_external_contract)
+        robot_hacker_news_scroll_exact_external_contract|robot_markdown_scroll_exact_external_contract|robot_text_scroll_exact_external_contract)
             timeout_secs=180
+            ;;
+        robot_presented_window_geometry|robot_presented_window_hidpi_geometry|robot_presented_window_redraw|robot_renderer_micro_contract)
+            timeout_secs=120
             ;;
         robot_leetcodedaily_code_scroll_pixel_drift)
             timeout_secs=180
@@ -455,8 +473,15 @@ run_test() {
 
     local headless_env="CRANPOSE_HEADLESS=1"
     case "$example" in
-        robot_text_scroll_exact_external_contract)
+        robot_hacker_news_scroll_exact_external_contract|robot_leetcodedaily_full_layout_scroll_stability|robot_markdown_scroll_exact_external_contract|robot_presented_window_geometry|robot_presented_window_hidpi_geometry|robot_presented_window_redraw|robot_renderer_micro_contract|robot_tab_walk_text_visual_contract|robot_text_scroll_exact_external_contract|robot_text_strikeout_presented|robot_underline_screenshot|robot_winamp_native_window_geometry)
             headless_env="CRANPOSE_HEADLESS=0"
+            ;;
+    esac
+
+    local example_env=()
+    case "$example" in
+        robot_presented_window_hidpi_geometry)
+            example_env+=(WINIT_X11_SCALE_FACTOR=2)
             ;;
     esac
 
@@ -475,12 +500,21 @@ run_test() {
             return 75
         fi
 
+        local robot_env_args=()
+        while IFS= read -r -d '' entry; do
+            robot_env_args+=("$entry")
+        done < <(robot_process_env "$headless_env" "${example_env[@]}")
+
         if command -v timeout >/dev/null 2>&1; then
-            env "$headless_env" timeout --kill-after=15s "${timeout_secs}s" "$example_bin" > "$attempt_output" 2>&1
+            env -i "${robot_env_args[@]}" timeout --kill-after=15s "${timeout_secs}s" "$example_bin" > "$attempt_output" 2>&1
             local exit_code=$?
         else
-            env "$headless_env" "$example_bin" > "$attempt_output" 2>&1
+            env -i "${robot_env_args[@]}" "$example_bin" > "$attempt_output" 2>&1
             local exit_code=$?
+        fi
+
+        if [ "$headless_env" = "CRANPOSE_HEADLESS=0" ]; then
+            sleep "${CRANPOSE_ROBOT_VISIBLE_TEARDOWN_SECS:-1}"
         fi
 
         cat "$attempt_output" >> "$output_file" 2>/dev/null
@@ -519,7 +553,30 @@ run_test() {
     done
 }
 
+robot_process_env() {
+    local headless_env="$1"
+    shift
+    local example_env=("$@")
+    local env_args=()
+    local name value
+
+    while IFS='=' read -r name value; do
+        case "$name" in
+            BASH_FUNC_*|RESULTS_DIR|EXAMPLE_BIN_DIR|ROBOT_TEST_TIMEOUT_CAP_SECS|ROBOT_TEST_ATTEMPTS)
+                ;;
+            PATH|HOME|USER|LOGNAME|SHELL|DISPLAY|XAUTHORITY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|LD_LIBRARY_PATH|LIBGL_DRIVERS_PATH|VK_ICD_FILENAMES|VK_LAYER_PATH|MESA_LOADER_DRIVER_OVERRIDE|MESA_VK_DEVICE_SELECT|RUST_BACKTRACE|RUST_LOG|WINIT_*|WGPU_*|CRANPOSE_*|TMPDIR)
+                env_args+=("$name=$value")
+                ;;
+        esac
+    done < <(env)
+
+    env_args+=("$headless_env")
+    env_args+=("${example_env[@]}")
+    printf '%s\0' "${env_args[@]}"
+}
+
 export -f run_test
+export -f robot_process_env
 export -f is_ci_env
 export -f host_cpu_min_mhz
 export -f host_cpu_freq_summary

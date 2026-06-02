@@ -1,4 +1,5 @@
 #![doc = r"Core runtime pieces for the Cranpose experiment."]
+#![deny(unsafe_code)]
 
 pub extern crate self as cranpose_core;
 
@@ -101,14 +102,33 @@ pub use snapshot_state_observer::SnapshotStateObserver;
 pub fn run_in_mutable_snapshot<T>(block: impl FnOnce() -> T) -> Result<T, &'static str> {
     let snapshot = snapshot_v2::take_mutable_snapshot(None, None);
 
-    // Mark that we're in an applied snapshot context
-    IN_APPLIED_SNAPSHOT.with(|c| c.set(true));
+    let _applied_guard = AppliedSnapshotFlagGuard::enter();
     let value = snapshot.enter(block);
-    IN_APPLIED_SNAPSHOT.with(|c| c.set(false));
 
     match snapshot.apply() {
         snapshot_v2::SnapshotApplyResult::Success => Ok(value),
         snapshot_v2::SnapshotApplyResult::Failure => Err("Snapshot apply failed"),
+    }
+}
+
+struct AppliedSnapshotFlagGuard {
+    previous: bool,
+}
+
+impl AppliedSnapshotFlagGuard {
+    fn enter() -> Self {
+        let previous = IN_APPLIED_SNAPSHOT.with(|flag| {
+            let previous = flag.get();
+            flag.set(true);
+            previous
+        });
+        Self { previous }
+    }
+}
+
+impl Drop for AppliedSnapshotFlagGuard {
+    fn drop(&mut self) {
+        IN_APPLIED_SNAPSHOT.with(|flag| flag.set(self.previous));
     }
 }
 
@@ -157,16 +177,24 @@ pub struct CompositionPassDebugStats {
     pub side_effects_cap: usize,
 }
 
-/// Marks the start of an event handler context.
-/// Call this at the start of keyboard/mouse/touch event handling.
-/// Use `run_in_mutable_snapshot` or `dispatch_ui_event` inside to ensure proper snapshot handling.
-pub fn enter_event_handler() {
-    IN_EVENT_HANDLER.with(|c| c.set(true));
+#[must_use]
+pub struct EventHandlerScopeGuard {
+    previous: bool,
 }
 
-/// Marks the end of an event handler context.
-pub fn exit_event_handler() {
-    IN_EVENT_HANDLER.with(|c| c.set(false));
+impl Drop for EventHandlerScopeGuard {
+    fn drop(&mut self) {
+        IN_EVENT_HANDLER.with(|flag| flag.set(self.previous));
+    }
+}
+
+pub fn enter_event_handler_scope() -> EventHandlerScopeGuard {
+    let previous = IN_EVENT_HANDLER.with(|flag| {
+        let previous = flag.get();
+        flag.set(true);
+        previous
+    });
+    EventHandlerScopeGuard { previous }
 }
 
 /// Returns true if currently in an event handler context.
@@ -191,9 +219,6 @@ use std::collections::BinaryHeap;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(any(test, debug_assertions))]
-use std::sync::{Mutex, OnceLock};
 
 pub type Key = u64;
 pub type NodeId = usize;
@@ -207,17 +232,10 @@ struct LocationKeyDebugInfo {
 }
 
 #[cfg(any(test, debug_assertions))]
-fn location_key_registry() -> &'static Mutex<HashMap<Key, LocationKeyDebugInfo>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<Key, LocationKeyDebugInfo>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::default()))
-}
-
-#[cfg(any(test, debug_assertions))]
-fn lock_location_key_registry() -> std::sync::MutexGuard<'static, HashMap<Key, LocationKeyDebugInfo>>
-{
-    location_key_registry()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+thread_local! {
+    static LOCATION_KEY_REGISTRY: RefCell<HashMap<Key, LocationKeyDebugInfo>> =
+        RefCell::new(HashMap::default());
+    static LOCATION_KEY_COLLISION_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(any(test, debug_assertions))]
@@ -227,8 +245,8 @@ fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32
         line,
         column,
     };
-    let collision = {
-        let mut registry = lock_location_key_registry();
+    let collision = LOCATION_KEY_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
         match registry.entry(key) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(info);
@@ -239,16 +257,18 @@ fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32
                 (existing != &info).then(|| (existing.clone(), info))
             }
         }
-    };
+    });
     if let Some((existing, incoming)) = collision {
-        panic!("location key collision: key={key} first={existing:?} second={incoming:?}");
+        LOCATION_KEY_COLLISION_COUNT.with(|count| {
+            count.set(count.get().saturating_add(1));
+        });
+        log::error!("location key collision: key={key} first={existing:?} second={incoming:?}");
     }
 }
 
 #[cfg(all(debug_assertions, not(test)))]
 fn location_key_diagnostics_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_LOCATION_KEY_DIAGNOSTICS").is_some())
+    std::env::var_os("CRANPOSE_LOCATION_KEY_DIAGNOSTICS").is_some()
 }
 
 #[cfg(test)]
@@ -262,14 +282,23 @@ pub(crate) fn register_location_key_debug_info_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn location_key_debug_collision_count_for_test() -> usize {
+    LOCATION_KEY_COLLISION_COUNT.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn location_key_debug_info_for_test(key: Key) -> Option<LocationKeyDebugInfo> {
+    LOCATION_KEY_REGISTRY.with(|registry| registry.borrow().get(&key).cloned())
+}
+
+#[cfg(test)]
 pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
     true
 }
 
 #[cfg(all(debug_assertions, not(test)))]
 pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_VALIDATE_SLOTS").is_some())
+    std::env::var_os("CRANPOSE_VALIDATE_SLOTS").is_some()
 }
 
 fn source_location_key(file: &str, line: u32, column: u32) -> Key {
@@ -341,9 +370,45 @@ impl AnchorId {
 }
 
 pub(crate) type ScopeId = usize;
-type LocalKey = usize;
 pub(crate) type FrameCallbackId = u64;
 type LocalStackSnapshot = Rc<Vec<composer::LocalContext>>;
+
+#[derive(Clone)]
+pub(crate) struct LocalKey(Rc<()>);
+
+impl LocalKey {
+    fn new() -> Self {
+        Self(Rc::new(()))
+    }
+}
+
+impl std::fmt::Debug for LocalKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("LocalKey")
+            .field(&(Rc::as_ptr(&self.0) as usize))
+            .finish()
+    }
+}
+
+impl std::fmt::Display for LocalKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:p}", Rc::as_ptr(&self.0))
+    }
+}
+
+impl PartialEq for LocalKey {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for LocalKey {}
+
+impl Hash for LocalKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Rc::as_ptr(&self.0).hash(state);
+    }
+}
 
 thread_local! {
     static EMPTY_LOCAL_STACK: LocalStackSnapshot = Rc::new(Vec::new());
@@ -356,18 +421,6 @@ thread_local! {
     static DEBUG_SCOPE_TRACKING_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
-static NEXT_SCOPE_ID: AtomicUsize = AtomicUsize::new(1);
-static NEXT_LOCAL_KEY: AtomicUsize = AtomicUsize::new(1);
-static LIVE_RECOMPOSE_SCOPE_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-fn next_scope_id() -> ScopeId {
-    NEXT_SCOPE_ID.fetch_add(1, Ordering::Relaxed)
-}
-
-fn next_local_key() -> LocalKey {
-    NEXT_LOCAL_KEY.fetch_add(1, Ordering::Relaxed)
-}
-
 fn empty_local_stack() -> LocalStackSnapshot {
     EMPTY_LOCAL_STACK.with(Rc::clone)
 }
@@ -378,7 +431,6 @@ enum RecomposeCallback {
 }
 
 pub(crate) struct RecomposeScopeInner {
-    id: ScopeId,
     runtime: RuntimeHandle,
     invalid: Cell<bool>,
     enqueued: Cell<bool>,
@@ -399,9 +451,8 @@ pub(crate) struct RecomposeScopeInner {
 
 impl RecomposeScopeInner {
     fn new(runtime: RuntimeHandle) -> Self {
-        LIVE_RECOMPOSE_SCOPE_COUNT.fetch_add(1, Ordering::Relaxed);
+        runtime.increment_live_recompose_scope_count();
         Self {
-            id: next_scope_id(),
             runtime,
             invalid: Cell::new(false),
             enqueued: Cell::new(false),
@@ -420,26 +471,31 @@ impl RecomposeScopeInner {
             state_subscriptions: RefCell::new(HashSet::default()),
         }
     }
+
+    fn id(&self) -> ScopeId {
+        std::ptr::from_ref(self).addr()
+    }
 }
 
 impl Drop for RecomposeScopeInner {
     fn drop(&mut self) {
-        LIVE_RECOMPOSE_SCOPE_COUNT.fetch_sub(1, Ordering::Relaxed);
+        let id = self.id();
+        self.runtime.decrement_live_recompose_scope_count();
         let subscriptions = std::mem::take(self.state_subscriptions.get_mut());
         for state_id in subscriptions {
-            self.runtime.unregister_state_scope(state_id, self.id);
+            self.runtime.unregister_state_scope(state_id, id);
         }
         #[cfg(debug_assertions)]
         {
             let _ = DEBUG_SCOPE_LABELS.try_with(|labels| {
-                labels.borrow_mut().remove(&self.id);
+                labels.borrow_mut().remove(&id);
             });
             let _ = DEBUG_SCOPE_INVALIDATION_SOURCES.try_with(|sources| {
-                sources.borrow_mut().remove(&self.id);
+                sources.borrow_mut().remove(&id);
             });
         }
         if self.enqueued.replace(false) {
-            self.runtime.mark_scope_recomposed(self.id);
+            self.runtime.mark_scope_recomposed(id);
         }
     }
 }
@@ -481,7 +537,7 @@ impl RecomposeScope {
     }
 
     pub fn id(&self) -> ScopeId {
-        self.inner.id
+        self.inner.id()
     }
 
     pub fn is_invalid(&self) -> bool {
@@ -504,7 +560,7 @@ impl RecomposeScope {
         if !self.inner.enqueued.replace(true) {
             self.inner
                 .runtime
-                .register_invalid_scope(self.inner.id, self.downgrade());
+                .register_invalid_scope(self.id(), self.downgrade());
         }
     }
 
@@ -513,7 +569,7 @@ impl RecomposeScope {
         self.inner.force_reuse.set(false);
         self.inner.force_recompose.set(false);
         if self.inner.enqueued.replace(false) {
-            self.inner.runtime.mark_scope_recomposed(self.inner.id);
+            self.inner.runtime.mark_scope_recomposed(self.id());
         }
         let pending = self.inner.pending_recompose.replace(false);
         if pending {
@@ -615,7 +671,7 @@ impl RecomposeScope {
             return;
         }
         if self.inner.enqueued.replace(false) {
-            self.inner.runtime.mark_scope_recomposed(self.inner.id);
+            self.inner.runtime.mark_scope_recomposed(self.id());
         }
     }
 
@@ -626,7 +682,7 @@ impl RecomposeScope {
         if self.inner.invalid.get() && !self.inner.enqueued.replace(true) {
             self.inner
                 .runtime
-                .register_invalid_scope(self.inner.id, self.downgrade());
+                .register_invalid_scope(self.id(), self.downgrade());
         }
     }
 
@@ -686,10 +742,31 @@ pub struct RecomposeOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeError {
-    Missing { id: NodeId },
-    TypeMismatch { id: NodeId, expected: &'static str },
-    MissingContext { id: NodeId, reason: &'static str },
-    AlreadyExists { id: NodeId },
+    Missing {
+        id: NodeId,
+    },
+    TypeMismatch {
+        id: NodeId,
+        expected: &'static str,
+    },
+    MissingContext {
+        id: NodeId,
+        reason: &'static str,
+    },
+    AlreadyExists {
+        id: NodeId,
+    },
+    MalformedCommandPayload {
+        tag: &'static str,
+    },
+    SlotHostUnavailable {
+        operation: &'static str,
+        reason: &'static str,
+    },
+    RecompositionLimitExceeded {
+        operation: &'static str,
+        limit: usize,
+    },
 }
 
 impl std::fmt::Display for NodeError {
@@ -704,6 +781,18 @@ impl std::fmt::Display for NodeError {
             }
             NodeError::AlreadyExists { id } => {
                 write!(f, "node {id} already exists")
+            }
+            NodeError::MalformedCommandPayload { tag } => {
+                write!(f, "command queue missing or invalid {tag} payload")
+            }
+            NodeError::SlotHostUnavailable { operation, reason } => {
+                write!(f, "{operation} cannot access slot host: {reason}")
+            }
+            NodeError::RecompositionLimitExceeded { operation, limit } => {
+                write!(
+                    f,
+                    "{operation} exceeded {limit} iterations while reconciling composition"
+                )
             }
         }
     }
@@ -940,7 +1029,7 @@ pub trait Node: Any {
     /// need to establish parent connections for bubble_measure_dirty without
     /// causing the full attachment lifecycle.
     ///
-    /// Default: delegates to on_attached_to_parent for backward compatibility.
+    /// Default implementation uses the normal parent-attachment hook.
     fn set_parent_for_bubbling(&mut self, parent: NodeId) {
         self.on_attached_to_parent(parent);
     }
@@ -1293,6 +1382,31 @@ impl RecycledNode {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecycledNodeInsertion {
+    pub id: NodeId,
+    pub stable_id_reused: bool,
+    pub fallback_error: Option<NodeError>,
+}
+
+impl RecycledNodeInsertion {
+    fn reused(stable_id: NodeId) -> Self {
+        Self {
+            id: stable_id,
+            stable_id_reused: true,
+            fallback_error: None,
+        }
+    }
+
+    fn fresh(id: NodeId, fallback_error: Option<NodeError>) -> Self {
+        Self {
+            id,
+            stable_id_reused: false,
+            fallback_error,
+        }
+    }
+}
+
 pub trait Applier: Any {
     fn create(&mut self, node: Box<dyn Node>) -> NodeId;
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError>;
@@ -1311,6 +1425,17 @@ pub trait Applier: Any {
     ///
     /// Returns Ok(()) if successful, or an error if the ID is already in use.
     fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError>;
+
+    /// Reinserts a recycled node at its retained stable ID, or creates a fresh ID if that
+    /// retained ID is no longer available.
+    fn insert_recycled_node_or_create(
+        &mut self,
+        stable_id: NodeId,
+        node: Box<dyn Node>,
+    ) -> RecycledNodeInsertion {
+        let id = self.create(node);
+        RecycledNodeInsertion::fresh(id, Some(NodeError::AlreadyExists { id: stable_id }))
+    }
 
     fn as_any(&self) -> &dyn Any
     where
@@ -1626,6 +1751,24 @@ enum CommandTag {
     Callback,
 }
 
+impl CommandTag {
+    fn label(self) -> &'static str {
+        match self {
+            Self::BubbleDirty => "BubbleDirty",
+            Self::UpdateTypedNode => "UpdateTypedNode",
+            Self::RemoveNode => "RemoveNode",
+            Self::MountNode => "MountNode",
+            Self::AttachChild => "AttachChild",
+            Self::InsertChild => "InsertChild",
+            Self::MoveChild => "MoveChild",
+            Self::RemoveChild => "RemoveChild",
+            Self::DetachChild => "DetachChild",
+            Self::SyncChildren => "SyncChildren",
+            Self::Callback => "Callback",
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 struct BubbleDirtyCommand {
     node_id: NodeId,
@@ -1708,11 +1851,10 @@ impl CommandQueue {
         if needs_chunk {
             self.chunks.push(Vec::with_capacity(COMMAND_CHUNK_CAPACITY));
         }
-        self.chunks
-            .last_mut()
-            .expect("command chunk should exist")
-            .push(tag);
-        self.len += 1;
+        if let Some(chunk) = self.chunks.last_mut() {
+            chunk.push(tag);
+            self.len += 1;
+        }
     }
 
     fn push(&mut self, command: Command) {
@@ -1968,24 +2110,23 @@ impl CommandQueue {
                 match tag {
                     CommandTag::BubbleDirty => {
                         let BubbleDirtyCommand { node_id, bubble } =
-                            bubble_dirty.next().expect("missing BubbleDirty payload");
+                            next_command_payload(&mut bubble_dirty, tag)?;
                         Command::BubbleDirty { node_id, bubble }
                             .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::UpdateTypedNode => {
-                        let UpdateTypedNodeCommand { id, updater } = update_typed_nodes
-                            .next()
-                            .expect("missing UpdateTypedNode payload");
+                        let UpdateTypedNodeCommand { id, updater } =
+                            next_command_payload(&mut update_typed_nodes, tag)?;
                         Command::UpdateTypedNode { id, updater }
                             .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::RemoveNode => {
-                        let id = remove_nodes.next().expect("missing RemoveNode payload");
+                        let id = next_command_payload(&mut remove_nodes, tag)?;
                         Command::RemoveNode { id }
                             .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::MountNode => {
-                        let id = mount_nodes.next().expect("missing MountNode payload");
+                        let id = next_command_payload(&mut mount_nodes, tag)?;
                         Command::MountNode { id }
                             .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
@@ -1994,7 +2135,7 @@ impl CommandQueue {
                             parent_id,
                             child_id,
                             bubble,
-                        } = attach_children.next().expect("missing AttachChild payload");
+                        } = next_command_payload(&mut attach_children, tag)?;
                         Command::AttachChild {
                             parent_id,
                             child_id,
@@ -2009,7 +2150,7 @@ impl CommandQueue {
                             appended_index,
                             insert_index,
                             bubble,
-                        } = insert_children.next().expect("missing InsertChild payload");
+                        } = next_command_payload(&mut insert_children, tag)?;
                         Command::InsertChild {
                             parent_id,
                             child_id,
@@ -2025,7 +2166,7 @@ impl CommandQueue {
                             from_index,
                             to_index,
                             bubble,
-                        } = move_children.next().expect("missing MoveChild payload");
+                        } = next_command_payload(&mut move_children, tag)?;
                         Command::MoveChild {
                             parent_id,
                             from_index,
@@ -2038,7 +2179,7 @@ impl CommandQueue {
                         let RemoveChildCommand {
                             parent_id,
                             child_id,
-                        } = remove_children.next().expect("missing RemoveChild payload");
+                        } = next_command_payload(&mut remove_children, tag)?;
                         Command::RemoveChild {
                             parent_id,
                             child_id,
@@ -2049,7 +2190,7 @@ impl CommandQueue {
                         let DetachChildCommand {
                             parent_id,
                             child_id,
-                        } = detach_children.next().expect("missing DetachChild payload");
+                        } = next_command_payload(&mut detach_children, tag)?;
                         Command::DetachChild {
                             parent_id,
                             child_id,
@@ -2061,11 +2202,13 @@ impl CommandQueue {
                             parent_id,
                             child_start,
                             child_len,
-                        } = sync_children_commands
-                            .next()
-                            .expect("missing SyncChildren payload");
-                        let expected_children =
-                            &sync_child_ids[child_start..child_start + child_len];
+                        } = next_command_payload(&mut sync_children_commands, tag)?;
+                        let child_end = child_start
+                            .checked_add(child_len)
+                            .ok_or_else(|| command_payload_error(tag))?;
+                        let expected_children = sync_child_ids
+                            .get(child_start..child_end)
+                            .ok_or_else(|| command_payload_error(tag))?;
                         sync_children(
                             applier,
                             parent_id,
@@ -2074,7 +2217,7 @@ impl CommandQueue {
                         )?;
                     }
                     CommandTag::Callback => {
-                        let callback = callbacks.next().expect("missing Callback payload");
+                        let callback = next_command_payload(&mut callbacks, tag)?;
                         Command::Callback(callback)
                             .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
@@ -2095,6 +2238,17 @@ impl CommandQueue {
         debug_assert!(callbacks.next().is_none());
         deferred_cleanup.flush(applier)
     }
+}
+
+fn command_payload_error(tag: CommandTag) -> NodeError {
+    NodeError::MalformedCommandPayload { tag: tag.label() }
+}
+
+fn next_command_payload<T>(
+    payloads: &mut impl Iterator<Item = T>,
+    tag: CommandTag,
+) -> Result<T, NodeError> {
+    payloads.next().ok_or_else(|| command_payload_error(tag))
 }
 
 fn update_typed_node<N: Node + 'static>(node: &mut dyn Node, id: NodeId) -> Result<(), NodeError> {
@@ -2465,6 +2619,7 @@ pub struct MemoryApplierDebugStats {
 
 impl MemoryApplier {
     const EAGER_COMPACT_NODE_LEN: usize = 1_024;
+    const HIGH_ID_THRESHOLD: NodeId = 1_000_000_000;
     const INVALID_STABLE_ID: u32 = u32::MAX;
     const INITIAL_DENSE_NODE_CAP: usize = 32;
     const LARGE_DENSE_NODE_GROWTH_THRESHOLD: usize = 32 * 1024;
@@ -3016,15 +3171,19 @@ impl MemoryApplier {
     fn dump_node(&self, output: &mut String, id: NodeId, depth: usize) {
         let indent = "  ".repeat(depth);
         if let Some(physical_id) = self.resolve_node_index(id) {
-            let node = self.nodes[physical_id]
-                .as_ref()
-                .expect("resolved physical node must exist");
-            let type_name = std::any::type_name_of_val(&**node);
-            output.push_str(&format!("{}[{}] {}\n", indent, id, type_name));
+            if let Some(node) = self.nodes.get(physical_id).and_then(Option::as_ref) {
+                let type_name = std::any::type_name_of_val(&**node);
+                output.push_str(&format!("{}[{}] {}\n", indent, id, type_name));
 
-            let children = node.children();
-            for child_id in children {
-                self.dump_node(output, child_id, depth + 1);
+                let children = node.children();
+                for child_id in children {
+                    self.dump_node(output, child_id, depth + 1);
+                }
+            } else {
+                output.push_str(&format!(
+                    "{}[{}] (missing physical node {})\n",
+                    indent, id, physical_id
+                ));
             }
         } else {
             output.push_str(&format!("{}[{}] (missing)\n", indent, id));
@@ -3033,6 +3192,45 @@ impl MemoryApplier {
 
     fn resolve_node_index(&self, id: NodeId) -> Option<usize> {
         self.stable_to_physical.get(&id).copied()
+    }
+
+    fn contains_node_id(&self, id: NodeId) -> bool {
+        self.resolve_node_index(id).is_some() || self.high_id_nodes.contains_key(&id)
+    }
+
+    fn insert_high_id_node(&mut self, stable_id: NodeId, node: Box<dyn Node>, warm_origin: bool) {
+        self.high_id_nodes.insert(stable_id, node);
+        self.high_id_warm_recycled_origins
+            .insert(stable_id, warm_origin);
+        self.high_id_generations.entry(stable_id).or_insert(0);
+    }
+
+    fn insert_available_with_id(&mut self, stable_id: NodeId, node: Box<dyn Node>) {
+        if stable_id >= Self::HIGH_ID_THRESHOLD {
+            self.insert_high_id_node(stable_id, node, false);
+            return;
+        }
+
+        let physical_id = if let Some(Reverse(free_physical_id)) = self.free_ids.pop() {
+            self.nodes[free_physical_id] = Some(node);
+            self.physical_stable_ids[free_physical_id] = Self::pack_stable_id(stable_id);
+            self.physical_warm_recycled_origins[free_physical_id] = false;
+            free_physical_id
+        } else {
+            self.ensure_dense_node_storage_capacity();
+            let physical_id = self.nodes.len();
+            self.nodes.push(Some(node));
+            self.physical_stable_ids
+                .push(Self::pack_stable_id(stable_id));
+            self.physical_warm_recycled_origins.push(false);
+            physical_id
+        };
+
+        self.next_stable_id = self.next_stable_id.max(stable_id.saturating_add(1));
+        self.ensure_stable_index_capacity();
+        self.stable_generations.entry(stable_id).or_insert(0);
+        self.physical_stable_ids[physical_id] = Self::pack_stable_id(stable_id);
+        self.stable_to_physical.insert(stable_id, physical_id);
     }
 
     fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
@@ -3182,9 +3380,14 @@ impl MemoryApplier {
 
 impl Applier for MemoryApplier {
     fn create(&mut self, node: Box<dyn Node>) -> NodeId {
-        self.ensure_stable_index_capacity();
         let stable_id = self.next_stable_id;
         self.next_stable_id = self.next_stable_id.saturating_add(1);
+        if stable_id >= Self::HIGH_ID_THRESHOLD {
+            self.insert_high_id_node(stable_id, node, false);
+            return stable_id;
+        }
+
+        self.ensure_stable_index_capacity();
         self.stable_generations.insert(stable_id, 0);
 
         let physical_id = if let Some(Reverse(id)) = self.free_ids.pop() {
@@ -3233,44 +3436,28 @@ impl Applier for MemoryApplier {
     }
 
     fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {
-        // Use HashMap for high IDs (virtual nodes) to avoid Vec capacity overflow
-        // Virtual node IDs start at a very high value that can't fit in a Vec
-        const HIGH_ID_THRESHOLD: NodeId = 1_000_000_000; // 1 billion
-
-        if id >= HIGH_ID_THRESHOLD {
-            if self.high_id_nodes.contains_key(&id) {
-                return Err(NodeError::AlreadyExists { id });
-            }
-            self.high_id_nodes.insert(id, node);
-            self.high_id_warm_recycled_origins.insert(id, false);
-            self.high_id_generations.entry(id).or_insert(0);
-            Ok(())
-        } else {
-            if self.stable_to_physical.contains_key(&id) {
-                return Err(NodeError::AlreadyExists { id });
-            }
-
-            let physical_id = if let Some(Reverse(id)) = self.free_ids.pop() {
-                self.nodes[id] = Some(node);
-                self.physical_stable_ids[id] = Self::pack_stable_id(id);
-                self.physical_warm_recycled_origins[id] = false;
-                id
-            } else {
-                self.ensure_dense_node_storage_capacity();
-                let id = self.nodes.len();
-                self.nodes.push(Some(node));
-                self.physical_stable_ids.push(Self::pack_stable_id(id));
-                self.physical_warm_recycled_origins.push(false);
-                id
-            };
-
-            self.next_stable_id = self.next_stable_id.max(id.saturating_add(1));
-            self.ensure_stable_index_capacity();
-            self.stable_generations.entry(id).or_insert(0);
-            self.physical_stable_ids[physical_id] = Self::pack_stable_id(id);
-            self.stable_to_physical.insert(id, physical_id);
-            Ok(())
+        if self.contains_node_id(id) {
+            return Err(NodeError::AlreadyExists { id });
         }
+        self.insert_available_with_id(id, node);
+        Ok(())
+    }
+
+    fn insert_recycled_node_or_create(
+        &mut self,
+        stable_id: NodeId,
+        node: Box<dyn Node>,
+    ) -> RecycledNodeInsertion {
+        if self.contains_node_id(stable_id) {
+            let id = self.create(node);
+            return RecycledNodeInsertion::fresh(
+                id,
+                Some(NodeError::AlreadyExists { id: stable_id }),
+            );
+        }
+
+        self.insert_available_with_id(stable_id, node);
+        RecycledNodeInsertion::reused(stable_id)
     }
 
     fn compact(&mut self) {
@@ -3543,10 +3730,10 @@ impl SlotsHost {
         state: &Rc<crate::composer::ComposerRuntimeState>,
     ) -> bool {
         let inner = self.inner.borrow();
-        assert!(
-            inner.active_pass.is_none(),
-            "cannot rebind SlotsHost during an active pass"
-        );
+        if inner.active_pass.is_some() {
+            log::error!("cannot rebind SlotsHost during an active pass");
+            return false;
+        }
         let Some(bound_state) = inner.runtime_state.as_ref() else {
             drop(inner);
             self.bind_runtime_state(state);
@@ -3603,20 +3790,23 @@ impl SlotsHost {
     }
 
     pub fn into_table(self: Rc<Self>) -> Result<SlotTable, NodeError> {
-        assert_eq!(
-            Rc::strong_count(&self),
-            1,
-            "cannot transfer SlotsHost table while other host references are alive"
-        );
+        if Rc::strong_count(&self) != 1 {
+            return Err(NodeError::SlotHostUnavailable {
+                operation: "SlotsHost::into_table",
+                reason: "other host references are alive",
+            });
+        }
         self.take_table_for_transfer()
     }
 
     fn take_table_for_transfer(&self) -> Result<SlotTable, NodeError> {
         let inner = self.inner.borrow();
-        assert!(
-            inner.active_pass.is_none(),
-            "cannot take SlotsHost during an active pass"
-        );
+        if inner.active_pass.is_some() {
+            return Err(NodeError::SlotHostUnavailable {
+                operation: "SlotsHost::into_table",
+                reason: "slot pass is active",
+            });
+        }
         drop(inner);
         let mut inner = self.inner.borrow_mut();
         let mut lifecycle = std::mem::take(&mut inner.lifecycle);
@@ -3636,10 +3826,12 @@ impl SlotsHost {
 
     pub fn reset(&self) -> Result<(), NodeError> {
         let inner = self.inner.borrow();
-        assert!(
-            inner.active_pass.is_none(),
-            "cannot reset SlotsHost during an active pass"
-        );
+        if inner.active_pass.is_some() {
+            return Err(NodeError::SlotHostUnavailable {
+                operation: "SlotsHost::reset",
+                reason: "slot pass is active",
+            });
+        }
         let runtime_state = inner.runtime_state.clone();
         drop(inner);
         let mut inner = self.inner.borrow_mut();
@@ -3659,10 +3851,10 @@ impl SlotsHost {
 
     pub(crate) fn abandon_after_apply_failure(&self) {
         let inner = self.inner.borrow();
-        assert!(
-            inner.active_pass.is_none(),
-            "cannot abandon SlotsHost during an active pass"
-        );
+        if inner.active_pass.is_some() {
+            log::error!("cannot abandon SlotsHost during an active pass");
+            return;
+        }
         let runtime_state = inner.runtime_state.clone();
         drop(inner);
         let mut inner = self.inner.borrow_mut();
@@ -3701,10 +3893,10 @@ impl SlotsHost {
 
     pub(crate) fn begin_pass(&self, mode: slot::SlotPassMode) {
         let mut inner = self.inner.borrow_mut();
-        assert!(
-            inner.active_pass.is_none(),
-            "slot pass already active for host"
-        );
+        if inner.active_pass.is_some() {
+            log::error!("slot pass already active for host");
+            return;
+        }
         let mut state = slot::SlotWriteSessionState::default();
         state.reset_for_pass(mode);
         inner.active_pass = Some(ActivePassState { state });
@@ -3766,7 +3958,11 @@ impl SlotsHost {
 
         #[cfg(debug_assertions)]
         if let Err(err) = active_pass.state.validate(table) {
-            panic!("slot writer invariant violation before finalize_pass: {err:?}");
+            log::error!("slot writer invariant violation before finalize_pass: {err:?}");
+            return Err(NodeError::SlotHostUnavailable {
+                operation: "SlotsHost::finish_pass",
+                reason: "slot writer invariant violation",
+            });
         }
 
         let detached_root_children = {

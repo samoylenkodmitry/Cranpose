@@ -6,10 +6,10 @@ use crate::{
     launcher::AppSettings,
     wgpu_surface::{current_surface_texture, SurfaceFrame},
 };
-use cranpose_app_shell::{default_root_key, AppShell};
+use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver};
 use cranpose_platform_web::WebPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
@@ -31,6 +31,37 @@ struct BrowserDisplayHandle;
 impl wgpu::rwh::HasDisplayHandle for BrowserDisplayHandle {
     fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
         Ok(wgpu::rwh::DisplayHandle::web())
+    }
+}
+
+#[derive(Default)]
+struct WebFrameTimer {
+    generation: Cell<u64>,
+    pending: Cell<bool>,
+}
+
+struct WebPlatformFrameDriver<'a> {
+    frame_timer: &'a Rc<WebFrameTimer>,
+    frame_pending: &'a Rc<Cell<bool>>,
+    render_loop: &'a Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+}
+
+impl PlatformFrameDriver for WebPlatformFrameDriver<'_> {
+    fn request_frame(&self) {
+        request_web_frame(self.frame_pending, self.render_loop, Some(self.frame_timer));
+    }
+
+    fn request_wake_at(&self, deadline: web_time::Instant) {
+        request_web_frame_at_deadline(
+            self.frame_timer,
+            deadline,
+            self.frame_pending,
+            self.render_loop,
+        );
+    }
+
+    fn clear_wake(&self) {
+        clear_web_frame_wake(self.frame_timer);
     }
 }
 
@@ -133,7 +164,13 @@ pub async fn run(
         .iter()
         .copied()
         .find(|f| f.is_srgb())
-        .unwrap_or(surface_caps.formats[0]);
+        .or_else(|| surface_caps.formats.first().copied())
+        .ok_or_else(|| JsValue::from_str("web surface reports no supported formats"))?;
+    let alpha_mode = surface_caps
+        .alpha_modes
+        .first()
+        .copied()
+        .ok_or_else(|| JsValue::from_str("web surface reports no supported alpha modes"))?;
 
     let present_mode = crate::present_mode::select_present_mode(&surface_caps);
     let surface_config = wgpu::SurfaceConfiguration {
@@ -142,7 +179,7 @@ pub async fn run(
         width: (width as f64 * scale_factor) as u32,
         height: (height as f64 * scale_factor) as u32,
         present_mode,
-        alpha_mode: surface_caps.alpha_modes[0],
+        alpha_mode,
         view_formats: vec![],
         desired_maximum_frame_latency: 2,
     };
@@ -196,28 +233,39 @@ pub async fn run(
         adapter_info.backend,
     );
     renderer.set_root_scale(effective_scale as f32);
-    cranpose_ui::set_density(effective_scale as f32);
 
-    let app = Rc::new(RefCell::new(AppShell::new(
+    let app = Rc::new(RefCell::new(AppShell::new_with_size_and_density(
         renderer,
         default_root_key(),
         content,
+        (actual_width, actual_height),
+        (width as f32, height as f32),
+        effective_scale as f32,
     )));
     let platform = Rc::new(RefCell::new(WebPlatform::default()));
     platform.borrow_mut().set_scale_factor(effective_scale);
 
-    // Set buffer_size to actual physical pixels and viewport to logical dp
-    app.borrow_mut()
-        .set_buffer_size(actual_width, actual_height);
-    app.borrow_mut().set_viewport(width as f32, height as f32);
-
     let surface = Rc::new(surface);
     let surface_config = Rc::new(RefCell::new(surface_config));
+    let render_loop: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+    let frame_pending = Rc::new(Cell::new(false));
+    let frame_timer = Rc::new(WebFrameTimer::default());
+    let request_frame: Rc<dyn Fn()> = {
+        let frame_pending = frame_pending.clone();
+        let render_loop = render_loop.clone();
+        let frame_timer = frame_timer.clone();
+        Rc::new(move || request_web_frame(&frame_pending, &render_loop, Some(&frame_timer)))
+    };
+    app.borrow_mut().set_frame_waker({
+        let request_frame = request_frame.clone();
+        move || request_frame()
+    });
 
     // Set up mouse event handlers
     {
         let app = app.clone();
         let platform = platform.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: MouseEvent| {
             let x = event.offset_x() as f64;
             let y = event.offset_y() as f64;
@@ -225,6 +273,7 @@ pub async fn run(
             // Use try_borrow_mut to avoid panic if render loop is active
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_cursor(logical.x, logical.y);
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref())?;
@@ -234,6 +283,7 @@ pub async fn run(
     {
         let app = app.clone();
         let platform = platform.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: MouseEvent| {
             let x = event.offset_x() as f64;
             let y = event.offset_y() as f64;
@@ -241,6 +291,7 @@ pub async fn run(
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_cursor(logical.x, logical.y);
                 app_mut.pointer_pressed();
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousedown", closure.as_ref().unchecked_ref())?;
@@ -250,6 +301,7 @@ pub async fn run(
     {
         let app = app.clone();
         let platform = platform.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: MouseEvent| {
             let x = event.offset_x() as f64;
             let y = event.offset_y() as f64;
@@ -257,6 +309,7 @@ pub async fn run(
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_cursor(logical.x, logical.y);
                 app_mut.pointer_released();
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mouseup", closure.as_ref().unchecked_ref())?;
@@ -267,6 +320,7 @@ pub async fn run(
         let app = app.clone();
         let platform = platform.clone();
         let wheel_canvas = canvas.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: WheelEvent| {
             let x = event.offset_x() as f64;
             let y = event.offset_y() as f64;
@@ -301,6 +355,7 @@ pub async fn run(
                 if app_mut.pointer_scrolled(delta_x, delta_y) {
                     event.prevent_default();
                 }
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("wheel", closure.as_ref().unchecked_ref())?;
@@ -311,6 +366,7 @@ pub async fn run(
     {
         let app = app.clone();
         let platform = platform.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
             let x = event.offset_x() as f64;
@@ -318,6 +374,7 @@ pub async fn run(
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_cursor(logical.x, logical.y);
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("pointermove", closure.as_ref().unchecked_ref())?;
@@ -327,6 +384,7 @@ pub async fn run(
     {
         let app = app.clone();
         let platform = platform.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
             let x = event.offset_x() as f64;
@@ -335,6 +393,7 @@ pub async fn run(
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_cursor(logical.x, logical.y);
                 app_mut.pointer_pressed();
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("pointerdown", closure.as_ref().unchecked_ref())?;
@@ -344,6 +403,7 @@ pub async fn run(
     {
         let app = app.clone();
         let platform = platform.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
             let x = event.offset_x() as f64;
@@ -352,6 +412,7 @@ pub async fn run(
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_cursor(logical.x, logical.y);
                 app_mut.pointer_released();
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("pointerup", closure.as_ref().unchecked_ref())?;
@@ -360,10 +421,12 @@ pub async fn run(
 
     {
         let app = app.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.cancel_gesture();
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         canvas
@@ -376,6 +439,7 @@ pub async fn run(
     // unless the canvas has tabindex set and is focused
     {
         let app = app.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 
@@ -479,6 +543,7 @@ pub async fn run(
                 if app_mut.on_key_event(&key_event) {
                     event.prevent_default();
                 }
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         document.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())?;
@@ -487,6 +552,7 @@ pub async fn run(
 
     {
         let app = app.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 
@@ -556,6 +622,7 @@ pub async fn run(
 
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.on_key_event(&key_event);
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         document.add_event_listener_with_callback("keyup", closure.as_ref().unchecked_ref())?;
@@ -565,6 +632,7 @@ pub async fn run(
     // Set up paste event handler for clipboard paste
     {
         let app = app.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
             // Get pasted text from clipboardData (synchronous!)
             if let Some(data) = event.clipboard_data() {
@@ -574,6 +642,7 @@ pub async fn run(
                             if app_mut.on_paste(&text) {
                                 event.prevent_default();
                             }
+                            request_frame();
                         }
                     }
                 }
@@ -586,6 +655,7 @@ pub async fn run(
     // Set up copy event handler for clipboard copy
     {
         let app = app.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 if let Some(text) = app_mut.on_copy() {
@@ -594,6 +664,7 @@ pub async fn run(
                         let _ = data.set_data("text/plain", &text);
                         event.prevent_default();
                     }
+                    request_frame();
                 }
             }
         }) as Box<dyn FnMut(_)>);
@@ -604,6 +675,7 @@ pub async fn run(
     // Set up cut event handler for clipboard cut
     {
         let app = app.clone();
+        let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 if let Some(text) = app_mut.on_cut() {
@@ -612,6 +684,7 @@ pub async fn run(
                         let _ = data.set_data("text/plain", &text);
                         event.prevent_default();
                     }
+                    request_frame();
                 }
             }
         }) as Box<dyn FnMut(_)>);
@@ -619,11 +692,12 @@ pub async fn run(
         closure.forget();
     }
 
-    // Render loop
-    let render_loop = Rc::new(RefCell::new(None));
-    let render_loop_clone = render_loop.clone();
+    let frame_pending_for_loop = frame_pending.clone();
+    let frame_timer_for_loop = frame_timer.clone();
+    let render_loop_for_deadline = render_loop.clone();
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+        frame_pending_for_loop.set(false);
         app.borrow_mut().update();
 
         let config = surface_config.borrow();
@@ -649,27 +723,120 @@ pub async fn run(
             }
             SurfaceFrame::Reconfigure => {
                 let mut app_mut = app.borrow_mut();
-                let device = app_mut.renderer().device();
-                surface.configure(device, &*config);
+                if let Some(device) = app_mut.renderer().try_device() {
+                    surface.configure(device, &*config);
+                } else {
+                    log::error!("web surface reconfigure skipped: GPU renderer is not initialized");
+                }
             }
             SurfaceFrame::Skip => {}
         }
 
-        // Request next frame
-        request_animation_frame(render_loop_clone.borrow().as_ref().unwrap());
+        let frame_driver = WebPlatformFrameDriver {
+            frame_timer: &frame_timer_for_loop,
+            frame_pending: &frame_pending_for_loop,
+            render_loop: &render_loop_for_deadline,
+        };
+        app.borrow().schedule_platform_frame(&frame_driver);
     }) as Box<dyn FnMut()>));
 
     // Start the render loop
-    request_animation_frame(render_loop.borrow().as_ref().unwrap());
+    request_frame();
 
     Ok(())
 }
 
-fn request_animation_frame(f: &Closure<dyn FnMut()>) {
-    web_sys::window()
-        .unwrap()
-        .request_animation_frame(f.as_ref().unchecked_ref())
-        .expect("should register `requestAnimationFrame` OK");
+fn request_animation_frame(f: &Closure<dyn FnMut()>) -> bool {
+    let Some(window) = web_sys::window() else {
+        log::error!("requestAnimationFrame unavailable: browser window is not available");
+        return false;
+    };
+
+    match window.request_animation_frame(f.as_ref().unchecked_ref()) {
+        Ok(_) => true,
+        Err(error) => {
+            log::error!("requestAnimationFrame registration failed: {error:?}");
+            false
+        }
+    }
+}
+
+fn request_web_frame(
+    frame_pending: &Cell<bool>,
+    render_loop: &Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+    timer: Option<&WebFrameTimer>,
+) {
+    if let Some(timer) = timer {
+        timer.pending.set(false);
+        timer
+            .generation
+            .set(timer.generation.get().saturating_add(1));
+    }
+    if frame_pending.replace(true) {
+        return;
+    }
+    let render_loop = render_loop.borrow();
+    let Some(render_loop) = render_loop.as_ref() else {
+        frame_pending.set(false);
+        return;
+    };
+    if !request_animation_frame(render_loop) {
+        frame_pending.set(false);
+    }
+}
+
+fn request_web_frame_at_deadline(
+    timer: &Rc<WebFrameTimer>,
+    deadline: web_time::Instant,
+    frame_pending: &Rc<Cell<bool>>,
+    render_loop: &Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+) {
+    if frame_pending.get() || timer.pending.get() {
+        return;
+    }
+
+    timer.pending.set(true);
+    let generation = timer.generation.get();
+    let delay = deadline
+        .checked_duration_since(web_time::Instant::now())
+        .unwrap_or_default();
+    let delay_ms = delay.as_millis().min(i32::MAX as u128) as i32;
+    let timer_for_timeout = timer.clone();
+    let frame_pending_for_timeout = frame_pending.clone();
+    let render_loop_for_timeout = render_loop.clone();
+    let callback = Closure::once_into_js(move || {
+        if timer_for_timeout.generation.get() != generation {
+            return;
+        }
+        timer_for_timeout.pending.set(false);
+        request_web_frame(
+            &frame_pending_for_timeout,
+            &render_loop_for_timeout,
+            Some(&timer_for_timeout),
+        );
+    });
+
+    let Some(window) = web_sys::window() else {
+        log::error!("setTimeout unavailable: browser window is not available");
+        timer.pending.set(false);
+        request_web_frame(frame_pending, render_loop, Some(timer));
+        return;
+    };
+
+    if let Err(error) = window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), delay_ms)
+    {
+        log::error!("setTimeout registration failed for frame deadline: {error:?}");
+        timer.pending.set(false);
+        request_web_frame(frame_pending, render_loop, Some(timer));
+    }
+}
+
+fn clear_web_frame_wake(timer: &WebFrameTimer) {
+    timer.pending.set(false);
+    timer
+        .generation
+        .set(timer.generation.get().saturating_add(1));
 }
 
 fn requested_web_backend(window: &web_sys::Window) -> WebBackendPreference {

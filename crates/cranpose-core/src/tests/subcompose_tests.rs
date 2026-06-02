@@ -30,6 +30,37 @@ impl SlotReusePolicy for ParityPolicy {
     }
 }
 
+struct SameTypeRejectsCrossSlotPolicy {
+    types: std::cell::RefCell<HashMap<SlotId, u64>>,
+}
+
+impl SameTypeRejectsCrossSlotPolicy {
+    fn new() -> Self {
+        Self {
+            types: std::cell::RefCell::new(HashMap::default()),
+        }
+    }
+}
+
+impl SlotReusePolicy for SameTypeRejectsCrossSlotPolicy {
+    fn get_slots_to_retain(&self, active: &[SlotId]) -> HashSet<SlotId> {
+        let _ = active;
+        HashSet::default()
+    }
+
+    fn are_compatible(&self, existing: SlotId, requested: SlotId) -> bool {
+        existing == requested
+    }
+
+    fn register_content_type(&self, slot_id: SlotId, content_type: u64) {
+        self.types.borrow_mut().insert(slot_id, content_type);
+    }
+
+    fn remove_content_type(&self, slot_id: SlotId) {
+        self.types.borrow_mut().remove(&slot_id);
+    }
+}
+
 #[test]
 fn exact_reuse_wins() {
     let mut state = SubcomposeState::default();
@@ -261,6 +292,28 @@ fn content_type_reuse_in_subcompose_state() {
 }
 
 #[test]
+fn typed_reusable_pool_respects_policy_compatibility() {
+    let mut state = SubcomposeState::new(Box::new(SameTypeRejectsCrossSlotPolicy::new()));
+
+    state.register_content_type(SlotId::new(1), 100);
+    state.register_content_type(SlotId::new(3), 100);
+    state.register_active(SlotId::new(1), &[10], &[]);
+    state.dispose_or_reuse_starting_from_index(0);
+
+    let reused = state.take_node_from_reusables(SlotId::new(3));
+
+    assert_eq!(
+        reused, None,
+        "same-type pool must not bypass SlotReusePolicy::are_compatible"
+    );
+    assert_eq!(
+        state.reusable(),
+        vec![10],
+        "incompatible typed candidates must stay reusable for a later compatible slot"
+    );
+}
+
+#[test]
 fn content_type_none_clears_policy() {
     // This test verifies that transitioning a slot's content type to None
     // properly clears the policy mapping, preventing stale type-based reuse.
@@ -298,7 +351,7 @@ fn content_type_none_clears_policy() {
 }
 
 #[test]
-fn migrating_last_reusable_node_prunes_dead_slot_bookkeeping() {
+fn moving_last_reusable_node_prunes_dead_slot_bookkeeping() {
     let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy::new()));
     let slot_a = SlotId::new(1);
     let slot_b = SlotId::new(2);
@@ -348,4 +401,36 @@ fn finish_pass_disposes_overflow_slot_and_prunes_dead_slot_bookkeeping() {
     assert_eq!(state.get_content_type(slot), None);
     assert_eq!(state.reusable_count, 0);
     assert!(!state.reusable_node_counts.contains_key(&slot));
+}
+
+#[test]
+fn reusable_pool_removal_tolerates_missing_slot_count() {
+    let mut state = SubcomposeState::default();
+    let slot = SlotId::new(1);
+    state.reusable_nodes_untyped.push_back((slot, 10));
+    state.reusable_count = 1;
+
+    let removed = state.remove_from_reusable_pools(10);
+
+    assert_eq!(removed, Some(slot));
+    assert!(state.reusable_nodes_untyped.is_empty());
+    assert_eq!(state.reusable_count, 0);
+}
+
+#[test]
+fn typed_reusable_pool_removal_tolerates_missing_slot_count() {
+    let mut state = SubcomposeState::default();
+    let slot = SlotId::new(1);
+    state
+        .reusable_by_type
+        .entry(7)
+        .or_default()
+        .push_back((slot, 10));
+    state.reusable_count = 1;
+
+    let removed = state.remove_from_reusable_pools(10);
+
+    assert_eq!(removed, Some(slot));
+    assert!(state.reusable_by_type.is_empty());
+    assert_eq!(state.reusable_count, 0);
 }

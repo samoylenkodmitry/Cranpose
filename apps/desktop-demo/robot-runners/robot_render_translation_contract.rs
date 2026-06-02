@@ -4,6 +4,8 @@
 //! - same scroll offset must render identically before and after pointer release
 //! - lazy-list item subtree stability under fractional wheel motion
 
+mod output_paths;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, find_bounds_by_text, find_button_exact_in_semantics,
@@ -13,7 +15,7 @@ use cranpose_testing::{
 };
 use desktop_app::app;
 use image::{ImageBuffer, RgbaImage};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 1200;
@@ -31,7 +33,6 @@ const LAZY_MAX_PIXEL_DIFFERENCE: u32 = 56;
 const LAZY_TEXT_MAX_DIFFERING_PIXELS: usize = 24;
 const LAZY_TEXT_MAX_PIXEL_DIFFERENCE: u32 = 72;
 const LAZY_SCROLL_DELTA_Y: f32 = -21.5;
-const DEBUG_OUTPUT_DIR: &str = "/tmp/cranpose_translation_contract";
 const DECORATED_TEXT_PAD_LEFT: f32 = 8.0;
 const DECORATED_TEXT_PAD_RIGHT: f32 = 8.0;
 const DECORATED_TEXT_TOP_INSET: f32 = 4.0;
@@ -299,19 +300,48 @@ fn click_tab(robot: &cranpose::Robot, label: &str) {
 }
 
 fn open_text_tab(robot: &cranpose::Robot) {
-    click_tab(robot, "Shaders");
-    let Some((x, y, w, h)) = find_button_exact_in_semantics(robot, "Text") else {
-        panic!("Text tab not found after moving to right-side tabs");
-    };
-    robot
-        .click(x + w * 0.5, y + h * 0.5)
-        .expect("click text tab");
-    std::thread::sleep(Duration::from_millis(350));
-    let _ = robot.wait_for_idle();
-    assert!(
-        find_text_in_semantics(robot, "Text Rendering Feature Showcase").is_some(),
-        "Text showcase heading not found after tab switch"
-    );
+    for _ in 0..3 {
+        click_tab(robot, "Shaders");
+        let Some((x, y, w, h)) = wait_for_exact_button(robot, "Text", 20) else {
+            continue;
+        };
+        robot
+            .click(x + w * 0.5, y + h * 0.5)
+            .expect("click text tab");
+        std::thread::sleep(Duration::from_millis(350));
+        let _ = robot.wait_for_idle();
+        if wait_for_semantic_text(robot, "Text Rendering Feature Showcase", 30) {
+            return;
+        }
+    }
+
+    panic!("Text showcase heading not found after tab switch");
+}
+
+fn wait_for_exact_button(
+    robot: &cranpose::Robot,
+    text: &str,
+    attempts: usize,
+) -> Option<(f32, f32, f32, f32)> {
+    for _ in 0..attempts {
+        if let Some(bounds) = find_button_exact_in_semantics(robot, text) {
+            return Some(bounds);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let _ = robot.wait_for_idle();
+    }
+    None
+}
+
+fn wait_for_semantic_text(robot: &cranpose::Robot, text: &str, attempts: usize) -> bool {
+    for _ in 0..attempts {
+        if find_text_in_semantics(robot, text).is_some() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let _ = robot.wait_for_idle();
+    }
+    false
 }
 
 fn wait_for_text(robot: &cranpose::Robot, text: &str) {
@@ -432,7 +462,7 @@ fn save_debug_images(
     before_normalized: &cranpose::RobotScreenshot,
     after_normalized: &cranpose::RobotScreenshot,
 ) {
-    let output_dir = PathBuf::from(DEBUG_OUTPUT_DIR);
+    let output_dir = output_paths::diagnostic_path("cranpose_translation_contract");
     if let Err(err) = std::fs::create_dir_all(&output_dir) {
         eprintln!(
             "failed to create translation-contract debug output dir {}: {}",

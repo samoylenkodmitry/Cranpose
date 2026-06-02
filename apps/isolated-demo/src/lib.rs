@@ -1,27 +1,18 @@
+#![deny(unsafe_code)]
+
 #[cfg(any(
     target_os = "android",
-    target_os = "ios",
     all(feature = "web", target_arch = "wasm32")
 ))]
 mod app;
 #[cfg(any(
     target_os = "android",
-    target_os = "ios",
     all(feature = "web", target_arch = "wasm32")
 ))]
 mod fonts;
 
-#[cfg(target_os = "ios")]
-#[no_mangle]
-pub extern "C" fn ios_main() {
-    app::create_app().run(app::IsolatedDemoApp);
-}
-
 #[cfg(target_os = "android")]
-#[no_mangle]
-pub fn android_main(app_handle: android_activity::AndroidApp) {
-    app::create_app().run(app_handle, app::IsolatedDemoApp);
-}
+mod native_entry;
 
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 use wasm_bindgen::prelude::*;

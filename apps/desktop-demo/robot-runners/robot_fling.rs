@@ -15,7 +15,6 @@
 use cranpose::AppLauncher;
 use cranpose_testing::{find_bounds_by_text, visible_bounds_in_viewport};
 use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
-use cranpose_ui::{last_fling_velocity, reset_last_fling_velocity};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -120,7 +119,10 @@ fn main() {
             let step_delay_ms = 10; // Fast swipe - 10ms between steps = ~900 px/sec
 
             // Reset velocity tracker before swipe
-            reset_last_fling_velocity();
+            if let Err(err) = robot.reset_last_fling_velocity() {
+                println!("  ✗ Failed to reset fling velocity: {err}\n");
+                all_passed = false;
+            }
 
             // Record scroll position before swipe (via an item we can track)
             let item_before = find_in_semantics(&robot, |elem| find_text(elem, "Item 5"));
@@ -184,7 +186,10 @@ fn main() {
             println!("--- Test 3: Reverse Swipe with Velocity Check ---");
 
             // Reset velocity before the reverse swipe
-            reset_last_fling_velocity();
+            if let Err(err) = robot.reset_last_fling_velocity() {
+                println!("  ✗ Failed to reset fling velocity: {err}\n");
+                all_passed = false;
+            }
 
             let _ = robot.mouse_move(start_x, end_y);
             std::thread::sleep(Duration::from_millis(50));
@@ -203,7 +208,14 @@ fn main() {
             std::thread::sleep(Duration::from_millis(300));
 
             // Check velocity was detected
-            let velocity = last_fling_velocity();
+            let velocity = match robot.last_fling_velocity() {
+                Ok(value) => value,
+                Err(err) => {
+                    println!("  ✗ Failed to query fling velocity: {err}\n");
+                    all_passed = false;
+                    0.0
+                }
+            };
             println!("  Measured fling velocity: {:.1} px/sec", velocity);
 
             if velocity.abs() > 50.0 {
@@ -226,8 +238,7 @@ fn main() {
             if all_passed {
                 println!("✓ ALL TESTS PASSED");
                 println!("\nNote: This test verifies velocity DETECTION.");
-                println!("Full fling animation (momentum scrolling) requires");
-                println!("runtime integration which is TODO.");
+                println!("Runtime-backed fling animation is covered by scroll animation tests.");
                 std::thread::sleep(Duration::from_secs(1));
                 let _ = robot.exit();
             } else {

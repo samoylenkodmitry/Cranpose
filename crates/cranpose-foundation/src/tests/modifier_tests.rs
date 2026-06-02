@@ -1,4 +1,5 @@
 use super::*;
+use std::any::TypeId;
 use std::cell::{Cell, RefCell};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -445,6 +446,177 @@ fn different_element_types_replace_nodes() {
     chain.update_from_slice(&draw, &mut context);
     assert!(chain.node::<TestLayoutNode>(0).is_none());
     assert!(chain.node::<TestDrawNode>(0).is_some());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectNodeKind {
+    A,
+    B,
+}
+
+#[derive(Debug)]
+struct DirectNodeA {
+    state: NodeState,
+    log: Rc<RefCell<Vec<String>>>,
+}
+
+impl DelegatableNode for DirectNodeA {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for DirectNodeA {
+    fn on_attach(&mut self, _context: &mut dyn ModifierNodeContext) {
+        self.log.borrow_mut().push("attach:a".to_string());
+    }
+
+    fn on_detach(&mut self) {
+        self.log.borrow_mut().push("detach:a".to_string());
+    }
+}
+
+#[derive(Debug)]
+struct DirectNodeB {
+    state: NodeState,
+    log: Rc<RefCell<Vec<String>>>,
+}
+
+impl DelegatableNode for DirectNodeB {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for DirectNodeB {
+    fn on_attach(&mut self, _context: &mut dyn ModifierNodeContext) {
+        self.log.borrow_mut().push("attach:b".to_string());
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DirectElement {
+    kind: DirectNodeKind,
+    shared_element_type: TypeId,
+    log: Rc<RefCell<Vec<String>>>,
+}
+
+impl DirectElement {
+    fn new(
+        kind: DirectNodeKind,
+        shared_element_type: TypeId,
+        log: Rc<RefCell<Vec<String>>>,
+    ) -> Self {
+        Self {
+            kind,
+            shared_element_type,
+            log,
+        }
+    }
+}
+
+impl AnyModifierElement for DirectElement {
+    fn node_type(&self) -> TypeId {
+        match self.kind {
+            DirectNodeKind::A => TypeId::of::<DirectNodeA>(),
+            DirectNodeKind::B => TypeId::of::<DirectNodeB>(),
+        }
+    }
+
+    fn element_type(&self) -> TypeId {
+        self.shared_element_type
+    }
+
+    fn create_node(&self) -> Box<dyn ModifierNode> {
+        match self.kind {
+            DirectNodeKind::A => Box::new(DirectNodeA {
+                state: NodeState::new(),
+                log: self.log.clone(),
+            }),
+            DirectNodeKind::B => Box::new(DirectNodeB {
+                state: NodeState::new(),
+                log: self.log.clone(),
+            }),
+        }
+    }
+
+    fn can_update_node(&self, node: &dyn ModifierNode) -> bool {
+        match self.kind {
+            DirectNodeKind::A => node.as_any().is::<DirectNodeA>(),
+            DirectNodeKind::B => node.as_any().is::<DirectNodeB>(),
+        }
+    }
+
+    fn update_node(&self, node: &mut dyn ModifierNode) {
+        if self.can_update_node(node) {
+            self.log
+                .borrow_mut()
+                .push(format!("update:{:?}", self.kind));
+        } else {
+            self.log.borrow_mut().push("wrong-node-update".to_string());
+        }
+    }
+
+    fn key(&self) -> Option<u64> {
+        Some(11)
+    }
+
+    fn hash_code(&self) -> u64 {
+        17
+    }
+
+    fn equals_element(&self, other: &dyn AnyModifierElement) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.kind == other.kind)
+    }
+
+    fn inspector_name(&self) -> &'static str {
+        "DirectElement"
+    }
+
+    fn record_inspector_properties(&self, _visitor: &mut dyn FnMut(&'static str, String)) {}
+
+    fn requires_update(&self) -> bool {
+        true
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[test]
+fn node_type_mismatch_recreates_entry_instead_of_updating_wrong_node() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let shared_element_type = TypeId::of::<DirectElement>();
+    let mut chain = ModifierNodeChain::new();
+    let mut context = TestContext::default();
+
+    let first: Vec<DynModifierElement> = vec![Rc::new(DirectElement::new(
+        DirectNodeKind::A,
+        shared_element_type,
+        log.clone(),
+    ))];
+    chain.update_from_slice(&first, &mut context);
+    assert!(chain.node::<DirectNodeA>(0).is_some());
+
+    log.borrow_mut().clear();
+    let second: Vec<DynModifierElement> = vec![Rc::new(DirectElement::new(
+        DirectNodeKind::B,
+        shared_element_type,
+        log.clone(),
+    ))];
+    chain.update_from_slice(&second, &mut context);
+
+    assert!(chain.node::<DirectNodeA>(0).is_none());
+    assert!(chain.node::<DirectNodeB>(0).is_some());
+    assert_eq!(
+        &*log.borrow(),
+        &["attach:b", "update:B", "detach:a"],
+        "node type is part of retained modifier identity"
+    );
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1285,11 +1457,7 @@ fn semantics_delegates_are_visited_by_forward_matching() {
     });
     assert_eq!(visits, 1, "delegated semantics node should be visited");
 
-    let mut config = SemanticsConfiguration {
-        content_description: None,
-        is_button: false,
-        is_clickable: false,
-    };
+    let mut config = SemanticsConfiguration::default();
     chain.for_each_forward_matching(NodeCapabilities::SEMANTICS, |node_ref| {
         node_ref.with_node(|node| {
             if let Some(semantics_node) = node.as_semantics_node() {

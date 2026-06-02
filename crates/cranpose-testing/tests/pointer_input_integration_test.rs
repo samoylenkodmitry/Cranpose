@@ -54,6 +54,9 @@ fn hover_tracking_app(hover_position: MutableState<Point>, is_hovered: MutableSt
 
 #[test]
 fn test_pointer_input_async_handler_is_present() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // This test verifies that async pointer_input handlers are properly
     // extracted into the modifier chain and available for hit-testing
 
@@ -84,14 +87,8 @@ fn test_pointer_input_async_handler_is_present() {
         "Should have at least 2 nodes (Column and Text)"
     );
 
-    // TODO: We need a way to simulate pointer events through the test infrastructure
-    // For now, this test validates that the composition structure is correct
-    // In a full integration test, we would:
-    // 1. Build the layout tree
-    // 2. Render to a scene
-    // 3. Call hit_test() on the scene
-    // 4. Invoke the returned HitRegion.dispatch() with Move events
-    // 5. Verify the state updates
+    // This test validates composition structure. The app-shell test suite covers
+    // hit-testing and pointer dispatch with rendered scenes.
 
     println!(
         "✓ Pointer input composition created successfully with {} nodes",
@@ -142,6 +139,9 @@ fn button_with_modifiers_app(click_count: MutableState<i32>) {
 
 #[test]
 fn test_button_with_draw_modifiers_is_clickable() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // This test verifies that buttons with draw_behind modifiers are still clickable
     // This reproduces the "pause button" issue where buttons with custom rendering
     // might not have their click handlers properly wired
@@ -212,6 +212,9 @@ fn dynamic_label_button_app(click_count: MutableState<i32>, is_active: MutableSt
 
 #[test]
 fn test_button_with_dynamic_content_updates_correctly() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // This test ensures buttons with dynamic labels (like pause/resume)
     // properly update and remain clickable after state changes
 

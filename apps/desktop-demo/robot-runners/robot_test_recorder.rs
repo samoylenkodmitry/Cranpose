@@ -7,13 +7,14 @@
 //! cargo run --package desktop-app --example robot_test_recorder --features robot-app
 //! ```
 
+mod output_paths;
+
 use cranpose::AppLauncher;
 use desktop_app::app;
-use std::path::PathBuf;
 use std::time::Duration;
 
 fn main() {
-    let recording_path = PathBuf::from("/tmp/robot_recording_test.rs");
+    let recording_path = output_paths::diagnostic_path("robot_recording_test.rs");
 
     println!("=== Robot Recorder Test ===");
     println!("Recording to: {:?}\n", recording_path);

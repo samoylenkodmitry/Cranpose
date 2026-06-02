@@ -3,6 +3,7 @@
 //! This crate contains geometry primitives, color definitions, brushes,
 //! and unit types that are used throughout the Cranpose framework.
 
+#![deny(unsafe_code)]
 #![allow(non_snake_case)]
 
 pub mod alpha_mask;

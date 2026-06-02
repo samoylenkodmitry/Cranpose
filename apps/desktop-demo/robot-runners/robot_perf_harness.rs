@@ -8,19 +8,23 @@
 
 mod perf_robot_stats;
 
-use cranpose::fps_stats;
 use cranpose::AppLauncher;
+use cranpose_core::CompositionLocalProvider;
 use cranpose_foundation::lazy::{
     remember_lazy_list_state, LazyLayoutStats, LazyListScope, LazyListState,
 };
+use cranpose_services::{local_http_client, HttpClient, HttpClientRef, HttpFuture};
+use cranpose_testing::{find_button_exact_in_semantics, find_text};
 use cranpose_ui::widgets::{
     Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
 };
 use cranpose_ui::{
     composable, Color, GraphicsLayer, LinearArrangement, Modifier, RenderEffect, TextStyle,
 };
+use desktop_app::app;
 use perf_robot_stats::{print_render_summary, RenderStatsAccumulator};
 use std::cell::RefCell;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DEFAULT_DURATION_SECS: u64 = 3;
@@ -28,10 +32,14 @@ const DEFAULT_WARMUP_SECS: u64 = 5;
 const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 200;
 const DEFAULT_MAX_GROWTH_KB: u64 = 512 * 1024;
 const DEFAULT_TIMEOUT_SLACK_SECS: u64 = 20;
+const DEFAULT_MIN_FPS: f32 = 0.0;
+const DEFAULT_MAX_P95_FRAME_MS: f32 = 0.0;
+const DEFAULT_WAIT_IDLE_AFTER_DRAG: bool = false;
 const WARN_GROWTH_KB: u64 = 100 * 1024;
 const ALERT_GROWTH_KB: u64 = 300 * 1024;
 const SCROLL_X_DEFAULT: f32 = 450.0;
 const SCROLL_X_BACKDROP: f32 = 700.0;
+const SCROLL_WHEEL_DELTA_Y: f32 = 420.0;
 const SCROLL_START_Y: f32 = 590.0;
 const SCROLL_END_Y: f32 = 180.0;
 const LAZY_STATS_HOOK: &str = "perf.lazy_stats";
@@ -44,6 +52,8 @@ thread_local! {
 enum PerfScenario {
     LazyListScroll,
     TextHeavyScroll,
+    MarkdownScroll,
+    MarkdownViewerScroll,
     BackdropBlur,
     OpaqueScene,
 }
@@ -53,6 +63,8 @@ impl PerfScenario {
         match raw {
             "lazy_list_scroll" => Some(Self::LazyListScroll),
             "text_heavy_scroll" => Some(Self::TextHeavyScroll),
+            "markdown_scroll" => Some(Self::MarkdownScroll),
+            "markdown_viewer_scroll" => Some(Self::MarkdownViewerScroll),
             "backdrop_blur" => Some(Self::BackdropBlur),
             "opaque_scene" => Some(Self::OpaqueScene),
             _ => None,
@@ -71,6 +83,8 @@ impl PerfScenario {
         match self {
             Self::LazyListScroll => "lazy_list_scroll",
             Self::TextHeavyScroll => "text_heavy_scroll",
+            Self::MarkdownScroll => "markdown_scroll",
+            Self::MarkdownViewerScroll => "markdown_viewer_scroll",
             Self::BackdropBlur => "backdrop_blur",
             Self::OpaqueScene => "opaque_scene",
         }
@@ -80,6 +94,8 @@ impl PerfScenario {
         match self {
             Self::LazyListScroll => "Lazy List Scroll",
             Self::TextHeavyScroll => "Text-Heavy Scroll",
+            Self::MarkdownScroll => "Markdown Scroll",
+            Self::MarkdownViewerScroll => "Fetched Markdown Viewer Scroll",
             Self::BackdropBlur => "Backdrop Blur Panel",
             Self::OpaqueScene => "Opaque Scene",
         }
@@ -89,6 +105,8 @@ impl PerfScenario {
         match self {
             Self::LazyListScroll => 280,
             Self::TextHeavyScroll => 180,
+            Self::MarkdownScroll => 0,
+            Self::MarkdownViewerScroll => 0,
             Self::BackdropBlur => 220,
             Self::OpaqueScene => 260,
         }
@@ -97,6 +115,7 @@ impl PerfScenario {
     fn drag_x(self) -> f32 {
         match self {
             Self::BackdropBlur => SCROLL_X_BACKDROP,
+            Self::MarkdownScroll => SCROLL_X_DEFAULT,
             _ => SCROLL_X_DEFAULT,
         }
     }
@@ -105,19 +124,51 @@ impl PerfScenario {
         match self {
             Self::LazyListScroll => Color(0.36, 0.62, 0.88, 0.9),
             Self::TextHeavyScroll => Color(0.82, 0.58, 0.32, 0.88),
+            Self::MarkdownScroll => Color(0.55, 0.68, 1.0, 0.88),
+            Self::MarkdownViewerScroll => Color(0.50, 0.78, 0.92, 0.88),
             Self::BackdropBlur => Color(0.72, 0.86, 0.98, 0.24),
             Self::OpaqueScene => Color(0.3, 0.36, 0.44, 1.0),
         }
     }
+
+    fn input_method(self) -> PerfInputMethod {
+        match self {
+            Self::MarkdownScroll | Self::MarkdownViewerScroll => PerfInputMethod::Wheel,
+            _ => PerfInputMethod::Drag,
+        }
+    }
+
+    fn requires_fetch(self) -> bool {
+        matches!(self, Self::MarkdownViewerScroll)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PerfInputMethod {
+    Drag,
+    Wheel,
 }
 
 #[composable]
 #[allow(non_snake_case)]
 fn PerfHarnessApp(scenario: PerfScenario) {
+    if scenario == PerfScenario::MarkdownViewerScroll {
+        PERF_LAZY_LIST_STATE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        MarkdownViewerPerfApp();
+        return;
+    }
+
     let list_state = remember_lazy_list_state();
     PERF_LAZY_LIST_STATE.with(|slot| {
         *slot.borrow_mut() = Some(list_state);
     });
+
+    if scenario == PerfScenario::MarkdownScroll {
+        app::MarkdownScrollStressRobotAppWithState(list_state);
+        return;
+    }
 
     Box(
         Modifier::empty().fill_max_size(),
@@ -218,6 +269,8 @@ fn PerfScenarioItem(index: usize, scenario: PerfScenario) {
     match scenario {
         PerfScenario::LazyListScroll => CacheRow(index, scenario),
         PerfScenario::TextHeavyScroll => TextHeavyRow(index, scenario),
+        PerfScenario::MarkdownScroll => TextHeavyRow(index, scenario),
+        PerfScenario::MarkdownViewerScroll => TextHeavyRow(index, scenario),
         PerfScenario::BackdropBlur => BackdropRow(index),
         PerfScenario::OpaqueScene => OpaqueRow(index),
     }
@@ -404,6 +457,36 @@ fn OpaqueBlock(color: Color) {
     );
 }
 
+struct PerfMarkdownClient {
+    body: String,
+}
+
+impl PerfMarkdownClient {
+    fn new() -> Self {
+        Self {
+            body: app::markdown_scroll_stress_fixture(),
+        }
+    }
+}
+
+impl HttpClient for PerfMarkdownClient {
+    fn get_text<'a>(&'a self, _url: &'a str) -> HttpFuture<'a, String> {
+        let body = self.body.clone();
+        Box::pin(async move { Ok(body) })
+    }
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn MarkdownViewerPerfApp() {
+    let client = cranpose_core::remember(|| Arc::new(PerfMarkdownClient::new()) as HttpClientRef)
+        .with(|client| client.clone());
+    let local = local_http_client();
+    CompositionLocalProvider(vec![local.provides(client)], || {
+        app::MarkdownViewerRobotApp();
+    });
+}
+
 #[composable]
 #[allow(non_snake_case)]
 fn PerfBadge(label: String, color: Color) {
@@ -466,6 +549,27 @@ fn env_u64(key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+fn env_u32(key: &str, default: u32) -> u32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(default)
+}
+
+fn fps_budget_from(value: Option<&str>, default: f32) -> f32 {
+    value
+        .and_then(|raw| raw.parse::<f32>().ok())
+        .filter(|fps| fps.is_finite() && *fps > 0.0)
+        .unwrap_or(default)
+}
+
+fn frame_ms_budget_from(value: Option<&str>, default: f32) -> f32 {
+    value
+        .and_then(|raw| raw.parse::<f32>().ok())
+        .filter(|ms| ms.is_finite() && *ms > 0.0)
+        .unwrap_or(default)
+}
+
 fn env_bool(key: &str, default: bool) -> bool {
     std::env::var(key)
         .ok()
@@ -508,9 +612,8 @@ fn read_rss_kb() -> Option<u64> {
     None
 }
 
-fn fatal(robot: &cranpose::Robot, message: impl std::fmt::Display) -> ! {
+fn fatal(_robot: &cranpose::Robot, message: impl std::fmt::Display) -> ! {
     eprintln!("FATAL: {message}");
-    let _ = robot.exit();
     std::process::exit(1);
 }
 
@@ -518,6 +621,64 @@ fn wait_for_perf_idle(robot: &cranpose::Robot) {
     if robot.wait_for_idle().is_err() {
         std::thread::sleep(Duration::from_millis(150));
     }
+}
+
+fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
+    (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5)
+}
+
+fn wait_for_perf_text_bounds(
+    robot: &cranpose::Robot,
+    text: &str,
+    timeout_ms: u64,
+) -> Option<(f32, f32, f32, f32)> {
+    let attempts = (timeout_ms / 100).max(1);
+    for _ in 0..attempts {
+        if let Ok(semantics) = robot.get_semantics() {
+            if let Some(bounds) = semantics.iter().find_map(|elem| find_text(elem, text)) {
+                return Some(bounds);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        wait_for_perf_idle(robot);
+    }
+    None
+}
+
+fn click_perf_button(robot: &cranpose::Robot, label: &str) {
+    let Some(bounds) = find_button_exact_in_semantics(robot, label) else {
+        fatal(robot, format!("button {label:?} not found"));
+    };
+    let (x, y) = center(bounds);
+    robot.move_to(x, y).unwrap_or_else(|err| fatal(robot, err));
+    robot
+        .wait_for_present_frame()
+        .unwrap_or_else(|err| fatal(robot, err));
+    robot.click(x, y).unwrap_or_else(|err| fatal(robot, err));
+    wait_for_perf_idle(robot);
+}
+
+fn prepare_perf_scenario(robot: &cranpose::Robot, scenario: PerfScenario) {
+    if !scenario.requires_fetch() {
+        return;
+    }
+
+    click_perf_button(robot, "Fetch");
+    let Some(viewport_bounds) = wait_for_perf_text_bounds(robot, "MarkdownListViewport", 10_000)
+    else {
+        fatal(
+            robot,
+            "fetched Markdown viewer viewport did not appear before perf measurement",
+        );
+    };
+    let (x, y) = center(viewport_bounds);
+    robot.move_to(x, y).unwrap_or_else(|err| fatal(robot, err));
+    robot
+        .wait_for_present_frame()
+        .unwrap_or_else(|err| fatal(robot, err));
+    robot
+        .reset_fps_stats()
+        .unwrap_or_else(|err| fatal(robot, err));
 }
 
 fn perf_isolate_debug_enabled() -> bool {
@@ -614,6 +775,36 @@ fn print_runtime_summary(robot: &cranpose::Robot, scenario: PerfScenario) {
     );
 }
 
+#[derive(Debug, Default)]
+struct FpsPacingAccumulator {
+    samples: u64,
+    worst_p95_ms: f32,
+    worst_p99_ms: f32,
+    worst_max_ms: f32,
+    worst_work_p95_ms: f32,
+    worst_work_max_ms: f32,
+    max_missed_120hz_budget: u32,
+    max_missed_60hz_budget: u32,
+    max_stalled_50ms_frames: u32,
+}
+
+impl FpsPacingAccumulator {
+    fn record(&mut self, stats: cranpose::FpsStats) {
+        if stats.interval_count == 0 {
+            return;
+        }
+        self.samples = self.samples.saturating_add(1);
+        self.worst_p95_ms = self.worst_p95_ms.max(stats.p95_ms);
+        self.worst_p99_ms = self.worst_p99_ms.max(stats.p99_ms);
+        self.worst_max_ms = self.worst_max_ms.max(stats.max_ms);
+        self.worst_work_p95_ms = self.worst_work_p95_ms.max(stats.work_p95_ms);
+        self.worst_work_max_ms = self.worst_work_max_ms.max(stats.work_max_ms);
+        self.max_missed_120hz_budget = self.max_missed_120hz_budget.max(stats.missed_120hz_budget);
+        self.max_missed_60hz_budget = self.max_missed_60hz_budget.max(stats.missed_60hz_budget);
+        self.max_stalled_50ms_frames = self.max_stalled_50ms_frames.max(stats.stalled_50ms_frames);
+    }
+}
+
 fn main() {
     env_logger::init();
     let scenario = PerfScenario::from_env();
@@ -625,6 +816,21 @@ fn main() {
     );
     let max_growth_kb = env_u64("CRANPOSE_MEM_MAX_GROWTH_KB", DEFAULT_MAX_GROWTH_KB);
     let validate_mem = env_bool("CRANPOSE_MEM_VALIDATE", true);
+    let min_fps = fps_budget_from(
+        std::env::var("CRANPOSE_PERF_MIN_FPS").ok().as_deref(),
+        DEFAULT_MIN_FPS,
+    );
+    let max_p95_frame_ms = frame_ms_budget_from(
+        std::env::var("CRANPOSE_PERF_MAX_P95_FRAME_MS")
+            .ok()
+            .as_deref(),
+        DEFAULT_MAX_P95_FRAME_MS,
+    );
+    let max_50ms_stalls = env_u32("CRANPOSE_PERF_MAX_50MS_STALLS", u32::MAX);
+    let wait_idle_after_drag = env_bool(
+        "CRANPOSE_PERF_WAIT_IDLE_AFTER_DRAG",
+        DEFAULT_WAIT_IDLE_AFTER_DRAG,
+    );
     let timeout_slack_secs = timeout_slack_secs_from(
         std::env::var("CRANPOSE_PERF_TIMEOUT_SLACK_SECS")
             .ok()
@@ -638,6 +844,16 @@ fn main() {
         "Memory validation: {} (max growth {} KB, sample {} ms)",
         validate_mem, max_growth_kb, sample_interval_ms
     );
+    println!("Wait idle after drag: {wait_idle_after_drag}");
+    if min_fps > 0.0 {
+        println!("FPS budget: >{min_fps:.1}");
+    }
+    if max_p95_frame_ms > 0.0 {
+        println!("P95 frame budget: <={max_p95_frame_ms:.2}ms");
+    }
+    if max_50ms_stalls != u32::MAX {
+        println!("50ms stall budget: <= {max_50ms_stalls}");
+    }
 
     AppLauncher::new()
         .with_title(format!("Robot Perf Harness - {}", scenario.title()))
@@ -657,6 +873,7 @@ fn main() {
 
             std::thread::sleep(Duration::from_millis(500));
             wait_for_perf_idle(&robot);
+            prepare_perf_scenario(&robot, scenario);
 
             let total_duration = Duration::from_secs(duration_secs + warmup_secs);
             let warmup_duration = Duration::from_secs(warmup_secs);
@@ -668,35 +885,77 @@ fn main() {
             let mut direction_down = true;
             let mut iteration = 0u64;
             let mut render_stats = RenderStatsAccumulator::default();
+            let mut pacing_stats = FpsPacingAccumulator::default();
+            let mut measurement_started = false;
+            let input_method = scenario.input_method();
             let start = Instant::now();
 
-            while start.elapsed() < total_duration {
-                let (from_y, to_y) = if direction_down {
-                    (SCROLL_START_Y, SCROLL_END_Y)
-                } else {
-                    (SCROLL_END_Y, SCROLL_START_Y)
-                };
-                direction_down = !direction_down;
+            if input_method == PerfInputMethod::Wheel {
+                robot
+                    .move_to(scenario.drag_x(), SCROLL_START_Y)
+                    .unwrap_or_else(|err| fatal(&robot, err));
+            }
 
-                if let Err(err) = robot.drag(scenario.drag_x(), from_y, scenario.drag_x(), to_y) {
-                    fatal(&robot, err);
+            while start.elapsed() < total_duration {
+                match input_method {
+                    PerfInputMethod::Drag => {
+                        let (from_y, to_y) = if direction_down {
+                            (SCROLL_START_Y, SCROLL_END_Y)
+                        } else {
+                            (SCROLL_END_Y, SCROLL_START_Y)
+                        };
+                        if let Err(err) =
+                            robot.drag(scenario.drag_x(), from_y, scenario.drag_x(), to_y)
+                        {
+                            fatal(&robot, err);
+                        }
+                    }
+                    PerfInputMethod::Wheel => {
+                        let delta_y = if direction_down {
+                            -SCROLL_WHEEL_DELTA_Y
+                        } else {
+                            SCROLL_WHEEL_DELTA_Y
+                        };
+                        if let Err(err) = robot.mouse_scroll(0.0, delta_y) {
+                            fatal(&robot, err);
+                        }
+                    }
                 }
-                wait_for_perf_idle(&robot);
+                direction_down = !direction_down;
+                if wait_idle_after_drag {
+                    wait_for_perf_idle(&robot);
+                } else if input_method == PerfInputMethod::Wheel {
+                    robot
+                        .wait_for_present_frame()
+                        .unwrap_or_else(|err| fatal(&robot, err));
+                }
 
                 let elapsed = start.elapsed();
-                if baseline_rss_kb.is_none() && elapsed >= warmup_duration {
+                if !measurement_started && elapsed >= warmup_duration {
+                    robot
+                        .reset_fps_stats()
+                        .unwrap_or_else(|err| fatal(&robot, err));
+                    pacing_stats = FpsPacingAccumulator::default();
+                    measurement_started = true;
+                }
+
+                if baseline_rss_kb.is_none() && measurement_started {
                     baseline_rss_kb = read_rss_kb();
                     if let Some(rss) = baseline_rss_kb {
                         peak_rss_kb = rss;
                     }
                 }
 
-                if elapsed >= warmup_duration {
+                if measurement_started {
                     match robot.get_render_stats() {
                         Ok(Some(snapshot)) => render_stats.record(snapshot),
                         Ok(None) => {}
                         Err(err) => fatal(&robot, err),
                     }
+                    let stats = robot.fps_stats().unwrap_or_else(|err| {
+                        fatal(&robot, format!("failed to read FPS stats: {err}"))
+                    });
+                    pacing_stats.record(stats);
                 }
 
                 if validate_mem && Instant::now() >= next_sample {
@@ -784,16 +1043,98 @@ fn main() {
                 }
             }
 
-            let stats = fps_stats();
+            let stats = robot
+                .fps_stats()
+                .unwrap_or_else(|err| fatal(&robot, format!("failed to read FPS stats: {err}")));
+            pacing_stats.record(stats);
             println!(
-                "PERF_FPS_SUMMARY scenario={} fps={:.1} avg_frame_ms={:.2} total_frames={} recompositions={} recompositions_per_second={}",
+                "PERF_FPS_SUMMARY scenario={} fps={:.1} avg_frame_ms={:.2} p95_frame_ms={:.2} p99_frame_ms={:.2} max_frame_ms={:.2} work_avg_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} missed_60hz={} stalls_50ms={} worst_p95_frame_ms={:.2} worst_p99_frame_ms={:.2} worst_max_frame_ms={:.2} worst_work_p95_ms={:.2} worst_work_max_ms={:.2} max_missed_120hz={} max_missed_60hz={} max_stalls_50ms={} pacing_samples={} total_frames={} recompositions={} recompositions_per_second={}",
                 scenario.name(),
                 stats.fps,
                 stats.avg_ms,
+                stats.p95_ms,
+                stats.p99_ms,
+                stats.max_ms,
+                stats.work_avg_ms,
+                stats.work_p95_ms,
+                stats.work_max_ms,
+                stats.missed_120hz_budget,
+                stats.missed_60hz_budget,
+                stats.stalled_50ms_frames,
+                pacing_stats.worst_p95_ms,
+                pacing_stats.worst_p99_ms,
+                pacing_stats.worst_max_ms,
+                pacing_stats.worst_work_p95_ms,
+                pacing_stats.worst_work_max_ms,
+                pacing_stats.max_missed_120hz_budget,
+                pacing_stats.max_missed_60hz_budget,
+                pacing_stats.max_stalled_50ms_frames,
+                pacing_stats.samples,
                 stats.frame_count,
                 stats.recompositions,
                 stats.recomps_per_second,
             );
+            if min_fps > 0.0 {
+                println!(
+                    "PERF_FPS_BUDGET scenario={} min_fps={:.1} observed_fps={:.1} passed={}",
+                    scenario.name(),
+                    min_fps,
+                    stats.fps,
+                    stats.fps > min_fps,
+                );
+                if stats.fps <= min_fps {
+                    fatal(
+                        &robot,
+                        format!(
+                            "FPS budget failed for {}: expected >{:.1}, observed {:.1}",
+                            scenario.name(),
+                            min_fps,
+                            stats.fps,
+                        ),
+                    );
+                }
+            }
+            if max_p95_frame_ms > 0.0 {
+                let observed_p95 = pacing_stats.worst_p95_ms;
+                println!(
+                    "PERF_FRAME_P95_BUDGET scenario={} max_p95_frame_ms={:.2} observed_p95_frame_ms={:.2} passed={}",
+                    scenario.name(),
+                    max_p95_frame_ms,
+                    observed_p95,
+                    observed_p95 <= max_p95_frame_ms,
+                );
+                if observed_p95 > max_p95_frame_ms {
+                    fatal(
+                        &robot,
+                        format!(
+                            "P95 frame budget failed for {}: expected <={:.2}ms, observed {:.2}ms",
+                            scenario.name(),
+                            max_p95_frame_ms,
+                            observed_p95,
+                        ),
+                    );
+                }
+            }
+            if max_50ms_stalls != u32::MAX {
+                println!(
+                    "PERF_STALL_BUDGET scenario={} max_50ms_stalls={} observed_50ms_stalls={} passed={}",
+                    scenario.name(),
+                    max_50ms_stalls,
+                    pacing_stats.max_stalled_50ms_frames,
+                    pacing_stats.max_stalled_50ms_frames <= max_50ms_stalls,
+                );
+                if pacing_stats.max_stalled_50ms_frames > max_50ms_stalls {
+                    fatal(
+                        &robot,
+                        format!(
+                            "50ms stall budget failed for {}: expected <= {}, observed {}",
+                            scenario.name(),
+                            max_50ms_stalls,
+                            pacing_stats.max_stalled_50ms_frames,
+                        ),
+                    );
+                }
+            }
             println!(
                 "PERF_SCENARIO_COMPLETE scenario={} iterations={}",
                 scenario.name(),
@@ -811,8 +1152,9 @@ fn main() {
 mod tests {
     use super::perf_robot_stats::RenderStatsAccumulator;
     use super::{
-        format_lazy_summary, lazy_reuse_rate_pct, timeout_budget_secs, timeout_slack_secs_from,
-        LazyLayoutStats, PerfScenario, DEFAULT_TIMEOUT_SLACK_SECS,
+        format_lazy_summary, fps_budget_from, frame_ms_budget_from, lazy_reuse_rate_pct,
+        timeout_budget_secs, timeout_slack_secs_from, FpsPacingAccumulator, LazyLayoutStats,
+        PerfScenario, DEFAULT_MAX_P95_FRAME_MS, DEFAULT_MIN_FPS, DEFAULT_TIMEOUT_SLACK_SECS,
     };
     use cranpose_render_wgpu::RenderStatsSnapshot;
 
@@ -831,6 +1173,49 @@ mod tests {
     }
 
     #[test]
+    fn fps_budget_accepts_only_positive_finite_values() {
+        assert_eq!(fps_budget_from(None, DEFAULT_MIN_FPS), DEFAULT_MIN_FPS);
+        assert_eq!(
+            fps_budget_from(Some("invalid"), DEFAULT_MIN_FPS),
+            DEFAULT_MIN_FPS
+        );
+        assert_eq!(fps_budget_from(Some("0"), DEFAULT_MIN_FPS), DEFAULT_MIN_FPS);
+        assert_eq!(
+            fps_budget_from(Some("-1"), DEFAULT_MIN_FPS),
+            DEFAULT_MIN_FPS
+        );
+        assert_eq!(
+            fps_budget_from(Some("inf"), DEFAULT_MIN_FPS),
+            DEFAULT_MIN_FPS
+        );
+        assert_eq!(fps_budget_from(Some("120.5"), DEFAULT_MIN_FPS), 120.5);
+    }
+
+    #[test]
+    fn frame_ms_budget_accepts_only_positive_finite_values() {
+        assert_eq!(
+            frame_ms_budget_from(None, DEFAULT_MAX_P95_FRAME_MS),
+            DEFAULT_MAX_P95_FRAME_MS
+        );
+        assert_eq!(
+            frame_ms_budget_from(Some("invalid"), DEFAULT_MAX_P95_FRAME_MS),
+            DEFAULT_MAX_P95_FRAME_MS
+        );
+        assert_eq!(
+            frame_ms_budget_from(Some("0"), DEFAULT_MAX_P95_FRAME_MS),
+            DEFAULT_MAX_P95_FRAME_MS
+        );
+        assert_eq!(
+            frame_ms_budget_from(Some("nan"), DEFAULT_MAX_P95_FRAME_MS),
+            DEFAULT_MAX_P95_FRAME_MS
+        );
+        assert_eq!(
+            frame_ms_budget_from(Some("8.33"), DEFAULT_MAX_P95_FRAME_MS),
+            8.33
+        );
+    }
+
+    #[test]
     fn timeout_budget_adds_duration_warmup_and_slack() {
         assert_eq!(timeout_budget_secs(2, 3, 180), 185);
     }
@@ -846,6 +1231,14 @@ mod tests {
             Some(PerfScenario::TextHeavyScroll)
         );
         assert_eq!(
+            PerfScenario::parse("markdown_scroll"),
+            Some(PerfScenario::MarkdownScroll)
+        );
+        assert_eq!(
+            PerfScenario::parse("markdown_viewer_scroll"),
+            Some(PerfScenario::MarkdownViewerScroll)
+        );
+        assert_eq!(
             PerfScenario::parse("backdrop_blur"),
             Some(PerfScenario::BackdropBlur)
         );
@@ -854,6 +1247,65 @@ mod tests {
             Some(PerfScenario::OpaqueScene)
         );
         assert_eq!(PerfScenario::parse("nope"), None);
+    }
+
+    #[test]
+    fn markdown_perf_scenarios_use_wheel_input_path() {
+        assert_eq!(
+            PerfScenario::MarkdownScroll.input_method(),
+            super::PerfInputMethod::Wheel
+        );
+        assert_eq!(
+            PerfScenario::MarkdownViewerScroll.input_method(),
+            super::PerfInputMethod::Wheel
+        );
+        assert_eq!(
+            PerfScenario::LazyListScroll.input_method(),
+            super::PerfInputMethod::Drag
+        );
+    }
+
+    #[test]
+    fn only_fetched_markdown_perf_requires_fetch_setup() {
+        assert!(!PerfScenario::MarkdownScroll.requires_fetch());
+        assert!(PerfScenario::MarkdownViewerScroll.requires_fetch());
+        assert!(!PerfScenario::LazyListScroll.requires_fetch());
+    }
+
+    #[test]
+    fn fps_pacing_accumulator_tracks_worst_rolling_samples() {
+        let mut accumulator = FpsPacingAccumulator::default();
+
+        accumulator.record(cranpose::FpsStats {
+            interval_count: 3,
+            p95_ms: 9.0,
+            p99_ms: 11.0,
+            max_ms: 18.0,
+            missed_120hz_budget: 2,
+            missed_60hz_budget: 1,
+            stalled_50ms_frames: 0,
+            ..Default::default()
+        });
+        accumulator.record(cranpose::FpsStats {
+            interval_count: 3,
+            p95_ms: 7.0,
+            p99_ms: 20.0,
+            max_ms: 51.0,
+            missed_120hz_budget: 1,
+            missed_60hz_budget: 2,
+            stalled_50ms_frames: 1,
+            ..Default::default()
+        });
+
+        assert_eq!(accumulator.samples, 2);
+        assert_eq!(accumulator.worst_p95_ms, 9.0);
+        assert_eq!(accumulator.worst_p99_ms, 20.0);
+        assert_eq!(accumulator.worst_max_ms, 51.0);
+        assert_eq!(accumulator.worst_work_p95_ms, 0.0);
+        assert_eq!(accumulator.worst_work_max_ms, 0.0);
+        assert_eq!(accumulator.max_missed_120hz_budget, 2);
+        assert_eq!(accumulator.max_missed_60hz_budget, 2);
+        assert_eq!(accumulator.max_stalled_50ms_frames, 1);
     }
 
     #[test]

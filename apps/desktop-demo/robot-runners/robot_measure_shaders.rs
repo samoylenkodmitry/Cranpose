@@ -12,7 +12,8 @@
 //! cargo run --package desktop-app --example robot_measure_shaders --features robot-app
 //! ```
 
-use cranpose::fps_stats;
+mod output_paths;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, find_button_in_semantics, find_in_semantics, find_text_exact,
@@ -30,7 +31,6 @@ const WINDOW_HEIGHT: u32 = 800;
 const DEFAULT_VISUAL_SETTLE_MS: u64 = 900;
 const DEFAULT_VISUAL_SCROLL_STEPS: u64 = 4;
 const DEFAULT_VISUAL_SCROLL_DELAY_MS: u64 = 140;
-const DEFAULT_VISUAL_OUTPUT_DIR: &str = "/tmp/cranpose_shaders_visual_compare";
 const DEFAULT_PROFILE_DURATION_SECS: u64 = 20;
 const DEFAULT_HEADLESS_PROFILE_DURATION_SECS: u64 = 5;
 const DEFAULT_PROFILE_SCROLL_STEPS: usize = 10;
@@ -103,13 +103,24 @@ fn fatal(robot: &cranpose::Robot, message: &str) -> ! {
     std::process::exit(1);
 }
 
-fn log_stage_fps(stage: &str) {
-    let stats = fps_stats();
+fn log_stage_fps(robot: &cranpose::Robot, stage: &str) {
+    let stats = robot
+        .fps_stats()
+        .unwrap_or_else(|err| fatal(robot, &format!("failed to read FPS stats: {err}")));
     println!(
-        "VISUAL_FPS stage={} fps={:.1} avg_ms={:.2} frames={} recompositions={} recomps_per_second={}",
+        "VISUAL_FPS stage={} fps={:.1} avg_ms={:.2} p95_ms={:.2} p99_ms={:.2} max_ms={:.2} work_avg_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} missed_60hz={} stalls_50ms={} frames={} recompositions={} recomps_per_second={}",
         stage,
         stats.fps,
         stats.avg_ms,
+        stats.p95_ms,
+        stats.p99_ms,
+        stats.max_ms,
+        stats.work_avg_ms,
+        stats.work_p95_ms,
+        stats.work_max_ms,
+        stats.missed_120hz_budget,
+        stats.missed_60hz_budget,
+        stats.stalled_50ms_frames,
         stats.frame_count,
         stats.recompositions,
         stats.recomps_per_second
@@ -236,7 +247,7 @@ fn save_stage_screenshot(
 fn wait_for_stage(robot: &cranpose::Robot, settle_ms: u64, stage: &str) {
     std::thread::sleep(Duration::from_millis(settle_ms));
     let _ = robot.wait_for_idle();
-    log_stage_fps(stage);
+    log_stage_fps(robot, stage);
     log_stage_render_stats(robot, stage);
 }
 
@@ -263,10 +274,9 @@ fn run_visual_compare(robot: &cranpose::Robot) {
         DEFAULT_VISUAL_SCROLL_DELAY_MS,
     );
     let branch_label = env_string("CRANPOSE_BRANCH_LABEL", "unknown");
-    let output_dir = PathBuf::from(env_string(
-        "CRANPOSE_VISUAL_OUTPUT_DIR",
-        DEFAULT_VISUAL_OUTPUT_DIR,
-    ));
+    let output_dir = std::env::var("CRANPOSE_VISUAL_OUTPUT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| output_paths::diagnostic_path("cranpose_shaders_visual_compare"));
     if let Err(err) = fs::create_dir_all(&output_dir) {
         fatal(
             robot,
@@ -280,7 +290,7 @@ fn run_visual_compare(robot: &cranpose::Robot) {
 
     std::thread::sleep(Duration::from_millis(1000));
     let _ = robot.wait_for_idle();
-    log_stage_fps("startup_idle");
+    log_stage_fps(robot, "startup_idle");
 
     if !click_button(robot, "Shaders") {
         if let Ok(elements) = robot.get_semantics() {
@@ -340,7 +350,7 @@ fn run_profile(robot: &cranpose::Robot, duration: Duration, scroll_steps: usize,
     std::thread::sleep(Duration::from_millis(500));
     println!("  ✓ Entered Shaders tab");
     assert_no_large_mixed_direct_layers(robot, "profile_open");
-    log_stage_fps("profile_open");
+    log_stage_fps(robot, "profile_open");
     log_stage_render_stats(robot, "profile_open");
 
     if headless {
@@ -403,10 +413,22 @@ fn run_profile(robot: &cranpose::Robot, duration: Duration, scroll_steps: usize,
         let _ = robot.wait_for_idle();
     }
 
-    let stats = fps_stats();
+    let stats = robot
+        .fps_stats()
+        .unwrap_or_else(|err| fatal(robot, &format!("failed to read FPS stats: {err}")));
     println!("=== Profiling Run Complete ===");
     println!("  FPS: {:.1}", stats.fps);
     println!("  Avg frame time: {:.2}ms", stats.avg_ms);
+    println!("  P95 frame time: {:.2}ms", stats.p95_ms);
+    println!("  P99 frame time: {:.2}ms", stats.p99_ms);
+    println!("  Max frame time: {:.2}ms", stats.max_ms);
+    println!("  Avg frame work: {:.2}ms", stats.work_avg_ms);
+    println!("  P95 frame work: {:.2}ms", stats.work_p95_ms);
+    println!("  Max frame work: {:.2}ms", stats.work_max_ms);
+    println!(
+        "  Budget misses: 120Hz={} 60Hz={} stalls50ms={}",
+        stats.missed_120hz_budget, stats.missed_60hz_budget, stats.stalled_50ms_frames
+    );
     println!("  Total frames: {}", stats.frame_count);
     println!(
         "  Recompositions: {} ({}/s)",

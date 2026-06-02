@@ -4,7 +4,7 @@
 //! matching Jetpack Compose's `LazyColumn` and `LazyRow` APIs.
 
 #![allow(non_snake_case)]
-#![allow(dead_code)] // Widget API is WIP
+#![allow(dead_code)] // Some public widget entry points are exercised by downstream apps.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::composable;
 use crate::modifier::Modifier;
 use crate::subcompose_layout::{
-    MeasurePolicy, Placement, SubcomposeLayoutNode, SubcomposeLayoutScope, SubcomposeMeasureScope,
+    MeasurePolicy, Placement, SubcomposeLayoutNode, SubcomposeMeasureScope,
     SubcomposeMeasureScopeImpl,
 };
 use cranpose_core::{NodeId, SlotId};
@@ -189,12 +189,12 @@ fn measure_lazy_list_internal(
         // ensuring stale types don't drive incorrect reuse after transitions
         scope.update_content_type(slot_id, content_type);
 
-        let item_content = content
-            .with_interval(index, |local_index, interval| {
-                let content = Rc::clone(&interval.content);
-                move || (content)(local_index)
-            })
-            .expect("lazy list interval content must exist for measured item");
+        let Some(item_content) = content.with_interval(index, |local_index, interval| {
+            let content = Rc::clone(&interval.content);
+            move || (content)(local_index)
+        }) else {
+            return LazyListMeasuredItem::new(index, key_slot_id, content_type, 1.0, 0.0);
+        };
         let children = scope.subcompose(slot_id, item_content);
 
         // Record composition statistics for diagnostics
@@ -346,41 +346,32 @@ fn measure_lazy_list_internal(
 
                 let prefetch_idx = idx;
                 let is_vertical = config.is_vertical;
-                let item_content = content
-                    .with_interval(prefetch_idx, |local_index, interval| {
+                if let Some(item_content) =
+                    content.with_interval(prefetch_idx, |local_index, interval| {
                         let content = Rc::clone(&interval.content);
                         move || (content)(local_index)
                     })
-                    .expect("lazy list interval content must exist for prefetched item");
-                let _ = scope.subcompose_with_size(slot_id, item_content, move |_| {
-                    // Use correct axis based on orientation:
-                    // Vertical list: width = cross_axis, height = main_axis (estimated)
-                    // Horizontal list: width = main_axis (estimated), height = cross_axis
-                    if is_vertical {
-                        crate::modifier::Size {
-                            width: cross_axis_size,
-                            height: estimated_size + config.spacing,
+                {
+                    let _ = scope.subcompose_with_size(slot_id, item_content, move |_| {
+                        // Use correct axis based on orientation:
+                        // Vertical list: width = cross_axis, height = main_axis (estimated)
+                        // Horizontal list: width = main_axis (estimated), height = cross_axis
+                        if is_vertical {
+                            crate::modifier::Size {
+                                width: cross_axis_size,
+                                height: estimated_size + config.spacing,
+                            }
+                        } else {
+                            crate::modifier::Size {
+                                width: estimated_size + config.spacing,
+                                height: cross_axis_size,
+                            }
                         }
-                    } else {
-                        crate::modifier::Size {
-                            width: estimated_size + config.spacing,
-                            height: cross_axis_size,
-                        }
-                    }
-                });
+                    });
+                }
             }
         }
     }
-
-    // Create placements from measured items - place only ROOT nodes
-    // JC Pattern (LazyListMeasure.kt:calculateItemsOffsets)
-    let placements = create_lazy_list_placements(
-        &result.visible_items,
-        items_count,
-        is_vertical,
-        effective_viewport_size,
-        config,
-    );
 
     let resolve_main_axis = |content_size: f32, min: f32, max: f32| {
         if max.is_finite() {
@@ -413,7 +404,16 @@ fn measure_lazy_list_internal(
         cross_axis_size
     };
 
-    scope.layout(width, height, placements)
+    scope.layout_with_placement_builder(width, height, |placements| {
+        push_lazy_list_placements(
+            placements,
+            &result.visible_items,
+            items_count,
+            is_vertical,
+            effective_viewport_size,
+            config,
+        );
+    })
 }
 
 fn get_spacing(arrangement: LinearArrangement) -> f32 {
@@ -426,10 +426,13 @@ fn get_spacing(arrangement: LinearArrangement) -> f32 {
 fn bind_layout_invalidation_callback(state: LazyListState, list_state_id: usize, node_id: NodeId) {
     let callback_owner =
         cranpose_core::remember(|| Rc::new(RefCell::new(None::<u64>))).with(|cell| cell.clone());
+    let app_context_id = crate::render_state::current_app_context_id();
     let callback_id = state.try_register_layout_callback(
         node_id,
         Rc::new(move || {
-            crate::schedule_layout_repass(node_id);
+            let _ = crate::render_state::enter_app_context_by_id(app_context_id, || {
+                crate::schedule_layout_repass(node_id);
+            });
         }),
     );
 
@@ -471,19 +474,23 @@ impl PartialEq for LazyListContentHandle {
     }
 }
 
-/// Creates placements for measured lazy list items.
+/// Writes placements for measured lazy list items.
 ///
 /// This helper encapsulates the logic for:
 /// - Applying arrangement when all items fit (hasSpareSpace in JC)
 /// - Using sequential positioning during scrolling
-fn create_lazy_list_placements(
+fn push_lazy_list_placements(
+    placements: &mut Vec<Placement>,
     visible_items: &[LazyListMeasuredItem],
     items_count: usize,
     is_vertical: bool,
     viewport_size: f32,
     config: &LazyListMeasureConfig,
-) -> Vec<Placement> {
+) {
     use cranpose_ui_layout::Arrangement;
+
+    placements.clear();
+    placements.reserve(visible_items.iter().map(|item| item.node_ids.len()).sum());
 
     let arrangement = if is_vertical {
         config
@@ -519,67 +526,58 @@ fn create_lazy_list_placements(
         // JC: density.arrange(mainAxisLayoutSize, sizes, offsets)
         let content_offset = config.before_content_padding;
 
-        let sizes: Vec<f32> = visible_items.iter().map(|i| i.main_axis_size).collect();
-        let mut positions = vec![0.0; sizes.len()];
+        let sizes: SmallVec<[f32; 32]> = visible_items.iter().map(|i| i.main_axis_size).collect();
+        let mut positions: SmallVec<[f32; 32]> = SmallVec::from_elem(0.0, sizes.len());
         arrangement.arrange(available_main_axis, &sizes, &mut positions);
 
-        visible_items
-            .iter()
-            .zip(positions.iter())
-            .flat_map(|(item, &pos)| {
-                item.node_ids.iter().zip(item.child_offsets.iter()).map(
-                    move |(&nid, &child_offset)| {
-                        let node_id: NodeId = nid as NodeId;
-                        let item_size = item.main_axis_size;
+        for (item, &pos) in visible_items.iter().zip(positions.iter()) {
+            for (&nid, &child_offset) in item.node_ids.iter().zip(item.child_offsets.iter()) {
+                let node_id: NodeId = nid as NodeId;
+                let item_size = item.main_axis_size;
 
-                        if is_vertical {
-                            let y = if config.reverse_layout {
-                                viewport_size - (content_offset + pos) - item_size + child_offset
-                            } else {
-                                content_offset + pos + child_offset
-                            };
-                            Placement::new(node_id, 0.0, y, 0)
-                        } else {
-                            let x = if config.reverse_layout {
-                                viewport_size - (content_offset + pos) - item_size + child_offset
-                            } else {
-                                content_offset + pos + child_offset
-                            };
-                            Placement::new(node_id, x, 0.0, 0)
-                        }
-                    },
-                )
-            })
-            .collect()
+                let placement = if is_vertical {
+                    let y = if config.reverse_layout {
+                        viewport_size - (content_offset + pos) - item_size + child_offset
+                    } else {
+                        content_offset + pos + child_offset
+                    };
+                    Placement::new(node_id, 0.0, y, 0)
+                } else {
+                    let x = if config.reverse_layout {
+                        viewport_size - (content_offset + pos) - item_size + child_offset
+                    } else {
+                        content_offset + pos + child_offset
+                    };
+                    Placement::new(node_id, x, 0.0, 0)
+                };
+                placements.push(placement);
+            }
+        }
     } else {
         // Use sequential offsets from measurement (scrolling case)
-        visible_items
-            .iter()
-            .flat_map(|item| {
-                item.node_ids.iter().zip(item.child_offsets.iter()).map(
-                    move |(&nid, &child_offset)| {
-                        let node_id: NodeId = nid as NodeId;
-                        let item_size = item.main_axis_size;
+        for item in visible_items {
+            for (&nid, &child_offset) in item.node_ids.iter().zip(item.child_offsets.iter()) {
+                let node_id: NodeId = nid as NodeId;
+                let item_size = item.main_axis_size;
 
-                        if is_vertical {
-                            let y = if config.reverse_layout {
-                                viewport_size - item.offset - item_size + child_offset
-                            } else {
-                                item.offset + child_offset
-                            };
-                            Placement::new(node_id, 0.0, y, 0)
-                        } else {
-                            let x = if config.reverse_layout {
-                                viewport_size - item.offset - item_size + child_offset
-                            } else {
-                                item.offset + child_offset
-                            };
-                            Placement::new(node_id, x, 0.0, 0)
-                        }
-                    },
-                )
-            })
-            .collect()
+                let placement = if is_vertical {
+                    let y = if config.reverse_layout {
+                        viewport_size - item.offset - item_size + child_offset
+                    } else {
+                        item.offset + child_offset
+                    };
+                    Placement::new(node_id, 0.0, y, 0)
+                } else {
+                    let x = if config.reverse_layout {
+                        viewport_size - item.offset - item_size + child_offset
+                    } else {
+                        item.offset + child_offset
+                    };
+                    Placement::new(node_id, x, 0.0, 0)
+                };
+                placements.push(placement);
+            }
+        }
     }
 }
 
@@ -939,6 +937,37 @@ mod tests {
         let spec = LazyColumnSpec::new().content_padding_all(24.0);
         assert_eq!(spec.content_padding_top, 24.0);
         assert_eq!(spec.content_padding_bottom, 24.0);
+    }
+
+    #[test]
+    fn lazy_list_placements_reuse_output_storage() {
+        let mut item = LazyListMeasuredItem::new(0, 10, None, 20.0, 50.0);
+        item.offset = 7.0;
+        item.node_ids.push(101);
+        item.node_ids.push(102);
+        item.child_offsets.push(0.0);
+        item.child_offsets.push(5.0);
+        let config = LazyListMeasureConfig {
+            is_vertical: true,
+            reverse_layout: false,
+            before_content_padding: 0.0,
+            after_content_padding: 0.0,
+            spacing: 0.0,
+            beyond_bounds_item_count: 0,
+            vertical_arrangement: Some(LinearArrangement::Start),
+            horizontal_arrangement: None,
+        };
+        let mut placements = Vec::with_capacity(8);
+        let original_capacity = placements.capacity();
+
+        push_lazy_list_placements(&mut placements, &[item], 1, true, 100.0, &config);
+
+        assert_eq!(placements.len(), 2);
+        assert_eq!(placements[0].node_id, 101);
+        assert_eq!(placements[0].y, 7.0);
+        assert_eq!(placements[1].node_id, 102);
+        assert_eq!(placements[1].y, 12.0);
+        assert_eq!(placements.capacity(), original_capacity);
     }
 
     #[test]

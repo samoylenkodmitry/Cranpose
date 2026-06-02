@@ -1,6 +1,6 @@
 use cranpose_ui::{
-    collect_slices_from_modifier, current_density, set_density, BlendMode, Brush, Dp, DpOffset,
-    DrawCommand, LayerShape, Modifier, Point, RoundedCornerShape, Shadow, Size,
+    collect_slices_from_modifier, AppContext, BlendMode, Brush, Dp, DpOffset, DrawCommand,
+    LayerShape, Modifier, Point, RoundedCornerShape, Shadow, Size,
 };
 use cranpose_ui_graphics::{DrawPrimitive, ShadowPrimitive};
 
@@ -163,50 +163,42 @@ fn background_before_drop_shadow_renders_shadow_on_top() {
 
 #[test]
 fn static_shadow_uses_density_when_converted_to_px() {
-    struct DensityGuard(f32);
-    impl Drop for DensityGuard {
-        fn drop(&mut self) {
-            set_density(self.0);
-        }
-    }
+    let app_context = AppContext::new_with_density(2.0);
+    app_context.enter(|| {
+        let modifier = Modifier::empty().inner_shadow_value(
+            LayerShape::Rectangle,
+            Shadow {
+                offset: DpOffset::new(Dp(2.5), Dp(0.0)),
+                ..Default::default()
+            },
+        );
+        let slices = collect_slices_from_modifier(&modifier);
+        let overlay_primitives = slices
+            .draw_commands()
+            .iter()
+            .find_map(|command| match command {
+                DrawCommand::Overlay(draw) => Some(draw(Size {
+                    width: 40.0,
+                    height: 20.0,
+                })),
+                _ => None,
+            })
+            .expect("overlay command expected");
 
-    let guard = DensityGuard(current_density());
-    set_density(2.0);
-
-    let modifier = Modifier::empty().inner_shadow_value(
-        LayerShape::Rectangle,
-        Shadow {
-            offset: DpOffset::new(Dp(2.5), Dp(0.0)),
-            ..Default::default()
-        },
-    );
-    let slices = collect_slices_from_modifier(&modifier);
-    let overlay_primitives = slices
-        .draw_commands()
-        .iter()
-        .find_map(|command| match command {
-            DrawCommand::Overlay(draw) => Some(draw(Size {
-                width: 40.0,
-                height: 20.0,
-            })),
-            _ => None,
-        })
-        .expect("overlay command expected");
-
-    let cutout_x = overlay_primitives
-        .iter()
-        .find_map(|primitive| match primitive {
-            DrawPrimitive::Shadow(ShadowPrimitive::Inner { cutout, .. }) => match cutout.as_ref() {
-                DrawPrimitive::Rect { rect, .. } | DrawPrimitive::RoundRect { rect, .. } => {
-                    Some(rect.x)
+        let cutout_x = overlay_primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                DrawPrimitive::Shadow(ShadowPrimitive::Inner { cutout, .. }) => {
+                    match cutout.as_ref() {
+                        DrawPrimitive::Rect { rect, .. }
+                        | DrawPrimitive::RoundRect { rect, .. } => Some(rect.x),
+                        _ => None,
+                    }
                 }
                 _ => None,
-            },
-            _ => None,
-        });
-    assert_eq!(cutout_x, Some(5.0));
-
-    drop(guard);
+            });
+        assert_eq!(cutout_x, Some(5.0));
+    });
 }
 
 #[test]

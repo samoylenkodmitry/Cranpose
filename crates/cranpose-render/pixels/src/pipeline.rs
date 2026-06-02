@@ -1,11 +1,11 @@
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::graph::{
     LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
     RenderNode, TextPrimitiveNode,
 };
+use cranpose_render_common::graph_scene::RenderDiagnostics;
 use cranpose_render_common::hit_graph::{
     collect_hits_from_graph as collect_common_hits, HitGraphSink,
 };
@@ -49,8 +49,6 @@ fn pad_clip_rect(rect: Rect) -> Rect {
         height: (rect.height + TEXT_CLIP_PAD * 2.0).max(0.0),
     }
 }
-
-static REPORTED_UNSUPPORTED_PIXELS_EFFECTS: AtomicBool = AtomicBool::new(false);
 
 fn graphics_layer_supports_rigid_snap(layer: &GraphicsLayer) -> bool {
     (layer.scale - 1.0).abs() <= f32::EPSILON
@@ -114,6 +112,15 @@ struct PrimitiveRenderContext<'a> {
     layer_snap_anchor: Option<Point>,
 }
 
+struct RasterTraversalContext<'a> {
+    parent_transform: ProjectiveTransform,
+    parent_content_style: GraphicsLayer,
+    parent_visual_clip: Option<Rect>,
+    inherited_translated_snap_anchor: Option<Point>,
+    inherited_translated_content_context: bool,
+    diagnostics: &'a RenderDiagnostics,
+}
+
 fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
     layer.children.iter().any(|child| {
         matches!(
@@ -161,9 +168,9 @@ fn layer_requires_effect_fallback(layer: &GraphicsLayer) -> bool {
         || layer.blend_mode != BlendMode::SrcOver
 }
 
-fn report_unsupported_effects(layer: &GraphicsLayer) {
+fn report_unsupported_effects(layer: &GraphicsLayer, diagnostics: &RenderDiagnostics) {
     if layer_requires_effect_fallback(layer)
-        && !REPORTED_UNSUPPORTED_PIXELS_EFFECTS.swap(true, Ordering::Relaxed)
+        && diagnostics.claim_warning_once("pixels.unsupported-layer-effect")
     {
         log::warn!(
             "Pixels renderer does not support render/backdrop effects, offscreen compositing, or non-SrcOver layer blend modes; falling back to base layer rendering"
@@ -345,6 +352,7 @@ fn push_layer_shadow(
         crate::scene::DrawShape {
             rect,
             snap_anchor: None,
+            snap_to_pixel_grid: false,
             brush: Brush::solid(color),
             shape,
             z_index: 0,
@@ -535,17 +543,6 @@ fn push_text_style_draws(
         );
     }
 
-    push_text_decorations(
-        scene,
-        rect,
-        shifted_text_rect,
-        node_layer,
-        text,
-        text_style,
-        &text_brush,
-        text_clip,
-    );
-
     scene.push_text(
         node_id,
         transformed_shifted_text_rect,
@@ -555,6 +552,17 @@ fn push_text_style_draws(
         font_size,
         layer_uniform_scale(node_layer),
         options,
+        text_clip,
+    );
+
+    push_text_decorations(
+        scene,
+        rect,
+        shifted_text_rect,
+        node_layer,
+        text,
+        text_style,
+        &text_brush,
         text_clip,
     );
 }
@@ -630,14 +638,14 @@ fn push_text_decorations(
         let line_top = text_rect.y;
 
         if decoration.contains(TextDecoration::UNDERLINE) {
-            let underline_rect = Rect {
-                x: text_rect.x + current_offset,
-                y: line_top + line_height - thickness * 1.35,
-                width: span_width,
-                height: thickness,
-            };
+            let underline_rect = text_decoration_rect(
+                text_rect.x + current_offset,
+                line_top + line_height - thickness * 1.35,
+                span_width,
+                thickness,
+            );
             let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
-            scene.push_shape(
+            scene.push_pixel_snapped_shape(
                 transformed,
                 brush.clone(),
                 None,
@@ -647,17 +655,26 @@ fn push_text_decorations(
         }
 
         if decoration.contains(TextDecoration::LINE_THROUGH) {
-            let strike_rect = Rect {
-                x: text_rect.x + current_offset,
-                y: line_top + line_height * 0.52 - thickness * 0.5,
-                width: span_width,
-                height: thickness,
-            };
+            let strike_rect = text_decoration_rect(
+                text_rect.x + current_offset,
+                line_top + line_height * 0.52 - thickness * 0.5,
+                span_width,
+                thickness,
+            );
             let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
-            scene.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
+            scene.push_pixel_snapped_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
         }
 
         current_offset += span_width;
+    }
+}
+
+fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
+    Rect {
+        x,
+        y,
+        width,
+        height: thickness.ceil().max(1.0),
     }
 }
 
@@ -771,16 +788,22 @@ fn collect_hits_from_graph(
     collect_common_hits(layer, parent_transform, &mut sink, parent_hit_clip);
 }
 
-pub(crate) fn build_raster_scene(graph: &RenderGraph) -> RasterScene {
+pub(crate) fn build_raster_scene(
+    graph: &RenderGraph,
+    diagnostics: &RenderDiagnostics,
+) -> RasterScene {
     let mut scene = RasterScene::new();
     populate_draws_from_graph(
         &graph.root,
-        ProjectiveTransform::identity(),
-        GraphicsLayer::default(),
         &mut scene,
-        None,
-        None,
-        false,
+        RasterTraversalContext {
+            parent_transform: ProjectiveTransform::identity(),
+            parent_content_style: GraphicsLayer::default(),
+            parent_visual_clip: None,
+            inherited_translated_snap_anchor: None,
+            inherited_translated_content_context: false,
+            diagnostics,
+        },
     );
     scene
 }
@@ -879,16 +902,13 @@ fn raster_layer_mapping(
 
 fn populate_draws_from_graph(
     layer: &LayerNode,
-    parent_transform: ProjectiveTransform,
-    parent_content_style: GraphicsLayer,
     scene: &mut RasterScene,
-    parent_visual_clip: Option<Rect>,
-    inherited_translated_snap_anchor: Option<Point>,
-    inherited_translated_content_context: bool,
+    context: RasterTraversalContext<'_>,
 ) {
-    let transform = layer.transform_to_parent.then(parent_transform);
-    let mapping = raster_layer_mapping(layer, transform, parent_content_style);
-    report_unsupported_effects(&layer.graphics_layer);
+    let diagnostics = context.diagnostics;
+    let transform = layer.transform_to_parent.then(context.parent_transform);
+    let mapping = raster_layer_mapping(layer, transform, context.parent_content_style);
+    report_unsupported_effects(&layer.graphics_layer, diagnostics);
 
     if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
         return;
@@ -896,13 +916,13 @@ fn populate_draws_from_graph(
 
     let content_clip_to_bounds = layer.clip_to_bounds || layer.graphics_layer.clip;
     let visual_clip = resolve_clip(
-        parent_visual_clip,
+        context.parent_visual_clip,
         content_clip_to_bounds.then_some(mapping.transformed_bounds),
     );
     let effective_translated_content_context =
-        inherited_translated_content_context || layer.translated_content_context;
+        context.inherited_translated_content_context || layer.translated_content_context;
     let allow_rigid_snap = effective_translated_content_context || !layer.motion_context_animated;
-    let boundary_snap_anchor = if !inherited_translated_content_context
+    let boundary_snap_anchor = if !context.inherited_translated_content_context
         && layer.translated_content_context
         && allow_rigid_snap
     {
@@ -916,7 +936,9 @@ fn populate_draws_from_graph(
     } else {
         None
     };
-    let translated_snap_anchor = inherited_translated_snap_anchor.or(boundary_snap_anchor);
+    let translated_snap_anchor = context
+        .inherited_translated_snap_anchor
+        .or(boundary_snap_anchor);
     let layer_snap_anchor = translated_snap_anchor.or_else(|| {
         if allow_rigid_snap && layer_needs_rigid_snap(layer, effective_translated_content_context) {
             rigid_snap_anchor(
@@ -935,7 +957,7 @@ fn populate_draws_from_graph(
     // GraphicsLayer clipping clips content, but should not clip its own shadow.
     // Explicit clip-to-bounds modifiers still clip both.
     let shadow_clip = resolve_clip(
-        parent_visual_clip,
+        context.parent_visual_clip,
         layer
             .shadow_clip
             .map(|clip| transform.bounds_for_rect(clip)),
@@ -970,12 +992,15 @@ fn populate_draws_from_graph(
             RenderNode::Layer(child_layer) => {
                 populate_draws_from_graph(
                     child_layer,
-                    transform,
-                    mapping.content_style.clone(),
                     scene,
-                    visual_clip,
-                    translated_snap_anchor,
-                    effective_translated_content_context,
+                    RasterTraversalContext {
+                        parent_transform: transform,
+                        parent_content_style: mapping.content_style.clone(),
+                        parent_visual_clip: visual_clip,
+                        inherited_translated_snap_anchor: translated_snap_anchor,
+                        inherited_translated_content_context: effective_translated_content_context,
+                        diagnostics,
+                    },
                 );
             }
         }
@@ -1157,6 +1182,7 @@ fn push_shadow_primitive(
             crate::scene::DrawShape {
                 rect: params.rect,
                 snap_anchor: None,
+                snap_to_pixel_grid: false,
                 brush: params.brush,
                 shape: params.shape,
                 z_index: 0,
@@ -1255,6 +1281,49 @@ mod tests {
     };
     use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
     use cranpose_ui_graphics::{CornerRadii, ImageBitmap, ImageSampling};
+
+    fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
+        let app_context = cranpose_ui::AppContext::new();
+        app_context.enter(block)
+    }
+
+    fn build_raster_scene_for_test(graph: &RenderGraph) -> RasterScene {
+        let diagnostics = RenderDiagnostics::new();
+        with_test_app_context(|| build_raster_scene(graph, &diagnostics))
+    }
+
+    fn prepare_text_layout_for_test(
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> cranpose_ui::text::PreparedTextLayout {
+        with_test_app_context(|| prepare_text_layout(text, style, options, max_width))
+    }
+
+    fn push_text_style_draws_for_test(
+        scene: &mut RasterScene,
+        rect: Rect,
+        text: &str,
+        text_style: &TextStyle,
+        clip: Option<Rect>,
+    ) {
+        let text = cranpose_ui::text::AnnotatedString::from(text);
+        with_test_app_context(|| {
+            push_text_style_draws(
+                scene,
+                7 as NodeId,
+                rect,
+                rect,
+                &GraphicsLayer::default(),
+                &text,
+                text_style,
+                14.0,
+                TextLayoutOptions::default(),
+                clip,
+            )
+        });
+    }
 
     fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> RenderGraph {
         let text_leaf = LayerNode {
@@ -1528,7 +1597,7 @@ mod tests {
             }))],
         });
 
-        let scene = build_raster_scene(&graph);
+        let scene = build_raster_scene_for_test(&graph);
         let [shape] = scene.shapes.as_slice() else {
             panic!("expected exactly one translated child shape");
         };
@@ -1545,7 +1614,7 @@ mod tests {
 
     #[test]
     fn direct_text_leaf_snaps_modifier_background_and_text_with_one_anchor() {
-        let scene = build_raster_scene(&snapped_text_leaf_root(false, false));
+        let scene = build_raster_scene_for_test(&snapped_text_leaf_root(false, false));
 
         assert_eq!(scene.shapes.len(), 1);
         assert_eq!(scene.images.len(), 1);
@@ -1558,7 +1627,7 @@ mod tests {
 
     #[test]
     fn animated_translated_content_text_leaf_uses_content_snap() {
-        let scene = build_raster_scene(&snapped_text_leaf_root(true, true));
+        let scene = build_raster_scene_for_test(&snapped_text_leaf_root(true, true));
 
         assert_eq!(scene.shapes.len(), 1);
         assert_eq!(scene.images.len(), 1);
@@ -1580,7 +1649,7 @@ mod tests {
 
     #[test]
     fn rested_translated_content_text_leaf_snaps_for_crisp_scroll_rest() {
-        let scene = build_raster_scene(&snapped_text_leaf_root(false, true));
+        let scene = build_raster_scene_for_test(&snapped_text_leaf_root(false, true));
 
         assert_eq!(scene.shapes.len(), 1);
         assert_eq!(scene.images.len(), 1);
@@ -1833,7 +1902,7 @@ mod tests {
         let options = cranpose_ui::TextLayoutOptions::default();
         let content_width = 130.0;
 
-        let wrapped_by_content = prepare_text_layout(
+        let wrapped_by_content = prepare_text_layout_for_test(
             &cranpose_ui::text::AnnotatedString::from(text),
             &style,
             options,
@@ -1847,7 +1916,7 @@ mod tests {
 
         let measure_width =
             resolve_text_measure_width(content_width, padding, Some(180.0), options);
-        let prepared = prepare_text_layout(
+        let prepared = prepare_text_layout_for_test(
             &cranpose_ui::text::AnnotatedString::from(text),
             &style,
             options,
@@ -1879,7 +1948,7 @@ mod tests {
         let content_width = 130.0;
         let measure_width =
             resolve_text_measure_width(content_width, padding, Some(180.0), options);
-        let prepared = prepare_text_layout(
+        let prepared = prepare_text_layout_for_test(
             &cranpose_ui::text::AnnotatedString::from(text),
             &style,
             options,
@@ -1921,16 +1990,11 @@ mod tests {
             height: 200.0,
         };
 
-        push_text_style_draws(
+        push_text_style_draws_for_test(
             &mut scene,
-            7 as NodeId,
             rect,
-            rect,
-            &GraphicsLayer::default(),
-            &cranpose_ui::text::AnnotatedString::from("Decorated shadow text"),
+            "Decorated shadow text",
             &style,
-            14.0,
-            TextLayoutOptions::default(),
             Some(clip),
         );
 
@@ -1980,21 +2044,21 @@ mod tests {
             height: 28.0,
         };
 
-        push_text_style_draws(
-            &mut scene,
-            7 as NodeId,
-            rect,
-            rect,
-            &GraphicsLayer::default(),
-            &cranpose_ui::text::AnnotatedString::from("Decorated"),
-            &style,
-            14.0,
-            TextLayoutOptions::default(),
-            None,
-        );
+        push_text_style_draws_for_test(&mut scene, rect, "Decorated", &style, None);
 
         assert_eq!(scene.shapes.len(), 2, "underline + line-through expected");
         assert_eq!(scene.texts.len(), 1, "main text expected");
+        assert!(
+            scene.shapes.iter().all(|shape| shape.snap_to_pixel_grid),
+            "text decoration shapes should snap after inherited translated-content anchors"
+        );
+        assert!(
+            scene
+                .shapes
+                .iter()
+                .all(|shape| shape.z_index > scene.texts[0].z_index),
+            "text decoration shapes should render over foreground glyph ink"
+        );
     }
 
     #[test]
@@ -2015,18 +2079,7 @@ mod tests {
             height: 28.0,
         };
 
-        push_text_style_draws(
-            &mut scene,
-            7 as NodeId,
-            rect,
-            rect,
-            &GraphicsLayer::default(),
-            &cranpose_ui::text::AnnotatedString::from("Shifted"),
-            &style,
-            14.0,
-            TextLayoutOptions::default(),
-            None,
-        );
+        push_text_style_draws_for_test(&mut scene, rect, "Shifted", &style, None);
 
         assert_eq!(scene.texts.len(), 1);
         assert!(
@@ -2057,18 +2110,7 @@ mod tests {
             height: 28.0,
         };
 
-        push_text_style_draws(
-            &mut scene,
-            7 as NodeId,
-            rect,
-            rect,
-            &GraphicsLayer::default(),
-            &cranpose_ui::text::AnnotatedString::from("Gradient text"),
-            &style,
-            14.0,
-            TextLayoutOptions::default(),
-            None,
-        );
+        push_text_style_draws_for_test(&mut scene, rect, "Gradient text", &style, None);
 
         assert_eq!(scene.texts.len(), 1);
         assert_ne!(
@@ -2096,7 +2138,7 @@ mod tests {
         let content_width = 130.0;
         let measure_width =
             resolve_text_measure_width(content_width, padding, Some(180.0), options);
-        let prepared = prepare_text_layout(
+        let prepared = prepare_text_layout_for_test(
             &cranpose_ui::text::AnnotatedString::from(text),
             &style,
             options,

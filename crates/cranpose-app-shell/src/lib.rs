@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 #![allow(clippy::type_complexity)]
 
 mod fps_monitor;
@@ -8,18 +9,20 @@ mod shell_input;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
 
-// Re-export FPS monitoring API
-pub use fps_monitor::{
-    current_fps, fps_display, fps_display_detailed, fps_stats, record_recomposition, FpsStats,
-};
+pub use fps_monitor::FpsStats;
 
 use std::fmt::{Debug, Write};
+use std::rc::Rc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex, MutexGuard,
+};
 // Use web_time for cross-platform time support (native + WASM) - compatible with winit
 use web_time::Instant;
 
 use cranpose_core::{
-    enter_event_handler, exit_event_handler, location_key, run_in_mutable_snapshot, Applier,
-    Composition, Key, MemoryApplier, NodeError, NodeId,
+    enter_event_handler_scope, location_key, run_in_mutable_snapshot, Applier, Composition, Key,
+    MemoryApplier, NodeError, NodeId,
 };
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
@@ -58,6 +61,7 @@ pub struct AppShell<R>
 where
     R: Renderer,
 {
+    app_context: Rc<cranpose_ui::AppContext>,
     runtime: StdRuntime,
     composition: Composition<MemoryApplier>,
     content: Box<dyn FnMut()>,
@@ -88,6 +92,7 @@ where
     hovered_nodes: Vec<NodeId>,
     /// Persistent clipboard for desktop (Linux X11 requires clipboard to stay alive)
     #[cfg(all(
+        feature = "clipboard-native",
         not(target_arch = "wasm32"),
         not(target_os = "android"),
         not(target_os = "ios")
@@ -96,6 +101,8 @@ where
     /// Dev options for debugging and performance monitoring
     dev_options: DevOptions,
     dev_overlay_controls: Vec<DevOverlayControl>,
+    fps_monitor: fps_monitor::FpsMonitor,
+    frame_scheduler: FrameScheduler,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -124,6 +131,83 @@ impl FramePacingMode {
             Self::Hard60 => Some(60),
             Self::Hard120 => Some(120),
             Self::Vsync | Self::NoVsync => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameSchedule {
+    pub needs_frame: bool,
+    pub next_deadline: Option<web_time::Instant>,
+}
+
+pub trait PlatformFrameDriver {
+    fn request_frame(&self);
+    fn request_wake_at(&self, deadline: web_time::Instant);
+    fn clear_wake(&self);
+}
+
+#[derive(Debug)]
+pub struct FrameScheduler {
+    frame_pending: AtomicBool,
+    next_deadline: Mutex<Option<web_time::Instant>>,
+}
+
+impl Default for FrameScheduler {
+    fn default() -> Self {
+        Self {
+            frame_pending: AtomicBool::new(false),
+            next_deadline: Mutex::new(None),
+        }
+    }
+}
+
+impl FrameScheduler {
+    fn lock_deadline(&self) -> MutexGuard<'_, Option<web_time::Instant>> {
+        self.next_deadline
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn record(&self, schedule: FrameSchedule) {
+        self.frame_pending
+            .store(schedule.needs_frame, Ordering::SeqCst);
+        let mut next_deadline = self.lock_deadline();
+        *next_deadline = if schedule.needs_frame {
+            None
+        } else {
+            schedule.next_deadline
+        };
+    }
+
+    pub fn schedule<D>(&self, schedule: FrameSchedule, driver: &D)
+    where
+        D: PlatformFrameDriver + ?Sized,
+    {
+        self.record(schedule);
+        schedule.apply_to(driver);
+    }
+
+    pub fn snapshot(&self) -> FrameSchedule {
+        FrameSchedule {
+            needs_frame: self.frame_pending.load(Ordering::SeqCst),
+            next_deadline: *self.lock_deadline(),
+        }
+    }
+}
+
+impl FrameSchedule {
+    pub fn apply_to<D>(self, driver: &D)
+    where
+        D: PlatformFrameDriver + ?Sized,
+    {
+        if self.needs_frame {
+            driver.clear_wake();
+            driver.request_frame();
+        } else if let Some(deadline) = self.next_deadline {
+            driver.request_wake_at(deadline);
+        } else {
+            driver.clear_wake();
         }
     }
 }
@@ -178,23 +262,36 @@ where
     }
 
     pub fn new_with_size(
-        mut renderer: R,
+        renderer: R,
         root_key: Key,
         content: impl FnMut() + 'static,
         buffer_size: (u32, u32),
         viewport: (f32, f32),
     ) -> Self {
-        // Initialize FPS tracking
-        fps_monitor::init_fps_tracker();
+        Self::new_with_size_and_density(renderer, root_key, content, buffer_size, viewport, 1.0)
+    }
 
+    pub fn new_with_size_and_density(
+        mut renderer: R,
+        root_key: Key,
+        content: impl FnMut() + 'static,
+        buffer_size: (u32, u32),
+        viewport: (f32, f32),
+        density: f32,
+    ) -> Self {
+        let app_context = cranpose_ui::AppContext::new_with_density(density);
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
         let mut build: Box<dyn FnMut()> = Box::new(content);
-        if let Err(err) = composition.render_stable(root_key, &mut *build) {
-            log::error!("initial render failed: {err}");
-        }
+        renderer.attach_app_context_services(&app_context);
+        app_context.enter(|| {
+            if let Err(err) = composition.render_stable(root_key, &mut *build) {
+                log::error!("initial render failed: {err}");
+            }
+        });
         renderer.scene_mut().clear();
         let mut shell = Self {
+            app_context,
             runtime,
             composition,
             content: build,
@@ -215,6 +312,7 @@ where
             hit_path_tracker: HitPathTracker::new(),
             hovered_nodes: Vec::new(),
             #[cfg(all(
+                feature = "clipboard-native",
                 not(target_arch = "wasm32"),
                 not(target_os = "android"),
                 not(target_os = "ios")
@@ -222,6 +320,8 @@ where
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
             dev_overlay_controls: Vec::new(),
+            fps_monitor: fps_monitor::FpsMonitor::new(),
+            frame_scheduler: FrameScheduler::default(),
         };
         shell.process_frame();
         shell
@@ -245,12 +345,25 @@ where
         self.dev_options.frame_pacing_mode
     }
 
+    pub fn current_fps(&self) -> f32 {
+        self.fps_monitor.current_fps()
+    }
+
+    pub fn fps_stats(&self) -> FpsStats {
+        self.fps_monitor.stats()
+    }
+
+    pub fn reset_fps_stats(&mut self) {
+        self.fps_monitor.reset_stats();
+    }
+
     pub fn set_frame_pacing_mode(&mut self, mode: FramePacingMode) {
         if self.dev_options.frame_pacing_mode == mode {
             return;
         }
         self.dev_options.frame_pacing_mode = mode;
-        request_render_invalidation();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(request_render_invalidation);
         self.mark_dirty();
     }
 
@@ -300,7 +413,7 @@ where
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn set_frame_waker(&mut self, waker: impl Fn() + Send + 'static) {
+    pub fn set_frame_waker(&mut self, waker: impl Fn() + 'static) {
         self.runtime.set_frame_waker(waker);
     }
 
@@ -309,37 +422,43 @@ where
     }
 
     pub fn should_render(&self) -> bool {
-        if self.layout_requested
-            || self.scene_dirty
-            || peek_render_invalidation()
-            || peek_pointer_invalidation()
-            || peek_focus_invalidation()
-            || peek_layout_invalidation()
-        {
-            return true;
-        }
-        self.composition.should_render()
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| {
+            if self.layout_requested
+                || self.scene_dirty
+                || peek_render_invalidation()
+                || peek_pointer_invalidation()
+                || peek_focus_invalidation()
+                || peek_layout_invalidation()
+            {
+                return true;
+            }
+            self.composition.should_render()
+        })
     }
 
     /// Returns true if the shell needs to redraw (dirty flag, layout dirty, active animations).
     /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {
-        if self.is_dirty
-            || self.layout_requested
-            || self.scene_dirty
-            || peek_render_invalidation()
-            || peek_pointer_invalidation()
-            || peek_focus_invalidation()
-            || peek_layout_invalidation()
-            || cranpose_ui::has_pending_layout_repasses()
-            || cranpose_ui::has_pending_draw_repasses()
-            || has_pending_pointer_repasses()
-            || has_pending_focus_invalidations()
-        {
-            return true;
-        }
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| {
+            if self.is_dirty
+                || self.layout_requested
+                || self.scene_dirty
+                || peek_render_invalidation()
+                || peek_pointer_invalidation()
+                || peek_focus_invalidation()
+                || peek_layout_invalidation()
+                || cranpose_ui::has_pending_layout_repasses()
+                || cranpose_ui::has_pending_draw_repasses()
+                || has_pending_pointer_repasses()
+                || has_pending_focus_invalidations()
+            {
+                return true;
+            }
 
-        self.composition.should_render()
+            self.composition.should_render()
+        })
     }
 
     /// Marks the shell as dirty, indicating a redraw is needed.
@@ -350,7 +469,36 @@ where
     pub fn request_root_render(&mut self) {
         self.composition.request_root_render();
         self.request_forced_layout_pass();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(request_render_invalidation);
         self.mark_dirty();
+    }
+
+    pub fn set_density(&mut self, density: f32) {
+        let app_context = Rc::clone(&self.app_context);
+        let changed = app_context.enter(|| {
+            let previous = cranpose_ui::current_density().to_bits();
+            cranpose_ui::set_density(density);
+            previous != cranpose_ui::current_density().to_bits()
+        });
+        if changed {
+            self.request_forced_layout_pass();
+            self.mark_dirty();
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn debug_current_density(&self) -> f32 {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::current_density)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn debug_enter_app_context<T>(&self, block: impl FnOnce() -> T) -> T {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(block)
     }
 
     fn request_layout_pass(&mut self) {
@@ -370,7 +518,34 @@ where
     /// Returns the next scheduled event time for cursor blink.
     /// Use this for `ControlFlow::WaitUntil` scheduling.
     pub fn next_event_time(&self) -> Option<web_time::Instant> {
-        cranpose_ui::next_cursor_blink_time()
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::next_cursor_blink_time)
+    }
+
+    fn compute_frame_schedule(&self) -> FrameSchedule {
+        FrameSchedule {
+            needs_frame: self.needs_redraw() || self.has_active_animations(),
+            next_deadline: self.next_event_time(),
+        }
+    }
+
+    pub fn frame_schedule(&self) -> FrameSchedule {
+        let schedule = self.compute_frame_schedule();
+        self.frame_scheduler.record(schedule);
+        schedule
+    }
+
+    pub fn schedule_platform_frame<D>(&self, driver: &D) -> FrameSchedule
+    where
+        D: PlatformFrameDriver + ?Sized,
+    {
+        let schedule = self.compute_frame_schedule();
+        self.frame_scheduler.schedule(schedule, driver);
+        schedule
+    }
+
+    pub fn frame_scheduler_snapshot(&self) -> FrameSchedule {
+        self.frame_scheduler.snapshot()
     }
 
     fn frame_time_nanos_at(&self, now: Instant) -> u64 {
@@ -389,57 +564,60 @@ where
     }
 
     pub fn update_at_frame_time_nanos(&mut self, frame_time: u64) {
-        let frame_time = frame_time.max(self.last_frame_time_nanos);
-        self.last_frame_time_nanos = frame_time;
-        let runtime_handle = self.runtime.runtime_handle();
-        runtime_handle.with_deferred_state_releases(|| {
-            self.runtime.drain_frame_callbacks(frame_time);
-            runtime_handle.drain_ui();
-            let should_render = self.composition.should_render();
-            if should_render {
-                log::trace!(
-                    target: "cranpose::input",
-                    "update begin: should_render=true layout_requested={} scene_dirty={} is_dirty={}",
-                    self.layout_requested,
-                    self.scene_dirty,
-                    self.is_dirty
-                );
-            }
-            if should_render {
-                let Some(root_key) = self.composition.root_key() else {
-                    self.process_frame();
-                    self.is_dirty = false;
-                    return;
-                };
-                match self.composition.reconcile(root_key, &mut *self.content) {
-                    Ok(changed) => {
-                        log::trace!(
-                            target: "cranpose::input",
-                            "reconcile changed={changed}"
-                        );
-                        if changed {
-                            fps_monitor::record_recomposition();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| {
+            let frame_time = frame_time.max(self.last_frame_time_nanos);
+            self.last_frame_time_nanos = frame_time;
+            let runtime_handle = self.runtime.runtime_handle();
+            runtime_handle.with_deferred_state_releases(|| {
+                self.runtime.drain_frame_callbacks(frame_time);
+                runtime_handle.drain_ui();
+                let should_render = self.composition.should_render();
+                if should_render {
+                    log::trace!(
+                        target: "cranpose::input",
+                        "update begin: should_render=true layout_requested={} scene_dirty={} is_dirty={}",
+                        self.layout_requested,
+                        self.scene_dirty,
+                        self.is_dirty
+                    );
+                }
+                if should_render {
+                    let Some(root_key) = self.composition.root_key() else {
+                        self.process_frame_in_context();
+                        self.is_dirty = false;
+                        return;
+                    };
+                    match self.composition.reconcile(root_key, &mut *self.content) {
+                        Ok(changed) => {
+                            log::trace!(
+                                target: "cranpose::input",
+                                "reconcile changed={changed}"
+                            );
+                            if changed {
+                                self.fps_monitor.record_recomposition();
+                                self.request_layout_pass();
+                                request_render_invalidation();
+                            }
+                        }
+                        Err(NodeError::Missing { id }) => {
+                            // Node was removed (likely due to conditional render or tab switch)
+                            // This is expected when scopes try to recompose after their nodes are gone
+                            log::debug!("Recomposition skipped: node {} no longer exists", id);
+                            self.request_layout_pass();
+                            request_render_invalidation();
+                        }
+                        Err(err) => {
+                            log::error!("recomposition failed: {err}");
                             self.request_layout_pass();
                             request_render_invalidation();
                         }
                     }
-                    Err(NodeError::Missing { id }) => {
-                        // Node was removed (likely due to conditional render or tab switch)
-                        // This is expected when scopes try to recompose after their nodes are gone
-                        log::debug!("Recomposition skipped: node {} no longer exists", id);
-                        self.request_layout_pass();
-                        request_render_invalidation();
-                    }
-                    Err(err) => {
-                        log::error!("recomposition failed: {err}");
-                        self.request_layout_pass();
-                        request_render_invalidation();
-                    }
                 }
-            }
-            self.process_frame();
-            // Clear dirty flag after update (frame has been processed)
-            self.is_dirty = false;
+                self.process_frame_in_context();
+                // Clear dirty flag after update (frame has been processed)
+                self.is_dirty = false;
+            });
         });
     }
 
@@ -464,7 +642,45 @@ pub fn default_root_key() -> Key {
 
 #[cfg(test)]
 mod frame_pacing_tests {
-    use super::FramePacingMode;
+    use super::{FramePacingMode, FrameSchedule, FrameScheduler, PlatformFrameDriver};
+    use std::cell::RefCell;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::time::Duration;
+    use web_time::Instant;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum DriverCall {
+        RequestFrame,
+        RequestWakeAt(Instant),
+        ClearWake,
+    }
+
+    #[derive(Default)]
+    struct RecordingFrameDriver {
+        calls: RefCell<Vec<DriverCall>>,
+    }
+
+    impl RecordingFrameDriver {
+        fn calls(&self) -> Vec<DriverCall> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl PlatformFrameDriver for RecordingFrameDriver {
+        fn request_frame(&self) {
+            self.calls.borrow_mut().push(DriverCall::RequestFrame);
+        }
+
+        fn request_wake_at(&self, deadline: Instant) {
+            self.calls
+                .borrow_mut()
+                .push(DriverCall::RequestWakeAt(deadline));
+        }
+
+        fn clear_wake(&self) {
+            self.calls.borrow_mut().push(DriverCall::ClearWake);
+        }
+    }
 
     #[test]
     fn frame_pacing_labels_match_overlay_modes() {
@@ -480,6 +696,125 @@ mod frame_pacing_tests {
         assert_eq!(FramePacingMode::Hard60.target_fps(), Some(60));
         assert_eq!(FramePacingMode::Hard120.target_fps(), Some(120));
         assert_eq!(FramePacingMode::NoVsync.target_fps(), None);
+    }
+
+    #[test]
+    fn frame_schedule_requests_immediate_frame_and_clears_deadline() {
+        let driver = RecordingFrameDriver::default();
+        let deadline = Instant::now() + Duration::from_millis(25);
+
+        FrameSchedule {
+            needs_frame: true,
+            next_deadline: Some(deadline),
+        }
+        .apply_to(&driver);
+
+        assert_eq!(
+            driver.calls(),
+            vec![DriverCall::ClearWake, DriverCall::RequestFrame]
+        );
+    }
+
+    #[test]
+    fn frame_schedule_requests_deadline_when_idle_until_timer() {
+        let driver = RecordingFrameDriver::default();
+        let deadline = Instant::now() + Duration::from_millis(25);
+
+        FrameSchedule {
+            needs_frame: false,
+            next_deadline: Some(deadline),
+        }
+        .apply_to(&driver);
+
+        assert_eq!(driver.calls(), vec![DriverCall::RequestWakeAt(deadline)]);
+    }
+
+    #[test]
+    fn frame_schedule_clears_wake_when_fully_idle() {
+        let driver = RecordingFrameDriver::default();
+
+        FrameSchedule {
+            needs_frame: false,
+            next_deadline: None,
+        }
+        .apply_to(&driver);
+
+        assert_eq!(driver.calls(), vec![DriverCall::ClearWake]);
+    }
+
+    #[test]
+    fn frame_scheduler_records_latest_schedule_and_applies_driver() {
+        let scheduler = FrameScheduler::default();
+        let driver = RecordingFrameDriver::default();
+        let deadline = Instant::now() + Duration::from_millis(25);
+
+        scheduler.schedule(
+            FrameSchedule {
+                needs_frame: false,
+                next_deadline: Some(deadline),
+            },
+            &driver,
+        );
+
+        assert_eq!(
+            scheduler.snapshot(),
+            FrameSchedule {
+                needs_frame: false,
+                next_deadline: Some(deadline),
+            }
+        );
+        assert_eq!(driver.calls(), vec![DriverCall::RequestWakeAt(deadline)]);
+    }
+
+    #[test]
+    fn frame_scheduler_clears_deadline_for_immediate_frame() {
+        let scheduler = FrameScheduler::default();
+        let driver = RecordingFrameDriver::default();
+        let deadline = Instant::now() + Duration::from_millis(25);
+
+        scheduler.schedule(
+            FrameSchedule {
+                needs_frame: true,
+                next_deadline: Some(deadline),
+            },
+            &driver,
+        );
+
+        assert_eq!(
+            scheduler.snapshot(),
+            FrameSchedule {
+                needs_frame: true,
+                next_deadline: None,
+            }
+        );
+        assert_eq!(
+            driver.calls(),
+            vec![DriverCall::ClearWake, DriverCall::RequestFrame]
+        );
+    }
+
+    #[test]
+    fn frame_scheduler_recovers_poisoned_deadline_lock() {
+        let scheduler = FrameScheduler::default();
+        let deadline = Instant::now() + Duration::from_millis(25);
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = scheduler.lock_deadline();
+            panic!("poison frame scheduler deadline lock");
+        }));
+
+        scheduler.record(FrameSchedule {
+            needs_frame: false,
+            next_deadline: Some(deadline),
+        });
+
+        assert_eq!(
+            scheduler.snapshot(),
+            FrameSchedule {
+                needs_frame: false,
+                next_deadline: Some(deadline),
+            }
+        );
     }
 }
 

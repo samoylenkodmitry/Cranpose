@@ -8,7 +8,7 @@ impl Modifier {
     ///
     /// `draw_content()` splits drawing into behind (before) and overlay (after)
     /// phases. If `draw_content()` is never called, primitives are treated as
-    /// overlay for backward compatibility.
+    /// overlay content.
     ///
     /// Example: `Modifier::empty().draw_with_content(|scope| { ... })`
     pub fn draw_with_content(self, f: impl Fn(&mut dyn DrawScope) + 'static) -> Self {

@@ -140,7 +140,7 @@ fn dispatch_order_for_paths(paths: &[Vec<NodeId>]) -> Vec<NodeId> {
         for node_id in path.iter().rev().copied() {
             tree.entry(node_id).or_default();
             if let Some(parent_id) = parent {
-                let parent_node = tree.get_mut(&parent_id).expect("parent inserted above");
+                let parent_node = tree.entry(parent_id).or_default();
                 push_unique(&mut parent_node.children, node_id);
             } else {
                 push_unique(&mut roots, node_id);
@@ -217,5 +217,14 @@ mod tests {
         let paths = vec![vec![1, 99], vec![2, 99]];
 
         assert_eq!(dispatch_order_for_paths(&paths), vec![1, 2, 99]);
+    }
+
+    #[test]
+    fn dispatch_tree_build_does_not_panic_on_parent_entry_assumption() {
+        let source = include_str!("hit_path_tracker.rs");
+        let parent_expect = ["expect(\"parent ", "inserted above\")"].concat();
+
+        assert!(!source.contains(parent_expect.as_str()));
+        assert!(source.contains("tree.entry(parent_id).or_default()"));
     }
 }

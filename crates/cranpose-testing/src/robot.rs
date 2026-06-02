@@ -26,8 +26,9 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_foundation::PointerEvent;
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
-use cranpose_ui::LayoutTree;
+use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Point, Rect, Size};
+use std::rc::Rc;
 
 /// Main robot testing rule that provides programmatic control over a real app.
 ///
@@ -38,6 +39,7 @@ where
     R: Renderer,
 {
     shell: AppShell<R>,
+    frame_time_nanos: u64,
 }
 
 impl<R> RobotTestRule<R>
@@ -54,7 +56,10 @@ where
         shell.set_viewport(width as f32, height as f32);
         shell.set_buffer_size(width, height);
 
-        Self { shell }
+        Self {
+            shell,
+            frame_time_nanos: 0,
+        }
     }
 
     /// Get the current viewport size.
@@ -71,9 +76,14 @@ where
     /// Advance frame time by the given duration in nanoseconds.
     ///
     /// This is useful for testing animations and time-based behaviors.
-    pub fn advance_time(&mut self, _nanos: u64) {
-        // TODO: Actually advance time using the provided nanos parameter
-        self.shell.update();
+    pub fn advance_time(&mut self, nanos: u64) {
+        self.frame_time_nanos = self.frame_time_nanos.saturating_add(nanos);
+        self.shell.update_at_frame_time_nanos(self.frame_time_nanos);
+    }
+
+    /// Current deterministic frame time used by this robot.
+    pub fn frame_time_nanos(&self) -> u64 {
+        self.frame_time_nanos
     }
 
     /// Pump the app until it's idle (no pending updates).
@@ -191,12 +201,11 @@ where
     pub fn get_all_text(&mut self) -> Vec<String> {
         self.wait_for_idle();
 
-        // Use HeadlessRenderer to extract text from the layout tree
-        if let Some(layout_tree) = self.get_layout_tree() {
-            extract_text_from_layout(layout_tree)
-        } else {
-            Vec::new()
-        }
+        self.shell.with_layout_tree(|layout_tree| {
+            layout_tree
+                .map(extract_text_from_layout)
+                .unwrap_or_default()
+        })
     }
 
     /// Get all rectangles (bounds) of UI elements on screen.
@@ -205,11 +214,11 @@ where
     pub fn get_all_rects(&mut self) -> Vec<(Rect, Option<String>)> {
         self.wait_for_idle();
 
-        if let Some(layout_tree) = self.get_layout_tree() {
-            extract_rects_from_layout(layout_tree)
-        } else {
-            Vec::new()
-        }
+        self.shell.with_layout_tree(|layout_tree| {
+            layout_tree
+                .map(extract_rects_from_layout)
+                .unwrap_or_default()
+        })
     }
 
     /// Print debug information about the current screen state.
@@ -222,11 +231,6 @@ where
     /// Get access to the underlying app shell for advanced scenarios.
     pub fn shell_mut(&mut self) -> &mut AppShell<R> {
         &mut self.shell
-    }
-
-    /// Get the layout tree if available.
-    fn get_layout_tree(&mut self) -> Option<&LayoutTree> {
-        self.shell.layout_tree()
     }
 
     /// Get the render scene for hit testing and queries.
@@ -420,11 +424,27 @@ fn extract_rects_from_layout(layout: &LayoutTree) -> Vec<(Rect, Option<String>)>
 #[derive(Default)]
 pub struct TestRenderer {
     scene: TestScene,
+    text_measurer: Option<Rc<dyn TextMeasurer>>,
+}
+
+impl TestRenderer {
+    pub fn with_text_measurer(text_measurer: Rc<dyn TextMeasurer>) -> Self {
+        Self {
+            scene: TestScene,
+            text_measurer: Some(text_measurer),
+        }
+    }
 }
 
 impl Renderer for TestRenderer {
     type Scene = TestScene;
     type Error = ();
+
+    fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
+        if let Some(text_measurer) = &self.text_measurer {
+            app_context.set_text_measurer_rc(Rc::clone(text_measurer));
+        }
+    }
 
     fn scene(&self) -> &Self::Scene {
         &self.scene
@@ -496,6 +516,24 @@ where
     RobotTestRule::new(width, height, TestRenderer::default(), content)
 }
 
+/// Create a headless robot test rule with an explicit text measurer.
+pub fn create_headless_robot_test_with_text_measurer<F>(
+    width: u32,
+    height: u32,
+    text_measurer: Rc<dyn TextMeasurer>,
+    content: F,
+) -> RobotTestRule<TestRenderer>
+where
+    F: FnMut() + 'static,
+{
+    RobotTestRule::new(
+        width,
+        height,
+        TestRenderer::with_text_measurer(text_measurer),
+        content,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,5 +566,16 @@ mod tests {
 
         // Should not panic
         robot.drag(0.0, 0.0, 100.0, 100.0);
+    }
+
+    #[test]
+    fn robot_advance_time_uses_supplied_frame_delta() {
+        let mut robot = create_headless_robot_test(800, 600, || {});
+
+        robot.advance_time(16_000_000);
+        assert_eq!(robot.frame_time_nanos(), 16_000_000);
+
+        robot.advance_time(8_000_000);
+        assert_eq!(robot.frame_time_nanos(), 24_000_000);
     }
 }

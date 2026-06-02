@@ -139,12 +139,24 @@ pub enum LaunchError {
     /// Creating the rendering surface failed.
     #[error("failed to create desktop rendering surface: {0}")]
     SurfaceCreate(#[source] wgpu::CreateSurfaceError),
+    /// The rendering surface did not report any supported formats.
+    #[error("desktop rendering surface reports no supported formats")]
+    NoSurfaceFormat,
+    /// The rendering surface did not report any supported alpha modes.
+    #[error("desktop rendering surface reports no supported alpha modes")]
+    NoSurfaceAlphaMode,
     /// No compatible GPU adapter was available for the surface.
     #[error("no compatible GPU adapter was available: {0}")]
     NoAdapter(#[source] wgpu::RequestAdapterError),
     /// Creating the GPU device failed.
     #[error("failed to create GPU device: {0}")]
     DeviceCreate(#[source] wgpu::RequestDeviceError),
+    /// The desktop renderer context was not initialized before a surface needed it.
+    #[error("desktop GPU context is not initialized")]
+    GpuContextUnavailable,
+    /// The application content closure was already consumed before the primary shell was created.
+    #[error("desktop application content is unavailable during launch")]
+    ContentUnavailable,
     /// The desktop event loop terminated with an error.
     #[error("desktop event loop terminated with error: {0}")]
     EventLoopRun(#[source] winit::error::EventLoopError),
@@ -152,6 +164,12 @@ pub enum LaunchError {
     #[cfg(feature = "robot")]
     #[error("desktop robot test driver panicked: {0}")]
     TestDriverPanic(String),
+}
+
+#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
+    eprintln!("{context}: {error}");
+    std::process::exit(1)
 }
 
 /// Platform-agnostic application launcher.
@@ -178,7 +196,7 @@ pub enum LaunchError {
 /// use cranpose::AppLauncher;
 ///
 /// // Desktop
-/// #[cfg(not(target_os = "android"))]
+/// #[cfg(all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")))]
 /// fn main() {
 ///     AppLauncher::new()
 ///         .with_title("My App")
@@ -189,7 +207,7 @@ pub enum LaunchError {
 /// }
 ///
 /// // Android
-/// #[cfg(target_os = "android")]
+/// #[cfg(all(feature = "android", target_os = "android"))]
 /// #[no_mangle]
 /// fn android_main(app: android_activity::AndroidApp) {
 ///     AppLauncher::new()
@@ -198,6 +216,12 @@ pub enum LaunchError {
 ///             // Your composable UI here
 ///         });
 /// }
+///
+/// #[cfg(not(any(
+///     all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")),
+///     all(feature = "android", target_os = "android")
+/// )))]
+/// fn main() {}
 /// ```
 pub struct AppLauncher {
     settings: AppSettings,
@@ -227,7 +251,7 @@ impl AppLauncher {
     /// as a best-effort host-window request after the native surface exists;
     /// fullscreen and split-screen activities may keep the system-managed
     /// bounds, while freeform and desktop-windowing activities can honor it.
-    /// iOS and maximized Web canvases still keep platform-controlled bounds.
+    /// Maximized Web canvases still keep platform-controlled bounds.
     ///
     /// # Arguments
     ///
@@ -302,6 +326,8 @@ impl AppLauncher {
     /// ```no_run
     /// use cranpose::AppLauncher;
     ///
+    /// #[cfg(all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")))]
+    /// {
     /// let launcher = AppLauncher::new()
     ///     .with_title("Robot Test")
     ///     .with_size(800, 600)
@@ -317,6 +343,7 @@ impl AppLauncher {
     /// launcher.run(|| {
     ///     // Your composable UI here
     /// });
+    /// }
     /// ```
     pub fn with_headless(mut self, headless: bool) -> Self {
         self.settings.headless = headless;
@@ -334,12 +361,15 @@ impl AppLauncher {
     /// ```no_run
     /// use cranpose::AppLauncher;
     ///
+    /// #[cfg(all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")))]
+    /// {
     /// AppLauncher::new()
     ///     .with_title("My App")
     ///     .with_fps_counter(true)
     ///     .run(|| {
     ///         // Your composable UI here
     ///     });
+    /// }
     /// ```
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
     pub fn with_fps_counter(mut self, enabled: bool) -> Self {
@@ -396,12 +426,15 @@ impl AppLauncher {
     /// ```no_run
     /// use cranpose::AppLauncher;
     ///
+    /// #[cfg(all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")))]
+    /// {
     /// AppLauncher::new()
     ///     .with_title("My App")
     ///     .with_fps_counter(true)
     ///     .run(|| {
     ///         // Your composable UI here
     ///     });
+    /// }
     /// ```
     #[cfg(not(all(feature = "desktop", feature = "renderer-wgpu")))]
     pub fn with_fps_counter(self, enabled: bool) -> Self {
@@ -422,7 +455,7 @@ impl AppLauncher {
     ///
     /// AppLauncher::new()
     ///     .with_title("My App")
-    ///     .with_recording("/tmp/my_test.rs")
+    ///     .with_recording(".cranpose-tmp/my_test.rs")
     ///     .run(|| {
     ///         // Interact with the app, then close
     ///         // Recording is saved automatically
@@ -507,7 +540,7 @@ impl AppLauncher {
     ))]
     pub fn run(self, content: impl FnMut() + 'static) -> ! {
         self.try_run(content)
-            .unwrap_or_else(|error| panic!("desktop launch failed: {error}"));
+            .unwrap_or_else(|error| exit_after_launch_error("desktop launch failed", error));
         std::process::exit(0)
     }
 
@@ -533,7 +566,7 @@ impl AppLauncher {
     ))]
     pub fn run_windows(self, content: impl FnMut() + 'static) -> ! {
         self.try_run_windows(content)
-            .unwrap_or_else(|error| panic!("desktop launch failed: {error}"));
+            .unwrap_or_else(|error| exit_after_launch_error("desktop launch failed", error));
         std::process::exit(0)
     }
 

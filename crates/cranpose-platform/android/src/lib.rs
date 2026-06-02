@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 use cranpose_ui_graphics::Point;
 
 /// Platform abstraction for Android.

@@ -19,7 +19,9 @@ members = [
     "crates/cranpose-render/pixels",
     "crates/cranpose-render/wgpu",
     "apps/desktop-demo",
+    "apps/desktop-demo-platform",
     "crates/cranpose-services",
+    "xtask",
 ]
 resolver = "2"
 
@@ -38,7 +40,7 @@ categories = ["gui"]
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.6", features = ["native-activity"] }
 cranpose-animation = { path = "crates/cranpose-animation", version = "0.1.7" }
-cranpose = { path = "crates/cranpose", version = "0.1.7" }
+cranpose = { path = "crates/cranpose", version = "0.1.7", default-features = false }
 cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.1.7" }
 cranpose-assets = { path = "crates/cranpose-assets", version = "0.1.7" }
 cranpose-core = { path = "crates/cranpose-core", version = "0.1.7" }
@@ -51,11 +53,17 @@ cranpose-render-common = { path = "crates/cranpose-render/common", version = "0.
 cranpose-render-pixels = { path = "crates/cranpose-render/pixels", version = "0.1.7" }
 cranpose-render-wgpu = { path = "crates/cranpose-render/wgpu", version = "0.1.7" }
 cranpose-runtime-std = { path = "crates/cranpose-runtime-std", version = "0.1.7" }
-cranpose-services = { path = "crates/cranpose-services", version = "0.1.7" }
+cranpose-services = { path = "crates/cranpose-services", version = "0.1.7", default-features = false }
 cranpose-testing = { path = "crates/cranpose-testing", version = "0.1.7" }
 cranpose-ui = { path = "crates/cranpose-ui", version = "0.1.7" }
 cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.1.7" }
 cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.1.7" }
+web-time = "1.1"
+
+[patch.crates-io]
+# Upstream master moved on to hashbrown 0.17. Pin the 0.16 alignment commit so
+# WGPU 29 and gpu-descriptor share one hashbrown/foldhash version family.
+gpu-descriptor = { git = "https://github.com/zakarumych/gpu-descriptor", rev = "79804e422186805f1ff5ab3d8310c07c145a6731" }
 
 # Faster local debug builds while preserving useful panic locations.
 [profile.dev]
@@ -126,3 +134,5 @@ lto = "fat"             # Full LTO for maximum optimization
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"         # Aggressive size optimization for WASM
+lto = "thin"            # Keep optimized web builds within practical local/CI memory limits
+codegen-units = 16      # Let wasm-opt own the final size cleanup pass

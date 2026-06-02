@@ -9,11 +9,6 @@ use cranpose_core::NodeId;
 use std::cell::RefCell;
 use std::collections::HashSet;
 
-thread_local! {
-    static POINTER_DISPATCH_MANAGER: RefCell<PointerDispatchManager> =
-        RefCell::new(PointerDispatchManager::new());
-}
-
 // ============================================================================
 // PointerDispatchManager - Invalidation tracking
 // ============================================================================
@@ -44,22 +39,20 @@ impl PointerDispatchManager {
         !self.dirty_nodes.is_empty()
     }
 
-    fn process_repasses<F>(&mut self, mut processor: F)
-    where
-        F: FnMut(NodeId),
-    {
+    fn take_pending_for_processing(&mut self) -> Option<Vec<NodeId>> {
         if self.is_processing {
-            return;
+            return None;
         }
 
         self.is_processing = true;
+        Some(self.dirty_nodes.drain().collect())
+    }
 
-        // Process all dirty nodes
-        let nodes: Vec<NodeId> = self.dirty_nodes.drain().collect();
-        for node_id in nodes {
-            processor(node_id);
-        }
-
+    fn finish_processing<I>(&mut self, remaining: I)
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        self.dirty_nodes.extend(remaining);
         self.is_processing = false;
     }
 
@@ -68,19 +61,70 @@ impl PointerDispatchManager {
     }
 }
 
+pub(crate) struct PointerDispatchState {
+    manager: RefCell<PointerDispatchManager>,
+}
+
+impl PointerDispatchState {
+    pub(crate) fn new() -> Self {
+        Self {
+            manager: RefCell::new(PointerDispatchManager::new()),
+        }
+    }
+
+    fn schedule_repass(&self, node_id: NodeId) {
+        self.manager.borrow_mut().schedule_repass(node_id);
+    }
+
+    fn has_pending_repass(&self) -> bool {
+        self.manager.borrow().has_pending_repass()
+    }
+
+    fn process_repasses<F>(&self, processor: F)
+    where
+        F: FnMut(NodeId),
+    {
+        let Some(nodes) = self.manager.borrow_mut().take_pending_for_processing() else {
+            return;
+        };
+
+        self.process_pending_nodes(nodes, processor);
+    }
+
+    fn clear(&self) {
+        self.manager.borrow_mut().clear();
+    }
+
+    fn process_pending_nodes<F>(&self, nodes: Vec<NodeId>, mut processor: F)
+    where
+        F: FnMut(NodeId),
+    {
+        let mut remaining = nodes.into_iter();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for node_id in remaining.by_ref() {
+                processor(node_id);
+            }
+        }));
+
+        self.manager.borrow_mut().finish_processing(remaining);
+
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
 /// Schedules a pointer repass for the specified node.
 ///
 /// This is called automatically when pointer modifiers invalidate
 /// and mirrors Kotlin's `PointerInputDelegatingNode.requestPointerInput`.
 pub fn schedule_pointer_repass(node_id: NodeId) {
-    POINTER_DISPATCH_MANAGER.with(|manager| {
-        manager.borrow_mut().schedule_repass(node_id);
-    });
+    crate::render_state::with_pointer_dispatch(|state| state.schedule_repass(node_id));
 }
 
 /// Returns true if any pointer repasses are pending.
 pub fn has_pending_pointer_repasses() -> bool {
-    POINTER_DISPATCH_MANAGER.with(|manager| manager.borrow().has_pending_repass())
+    crate::render_state::with_pointer_dispatch(|state| state.has_pending_repass())
 }
 
 /// Processes all pending pointer repasses.
@@ -92,16 +136,12 @@ pub fn process_pointer_repasses<F>(processor: F)
 where
     F: FnMut(NodeId),
 {
-    POINTER_DISPATCH_MANAGER.with(|manager| {
-        manager.borrow_mut().process_repasses(processor);
-    });
+    crate::render_state::with_pointer_dispatch(|state| state.process_repasses(processor));
 }
 
 /// Clears all pending pointer repasses without processing them.
 pub fn clear_pointer_repasses() {
-    POINTER_DISPATCH_MANAGER.with(|manager| {
-        manager.borrow_mut().clear();
-    });
+    crate::render_state::with_pointer_dispatch(|state| state.clear());
 }
 
 #[cfg(test)]
@@ -110,6 +150,7 @@ mod tests {
 
     #[test]
     fn schedule_and_process_repasses() {
+        let _app_context = crate::render_state::app_context_test_scope();
         clear_pointer_repasses();
 
         let node1: NodeId = 1;
@@ -133,6 +174,7 @@ mod tests {
 
     #[test]
     fn duplicate_schedules_deduplicated() {
+        let _app_context = crate::render_state::app_context_test_scope();
         clear_pointer_repasses();
 
         let node: NodeId = 42;
@@ -146,5 +188,80 @@ mod tests {
         });
 
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn process_repasses_recovers_after_processor_panic() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        clear_pointer_repasses();
+
+        schedule_pointer_repass(1);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            process_pointer_repasses(|_| panic!("pointer repass processor panic"));
+        }));
+        assert!(result.is_err());
+
+        schedule_pointer_repass(2);
+        let mut processed = Vec::new();
+        process_pointer_repasses(|node_id| processed.push(node_id));
+
+        assert!(
+            processed.contains(&2),
+            "pointer repass processing must not stay stuck after a processor panic"
+        );
+        assert!(!has_pending_pointer_repasses());
+    }
+
+    #[test]
+    fn process_repasses_allows_processor_to_schedule_more_work() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        clear_pointer_repasses();
+
+        schedule_pointer_repass(1);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            process_pointer_repasses(|_| schedule_pointer_repass(2));
+        }));
+        assert!(
+            result.is_ok(),
+            "pointer repass processors must be able to enqueue follow-up repasses"
+        );
+        assert!(has_pending_pointer_repasses());
+
+        let mut processed = Vec::new();
+        process_pointer_repasses(|node_id| processed.push(node_id));
+
+        assert_eq!(processed, vec![2]);
+        assert!(!has_pending_pointer_repasses());
+    }
+
+    #[test]
+    fn pointer_repasses_are_scoped_by_app_context() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let first = crate::render_state::AppContext::new_with_density(1.0);
+        let second = crate::render_state::AppContext::new_with_density(1.0);
+
+        first.enter(|| {
+            clear_pointer_repasses();
+            schedule_pointer_repass(7);
+            assert!(has_pending_pointer_repasses());
+        });
+
+        second.enter(|| {
+            clear_pointer_repasses();
+            assert!(!has_pending_pointer_repasses());
+            schedule_pointer_repass(9);
+        });
+
+        first.enter(|| {
+            let mut processed = Vec::new();
+            process_pointer_repasses(|node_id| processed.push(node_id));
+            assert_eq!(processed, vec![7]);
+        });
+
+        second.enter(|| {
+            let mut processed = Vec::new();
+            process_pointer_repasses(|node_id| processed.push(node_id));
+            assert_eq!(processed, vec![9]);
+        });
     }
 }

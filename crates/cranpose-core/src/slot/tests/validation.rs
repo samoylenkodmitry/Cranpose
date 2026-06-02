@@ -25,6 +25,35 @@ fn fast_integrity_rejects_active_anchor_count_mismatch() {
 }
 
 #[test]
+fn slots_host_finish_pass_reports_writer_invariant_violation() {
+    let slots_host = Rc::new(crate::SlotsHost::new(SlotTable::new()));
+    slots_host.begin_pass(SlotPassMode::Compose);
+    {
+        let mut inner = slots_host.inner.borrow_mut();
+        let active_pass = inner
+            .active_pass
+            .as_mut()
+            .expect("test setup should leave a pass active");
+        active_pass.state.root.next_child_index = 1;
+    }
+
+    let mut applier = MemoryApplier::new();
+    let result = panic::catch_unwind(AssertUnwindSafe(|| slots_host.finish_pass(&mut applier)));
+
+    assert!(
+        result.is_ok(),
+        "SlotsHost::finish_pass should report writer invariant failures without panicking"
+    );
+    assert!(matches!(
+        result.unwrap().err(),
+        Some(crate::NodeError::SlotHostUnavailable {
+            operation: "SlotsHost::finish_pass",
+            reason: "slot writer invariant violation",
+        })
+    ));
+}
+
+#[test]
 fn validate_reports_duplicate_sibling_key_structurally() {
     const PARENT_KEY: Key = 462;
     const STATIC_KEY: Key = 463;

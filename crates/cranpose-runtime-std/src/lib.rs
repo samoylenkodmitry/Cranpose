@@ -5,43 +5,38 @@
 //! construct a [`StdRuntime`] and pass it to [`cranpose_core::Composition`]
 //! to power the runtime with `std` primitives.
 
+#![deny(unsafe_code)]
+
+#[cfg(target_arch = "wasm32")]
+use std::cell::RefCell;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "internal")]
 use cranpose_core::internal::FrameClock;
 use cranpose_core::{Clock, Runtime, RuntimeHandle, RuntimeScheduler};
 
-// On WASM, wrap closures to make them Sync since WASM is single-threaded
-#[cfg(target_arch = "wasm32")]
-struct SyncWaker<F>(F);
-
-#[cfg(target_arch = "wasm32")]
-unsafe impl<F> Sync for SyncWaker<F> {}
-
-#[cfg(target_arch = "wasm32")]
-impl<F: Fn()> SyncWaker<F> {
-    fn call(&self) {
-        (self.0)();
-    }
-}
+#[cfg(not(target_arch = "wasm32"))]
+type NativeFrameWaker = Arc<dyn Fn() + Send + Sync + 'static>;
 
 /// Scheduler that delegates work to Rust's threading primitives.
 pub struct StdScheduler {
     frame_requested: AtomicBool,
     #[cfg(not(target_arch = "wasm32"))]
-    frame_waker: RwLock<Option<Arc<dyn Fn() + Send + Sync + 'static>>>,
+    frame_waker: RwLock<Option<NativeFrameWaker>>,
     #[cfg(target_arch = "wasm32")]
-    frame_waker: RwLock<Option<Arc<SyncWaker<Box<dyn Fn() + Send + 'static>>>>>,
+    frame_waker: RefCell<Option<Box<dyn Fn() + 'static>>>,
 }
 
 impl StdScheduler {
     pub fn new() -> Self {
         Self {
             frame_requested: AtomicBool::new(false),
-            frame_waker: RwLock::new(None),
+            frame_waker: Default::default(),
         }
     }
 
@@ -58,22 +53,37 @@ impl StdScheduler {
     /// Registers a waker that will be invoked whenever a new frame is scheduled.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_frame_waker(&self, waker: impl Fn() + Send + Sync + 'static) {
-        *self.frame_waker.write().unwrap() = Some(Arc::new(waker));
+        let old_waker = {
+            let mut frame_waker = self.frame_waker_write();
+            frame_waker.replace(Arc::new(waker))
+        };
+        drop(old_waker);
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn set_frame_waker(&self, waker: impl Fn() + Send + 'static) {
-        *self.frame_waker.write().unwrap() = Some(Arc::new(SyncWaker(Box::new(waker))));
+    pub fn set_frame_waker(&self, waker: impl Fn() + 'static) {
+        *self.frame_waker.borrow_mut() = Some(Box::new(waker));
     }
 
     /// Clears any registered frame waker.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn clear_frame_waker(&self) {
-        *self.frame_waker.write().unwrap() = None;
+        let old_waker = {
+            let mut frame_waker = self.frame_waker_write();
+            frame_waker.take()
+        };
+        drop(old_waker);
+    }
+
+    /// Clears any registered frame waker.
+    #[cfg(target_arch = "wasm32")]
+    pub fn clear_frame_waker(&self) {
+        *self.frame_waker.borrow_mut() = None;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn wake(&self) {
-        let waker = self.frame_waker.read().unwrap().clone();
+        let waker = self.frame_waker_read().clone();
         if let Some(waker) = waker {
             waker();
         }
@@ -81,9 +91,24 @@ impl StdScheduler {
 
     #[cfg(target_arch = "wasm32")]
     fn wake(&self) {
-        let waker = self.frame_waker.read().unwrap().clone();
-        if let Some(waker) = waker {
-            waker.call();
+        if let Some(waker) = self.frame_waker.borrow().as_ref() {
+            waker();
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn frame_waker_read(&self) -> RwLockReadGuard<'_, Option<NativeFrameWaker>> {
+        match self.frame_waker.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn frame_waker_write(&self) -> RwLockWriteGuard<'_, Option<NativeFrameWaker>> {
+        match self.frame_waker.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         }
     }
 }
@@ -197,7 +222,7 @@ impl StdRuntime {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn set_frame_waker(&self, waker: impl Fn() + Send + 'static) {
+    pub fn set_frame_waker(&self, waker: impl Fn() + 'static) {
         self.scheduler.set_frame_waker(waker);
     }
 

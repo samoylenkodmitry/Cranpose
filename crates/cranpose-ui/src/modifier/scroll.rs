@@ -33,57 +33,19 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use web_time::Instant;
 
-// ============================================================================
-// Test Accessibility: Last Fling Velocity (only in test-helpers builds)
-// ============================================================================
-
 #[cfg(feature = "test-helpers")]
-mod test_velocity_tracking {
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    /// Stores the last fling velocity calculated for test verification.
-    ///
-    /// Uses `AtomicU32` (not thread_local) because the test driver runs on a separate
-    /// thread from the UI thread, and the test needs to read values written by the UI.
-    ///
-    /// # Parallel Test Safety
-    /// This global state means parallel tests could interfere with each other.
-    /// For test isolation, run robot tests sequentially (cargo test -- --test-threads=1)
-    /// or use test harnesses that reset state between runs.
-    static LAST_FLING_VELOCITY: AtomicU32 = AtomicU32::new(0);
-
-    /// Returns the last fling velocity calculated (in px/sec).
-    ///
-    /// This is primarily for testing - allows robot tests to verify that
-    /// velocity detection is working correctly instead of relying on log output.
-    pub fn last_fling_velocity() -> f32 {
-        f32::from_bits(LAST_FLING_VELOCITY.load(Ordering::SeqCst))
-    }
-
-    /// Resets the last fling velocity to 0.0.
-    ///
-    /// Call this at the start of a test to ensure clean state.
-    pub fn reset_last_fling_velocity() {
-        LAST_FLING_VELOCITY.store(0.0f32.to_bits(), Ordering::SeqCst);
-    }
-
-    /// Internal: Set the last fling velocity (called from gesture detection).
-    pub(super) fn set_last_fling_velocity(velocity: f32) {
-        LAST_FLING_VELOCITY.store(velocity.to_bits(), Ordering::SeqCst);
-    }
+pub fn last_fling_velocity() -> f32 {
+    crate::render_state::debug_last_fling_velocity()
 }
 
 #[cfg(feature = "test-helpers")]
-pub use test_velocity_tracking::{last_fling_velocity, reset_last_fling_velocity};
+pub fn reset_last_fling_velocity() {
+    crate::render_state::debug_reset_last_fling_velocity();
+}
 
-/// Internal: Set the last fling velocity (called from gesture detection).
-/// No-op in production builds without test-helpers feature.
 #[inline]
 fn set_last_fling_velocity(velocity: f32) {
-    #[cfg(feature = "test-helpers")]
-    test_velocity_tracking::set_last_fling_velocity(velocity);
-    #[cfg(not(feature = "test-helpers"))]
-    let _ = velocity; // Silence unused variable warning
+    crate::render_state::record_last_fling_velocity(velocity);
 }
 
 /// Local gesture state for scroll drag handling.
@@ -216,9 +178,7 @@ impl ScrollTarget for LazyListState {
 
     fn invalidate(&self) {
         // dispatch_scroll_delta already handles invalidation internally via callback.
-        // We do NOT call request_layout_invalidation() here - that's the global
-        // nuclear option that invalidates ALL layout caches app-wide.
-        // The registered callback uses schedule_layout_repass for scoped invalidation.
+        // The registered callback uses schedule_layout_repass for scoped layout work.
     }
 
     fn current_offset(&self) -> f32 {

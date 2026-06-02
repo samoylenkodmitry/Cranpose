@@ -1,17 +1,17 @@
 //! Robot test: capture REAL window screenshots of the Text showcase while scrolling by
 //! exactly one logical pixel per step and require perfect overlap in the shared middle area.
 
+mod output_paths;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
 
 use cranpose::AppLauncher;
-use desktop_app::app;
+use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
 use scroll_stability_external_helpers::{
     prepare_internal_diagnostic, run_scroll_stability_capture, ScrollStabilityConfig,
 };
-use std::path::PathBuf;
 use std::time::Duration;
-use text_showcase_external_helpers::{open_text_tab, scroll_text_into_view};
+use text_showcase_external_helpers::{scroll_text_into_view, wait_for_text_showcase_heading};
 
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 900;
@@ -36,7 +36,7 @@ fn main() {
     let internal_diagnostic = prepare_internal_diagnostic(
         INTERNAL_DIAGNOSTIC_ENV,
         INTERNAL_DIAGNOSTIC_SCALE_ENV,
-        PathBuf::from("/tmp/cranpose_text_scroll_exact_internal"),
+        output_paths::diagnostic_path("cranpose_text_scroll_exact_internal"),
     );
     if let Some(diagnostic) = &internal_diagnostic {
         println!(
@@ -50,11 +50,25 @@ fn main() {
         .with_title(WINDOW_TITLE)
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_headless(false)
+        .with_robot_app_hook(set_tab_hook)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(1000));
             let _ = robot.wait_for_idle();
 
-            open_text_tab(&robot);
+            walk_tabs_to_text(&robot);
+            wait_for_text_showcase_heading(&robot);
+            if std::env::var_os("CRANPOSE_TEXT_SCROLL_HELPER_DIAGNOSTIC").is_some() {
+                match robot.screenshot() {
+                    Ok(screenshot) => println!(
+                        "text robot internal screenshot pixels={}x{} logical={:.1}x{:.1}",
+                        screenshot.width,
+                        screenshot.height,
+                        screenshot.logical_width,
+                        screenshot.logical_height
+                    ),
+                    Err(err) => println!("text robot internal screenshot error={err}"),
+                }
+            }
             scroll_text_into_view(&robot, TARGET_TEXT, WINDOW_HEIGHT, 20);
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
@@ -79,6 +93,7 @@ fn main() {
                     compare_stabilized_guard_px: COMPARE_STABILIZED_GUARD_PX,
                     compare_viewport_inset_px: 0,
                     render_stats_env: Some(RENDER_STATS_ENV),
+                    active_frame: None,
                 },
                 internal_diagnostic.as_ref(),
             );
@@ -93,4 +108,36 @@ fn main() {
             robot.exit().expect("exit");
         })
         .run(app::combined_app);
+}
+
+fn walk_tabs_to_text(robot: &cranpose::Robot) {
+    for tab in ["mineswapper2", "images", "lazy-list", "text"] {
+        set_active_tab(robot, tab);
+        std::thread::sleep(Duration::from_millis(180));
+        let _ = robot.wait_for_idle();
+    }
+}
+
+fn set_active_tab(robot: &cranpose::Robot, tab: &str) {
+    robot
+        .invoke_app_hook("set-tab", tab)
+        .unwrap_or_else(|err| panic!("failed to select tab '{tab}': {err}"));
+}
+
+fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
+    if name != "set-tab" {
+        return Err(format!("unsupported robot app hook {name}({argument})"));
+    }
+    let tab = match argument.as_str() {
+        "mineswapper2" => DemoTab::Mineswapper2,
+        "images" => DemoTab::Images,
+        "lazy-list" => DemoTab::LazyList,
+        "text" => DemoTab::Text,
+        _ => return Err(format!("unknown demo tab '{argument}'")),
+    };
+    let state = TEST_ACTIVE_TAB_STATE
+        .with(|cell| cell.borrow().as_ref().copied())
+        .unwrap_or_else(|| panic!("active tab state was not installed before selecting {tab:?}"));
+    state.set(tab);
+    Ok(None)
 }

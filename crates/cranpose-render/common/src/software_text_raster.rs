@@ -1,18 +1,517 @@
-use ab_glyph::{point, Font, Glyph, OutlinedGlyph, ScaleFont};
-use cranpose_ui::text::{Shadow, TextDrawStyle, TextMotion, TextStyle};
-use cranpose_ui_graphics::{Color, ImageBitmap, Rect, TileMode};
+use ab_glyph::{point, Font, FontArc, Glyph, OutlinedGlyph, PxScale, ScaleFont};
+use cranpose_core::hash::default as default_hash;
+use cranpose_ui::text::{
+    AnnotatedString, FontFamily, FontStyle, FontSynthesis, FontWeight, Shadow, TextDrawStyle,
+    TextMotion, TextStyle,
+};
+use cranpose_ui::text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult};
+use cranpose_ui::{TextMeasurer, TextMetrics};
+use cranpose_ui_graphics::{Color, ImageBitmap, Rect};
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 
+use crate::bounded_lru_cache::BoundedLruCache;
+use crate::brush_sampling::{color_to_rgba, sample_brush_rgba};
 use crate::font_layout::{
-    align_glyph_to_pixel_grid, layout_line_glyphs, pixel_bounds_from_outlined, vertical_metrics,
-    GlyphPixelBounds,
+    align_glyph_to_pixel_grid, layout_line_glyphs, line_advance_width, pixel_bounds_from_outlined,
+    vertical_metrics, GlyphPixelBounds,
 };
+#[cfg(feature = "text-hyphenation")]
+use crate::text_hyphenation::HyphenationDictionaryError;
+use crate::text_hyphenation::HyphenationDictionaryStore;
 use crate::Brush;
 
 const COMPOSE_STROKE_MITER_LIMIT: f32 = 4.0;
 const SHADOW_SIGMA_SCALE: f32 = 0.57735;
 const SHADOW_SIGMA_BIAS: f32 = 0.5;
 const MAX_GAUSSIAN_KERNEL_HALF: i32 = 128;
+const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] =
+    include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SoftwareTextFontError {
+    #[error("invalid software text font bytes")]
+    InvalidFont,
+}
+
+#[derive(Clone)]
+pub struct SoftwareTextFont {
+    font: FontArc,
+    metadata: SoftwareTextFontMetadata,
+    score: TextFontScore,
+}
+
+#[derive(Clone)]
+struct SoftwareTextFontMetadata {
+    families: Arc<[String]>,
+    weight: FontWeight,
+    style: FontStyle,
+    ab_glyph_scale_factor: f32,
+}
+
+impl SoftwareTextFont {
+    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self, SoftwareTextFontError> {
+        let bytes = bytes.into();
+        let metadata = software_text_font_metadata(bytes.as_slice());
+        let font = FontArc::try_from_vec(bytes).map_err(|_| SoftwareTextFontError::InvalidFont)?;
+        let score =
+            text_font_score_from_parts(&font, metadata.ab_glyph_scale_factor, metadata.weight);
+        Ok(Self {
+            font,
+            metadata,
+            score,
+        })
+    }
+
+    pub fn family_names(&self) -> &[String] {
+        &self.metadata.families
+    }
+
+    pub fn weight(&self) -> FontWeight {
+        self.metadata.weight
+    }
+
+    pub fn style(&self) -> FontStyle {
+        self.metadata.style
+    }
+
+    fn ab_glyph_px_size(&self, logical_font_size: f32) -> f32 {
+        logical_font_size * self.metadata.ab_glyph_scale_factor
+    }
+}
+
+pub fn try_default_software_text_font() -> Result<SoftwareTextFont, SoftwareTextFontError> {
+    SoftwareTextFont::from_bytes(DEFAULT_SOFTWARE_TEXT_FONT_BYTES.to_vec())
+}
+
+pub fn default_software_text_font() -> Option<SoftwareTextFont> {
+    try_default_software_text_font().ok()
+}
+
+#[derive(Clone)]
+pub struct SoftwareTextFontSet {
+    fonts: Arc<[SoftwareTextFont]>,
+    default_index: Option<usize>,
+}
+
+impl SoftwareTextFontSet {
+    pub fn empty() -> Self {
+        Self {
+            fonts: Arc::from(Vec::new()),
+            default_index: None,
+        }
+    }
+
+    pub fn from_font(font: SoftwareTextFont) -> Self {
+        Self {
+            fonts: Arc::from(vec![font]),
+            default_index: Some(0),
+        }
+    }
+
+    pub fn from_fonts_or_default(fonts: &[&[u8]]) -> Self {
+        let mut parsed = Vec::with_capacity(fonts.len().max(1));
+        for font in fonts {
+            if let Ok(candidate) = SoftwareTextFont::from_bytes((*font).to_vec()) {
+                parsed.push(candidate);
+            }
+        }
+        if parsed.is_empty() {
+            if let Some(default_font) = default_software_text_font() {
+                parsed.push(default_font);
+            }
+        }
+
+        let default_index = (!parsed.is_empty()).then(|| default_font_index(&parsed));
+        Self {
+            fonts: Arc::from(parsed),
+            default_index,
+        }
+    }
+
+    pub fn default_font(&self) -> Option<&SoftwareTextFont> {
+        self.default_index.and_then(|index| self.fonts.get(index))
+    }
+
+    pub fn resolve(&self, style: &TextStyle) -> Option<&SoftwareTextFont> {
+        let target_weight = style.span_style.font_weight.unwrap_or_default();
+        let target_style = style.span_style.font_style.unwrap_or_default();
+        let family_name = requested_family_name(style.span_style.font_family.as_ref());
+
+        let mut best: Option<(usize, u32)> = None;
+        for (index, font) in self.fonts.iter().enumerate() {
+            let Some(score) = font_match_score(font, target_weight, target_style, family_name)
+            else {
+                continue;
+            };
+            if best.is_none_or(|(_, best_score)| score < best_score) {
+                best = Some((index, score));
+            }
+        }
+
+        let index = best.map(|(index, _)| index).or(self.default_index);
+        index.and_then(|index| self.fonts.get(index))
+    }
+}
+
+pub fn software_text_font_from_fonts_or_default(fonts: &[&[u8]]) -> Option<SoftwareTextFont> {
+    SoftwareTextFontSet::from_fonts_or_default(fonts)
+        .default_font()
+        .cloned()
+}
+
+pub fn software_text_font_set_from_fonts_or_default(fonts: &[&[u8]]) -> SoftwareTextFontSet {
+    SoftwareTextFontSet::from_fonts_or_default(fonts)
+}
+
+#[derive(Clone, Copy)]
+struct TextFontScore {
+    supported_latin_chars: usize,
+    latin_sample_width: f32,
+}
+
+impl TextFontScore {
+    fn is_complete_default_face(self) -> bool {
+        const LATIN_SAMPLE_CHAR_COUNT: usize = 21;
+        self.supported_latin_chars == LATIN_SAMPLE_CHAR_COUNT && self.latin_sample_width > 1.0
+    }
+
+    fn is_better_than(self, other: Self) -> bool {
+        self.supported_latin_chars > other.supported_latin_chars
+            || (self.supported_latin_chars == other.supported_latin_chars
+                && self.latin_sample_width > other.latin_sample_width)
+    }
+}
+
+fn text_font_score(font: &SoftwareTextFont) -> TextFontScore {
+    font.score
+}
+
+fn text_font_score_from_parts(
+    font: &FontArc,
+    ab_glyph_scale_factor: f32,
+    weight: FontWeight,
+) -> TextFontScore {
+    const SAMPLE: &str = "UNDER The quick brown fox";
+    let glyph_font_size = 18.0 * ab_glyph_scale_factor;
+    let scaled_font = font.as_scaled(PxScale::from(glyph_font_size));
+    let supported_latin_chars = SAMPLE
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .filter(|ch| scaled_font.glyph_id(*ch).0 != 0)
+        .count();
+    let latin_sample_width = measure_text_impl(
+        SAMPLE,
+        &TextStyle::default(),
+        18.0,
+        glyph_font_size,
+        font,
+        FontStyle::Normal,
+        weight,
+    )
+    .width;
+    TextFontScore {
+        supported_latin_chars,
+        latin_sample_width,
+    }
+}
+
+fn default_font_index(fonts: &[SoftwareTextFont]) -> usize {
+    let mut best: Option<(usize, TextFontScore)> = None;
+    for (index, font) in fonts.iter().enumerate() {
+        let score = text_font_score(font);
+        if font.style() == FontStyle::Normal
+            && font.weight() == FontWeight::NORMAL
+            && score.is_complete_default_face()
+        {
+            return index;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(_, best_score)| score.is_better_than(*best_score))
+        {
+            best = Some((index, score));
+        }
+    }
+    best.map(|(index, _)| index).unwrap_or(0)
+}
+
+fn requested_family_name(font_family: Option<&FontFamily>) -> Option<&str> {
+    match font_family {
+        Some(FontFamily::Named(name)) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn font_match_score(
+    font: &SoftwareTextFont,
+    target_weight: FontWeight,
+    target_style: FontStyle,
+    family_name: Option<&str>,
+) -> Option<u32> {
+    let family_penalty = match family_name {
+        Some(name) if font_family_matches(font, name) => 0,
+        Some(_) => return None,
+        None => 0,
+    };
+    let style_penalty = if font.style() == target_style {
+        0
+    } else {
+        10_000
+    };
+    let weight_penalty = (i32::from(font.weight().0) - i32::from(target_weight.0)).unsigned_abs();
+    let coverage_penalty =
+        (21usize.saturating_sub(text_font_score(font).supported_latin_chars) as u32) * 1_000;
+
+    Some(family_penalty + style_penalty + weight_penalty + coverage_penalty)
+}
+
+fn font_family_matches(font: &SoftwareTextFont, requested: &str) -> bool {
+    font.family_names()
+        .iter()
+        .any(|family| family.eq_ignore_ascii_case(requested))
+}
+
+fn software_text_font_metadata(bytes: &[u8]) -> SoftwareTextFontMetadata {
+    let Some(face) = ttf_parser::Face::parse(bytes, 0).ok() else {
+        return SoftwareTextFontMetadata {
+            families: Arc::from(Vec::<String>::new()),
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Normal,
+            ab_glyph_scale_factor: 1.0,
+        };
+    };
+
+    let mut families = Vec::new();
+    for name in face.names() {
+        if matches!(
+            name.name_id,
+            ttf_parser::name_id::TYPOGRAPHIC_FAMILY | ttf_parser::name_id::FAMILY
+        ) {
+            if let Some(value) = name.to_string().filter(|value| !value.is_empty()) {
+                if !families
+                    .iter()
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
+                {
+                    families.push(value);
+                }
+            }
+        }
+    }
+    let weight = FontWeight::try_new(face.weight().to_number()).unwrap_or(FontWeight::NORMAL);
+    let style = if face.is_italic() {
+        FontStyle::Italic
+    } else {
+        FontStyle::Normal
+    };
+    let units_per_em = face.units_per_em() as f32;
+    let height = (face.ascender() as f32 - face.descender() as f32).abs();
+    let ab_glyph_scale_factor =
+        if units_per_em.is_finite() && units_per_em > 0.0 && height.is_finite() && height > 0.0 {
+            height / units_per_em
+        } else {
+            1.0
+        };
+
+    SoftwareTextFontMetadata {
+        families: Arc::from(families),
+        weight,
+        style,
+        ab_glyph_scale_factor,
+    }
+}
+
+#[derive(Clone)]
+struct TextMetricsKey {
+    text: Rc<str>,
+    font_size_bits: u32,
+    style_hash: u64,
+    span_styles_hash: u64,
+}
+
+impl PartialEq for TextMetricsKey {
+    fn eq(&self, other: &Self) -> bool {
+        (Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text)
+            && self.font_size_bits == other.font_size_bits
+            && self.style_hash == other.style_hash
+            && self.span_styles_hash == other.span_styles_hash
+    }
+}
+
+impl Eq for TextMetricsKey {}
+
+impl Hash for TextMetricsKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.text.hash(state);
+        self.font_size_bits.hash(state);
+        self.style_hash.hash(state);
+        self.span_styles_hash.hash(state);
+    }
+}
+
+struct SoftwareTextMetricsCache {
+    map: BoundedLruCache<TextMetricsKey, TextMetrics>,
+}
+
+impl SoftwareTextMetricsCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            map: BoundedLruCache::with_capacity_at_least_one(capacity),
+        }
+    }
+
+    fn get_or_measure(
+        &mut self,
+        fonts: &SoftwareTextFontSet,
+        text: &AnnotatedString,
+        style: &TextStyle,
+    ) -> TextMetrics {
+        let font_size = resolve_font_size(style);
+        let key = TextMetricsKey {
+            text: Rc::from(text.text.as_str()),
+            font_size_bits: font_size.to_bits(),
+            style_hash: style.measurement_hash(),
+            span_styles_hash: text.span_styles_hash(),
+        };
+        if let Some(metrics) = self.map.get(&key).copied() {
+            return metrics;
+        }
+
+        let metrics = measure_annotated_text_with_font_set(text, style, font_size, fonts);
+        self.map.put(key, metrics);
+        metrics
+    }
+}
+
+pub struct SoftwareTextMeasurer {
+    fonts: SoftwareTextFontSet,
+    cache: Mutex<SoftwareTextMetricsCache>,
+    hyphenation: HyphenationDictionaryStore,
+}
+
+impl SoftwareTextMeasurer {
+    pub fn new(font: SoftwareTextFont, cache_capacity: usize) -> Self {
+        Self::from_font_set(SoftwareTextFontSet::from_font(font), cache_capacity)
+    }
+
+    pub fn from_font_set(fonts: SoftwareTextFontSet, cache_capacity: usize) -> Self {
+        Self {
+            fonts,
+            cache: Mutex::new(SoftwareTextMetricsCache::new(cache_capacity)),
+            hyphenation: HyphenationDictionaryStore::new(),
+        }
+    }
+
+    pub fn from_fonts_or_default(fonts: &[&[u8]], cache_capacity: usize) -> Self {
+        Self::from_font_set(
+            software_text_font_set_from_fonts_or_default(fonts),
+            cache_capacity,
+        )
+    }
+
+    fn lock_cache(&self) -> MutexGuard<'_, SoftwareTextMetricsCache> {
+        self.cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[cfg(feature = "text-hyphenation")]
+    pub fn register_hyphenation_dictionary_path(
+        &self,
+        locale: &str,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<(), HyphenationDictionaryError> {
+        self.hyphenation.register_dictionary_path(locale, path)
+    }
+
+    #[cfg(feature = "text-hyphenation")]
+    pub fn register_hyphenation_dictionary_reader(
+        &self,
+        locale: &str,
+        reader: &mut impl std::io::Read,
+    ) -> Result<(), HyphenationDictionaryError> {
+        self.hyphenation.register_dictionary_reader(locale, reader)
+    }
+}
+
+impl TextMeasurer for SoftwareTextMeasurer {
+    fn measure(&self, text: &cranpose_ui::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+        self.lock_cache().get_or_measure(&self.fonts, text, style)
+    }
+
+    fn measure_subsequence(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        range: std::ops::Range<usize>,
+        style: &TextStyle,
+    ) -> TextMetrics {
+        let text = text.subsequence(range);
+        self.lock_cache().get_or_measure(&self.fonts, &text, style)
+    }
+
+    fn get_offset_for_position(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
+        x: f32,
+        y: f32,
+    ) -> usize {
+        if let Some(font) = self.fonts.resolve(style) {
+            text_offset_for_position_with_font(text.text.as_str(), style, x, y, font)
+        } else {
+            fallback_text_offset_for_position(text.text.as_str(), style, x, y)
+        }
+    }
+
+    fn get_cursor_x_for_offset(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
+        offset: usize,
+    ) -> f32 {
+        if let Some(font) = self.fonts.resolve(style) {
+            cursor_x_for_offset_with_font(text.text.as_str(), style, offset, font)
+        } else {
+            fallback_cursor_x_for_offset(text.text.as_str(), style, offset)
+        }
+    }
+
+    fn layout(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> TextLayoutResult {
+        if let Some(font) = self.fonts.resolve(style) {
+            layout_text_with_font(text.text.as_str(), style, font)
+        } else {
+            fallback_layout_text(text.text.as_str(), style)
+        }
+    }
+
+    fn choose_auto_hyphen_break(
+        &self,
+        line: &str,
+        style: &TextStyle,
+        segment_start_char: usize,
+        measured_break_char: usize,
+    ) -> Option<usize> {
+        self.hyphenation.choose_auto_hyphen_break(
+            line,
+            style,
+            segment_start_char,
+            measured_break_char,
+        )
+    }
+}
+
+pub fn software_text_content_hash(text: &cranpose_ui::text::AnnotatedString) -> u64 {
+    let mut state = default_hash::new();
+    text.text.hash(&mut state);
+    text.span_styles_hash().hash(&mut state);
+    state.finish()
+}
 
 #[derive(Clone, Copy)]
 enum GlyphRasterStyle {
@@ -28,6 +527,391 @@ struct GlyphMask {
     origin_y: i32,
 }
 
+struct RasterFontRef<'a, F> {
+    font: &'a F,
+    ab_glyph_scale_factor: f32,
+    weight: FontWeight,
+    style: FontStyle,
+}
+
+#[derive(Clone, Copy)]
+struct TextWeightSynthesis {
+    embolden_px: f32,
+    advance_scale: f32,
+}
+
+impl TextWeightSynthesis {
+    fn none() -> Self {
+        Self {
+            embolden_px: 0.0,
+            advance_scale: 1.0,
+        }
+    }
+
+    fn for_style(
+        style: &TextStyle,
+        resolved_weight: FontWeight,
+        font_size: f32,
+        scale: f32,
+    ) -> Self {
+        let requested_weight = style.span_style.font_weight.unwrap_or_default();
+        if requested_weight <= resolved_weight {
+            return Self::none();
+        }
+
+        let synthesis = style
+            .span_style
+            .font_synthesis
+            .unwrap_or(FontSynthesis::All);
+        if !matches!(synthesis, FontSynthesis::All | FontSynthesis::Weight) {
+            return Self::none();
+        }
+
+        let weight_delta = (requested_weight.value() - resolved_weight.value()) as f32;
+        let strength = (weight_delta / 300.0).clamp(0.0, 1.5);
+        Self {
+            embolden_px: (font_size * scale * 0.055 * strength).clamp(0.0, 3.0 * scale),
+            advance_scale: 1.0 + 0.085 * strength.min(1.0),
+        }
+    }
+
+    fn apply_width(self, width: f32) -> f32 {
+        width * self.advance_scale
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TextStyleSynthesis {
+    slant: f32,
+    font_size: f32,
+    scale: f32,
+}
+
+impl TextStyleSynthesis {
+    fn none() -> Self {
+        Self {
+            slant: 0.0,
+            font_size: 0.0,
+            scale: 1.0,
+        }
+    }
+
+    fn for_style(style: &TextStyle, resolved_style: FontStyle, font_size: f32, scale: f32) -> Self {
+        let requested_style = style.span_style.font_style.unwrap_or_default();
+        if requested_style != FontStyle::Italic || resolved_style == FontStyle::Italic {
+            return Self::none();
+        }
+
+        let synthesis = style
+            .span_style
+            .font_synthesis
+            .unwrap_or(FontSynthesis::All);
+        if !matches!(synthesis, FontSynthesis::All | FontSynthesis::Style) {
+            return Self::none();
+        }
+
+        Self {
+            slant: 0.22,
+            font_size,
+            scale,
+        }
+    }
+
+    fn visual_overhang_px(self) -> f32 {
+        if self.slant <= 0.0 || !self.font_size.is_finite() || !self.scale.is_finite() {
+            return 0.0;
+        }
+        (self.font_size * self.scale * self.slant).ceil().max(0.0)
+    }
+}
+
+pub fn rasterize_text_to_image(
+    text: &str,
+    rect: Rect,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    font: &SoftwareTextFont,
+) -> Option<ImageBitmap> {
+    rasterize_text_to_image_impl(
+        text,
+        rect,
+        style,
+        fallback_color,
+        font_size,
+        scale,
+        RasterFontRef {
+            font: &font.font,
+            ab_glyph_scale_factor: font.metadata.ab_glyph_scale_factor,
+            weight: font.weight(),
+            style: font.style(),
+        },
+    )
+}
+
+pub fn measure_text_with_font(
+    text: &str,
+    style: &TextStyle,
+    font_size: f32,
+    font: &SoftwareTextFont,
+) -> TextMetrics {
+    measure_text_impl(
+        text,
+        style,
+        font_size,
+        font.ab_glyph_px_size(font_size),
+        &font.font,
+        font.style(),
+        font.weight(),
+    )
+}
+
+pub fn measure_annotated_text_with_font(
+    text: &AnnotatedString,
+    style: &TextStyle,
+    font_size: f32,
+    font: &SoftwareTextFont,
+) -> TextMetrics {
+    if text.span_styles.is_empty() {
+        return measure_text_with_font(text.text.as_str(), style, font_size, font);
+    }
+    measure_annotated_text_with_resolver(
+        text,
+        style,
+        font_size,
+        &SoftwareTextFontSet::from_font(font.clone()),
+    )
+}
+
+pub fn measure_annotated_text_with_font_set(
+    text: &AnnotatedString,
+    style: &TextStyle,
+    font_size: f32,
+    fonts: &SoftwareTextFontSet,
+) -> TextMetrics {
+    if text.span_styles.is_empty() {
+        if let Some(font) = fonts.resolve(style) {
+            return measure_text_with_font(text.text.as_str(), style, font_size, font);
+        }
+        return fallback_text_metrics(text.text.as_str(), style, font_size);
+    }
+    measure_annotated_text_with_resolver(text, style, font_size, fonts)
+}
+
+pub fn text_offset_for_position_with_font(
+    text: &str,
+    style: &TextStyle,
+    x: f32,
+    y: f32,
+    font: &SoftwareTextFont,
+) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+
+    let font_size = resolve_font_size(style);
+    let glyph_font_size = font.ab_glyph_px_size(font_size);
+    let line_height = resolve_line_height(style, font_size * 1.4);
+
+    let line_index = (y / line_height).floor().max(0.0) as usize;
+    let lines: Vec<&str> = text.split('\n').collect();
+    let target_line = line_index.min(lines.len().saturating_sub(1));
+
+    let mut line_start_byte = 0;
+    for line in lines.iter().take(target_line) {
+        line_start_byte += line.len() + 1;
+    }
+
+    let line_text = lines.get(target_line).unwrap_or(&"");
+    if line_text.is_empty() {
+        return line_start_byte;
+    }
+
+    let mut best_offset = 0;
+    let mut best_distance = f32::INFINITY;
+    let mut current_byte_offset = 0;
+
+    for c in line_text.chars() {
+        let prefix = &line_text[..current_byte_offset];
+        let glyph_x = measure_text_impl(
+            prefix,
+            style,
+            font_size,
+            glyph_font_size,
+            &font.font,
+            font.style(),
+            font.weight(),
+        )
+        .width;
+
+        let char_str = &line_text[current_byte_offset..current_byte_offset + c.len_utf8()];
+        let char_width = measure_text_impl(
+            char_str,
+            style,
+            font_size,
+            glyph_font_size,
+            &font.font,
+            font.style(),
+            font.weight(),
+        )
+        .width
+        .max(font_size * 0.5);
+
+        let left_dist = (x - glyph_x).abs();
+        if left_dist < best_distance {
+            best_distance = left_dist;
+            best_offset = current_byte_offset;
+        }
+
+        let right_x = glyph_x + char_width;
+        let right_dist = (x - right_x).abs();
+        if right_dist < best_distance {
+            best_distance = right_dist;
+            best_offset = current_byte_offset + c.len_utf8();
+        }
+
+        current_byte_offset += c.len_utf8();
+    }
+
+    let total_width = measure_text_impl(
+        line_text,
+        style,
+        font_size,
+        glyph_font_size,
+        &font.font,
+        font.style(),
+        font.weight(),
+    )
+    .width;
+    let end_dist = (x - total_width).abs();
+    if end_dist < best_distance {
+        best_offset = line_text.len();
+    }
+
+    line_start_byte + best_offset.min(line_text.len())
+}
+
+pub fn cursor_x_for_offset_with_font(
+    text: &str,
+    style: &TextStyle,
+    offset: usize,
+    font: &SoftwareTextFont,
+) -> f32 {
+    let clamped_offset = clamp_to_char_boundary(text, offset.min(text.len()));
+    if clamped_offset == 0 {
+        return 0.0;
+    }
+
+    let font_size = resolve_font_size(style);
+    measure_text_impl(
+        &text[..clamped_offset],
+        style,
+        font_size,
+        font.ab_glyph_px_size(font_size),
+        &font.font,
+        font.style(),
+        font.weight(),
+    )
+    .width
+}
+
+pub fn layout_text_with_font(
+    text: &str,
+    style: &TextStyle,
+    font: &SoftwareTextFont,
+) -> TextLayoutResult {
+    let font_size = resolve_font_size(style);
+    let glyph_font_size = font.ab_glyph_px_size(font_size);
+    let resolved_weight = font.weight();
+    let resolved_style = font.style();
+    let weight_synthesis = TextWeightSynthesis::for_style(style, resolved_weight, font_size, 1.0);
+    let font = &font.font;
+    let line_height = resolve_line_height(style, font_size * 1.4);
+    let letter_spacing = resolve_letter_spacing(style, font_size);
+    let scaled_font = font.as_scaled(PxScale::from(glyph_font_size));
+
+    let mut glyph_x_positions = Vec::new();
+    let mut char_to_byte = Vec::new();
+    let mut glyph_layouts = Vec::new();
+    let mut lines = Vec::new();
+    let mut current_x = 0.0f32;
+    let mut line_start = 0;
+    let mut y = 0.0f32;
+
+    let mut iter = text.char_indices().peekable();
+    while let Some((byte_offset, c)) = iter.next() {
+        glyph_x_positions.push(current_x);
+        char_to_byte.push(byte_offset);
+
+        if c == '\n' {
+            lines.push(LineLayout {
+                start_offset: line_start,
+                end_offset: byte_offset,
+                y,
+                height: line_height,
+            });
+            line_start = byte_offset + 1;
+            y += line_height;
+            current_x = 0.0;
+        } else {
+            let glyph_id = scaled_font.glyph_id(c);
+            let glyph_width =
+                weight_synthesis.apply_width(scaled_font.h_advance(glyph_id).max(0.0));
+            let glyph_end = byte_offset + c.len_utf8();
+            if glyph_end > byte_offset {
+                glyph_layouts.push(GlyphLayout {
+                    line_index: lines.len(),
+                    start_offset: byte_offset,
+                    end_offset: glyph_end,
+                    x: current_x,
+                    y,
+                    width: glyph_width,
+                    height: line_height,
+                });
+            }
+            current_x += glyph_width;
+            if let Some((_, next)) = iter.peek() {
+                if *next != '\n' {
+                    current_x += letter_spacing;
+                }
+            }
+        }
+    }
+
+    glyph_x_positions.push(current_x);
+    char_to_byte.push(text.len());
+
+    lines.push(LineLayout {
+        start_offset: line_start,
+        end_offset: text.len(),
+        y,
+        height: line_height,
+    });
+
+    let metrics = measure_text_impl(
+        text,
+        style,
+        font_size,
+        glyph_font_size,
+        font,
+        resolved_style,
+        resolved_weight,
+    );
+    TextLayoutResult::new(
+        text,
+        TextLayoutData {
+            width: metrics.width,
+            height: metrics.height,
+            line_height,
+            glyph_x_positions,
+            char_to_byte,
+            lines,
+            glyph_layouts,
+        },
+    )
+}
+
 pub fn rasterize_text_to_image_with_font(
     text: &str,
     rect: Rect,
@@ -36,6 +920,31 @@ pub fn rasterize_text_to_image_with_font(
     font_size: f32,
     scale: f32,
     font: &impl Font,
+) -> Option<ImageBitmap> {
+    rasterize_text_to_image_impl(
+        text,
+        rect,
+        style,
+        fallback_color,
+        font_size,
+        scale,
+        RasterFontRef {
+            font,
+            ab_glyph_scale_factor: 1.0,
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Normal,
+        },
+    )
+}
+
+fn rasterize_text_to_image_impl(
+    text: &str,
+    rect: Rect,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    font_ref: RasterFontRef<'_, impl Font>,
 ) -> Option<ImageBitmap> {
     if text.is_empty()
         || rect.width <= 0.0
@@ -90,14 +999,16 @@ pub fn rasterize_text_to_image_with_font(
         rect.y.fract()
     };
 
-    let font_px_size = font_size * scale;
+    let font = font_ref.font;
+    let font_px_size = font_size * scale * font_ref.ab_glyph_scale_factor;
+    let weight_synthesis = TextWeightSynthesis::for_style(style, font_ref.weight, font_size, scale);
+    let style_synthesis = TextStyleSynthesis::for_style(style, font_ref.style, font_size, scale);
     let metrics = vertical_metrics(font, font_px_size);
-    let line_height = style
-        .resolve_line_height(14.0, metrics.natural_line_height)
-        .max(1.0);
+    let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
+    let first_baseline_y = baseline_y_for_line_box(metrics, line_height);
 
     for (line_idx, line) in text.split('\n').enumerate() {
-        let baseline_y = metrics.ascent + line_idx as f32 * line_height + origin_y;
+        let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
         let offset = point(origin_x, baseline_y);
 
         for glyph in layout_line_glyphs(font, line, font_px_size, offset) {
@@ -108,6 +1019,8 @@ pub fn rasterize_text_to_image_with_font(
             let Some(mask) = build_glyph_mask(font, &glyph, &outlined, bounds, raster_style) else {
                 continue;
             };
+            let mask = synthesize_glyph_weight(mask, weight_synthesis);
+            let mask = synthesize_glyph_style(mask, style_synthesis);
 
             if let Some(shadow) = shadow {
                 draw_shadow_mask(
@@ -143,6 +1056,415 @@ pub fn rasterize_text_to_image_with_font(
     }
 
     ImageBitmap::from_rgba8(width, height, rgba).ok()
+}
+
+fn resolve_font_size(style: &TextStyle) -> f32 {
+    style.resolve_font_size(14.0)
+}
+
+fn baseline_y_for_line_box(
+    metrics: crate::font_layout::FontVerticalMetrics,
+    line_height: f32,
+) -> f32 {
+    metrics.ascent + (line_height - metrics.natural_line_height) * 0.5
+}
+
+fn resolve_line_height(style: &TextStyle, font_size: f32) -> f32 {
+    style.resolve_line_height(14.0, font_size)
+}
+
+fn resolve_letter_spacing(style: &TextStyle, font_size: f32) -> f32 {
+    let _ = font_size;
+    style.resolve_letter_spacing(14.0)
+}
+
+fn fallback_char_width(font_size: f32) -> f32 {
+    font_size.max(1.0) * 0.55
+}
+
+fn fallback_line_height(style: &TextStyle, font_size: f32) -> f32 {
+    resolve_line_height(style, font_size.max(1.0) * 1.2)
+}
+
+fn fallback_line_heights(text: &str, style: &TextStyle, font_size: f32) -> Vec<f32> {
+    let line_count = text.split('\n').count().max(1);
+    vec![fallback_line_height(style, font_size); line_count]
+}
+
+fn fallback_text_metrics(text: &str, style: &TextStyle, font_size: f32) -> TextMetrics {
+    let line_height = fallback_line_height(style, font_size);
+    let char_width = fallback_char_width(font_size);
+    let letter_spacing = resolve_letter_spacing(style, font_size);
+    let mut line_count = 0usize;
+    let mut max_width = 0.0f32;
+
+    for line in text.split('\n') {
+        line_count += 1;
+        let char_count = line.chars().count();
+        let spacing = char_count.saturating_sub(1) as f32 * letter_spacing;
+        max_width = max_width.max(char_count as f32 * char_width + spacing);
+    }
+
+    let line_count = line_count.max(1);
+    TextMetrics {
+        width: max_width,
+        height: line_count as f32 * line_height,
+        line_height,
+        line_count,
+    }
+}
+
+fn fallback_cursor_x_for_offset(text: &str, style: &TextStyle, offset: usize) -> f32 {
+    let font_size = resolve_font_size(style);
+    let clamped = clamp_to_char_boundary(text, offset.min(text.len()));
+    let line_start = text[..clamped].rfind('\n').map_or(0, |index| index + 1);
+    let char_count = text[line_start..clamped].chars().count();
+    let spacing = char_count.saturating_sub(1) as f32 * resolve_letter_spacing(style, font_size);
+    char_count as f32 * fallback_char_width(font_size) + spacing
+}
+
+fn fallback_text_offset_for_position(text: &str, style: &TextStyle, x: f32, y: f32) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+
+    let font_size = resolve_font_size(style);
+    let line_height = fallback_line_height(style, font_size);
+    let line_index = (y / line_height).floor().max(0.0) as usize;
+    let lines: Vec<&str> = text.split('\n').collect();
+    let target_line = line_index.min(lines.len().saturating_sub(1));
+
+    let mut line_start_byte = 0;
+    for line in lines.iter().take(target_line) {
+        line_start_byte += line.len() + 1;
+    }
+
+    let line_text = lines.get(target_line).copied().unwrap_or("");
+    if line_text.is_empty() {
+        return line_start_byte;
+    }
+
+    let advance =
+        (fallback_char_width(font_size) + resolve_letter_spacing(style, font_size)).max(1.0);
+    let target_char = (x / advance).round().max(0.0) as usize;
+    line_start_byte + byte_offset_for_char_index(line_text, target_char)
+}
+
+fn fallback_layout_text(text: &str, style: &TextStyle) -> TextLayoutResult {
+    let font_size = resolve_font_size(style);
+    let line_height = fallback_line_height(style, font_size);
+    let char_width = fallback_char_width(font_size);
+    let letter_spacing = resolve_letter_spacing(style, font_size);
+
+    let mut glyph_x_positions = Vec::new();
+    let mut char_to_byte = Vec::new();
+    let mut glyph_layouts = Vec::new();
+    let mut lines = Vec::new();
+    let mut current_x = 0.0f32;
+    let mut line_start = 0;
+    let mut y = 0.0f32;
+
+    let mut iter = text.char_indices().peekable();
+    while let Some((byte_offset, ch)) = iter.next() {
+        glyph_x_positions.push(current_x);
+        char_to_byte.push(byte_offset);
+
+        if ch == '\n' {
+            lines.push(LineLayout {
+                start_offset: line_start,
+                end_offset: byte_offset,
+                y,
+                height: line_height,
+            });
+            line_start = byte_offset + 1;
+            y += line_height;
+            current_x = 0.0;
+        } else {
+            glyph_layouts.push(GlyphLayout {
+                line_index: lines.len(),
+                start_offset: byte_offset,
+                end_offset: byte_offset + ch.len_utf8(),
+                x: current_x,
+                y,
+                width: char_width,
+                height: line_height,
+            });
+            current_x += char_width;
+            if let Some((_, next)) = iter.peek() {
+                if *next != '\n' {
+                    current_x += letter_spacing;
+                }
+            }
+        }
+    }
+
+    glyph_x_positions.push(current_x);
+    char_to_byte.push(text.len());
+    lines.push(LineLayout {
+        start_offset: line_start,
+        end_offset: text.len(),
+        y,
+        height: line_height,
+    });
+
+    let metrics = fallback_text_metrics(text, style, font_size);
+    TextLayoutResult::new(
+        text,
+        TextLayoutData {
+            width: metrics.width,
+            height: metrics.height,
+            line_height,
+            glyph_x_positions,
+            char_to_byte,
+            glyph_layouts,
+            lines,
+        },
+    )
+}
+
+fn byte_offset_for_char_index(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .map(|(index, _)| index)
+        .nth(char_index)
+        .unwrap_or(text.len())
+}
+
+fn measure_text_impl(
+    text: &str,
+    style: &TextStyle,
+    font_size: f32,
+    glyph_font_size: f32,
+    font: &impl Font,
+    resolved_style: FontStyle,
+    resolved_weight: FontWeight,
+) -> TextMetrics {
+    let line_height = resolve_line_height(style, font_size * 1.4);
+    let letter_spacing = resolve_letter_spacing(style, font_size);
+    let weight_synthesis = TextWeightSynthesis::for_style(style, resolved_weight, font_size, 1.0);
+    let style_synthesis = TextStyleSynthesis::for_style(style, resolved_style, font_size, 1.0);
+
+    let lines: Vec<&str> = text.split('\n').collect();
+    let line_count = lines.len().max(1);
+
+    let mut max_width: f32 = 0.0;
+    for line in &lines {
+        let line_width = line_advance_width(font, line, glyph_font_size);
+        let char_spacing = (line.chars().count().saturating_sub(1) as f32) * letter_spacing;
+        let line_width = (weight_synthesis.apply_width(line_width) + char_spacing).max(0.0);
+        let line_width = if line.is_empty() {
+            line_width
+        } else {
+            line_width + style_synthesis.visual_overhang_px()
+        };
+        max_width = max_width.max(line_width);
+    }
+
+    TextMetrics {
+        width: max_width,
+        height: line_count as f32 * line_height,
+        line_height,
+        line_count,
+    }
+}
+
+fn measure_annotated_text_with_resolver(
+    text: &AnnotatedString,
+    style: &TextStyle,
+    font_size: f32,
+    fonts: &SoftwareTextFontSet,
+) -> TextMetrics {
+    let Some(base_font) = fonts.resolve(style) else {
+        return fallback_text_metrics(text.text.as_str(), style, font_size);
+    };
+    let base_line_height = line_height_for_style(style, font_size, &base_font.font);
+    let mut boundaries = text.span_boundaries();
+    for (offset, ch) in text.text.char_indices() {
+        if ch == '\n' {
+            boundaries.push(offset);
+            boundaries.push(offset + ch.len_utf8());
+        }
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    boundaries.retain(|offset| *offset <= text.text.len() && text.text.is_char_boundary(*offset));
+
+    let mut line_count = 1usize;
+    let mut max_width = 0.0f32;
+    let mut current_line_width = 0.0f32;
+
+    for range in boundaries.windows(2) {
+        let start = range[0];
+        let end = range[1];
+        if start == end {
+            continue;
+        }
+        let segment = &text.text[start..end];
+        let segment_style = effective_style_for_range(text, style, start, end);
+        let segment_font_size = resolve_font_size(&segment_style);
+        let Some(segment_font) = fonts.resolve(&segment_style) else {
+            let mut remaining = segment;
+            loop {
+                if let Some(newline_offset) = remaining.find('\n') {
+                    let before_newline = &remaining[..newline_offset];
+                    if !before_newline.is_empty() {
+                        current_line_width += fallback_text_metrics(
+                            before_newline,
+                            &segment_style,
+                            segment_font_size,
+                        )
+                        .width;
+                    }
+                    max_width = max_width.max(current_line_width);
+                    current_line_width = 0.0;
+                    line_count += 1;
+                    remaining = &remaining[newline_offset + 1..];
+                    if remaining.is_empty() {
+                        break;
+                    }
+                } else {
+                    if !remaining.is_empty() {
+                        current_line_width +=
+                            fallback_text_metrics(remaining, &segment_style, segment_font_size)
+                                .width;
+                    }
+                    break;
+                }
+            }
+            continue;
+        };
+
+        let mut remaining = segment;
+        loop {
+            if let Some(newline_offset) = remaining.find('\n') {
+                let before_newline = &remaining[..newline_offset];
+                if !before_newline.is_empty() {
+                    let metrics = measure_text_impl(
+                        before_newline,
+                        &segment_style,
+                        segment_font_size,
+                        segment_font.ab_glyph_px_size(segment_font_size),
+                        &segment_font.font,
+                        segment_font.style(),
+                        segment_font.weight(),
+                    );
+                    current_line_width += metrics.width;
+                }
+                max_width = max_width.max(current_line_width);
+                current_line_width = 0.0;
+                line_count += 1;
+                remaining = &remaining[newline_offset + 1..];
+                if remaining.is_empty() {
+                    break;
+                }
+            } else {
+                if !remaining.is_empty() {
+                    let metrics = measure_text_impl(
+                        remaining,
+                        &segment_style,
+                        segment_font_size,
+                        segment_font.ab_glyph_px_size(segment_font_size),
+                        &segment_font.font,
+                        segment_font.style(),
+                        segment_font.weight(),
+                    );
+                    current_line_width += metrics.width;
+                }
+                break;
+            }
+        }
+    }
+
+    max_width = max_width.max(current_line_width);
+
+    let line_heights = annotated_line_heights_with_resolver(text, style, font_size, fonts);
+    let total_height = line_heights.iter().sum();
+    let max_line_height = line_heights.into_iter().fold(base_line_height, f32::max);
+
+    TextMetrics {
+        width: max_width,
+        height: total_height,
+        line_height: max_line_height,
+        line_count,
+    }
+}
+
+fn annotated_line_heights_with_resolver(
+    text: &AnnotatedString,
+    style: &TextStyle,
+    font_size: f32,
+    fonts: &SoftwareTextFontSet,
+) -> Vec<f32> {
+    let Some(base_font) = fonts.resolve(style) else {
+        return fallback_line_heights(text.text.as_str(), style, font_size);
+    };
+    let base_line_height = line_height_for_style(style, font_size, &base_font.font);
+    let mut line_heights = vec![base_line_height];
+    let mut boundaries = text.span_boundaries();
+    for (offset, ch) in text.text.char_indices() {
+        if ch == '\n' {
+            boundaries.push(offset);
+            boundaries.push(offset + ch.len_utf8());
+        }
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    boundaries.retain(|offset| *offset <= text.text.len() && text.text.is_char_boundary(*offset));
+
+    let mut line_index = 0usize;
+    for range in boundaries.windows(2) {
+        let start = range[0];
+        let end = range[1];
+        if start == end {
+            continue;
+        }
+        let segment = &text.text[start..end];
+        let segment_style = effective_style_for_range(text, style, start, end);
+        let segment_font_size = resolve_font_size(&segment_style);
+        let segment_line_height = if let Some(segment_font) = fonts.resolve(&segment_style) {
+            line_height_for_style(&segment_style, segment_font_size, &segment_font.font)
+        } else {
+            fallback_line_height(&segment_style, segment_font_size)
+        };
+        for ch in segment.chars() {
+            line_heights[line_index] = line_heights[line_index].max(segment_line_height);
+            if ch == '\n' {
+                line_index += 1;
+                if line_heights.len() <= line_index {
+                    line_heights.push(base_line_height);
+                }
+            }
+        }
+    }
+
+    line_heights
+}
+
+fn effective_style_for_range(
+    text: &AnnotatedString,
+    style: &TextStyle,
+    start: usize,
+    end: usize,
+) -> TextStyle {
+    let mut effective = style.clone();
+    for span in &text.span_styles {
+        if span.range.start < end && span.range.end > start {
+            effective.span_style = effective.span_style.merge(&span.item);
+        }
+    }
+    effective
+}
+
+fn line_height_for_style(style: &TextStyle, font_size: f32, font: &impl Font) -> f32 {
+    let _ = font;
+    resolve_line_height(style, font_size * 1.4)
+}
+
+fn clamp_to_char_boundary(text: &str, mut offset: usize) -> usize {
+    offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
 }
 
 fn align_glyph_for_text_motion(glyph: Glyph, static_text_motion: bool) -> Glyph {
@@ -198,7 +1520,7 @@ fn draw_mask_glyph(
                 continue;
             }
 
-            let sample = sample_brush(
+            let sample = sample_brush_rgba(
                 brush,
                 brush_rect,
                 brush_rect.x + px as f32 + 0.5,
@@ -527,6 +1849,99 @@ fn build_stroke_mask(
     })
 }
 
+fn synthesize_glyph_weight(mask: GlyphMask, synthesis: TextWeightSynthesis) -> GlyphMask {
+    let horizontal_shift = synthetic_weight_shift_px(synthesis.embolden_px);
+    if horizontal_shift == 0 || mask.width == 0 || mask.height == 0 {
+        return mask;
+    }
+
+    let vertical_shift = (horizontal_shift / 2).min(1);
+    let output_width = mask.width + horizontal_shift;
+    let output_height = mask.height + vertical_shift * 2;
+    let mut alpha = vec![0.0f32; output_width * output_height];
+    for y in 0..mask.height {
+        for x in 0..mask.width {
+            let coverage = mask.alpha[y * mask.width + x];
+            if coverage <= 0.0 {
+                continue;
+            }
+            for dy in 0..=(vertical_shift * 2) {
+                let output_y = y + dy;
+                for dx in 0..=horizontal_shift {
+                    let output_x = x + dx;
+                    let output_index = output_y * output_width + output_x;
+                    if coverage > alpha[output_index] {
+                        alpha[output_index] = coverage;
+                    }
+                }
+            }
+        }
+    }
+
+    GlyphMask {
+        alpha,
+        width: output_width,
+        height: output_height,
+        origin_x: mask.origin_x,
+        origin_y: mask.origin_y - vertical_shift as i32,
+    }
+}
+
+fn synthesize_glyph_style(mask: GlyphMask, synthesis: TextStyleSynthesis) -> GlyphMask {
+    if synthesis.slant <= 0.0 || mask.width == 0 || mask.height == 0 {
+        return mask;
+    }
+
+    let max_shift = ((mask.height.saturating_sub(1)) as f32 * synthesis.slant).ceil() as usize;
+    if max_shift == 0 {
+        return mask;
+    }
+
+    let output_width = mask.width + max_shift + 1;
+    let mut alpha = vec![0.0f32; output_width * mask.height];
+    for y in 0..mask.height {
+        let shift = (mask.height.saturating_sub(1) - y) as f32 * synthesis.slant;
+        let shift_floor = shift.floor() as usize;
+        let shift_fraction = shift - shift.floor();
+        for x in 0..mask.width {
+            let coverage = mask.alpha[y * mask.width + x];
+            if coverage <= 0.0 {
+                continue;
+            }
+
+            let output_x = x + shift_floor;
+            let left_index = y * output_width + output_x;
+            let left_coverage = coverage * (1.0 - shift_fraction);
+            if left_coverage > alpha[left_index] {
+                alpha[left_index] = left_coverage;
+            }
+
+            if shift_fraction > 0.0 {
+                let right_index = left_index + 1;
+                let right_coverage = coverage * shift_fraction;
+                if right_coverage > alpha[right_index] {
+                    alpha[right_index] = right_coverage;
+                }
+            }
+        }
+    }
+
+    GlyphMask {
+        alpha,
+        width: output_width,
+        height: mask.height,
+        origin_x: mask.origin_x,
+        origin_y: mask.origin_y,
+    }
+}
+
+fn synthetic_weight_shift_px(embolden_px: f32) -> usize {
+    if !embolden_px.is_finite() || embolden_px < 0.35 {
+        return 0;
+    }
+    embolden_px.ceil().max(1.0) as usize
+}
+
 fn build_outline_path(
     font: &impl Font,
     glyph: &Glyph,
@@ -630,156 +2045,6 @@ fn transform_outline_point(
     )
 }
 
-fn color_to_rgba(color: Color) -> [f32; 4] {
-    [
-        color.0.clamp(0.0, 1.0),
-        color.1.clamp(0.0, 1.0),
-        color.2.clamp(0.0, 1.0),
-        color.3.clamp(0.0, 1.0),
-    ]
-}
-
-fn sample_brush(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] {
-    match brush {
-        Brush::Solid(color) => color_to_rgba(*color),
-        Brush::LinearGradient {
-            colors,
-            stops,
-            start,
-            end,
-            tile_mode,
-        } => {
-            let sx = resolve_gradient_point(rect.x, rect.width, start.x);
-            let sy = resolve_gradient_point(rect.y, rect.height, start.y);
-            let ex = resolve_gradient_point(rect.x, rect.width, end.x);
-            let ey = resolve_gradient_point(rect.y, rect.height, end.y);
-            let dx = ex - sx;
-            let dy = ey - sy;
-            let denom = (dx * dx + dy * dy).max(f32::EPSILON);
-            let t = ((x - sx) * dx + (y - sy) * dy) / denom;
-            match normalize_gradient_t(t, *tile_mode) {
-                Some(sample_t) => {
-                    color_to_rgba(interpolate_colors(colors, stops.as_deref(), sample_t))
-                }
-                None => [0.0, 0.0, 0.0, 0.0],
-            }
-        }
-        Brush::RadialGradient {
-            colors,
-            stops,
-            center,
-            radius,
-            tile_mode,
-        } => {
-            let cx = rect.x + center.x;
-            let cy = rect.y + center.y;
-            let radius = (*radius).max(f32::EPSILON);
-            let dx = x - cx;
-            let dy = y - cy;
-            let distance = (dx * dx + dy * dy).sqrt();
-            let t = distance / radius;
-            match normalize_gradient_t(t, *tile_mode) {
-                Some(sample_t) => {
-                    color_to_rgba(interpolate_colors(colors, stops.as_deref(), sample_t))
-                }
-                None => [0.0, 0.0, 0.0, 0.0],
-            }
-        }
-        Brush::SweepGradient {
-            colors,
-            stops,
-            center,
-        } => {
-            let cx = rect.x + center.x;
-            let cy = rect.y + center.y;
-            let dx = x - cx;
-            let dy = y - cy;
-            let angle = dy.atan2(dx);
-            let t = (angle / std::f32::consts::TAU + 0.5).clamp(0.0, 1.0);
-            color_to_rgba(interpolate_colors(colors, stops.as_deref(), t))
-        }
-    }
-}
-
-fn resolve_gradient_point(origin: f32, extent: f32, value: f32) -> f32 {
-    if value.is_finite() {
-        origin + value
-    } else if value.is_sign_positive() {
-        origin + extent
-    } else {
-        origin
-    }
-}
-
-fn normalize_gradient_t(t: f32, tile_mode: TileMode) -> Option<f32> {
-    match tile_mode {
-        TileMode::Clamp => Some(t.clamp(0.0, 1.0)),
-        TileMode::Decal => {
-            if (0.0..=1.0).contains(&t) {
-                Some(t)
-            } else {
-                None
-            }
-        }
-        TileMode::Repeated => Some(t.rem_euclid(1.0)),
-        TileMode::Mirror => {
-            let wrapped = t.rem_euclid(2.0);
-            if wrapped <= 1.0 {
-                Some(wrapped)
-            } else {
-                Some(2.0 - wrapped)
-            }
-        }
-    }
-}
-
-fn interpolate_colors(colors: &[Color], stops: Option<&[f32]>, t: f32) -> Color {
-    if colors.is_empty() {
-        return Color(0.0, 0.0, 0.0, 0.0);
-    }
-    if colors.len() == 1 {
-        return colors[0];
-    }
-    let clamped = t.clamp(0.0, 1.0);
-
-    if let Some(stops) = stops {
-        if stops.len() == colors.len() {
-            if clamped <= stops[0] {
-                return colors[0];
-            }
-            for index in 0..(stops.len() - 1) {
-                let start = stops[index];
-                let end = stops[index + 1];
-                if clamped <= end {
-                    let span = (end - start).max(f32::EPSILON);
-                    let frac = ((clamped - start) / span).clamp(0.0, 1.0);
-                    return lerp_color(colors[index], colors[index + 1], frac);
-                }
-            }
-            return *colors.last().unwrap_or(&colors[0]);
-        }
-    }
-
-    let segments = (colors.len() - 1) as f32;
-    let scaled = clamped * segments;
-    let index = scaled.floor() as usize;
-    if index >= colors.len() - 1 {
-        return *colors.last().unwrap();
-    }
-    let frac = scaled - index as f32;
-    lerp_color(colors[index], colors[index + 1], frac)
-}
-
-fn lerp_color(a: Color, b: Color, t: f32) -> Color {
-    let lerp = |start: f32, end: f32| start + (end - start) * t;
-    Color(
-        lerp(a.0, b.0),
-        lerp(a.1, b.1),
-        lerp(a.2, b.2),
-        lerp(a.3, b.3),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -851,6 +2116,56 @@ mod tests {
             }
         }
         found.then_some((min_x, max_x))
+    }
+
+    fn ink_y_range(image: &ImageBitmap) -> Option<(u32, u32)> {
+        let width = image.width();
+        let height = image.height();
+        let pixels = image.pixels();
+        let mut min_y = u32::MAX;
+        let mut max_y = 0u32;
+        let mut found = false;
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                if pixels[idx + 3] > 0 {
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y + 1);
+                    found = true;
+                }
+            }
+        }
+        found.then_some((min_y, max_y))
+    }
+
+    fn ink_centroid_x(image: &ImageBitmap, y_start: u32, y_end: u32) -> Option<f32> {
+        let width = image.width();
+        let height = image.height();
+        let pixels = image.pixels();
+        let mut weighted_x = 0.0f32;
+        let mut total_alpha = 0.0f32;
+
+        for y in y_start.min(height)..y_end.min(height) {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                let alpha = pixels[idx + 3] as f32 / 255.0;
+                if alpha <= 0.0 {
+                    continue;
+                }
+                weighted_x += x as f32 * alpha;
+                total_alpha += alpha;
+            }
+        }
+
+        (total_alpha > 0.0).then_some(weighted_x / total_alpha)
+    }
+
+    fn vertical_slant_delta(image: &ImageBitmap) -> f32 {
+        let (top, bottom) = ink_y_range(image).expect("image should contain ink");
+        let mid = top + (bottom - top).max(1) / 2;
+        let top_x = ink_centroid_x(image, top, mid).expect("top ink centroid");
+        let bottom_x = ink_centroid_x(image, mid, bottom).expect("bottom ink centroid");
+        top_x - bottom_x
     }
 
     fn top_ink_row(image: &ImageBitmap) -> Option<u32> {
@@ -944,7 +2259,8 @@ mod tests {
         let height = rect.height.ceil().max(1.0) as u32;
         let mut canvas = vec![[0.0f32; 4]; (width * height) as usize];
 
-        let baseline = vertical_metrics(font, font_size).ascent;
+        let metrics = vertical_metrics(font, font_size);
+        let baseline = baseline_y_for_line_box(metrics, font_size * 1.4);
         for glyph in layout_line_glyphs(font, text, font_size, point(0.0, baseline)) {
             let Some((outlined, bounds)) = outline_glyph_with_bounds(font, &glyph) else {
                 continue;
@@ -980,6 +2296,525 @@ mod tests {
             "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
         ))
         .expect("font")
+    }
+
+    fn test_software_font() -> SoftwareTextFont {
+        SoftwareTextFont::from_bytes(
+            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf").to_vec(),
+        )
+        .expect("font")
+    }
+
+    #[test]
+    fn software_text_font_rejects_invalid_bytes() {
+        assert!(SoftwareTextFont::from_bytes(vec![0, 1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn default_software_text_font_has_no_process_global_cache() {
+        let source = include_str!("software_text_raster.rs");
+        let once_lock = ["Once", "Lock"].concat();
+        let cached_default = ["static ", "FONT"].concat();
+        let default_font_fn = ["fn ", "default_font()"].concat();
+
+        assert!(
+            !source.contains(&cached_default)
+                && !source.contains(&default_font_fn)
+                && !source.contains(&once_lock),
+            "default software text font construction must be explicit renderer/app-owned state, not a process-global cache"
+        );
+    }
+
+    #[test]
+    fn software_text_measurer_empty_font_set_uses_deterministic_fallback_without_panicking() {
+        let measurer = SoftwareTextMeasurer::from_font_set(SoftwareTextFontSet::empty(), 4);
+        let style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(20.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = AnnotatedString::from("ab\nc");
+
+        let metrics = measurer.measure(&text, &style);
+        assert_eq!(metrics.line_count, 2);
+        assert!(metrics.width > 0.0);
+        assert!(metrics.height >= metrics.line_height * 2.0);
+
+        let cursor_x = measurer.get_cursor_x_for_offset(&text, &style, 2);
+        assert!(cursor_x > 0.0);
+        let second_line_offset =
+            measurer.get_offset_for_position(&text, &style, 0.0, metrics.line_height);
+        assert!(
+            second_line_offset >= "ab\n".len(),
+            "fallback hit testing should resolve into the second line: {second_line_offset}"
+        );
+
+        let layout = measurer.layout(&text, &style);
+        assert_eq!(layout.lines.len(), 2);
+        assert_eq!(layout.glyph_layouts().len(), 3);
+    }
+
+    #[test]
+    fn software_text_metrics_layout_and_cursor_share_font_backend() {
+        let font = test_software_font();
+        let style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(18.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = "Text\nBackend";
+
+        let metrics = measure_text_with_font(text, &style, 18.0, &font);
+        let layout = layout_text_with_font(text, &style, &font);
+
+        assert!(metrics.width > 0.0);
+        assert_eq!(metrics.line_count, 2);
+        assert_eq!(layout.lines.len(), 2);
+        assert_eq!(layout.height, metrics.height);
+        assert!(layout.glyph_layouts().len() >= "TextBackend".len());
+
+        let offset =
+            text_offset_for_position_with_font(text, &style, 0.0, metrics.line_height, &font);
+        assert!(
+            offset >= "Text\n".len(),
+            "second-line hit testing should return a byte offset on the second line: {offset}"
+        );
+        let cursor_x = cursor_x_for_offset_with_font(text, &style, "Text".len(), &font);
+        assert!(cursor_x > 0.0);
+    }
+
+    #[test]
+    fn software_text_metrics_keep_requested_font_size_for_default_font() {
+        let font = default_software_text_font().expect("bundled default test font");
+        let style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(14.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let metrics = measure_text_with_font("Counter App", &style, 14.0, &font);
+        assert!(
+            (metrics.width - 83.16).abs() < 0.05 && (metrics.height - 19.6).abs() < 0.05,
+            "14sp demo text must use font em metrics, not ab_glyph height units: {metrics:?}"
+        );
+    }
+
+    #[test]
+    fn software_text_synthesizes_missing_bold_weight() {
+        let font = test_software_font();
+        let normal_style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(20.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bold_style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(20.0),
+                font_weight: Some(FontWeight::BOLD),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let no_synthesis_style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(20.0),
+                font_weight: Some(FontWeight::BOLD),
+                font_synthesis: Some(FontSynthesis::None),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let normal = measure_text_with_font("Save Raster WebP", &normal_style, 20.0, &font);
+        let synthesized = measure_text_with_font("Save Raster WebP", &bold_style, 20.0, &font);
+        let disabled = measure_text_with_font("Save Raster WebP", &no_synthesis_style, 20.0, &font);
+
+        assert!(
+            synthesized.width > normal.width * 1.04,
+            "bold fallback should synthesize heavier advances: normal={normal:?} synthesized={synthesized:?}"
+        );
+        assert!(
+            (disabled.width - normal.width).abs() < 0.01,
+            "explicit FontSynthesis::None should preserve regular metrics: normal={normal:?} disabled={disabled:?}"
+        );
+    }
+
+    #[test]
+    fn rasterized_synthetic_bold_adds_ink_without_changing_line_box() {
+        let font = test_software_font();
+        let normal_style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(20.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bold_style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(20.0),
+                font_weight: Some(FontWeight::BOLD),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let normal_metrics = measure_text_with_font("Composer", &normal_style, 20.0, &font);
+        let bold_metrics = measure_text_with_font("Composer", &bold_style, 20.0, &font);
+
+        let normal = rasterize_text_to_image(
+            "Composer",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: normal_metrics.width.ceil(),
+                height: normal_metrics.height.ceil(),
+            },
+            &normal_style,
+            Color::WHITE,
+            20.0,
+            1.0,
+            &font,
+        )
+        .expect("normal text image");
+        let bold = rasterize_text_to_image(
+            "Composer",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: bold_metrics.width.ceil(),
+                height: bold_metrics.height.ceil(),
+            },
+            &bold_style,
+            Color::WHITE,
+            20.0,
+            1.0,
+            &font,
+        )
+        .expect("bold text image");
+
+        assert_eq!(bold.height(), normal.height());
+        assert!(
+            count_ink_pixels(&bold) > count_ink_pixels(&normal),
+            "synthetic bold should increase rasterized ink coverage"
+        );
+    }
+
+    #[test]
+    fn software_text_synthesizes_missing_italic_style() {
+        let font = test_software_font();
+        let normal_style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(36.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let italic_style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(36.0),
+                font_style: Some(FontStyle::Italic),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let no_synthesis_style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(36.0),
+                font_style: Some(FontStyle::Italic),
+                font_synthesis: Some(FontSynthesis::None),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let normal_metrics = measure_text_with_font("Italic", &normal_style, 36.0, &font);
+        let italic_metrics = measure_text_with_font("Italic", &italic_style, 36.0, &font);
+        let disabled_metrics = measure_text_with_font("Italic", &no_synthesis_style, 36.0, &font);
+
+        assert!(
+            italic_metrics.width > normal_metrics.width + 6.0,
+            "italic fallback should reserve slanted visual overhang: normal={normal_metrics:?} italic={italic_metrics:?}"
+        );
+        assert!(
+            (disabled_metrics.width - normal_metrics.width).abs() < 0.01,
+            "explicit FontSynthesis::None should preserve regular metrics: normal={normal_metrics:?} disabled={disabled_metrics:?}"
+        );
+
+        let normal = rasterize_text_to_image(
+            "Italic",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: normal_metrics.width.ceil(),
+                height: normal_metrics.height.ceil(),
+            },
+            &normal_style,
+            Color::WHITE,
+            36.0,
+            1.0,
+            &font,
+        )
+        .expect("normal text image");
+        let italic = rasterize_text_to_image(
+            "Italic",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: italic_metrics.width.ceil(),
+                height: italic_metrics.height.ceil(),
+            },
+            &italic_style,
+            Color::WHITE,
+            36.0,
+            1.0,
+            &font,
+        )
+        .expect("italic text image");
+        let disabled = rasterize_text_to_image(
+            "Italic",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: disabled_metrics.width.ceil(),
+                height: disabled_metrics.height.ceil(),
+            },
+            &no_synthesis_style,
+            Color::WHITE,
+            36.0,
+            1.0,
+            &font,
+        )
+        .expect("disabled italic text image");
+
+        assert_eq!(
+            normal.pixels(),
+            disabled.pixels(),
+            "FontSynthesis::None must not synthesize oblique glyphs"
+        );
+        assert!(
+            vertical_slant_delta(&italic) > vertical_slant_delta(&normal) + 2.0,
+            "synthetic italic should visibly lean top ink to the right"
+        );
+    }
+
+    #[test]
+    fn rasterized_default_text_fills_expected_visual_height() {
+        let font = default_software_text_font().expect("bundled default test font");
+        let style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(14.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let metrics = measure_text_with_font("Counter App", &style, 14.0, &font);
+        let image = rasterize_text_to_image(
+            "Counter App",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: metrics.width.ceil(),
+                height: metrics.height.ceil(),
+            },
+            &style,
+            Color::WHITE,
+            14.0,
+            1.0,
+            &font,
+        )
+        .expect("text image");
+        let (top, bottom) = ink_y_range(&image).expect("text should contain ink");
+        let ink_height = bottom - top;
+
+        assert!(
+            ink_height >= 13,
+            "14sp default text ink should keep visual height parity with the WGPU baseline: top={top} bottom={bottom} image={}x{}",
+            image.width(),
+            image.height()
+        );
+    }
+
+    #[test]
+    fn software_text_font_selection_preserves_first_complete_default_face() {
+        let regular = SoftwareTextFont::from_bytes(
+            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf").to_vec(),
+        )
+        .expect("regular test font should load");
+        let font = software_text_font_from_fonts_or_default(&[
+            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"),
+            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansBold.ttf"),
+            include_bytes!("../../../../apps/desktop-demo/assets/TwemojiMozilla.ttf"),
+        ])
+        .expect("font selection should resolve a test font");
+        let style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(18.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let regular_metrics = measure_text_with_font("UNDER", &style, 18.0, &regular);
+        let metrics = measure_text_with_font("UNDER", &style, 18.0, &font);
+        assert!(
+            (metrics.width - regular_metrics.width).abs() < 0.01,
+            "font selection should keep the declared regular face for default text: selected={metrics:?}, regular={regular_metrics:?}"
+        );
+    }
+
+    #[test]
+    fn software_text_font_resolution_reuses_cached_font_score() {
+        let font = test_software_font();
+        assert!(
+            font.score.is_complete_default_face(),
+            "test font should cache complete Latin coverage at load time: supported={} width={}",
+            font.score.supported_latin_chars,
+            font.score.latin_sample_width
+        );
+
+        let fonts = SoftwareTextFontSet::from_font(font.clone());
+        let resolved = fonts
+            .resolve(&TextStyle {
+                span_style: SpanStyle {
+                    font_weight: Some(FontWeight::BOLD),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .expect("font set should resolve a test font");
+
+        assert_eq!(
+            resolved.score.supported_latin_chars,
+            font.score.supported_latin_chars
+        );
+        assert_eq!(
+            resolved.score.latin_sample_width,
+            font.score.latin_sample_width
+        );
+    }
+
+    #[test]
+    fn software_text_font_set_resolves_requested_weight() {
+        let fonts = software_text_font_set_from_fonts_or_default(&[
+            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"),
+            include_bytes!("../../../../apps/desktop-demo/assets/NotoSansBold.ttf"),
+            include_bytes!("../../../../apps/desktop-demo/assets/TwemojiMozilla.ttf"),
+        ]);
+        let regular = fonts
+            .resolve(&TextStyle::default())
+            .expect("font set should resolve regular test font");
+        let bold_style = TextStyle {
+            span_style: SpanStyle {
+                font_weight: Some(FontWeight::BOLD),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bold = fonts
+            .resolve(&bold_style)
+            .expect("font set should resolve bold test font");
+
+        assert_eq!(regular.weight(), FontWeight::NORMAL);
+        assert_eq!(bold.weight(), FontWeight::BOLD);
+
+        let regular_metrics =
+            measure_text_with_font("Counter App", &TextStyle::default(), 18.0, regular);
+        let bold_metrics = measure_text_with_font("Counter App", &bold_style, 18.0, bold);
+        assert!(
+            bold_metrics.width > regular_metrics.width,
+            "bold face resolution should affect real text metrics: regular={regular_metrics:?} bold={bold_metrics:?}"
+        );
+    }
+
+    #[test]
+    fn software_text_metrics_use_largest_annotated_span_font_size() {
+        let font = default_software_text_font().expect("bundled default test font");
+        let text = AnnotatedString::builder()
+            .push_style(SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(30.0),
+                ..Default::default()
+            })
+            .append("BIG ")
+            .pop()
+            .push_style(SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(10.0),
+                ..Default::default()
+            })
+            .append("small")
+            .pop()
+            .to_annotated_string();
+
+        let metrics = measure_annotated_text_with_font(&text, &TextStyle::default(), 14.0, &font);
+
+        assert!(
+            metrics.height >= 30.0,
+            "rich text metrics must include the largest span height: {metrics:?}"
+        );
+        assert!(
+            metrics.width > 48.0,
+            "rich text metrics should measure run widths at their span sizes: {metrics:?}"
+        );
+    }
+
+    #[test]
+    fn software_text_metrics_cache_keys_include_span_styles() {
+        let measurer = SoftwareTextMeasurer::new(
+            default_software_text_font().expect("bundled default test font"),
+            8,
+        );
+        let plain = AnnotatedString::from("BIG small");
+        let rich = AnnotatedString::builder()
+            .push_style(SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(30.0),
+                ..Default::default()
+            })
+            .append("BIG ")
+            .pop()
+            .append("small")
+            .to_annotated_string();
+
+        let plain_metrics = measurer.measure(&plain, &TextStyle::default());
+        let rich_metrics = measurer.measure(&rich, &TextStyle::default());
+
+        assert!(
+            rich_metrics.height > plain_metrics.height,
+            "cached plain text metrics must not be reused for styled text: plain={plain_metrics:?} rich={rich_metrics:?}"
+        );
+    }
+
+    #[test]
+    fn software_text_metrics_cache_recovers_after_poison() {
+        let measurer = SoftwareTextMeasurer::new(
+            default_software_text_font().expect("bundled default test font"),
+            8,
+        );
+        let text = AnnotatedString::from("Recovered text metrics");
+
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = measurer
+                .cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            panic!("poison software text metrics cache for recovery test");
+        }));
+
+        assert!(poison_result.is_err());
+
+        let metrics = measurer.measure(&text, &TextStyle::default());
+        assert!(metrics.width > 0.0);
+        assert!(metrics.height > 0.0);
+
+        let subset =
+            measurer.measure_subsequence(&text, 0.."Recovered".len(), &TextStyle::default());
+        assert!(subset.width > 0.0);
+        assert!(subset.width < metrics.width);
     }
 
     #[test]

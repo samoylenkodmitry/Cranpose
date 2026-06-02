@@ -34,15 +34,15 @@ impl GlobalSnapshot {
     pub fn get_or_create() -> Arc<Self> {
         GLOBAL_SNAPSHOT.with(|cell| {
             let mut snapshot = cell.borrow_mut();
-            if snapshot.is_none() {
-                let id = with_runtime(|runtime| runtime.global_snapshot_id());
-                let invalid = super::runtime::open_snapshots();
-                *snapshot = Some(GlobalSnapshot::new(id, invalid));
+            if let Some(global) = snapshot.as_ref() {
+                return Arc::clone(global);
             }
-            snapshot
-                .as_ref()
-                .expect("GlobalSnapshot must be initialized before use")
-                .clone()
+
+            let id = with_runtime(|runtime| runtime.global_snapshot_id());
+            let invalid = super::runtime::open_snapshots();
+            let global = GlobalSnapshot::new(id, invalid);
+            *snapshot = Some(Arc::clone(&global));
+            global
         })
     }
 
@@ -84,11 +84,7 @@ impl GlobalSnapshot {
     }
 
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
-        let previous = current_snapshot();
-        set_current_snapshot(Some(AnySnapshot::Global(self.root_global())));
-        let result = f();
-        set_current_snapshot(previous);
-        result
+        enter_snapshot_scope(AnySnapshot::Global(self.root_global()), f)
     }
 
     pub fn take_nested_snapshot(

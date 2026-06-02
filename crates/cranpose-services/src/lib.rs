@@ -1,5 +1,7 @@
 //! Multiplatform service abstractions used by Cranpose applications.
 
+#![deny(unsafe_code)]
+
 #[cfg(test)]
 use cranpose_core::{location_key, Composition, MemoryApplier};
 

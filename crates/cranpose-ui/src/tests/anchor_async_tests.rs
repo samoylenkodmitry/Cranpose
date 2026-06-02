@@ -140,6 +140,7 @@ fn drain_all(composition: &mut Composition<MemoryApplier>) -> Result<(), NodeErr
 
 #[test]
 fn async_runtime_freezes_without_conditional_key() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let animation = MutableState::with_runtime(AnimationState::default(), runtime.clone());
@@ -187,7 +188,7 @@ fn async_runtime_freezes_without_conditional_key() {
 
     assert!(
         after > before,
-        "frames should increase after forward flip without manual with_key workaround (before {before}, after {after})"
+        "frames should increase after forward flip without manual key stabilization (before {before}, after {after})"
     );
 }
 
@@ -278,6 +279,7 @@ fn keyed_progress_demo(progress: MutableState<f32>) {
 
 #[test]
 fn stats_state_invalidates_after_direction_flip() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let animation = MutableState::with_runtime(AnimationState::default(), runtime.clone());
@@ -318,12 +320,13 @@ fn stats_state_invalidates_after_direction_flip() {
     stats.update(|state| state.frames = state.frames.wrapping_add(1));
     assert!(
         composition.should_render(),
-        "stats update should still schedule render without manual with_key workaround"
+        "stats update should still schedule render without manual key stabilization"
     );
 }
 
 #[test]
 fn keyed_progress_branch_does_not_grow_slots_across_toggle_cycles() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let progress = MutableState::with_runtime(0.8f32, runtime);

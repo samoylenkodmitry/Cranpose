@@ -1,8 +1,12 @@
 //! High level UI primitives built on top of the Compose core runtime.
 
-use cranpose_core::{location_key, MemoryApplier};
+#![deny(unsafe_code)]
+
+use cranpose_core::{location_key, ApplierGuard, MemoryApplier, NodeError, NodeId, RuntimeHandle};
 pub use cranpose_core::{Composition, Key};
 pub use cranpose_macros::composable;
+use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 
 mod cursor_animation;
 mod debug;
@@ -51,6 +55,9 @@ pub use interaction::{
 };
 // Re-export FocusManager from cranpose-foundation to avoid duplication
 pub use cranpose_foundation::nodes::input::focus::FocusManager;
+pub use cranpose_foundation::{
+    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
+};
 pub use layout::{
     build_layout_tree_from_applier, build_semantics_tree_from_applier,
     build_semantics_tree_from_layout_tree,
@@ -94,13 +101,14 @@ pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 #[doc(hidden)]
 pub use render_state::reset_render_state_for_tests;
 pub use render_state::{
-    current_density, has_pending_draw_repasses, has_pending_layout_repasses,
+    current_density, debug_last_fling_velocity, debug_reset_last_fling_velocity,
+    has_current_app_context, has_pending_draw_repasses, has_pending_layout_repasses,
     peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,
     peek_render_invalidation, request_focus_invalidation, request_layout_invalidation,
     request_pointer_invalidation, request_render_invalidation, schedule_draw_repass,
     schedule_layout_repass, set_density, take_draw_repass_nodes, take_focus_invalidation,
     take_layout_invalidation, take_layout_repass_nodes, take_pointer_invalidation,
-    take_render_invalidation,
+    take_render_invalidation, AppContext, AppContextScope,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use scroll::{ScrollElement, ScrollNode, ScrollState};
@@ -117,7 +125,7 @@ pub use text::{
     prepare_text_layout, prepare_text_layout_for_node, set_text_measurer, LinkAnnotation,
     ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     PreparedTextLayout, SpanStyle, StringAnnotation, TextDrawStyle, TextLayoutOptions,
-    TextMeasurer, TextMetrics, TextOptions, TextOverflow, TextShaping, TextStyle,
+    TextLayoutResult, TextMeasurer, TextMetrics, TextOptions, TextOverflow, TextShaping, TextStyle,
 };
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};
@@ -132,18 +140,95 @@ pub use debug::{
     log_screen_summary, ModifierChainTraceGuard,
 };
 
-/// Convenience alias used in examples and tests.
-pub type TestComposition = Composition<MemoryApplier>;
+/// In-memory composition helper used by tests.
+pub struct TestComposition {
+    _scope: render_state::AppContextScope,
+    app_context: Rc<AppContext>,
+    composition: Composition<MemoryApplier>,
+}
+
+impl TestComposition {
+    pub fn root(&self) -> Option<NodeId> {
+        self.app_context.enter(|| self.composition.root())
+    }
+
+    pub fn runtime_handle(&self) -> RuntimeHandle {
+        self.app_context.enter(|| self.composition.runtime_handle())
+    }
+
+    pub fn should_render(&self) -> bool {
+        self.app_context.enter(|| self.composition.should_render())
+    }
+
+    pub fn take_root_render_request(&mut self) -> bool {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.composition.take_root_render_request())
+    }
+
+    pub fn flush_pending_node_updates(&mut self) -> Result<(), NodeError> {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.composition.flush_pending_node_updates())
+    }
+
+    pub fn process_invalid_scopes(&mut self) -> Result<bool, NodeError> {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.composition.process_invalid_scopes())
+    }
+
+    pub fn render(&mut self, root_key: Key, content: impl FnMut()) -> Result<(), NodeError> {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.composition.render(root_key, content))
+    }
+
+    pub fn applier_mut(&mut self) -> TestApplierGuard<'_> {
+        let scope = self.app_context.enter_scope();
+        let applier = self.composition.applier_mut();
+        TestApplierGuard {
+            _scope: scope,
+            applier,
+        }
+    }
+
+    pub fn with_app_context<R>(&self, block: impl FnOnce() -> R) -> R {
+        self.app_context.enter(block)
+    }
+}
+
+pub struct TestApplierGuard<'a> {
+    _scope: render_state::AppContextScope,
+    applier: ApplierGuard<'a, MemoryApplier>,
+}
+
+impl Deref for TestApplierGuard<'_> {
+    type Target = MemoryApplier;
+
+    fn deref(&self) -> &Self::Target {
+        &self.applier
+    }
+}
+
+impl DerefMut for TestApplierGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.applier
+    }
+}
 
 /// Build a composition with a simple in-memory applier and run the provided closure once.
 pub fn run_test_composition(build: impl FnMut()) -> TestComposition {
-    #[cfg(test)]
-    reset_render_state_for_tests();
-    let mut composition = Composition::new(MemoryApplier::new());
-    composition
+    let app_context = AppContext::new();
+    app_context.enter(|| {
+        #[cfg(test)]
+        reset_render_state_for_tests();
+    });
+    let mut test_composition = TestComposition {
+        _scope: app_context.enter_scope(),
+        app_context,
+        composition: Composition::new(MemoryApplier::new()),
+    };
+    test_composition
         .render(location_key(file!(), line!(), column!()), build)
         .expect("initial render succeeds");
-    composition
+    test_composition
 }
 
 pub use cranpose_core::MutableState as SnapshotState;

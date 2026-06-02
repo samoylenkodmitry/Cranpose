@@ -5,6 +5,8 @@
 //! text's bounding box and asserts pixel-identical output. Repeats for multiple sub-pixel
 //! scroll offsets to catch device-pixel-boundary artifacts.
 
+mod output_paths;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_exact_in_semantics, find_button_in_semantics, find_text_in_semantics,
@@ -12,16 +14,18 @@ use cranpose_testing::{
 };
 use desktop_app::app;
 use image::{ImageBuffer, RgbaImage};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 900;
-const DEBUG_OUTPUT_DIR: &str = "/tmp/cranpose_scroll_decoration_invariance";
 const TARGET_TEXT: &str =
     "This is bold green and this is normal text. This is red, italic, and underlined!";
 // Capture at 2x to reproduce the HiDPI underline thickness artifact
 const CAPTURE_SCALE: f32 = 2.0;
+const UNDERLINE_TRACK_STEPS: usize = 12;
+const UNDERLINE_TRACK_SCROLL_DELTA_Y: f32 = -0.7;
+const UNDERLINE_LOCAL_Y_TOLERANCE: f32 = 0.35;
 
 fn main() {
     env_logger::init();
@@ -38,6 +42,7 @@ fn main() {
             open_text_tab(&robot);
             scroll_text_into_view(&robot, TARGET_TEXT, 20);
 
+            verify_underline_row_tracks_fractional_scroll(&robot);
             verify_scroll_decoration_invariance(&robot);
 
             println!("\n=== Test Summary ===");
@@ -45,6 +50,120 @@ fn main() {
             robot.exit().expect("exit");
         })
         .run(app::combined_app);
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UnderlineRowMetrics {
+    center_y: f32,
+    red_pixels: usize,
+    max_run: usize,
+}
+
+fn verify_underline_row_tracks_fractional_scroll(robot: &cranpose::Robot) {
+    println!("\n--- Underline row tracks fractional scroll ---");
+
+    let mut samples = Vec::with_capacity(UNDERLINE_TRACK_STEPS + 1);
+    for step in 0..=UNDERLINE_TRACK_STEPS {
+        let bounds = find_text_in_semantics(robot, TARGET_TEXT).expect("target text bounds");
+        let shot = robot
+            .screenshot_with_scale(CAPTURE_SCALE)
+            .expect("underline tracking screenshot");
+        let metrics = find_presented_underline_row(&shot, bounds).expect("presented underline row");
+        let scale_y = shot.height as f32 / shot.logical_height.max(1.0);
+        let local_y = metrics.center_y / scale_y - bounds.1;
+        println!(
+            "  step {step}: semantic_y={:.2} underline_local_y={local_y:.3} red_pixels={} max_run={}",
+            bounds.1, metrics.red_pixels, metrics.max_run
+        );
+        samples.push(local_y);
+
+        if step < UNDERLINE_TRACK_STEPS {
+            let center_x = bounds.0 + bounds.2 * 0.5;
+            let center_y = bounds.1 + bounds.3 * 0.5;
+            robot.mouse_move(center_x, center_y).expect("move cursor");
+            std::thread::sleep(Duration::from_millis(30));
+            robot
+                .mouse_scroll(0.0, UNDERLINE_TRACK_SCROLL_DELTA_Y)
+                .expect("fractional underline tracking scroll");
+            std::thread::sleep(Duration::from_millis(150));
+            let _ = robot.wait_for_idle();
+        }
+    }
+
+    let baseline = samples[0];
+    for (step, local_y) in samples.iter().copied().enumerate().skip(1) {
+        let drift = (local_y - baseline).abs();
+        assert!(
+            drift <= UNDERLINE_LOCAL_Y_TOLERANCE,
+            "underlined span decoration row drifted relative to text bounds at step {step}: baseline={baseline:.3} local_y={local_y:.3} drift={drift:.3}"
+        );
+    }
+}
+
+fn find_presented_underline_row(
+    screenshot: &cranpose::RobotScreenshot,
+    bounds: (f32, f32, f32, f32),
+) -> Option<UnderlineRowMetrics> {
+    let scale_x = screenshot.width as f32 / screenshot.logical_width.max(1.0);
+    let scale_y = screenshot.height as f32 / screenshot.logical_height.max(1.0);
+    let left = ((bounds.0 - 4.0) * scale_x).floor().max(0.0) as usize;
+    let right = ((bounds.0 + bounds.2 + 4.0) * scale_x)
+        .ceil()
+        .min(screenshot.width as f32) as usize;
+    let top = ((bounds.1 + bounds.3 * 0.45) * scale_y).floor().max(0.0) as usize;
+    let bottom = ((bounds.1 + bounds.3 + 6.0) * scale_y)
+        .ceil()
+        .min(screenshot.height as f32) as usize;
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    let mut rows = Vec::new();
+    for y in top..bottom {
+        let mut red_pixels = 0usize;
+        let mut run = 0usize;
+        let mut max_run = 0usize;
+        for x in left..right {
+            if is_red_decoration_pixel(screenshot, x, y) {
+                red_pixels += 1;
+                run += 1;
+                max_run = max_run.max(run);
+            } else {
+                run = 0;
+            }
+        }
+        if max_run >= 16 && red_pixels >= 24 {
+            rows.push((y, red_pixels, max_run));
+        }
+    }
+
+    let best_run = rows.iter().map(|(_, _, max_run)| *max_run).max()?;
+    let min_selected_run = (best_run * 3 / 4).max(16);
+    let mut weighted_y = 0.0f32;
+    let mut total_weight = 0usize;
+    let mut selected_pixels = 0usize;
+    for (y, red_pixels, max_run) in rows {
+        if max_run < min_selected_run {
+            continue;
+        }
+        weighted_y += y as f32 * red_pixels as f32;
+        total_weight += red_pixels;
+        selected_pixels += red_pixels;
+    }
+
+    (total_weight > 0).then_some(UnderlineRowMetrics {
+        center_y: weighted_y / total_weight as f32,
+        red_pixels: selected_pixels,
+        max_run: best_run,
+    })
+}
+
+fn is_red_decoration_pixel(screenshot: &cranpose::RobotScreenshot, x: usize, y: usize) -> bool {
+    let index = (y * screenshot.width as usize + x) * 4;
+    let red = screenshot.pixels[index] as u16;
+    let green = screenshot.pixels[index + 1] as u16;
+    let blue = screenshot.pixels[index + 2] as u16;
+    red >= 120 && red > green + 25 && red > blue + 25
 }
 
 fn verify_scroll_decoration_invariance(robot: &cranpose::Robot) {
@@ -234,7 +353,7 @@ fn save_debug_images(
     before_normalized: &cranpose::RobotScreenshot,
     after_normalized: &cranpose::RobotScreenshot,
 ) {
-    let output_dir = PathBuf::from(DEBUG_OUTPUT_DIR);
+    let output_dir = output_paths::diagnostic_path("cranpose_scroll_decoration_invariance");
     if let Err(err) = std::fs::create_dir_all(&output_dir) {
         eprintln!(
             "failed to create debug dir {}: {}",

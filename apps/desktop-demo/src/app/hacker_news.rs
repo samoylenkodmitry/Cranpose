@@ -534,7 +534,8 @@ async fn fetch_stories_page(
             async move { fetch_story(&client, id).await }
         }
     })
-    .await;
+    .await
+    .map_err(|err| format!("Failed to fetch story batch: {err}"))?;
 
     Ok(results
         .into_iter()
@@ -568,7 +569,7 @@ async fn fetch_comment_items_batch(
     client: &HttpClientRef,
     ids: &[u64],
 ) -> Vec<Result<CommentItem, String>> {
-    map_ordered_concurrent(ids, COMMENT_FETCH_CONCURRENCY, {
+    match map_ordered_concurrent(ids, COMMENT_FETCH_CONCURRENCY, {
         let client = client.clone();
         move |id| {
             let client = client.clone();
@@ -576,6 +577,13 @@ async fn fetch_comment_items_batch(
         }
     })
     .await
+    {
+        Ok(results) => results,
+        Err(err) => ids
+            .iter()
+            .map(|id| Err(format!("Failed to fetch comment batch item {id}: {err}")))
+            .collect(),
+    }
 }
 
 fn push_pending_comments(pending: &mut Vec<PendingComment>, ids: &[u64], depth: usize) {
@@ -1132,8 +1140,8 @@ fn HackerNewsHeader<F1, F2, F3>(
 }
 
 #[composable]
-fn loading_stub_item(palette: HackerNewsPalette) {
-    let transition = rememberInfiniteTransition("hn_loading_stub");
+fn loading_skeleton_item(palette: HackerNewsPalette) {
+    let transition = rememberInfiniteTransition("hn_loading_skeleton");
     let pulse = transition.animateFloat(
         0.0,
         1.0,
@@ -1443,7 +1451,7 @@ fn StoriesPane(
                                     move || {
                                         if data.has_more() {
                                             if data.is_loading_more {
-                                                loading_stub_item(palette);
+                                                loading_skeleton_item(palette);
                                             } else {
                                                 StatusCard(
                                                     Modifier::empty().fill_max_width(),
@@ -1634,7 +1642,7 @@ fn CommentsFooter(
     palette: HackerNewsPalette,
 ) {
     if data.is_loading_more {
-        loading_stub_item(palette);
+        loading_skeleton_item(palette);
         return;
     }
 
@@ -2172,7 +2180,7 @@ mod tests {
         TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("test lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2491,10 +2499,13 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn hacker_news_list_node_id(robot: &mut RobotTestRule<TestRenderer>) -> Option<usize> {
-        let layout_tree = robot.shell_mut().layout_tree()?;
         let stories_pane_node_id = super::LAST_STORIES_PANE_NODE_ID.with(|slot| *slot.borrow())?;
-        let stories_pane = find_layout_box_by_node_id(layout_tree.root(), stories_pane_node_id)?;
-        find_story_list_layout_box(stories_pane).map(|layout| layout.node_id)
+        robot.shell_mut().with_layout_tree(|layout_tree| {
+            let layout_tree = layout_tree?;
+            let stories_pane =
+                find_layout_box_by_node_id(layout_tree.root(), stories_pane_node_id)?;
+            find_story_list_layout_box(stories_pane).map(|layout| layout.node_id)
+        })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2506,8 +2517,10 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn stories_list_parent_node_id(robot: &mut RobotTestRule<TestRenderer>) -> Option<usize> {
         let list_node_id = hacker_news_list_node_id(robot)?;
-        let layout_tree = robot.shell_mut().layout_tree()?;
-        find_parent_node_id(layout_tree.root(), list_node_id, None)
+        robot.shell_mut().with_layout_tree(|layout_tree| {
+            let layout_tree = layout_tree?;
+            find_parent_node_id(layout_tree.root(), list_node_id, None)
+        })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2711,13 +2724,17 @@ mod tests {
         let stories_pane_bounds =
             stories_pane_node_id.and_then(|node_id| robot.shell_mut().node_layout_bounds(node_id));
         let stories_pane_child_count = stories_pane_node_id.and_then(|node_id| {
-            let layout_tree = robot.shell_mut().layout_tree()?;
-            find_layout_box_by_node_id(layout_tree.root(), node_id)
-                .map(|layout| layout.children.len())
+            robot.shell_mut().with_layout_tree(|layout_tree| {
+                let layout_tree = layout_tree?;
+                find_layout_box_by_node_id(layout_tree.root(), node_id)
+                    .map(|layout| layout.children.len())
+            })
         });
         let stories_pane_layout = stories_pane_node_id.and_then(|node_id| {
-            let layout_tree = robot.shell_mut().layout_tree()?;
-            find_layout_box_by_node_id(layout_tree.root(), node_id).map(layout_subtree_summary)
+            robot.shell_mut().with_layout_tree(|layout_tree| {
+                let layout_tree = layout_tree?;
+                find_layout_box_by_node_id(layout_tree.root(), node_id).map(layout_subtree_summary)
+            })
         });
 
         panic!(
@@ -2735,17 +2752,16 @@ mod tests {
             .node_layout_bounds(node_id)
             .unwrap_or_else(|| panic!("missing layout bounds for node {node_id}"));
         let handlers = {
-            let layout_tree = robot
-                .shell_mut()
-                .layout_tree()
-                .expect("layout tree should be available");
-            let layout_box = find_layout_box_by_node_id(layout_tree.root(), node_id)
-                .unwrap_or_else(|| panic!("missing layout box for node {node_id}"));
-            layout_box
-                .node_data
-                .modifier_slices()
-                .pointer_inputs()
-                .to_vec()
+            robot.shell_mut().with_layout_tree(|layout_tree| {
+                let layout_tree = layout_tree.expect("layout tree should be available");
+                let layout_box = find_layout_box_by_node_id(layout_tree.root(), node_id)
+                    .unwrap_or_else(|| panic!("missing layout box for node {node_id}"));
+                layout_box
+                    .node_data
+                    .modifier_slices()
+                    .pointer_inputs()
+                    .to_vec()
+            })
         };
 
         assert!(
@@ -2862,7 +2878,9 @@ mod tests {
         let mut list_parent_ids = Vec::new();
         let mut invalid_scope_tags_per_step = Vec::new();
         for _ in 0..steps {
-            list_state.dispatch_scroll_delta(delta);
+            robot
+                .shell_mut()
+                .debug_enter_app_context(|| list_state.dispatch_scroll_delta(delta));
             let invalid_scope_ids = robot.shell_mut().runtime_handle().debug_invalid_scope_ids();
             let invalid_scope_tags = super::DEBUG_SCOPE_TAGS.with(|tags| {
                 invalid_scope_ids
@@ -3204,16 +3222,23 @@ mod tests {
             stats.runtime_stats.frame_callbacks_len, 0,
             "back navigation should not leave active frame callbacks behind"
         );
+        let pending_repasses = robot.shell_mut().debug_enter_app_context(|| {
+            (
+                cranpose_ui::has_pending_layout_repasses(),
+                cranpose_ui::has_pending_draw_repasses(),
+                cranpose_ui::has_pending_pointer_repasses(),
+            )
+        });
         assert!(
-            !cranpose_ui::has_pending_layout_repasses(),
+            !pending_repasses.0,
             "back navigation should not leave pending layout repasses behind"
         );
         assert!(
-            !cranpose_ui::has_pending_draw_repasses(),
+            !pending_repasses.1,
             "back navigation should not leave pending draw repasses behind"
         );
         assert!(
-            !cranpose_ui::has_pending_pointer_repasses(),
+            !pending_repasses.2,
             "back navigation should not leave pending pointer repasses behind"
         );
     }
@@ -3442,14 +3467,13 @@ mod tests {
             .with(|slot| *slot.borrow())
             .expect("restored StoriesPane should exist");
         let stories_pane_layout_before = {
-            let layout_tree = robot
-                .shell_mut()
-                .layout_tree()
-                .expect("layout tree should exist");
-            let stories_pane =
-                find_layout_box_by_node_id(layout_tree.root(), restored_stories_pane_node_id)
-                    .expect("stories pane should exist before scroll");
-            layout_subtree_summary(stories_pane)
+            robot.shell_mut().with_layout_tree(|layout_tree| {
+                let layout_tree = layout_tree.expect("layout tree should exist");
+                let stories_pane =
+                    find_layout_box_by_node_id(layout_tree.root(), restored_stories_pane_node_id)
+                        .expect("stories pane should exist before scroll");
+                layout_subtree_summary(stories_pane)
+            })
         };
         let restored_scroll_trace =
             programmatic_story_scroll_node_ids(&mut robot, -120.0, 6, "restored");
@@ -3470,14 +3494,13 @@ mod tests {
             12,
         );
         let stories_pane_layout_after = {
-            let layout_tree = robot
-                .shell_mut()
-                .layout_tree()
-                .expect("layout tree should exist");
-            let stories_pane =
-                find_layout_box_by_node_id(layout_tree.root(), restored_stories_pane_node_id)
-                    .expect("stories pane should exist after scroll");
-            layout_subtree_summary(stories_pane)
+            robot.shell_mut().with_layout_tree(|layout_tree| {
+                let layout_tree = layout_tree.expect("layout tree should exist");
+                let stories_pane =
+                    find_layout_box_by_node_id(layout_tree.root(), restored_stories_pane_node_id)
+                        .expect("stories pane should exist after scroll");
+                layout_subtree_summary(stories_pane)
+            })
         };
         assert!(
             restored_after

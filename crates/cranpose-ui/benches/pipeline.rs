@@ -1,7 +1,7 @@
 use cranpose_core::{location_key, Composition, Key, MemoryApplier};
 use cranpose_ui::{
-    composable, measure_layout, Column, ColumnSpec, HeadlessRenderer, LayoutMeasurements, Modifier,
-    Row, RowSpec, Size, Text, TextStyle,
+    composable, measure_layout, Column, ColumnSpec, HeadlessRenderer, LayoutMeasurements,
+    LayoutTree, Modifier, Row, RowSpec, Size, Text, TextStyle,
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::hint::black_box;
@@ -16,6 +16,12 @@ const ROOT_SIZE: Size = Size {
     width: 1080.0,
     height: 1920.0,
 };
+
+fn measured_layout_tree(measurements: &LayoutMeasurements) -> LayoutTree {
+    measurements
+        .layout_tree()
+        .expect("pipeline benchmark requested a layout tree")
+}
 
 #[composable]
 fn pipeline_content(sections: usize, rows_per_section: usize) {
@@ -252,7 +258,7 @@ fn bench_layout(c: &mut Criterion) {
                 let measurements = fixture.measure();
 
                 b.iter(|| {
-                    let tree = measurements.layout_tree();
+                    let tree = measured_layout_tree(&measurements);
                     black_box(tree);
                 });
             },
@@ -273,7 +279,7 @@ fn bench_render(c: &mut Criterion) {
                 let mut fixture = PipelineFixture::new(sections, rows_per_section, ROOT_SIZE);
                 fixture.compose();
                 let measurements = fixture.measure();
-                let layout_tree = measurements.layout_tree();
+                let layout_tree = measured_layout_tree(&measurements);
                 let renderer = HeadlessRenderer::new();
 
                 b.iter(|| {
@@ -294,7 +300,7 @@ fn bench_full_pipeline(c: &mut Criterion) {
         b.iter(|| {
             fixture.compose();
             let measurements = fixture.measure();
-            let layout_tree = measurements.layout_tree();
+            let layout_tree = measured_layout_tree(&measurements);
             let scene = renderer.render(&layout_tree);
             black_box(scene);
         });
@@ -352,7 +358,7 @@ fn bench_recursive_layout(c: &mut Criterion) {
                 fixture.compose();
                 let measurements = fixture.measure();
                 b.iter(|| {
-                    let tree = measurements.layout_tree();
+                    let tree = measured_layout_tree(&measurements);
                     black_box(tree);
                 });
             },
@@ -372,7 +378,7 @@ fn bench_recursive_render(c: &mut Criterion) {
                 let mut fixture = RecursiveFixture::new(depth, RECURSIVE_ROWS_PER_LEVEL, ROOT_SIZE);
                 fixture.compose();
                 let measurements = fixture.measure();
-                let layout_tree = measurements.layout_tree();
+                let layout_tree = measured_layout_tree(&measurements);
                 let renderer = HeadlessRenderer::new();
                 b.iter(|| {
                     let scene = renderer.render(&layout_tree);

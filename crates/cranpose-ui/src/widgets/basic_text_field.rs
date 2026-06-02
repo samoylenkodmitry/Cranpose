@@ -112,6 +112,7 @@ mod tests {
 
     #[test]
     fn basic_text_field_creates_node() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut composition = Composition::new(MemoryApplier::new());
         let state = TextFieldState::new("Test content");
 
@@ -128,6 +129,7 @@ mod tests {
 
     #[test]
     fn basic_text_field_state_updates() {
+        let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state = TextFieldState::new("Hello");
             assert_eq!(state.text(), "Hello");

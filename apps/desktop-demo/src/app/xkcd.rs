@@ -32,9 +32,7 @@ fn random_u32(max_exclusive: u32) -> u32 {
     if max_exclusive <= 1 {
         return 1;
     }
-    let mut buf = [0u8; 4];
-    getrandom::fill(&mut buf).expect("getrandom failed");
-    let raw = u32::from_le_bytes(buf);
+    let raw = super::demo_random_u32();
     (raw % max_exclusive).max(1)
 }
 

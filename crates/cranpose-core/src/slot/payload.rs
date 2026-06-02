@@ -1,9 +1,9 @@
 use super::{
     segments::{
-        extract_subtree_segment, group_segment_len, group_segment_range_at, group_segment_start,
-        group_segment_subrange_at, insert_group_segment_item,
-        move_subtree_segment_to_earlier_group, remove_group_segment_range, restore_subtree_segment,
-        PayloadSegment,
+        extract_subtree_segment, group_segment_len, group_segment_range_checked,
+        group_segment_start, group_segment_subrange_at, insert_group_segment_item,
+        move_subtree_segment_to_earlier_group, remove_group_segment_range,
+        repair_group_segment_start_and_len_to_storage, restore_subtree_segment, PayloadSegment,
     },
     DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadAnchor, PayloadKind,
     PayloadRange, PayloadRecord, SlotTable, SlotWriteSessionState, ValueSlotId,
@@ -39,8 +39,29 @@ impl SlotTable {
         group_segment_len::<PayloadSegment>(&self.groups, group_index)
     }
 
-    fn group_payload_range_at(&self, group_index: usize) -> PayloadRange {
-        group_segment_range_at::<PayloadSegment>(&self.groups, self.payloads.len(), group_index)
+    fn group_payload_range_checked_at(&self, group_index: usize) -> Option<PayloadRange> {
+        group_segment_range_checked::<PayloadSegment>(
+            &self.groups,
+            self.payloads.len(),
+            group_index,
+        )
+    }
+
+    fn repair_group_payload_len_to_storage(
+        &mut self,
+        group_index: usize,
+        operation: &'static str,
+    ) -> usize {
+        let repair = repair_group_segment_start_and_len_to_storage::<PayloadSegment>(
+            &mut self.groups,
+            self.payloads.len(),
+            group_index,
+            operation,
+        );
+        if repair.repaired {
+            self.record_segment_range_update_from(group_index);
+        }
+        repair.len
     }
 
     pub(in crate::slot) fn group_payload_subrange_at(
@@ -131,12 +152,17 @@ impl SlotTable {
         );
     }
 
-    pub(super) fn allocate_payload_anchor(&mut self) -> PayloadAnchor {
-        self.payload_anchors.allocate()
+    pub(super) fn allocate_payload_anchor(&mut self) -> Option<PayloadAnchor> {
+        self.payload_anchors.try_allocate()
     }
 
     pub(in crate::slot) fn group_payload_records_at(&self, group_index: usize) -> &[PayloadRecord] {
-        let range = self.group_payload_range_at(group_index);
+        let Some(range) = self.group_payload_range_checked_at(group_index) else {
+            log::error!(
+                "slot table ignored payload record read for corrupt payload segment at group index {group_index}"
+            );
+            return &[];
+        };
         &self.payloads[range.as_range()]
     }
 
@@ -152,12 +178,6 @@ impl SlotTable {
     ) -> PayloadAnchor {
         self.group_payload_record_at(group_index, payload_index)
             .anchor
-    }
-
-    pub(super) fn payload_generation_at(&self, group_index: usize, payload_index: usize) -> u32 {
-        self.group_payload_record_at(group_index, payload_index)
-            .anchor
-            .generation()
     }
 
     fn payload_value_is<T: 'static>(&self, group_index: usize, payload_index: usize) -> bool {
@@ -206,13 +226,18 @@ impl SlotTable {
     fn insert_value_payload_internal<T: 'static>(
         &mut self,
         owner: AnchorId,
+        owner_index: usize,
         insert_index: usize,
         kind: PayloadKind,
-        value: T,
+        init: impl FnOnce() -> T,
         refresh_index: bool,
-    ) -> PayloadAnchor {
-        let owner_index = self.current_group_index(owner);
-        let anchor = self.allocate_payload_anchor();
+    ) -> Option<PayloadAnchor> {
+        let Some(anchor) = self.allocate_payload_anchor() else {
+            log::error!(
+                "slot table rejected value payload insertion because payload anchor ids are exhausted"
+            );
+            return None;
+        };
         self.insert_group_payload(
             owner_index,
             insert_index,
@@ -222,7 +247,7 @@ impl SlotTable {
                 type_id: TypeId::of::<T>(),
                 type_name: std::any::type_name::<T>(),
                 kind,
-                value: Box::new(value),
+                value: Box::new(init()),
             },
         );
         if refresh_index {
@@ -230,7 +255,7 @@ impl SlotTable {
         } else {
             self.set_group_payload_anchor_active_location(owner, insert_index);
         }
-        anchor
+        Some(anchor)
     }
 
     #[cfg(test)]
@@ -241,7 +266,11 @@ impl SlotTable {
         kind: PayloadKind,
         value: T,
     ) -> PayloadAnchor {
-        self.insert_value_payload_internal(owner, insert_index, kind, value, true)
+        let owner_index = self
+            .active_group_index(owner)
+            .expect("test payload owner should resolve");
+        self.insert_value_payload_internal(owner, owner_index, insert_index, kind, || value, true)
+            .unwrap_or(PayloadAnchor::INVALID)
     }
 
     #[cfg(test)]
@@ -266,22 +295,44 @@ impl SlotTable {
         group_index: usize,
         payload_index: usize,
         kind: PayloadKind,
-        value: T,
-    ) -> (PayloadAnchor, Box<dyn std::any::Any>) {
+        init: impl FnOnce() -> T,
+    ) -> Option<(PayloadAnchor, Box<dyn std::any::Any>)> {
         let old_anchor = self.payload_anchor_at(group_index, payload_index);
-        let anchor = self
-            .payload_anchors
-            .bump_generation(old_anchor)
-            .expect("active payload anchor generation must bump");
+        let anchor = match self.payload_anchors.bump_generation(old_anchor) {
+            Some(anchor) => anchor,
+            None if self.payload_anchors.active_location(old_anchor).is_none() => {
+                log::error!(
+                    "slot table replaced stale payload anchor record {old_anchor:?} with a fresh anchor"
+                );
+                self.allocate_payload_anchor()
+                    .unwrap_or(PayloadAnchor::INVALID)
+            }
+            None => {
+                log::error!(
+                    "slot table rejected value payload replacement because active payload anchor {old_anchor:?} could not advance generation"
+                );
+                return None;
+            }
+        };
+        if anchor == PayloadAnchor::INVALID {
+            log::error!(
+                "slot table rejected value payload replacement because payload anchor ids are exhausted"
+            );
+            return None;
+        }
+        let owner = self.payload_owner_at(group_index, payload_index);
         let record = self.group_payload_record_at_mut(group_index, payload_index);
         record.anchor = anchor;
-        let old_value = replace_payload_record(record, kind, value);
-        (anchor, old_value)
+        let old_value = replace_payload_record(record, kind, init());
+        self.payload_anchors
+            .set_active(anchor, owner, payload_index);
+        Some((anchor, old_value))
     }
 
     pub(super) fn use_value_payload_at_cursor<T: 'static>(
         &mut self,
         owner: AnchorId,
+        group_index: usize,
         payload_index: usize,
         kind: PayloadKind,
         init: impl FnOnce() -> T,
@@ -290,8 +341,16 @@ impl SlotTable {
         Option<DeferredDrop>,
         Option<PayloadLocationRefresh>,
     ) {
-        let group_index = self.current_group_index(owner);
-        let payload_len = self.group_payload_len_at(group_index);
+        let payload_len =
+            self.repair_group_payload_len_to_storage(group_index, "value payload cursor");
+        let payload_index = if payload_index > payload_len {
+            log::error!(
+                "slot table clamped payload cursor {payload_index} to repaired payload length {payload_len} for owner {owner:?}"
+            );
+            payload_len
+        } else {
+            payload_index
+        };
         let mut location_refresh = None;
 
         let (anchor, deferred_drop) = if payload_index < payload_len {
@@ -300,13 +359,26 @@ impl SlotTable {
                 self.update_payload_kind(group_index, payload_index, kind);
                 (anchor, None)
             } else {
-                let (anchor, old_value) =
-                    self.replace_payload_identity(group_index, payload_index, kind, init());
-                (anchor, Some(DeferredDrop::payload(old_value)))
+                match self.replace_payload_identity(group_index, payload_index, kind, init) {
+                    Some((anchor, old_value)) => (anchor, Some(DeferredDrop::payload(old_value))),
+                    None => (PayloadAnchor::INVALID, None),
+                }
             }
         } else {
-            let anchor =
-                self.insert_value_payload_internal(owner, payload_index, kind, init(), false);
+            let Some(anchor) = self.insert_value_payload_internal(
+                owner,
+                group_index,
+                payload_index,
+                kind,
+                init,
+                false,
+            ) else {
+                return (
+                    ValueSlotId::new_for_table(PayloadAnchor::INVALID, self.storage_id()),
+                    None,
+                    None,
+                );
+            };
             location_refresh = Some(PayloadLocationRefresh {
                 owner,
                 start: payload_index,
@@ -322,9 +394,31 @@ impl SlotTable {
     }
 
     fn set_group_payload_anchor_active_location(&mut self, owner: AnchorId, index: usize) {
-        let group_index = self.current_group_index(owner);
-        let range = self.group_payload_range_at(group_index);
-        let payload_anchor = self.payloads[range.start() + index].anchor;
+        let Some(group_index) = self.active_group_index(owner) else {
+            log::error!(
+                "slot table ignored payload-location activation for stale owner anchor {owner:?}"
+            );
+            return;
+        };
+        let Some(range) = self.group_payload_range_checked_at(group_index) else {
+            log::error!(
+                "slot table ignored payload-location activation for corrupt payload segment at group index {group_index}"
+            );
+            return;
+        };
+        let Some(payload_index) = range.start().checked_add(index) else {
+            log::error!(
+                "slot table ignored payload-location activation for overflowing payload index {index} in group index {group_index}"
+            );
+            return;
+        };
+        let Some(payload_record) = self.payloads.get(payload_index) else {
+            log::error!(
+                "slot table ignored payload-location activation for missing payload index {index} in group index {group_index}"
+            );
+            return;
+        };
+        let payload_anchor = payload_record.anchor;
         self.payload_anchors
             .set_active(payload_anchor, owner, index);
     }
@@ -334,8 +428,18 @@ impl SlotTable {
         owner: AnchorId,
         start: usize,
     ) {
-        let group_index = self.current_group_index(owner);
-        let range = self.group_payload_range_at(group_index);
+        let Some(group_index) = self.active_group_index(owner) else {
+            log::error!(
+                "slot table ignored payload-location refresh for stale owner anchor {owner:?}"
+            );
+            return;
+        };
+        let Some(range) = self.group_payload_range_checked_at(group_index) else {
+            log::error!(
+                "slot table ignored payload-location refresh for corrupt payload segment at group index {group_index}"
+            );
+            return;
+        };
         let payload_span = range.len().saturating_sub(start);
         if payload_span == 0 {
             return;
@@ -365,8 +469,19 @@ impl SlotTable {
         let group_span = group_range.len();
         let mut payload_span = 0usize;
         for group_index in group_range.as_range() {
-            let owner = self.groups[group_index].anchor;
-            let range = self.group_payload_range_at(group_index);
+            let Some(group) = self.groups.get(group_index) else {
+                log::error!(
+                    "slot table ignored payload-location range refresh for missing group index {group_index}"
+                );
+                continue;
+            };
+            let owner = group.anchor;
+            let Some(range) = self.group_payload_range_checked_at(group_index) else {
+                log::error!(
+                    "slot table ignored payload-location range refresh for corrupt payload segment at group index {group_index}"
+                );
+                continue;
+            };
             payload_span += range.len();
             for index in 0..range.len() {
                 let payload_anchor = self.payloads[range.start() + index].anchor;
@@ -383,13 +498,34 @@ impl SlotTable {
         owner: AnchorId,
         payload_range: GroupPayloadRange,
     ) -> Vec<PayloadRecord> {
-        let owner_index = self.current_group_index(owner);
-        assert_eq!(
-            payload_range.group_index(),
-            owner_index,
-            "payload removal range must belong to the owner group",
-        );
+        let Some(owner_index) = self.active_group_index(owner) else {
+            log::error!("slot table ignored payload removal for stale owner anchor {owner:?}");
+            return Vec::new();
+        };
+        if payload_range.group_index() != owner_index {
+            log::error!(
+                "slot table ignored payload removal for owner {owner:?}: range group index {} does not match owner group index {owner_index}",
+                payload_range.group_index()
+            );
+            return Vec::new();
+        }
         if payload_range.is_empty() {
+            return Vec::new();
+        }
+        let Some(current_range) = self.group_payload_range_checked_at(owner_index) else {
+            log::error!(
+                "slot table ignored payload removal for corrupt payload segment at group index {owner_index}"
+            );
+            return Vec::new();
+        };
+        let requested_range = payload_range.into_inner().as_range();
+        let current_range = current_range.as_range();
+        if requested_range.start < current_range.start || requested_range.end > current_range.end {
+            log::error!(
+                "slot table ignored payload removal for owner {owner:?}: requested range {:?} is outside current group payload range {:?}",
+                requested_range,
+                current_range
+            );
             return Vec::new();
         }
         let start_offset = payload_range.start_offset();
@@ -404,8 +540,12 @@ impl SlotTable {
         owner: AnchorId,
         payload_cursor: usize,
     ) -> Vec<PayloadRecord> {
-        let owner_index = self.current_group_index(owner);
-        let payload_len = self.group_payload_len_at(owner_index);
+        let Some(owner_index) = self.active_group_index(owner) else {
+            log::error!("slot table ignored payload-tail removal for stale owner anchor {owner:?}");
+            return Vec::new();
+        };
+        let payload_len =
+            self.repair_group_payload_len_to_storage(owner_index, "payload tail cleanup");
         if payload_cursor >= payload_len {
             return Vec::new();
         }

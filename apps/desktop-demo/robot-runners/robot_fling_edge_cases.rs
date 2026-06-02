@@ -16,7 +16,6 @@
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_bounds_by_text, visible_bounds_in_viewport};
 use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
-use cranpose_ui::{last_fling_velocity, reset_last_fling_velocity};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -293,7 +292,10 @@ fn main() {
                 }
             };
 
-            reset_last_fling_velocity();
+            if let Err(err) = robot.reset_last_fling_velocity() {
+                eprintln!("✗ Failed to reset fling velocity: {err}");
+                std::process::exit(1);
+            }
 
             let _ = robot.mouse_move(viewport.center_x, viewport.center_y);
             std::thread::sleep(Duration::from_millis(50));
@@ -315,7 +317,13 @@ fn main() {
             let post_release_y = find_item_center_y(&robot, &tracked_label);
             std::thread::sleep(Duration::from_millis(300));
             let after_fling_y = find_item_center_y(&robot, &tracked_label);
-            let measured_velocity = last_fling_velocity().abs();
+            let measured_velocity = match robot.last_fling_velocity() {
+                Ok(value) => value.abs(),
+                Err(err) => {
+                    eprintln!("✗ Failed to query fling velocity: {err}");
+                    std::process::exit(1);
+                }
+            };
 
             match (post_release_y, after_fling_y) {
                 (Some(post_y), Some(after_y)) => {

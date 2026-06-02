@@ -71,6 +71,9 @@ fn gradient_follows_state_app(pointer_position: MutableState<Point>) {
 
 #[test]
 fn test_manual_state_change_triggers_recomposition() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // This test verifies that manual state changes DO trigger recomposition
     // and the draw closure is recreated with new values.
 
@@ -159,6 +162,9 @@ fn working_gradient_app(pointer_position: MutableState<Point>) {
 
 #[test]
 fn test_correct_pattern_reads_state_at_draw_time() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     // This test shows the pattern that SHOULD work:
     // Clone the state handle and read it inside the draw callback
     // This way, state is read at draw time, not composition time

@@ -68,8 +68,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
 }
 
 #[test]
-#[should_panic(expected = "detached subtree nodes must expose root metadata during test")]
-fn detached_subtree_root_node_metadata_is_checked_at_runtime() {
+fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
     const NODE_ID: NodeId = 88;
     let owner = AnchorId::new(1);
     let subtree = DetachedSubtree {
@@ -99,6 +98,8 @@ fn detached_subtree_root_node_metadata_is_checked_at_runtime() {
     let mut root_nodes = Vec::new();
 
     subtree.collect_root_nodes_checked_into(&mut root_nodes, "test");
+
+    assert_eq!(root_nodes, vec![NODE_ID]);
 }
 
 #[test]
@@ -231,6 +232,99 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
         *harness.table.read_value::<i32>(restored_grandchild_slot),
         111
     );
+}
+
+#[test]
+fn detach_repairs_corrupt_child_payload_and_node_lengths() {
+    const PARENT_KEY: Key = 132;
+    const CHILD_KEY: Key = 232;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+        begin_unkeyed(session, CHILD_KEY, None);
+        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 11_i32);
+        session.record_node_with_parent(42, 1, None);
+        let child_result = session.finish_group_body();
+        assert!(child_result.detached_children.is_empty());
+        session.end_group();
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    harness.table.groups[1].payload_len = 2;
+    harness.table.groups[1].node_len = 2;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+        let parent_result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(parent_result.detached_children.len(), 1);
+        parent_result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass();
+
+    assert_eq!(detached.groups.len(), 1);
+    assert_eq!(detached.payloads.len(), 1);
+    assert_eq!(detached.nodes.len(), 1);
+    assert_eq!(detached.groups[0].payload_len, 1);
+    assert_eq!(detached.groups[0].node_len, 1);
+    assert_eq!(detached.validate_detached(), Ok(()));
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
+fn detach_repairs_corrupt_child_subtree_len_from_structure() {
+    const PARENT_KEY: Key = 136;
+    const CHILD_KEY: Key = 236;
+    const GRANDCHILD_KEY: Key = 336;
+
+    let mut harness = SlotHarness::new();
+
+    harness.begin_pass(SlotPassMode::Compose);
+    harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+
+        begin_unkeyed(session, CHILD_KEY, None);
+        begin_unkeyed(session, GRANDCHILD_KEY, None);
+        let grandchild_result = session.finish_group_body();
+        assert!(grandchild_result.detached_children.is_empty());
+        session.end_group();
+        let child_result = session.finish_group_body();
+        assert!(child_result.detached_children.is_empty());
+        session.end_group();
+
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+    });
+    harness.finish_pass();
+
+    harness.table.groups[1].subtree_len = 0;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(|session| {
+        begin_unkeyed(session, PARENT_KEY, None);
+        let parent_result = session.finish_group_body();
+        session.end_group();
+        assert_eq!(parent_result.detached_children.len(), 1);
+        parent_result.detached_children.into_iter().next().unwrap()
+    });
+    harness.finish_pass();
+
+    assert_eq!(detached.groups.len(), 2);
+    assert_eq!(detached.groups[0].key.static_key, CHILD_KEY);
+    assert_eq!(detached.groups[0].subtree_len, 2);
+    assert_eq!(detached.groups[1].key.static_key, GRANDCHILD_KEY);
+    assert_eq!(harness.table.groups.len(), 1);
+    assert_eq!(harness.table.groups[0].subtree_len, 1);
+    assert_eq!(detached.validate_detached(), Ok(()));
+    assert_eq!(harness.table.validate(), Ok(()));
 }
 
 #[test]
@@ -496,9 +590,8 @@ fn restore_subtree_rejects_mismatched_root_key_without_mutating_table() {
         .expect("detached subtree must contain an anchor");
     let wrong_key = GroupKey::new(CHILD_KEY + 1, None, 0);
 
-    let restore = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        restore_detached_child(&mut harness.table, parent_anchor, 1, wrong_key, detached);
-    }));
+    let restore =
+        try_restore_detached_child(&mut harness.table, parent_anchor, 1, wrong_key, detached);
     assert!(
         restore.is_err(),
         "restoring a detached subtree under a different group key must be rejected",
@@ -510,6 +603,56 @@ fn restore_subtree_rejects_mismatched_root_key_without_mutating_table() {
         "failed restore must leave the detached anchor out of the active table",
     );
     harness.table.debug_verify();
+}
+
+#[test]
+fn restore_subtree_rejects_empty_detached_subtree_without_mutating_table() {
+    const PARENT_KEY: Key = 356;
+    const CHILD_KEY: Key = 357;
+
+    let mut harness = SlotHarness::new();
+    harness.begin_pass(SlotPassMode::Compose);
+    let parent_anchor = harness.session(|session| {
+        let parent = begin_unkeyed(session, PARENT_KEY, None);
+        let parent_result = session.finish_group_body();
+        assert!(parent_result.detached_children.is_empty());
+        session.end_group();
+        parent.anchor
+    });
+    harness.finish_pass();
+
+    let group_count_before = harness.table.groups.len();
+    let empty_subtree = DetachedSubtree {
+        groups: Vec::new(),
+        payloads: Vec::new(),
+        nodes: Vec::new(),
+    };
+    let restore_key = GroupKey::new(CHILD_KEY, None, 0);
+    let restore = try_restore_detached_child(
+        &mut harness.table,
+        parent_anchor,
+        1,
+        restore_key,
+        empty_subtree,
+    );
+
+    assert!(
+        restore.is_err(),
+        "restoring an empty detached subtree must be rejected without panicking",
+    );
+    assert_eq!(harness.table.groups.len(), group_count_before);
+    harness.table.debug_verify();
+}
+
+#[test]
+fn empty_detached_subtree_root_scope_id_is_absent() {
+    let empty_subtree = DetachedSubtree {
+        groups: Vec::new(),
+        payloads: Vec::new(),
+        nodes: Vec::new(),
+    };
+
+    assert_eq!(empty_subtree.root_scope_id(), None);
 }
 
 #[test]

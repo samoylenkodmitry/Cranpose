@@ -228,9 +228,9 @@ impl MineswapperGame {
 }
 
 fn random_seed() -> u64 {
-    let mut buf = [0u8; 8];
-    getrandom::fill(&mut buf).expect("getrandom failed");
-    u64::from_le_bytes(buf)
+    let low = super::demo_random_u32() as u64;
+    let high = super::demo_random_u32() as u64;
+    low | (high << 32)
 }
 
 #[composable]

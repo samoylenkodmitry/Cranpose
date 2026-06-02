@@ -28,6 +28,18 @@ impl MeasurePolicy for BoxMeasurePolicy {
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
+        let mut placements = Vec::new();
+        let size = self.measure_into(measurables, constraints, &mut placements);
+        MeasureResult::new(size, placements)
+    }
+
+    fn measure_into(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        placements: &mut Vec<Placement>,
+    ) -> crate::modifier::Size {
+        placements.clear();
         let child_constraints = if self.propagate_min_constraints {
             constraints
         } else {
@@ -41,7 +53,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
 
         let mut max_width = 0.0_f32;
         let mut max_height = 0.0_f32;
-        let mut placeables = Vec::with_capacity(measurables.len());
+        let mut placeables: SmallVec<[cranpose_ui_layout::Placeable; 8]> = SmallVec::new();
 
         for measurable in measurables {
             let placeable = measurable.measure(child_constraints);
@@ -53,7 +65,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
         let width = max_width.clamp(constraints.min_width, constraints.max_width);
         let height = max_height.clamp(constraints.min_height, constraints.max_height);
 
-        let mut placements = Vec::with_capacity(placeables.len());
+        placements.reserve(placeables.len());
         for placeable in placeables {
             let child_width = placeable.width();
             let child_height = placeable.height();
@@ -74,7 +86,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
             placements.push(Placement::new(placeable.node_id(), x, y, 0));
         }
 
-        MeasureResult::new(crate::modifier::Size { width, height }, placements)
+        crate::modifier::Size { width, height }
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
@@ -106,8 +118,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
     }
 }
 
-// Note: RowMeasurePolicy and ColumnMeasurePolicy have been replaced by FlexMeasurePolicy.
-// See FlexMeasurePolicy below for the unified flex layout implementation.
+// Row and Column use FlexMeasurePolicy with axis-specific configuration.
 
 /// Unified Flex layout policy that powers both Row and Column.
 ///
@@ -134,7 +145,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
 /// - Use weights for flexible sizing: `.weight(1.0, true)`
 /// - Use `fillMaxWidth()`/`fillMaxHeight()` modifiers
 /// - Design UI to fit within available space
-/// - Add a clip modifier (when implemented) to hide overflowing content
+/// - Add a clip modifier to hide overflowing content
 ///
 /// ## Weighted Children
 ///
@@ -308,9 +319,21 @@ impl MeasurePolicy for FlexMeasurePolicy {
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
+        let mut placements = Vec::new();
+        let size = self.measure_into(measurables, constraints, &mut placements);
+        MeasureResult::new(size, placements)
+    }
+
+    fn measure_into(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        placements: &mut Vec<Placement>,
+    ) -> crate::modifier::Size {
+        placements.clear();
         if measurables.is_empty() {
             let (width, height) = constraints.constrain(0.0, 0.0);
-            return MeasureResult::new(crate::modifier::Size { width, height }, vec![]);
+            return crate::modifier::Size { width, height };
         }
 
         let (min_main, max_main, min_cross, max_cross) = self.get_axis_constraints(constraints);
@@ -404,10 +427,12 @@ impl MeasurePolicy for FlexMeasurePolicy {
             }
         }
 
-        // Unwrap all placeables
         let placeables: SmallVec<[cranpose_ui_layout::Placeable; 8]> = placeables
             .into_iter()
-            .map(|p| p.expect("placeable missing"))
+            .enumerate()
+            .map(|(idx, placeable)| {
+                placeable.unwrap_or_else(|| measurables[idx].measure(child_constraints))
+            })
             .collect();
 
         // Calculate total main size
@@ -440,7 +465,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
         arrangement.arrange(container_main, &child_main_sizes, &mut main_positions);
 
         // Place children
-        let mut placements: SmallVec<[Placement; 8]> = SmallVec::with_capacity(placeables.len());
+        placements.reserve(placeables.len());
         for (placeable, main_pos) in placeables.into_iter().zip(main_positions) {
             let child_cross = self.get_cross_axis_size(placeable.width(), placeable.height());
             let cross_pos = self
@@ -462,10 +487,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
             Axis::Vertical => (container_cross, container_main),
         };
 
-        MeasureResult::new(
-            crate::modifier::Size { width, height },
-            placements.into_vec(),
-        )
+        crate::modifier::Size { width, height }
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
@@ -596,14 +618,23 @@ impl MeasurePolicy for LeafMeasurePolicy {
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
+        let mut placements = Vec::new();
+        let size = self.measure_into(&[], constraints, &mut placements);
+        MeasureResult::new(size, placements)
+    }
+
+    fn measure_into(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        placements: &mut Vec<Placement>,
+    ) -> crate::modifier::Size {
+        placements.clear();
         // Use intrinsic size but constrain to provided constraints
         let (width, height) =
             constraints.constrain(self.intrinsic_size.width, self.intrinsic_size.height);
 
-        MeasureResult::new(
-            crate::modifier::Size { width, height },
-            vec![], // Leaf nodes have no children
-        )
+        crate::modifier::Size { width, height }
     }
 
     fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
@@ -649,14 +680,23 @@ impl MeasurePolicy for EmptyMeasurePolicy {
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
+        let mut placements = Vec::new();
+        let size = self.measure_into(&[], constraints, &mut placements);
+        MeasureResult::new(size, placements)
+    }
+
+    fn measure_into(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        placements: &mut Vec<Placement>,
+    ) -> crate::modifier::Size {
+        placements.clear();
         // Empty policy returns the maximum available space
         // The actual measurement is handled by modifier nodes in the chain
         let (width, height) = constraints.constrain(0.0, 0.0);
 
-        MeasureResult::new(
-            crate::modifier::Size { width, height },
-            vec![], // No children
-        )
+        crate::modifier::Size { width, height }
     }
 
     fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {

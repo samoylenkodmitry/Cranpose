@@ -23,6 +23,15 @@ fn drain_all(composition: &mut Composition<MemoryApplier>) -> Result<(), NodeErr
     Ok(())
 }
 
+fn app_context_scope() -> (
+    std::rc::Rc<cranpose_ui::AppContext>,
+    cranpose_ui::AppContextScope,
+) {
+    let context = cranpose_ui::AppContext::new();
+    let scope = context.enter_scope();
+    (context, scope)
+}
+
 fn semantics_node_text(node: &SemanticsNode) -> Option<&str> {
     match &node.role {
         SemanticsRole::Text { value } => Some(value.as_str()),
@@ -85,7 +94,9 @@ fn composition_layout_texts(composition: &mut Composition<MemoryApplier>) -> Vec
     )
     .expect("measure layout for test rule");
     applier.clear_runtime_handle();
-    let layout_tree = measurements.layout_tree();
+    let layout_tree = measurements
+        .layout_tree()
+        .expect("test rule requested a layout tree");
     let mut texts = Vec::new();
     collect_layout_text(layout_tree.root(), &mut texts);
     texts
@@ -155,7 +166,10 @@ fn render_scene(composition: &mut Composition<MemoryApplier>) -> RecordedRenderS
     )
     .expect("measure layout for render scene");
     applier.clear_runtime_handle();
-    HeadlessRenderer::new().render(&measurements.layout_tree())
+    let layout_tree = measurements
+        .layout_tree()
+        .expect("render scene requested a layout tree");
+    HeadlessRenderer::new().render(&layout_tree)
 }
 
 fn advance_async_runtime_to_second_forward_half(
@@ -471,6 +485,7 @@ fn animations_to_other_tabs_preserve_tab_content_markers() {
 
 #[test]
 fn animations_to_other_tabs_preserve_tab_content_markers_in_composition() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
     TEST_COMPOSITION_LOCAL_COUNTER.with(|cell| cell.borrow_mut().take());
 
@@ -509,6 +524,7 @@ fn animations_to_other_tabs_preserve_tab_content_markers_in_composition() {
 
 #[test]
 fn animations_tab_keeps_tree_after_frame_recomposition() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -552,6 +568,7 @@ fn animations_tab_keeps_tree_after_frame_recomposition() {
 
 #[test]
 fn animations_tab_advances_display_values_after_switch() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -605,6 +622,7 @@ fn animations_tab_advances_display_values_after_switch() {
 
 #[test]
 fn async_runtime_progress_advances_after_switching_from_animations() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -656,6 +674,7 @@ fn async_runtime_progress_advances_after_switching_from_animations() {
 
 #[test]
 fn recursive_layout_tab_renders_accent_box_chrome() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -714,6 +733,7 @@ fn recursive_layout_tab_renders_accent_box_chrome() {
 
 #[test]
 fn async_runtime_to_other_tabs_after_second_forward_pass_preserves_content() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
 
     let mut composition = Composition::new(MemoryApplier::new());

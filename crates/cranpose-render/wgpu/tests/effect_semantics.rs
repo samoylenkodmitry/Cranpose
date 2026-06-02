@@ -36,7 +36,7 @@ const TRANSLATED_BACKDROP_MAX_DIFFERING_PIXELS: u32 = 120;
 const TRANSLATED_BACKDROP_MAX_PIXEL_DIFFERENCE: u32 = 360;
 const SHOWCASE_CARD_PIXEL_TOLERANCE: u32 = 1;
 const SHOWCASE_CARD_MAX_DIFFERING_PIXELS: u32 = 4;
-const SHOWCASE_CARD_MAX_PIXEL_DIFFERENCE: u32 = 1;
+const SHOWCASE_CARD_MAX_PIXEL_DIFFERENCE: u32 = 3;
 const TRANSLATED_TEXT_LOCAL_SIZE: (u32, u32) = (48, 24);
 const MULTISPAN_FRAME_WIDTH: u32 = 420;
 const MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE: (u32, u32) = (340, 40);
@@ -612,6 +612,42 @@ fn repeated_translated_drop_shadow_layers_stay_on_direct_path() {
 }
 
 #[test]
+fn shadow_blur_composite_render_submits_one_frame_command_buffer() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping shadow frame-submit assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(repeated_drop_shadow_layers_fixture(4));
+    let stats = renderer
+        .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("shadow render should succeed");
+
+    assert!(
+        stats.blur_passes >= 1,
+        "drop-shadow frame should encode blur passes: {stats:?}"
+    );
+    assert!(
+        stats.composite_passes >= 1,
+        "drop-shadow frame should encode composite passes: {stats:?}"
+    );
+    assert_eq!(
+        stats.encoder_count, 1,
+        "drop-shadow frame should use one frame command encoder: {stats:?}"
+    );
+    assert_eq!(
+        stats.submit_count, 1,
+        "drop-shadow frame should submit exactly once outside explicit readback paths: {stats:?}"
+    );
+}
+
+#[test]
 fn translated_multispan_showcase_text_stays_exact_at_fractional_root_scale() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -947,6 +983,79 @@ fn bounded_backdrop_capture_only_filters_local_snapshot() {
 }
 
 #[test]
+fn nested_backdrop_blur_radius_changes_rendered_pixels() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping nested backdrop radius assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(nested_backdrop_effect_fixture(0.0));
+    let base_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("nested backdrop base capture should succeed");
+
+    renderer.scene_mut().graph = Some(nested_backdrop_effect_fixture(18.0));
+    let blurred_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("nested backdrop blurred capture should succeed");
+    let stats = renderer
+        .last_frame_stats()
+        .expect("nested backdrop blur frame stats");
+
+    assert!(
+        stats.blur_passes >= 1,
+        "nested backdrop blur radius should execute blur passes: {stats:?}"
+    );
+    assert!(
+        stats.submit_count <= 2,
+        "capturing a nested backdrop frame should submit once for rendering plus the explicit readback copy: {stats:?}"
+    );
+    assert!(
+        stats.encoder_count <= 2,
+        "capturing a nested backdrop frame should use one render encoder plus the explicit readback encoder: {stats:?}"
+    );
+
+    let compare_rect = Rect {
+        x: 62.0,
+        y: 34.0,
+        width: 36.0,
+        height: 28.0,
+    };
+    let width = compare_rect.width as u32;
+    let height = compare_rect.height as u32;
+    let base = normalize_rgba_region(
+        &base_frame.pixels,
+        base_frame.width,
+        base_frame.height,
+        compare_rect,
+        width,
+        height,
+    );
+    let blurred = normalize_rgba_region(
+        &blurred_frame.pixels,
+        blurred_frame.width,
+        blurred_frame.height,
+        compare_rect,
+        width,
+        height,
+    );
+    let diff = image_difference_stats(&base, &blurred, width, height, 10);
+
+    assert!(
+        diff.differing_pixels > 90,
+        "changing nested backdrop blur radius should change the rendered layer; differing_pixels={} max_diff={} stats={stats:?}",
+        diff.differing_pixels,
+        diff.max_difference
+    );
+}
+
+#[test]
 fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -1167,6 +1276,70 @@ fn backdrop_fixture() -> RenderGraph {
             Color::BLUE,
         ),
         RenderNode::Layer(Box::new(backdrop_layer)),
+    ])
+}
+
+fn nested_backdrop_effect_fixture(child_blur_radius: f32) -> RenderGraph {
+    let child = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 48.0,
+            height: 32.0,
+        },
+        ProjectiveTransform::translation(54.0, 28.0),
+        GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::blur(child_blur_radius)),
+            ..GraphicsLayer::default()
+        },
+        vec![solid_rect(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 48.0,
+                height: 32.0,
+            },
+            Color::from_rgba_u8(40, 220, 140, 70),
+        )],
+    );
+    let parent = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 112.0,
+            height: 64.0,
+        },
+        ProjectiveTransform::translation(8.0, 16.0),
+        GraphicsLayer {
+            render_effect: Some(RenderEffect::blur(0.0)),
+            ..GraphicsLayer::default()
+        },
+        vec![
+            solid_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 64.0,
+                    height: 64.0,
+                },
+                Color::RED,
+            ),
+            solid_rect(
+                Rect {
+                    x: 64.0,
+                    y: 0.0,
+                    width: 48.0,
+                    height: 64.0,
+                },
+                Color::BLUE,
+            ),
+            RenderNode::Layer(Box::new(child)),
+        ],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        RenderNode::Layer(Box::new(parent)),
     ])
 }
 

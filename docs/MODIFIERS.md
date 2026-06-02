@@ -29,10 +29,10 @@ The modifier system is a **node-based architecture** inspired by Jetpack Compose
 
 ### Key Design Principles
 
-1. **Element-Node Duality**: Immutable `ModifierElement` descriptors create/update stateful `ModifierNode` instances
+1. **Element-Node Duality**: Immutable `ModifierNodeElement` descriptors create/update stateful `ModifierNode` instances
 2. **Flat Composition**: `.then()` eagerly concatenates element vectors, keeping modifiers as a single flat list
 3. **Capability Filtering**: Traversal methods accept capability masks to skip irrelevant nodes
-4. **Snapshot-Based Measurement**: Measurement proxies solve borrow-checker constraints
+4. **Retained Measurement**: Layout modifier coordinators invoke reconciled node instances by identity
 
 ---
 
@@ -122,10 +122,6 @@ pub trait LayoutModifierNode: ModifierNode {
         measurable: &dyn Measurable,
         constraints: Constraints
     ) -> LayoutModifierMeasureResult;
-
-    fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
-        None
-    }
 }
 ```
 
@@ -460,7 +456,6 @@ impl ModifierNodeChain {
 
 - **Capability**: `LAYOUT`
 - **Behavior**: Deflates constraints, adds padding to result size, offsets child placement
-- **Measurement Proxy**: `PaddingMeasurementProxy` (snapshot-based)
 
 ```rust
 impl LayoutModifierNode for PaddingNode {
@@ -478,12 +473,6 @@ impl LayoutModifierNode for PaddingNode {
             self.padding.left,  // X offset
             self.padding.top,   // Y offset
         )
-    }
-
-    fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
-        Some(Box::new(PaddingMeasurementProxy {
-            padding: self.padding // Snapshot
-        }))
     }
 }
 ```
@@ -647,20 +636,26 @@ pub struct MyModifierElement {
 
 // 2. Define node (stateful instance)
 pub struct MyModifierNode {
+    state: NodeState,
     param1: f32,
     param2: Color,
-    // Additional runtime state...
+}
+
+impl DelegatableNode for MyModifierNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
 }
 
 // 3. Implement ModifierNodeElement
 impl ModifierNodeElement for MyModifierElement {
     type Node = MyModifierNode;
 
-    fn create(&self) -> MyModifierNode {
+    fn create(&self) -> Self::Node {
         MyModifierNode::new(self.param1, self.param2)
     }
 
-    fn update(&self, node: &mut MyModifierNode) {
+    fn update(&self, node: &mut Self::Node) {
         if node.param1 != self.param1 || node.param2 != self.param2 {
             node.param1 = self.param1;
             node.param2 = self.param2;
@@ -688,14 +683,18 @@ impl ModifierNode for MyModifierNode {
 }
 
 impl LayoutModifierNode for MyModifierNode {
-    fn measure(&self, ...) -> LayoutModifierMeasureResult {
+    fn measure(
+        &self,
+        context: &mut dyn ModifierNodeContext,
+        measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> LayoutModifierMeasureResult {
         // Implementation
     }
 }
 
 impl DrawModifierNode for MyModifierNode {
-    fn draw(&mut self, context: &mut dyn ModifierNodeContext,
-            draw_scope: &mut dyn DrawScope) {
+    fn draw(&self, draw_scope: &mut dyn DrawScope) {
         // Implementation
     }
 }
@@ -848,64 +847,21 @@ impl ModifierChainHandle {
 }
 ```
 
-### Measurement Proxy System
+### Retained Coordinator Measurement
 
-**Location**: `crates/cranpose-foundation/src/measurement_proxy.rs`
+**Location**: `crates/cranpose-ui/src/layout/mod.rs`
 
-**Problem**: Rust's borrow checker prevents holding mutable references to nodes during measurement recursion.
-
-**Solution**: Snapshot-based measurement proxies that capture immutable state:
-
-```rust
-pub trait MeasurementProxy: Any {
-    fn measure_proxy(
-        &self,
-        context: &mut dyn ModifierNodeContext,
-        wrapped: &dyn Measurable,
-        constraints: Constraints
-    ) -> LayoutModifierMeasureResult;
-}
-
-// Example: Padding measurement proxy
-pub struct PaddingMeasurementProxy {
-    padding: EdgeInsets, // Snapshot of padding at proxy creation time
-}
-
-impl MeasurementProxy for PaddingMeasurementProxy {
-    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext,
-                     wrapped: &dyn Measurable,
-                     constraints: Constraints) -> LayoutModifierMeasureResult {
-        // Use snapshot instead of borrowing node
-        let inner_constraints = constraints.deflate(self.padding);
-        let placeable = wrapped.measure(inner_constraints);
-
-        LayoutModifierMeasureResult::new(
-            Size {
-                width: placeable.width() + self.padding.horizontal_sum(),
-                height: placeable.height() + self.padding.vertical_sum(),
-            },
-            self.padding.left,
-            self.padding.top,
-        )
-    }
-}
-
-// Node creates proxy during measurement chain setup
-impl LayoutModifierNode for PaddingNode {
-    fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
-        Some(Box::new(PaddingMeasurementProxy {
-            padding: self.padding // Create snapshot
-        }))
-    }
-}
-```
+The layout system reconciles layout modifier nodes into a retained
+`CoordinatorChain`. Each coordinator stores the retained modifier node handle and
+invokes `LayoutModifierNode::measure()` on the live node during measurement.
 
 **Measurement Flow**:
-1. Layout system requests measurement chain from `ModifierChainHandle`
-2. Chain creates measurement proxies for each layout node
-3. Proxies are chained together (outer wraps inner)
-4. Measurement proceeds with proxies instead of node references
-5. No borrow-checker conflicts because proxies are independent values
+1. Layout collects retained layout modifier node handles from the `ModifierNodeChain`.
+2. `LayoutRuntimeState` reconciles those handles into a retained `CoordinatorChain`.
+3. Each coordinator invokes the live `LayoutModifierNode` and passes a wrapped
+   measurable for the next coordinator.
+4. Node-local measurement state stays on the retained node instead of being copied
+   into detached snapshot objects.
 
 ---
 
@@ -1158,7 +1114,6 @@ let modifier = Modifier::empty()
 | `cranpose-ui/src/modifier/chain.rs` | `ModifierChainHandle` integration bridge, `ResolvedModifiers` caching, invalidation propagation, measurement chain setup |
 | `cranpose-ui/src/modifier_nodes.rs` | All built-in modifier nodes: `PaddingNode`, `SizeNode`, `FillNode`, `OffsetNode`, `BackgroundNode`, `CornerShapeNode`, `ClickableNode`, etc. |
 | `cranpose-ui/src/modifier/slices.rs` | `ModifierNodeSlices` collection, draw command aggregation, background+shape combination, pointer input collection |
-| `cranpose-foundation/src/measurement_proxy.rs` | `MeasurementProxy` trait, concrete proxies (`PaddingMeasurementProxy`, `SizeMeasurementProxy`), borrow-checker-safe measurement |
 | `cranpose-ui/src/modifier/padding.rs` | Padding modifier factory methods (`padding()`, `padding_symmetric()`, `padding_all()`), `PaddingElement` definition |
 | `cranpose-ui/src/modifier/size.rs` | Size modifier factory methods (`size()`, `width()`, `height()`, `required_size()`), `SizeElement` definition |
 | `cranpose-ui/src/modifier/fill.rs` | Fill modifier factory methods (`fill_max_width()`, `fill_max_height()`, `fill_max_size()`), `FillElement` definition |
@@ -1189,7 +1144,7 @@ let modifier = Modifier::empty()
 | `Modifier` | O(n) | Flat element vector per modifier |
 | `ModifierNodeChain` | O(n) | One entry per element |
 | Node instances | O(n) | Reused across recompositions (zero new allocations when stable) |
-| Measurement proxies | O(n) | Temporary allocations during measure phase |
+| Coordinator chain | O(n) | Retained layout modifier chain reconciled by element identity |
 | Modifier slices | O(n) | Cached pre-computed capabilities |
 
 ### Optimization Strategies
@@ -1197,7 +1152,7 @@ let modifier = Modifier::empty()
 1. **Node Reuse**: Existing nodes are updated in-place when elements match (type + hash + key)
 2. **Capability Aggregation**: Chain maintains union of all node capabilities for early exit
 3. **Lazy Evaluation**: Nodes are only created/updated when modifier changes
-4. **Snapshot Proxies**: Measurement proxies capture minimal state to avoid borrow conflicts
+4. **Retained Coordinators**: Layout measurement walks stable coordinator nodes and live retained modifier state
 5. **Flat Composition**: `.then()` concatenates elements eagerly, eliminating recursive Rc overhead
 6. **Slice Caching**: Draw/input capabilities pre-collected to avoid hot-path traversal
 

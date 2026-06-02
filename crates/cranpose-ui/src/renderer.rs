@@ -12,7 +12,7 @@ pub enum PaintLayer {
     Overlay,
 }
 
-/// A rendered operation emitted by the headless renderer stub.
+/// A rendered operation emitted by the headless renderer.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RenderOp {
     Primitive {

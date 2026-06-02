@@ -49,6 +49,39 @@ fn subcompose_reuses_nodes_across_calls() {
     }
 }
 
+#[test]
+fn run_in_mutable_snapshot_restores_applied_flag_after_panic() {
+    let _guard = reset_snapshot_runtime();
+    assert!(!in_applied_snapshot());
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _: Result<(), &'static str> =
+            run_in_mutable_snapshot(|| panic!("mutable snapshot body panic"));
+    }));
+
+    assert!(result.is_err());
+    assert!(
+        !in_applied_snapshot(),
+        "run_in_mutable_snapshot must restore the applied flag while unwinding"
+    );
+}
+
+#[test]
+fn event_handler_scope_restores_flag_after_panic() {
+    assert!(!in_event_handler());
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = enter_event_handler_scope();
+        panic!("event handler body panic");
+    }));
+
+    assert!(result.is_err());
+    assert!(
+        !in_event_handler(),
+        "event handler scope must restore the event flag while unwinding"
+    );
+}
+
 type CapturedSubcomposeSlot = (SlotId, Owned<i32>, NodeId);
 type SubcomposePassResult = (Vec<CapturedSubcomposeSlot>, Vec<NodeId>);
 
@@ -426,6 +459,24 @@ fn state_arena_reuses_slot_after_last_owner_drops() {
 }
 
 #[test]
+fn state_arena_diagnostics_are_total_after_runtime_drop() {
+    let (handle, runtime) = runtime_handle();
+    let state = OwnedMutableState::with_runtime(1i32, handle.clone());
+
+    assert_eq!(state.value(), 1);
+    assert_eq!(handle.state_arena_stats(), (1, 0));
+
+    drop(state);
+    drop(runtime);
+
+    assert_eq!(handle.state_arena_stats(), (0, 0));
+    assert_eq!(
+        handle.state_arena_debug_stats(),
+        crate::runtime::StateArenaDebugStats::default()
+    );
+}
+
+#[test]
 fn stale_state_observer_task_does_not_invalidate_reused_slot() {
     let runtime = TestRuntime::new();
     let handle = runtime.handle();
@@ -484,6 +535,56 @@ fn runtime_registry_stays_alive_until_last_runtime_clone_drops() {
     drop(runtime_clone);
 
     assert!(crate::runtime::runtime_handle_by_id(handle.id()).is_none());
+}
+
+#[test]
+fn mutable_state_try_methods_return_none_after_runtime_drop() {
+    let state = {
+        let runtime = Runtime::new(Arc::new(TestScheduler));
+        let state = MutableState::with_runtime(5_i32, runtime.handle());
+        let readonly = state.as_state();
+        assert_eq!(state.try_value(), Some(5));
+        assert_eq!(readonly.try_value(), Some(5));
+        assert_eq!(readonly.try_with(|value| *value + 1), Some(6));
+        assert!(readonly.is_alive());
+        assert!(state.is_alive());
+        assert!(state.try_retain().is_some());
+        state
+    };
+    let readonly = state.as_state();
+
+    assert_eq!(state.try_value(), None);
+    assert_eq!(readonly.try_value(), None);
+    assert_eq!(readonly.try_with(|value| *value + 1), None);
+    assert!(!readonly.is_alive());
+    assert!(!state.is_alive());
+    assert!(state.try_retain().is_none());
+    state.set(7);
+    assert_eq!(state.try_value(), None);
+}
+
+#[test]
+fn readonly_state_debug_reports_dropped_runtime_without_panicking() {
+    let readonly = {
+        let runtime = Runtime::new(Arc::new(TestScheduler));
+        let state = MutableState::with_runtime(5_i32, runtime.handle());
+        state.as_state()
+    };
+
+    assert_eq!(format!("{readonly:?}"), "State { value: <unavailable> }");
+}
+
+#[test]
+fn mutable_state_debug_reports_dropped_runtime_without_panicking() {
+    let state = {
+        let runtime = Runtime::new(Arc::new(TestScheduler));
+        MutableState::with_runtime(5_i32, runtime.handle())
+    };
+
+    assert_eq!(
+        format!("{state:?}"),
+        "MutableState { value: <unavailable> }"
+    );
 }
 
 #[test]

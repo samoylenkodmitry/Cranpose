@@ -61,6 +61,7 @@ impl SubtreeRange {
         }
     }
 
+    #[cfg(test)]
     #[inline(always)]
     pub(in crate::slot) fn root_index(self) -> usize {
         self.groups.start()

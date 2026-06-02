@@ -87,10 +87,7 @@ impl FrameKeyState {
         for (key, ordinal) in self.ordinal_entries.drain(..) {
             map.insert(key, ordinal);
         }
-        self.ordinal_map = Some(map);
-        self.ordinal_map
-            .as_mut()
-            .expect("ordinal map should be promoted")
+        self.ordinal_map.insert(map)
     }
 
     fn promote_seen(&mut self) -> &mut HashSet<GroupKey> {
@@ -99,8 +96,7 @@ impl FrameKeyState {
         for key in self.seen_entries.drain(..) {
             set.insert(key);
         }
-        self.seen_set = Some(set);
-        self.seen_set.as_mut().expect("seen set should be promoted")
+        self.seen_set.insert(set)
     }
 
     #[cfg(test)]

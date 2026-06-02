@@ -17,9 +17,8 @@ cranpose-macros = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 cranpose-ui-layout = { workspace = true }
 smallvec = "1.15"
-web-time = "1.1"
+web-time = { workspace = true }
 log = "0.4"
-rustc-hash = "2.1.2"
 
 [features]
 default = []

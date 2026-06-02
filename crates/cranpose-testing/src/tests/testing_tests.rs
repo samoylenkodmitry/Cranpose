@@ -124,3 +124,41 @@ fn cranpose_test_rule_replays_root_render_requests_before_returning() {
         assert_eq!(stored_value, "render 2");
     });
 }
+
+#[test]
+fn cranpose_test_rule_reports_idle_replay_limit_without_panicking() {
+    run_test_composition(|rule| {
+        rule.composition().request_root_render();
+
+        let result = rule.pump_until_idle();
+
+        assert_eq!(
+            result,
+            Err(NodeError::RecompositionLimitExceeded {
+                operation: "pump_until_idle",
+                limit: ROOT_RENDER_REPLAY_LIMIT,
+            })
+        );
+    });
+}
+
+#[test]
+fn cranpose_test_rule_reports_root_render_replay_limit_without_panicking() {
+    run_test_composition(|rule| {
+        let result = rule.set_content(|| {
+            let value = useState(|| 0usize);
+            let current = value.value();
+            cranpose_core::SideEffect(move || {
+                value.set_value(current + 1);
+            });
+        });
+
+        assert_eq!(
+            result,
+            Err(NodeError::RecompositionLimitExceeded {
+                operation: "root render replay",
+                limit: ROOT_RENDER_REPLAY_LIMIT,
+            })
+        );
+    });
+}

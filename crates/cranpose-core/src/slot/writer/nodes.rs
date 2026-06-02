@@ -5,17 +5,38 @@ use super::super::{
 use crate::{AnchorId, NodeId};
 
 impl SlotTable {
-    fn collect_subtree_node_records(&self, group_anchor: AnchorId) -> Vec<NodeRecord> {
-        let group_index = self.current_group_index(group_anchor);
-        let subtree_end = self.group_subtree_end_at_index(group_index);
-        let mut nodes = Vec::with_capacity(self.group_subtree_node_count_at_index(group_index));
-        for index in group_index..subtree_end {
+    fn collect_subtree_node_records(&mut self, group_anchor: AnchorId) -> Vec<NodeRecord> {
+        let Some(group_index) = self.active_group_index(group_anchor) else {
+            log::error!(
+                "slot table ignored root-node collection for stale group anchor {group_anchor:?}"
+            );
+            return Vec::new();
+        };
+        let Some(subtree_range) =
+            self.repair_group_subtree_range_at_index(group_index, "root-node collection")
+        else {
+            log::error!(
+                "slot table ignored root-node collection for malformed subtree at group index {group_index}"
+            );
+            return Vec::new();
+        };
+
+        for index in subtree_range.as_range() {
+            self.repair_group_node_len_to_storage(index, "root-node collection");
+        }
+
+        let mut nodes = Vec::new();
+        for index in subtree_range.as_range() {
             nodes.extend(self.group_node_records_at(index).iter().copied());
         }
+        self.repair_group_subtree_node_count_from_storage(group_index, "root-node collection");
         nodes
     }
 
-    pub(super) fn collect_subtree_root_node_ids(&self, group_anchor: AnchorId) -> Vec<NodeId> {
+    pub(in crate::slot) fn collect_subtree_root_node_ids(
+        &mut self,
+        group_anchor: AnchorId,
+    ) -> Vec<NodeId> {
         let nodes = self.collect_subtree_node_records(group_anchor);
         let mut root_nodes = Vec::new();
         collect_root_node_ids_from_records_into(&nodes, &mut root_nodes);
@@ -30,11 +51,12 @@ impl SlotWriteSession<'_> {
         generation: u32,
         parent_id: Option<NodeId>,
     ) -> NodeSlotUpdate {
-        let frame = self
-            .state
-            .group_stack
-            .last_mut()
-            .expect("node records require an active group");
+        let Some(frame) = self.state.group_stack.last_mut() else {
+            log::error!(
+                "slot writer record_node_with_parent called with an empty group stack; id={id}"
+            );
+            return NodeSlotUpdate::Inserted { id, generation };
+        };
         let group_anchor = frame.group_anchor;
         let result = self.table.record_node_at_cursor(
             group_anchor,

@@ -88,15 +88,24 @@ impl PayloadAnchorRegistry {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn allocate(&mut self) -> PayloadAnchor {
+        self.try_allocate().unwrap_or(PayloadAnchor::INVALID)
+    }
+
+    pub(super) fn try_allocate(&mut self) -> Option<PayloadAnchor> {
         let anchor = if let Some((id, generation)) = self.pop_free_id() {
             PayloadAnchor::new(id as usize, generation)
         } else {
+            if self.next_id > u32::MAX as usize {
+                log::error!(
+                    "slot table rejected payload anchor allocation because id counter {} exceeds u32 storage",
+                    self.next_id
+                );
+                return None;
+            }
             let anchor = PayloadAnchor::new(self.next_id, 1);
-            self.next_id = self
-                .next_id
-                .checked_add(1)
-                .expect("payload anchor counter overflow");
+            self.next_id = self.next_id.saturating_add(1);
             anchor
         };
         let replaced = self.set_state(anchor, PayloadAnchorState::Detached);
@@ -104,26 +113,30 @@ impl PayloadAnchorRegistry {
             replaced.is_none(),
             "payload anchors must not keep slots while reusable"
         );
-        anchor
+        Some(anchor)
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_next_id_for_test(&mut self, next_id: usize) {
+        self.next_id = next_id;
     }
 
     pub(super) fn set_active(&mut self, anchor: PayloadAnchor, owner: AnchorId, index: usize) {
         let previous = self.set_state(anchor, PayloadAnchorState::Active { owner, index });
-        assert!(
-            previous.is_some(),
-            "payload anchor must be registered with a matching generation before activation: {:?}",
-            anchor
-        );
-        assert_eq!(self.active_location(anchor), Some((owner, index)));
+        if previous.is_none() {
+            log::error!(
+                "slot table ignored active-state update for stale payload anchor {anchor:?}"
+            );
+            return;
+        }
+        debug_assert_eq!(self.active_location(anchor), Some((owner, index)));
     }
 
     pub(super) fn mark_detached(&mut self, anchor: PayloadAnchor) {
         let previous = self.set_state(anchor, PayloadAnchorState::Detached);
-        assert!(
-            previous.is_some(),
-            "payload anchor must be registered with a matching generation before detach: {:?}",
-            anchor
-        );
+        if previous.is_none() {
+            log::error!("slot table ignored detach for stale payload anchor {anchor:?}");
+        }
     }
 
     pub(super) fn active_location(&self, anchor: PayloadAnchor) -> Option<(AnchorId, usize)> {
@@ -292,10 +305,12 @@ impl PayloadAnchorRegistry {
         if slot.generation != anchor.generation() {
             return None;
         }
-        let next_generation = anchor
-            .generation()
-            .checked_add(1)
-            .expect("payload anchor generation counter overflow");
+        let Some(next_generation) = anchor.generation().checked_add(1) else {
+            log::error!(
+                "slot table cannot bump payload anchor {anchor:?}: generation counter overflow"
+            );
+            return None;
+        };
         slot.generation = next_generation;
         Some(anchor.with_generation(next_generation))
     }
@@ -307,14 +322,18 @@ impl PayloadAnchorRegistry {
         if slot.generation != anchor.generation() {
             return false;
         }
-        let next_generation = anchor
-            .generation()
-            .checked_add(1)
-            .expect("payload anchor generation counter overflow");
-        assert!(
-            self.storage.remove_state(anchor.id()).is_some(),
-            "validated payload anchor state must remove"
-        );
+        let Some(next_generation) = anchor.generation().checked_add(1) else {
+            log::error!(
+                "slot table cannot invalidate payload anchor {anchor:?}: generation counter overflow"
+            );
+            return false;
+        };
+        if self.storage.remove_state(anchor.id()).is_none() {
+            log::error!(
+                "slot table ignored invalidation for payload anchor removed during validation {anchor:?}"
+            );
+            return false;
+        }
         self.enqueue_reuse(anchor, next_generation);
         true
     }
@@ -352,7 +371,10 @@ impl PayloadAnchorRegistry {
     }
 
     fn enqueue_reuse(&mut self, anchor: PayloadAnchor, next_generation: u32) {
-        let id = u32::try_from(anchor.id()).expect("payload anchor id must fit u32");
+        let Ok(id) = u32::try_from(anchor.id()) else {
+            log::error!("slot table cannot reuse payload anchor {anchor:?}: id exceeds u32");
+            return;
+        };
         self.free_ids
             .push(Reverse(FreePayloadAnchorIdRange::singleton(id)));
         self.free_count += 1;
@@ -559,17 +581,17 @@ mod tests {
         assert_eq!(registry.invalidated_len(), 0);
         assert_eq!(registry.free_len(), 0);
 
-        let stale_set_active = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            registry.set_active(stale_anchor, owner, 99);
-        }));
-        assert!(
-            stale_set_active.is_err(),
-            "stale generation must be rejected before it can reactivate a reused payload anchor id"
-        );
+        registry.set_active(stale_anchor, owner, 99);
         assert_eq!(
             registry.state_kind(reused_anchor),
             Some(PayloadAnchorLifecycle::Detached),
             "stale generation rejection must preserve the reused payload anchor state"
+        );
+        registry.mark_detached(stale_anchor);
+        assert_eq!(
+            registry.state_kind(reused_anchor),
+            Some(PayloadAnchorLifecycle::Detached),
+            "stale generation must not detach a reused payload anchor id"
         );
 
         registry.set_active(reused_anchor, owner, 5);

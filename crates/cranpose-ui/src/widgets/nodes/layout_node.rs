@@ -1,5 +1,7 @@
+#[cfg(test)]
+use crate::layout::LayoutRuntimeDebugStats;
 use crate::{
-    layout::MeasuredNode,
+    layout::{LayoutRuntimeState, MeasuredNode},
     modifier::{
         Modifier, ModifierChainHandle, ModifierLocalSource, ModifierLocalToken,
         ModifierLocalsHandle, ModifierNodeSlices, Point, ResolvedModifierLocal, ResolvedModifiers,
@@ -205,6 +207,7 @@ pub struct LayoutNode {
     folded_parent: Cell<Option<NodeId>>,
     // Node's own ID (set by applier after creation)
     id: Cell<Option<NodeId>>,
+    owner_context_id: Cell<Option<crate::render_state::AppContextId>>,
     debug_modifiers: Cell<bool>,
     /// Virtual node flag - virtual nodes are transparent containers for subcomposition
     /// Their children are flattened into the parent's children list for measurement
@@ -219,6 +222,7 @@ pub struct LayoutNode {
     /// Updated by measure/place and read by renderer.
     /// Wrapped in Rc to ensure state is shared across clones (e.g. SubcomposeLayout usage).
     layout_state: Rc<RefCell<LayoutState>>,
+    layout_runtime_state: Rc<RefCell<LayoutRuntimeState>>,
 }
 
 pub(crate) const RECYCLED_LAYOUT_NODE_POOL_LIMIT: usize = 128;
@@ -255,12 +259,14 @@ impl LayoutNode {
         shell.parent.set(None);
         shell.folded_parent.set(None);
         shell.id.set(None);
+        shell.owner_context_id.set(None);
         shell.debug_modifiers.set(false);
         shell.virtual_children_count.set(0);
         shell.cache = LayoutNodeCacheHandles::default();
         shell.modifier_slices_snapshot = RefCell::new(Rc::default());
         shell.modifier_slices_dirty = Cell::new(true);
         shell.layout_state = Rc::new(RefCell::new(LayoutState::default()));
+        shell.layout_runtime_state = Rc::new(RefCell::new(LayoutRuntimeState::default()));
         shell
     }
 
@@ -287,12 +293,14 @@ impl LayoutNode {
             parent: Cell::new(None),        // Non-virtual parent for bubbling
             folded_parent: Cell::new(None), // Direct parent (may be virtual)
             id: Cell::new(None),            // ID set by applier after creation
+            owner_context_id: Cell::new(None),
             debug_modifiers: Cell::new(false),
             is_virtual,
             virtual_children_count: Cell::new(0),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
             layout_state: Rc::new(RefCell::new(LayoutState::default())),
+            layout_runtime_state: Rc::new(RefCell::new(LayoutRuntimeState::default())),
         };
         node.sync_modifier_chain();
         node
@@ -316,7 +324,7 @@ impl LayoutNode {
     fn sync_modifier_chain(&mut self) {
         let prev_caps = self.modifier_capabilities;
         let start_parent = self.parent();
-        let mut resolver = move |token: ModifierLocalToken| {
+        let mut resolver = move |token: &ModifierLocalToken| {
             resolve_modifier_local_from_parent_chain(start_parent, token)
         };
         self.modifier_chain
@@ -536,9 +544,12 @@ impl LayoutNode {
     /// Set this node's ID (called by applier after creation).
     pub fn set_node_id(&mut self, id: NodeId) {
         if let Some(existing) = self.id.replace(Some(id)) {
-            unregister_layout_node(existing);
+            if let Some(owner_context_id) = self.owner_context_id.take() {
+                unregister_layout_node(owner_context_id, existing);
+            }
         }
-        register_layout_node(id, self);
+        let owner_context_id = register_layout_node(id, self);
+        self.owner_context_id.set(Some(owner_context_id));
         self.refresh_registry_state();
 
         // Propagate the ID to the modifier chain. This triggers a lifecycle update
@@ -637,17 +648,16 @@ impl LayoutNode {
     }
 
     fn refresh_registry_state(&self) {
-        if let Some(id) = self.id.get() {
+        if let (Some(id), Some(owner_context_id)) = (self.id.get(), self.owner_context_id.get()) {
             let parent = self.parent();
             let capabilities = self.modifier_child_capabilities();
             let modifier_locals = self.modifier_locals_handle();
-            LAYOUT_NODE_REGISTRY.with(|registry| {
-                if let Some(entry) = registry.borrow_mut().get_mut(&id) {
-                    entry.parent = parent;
-                    entry.modifier_child_capabilities = capabilities;
-                    entry.modifier_locals = modifier_locals;
-                }
-            });
+            let _ = crate::render_state::with_layout_node_registry_by_app_context(
+                owner_context_id,
+                |registry| {
+                    registry.update_entry(id, parent, capabilities, modifier_locals);
+                },
+            );
         }
     }
 
@@ -735,6 +745,15 @@ impl LayoutNode {
     pub fn layout_state_handle(&self) -> Rc<RefCell<LayoutState>> {
         self.layout_state.clone()
     }
+
+    pub(crate) fn layout_runtime_state_handle(&self) -> Rc<RefCell<LayoutRuntimeState>> {
+        self.layout_runtime_state.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn layout_runtime_debug_stats(&self) -> LayoutRuntimeDebugStats {
+        self.layout_runtime_state.borrow().debug_stats()
+    }
 }
 impl Clone for LayoutNode {
     fn clone(&self) -> Self {
@@ -756,6 +775,7 @@ impl Clone for LayoutNode {
             parent: Cell::new(self.parent.get()),
             folded_parent: Cell::new(self.folded_parent.get()),
             id: Cell::new(None),
+            owner_context_id: Cell::new(None),
             debug_modifiers: Cell::new(self.debug_modifiers.get()),
             is_virtual: self.is_virtual,
             virtual_children_count: Cell::new(self.virtual_children_count.get()),
@@ -763,6 +783,7 @@ impl Clone for LayoutNode {
             modifier_slices_dirty: Cell::new(true),
             // Share the same layout state across clones
             layout_state: self.layout_state.clone(),
+            layout_runtime_state: self.layout_runtime_state.clone(),
         };
         node.sync_modifier_chain();
         node
@@ -918,6 +939,7 @@ impl Node for LayoutNode {
         let modifier = previous.modifier.rehouse_for_live_compaction();
         let measure_policy = previous.measure_policy.clone();
         let layout_state = previous.layout_state.clone();
+        let layout_runtime_state = previous.layout_runtime_state.clone();
 
         previous.modifier_chain.chain_mut().detach_nodes();
 
@@ -935,9 +957,11 @@ impl Node for LayoutNode {
         compact.needs_focus_sync.set(needs_focus_sync);
         compact.virtual_children_count.set(virtual_children_count);
         compact.layout_state = layout_state;
+        compact.layout_runtime_state = layout_runtime_state;
         compact.sync_modifier_chain();
         if let Some(id) = node_id {
-            register_layout_node(id, &compact);
+            let owner_context_id = register_layout_node(id, &compact);
+            compact.owner_context_id.set(Some(owner_context_id));
         }
 
         Some(Box::new(compact))
@@ -946,22 +970,14 @@ impl Node for LayoutNode {
 
 impl Drop for LayoutNode {
     fn drop(&mut self) {
-        if let Some(id) = self.id.get() {
-            unregister_layout_node(id);
+        if let (Some(id), Some(owner_context_id)) = (self.id.get(), self.owner_context_id.get()) {
+            unregister_layout_node(owner_context_id, id);
         }
     }
 }
 
-thread_local! {
-    static LAYOUT_NODE_REGISTRY: RefCell<HashMap<NodeId, LayoutNodeRegistryEntry>> =
-        RefCell::new(HashMap::new());
-    // Start at a high value to avoid conflicts with SlotTable IDs (which start low).
-    // We use a value compatible with 32-bit (WASM) usize to prevent truncation issues.
-    // 0xC0000000 is ~3.2 billion, leaving ~1 billion IDs before overflow.
-    static VIRTUAL_NODE_ID_COUNTER: std::sync::atomic::AtomicUsize = const { std::sync::atomic::AtomicUsize::new(0xC0000000) };
-}
-
 const MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY: usize = 128;
+const VIRTUAL_NODE_ID_START: NodeId = 0xC0000000;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -977,9 +993,21 @@ struct LayoutNodeRegistryEntry {
     is_virtual: bool,
 }
 
-pub(crate) fn register_layout_node(id: NodeId, node: &LayoutNode) {
-    LAYOUT_NODE_REGISTRY.with(|registry| {
-        registry.borrow_mut().insert(
+pub(crate) struct LayoutNodeRegistryState {
+    entries: RefCell<HashMap<NodeId, LayoutNodeRegistryEntry>>,
+    virtual_node_id_counter: Cell<NodeId>,
+}
+
+impl LayoutNodeRegistryState {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: RefCell::new(HashMap::new()),
+            virtual_node_id_counter: Cell::new(VIRTUAL_NODE_ID_START),
+        }
+    }
+
+    fn register(&self, id: NodeId, node: &LayoutNode) {
+        self.entries.borrow_mut().insert(
             id,
             LayoutNodeRegistryEntry {
                 parent: node.parent(),
@@ -988,92 +1016,148 @@ pub(crate) fn register_layout_node(id: NodeId, node: &LayoutNode) {
                 is_virtual: node.is_virtual(),
             },
         );
-    });
-}
+    }
 
-pub(crate) fn unregister_layout_node(id: NodeId) {
-    LAYOUT_NODE_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        registry.remove(&id);
-        let should_shrink = (registry.len() <= MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY
-            && registry.capacity() > MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY)
-            || registry.capacity()
-                > registry
+    fn unregister(&self, id: NodeId) {
+        let mut entries = self.entries.borrow_mut();
+        entries.remove(&id);
+        let should_shrink = (entries.len() <= MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY
+            && entries.capacity() > MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY)
+            || entries.capacity()
+                > entries
                     .len()
                     .max(MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY)
                     .saturating_mul(4);
         if should_shrink {
-            let retained = registry
+            let retained = entries
                 .len()
                 .max(MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY);
             let mut rebuilt = HashMap::new();
             rebuilt.reserve(retained);
-            rebuilt.extend(registry.drain());
-            *registry = rebuilt;
+            rebuilt.extend(entries.drain());
+            *entries = rebuilt;
         }
-    });
-}
+    }
 
-#[cfg(test)]
-fn layout_node_registry_stats() -> LayoutNodeRegistryDebugStats {
-    LAYOUT_NODE_REGISTRY.with(|registry| {
-        let registry = registry.borrow();
+    fn update_entry(
+        &self,
+        id: NodeId,
+        parent: Option<NodeId>,
+        modifier_child_capabilities: NodeCapabilities,
+        modifier_locals: ModifierLocalsHandle,
+    ) {
+        if let Some(entry) = self.entries.borrow_mut().get_mut(&id) {
+            entry.parent = parent;
+            entry.modifier_child_capabilities = modifier_child_capabilities;
+            entry.modifier_locals = modifier_locals;
+        }
+    }
+
+    #[cfg(test)]
+    fn stats(&self) -> LayoutNodeRegistryDebugStats {
+        let entries = self.entries.borrow();
         LayoutNodeRegistryDebugStats {
-            len: registry.len(),
-            capacity: registry.capacity(),
+            len: entries.len(),
+            capacity: entries.capacity(),
         }
-    })
-}
+    }
 
-pub(crate) fn is_virtual_node(id: NodeId) -> bool {
-    LAYOUT_NODE_REGISTRY.with(|registry| {
-        registry
+    fn is_virtual_node(&self, id: NodeId) -> bool {
+        self.entries
             .borrow()
             .get(&id)
             .map(|entry| entry.is_virtual)
             .unwrap_or(false)
-    })
+    }
+
+    fn allocate_virtual_node_id(&self) -> NodeId {
+        let id = self.virtual_node_id_counter.get();
+        self.virtual_node_id_counter.set(id.wrapping_add(1));
+        id
+    }
+
+    fn resolve_modifier_local_from_parent_chain(
+        &self,
+        start: Option<NodeId>,
+        token: &ModifierLocalToken,
+    ) -> Option<ResolvedModifierLocal> {
+        let mut current = start;
+        while let Some(parent_id) = current {
+            let (next_parent, resolved) = {
+                let entries = self.entries.borrow();
+                if let Some(entry) = entries.get(&parent_id) {
+                    let resolved = if entry
+                        .modifier_child_capabilities
+                        .contains(NodeCapabilities::MODIFIER_LOCALS)
+                    {
+                        entry
+                            .modifier_locals
+                            .borrow()
+                            .resolve(token)
+                            .map(|value| value.with_source(ModifierLocalSource::Ancestor))
+                    } else {
+                        None
+                    };
+                    (entry.parent, resolved)
+                } else {
+                    (None, None)
+                }
+            };
+            if let Some(value) = resolved {
+                return Some(value);
+            }
+            current = next_parent;
+        }
+        None
+    }
+}
+
+pub(crate) fn register_layout_node(
+    id: NodeId,
+    node: &LayoutNode,
+) -> crate::render_state::AppContextId {
+    let owner_context_id = crate::render_state::current_app_context_id();
+    let _ = crate::render_state::with_layout_node_registry_by_app_context(
+        owner_context_id,
+        |registry| {
+            registry.register(id, node);
+        },
+    );
+    owner_context_id
+}
+
+pub(crate) fn unregister_layout_node(
+    owner_context_id: crate::render_state::AppContextId,
+    id: NodeId,
+) {
+    let _ = crate::render_state::with_layout_node_registry_by_app_context(
+        owner_context_id,
+        |registry| {
+            registry.unregister(id);
+        },
+    );
+}
+
+#[cfg(test)]
+fn layout_node_registry_stats() -> LayoutNodeRegistryDebugStats {
+    crate::render_state::with_layout_node_registry(|registry| registry.stats())
+}
+
+pub(crate) fn is_virtual_node(id: NodeId) -> bool {
+    crate::render_state::with_layout_node_registry(|registry| registry.is_virtual_node(id))
 }
 
 pub(crate) fn allocate_virtual_node_id() -> NodeId {
-    use std::sync::atomic::Ordering;
-    // Allocate IDs from a high range to avoid conflict with SlotTable IDs.
-    // Thread-local counter avoids cross-thread contention (WASM is single-threaded anyway).
-    VIRTUAL_NODE_ID_COUNTER.with(|counter| counter.fetch_add(1, Ordering::Relaxed))
+    crate::render_state::with_layout_node_registry(|registry| registry.allocate_virtual_node_id())
 }
 
 fn resolve_modifier_local_from_parent_chain(
     start: Option<NodeId>,
-    token: ModifierLocalToken,
+    token: &ModifierLocalToken,
 ) -> Option<ResolvedModifierLocal> {
-    let mut current = start;
-    while let Some(parent_id) = current {
-        let (next_parent, resolved) = LAYOUT_NODE_REGISTRY.with(|registry| {
-            let registry = registry.borrow();
-            if let Some(entry) = registry.get(&parent_id) {
-                let resolved = if entry
-                    .modifier_child_capabilities
-                    .contains(NodeCapabilities::MODIFIER_LOCALS)
-                {
-                    entry
-                        .modifier_locals
-                        .borrow()
-                        .resolve(token)
-                        .map(|value| value.with_source(ModifierLocalSource::Ancestor))
-                } else {
-                    None
-                };
-                (entry.parent, resolved)
-            } else {
-                (None, None)
-            }
-        });
-        if let Some(value) = resolved {
-            return Some(value);
-        }
-        current = next_parent;
-    }
-    None
+    crate::render_state::with_layout_node_registry(|registry| {
+        registry.resolve_modifier_local_from_parent_chain(start, token)
+    })
 }
 
 #[cfg(test)]
@@ -1124,6 +1208,7 @@ mod tests {
 
     #[test]
     fn modifier_slices_cache_reuses_unique_snapshot_allocation() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         let snapshot = node.modifier_slices_snapshot();
         let snapshot_ptr = Rc::as_ptr(&snapshot);
@@ -1137,6 +1222,7 @@ mod tests {
 
     #[test]
     fn modifier_slices_cache_preserves_live_snapshot_isolation() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         let old_snapshot = node.modifier_slices_snapshot();
         let old_snapshot_ptr = Rc::as_ptr(&old_snapshot);
@@ -1150,30 +1236,70 @@ mod tests {
 
     #[test]
     fn layout_node_registry_retains_warm_capacity_after_large_cleanup() {
-        let nodes: Vec<_> = (0..2048)
-            .map(|_| {
-                let id = allocate_virtual_node_id();
-                let node = fresh_node();
-                register_layout_node(id, &node);
-                (id, node)
-            })
-            .collect();
+        let _app_context = crate::render_state::app_context_test_scope();
+        let app_context = crate::render_state::AppContext::new_with_density(1.0);
+        app_context.enter(|| {
+            let nodes: Vec<_> = (0..2048)
+                .map(|_| {
+                    let id = allocate_virtual_node_id();
+                    let node = fresh_node();
+                    let owner_context_id = register_layout_node(id, &node);
+                    (id, owner_context_id, node)
+                })
+                .collect();
 
-        for (id, _) in &nodes {
-            unregister_layout_node(*id);
-        }
+            for (id, owner_context_id, _) in &nodes {
+                unregister_layout_node(*owner_context_id, *id);
+            }
 
-        let stats = layout_node_registry_stats();
-        assert_eq!(stats.len, 0);
-        assert!(
-            (MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY
-                ..=MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY.saturating_mul(2))
-                .contains(&stats.capacity),
-            "registry warm capacity {} fell outside expected retained range {}..={}",
-            stats.capacity,
-            MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY,
-            MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY.saturating_mul(2),
-        );
+            let stats = layout_node_registry_stats();
+            assert_eq!(stats.len, 0);
+            assert!(
+                (MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY
+                    ..=MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY.saturating_mul(2))
+                    .contains(&stats.capacity),
+                "registry warm capacity {} fell outside expected retained range {}..={}",
+                stats.capacity,
+                MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY,
+                MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY.saturating_mul(2),
+            );
+        });
+    }
+
+    #[test]
+    fn layout_node_registry_is_scoped_by_app_context() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let first = crate::render_state::AppContext::new_with_density(1.0);
+        let second = crate::render_state::AppContext::new_with_density(1.0);
+
+        let first_id = first.enter(allocate_virtual_node_id);
+        let second_id = second.enter(allocate_virtual_node_id);
+
+        assert_eq!(first_id, VIRTUAL_NODE_ID_START);
+        assert_eq!(second_id, VIRTUAL_NODE_ID_START);
+
+        let virtual_node = LayoutNode::new_virtual();
+        let regular_node = fresh_node();
+
+        first.enter(|| {
+            register_layout_node(first_id, &virtual_node);
+            register_layout_node(101, &regular_node);
+            assert!(is_virtual_node(first_id));
+            assert_eq!(layout_node_registry_stats().len, 2);
+        });
+
+        second.enter(|| {
+            assert!(!is_virtual_node(first_id));
+            assert_eq!(layout_node_registry_stats().len, 0);
+            assert_eq!(allocate_virtual_node_id(), VIRTUAL_NODE_ID_START + 1);
+        });
+
+        first.enter(|| {
+            let owner_context_id = crate::render_state::current_app_context_id();
+            unregister_layout_node(owner_context_id, first_id);
+            unregister_layout_node(owner_context_id, 101);
+            assert_eq!(layout_node_registry_stats().len, 0);
+        });
     }
 
     fn invalidation(kind: InvalidationKind) -> ModifierInvalidation {
@@ -1182,6 +1308,7 @@ mod tests {
 
     #[test]
     fn layout_invalidation_requires_layout_capability() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         node.clear_needs_measure();
         node.clear_needs_layout();
@@ -1196,6 +1323,7 @@ mod tests {
 
     #[test]
     fn semantics_configuration_reflects_modifier_state() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         node.set_modifier(Modifier::empty().semantics(|config| {
             config.content_description = Some("greeting".into());
@@ -1211,6 +1339,7 @@ mod tests {
 
     #[test]
     fn layout_invalidation_marks_flags_when_capability_present() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let _guard = crate::render_state::render_state_test_guard();
         crate::reset_render_state_for_tests();
         let mut node = fresh_node();
@@ -1230,6 +1359,7 @@ mod tests {
 
     #[test]
     fn layout_invalidation_skips_repass_while_composing() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let _guard = crate::render_state::render_state_test_guard();
         crate::reset_render_state_for_tests();
 
@@ -1259,6 +1389,7 @@ mod tests {
 
     #[test]
     fn draw_invalidation_marks_redraw_flag_when_capable() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         node.clear_needs_measure();
         node.clear_needs_layout();
@@ -1273,6 +1404,7 @@ mod tests {
 
     #[test]
     fn semantics_invalidation_sets_semantics_flag_only() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         node.clear_needs_measure();
         node.clear_needs_layout();
@@ -1289,6 +1421,7 @@ mod tests {
 
     #[test]
     fn pointer_invalidation_requires_pointer_capability() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         node.clear_needs_pointer_pass();
         node.modifier_capabilities = NodeCapabilities::DRAW;
@@ -1304,6 +1437,7 @@ mod tests {
 
     #[test]
     fn pointer_invalidation_marks_flag_and_requests_queue() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         node.clear_needs_pointer_pass();
         node.modifier_capabilities = NodeCapabilities::POINTER_INPUT;
@@ -1319,6 +1453,7 @@ mod tests {
 
     #[test]
     fn focus_invalidation_requires_focus_capability() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         node.clear_needs_focus_sync();
         node.modifier_capabilities = NodeCapabilities::DRAW;
@@ -1333,6 +1468,7 @@ mod tests {
 
     #[test]
     fn focus_invalidation_marks_flag_and_requests_queue() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         node.clear_needs_focus_sync();
         node.modifier_capabilities = NodeCapabilities::FOCUS;
@@ -1347,6 +1483,7 @@ mod tests {
 
     #[test]
     fn set_modifier_marks_semantics_dirty() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         node.clear_needs_semantics();
         node.set_modifier(Modifier::empty().semantics(|config| {
@@ -1358,6 +1495,7 @@ mod tests {
 
     #[test]
     fn modifier_child_capabilities_reflect_chain_head() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut node = fresh_node();
         node.set_modifier(Modifier::empty().padding(4.0));
         assert!(

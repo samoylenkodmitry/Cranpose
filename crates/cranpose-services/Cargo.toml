@@ -16,14 +16,30 @@ cranpose-core = { workspace = true }
 cranpose-macros = { workspace = true }
 thiserror = "2.0.18"
 
+[features]
+default = []
+http-native = ["dep:reqwest", "dep:webpki-root-certs"]
+web-http = [
+    "dep:futures-util",
+    "dep:js-sys",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+]
+uri-native = ["dep:open"]
+uri-android = ["dep:webbrowser"]
+uri-web = ["dep:web-sys"]
+system-theme = []
+system-theme-web = ["dep:web-sys"]
+
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-open = "5.3.5"
+open = { version = "5.3.5", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-futures-util = "0.3.32"
-js-sys = "0.3.98"
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4.71"
+futures-util = { version = "0.3.32", optional = true }
+js-sys = { version = "0.3.98", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4.71", optional = true }
 web-sys = { version = "0.3", features = [
     "MediaQueryList",
     "Request",
@@ -31,19 +47,15 @@ web-sys = { version = "0.3", features = [
     "RequestMode",
     "Response",
     "Window",
-] }
+], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.4.0"
-reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "rustls"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "rustls"], optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-webbrowser = "1.2.1"
-webpki-root-certs = "1.0.7"
-
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
-dark-light = "2.0.0"
+webbrowser = { version = "1.2.1", optional = true }
+webpki-root-certs = { version = "1.0.7", optional = true }
 
 [dev-dependencies]
-pollster = "0.4.0"
 webpki-root-certs = "1.0.7"

@@ -7,6 +7,9 @@ use cranpose_ui::*;
 
 #[test]
 fn test_padding_plus_size_constraint() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         Box(
             Modifier::empty()
@@ -65,6 +68,9 @@ fn test_padding_plus_size_constraint() {
 
 #[test]
 fn test_column_with_padding_and_sized_children() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         Column(
             Modifier::empty().padding(10.0),
@@ -153,6 +159,9 @@ fn test_column_with_padding_and_sized_children() {
 
 #[test]
 fn test_row_with_offset_children() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut composition = run_test_composition(|| {
         Row(Modifier::empty(), RowSpec::default(), || {
             Box(

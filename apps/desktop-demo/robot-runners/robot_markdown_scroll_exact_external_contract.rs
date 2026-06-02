@@ -6,7 +6,9 @@ mod text_showcase_external_helpers;
 
 use cranpose::AppLauncher;
 use desktop_app::app;
-use scroll_stability_external_helpers::{run_scroll_stability_capture, ScrollStabilityConfig};
+use scroll_stability_external_helpers::{
+    run_scroll_stability_capture, ActiveFrameConfig, ScrollStabilityConfig,
+};
 use std::time::Duration;
 use text_showcase_external_helpers::scroll_text_into_view_between;
 
@@ -23,6 +25,7 @@ const COMPARE_VIEWPORT_INSET_PX: u32 = 200;
 const TARGET_MIN_CENTER_Y: f32 = 220.0;
 const TARGET_MAX_CENTER_Y: f32 = 320.0;
 const RENDER_STATS_ENV: &str = "CRANPOSE_SCROLL_STABILITY_RENDER_STATS";
+const ACTIVE_FRAME_MIN_IMPROVEMENT_RATIO: f32 = 0.05;
 
 fn main() {
     env_logger::init();
@@ -66,6 +69,13 @@ fn main() {
                     compare_stabilized_guard_px: COMPARE_STABILIZED_GUARD_PX,
                     compare_viewport_inset_px: COMPARE_VIEWPORT_INSET_PX,
                     render_stats_env: Some(RENDER_STATS_ENV),
+                    active_frame: Some(ActiveFrameConfig {
+                        pump_frames_after_scroll: 1,
+                        settle_frames_after_capture: 2,
+                        max_capture_attempts: 2,
+                        sleep_between_attempts_ms: 16,
+                        min_improvement_ratio: ACTIVE_FRAME_MIN_IMPROVEMENT_RATIO,
+                    }),
                 },
                 None,
             );

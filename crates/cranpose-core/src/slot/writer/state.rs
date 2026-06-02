@@ -8,6 +8,7 @@ pub(crate) struct SlotWriteSessionState {
     pub(in crate::slot) group_stack: Vec<GroupFrame>,
     frame_pool: Vec<GroupFrame>,
     payload_location_refreshes: HashMap<AnchorId, usize>,
+    rejected_restore_subtrees: Vec<DetachedSubtree>,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
@@ -27,6 +28,13 @@ impl SlotWriteSessionState {
             self.recycle_group_frame(frame);
         }
         self.payload_location_refreshes.clear();
+        if !self.rejected_restore_subtrees.is_empty() {
+            log::error!(
+                "slot writer reset discarded {} rejected restore subtrees that were not finalized",
+                self.rejected_restore_subtrees.len()
+            );
+            self.rejected_restore_subtrees.clear();
+        }
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
         self.removed_group_count = 0;
@@ -107,6 +115,14 @@ impl SlotWriteSessionState {
             .map(DetachedSubtree::node_count)
             .sum::<usize>();
         self.update_compaction_hint();
+    }
+
+    pub(in crate::slot) fn queue_rejected_restore_subtree(&mut self, subtree: DetachedSubtree) {
+        self.rejected_restore_subtrees.push(subtree);
+    }
+
+    pub(in crate::slot) fn drain_rejected_restore_subtrees(&mut self) -> Vec<DetachedSubtree> {
+        std::mem::take(&mut self.rejected_restore_subtrees)
     }
 
     fn update_compaction_hint(&mut self) {

@@ -8,11 +8,6 @@ use cranpose_core::NodeId;
 use std::cell::RefCell;
 use std::collections::HashSet;
 
-thread_local! {
-    static FOCUS_INVALIDATION_MANAGER: RefCell<FocusInvalidationManager> =
-        RefCell::new(FocusInvalidationManager::new());
-}
-
 /// Manages focus invalidations across the UI tree.
 ///
 /// Similar to Kotlin's `FocusInvalidationManager`, this tracks which
@@ -49,22 +44,20 @@ impl FocusInvalidationManager {
         self.active_focus_target
     }
 
-    fn process_invalidations<F>(&mut self, mut processor: F)
-    where
-        F: FnMut(NodeId),
-    {
+    fn take_pending_for_processing(&mut self) -> Option<Vec<NodeId>> {
         if self.is_processing {
-            return;
+            return None;
         }
 
         self.is_processing = true;
+        Some(self.dirty_nodes.drain().collect())
+    }
 
-        // Process all dirty nodes
-        let nodes: Vec<NodeId> = self.dirty_nodes.drain().collect();
-        for node_id in nodes {
-            processor(node_id);
-        }
-
+    fn finish_processing<I>(&mut self, remaining: I)
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        self.dirty_nodes.extend(remaining);
         self.is_processing = false;
     }
 
@@ -73,19 +66,78 @@ impl FocusInvalidationManager {
     }
 }
 
+pub(crate) struct FocusInvalidationState {
+    manager: RefCell<FocusInvalidationManager>,
+}
+
+impl FocusInvalidationState {
+    pub(crate) fn new() -> Self {
+        Self {
+            manager: RefCell::new(FocusInvalidationManager::new()),
+        }
+    }
+
+    fn schedule_invalidation(&self, node_id: NodeId) {
+        self.manager.borrow_mut().schedule_invalidation(node_id);
+    }
+
+    fn has_pending_invalidation(&self) -> bool {
+        self.manager.borrow().has_pending_invalidation()
+    }
+
+    fn set_active_focus_target(&self, node_id: Option<NodeId>) {
+        self.manager.borrow_mut().set_active_focus_target(node_id);
+    }
+
+    fn active_focus_target(&self) -> Option<NodeId> {
+        self.manager.borrow().active_focus_target()
+    }
+
+    fn process_invalidations<F>(&self, processor: F)
+    where
+        F: FnMut(NodeId),
+    {
+        let Some(nodes) = self.manager.borrow_mut().take_pending_for_processing() else {
+            return;
+        };
+
+        self.process_pending_nodes(nodes, processor);
+    }
+
+    fn clear(&self) {
+        self.manager.borrow_mut().clear();
+    }
+
+    fn process_pending_nodes<F>(&self, nodes: Vec<NodeId>, mut processor: F)
+    where
+        F: FnMut(NodeId),
+    {
+        let mut remaining = nodes.into_iter();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for node_id in remaining.by_ref() {
+                processor(node_id);
+            }
+        }));
+
+        self.manager.borrow_mut().finish_processing(remaining);
+
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
 /// Schedules a focus invalidation for the specified node.
 ///
 /// This is called automatically when focus modifiers invalidate
 /// and mirrors Kotlin's `FocusInvalidationManager.scheduleInvalidation`.
 pub fn schedule_focus_invalidation(node_id: NodeId) {
-    FOCUS_INVALIDATION_MANAGER.with(|manager| {
-        manager.borrow_mut().schedule_invalidation(node_id);
-    });
+    crate::render_state::with_focus_dispatch(|state| state.schedule_invalidation(node_id));
 }
 
 /// Returns true if any focus invalidations are pending.
 pub fn has_pending_focus_invalidations() -> bool {
-    FOCUS_INVALIDATION_MANAGER.with(|manager| manager.borrow().has_pending_invalidation())
+    crate::render_state::with_focus_dispatch(|state| state.has_pending_invalidation())
 }
 
 /// Sets the currently active focus target.
@@ -93,14 +145,12 @@ pub fn has_pending_focus_invalidations() -> bool {
 /// This mirrors Kotlin's `FocusOwner.activeFocusTargetNode` and allows
 /// the focus system to track which node currently has focus.
 pub fn set_active_focus_target(node_id: Option<NodeId>) {
-    FOCUS_INVALIDATION_MANAGER.with(|manager| {
-        manager.borrow_mut().set_active_focus_target(node_id);
-    });
+    crate::render_state::with_focus_dispatch(|state| state.set_active_focus_target(node_id));
 }
 
 /// Returns the currently active focus target, if any.
 pub fn active_focus_target() -> Option<NodeId> {
-    FOCUS_INVALIDATION_MANAGER.with(|manager| manager.borrow().active_focus_target())
+    crate::render_state::with_focus_dispatch(|state| state.active_focus_target())
 }
 
 /// Processes all pending focus invalidations.
@@ -112,16 +162,12 @@ pub fn process_focus_invalidations<F>(processor: F)
 where
     F: FnMut(NodeId),
 {
-    FOCUS_INVALIDATION_MANAGER.with(|manager| {
-        manager.borrow_mut().process_invalidations(processor);
-    });
+    crate::render_state::with_focus_dispatch(|state| state.process_invalidations(processor));
 }
 
 /// Clears all pending focus invalidations without processing them.
 pub fn clear_focus_invalidations() {
-    FOCUS_INVALIDATION_MANAGER.with(|manager| {
-        manager.borrow_mut().clear();
-    });
+    crate::render_state::with_focus_dispatch(|state| state.clear());
 }
 
 #[cfg(test)]
@@ -130,6 +176,7 @@ mod tests {
 
     #[test]
     fn schedule_and_process_invalidations() {
+        let _app_context = crate::render_state::app_context_test_scope();
         clear_focus_invalidations();
 
         let node1: NodeId = 1;
@@ -153,6 +200,7 @@ mod tests {
 
     #[test]
     fn active_focus_target_tracking() {
+        let _app_context = crate::render_state::app_context_test_scope();
         set_active_focus_target(None);
         assert_eq!(active_focus_target(), None);
 
@@ -166,6 +214,7 @@ mod tests {
 
     #[test]
     fn duplicate_invalidations_deduplicated() {
+        let _app_context = crate::render_state::app_context_test_scope();
         clear_focus_invalidations();
 
         let node: NodeId = 42;
@@ -179,5 +228,86 @@ mod tests {
         });
 
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn process_invalidations_recovers_after_processor_panic() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        clear_focus_invalidations();
+
+        schedule_focus_invalidation(1);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            process_focus_invalidations(|_| panic!("focus processor panic"));
+        }));
+        assert!(result.is_err());
+
+        schedule_focus_invalidation(2);
+        let mut processed = Vec::new();
+        process_focus_invalidations(|node_id| processed.push(node_id));
+
+        assert!(
+            processed.contains(&2),
+            "focus invalidation processing must not stay stuck after a processor panic"
+        );
+        assert!(!has_pending_focus_invalidations());
+    }
+
+    #[test]
+    fn process_invalidations_allows_processor_to_schedule_more_work() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        clear_focus_invalidations();
+
+        schedule_focus_invalidation(1);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            process_focus_invalidations(|_| schedule_focus_invalidation(2));
+        }));
+        assert!(
+            result.is_ok(),
+            "focus processors must be able to enqueue follow-up invalidations"
+        );
+        assert!(has_pending_focus_invalidations());
+
+        let mut processed = Vec::new();
+        process_focus_invalidations(|node_id| processed.push(node_id));
+
+        assert_eq!(processed, vec![2]);
+        assert!(!has_pending_focus_invalidations());
+    }
+
+    #[test]
+    fn focus_state_is_scoped_by_app_context() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let first = crate::render_state::AppContext::new_with_density(1.0);
+        let second = crate::render_state::AppContext::new_with_density(1.0);
+
+        first.enter(|| {
+            clear_focus_invalidations();
+            schedule_focus_invalidation(7);
+            set_active_focus_target(Some(17));
+            assert!(has_pending_focus_invalidations());
+            assert_eq!(active_focus_target(), Some(17));
+        });
+
+        second.enter(|| {
+            clear_focus_invalidations();
+            assert!(!has_pending_focus_invalidations());
+            assert_eq!(active_focus_target(), None);
+            schedule_focus_invalidation(9);
+            set_active_focus_target(Some(19));
+        });
+
+        first.enter(|| {
+            let mut processed = Vec::new();
+            process_focus_invalidations(|node_id| processed.push(node_id));
+            assert_eq!(processed, vec![7]);
+            assert_eq!(active_focus_target(), Some(17));
+        });
+
+        second.enter(|| {
+            let mut processed = Vec::new();
+            process_focus_invalidations(|node_id| processed.push(node_id));
+            assert_eq!(processed, vec![9]);
+            assert_eq!(active_focus_target(), Some(19));
+        });
     }
 }

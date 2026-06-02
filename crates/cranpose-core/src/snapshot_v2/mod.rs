@@ -29,8 +29,8 @@ use crate::snapshot_pinning::{self, PinHandle};
 use crate::snapshot_weak_set::SnapshotWeakSetDebugStats;
 use crate::state::{StateObject, StateRecord};
 use std::cell::{Cell, RefCell};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
 mod global;
@@ -400,6 +400,29 @@ pub(crate) fn set_current_snapshot(snapshot: Option<AnySnapshot>) {
     });
 }
 
+struct CurrentSnapshotGuard {
+    previous: Option<AnySnapshot>,
+}
+
+impl CurrentSnapshotGuard {
+    fn enter(snapshot: AnySnapshot) -> Self {
+        let previous = current_snapshot();
+        set_current_snapshot(Some(snapshot));
+        Self { previous }
+    }
+}
+
+impl Drop for CurrentSnapshotGuard {
+    fn drop(&mut self) {
+        set_current_snapshot(self.previous.take());
+    }
+}
+
+pub(crate) fn enter_snapshot_scope<T>(snapshot: AnySnapshot, f: impl FnOnce() -> T) -> T {
+    let _guard = CurrentSnapshotGuard::enter(snapshot);
+    f()
+}
+
 /// Creates a mutable snapshot, matching Kotlin's `Snapshot.takeMutableSnapshot` semantics.
 ///
 /// If called while inside a MutableSnapshot, creates a nested snapshot that will
@@ -478,12 +501,31 @@ pub(crate) fn peek_next_snapshot_id() -> SnapshotId {
     runtime::peek_next_snapshot_id()
 }
 
-/// Global counter for unique observer IDs.
-static NEXT_OBSERVER_ID: AtomicUsize = AtomicUsize::new(1);
+#[derive(Clone)]
+struct ObserverId(Rc<()>);
+
+impl ObserverId {
+    fn new() -> Self {
+        Self(Rc::new(()))
+    }
+}
+
+impl PartialEq for ObserverId {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ObserverId {}
+
+impl Hash for ObserverId {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Rc::as_ptr(&self.0).hash(state);
+    }
+}
 
 thread_local! {
-    // Global map of apply observers indexed by unique ID.
-    static APPLY_OBSERVERS: RefCell<HashMap<usize, ApplyObserver>> = RefCell::new(HashMap::default());
+    static APPLY_OBSERVERS: RefCell<HashMap<ObserverId, ApplyObserver>> = RefCell::new(HashMap::default());
 }
 
 thread_local! {
@@ -552,9 +594,9 @@ pub fn debug_snapshot_v2_stats() -> SnapshotV2DebugStats {
 ///
 /// Returns a handle that will automatically unregister the observer when dropped.
 pub fn register_apply_observer(observer: ApplyObserver) -> ObserverHandle {
-    let id = NEXT_OBSERVER_ID.fetch_add(1, Ordering::SeqCst);
+    let id = ObserverId::new();
     APPLY_OBSERVERS.with(|cell| {
-        cell.borrow_mut().insert(id, observer);
+        cell.borrow_mut().insert(id.clone(), observer);
     });
     ObserverHandle {
         kind: ObserverKind::Apply,
@@ -567,7 +609,7 @@ pub fn register_apply_observer(observer: ApplyObserver) -> ObserverHandle {
 /// When dropped, automatically removes the associated observer.
 pub struct ObserverHandle {
     kind: ObserverKind,
-    id: usize,
+    id: ObserverId,
 }
 
 enum ObserverKind {
@@ -761,9 +803,9 @@ pub(crate) struct SnapshotState {
     /// Whether this snapshot has been disposed.
     pub(crate) disposed: Cell<bool>,
     /// Read observer, if any.
-    pub(crate) read_observer: Option<ReadObserver>,
+    pub(crate) read_observer: RefCell<Option<ReadObserver>>,
     /// Write observer, if any.
-    pub(crate) write_observer: Option<WriteObserver>,
+    pub(crate) write_observer: RefCell<Option<WriteObserver>>,
     /// Modified state objects.
     #[allow(clippy::type_complexity)]
     // HashMap value is (Arc, SnapshotId) - reasonable for tracking state
@@ -816,8 +858,8 @@ impl SnapshotState {
             invalid: RefCell::new(invalid),
             pin_handle: Cell::new(pin_handle),
             disposed: Cell::new(false),
-            read_observer,
-            write_observer,
+            read_observer: RefCell::new(read_observer),
+            write_observer: RefCell::new(write_observer),
             modified: RefCell::new(HashMap::default()),
             on_dispose: RefCell::new(None),
             runtime_tracked,
@@ -826,7 +868,7 @@ impl SnapshotState {
     }
 
     pub(crate) fn record_read(&self, state: &dyn StateObject) {
-        if let Some(ref observer) = self.read_observer {
+        if let Some(observer) = self.read_observer.borrow().as_ref() {
             observer(state);
         }
     }
@@ -840,7 +882,7 @@ impl SnapshotState {
         // Only call observer on first write
         match modified.entry(state_id) {
             std::collections::hash_map::Entry::Vacant(e) => {
-                if let Some(ref observer) = self.write_observer {
+                if let Some(observer) = self.write_observer.borrow().as_ref() {
                     observer(&*state);
                 }
                 // Store the Arc and writer id in the modified set
@@ -895,6 +937,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn apply_observer_ids_do_not_use_process_global_counter() {
+        let source = include_str!("mod.rs");
+        assert!(!source.contains(concat!("NEXT_", "OBSERVER_ID")));
+        assert!(!source.contains(concat!("Atomic", "Usize")));
+    }
+
+    #[test]
     fn test_apply_result_is_success() {
         assert!(SnapshotApplyResult::Success.is_success());
         assert!(!SnapshotApplyResult::Failure.is_success());
@@ -915,6 +964,22 @@ mod tests {
     #[should_panic(expected = "Snapshot apply failed")]
     fn test_apply_result_check_failure() {
         SnapshotApplyResult::Failure.check(); // Should panic
+    }
+
+    #[test]
+    fn snapshot_enter_restores_current_snapshot_after_panic() {
+        let _guard = reset_runtime_for_tests();
+        let snapshot = take_mutable_snapshot(None, None);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            snapshot.enter(|| panic!("snapshot body panic"));
+        }));
+
+        assert!(result.is_err());
+        assert!(
+            current_snapshot().is_none(),
+            "snapshot enter must restore the previous current snapshot while unwinding"
+        );
     }
 
     #[test]
@@ -973,6 +1038,14 @@ mod tests {
 
         fn first_record(&self) -> Rc<crate::state::StateRecord> {
             unimplemented!("Not needed for observer tests")
+        }
+
+        fn try_readable_record(
+            &self,
+            _snapshot_id: SnapshotId,
+            _invalid: &SnapshotIdSet,
+        ) -> Option<Rc<crate::state::StateRecord>> {
+            None
         }
 
         fn readable_record(
@@ -1340,6 +1413,14 @@ mod tests {
                 unimplemented!("Not needed for this test")
             }
 
+            fn try_readable_record(
+                &self,
+                _snapshot_id: SnapshotId,
+                _invalid: &SnapshotIdSet,
+            ) -> Option<Rc<crate::state::StateRecord>> {
+                None
+            }
+
             fn readable_record(
                 &self,
                 _snapshot_id: SnapshotId,
@@ -1393,6 +1474,14 @@ mod tests {
 
             fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 unimplemented!()
+            }
+
+            fn try_readable_record(
+                &self,
+                _snapshot_id: SnapshotId,
+                _invalid: &SnapshotIdSet,
+            ) -> Option<Rc<crate::state::StateRecord>> {
+                None
             }
 
             fn readable_record(

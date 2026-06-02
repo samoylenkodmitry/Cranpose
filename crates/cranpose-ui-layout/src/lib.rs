@@ -1,5 +1,6 @@
 //! Layout contracts & policies for Cranpose
 
+#![deny(unsafe_code)]
 #![allow(non_snake_case)]
 
 mod alignment;

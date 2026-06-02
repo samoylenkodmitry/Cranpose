@@ -6,23 +6,26 @@ where
     R::Error: Debug,
 {
     pub fn debug_info_report(&mut self) -> String {
-        let mut report = String::new();
-        writeln!(report, "=== DEBUG: CURRENT SCREEN STATE ===").ok();
-        if let Some(layout_tree) = self.layout_tree() {
-            let renderer = HeadlessRenderer::new();
-            let render_scene = renderer.render(layout_tree);
-            writeln!(report, "{}", format_layout_tree(layout_tree)).ok();
-            writeln!(report, "{}", format_render_scene(&render_scene)).ok();
-            writeln!(
-                report,
-                "{}",
-                format_screen_summary(layout_tree, &render_scene)
-            )
-            .ok();
-        } else {
-            writeln!(report, "No layout available").ok();
-        }
-        report
+        let app_context = std::rc::Rc::clone(&self.app_context);
+        app_context.enter(|| {
+            let mut report = String::new();
+            writeln!(report, "=== DEBUG: CURRENT SCREEN STATE ===").ok();
+            if let Some(layout_tree) = self.layout_tree_in_context() {
+                let renderer = HeadlessRenderer::new();
+                let render_scene = renderer.render(layout_tree);
+                writeln!(report, "{}", format_layout_tree(layout_tree)).ok();
+                writeln!(report, "{}", format_render_scene(&render_scene)).ok();
+                writeln!(
+                    report,
+                    "{}",
+                    format_screen_summary(layout_tree, &render_scene)
+                )
+                .ok();
+            } else {
+                writeln!(report, "No layout available").ok();
+            }
+            report
+        })
     }
 
     pub fn log_debug_info(&mut self) -> String {
@@ -33,6 +36,20 @@ where
 
     /// Get the current layout tree (for robot/testing)
     pub fn layout_tree(&mut self) -> Option<&LayoutTree> {
+        let app_context = std::rc::Rc::clone(&self.app_context);
+        app_context.enter(|| self.layout_tree_in_context())
+    }
+
+    #[doc(hidden)]
+    pub fn with_layout_tree<T>(&mut self, block: impl FnOnce(Option<&LayoutTree>) -> T) -> T {
+        let app_context = std::rc::Rc::clone(&self.app_context);
+        app_context.enter(|| {
+            let layout_tree = self.layout_tree_in_context();
+            block(layout_tree)
+        })
+    }
+
+    fn layout_tree_in_context(&mut self) -> Option<&LayoutTree> {
         if self.layout_tree.is_none() {
             let root = self.composition.root()?;
             let mut applier = self.composition.applier_mut();
@@ -51,6 +68,11 @@ where
 
     /// Get the current semantics tree (for robot/testing)
     pub fn semantics_tree(&mut self) -> Option<&SemanticsTree> {
+        let app_context = std::rc::Rc::clone(&self.app_context);
+        app_context.enter(|| self.semantics_tree_in_context())
+    }
+
+    fn semantics_tree_in_context(&mut self) -> Option<&SemanticsTree> {
         if !self.semantics_enabled {
             return None;
         }

@@ -1,6 +1,7 @@
-extern void ios_main(void);
+#error "Cranpose iOS backend is unavailable. Do not build this demo until a real UIKit/CAMetalLayer backend exists."
 
 int main(int argc, char * argv[]) {
-    ios_main();
+    (void)argc;
+    (void)argv;
     return 0;
 }

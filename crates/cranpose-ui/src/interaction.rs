@@ -11,7 +11,6 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone)]
 pub struct MutableInteractionSource {
@@ -19,7 +18,7 @@ pub struct MutableInteractionSource {
 }
 
 struct MutableInteractionSourceInner {
-    id: u64,
+    next_press_id: RefCell<u64>,
     active_presses: RefCell<HashSet<u64>>,
     pressed: OwnedMutableState<bool>,
     last_interaction: OwnedMutableState<Option<Interaction>>,
@@ -60,10 +59,9 @@ impl MutableInteractionSource {
     }
 
     pub fn with_runtime(runtime: RuntimeHandle) -> Self {
-        static NEXT_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
         Self {
             inner: Rc::new(MutableInteractionSourceInner {
-                id: NEXT_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
+                next_press_id: RefCell::new(1),
                 active_presses: RefCell::new(HashSet::new()),
                 pressed: OwnedMutableState::with_runtime(false, runtime.clone()),
                 last_interaction: OwnedMutableState::with_runtime(None, runtime),
@@ -72,15 +70,17 @@ impl MutableInteractionSource {
     }
 
     pub fn id(&self) -> u64 {
-        self.inner.id
+        Rc::as_ptr(&self.inner) as usize as u64
     }
 
     pub fn press(&self, press_position: Point) -> PressInteractionPress {
-        static NEXT_PRESS_ID: AtomicU64 = AtomicU64::new(1);
-        let press = PressInteractionPress {
-            id: NEXT_PRESS_ID.fetch_add(1, Ordering::Relaxed),
-            press_position,
+        let id = {
+            let mut next_press_id = self.inner.next_press_id.borrow_mut();
+            let id = *next_press_id;
+            *next_press_id = next_press_id.saturating_add(1);
+            id
         };
+        let press = PressInteractionPress { id, press_position };
         self.emit(Interaction::Press(PressInteraction::Press(press)));
         press
     }
@@ -340,6 +340,18 @@ mod tests {
     use cranpose_core::{Composition, MemoryApplier};
 
     #[test]
+    fn interaction_ids_do_not_use_process_global_counters() {
+        let source = include_str!("interaction.rs");
+        let source_counter = ["static ", "NEXT_SOURCE_ID"].concat();
+        let press_counter = ["static ", "NEXT_PRESS_ID"].concat();
+
+        assert!(
+            !source.contains(&source_counter) && !source.contains(&press_counter),
+            "interaction source and press ids must be owned by the interaction source instance"
+        );
+    }
+
+    #[test]
     fn interaction_source_tracks_active_press_state() {
         let composition = Composition::new(MemoryApplier::new());
         let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
@@ -357,6 +369,20 @@ mod tests {
 
         source.cancel(second);
         assert!(!pressed.get());
+    }
+
+    #[test]
+    fn interaction_source_ids_are_instance_owned() {
+        let composition = Composition::new(MemoryApplier::new());
+        let first = MutableInteractionSource::with_runtime(composition.runtime_handle());
+        let first_clone = first.clone();
+        let second = MutableInteractionSource::with_runtime(composition.runtime_handle());
+
+        assert_eq!(first.id(), first_clone.id());
+        assert_ne!(first.id(), second.id());
+        assert_eq!(first.press(Point { x: 0.0, y: 0.0 }).id(), 1);
+        assert_eq!(first.press(Point { x: 1.0, y: 1.0 }).id(), 2);
+        assert_eq!(second.press(Point { x: 0.0, y: 0.0 }).id(), 1);
     }
 
     #[test]

@@ -14,7 +14,6 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
@@ -52,8 +51,35 @@ where
 type PointerInputFuture = Pin<Box<dyn Future<Output = ()>>>;
 type PointerInputHandler = Rc<dyn Fn(PointerInputScope) -> PointerInputFuture>;
 
-thread_local! {
-    static POINTER_INPUT_TASKS: RefCell<HashMap<u64, Rc<PointerInputTaskInner>>> = RefCell::new(HashMap::new());
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PointerInputTaskOwner {
+    App(crate::render_state::AppContextId),
+}
+
+pub(crate) struct PointerInputTaskRegistry {
+    tasks: RefCell<HashMap<u64, Rc<PointerInputTaskInner>>>,
+}
+
+impl PointerInputTaskRegistry {
+    pub(crate) fn new() -> Self {
+        Self {
+            tasks: RefCell::new(HashMap::new()),
+        }
+    }
+
+    pub(crate) fn insert(&self, task_id: u64, task: Rc<PointerInputTaskInner>) {
+        self.tasks.borrow_mut().insert(task_id, task);
+    }
+
+    pub(crate) fn remove(&self, task_id: u64) {
+        self.tasks.borrow_mut().remove(&task_id);
+    }
+
+    pub(crate) fn request_poll(&self, task_id: u64, owner: PointerInputTaskOwner) {
+        if let Some(task) = self.tasks.borrow().get(&task_id).cloned() {
+            task.request_poll(owner, task_id);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -65,8 +91,7 @@ struct PointerInputElement {
 
 impl PointerInputElement {
     fn new(keys: Vec<KeyToken>, handler: PointerInputHandler) -> Self {
-        static NEXT_HANDLER_ID: AtomicU64 = AtomicU64::new(1);
-        let handler_id = NEXT_HANDLER_ID.fetch_add(1, Ordering::Relaxed);
+        let handler_id = pointer_handler_identity(&handler);
         Self {
             keys,
             handler,
@@ -81,6 +106,10 @@ impl PointerInputElement {
     fn handler_id(&self) -> u64 {
         self.handler_id
     }
+}
+
+fn pointer_handler_identity(handler: &PointerInputHandler) -> u64 {
+    Rc::as_ptr(handler) as *const () as usize as u64
 }
 
 impl fmt::Debug for PointerInputElement {
@@ -267,42 +296,36 @@ impl PointerEventDispatcher {
 
 struct PointerInputTask {
     id: u64,
+    owner: PointerInputTaskOwner,
     inner: Rc<PointerInputTaskInner>,
 }
 
 impl PointerInputTask {
     fn new(future: PointerInputFuture) -> Self {
-        static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
-        let id = NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed);
         let inner = Rc::new(PointerInputTaskInner::new(future));
-        POINTER_INPUT_TASKS.with(|registry| {
-            registry.borrow_mut().insert(id, inner.clone());
-        });
-        Self { id, inner }
+        let id = Rc::as_ptr(&inner) as usize as u64;
+        let owner = crate::render_state::register_pointer_input_task(id, inner.clone());
+        Self { id, owner, inner }
     }
 
     fn poll(&self) {
-        self.inner.poll(self.id);
+        self.inner.poll(self.owner, self.id);
     }
 
     fn cancel(self) {
         self.inner.cancel();
-        POINTER_INPUT_TASKS.with(|registry| {
-            registry.borrow_mut().remove(&self.id);
-        });
+        crate::render_state::remove_pointer_input_task(self.owner, self.id);
     }
 }
 
 impl Drop for PointerInputTask {
     fn drop(&mut self) {
         self.inner.cancel();
-        POINTER_INPUT_TASKS.with(|registry| {
-            registry.borrow_mut().remove(&self.id);
-        });
+        crate::render_state::remove_pointer_input_task(self.owner, self.id);
     }
 }
 
-struct PointerInputTaskInner {
+pub(crate) struct PointerInputTaskInner {
     future: RefCell<Option<PointerInputFuture>>,
     is_polling: Cell<bool>,
     needs_poll: Cell<bool>,
@@ -321,22 +344,22 @@ impl PointerInputTaskInner {
         self.future.borrow_mut().take();
     }
 
-    fn request_poll(&self, task_id: u64) {
+    fn request_poll(&self, owner: PointerInputTaskOwner, task_id: u64) {
         if self.is_polling.get() {
             self.needs_poll.set(true);
         } else {
-            self.poll(task_id);
+            self.poll(owner, task_id);
         }
     }
 
-    fn poll(&self, task_id: u64) {
+    fn poll(&self, owner: PointerInputTaskOwner, task_id: u64) {
         if self.is_polling.replace(true) {
             self.needs_poll.set(true);
             return;
         }
         loop {
             self.needs_poll.set(false);
-            let waker = waker(Arc::new(PointerInputTaskWaker { task_id }));
+            let waker = waker(Arc::new(PointerInputTaskWaker { task_id, owner }));
             let mut cx = Context::from_waker(&waker);
             let mut future_slot = self.future.borrow_mut();
             if let Some(future) = future_slot.as_mut() {
@@ -355,15 +378,12 @@ impl PointerInputTaskInner {
 
 struct PointerInputTaskWaker {
     task_id: u64,
+    owner: PointerInputTaskOwner,
 }
 
 impl ArcWake for PointerInputTaskWaker {
     fn wake_by_ref(arc_self: &Arc<Self>) {
-        POINTER_INPUT_TASKS.with(|registry| {
-            if let Some(task) = registry.borrow().get(&arc_self.task_id).cloned() {
-                task.request_poll(arc_self.task_id);
-            }
-        });
+        crate::render_state::request_pointer_input_task_poll(arc_self.owner, arc_self.task_id);
     }
 }
 

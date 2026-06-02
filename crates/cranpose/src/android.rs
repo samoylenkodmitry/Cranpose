@@ -7,17 +7,18 @@ use crate::{
     android_host_window,
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
     android_overlay_window,
+    android_surface::{create_android_wgpu_surface, AndroidSurfaceError},
     launcher::{AndroidOverlayWindowOptions, AppSettings},
     wgpu_surface::{current_surface_texture, SurfaceFrame},
 };
-use cranpose_app_shell::{default_root_key, AppShell};
+use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver};
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::{Point, Size};
 use ndk::native_window::NativeWindow;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     ffi::c_void,
     ptr::NonNull,
     rc::Rc,
@@ -48,11 +49,134 @@ enum PendingInput {
     PointerMove(f32, f32),
 }
 
+fn pending_input_from_android_event(
+    event: &android_activity::input::InputEvent<'_>,
+    android_platform: &AndroidPlatform,
+) -> Option<PendingInput> {
+    let android_activity::input::InputEvent::MotionEvent(motion_event) = event else {
+        return None;
+    };
+
+    let pointer = motion_event.pointer_at_index(0);
+    let logical = android_platform.pointer_position(pointer.x() as f64, pointer.y() as f64);
+    match motion_event.action() {
+        android_activity::input::MotionAction::Down
+        | android_activity::input::MotionAction::PointerDown => Some(PendingInput::PointerDown(
+            logical.x as f32,
+            logical.y as f32,
+        )),
+        android_activity::input::MotionAction::Up
+        | android_activity::input::MotionAction::PointerUp => {
+            Some(PendingInput::PointerUp(logical.x as f32, logical.y as f32))
+        }
+        android_activity::input::MotionAction::Move => Some(PendingInput::PointerMove(
+            logical.x as f32,
+            logical.y as f32,
+        )),
+        _ => None,
+    }
+}
+
+fn drain_android_input_events(
+    app: &android_activity::AndroidApp,
+    android_platform: &AndroidPlatform,
+    pending_inputs: &mut Vec<PendingInput>,
+) {
+    let Ok(mut iter) = app.input_events_iter() else {
+        return;
+    };
+
+    for _ in 0..MAX_ANDROID_INPUT_EVENTS_PER_POLL {
+        let event_available = iter.next(|event| {
+            if let Some(input) = pending_input_from_android_event(event, android_platform) {
+                pending_inputs.push(input);
+                android_activity::InputStatus::Handled
+            } else {
+                android_activity::InputStatus::Unhandled
+            }
+        });
+        if !event_available {
+            break;
+        }
+    }
+}
+
+const MAX_ANDROID_INPUT_EVENTS_PER_POLL: usize = 10;
+
 #[derive(Clone, Copy)]
 struct PendingHostWindowSizeRequest {
     state: Option<android_host_window::AndroidHostWindowState>,
     requested: Size,
     requested_at: Instant,
+}
+
+struct AndroidFrameDriver {
+    need_frame: Arc<AtomicBool>,
+    app_waker: android_activity::AndroidAppWaker,
+    next_deadline: Cell<Option<web_time::Instant>>,
+}
+
+impl AndroidFrameDriver {
+    fn new(app_waker: android_activity::AndroidAppWaker) -> Self {
+        Self {
+            need_frame: Arc::new(AtomicBool::new(false)),
+            app_waker,
+            next_deadline: Cell::new(None),
+        }
+    }
+
+    fn frame_waker(&self) -> impl Fn() + Send + Sync + 'static {
+        let need_frame = self.need_frame.clone();
+        let app_waker = self.app_waker.clone();
+        move || {
+            need_frame.store(true, Ordering::Relaxed);
+            app_waker.wake();
+        }
+    }
+
+    fn frame_requested(&self) -> bool {
+        self.need_frame.load(Ordering::Relaxed)
+    }
+
+    fn take_frame_request(&self) -> bool {
+        self.need_frame.swap(false, Ordering::Relaxed)
+    }
+
+    fn deadline_timeout(&self) -> Option<Duration> {
+        self.next_deadline.get().map(duration_until_frame_deadline)
+    }
+}
+
+impl PlatformFrameDriver for AndroidFrameDriver {
+    fn request_frame(&self) {
+        self.need_frame.store(true, Ordering::Relaxed);
+        self.app_waker.wake();
+    }
+
+    fn request_wake_at(&self, deadline: web_time::Instant) {
+        self.next_deadline.set(Some(deadline));
+    }
+
+    fn clear_wake(&self) {
+        self.next_deadline.set(None);
+    }
+}
+
+fn duration_until_frame_deadline(deadline: web_time::Instant) -> Duration {
+    deadline
+        .checked_duration_since(web_time::Instant::now())
+        .unwrap_or(Duration::ZERO)
+}
+
+fn earliest_android_poll_timeout(
+    first: Option<Duration>,
+    second: Option<Duration>,
+) -> Option<Duration> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(first.min(second)),
+        (Some(duration), None) | (None, Some(duration)) => Some(duration),
+        (None, None) => None,
+    }
 }
 
 /// Get display density from Android NDK Configuration.
@@ -90,12 +214,16 @@ fn update_android_platform_geometry(
         android_platform.set_input_surface_offset_px(0.0, 0.0);
     }
 
-    cranpose_ui::set_density(density);
     density
 }
 
-fn update_android_shell_geometry(shell: &mut AppShell<WgpuRenderer>, density: f32) -> Option<Size> {
+fn update_android_shell_geometry(
+    shell: &mut AppShell<WgpuRenderer>,
+    density: f32,
+    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
+) -> Option<Size> {
     shell.renderer().set_root_scale(density);
+    shell.set_density(density);
 
     let (width, height) = shell.buffer_size();
     if width > 0 && height > 0 {
@@ -103,7 +231,7 @@ fn update_android_shell_geometry(shell: &mut AppShell<WgpuRenderer>, density: f3
         let height_dp = height as f32 / density;
         shell.set_viewport(width_dp, height_dp);
         let actual = Size::new(width_dp, height_dp);
-        android_host_window::sync_android_host_window_actual_size(actual);
+        android_host_window::sync_android_host_window_actual_size(host_window_registry, actual);
         Some(actual)
     } else {
         None
@@ -150,13 +278,14 @@ fn initialize_android_rendering<F>(
     app_shell: &mut Option<AppShell<WgpuRenderer>>,
     content: &Rc<RefCell<F>>,
     settings: &AppSettings,
-    need_frame: &Arc<AtomicBool>,
+    frame_driver: &AndroidFrameDriver,
+    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
     native_window_ptr: NonNull<c_void>,
     native_window_owner: Option<NativeWindow>,
     width: u32,
     height: u32,
     density: f32,
-) -> (GpuResources, Option<Size>)
+) -> Result<(GpuResources, Option<Size>), AndroidSurfaceError>
 where
     F: FnMut() + 'static,
 {
@@ -167,7 +296,7 @@ where
         native_window_owner,
         width,
         height,
-    );
+    )?;
 
     if app_shell.is_none() {
         let fonts: &[&[u8]] = settings.fonts.unwrap_or(&[]);
@@ -180,17 +309,20 @@ where
         );
 
         let content_clone = content.clone();
-        let shell = AppShell::new(renderer, default_root_key(), move || {
-            content_clone.borrow_mut()()
-        });
+        let density = density.max(f32::EPSILON);
+        let shell = AppShell::new_with_size_and_density(
+            renderer,
+            default_root_key(),
+            move || content_clone.borrow_mut()(),
+            (width, height),
+            (width as f32 / density, height as f32 / density),
+            density,
+        );
 
         *app_shell = Some(shell);
 
         if let Some(shell) = app_shell {
-            let need_frame = need_frame.clone();
-            shell.set_frame_waker(move || {
-                need_frame.store(true, Ordering::Relaxed);
-            });
+            shell.set_frame_waker(frame_driver.frame_waker());
         }
 
         log::info!("App shell created");
@@ -210,15 +342,15 @@ where
 
     if let Some(shell) = app_shell {
         shell.renderer().set_root_scale(density);
+        shell.set_density(density);
     }
-    cranpose_ui::set_density(density);
 
     let actual_size = app_shell.as_mut().and_then(|shell| {
         shell.set_buffer_size(width, height);
-        update_android_shell_geometry(shell, density)
+        update_android_shell_geometry(shell, density, host_window_registry)
     });
 
-    (setup.resources, actual_size)
+    Ok((setup.resources, actual_size))
 }
 
 fn create_android_gpu_resources(
@@ -228,7 +360,7 @@ fn create_android_gpu_resources(
     native_window_owner: Option<NativeWindow>,
     width: u32,
     height: u32,
-) -> AndroidGpuSetup {
+) -> Result<AndroidGpuSetup, AndroidSurfaceError> {
     if let Some(mut resources) = existing_resources {
         if resources.native_window_ptr == native_window_ptr {
             resources.config.width = width;
@@ -239,10 +371,10 @@ fn create_android_gpu_resources(
             if let Some(native_window_owner) = native_window_owner {
                 resources._native_window = Some(native_window_owner);
             }
-            return AndroidGpuSetup {
+            return Ok(AndroidGpuSetup {
                 resources,
                 renderer_needs_init: false,
-            };
+            });
         }
 
         return create_android_gpu_resources_for_existing_device(
@@ -255,14 +387,13 @@ fn create_android_gpu_resources(
         );
     }
 
-    let surface = create_android_wgpu_surface(instance, native_window_ptr);
+    let surface = create_android_wgpu_surface(instance, native_window_ptr)?;
 
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: Some(&surface),
         force_fallback_adapter: false,
-    }))
-    .expect("Failed to find suitable adapter");
+    }))?;
 
     let adapter_info = adapter.get_info();
     log::info!("Found adapter: {:?}", adapter_info.backend);
@@ -275,15 +406,14 @@ fn create_android_gpu_resources(
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::default(),
         trace: wgpu::Trace::Off,
-    }))
-    .expect("Failed to create device");
+    }))?;
 
     let device = Arc::new(device);
     let queue = Arc::new(queue);
-    let config = create_android_surface_config(&surface, &adapter, width, height);
+    let config = create_android_surface_config(&surface, &adapter, width, height)?;
     surface.configure(&device, &config);
 
-    AndroidGpuSetup {
+    Ok(AndroidGpuSetup {
         resources: GpuResources {
             surface,
             native_window_ptr,
@@ -296,7 +426,7 @@ fn create_android_gpu_resources(
             _native_window: native_window_owner,
         },
         renderer_needs_init: true,
-    }
+    })
 }
 
 fn create_android_gpu_resources_for_existing_device(
@@ -306,13 +436,13 @@ fn create_android_gpu_resources_for_existing_device(
     native_window_owner: Option<NativeWindow>,
     width: u32,
     height: u32,
-) -> AndroidGpuSetup {
-    let surface = create_android_wgpu_surface(instance, native_window_ptr);
-    let config = create_android_surface_config(&surface, &existing.adapter, width, height);
+) -> Result<AndroidGpuSetup, AndroidSurfaceError> {
+    let surface = create_android_wgpu_surface(instance, native_window_ptr)?;
+    let config = create_android_surface_config(&surface, &existing.adapter, width, height)?;
     surface.configure(&existing.device, &config);
     let renderer_needs_init = config.format != existing.surface_format;
 
-    AndroidGpuSetup {
+    Ok(AndroidGpuSetup {
         resources: GpuResources {
             surface,
             native_window_ptr,
@@ -325,7 +455,7 @@ fn create_android_gpu_resources_for_existing_device(
             _native_window: native_window_owner,
         },
         renderer_needs_init,
-    }
+    })
 }
 
 fn create_android_surface_config(
@@ -333,50 +463,31 @@ fn create_android_surface_config(
     adapter: &wgpu::Adapter,
     width: u32,
     height: u32,
-) -> wgpu::SurfaceConfiguration {
+) -> Result<wgpu::SurfaceConfiguration, AndroidSurfaceError> {
     let surface_caps = surface.get_capabilities(&adapter);
     let surface_format = surface_caps
         .formats
         .iter()
         .copied()
         .find(|f| f.is_srgb())
-        .unwrap_or(surface_caps.formats[0]);
+        .or_else(|| surface_caps.formats.first().copied())
+        .ok_or(AndroidSurfaceError::NoSurfaceFormat)?;
+    let alpha_mode = surface_caps
+        .alpha_modes
+        .first()
+        .copied()
+        .ok_or(AndroidSurfaceError::NoAlphaMode)?;
     let present_mode = crate::present_mode::select_present_mode(&surface_caps);
-    wgpu::SurfaceConfiguration {
+    Ok(wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
         width,
         height,
         present_mode,
-        alpha_mode: surface_caps.alpha_modes[0],
+        alpha_mode,
         view_formats: vec![],
         desired_maximum_frame_latency: 2,
-    }
-}
-
-fn create_android_wgpu_surface(
-    instance: &wgpu::Instance,
-    native_window_ptr: NonNull<c_void>,
-) -> wgpu::Surface<'static> {
-    unsafe {
-        use raw_window_handle::{
-            AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
-        };
-
-        let window_handle = AndroidNdkWindowHandle::new(native_window_ptr);
-        let raw_window_handle = RawWindowHandle::AndroidNdk(window_handle);
-        let display_handle = AndroidDisplayHandle::new();
-        let raw_display_handle = RawDisplayHandle::Android(display_handle);
-
-        let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-            raw_display_handle: Some(raw_display_handle),
-            raw_window_handle,
-        };
-
-        instance
-            .create_surface_unsafe(target)
-            .expect("Failed to create WGPU surface")
-    }
+    })
 }
 
 fn dispatch_android_surface_size_request(
@@ -401,12 +512,15 @@ fn dispatch_android_surface_size_request(
 
 fn dispatch_registered_android_surface_size_request(
     app: &android_activity::AndroidApp,
+    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
     density: f32,
     overlay_options: Option<AndroidOverlayWindowOptions>,
     last_dispatched: &mut Option<(android_host_window::AndroidHostWindowState, u64, u64)>,
     pending_confirmation: &mut Option<PendingHostWindowSizeRequest>,
 ) {
-    let Some(request) = android_host_window::latest_android_host_window_request() else {
+    let Some(request) =
+        android_host_window::latest_android_host_window_request(host_window_registry)
+    else {
         return;
     };
     let dispatch_key = (
@@ -508,29 +622,30 @@ fn set_android_window_layout_px(
     use jni::{jni_sig, jni_str, objects::JValue};
 
     with_android_activity_env(app, |env, activity| {
-        let window = env
-            .call_method(
-                &activity,
-                jni_str!("getWindow"),
-                jni_sig!("()Landroid/view/Window;"),
-                &[],
+        let class = android_overlay_window::find_android_overlay_class(env, &activity)?;
+        let result = env
+            .call_static_method(
+                class,
+                jni_str!("setActivityWindowLayout"),
+                jni_sig!("(Landroid/app/Activity;II)I"),
+                &[
+                    JValue::Object(&activity),
+                    JValue::Int(width_px),
+                    JValue::Int(height_px),
+                ],
             )
-            .and_then(|value| value.l())
+            .and_then(|value| value.i())
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
-                format!("failed to access Android Activity window: {error}")
+                format!("failed to request Android window layout: {error}")
             })?;
-        env.call_method(
-            &window,
-            jni_str!("setLayout"),
-            jni_sig!("(II)V"),
-            &[JValue::Int(width_px), JValue::Int(height_px)],
-        )
-        .map_err(|error| {
-            clear_pending_android_jni_exception(env);
-            format!("failed to request Android window layout: {error}")
-        })?;
-        Ok(())
+
+        match result {
+            0 => Ok(()),
+            code => Err(format!(
+                "Android window layout request failed with code {code}"
+            )),
+        }
     })
 }
 
@@ -545,7 +660,7 @@ pub fn run(
     settings: AppSettings,
     content: impl FnMut() + 'static,
 ) {
-    use android_activity::{input::MotionAction, InputStatus, MainEvent, PollEvent};
+    use android_activity::{MainEvent, PollEvent};
 
     // Install panic hook for better crash logging in Logcat
     std::panic::set_hook(Box::new(|panic_info| {
@@ -590,8 +705,9 @@ pub fn run(
 
     log::info!("Starting Compose Android Application");
 
-    // Frame wake flag for event-driven rendering
-    let need_frame = Arc::new(AtomicBool::new(false));
+    let android_frame_driver = AndroidFrameDriver::new(app.create_waker());
+    let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
+    let overlay_event_queue = Arc::new(android_overlay_window::AndroidOverlayEventQueue::default());
 
     // Exit flag for Destroy event (can't break from inside poll_events closure)
     let should_exit = Arc::new(AtomicBool::new(false));
@@ -630,22 +746,27 @@ pub fn run(
 
     // Main event loop
     loop {
-        // Dynamic poll duration:
-        // - ZERO when dirty, animating, OR pending inputs (immediate processing)
-        // - Short timeout (16ms ~= 60fps) otherwise to ensure responsive input handling
-        //   (Never use None/infinite wait as it can cause ANR if events arrive between checks)
-        let poll_duration = if !pending_inputs.is_empty() {
-            Some(std::time::Duration::ZERO) // Process pending inputs immediately
-        } else if gpu_resources.is_none() {
-            Some(std::time::Duration::from_millis(100)) // No window, poll occasionally
-        } else if let Some(shell) = &app_shell {
-            if shell.needs_redraw() {
-                Some(std::time::Duration::ZERO) // Dirty or animating, tight loop
-            } else {
-                Some(std::time::Duration::from_millis(16)) // Idle, poll at ~60fps for responsive input
-            }
+        let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
+            android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT
+                .checked_sub(pending.requested_at.elapsed())
+                .unwrap_or(Duration::ZERO)
+        });
+
+        if let Some(shell) = app_shell.as_ref() {
+            shell.schedule_platform_frame(&android_frame_driver);
         } else {
-            Some(std::time::Duration::from_millis(100))
+            android_frame_driver.clear_wake();
+        }
+        let frame_deadline_timeout = android_frame_driver.deadline_timeout();
+        let idle_timeout =
+            earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout);
+
+        let poll_duration = if !pending_inputs.is_empty() {
+            Some(Duration::ZERO)
+        } else if android_frame_driver.frame_requested() {
+            Some(Duration::ZERO)
+        } else {
+            idle_timeout
         };
 
         app.poll_events(poll_duration, |event| {
@@ -660,7 +781,10 @@ pub fn run(
                             android_platform.set_input_surface_offset_px(0.0, 0.0);
                             if !overlay_window_requested {
                                 match android_overlay_window::show_android_overlay_window(
-                                    &app, options, density,
+                                    &app,
+                                    options,
+                                    density,
+                                    &overlay_event_queue,
                                 ) {
                                     Ok(()) => {
                                         overlay_window_requested = true;
@@ -697,64 +821,71 @@ pub fn run(
                                     input_offset_y
                                 );
 
-                                let (resources, actual_size) = initialize_android_rendering(
+                                match initialize_android_rendering(
                                     &instance,
                                     gpu_resources.take(),
                                     &mut app_shell,
                                     &content,
                                     &settings,
-                                    &need_frame,
+                                    &android_frame_driver,
+                                    &host_window_registry,
                                     native_window.ptr().cast(),
                                     None,
                                     width,
                                     height,
                                     density,
-                                );
-                                if let Some(actual_size) = actual_size {
-                                    current_host_window_size = actual_size;
-                                }
-                                let width_dp = current_host_window_size.width;
-                                let height_dp = current_host_window_size.height;
-                                log::info!(
-                                    "Set viewport to {:.1}x{:.1} dp ({}x{} px at {:.2}x density)",
-                                    width_dp,
-                                    height_dp,
-                                    width,
-                                    height,
-                                    density
-                                );
+                                ) {
+                                    Ok((resources, actual_size)) => {
+                                        if let Some(actual_size) = actual_size {
+                                            current_host_window_size = actual_size;
+                                        }
+                                        let width_dp = current_host_window_size.width;
+                                        let height_dp = current_host_window_size.height;
+                                        log::info!(
+                                            "Set viewport to {:.1}x{:.1} dp ({}x{} px at {:.2}x density)",
+                                            width_dp,
+                                            height_dp,
+                                            width,
+                                            height,
+                                            density
+                                        );
 
-                                if let Some(requested) = initial_host_window_size.take() {
-                                    match dispatch_android_surface_size_request(
-                                        &app,
-                                        requested,
-                                        Point::ZERO,
-                                        density,
-                                        None,
-                                    ) {
-                                        Ok(()) => {
-                                            pending_host_window_confirmation =
-                                                Some(PendingHostWindowSizeRequest {
-                                                    state: None,
-                                                    requested,
-                                                    requested_at: Instant::now(),
-                                                });
-                                            log::info!(
-                                                "Requested initial Android host-window size {:.1}x{:.1} dp",
-                                                requested.width,
-                                                requested.height
-                                            );
+                                        if let Some(requested) = initial_host_window_size.take() {
+                                            match dispatch_android_surface_size_request(
+                                                &app,
+                                                requested,
+                                                Point::ZERO,
+                                                density,
+                                                None,
+                                            ) {
+                                                Ok(()) => {
+                                                    pending_host_window_confirmation =
+                                                        Some(PendingHostWindowSizeRequest {
+                                                            state: None,
+                                                            requested,
+                                                            requested_at: Instant::now(),
+                                                        });
+                                                    log::info!(
+                                                        "Requested initial Android host-window size {:.1}x{:.1} dp",
+                                                        requested.width,
+                                                        requested.height
+                                                    );
+                                                }
+                                                Err(error) => {
+                                                    log::warn!(
+                                                        "Initial Android host-window size request failed: {error}"
+                                                    );
+                                                }
+                                            }
                                         }
-                                        Err(error) => {
-                                            log::warn!(
-                                                "Initial Android host-window size request failed: {error}"
-                                            );
-                                        }
+
+                                        gpu_resources = Some(resources);
+                                        log::info!("Rendering initialized successfully");
+                                    }
+                                    Err(error) => {
+                                        log::error!("Android rendering initialization failed: {error}");
                                     }
                                 }
-
-                                gpu_resources = Some(resources);
-                                log::info!("Rendering initialized successfully");
                             }
                         }
                     }
@@ -797,7 +928,11 @@ pub fn run(
                                         shell.set_buffer_size(width, height);
 
                                         if let Some(actual_size) =
-                                            update_android_shell_geometry(shell, density)
+                                            update_android_shell_geometry(
+                                                shell,
+                                                density,
+                                                &host_window_registry,
+                                            )
                                         {
                                             current_host_window_size = actual_size;
                                         }
@@ -821,7 +956,8 @@ pub fn run(
                         );
 
                         if let Some(shell) = &mut app_shell {
-                            if let Some(actual_size) = update_android_shell_geometry(shell, density)
+                            if let Some(actual_size) =
+                                update_android_shell_geometry(shell, density, &host_window_registry)
                             {
                                 current_host_window_size = actual_size;
                             }
@@ -845,7 +981,7 @@ pub fn run(
                         log::info!("App stopped");
                     }
                     MainEvent::SaveState { .. } => {
-                        log::info!("Save state requested (hook for future serialization)");
+                        log::info!("Save state requested");
                     }
                     MainEvent::Destroy => {
                         log::info!("App destroy requested, will exit after this event");
@@ -854,88 +990,25 @@ pub fn run(
                         }
                         should_exit.store(true, Ordering::Relaxed);
                     }
+                    MainEvent::InputAvailable => {
+                        drain_android_input_events(
+                            &app,
+                            &android_platform,
+                            &mut pending_inputs,
+                        );
+                    }
                     _ => {}
                 },
-                // Handle input events to prevent ANR
                 _ => {
-                    if let Ok(mut iter) = app.input_events_iter() {
-                        // Limit how many events we process per poll to prevent blocking
-                        // Android ANR timeout is 5 seconds, so we need to return quickly
-                        let mut events_processed = 0;
-                        const MAX_EVENTS_PER_POLL: usize = 10;
-
-                        loop {
-                            if !iter.next(|event| {
-                                let handled = match event {
-                                    android_activity::input::InputEvent::MotionEvent(
-                                        motion_event,
-                                    ) => {
-                                        // Get pointer position in physical pixels and convert to logical dp
-                                        let pointer = motion_event.pointer_at_index(0);
-                                        let x_px = pointer.x() as f64;
-                                        let y_px = pointer.y() as f64;
-                                        let logical = android_platform.pointer_position(x_px, y_px);
-
-                                        match motion_event.action() {
-                                            MotionAction::Down | MotionAction::PointerDown => {
-                                                println!(
-                                                    "[TOUCH] Down at ({:.1}, {:.1})",
-                                                    logical.x, logical.y
-                                                );
-                                                pending_inputs.push(PendingInput::PointerDown(
-                                                    logical.x as f32,
-                                                    logical.y as f32,
-                                                ));
-                                            }
-                                            MotionAction::Up | MotionAction::PointerUp => {
-                                                println!(
-                                                    "[TOUCH] Up at ({:.1}, {:.1})",
-                                                    logical.x, logical.y
-                                                );
-                                                pending_inputs.push(PendingInput::PointerUp(
-                                                    logical.x as f32,
-                                                    logical.y as f32,
-                                                ));
-                                            }
-                                            MotionAction::Move => {
-                                                println!(
-                                                    "[TOUCH] Move at ({:.1}, {:.1})",
-                                                    logical.x, logical.y
-                                                );
-                                                pending_inputs.push(PendingInput::PointerMove(
-                                                    logical.x as f32,
-                                                    logical.y as f32,
-                                                ));
-                                            }
-                                            _ => {}
-                                        }
-                                        true
-                                    }
-                                    _ => false,
-                                };
-
-                                if handled {
-                                    InputStatus::Handled
-                                } else {
-                                    InputStatus::Unhandled
-                                }
-                            }) {
-                                break;
-                            }
-
-                            events_processed += 1;
-                            if events_processed >= MAX_EVENTS_PER_POLL {
-                                // Processed enough events, return to main loop
-                                // Remaining events will be processed in next poll
-                                break;
-                            }
-                        }
-                    }
+                    // Non-main poll events do not own Android NativeActivity
+                    // input. Native input is delivered as MainEvent::InputAvailable.
                 }
             }
         });
 
-        for event in android_overlay_window::drain_android_overlay_window_events() {
+        for event in
+            android_overlay_window::drain_android_overlay_window_events(&overlay_event_queue)
+        {
             match event {
                 android_overlay_window::AndroidOverlayWindowEvent::CreateFailed(message) => {
                     log::warn!("Android overlay surface failed: {message}");
@@ -947,23 +1020,32 @@ pub fn run(
                         if width > 0 && height > 0 {
                             let density =
                                 update_android_platform_geometry(&app, &mut android_platform);
-                            let (resources, actual_size) = initialize_android_rendering(
+                            match initialize_android_rendering(
                                 &instance,
                                 gpu_resources.take(),
                                 &mut app_shell,
                                 &content,
                                 &settings,
-                                &need_frame,
+                                &android_frame_driver,
+                                &host_window_registry,
                                 native_window.ptr().cast(),
                                 None,
                                 width,
                                 height,
                                 density,
-                            );
-                            if let Some(actual_size) = actual_size {
-                                current_host_window_size = actual_size;
+                            ) {
+                                Ok((resources, actual_size)) => {
+                                    if let Some(actual_size) = actual_size {
+                                        current_host_window_size = actual_size;
+                                    }
+                                    gpu_resources = Some(resources);
+                                }
+                                Err(error) => {
+                                    log::error!(
+                                        "Android activity surface fallback initialization failed: {error}"
+                                    );
+                                }
                             }
-                            gpu_resources = Some(resources);
                         }
                     }
                 }
@@ -976,32 +1058,43 @@ pub fn run(
                         let density = get_display_density(&app);
                         android_platform.set_scale_factor(density as f64);
                         android_platform.set_input_surface_offset_px(0.0, 0.0);
-                        cranpose_ui::set_density(density);
+                        if let Some(shell) = app_shell.as_mut() {
+                            shell.set_density(density);
+                        }
 
                         let native_window_ptr = native_window.ptr().cast();
-                        let (resources, actual_size) = initialize_android_rendering(
+                        match initialize_android_rendering(
                             &instance,
                             gpu_resources.take(),
                             &mut app_shell,
                             &content,
                             &settings,
-                            &need_frame,
+                            &android_frame_driver,
+                            &host_window_registry,
                             native_window_ptr,
                             Some(native_window),
                             width,
                             height,
                             density,
-                        );
-                        if let Some(actual_size) = actual_size {
-                            current_host_window_size = actual_size;
+                        ) {
+                            Ok((resources, actual_size)) => {
+                                if let Some(actual_size) = actual_size {
+                                    current_host_window_size = actual_size;
+                                }
+                                gpu_resources = Some(resources);
+                                log::info!(
+                                    "Android overlay surface ready at {}x{} px ({:.2}x density)",
+                                    width,
+                                    height,
+                                    density
+                                );
+                            }
+                            Err(error) => {
+                                log::error!(
+                                    "Android overlay surface initialization failed: {error}"
+                                );
+                            }
                         }
-                        gpu_resources = Some(resources);
-                        log::info!(
-                            "Android overlay surface ready at {}x{} px ({:.2}x density)",
-                            width,
-                            height,
-                            density
-                        );
                     }
                 }
                 android_overlay_window::AndroidOverlayWindowEvent::SurfaceDestroyed => {
@@ -1056,7 +1149,7 @@ pub fn run(
         }
 
         // Check if app side requested a frame (animations, state changes)
-        if need_frame.swap(false, Ordering::Relaxed) {
+        if android_frame_driver.take_frame_request() {
             if let Some(shell) = &mut app_shell {
                 shell.mark_dirty();
             }
@@ -1076,9 +1169,15 @@ pub fn run(
         // Render outside event callback if needed
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
             if shell.needs_redraw() {
-                shell.update();
+                android_host_window::with_android_host_window_registry(
+                    &host_window_registry,
+                    || {
+                        shell.update();
+                    },
+                );
                 dispatch_registered_android_surface_size_request(
                     &app,
+                    &host_window_registry,
                     android_platform.scale_factor(),
                     overlay_window_options,
                     &mut last_dispatched_host_window_request,

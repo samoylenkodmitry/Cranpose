@@ -25,7 +25,6 @@ renderer-pixels = ["cranpose/renderer-pixels"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
 desktop = ["cranpose/desktop"]
 android = ["cranpose/android"]
-ios = ["cranpose/ios"]
 web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-logger"]
 logging = ["dep:env_logger"]
 

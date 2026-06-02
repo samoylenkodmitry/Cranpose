@@ -64,10 +64,7 @@ pub(crate) fn with_runtime<T>(f: impl FnOnce(&mut SnapshotRuntime) -> T) -> T {
     let _scope = RuntimeLockGuard::enter();
     SNAPSHOT_RUNTIME.with(|runtime_cell| {
         let mut runtime = runtime_cell.borrow_mut();
-        if runtime.is_none() {
-            *runtime = Some(SnapshotRuntime::new());
-        }
-        f(runtime.as_mut().expect("runtime initialized"))
+        f(runtime.get_or_insert_with(SnapshotRuntime::new))
     })
 }
 

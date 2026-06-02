@@ -13,18 +13,35 @@ fn failed_retention_restore_validation_keeps_subtree_available() {
         subtree.mark_nodes_active();
     }
 
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = retention.take(key);
-    }));
+    let restored = retention.take(key);
 
     assert!(
-        panic.is_err(),
-        "invalid retained node lifecycle must reject restore"
+        restored.is_none(),
+        "invalid retained node lifecycle must reject restore without panicking"
     );
     assert_eq!(
         retention.debug_stats().subtree_count,
         1,
         "failed restore validation must not remove retained state"
+    );
+}
+
+#[test]
+fn retention_validate_reports_empty_subtree_without_panicking() {
+    let (harness, detached, _) = detached_single_child_with_options(342, 343, None, false, false);
+    let key = RetainKey {
+        parent_scope: None,
+        key: detached.root_key(),
+    };
+    let mut retention = RetentionManager::default();
+    retention.insert(key, detached);
+    for subtree in retention.subtrees_mut() {
+        subtree.groups.clear();
+    }
+
+    assert_eq!(
+        retention.validate(&harness.table),
+        Err(SlotInvariantError::DetachedSubtreeEmpty)
     );
 }
 
@@ -501,12 +518,11 @@ fn retention_insert_rejects_duplicate_key_without_replacing_existing_subtree() {
     let mut retention = RetentionManager::default();
     retention.insert(retain_key, first_detached);
 
-    let duplicate_insert = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        retention.insert(retain_key, duplicate_detached);
-    }));
-    assert!(
-        duplicate_insert.is_err(),
-        "retention must reject duplicate retained keys instead of dropping the existing subtree",
+    let rejected = retention.insert(retain_key, duplicate_detached);
+    assert_eq!(
+        rejected.len(),
+        1,
+        "retention must return duplicate retained subtrees for caller-owned disposal",
     );
     assert_eq!(retention.debug_stats().subtree_count, 1);
     assert_eq!(retention.validate(&harness.table), Ok(()));
@@ -518,7 +534,6 @@ fn retention_insert_rejects_duplicate_key_without_replacing_existing_subtree() {
 }
 
 #[test]
-#[should_panic(expected = "retention insert: detached subtree root key mismatch")]
 fn retention_insert_rejects_root_key_mismatch() {
     const PARENT_KEY: Key = 370;
     const CHILD_KEY: Key = 371;
@@ -530,7 +545,10 @@ fn retention_insert_rejects_root_key_mismatch() {
     };
 
     let mut retention = RetentionManager::default();
-    retention.insert(retain_key, detached);
+    let rejected = retention.insert(retain_key, detached);
+
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(retention.debug_stats().subtree_count, 0);
 }
 
 #[test]
@@ -724,7 +742,6 @@ fn retention_validate_rejects_active_retained_node() {
 }
 
 #[test]
-#[should_panic(expected = "retention restore: detached subtree node lifecycle mismatch")]
 fn retention_take_rejects_active_retained_node_before_restore() {
     const PARENT_KEY: Key = 3780;
     const CHILD_KEY: Key = 3790;
@@ -745,11 +762,20 @@ fn retention_take_rejects_active_retained_node_before_restore() {
         .expect("retained subtree must exist")
         .mark_nodes_active();
 
-    let _ = retention.take(retain_key);
+    let restored = retention.take(retain_key);
+
+    assert!(
+        restored.is_none(),
+        "invalid retained node lifecycle must reject restore without panicking",
+    );
+    assert_eq!(
+        retention.debug_stats().subtree_count,
+        1,
+        "failed restore must leave the retained subtree available for disposal or later diagnostics",
+    );
 }
 
 #[test]
-#[should_panic(expected = "retention insert: detached subtree root parent must be detached")]
 fn retention_insert_rejects_retained_root_with_active_parent() {
     const PARENT_KEY: Key = 380;
     const CHILD_KEY: Key = 381;
@@ -763,7 +789,10 @@ fn retention_insert_rejects_retained_root_with_active_parent() {
     detached.groups[0].parent_anchor = parent_anchor;
 
     let mut retention = RetentionManager::default();
-    retention.insert(retain_key, detached);
+    let rejected = retention.insert(retain_key, detached);
+
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(retention.debug_stats().subtree_count, 0);
 }
 
 #[test]

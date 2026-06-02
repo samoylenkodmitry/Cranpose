@@ -1,5 +1,7 @@
 use super::*;
-use crate::modifier::{collect_slices_from_modifier, Modifier, PointerInputScope};
+use crate::modifier::{
+    collect_modifier_slices, collect_slices_from_modifier, Modifier, PointerInputScope,
+};
 use cranpose_foundation::{
     modifier_element, BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PointerButton,
     PointerButtons, PointerEvent, PointerEventKind,
@@ -8,6 +10,29 @@ use cranpose_ui_layout::Placeable;
 use std::cell::{Cell, RefCell};
 use std::future::pending;
 use std::rc::Rc;
+
+#[test]
+fn pointer_input_ids_do_not_use_process_global_counters() {
+    let source = include_str!("../modifier/pointer_input.rs");
+    let handler_counter = ["static ", "NEXT_HANDLER_ID"].concat();
+    let task_counter = ["static ", "NEXT_TASK_ID"].concat();
+
+    assert!(
+        !source.contains(&handler_counter) && !source.contains(&task_counter),
+        "pointer input handler/task ids must come from retained object identity, not process-global counters"
+    );
+}
+
+#[test]
+fn lazy_graphics_layer_scope_ids_do_not_use_process_global_counter() {
+    let source = include_str!("../modifier_nodes.rs");
+    let scope_counter = ["static ", "NEXT_LAZY_GRAPHICS_LAYER_SCOPE_ID"].concat();
+
+    assert!(
+        !source.contains(&scope_counter),
+        "lazy graphics-layer observer scope ids must be owned by the observer/node, not a process-global counter"
+    );
+}
 
 struct TestMeasurable {
     intrinsic_width: f32,
@@ -42,6 +67,7 @@ impl Measurable for TestMeasurable {
 
 #[test]
 fn padding_node_adds_space_to_content() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -73,6 +99,7 @@ fn padding_node_adds_space_to_content() {
 
 #[test]
 fn padding_node_clamps_to_constraints() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut context = BasicModifierNodeContext::new();
     let node = PaddingNode::new(EdgeInsets::uniform(12.0));
     let measurable = TestMeasurable {
@@ -94,6 +121,7 @@ fn padding_node_clamps_to_constraints() {
 
 #[test]
 fn padding_node_respects_intrinsics() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let padding = EdgeInsets::uniform(10.0);
     let node = PaddingNode::new(padding);
     let measurable = TestMeasurable {
@@ -112,6 +140,7 @@ fn padding_node_respects_intrinsics() {
 
 #[test]
 fn background_node_is_draw_only() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -126,6 +155,7 @@ fn background_node_is_draw_only() {
 
 #[test]
 fn corner_shape_node_is_draw_only() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -140,6 +170,7 @@ fn corner_shape_node_is_draw_only() {
 
 #[test]
 fn modifier_chain_reuses_padding_nodes() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -175,6 +206,7 @@ fn modifier_chain_reuses_padding_nodes() {
 
 #[test]
 fn size_node_enforces_dimensions() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -200,6 +232,7 @@ fn size_node_enforces_dimensions() {
 
 #[test]
 fn clickable_node_handles_pointer_events() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -241,6 +274,7 @@ fn clickable_node_handles_pointer_events() {
 
 #[test]
 fn clickable_node_cancels_click_on_drag() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -288,6 +322,7 @@ fn clickable_node_cancels_click_on_drag() {
 
 #[test]
 fn alpha_node_clamps_values() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -314,6 +349,7 @@ fn alpha_node_clamps_values() {
 
 #[test]
 fn alpha_node_is_draw_only() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -326,6 +362,7 @@ fn alpha_node_is_draw_only() {
 
 #[test]
 fn mixed_modifier_chain_tracks_all_capabilities() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -370,6 +407,7 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
 
 #[test]
 fn toggling_background_color_reuses_node() {
+    let _app_context = crate::render_state::app_context_test_scope();
     // This test verifies the gate condition:
     // "Toggling Modifier.background(color) allocates 0 new nodes; only update() runs"
     let mut chain = ModifierNodeChain::new();
@@ -407,6 +445,7 @@ fn toggling_background_color_reuses_node() {
 
 #[test]
 fn reordering_modifiers_with_stable_reuse() {
+    let _app_context = crate::render_state::app_context_test_scope();
     // This test verifies the gate condition:
     // "Reordering modifiers: stable reuse when elements equal (by type + key)"
     let mut chain = ModifierNodeChain::new();
@@ -454,6 +493,7 @@ fn reordering_modifiers_with_stable_reuse() {
 
 #[test]
 fn pointer_input_coroutine_receives_events() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
     let recorded = Rc::new(RefCell::new(Vec::new()));
@@ -496,7 +536,50 @@ fn pointer_input_coroutine_receives_events() {
 }
 
 #[test]
+fn pointer_input_waker_reenters_owning_app_context() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let app_context = crate::AppContext::new_with_density(3.0);
+    let recorded = Rc::new(RefCell::new(Vec::new()));
+
+    let (handler, _chain) = app_context.enter(|| {
+        let mut chain = ModifierNodeChain::new();
+        let mut context = BasicModifierNodeContext::new();
+        let modifier = Modifier::empty().pointer_input((), {
+            let recorded = recorded.clone();
+            move |scope: PointerInputScope| {
+                let recorded = recorded.clone();
+                async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            let event = await_scope.await_pointer_event().await;
+                            recorded
+                                .borrow_mut()
+                                .push((event.kind, crate::current_density()));
+                        })
+                        .await;
+                }
+            }
+        });
+
+        let elements = modifier.elements();
+        chain.update_from_slice(&elements, &mut context);
+        let slices = collect_modifier_slices(&chain);
+        assert_eq!(slices.pointer_inputs().len(), 1);
+        (slices.pointer_inputs()[0].clone(), chain)
+    });
+
+    handler(PointerEvent::new(
+        PointerEventKind::Down,
+        Point { x: 0.0, y: 0.0 },
+        Point { x: 0.0, y: 0.0 },
+    ));
+
+    assert_eq!(*recorded.borrow(), vec![(PointerEventKind::Down, 3.0)]);
+}
+
+#[test]
 fn pointer_input_restarts_on_key_change() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
     let starts = Rc::new(Cell::new(0));
@@ -532,19 +615,11 @@ fn pointer_input_restarts_on_key_change() {
     assert_eq!(starts.get(), 2);
 }
 
-/// Regression test for pointer input handlers from temporary chains.
-///
-/// This test validates that pointer input handlers extracted via `collect_slices_from_modifier()`
-/// continue to work correctly even after the temporary modifier chain is dropped.
-///
-/// Before the fix, the global task registry used weak references and tasks were removed in `Drop`,
-/// causing handlers to fail when the temporary chain was dropped. This led to the bug where
-/// mouse events weren't being delivered to async pointer input handlers in the desktop app.
-///
-/// The fix changed the registry to use strong `Rc` references and only remove tasks on explicit
-/// cancellation, allowing handlers from temporary chains to remain functional.
+/// Pointer input handlers extracted from a modifier slice keep their task alive
+/// until explicit cancellation, even after the temporary collection chain drops.
 #[test]
 fn pointer_input_handlers_survive_temporary_chain_drop() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -567,8 +642,6 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
         }
     });
 
-    // Collect slices from the modifier - this creates a TEMPORARY chain
-    // The chain will be dropped when this function returns, but the handler should still work!
     let slices = collect_slices_from_modifier(&modifier);
 
     // Verify we got a handler
@@ -581,10 +654,6 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
     // Extract the handler - this is what the renderer does
     let handler = slices.pointer_inputs()[0].clone();
 
-    // At this point, the temporary ModifierChainHandle created by collect_slices_from_modifier
-    // has been dropped. Before the fix, this would have removed the task from the global registry.
-
-    // Now send events through the handler - this should work even though the chain is dropped!
     handler(PointerEvent::new(
         PointerEventKind::Move,
         Point { x: 10.0, y: 20.0 },
@@ -619,6 +688,7 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
 /// Test that multiple temporary chains can coexist without interfering with each other.
 #[test]
 fn multiple_temporary_chains_dont_interfere() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -695,17 +765,14 @@ fn multiple_temporary_chains_dont_interfere() {
     assert_eq!(ev2[0], ("handler2", PointerEventKind::Down));
 }
 
-/// Test that custom user-defined layout modifiers can work with the coordinator chain
-/// via the measurement proxy API.
-///
-/// This test validates Phase 1 of the modifier system transition: generic extensibility.
-/// Custom layout modifiers can now provide their own measurement proxies, enabling them
-/// to participate in the layout process without being hardcoded into the coordinator.
+/// Custom user-defined layout modifiers participate in the retained coordinator
+/// chain without being hardcoded into the framework.
 #[test]
-fn custom_layout_modifier_works_via_proxy() {
+fn custom_layout_modifier_works_through_retained_chain() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use cranpose_foundation::{
-        DelegatableNode, LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode,
-        ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
+        DelegatableNode, LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext,
+        ModifierNodeElement, NodeCapabilities, NodeState,
     };
     use std::hash::{Hash, Hasher};
 
@@ -774,51 +841,6 @@ fn custom_layout_modifier_works_via_proxy() {
         fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
             measurable.max_intrinsic_height(width)
         }
-
-        // This is the key: provide a measurement proxy
-        fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
-            Some(Box::new(CustomWidthProxy {
-                extra_width: self.extra_width,
-            }))
-        }
-    }
-
-    // Define the measurement proxy
-    struct CustomWidthProxy {
-        extra_width: f32,
-    }
-
-    impl MeasurementProxy for CustomWidthProxy {
-        fn measure_proxy(
-            &self,
-            context: &mut dyn ModifierNodeContext,
-            wrapped: &dyn Measurable,
-            constraints: Constraints,
-        ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-            let node = CustomWidthNode::new(self.extra_width);
-
-            node.measure(context, wrapped, constraints)
-        }
-
-        fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-            let node = CustomWidthNode::new(self.extra_width);
-            node.min_intrinsic_width(wrapped, height)
-        }
-
-        fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-            let node = CustomWidthNode::new(self.extra_width);
-            node.max_intrinsic_width(wrapped, height)
-        }
-
-        fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-            let node = CustomWidthNode::new(self.extra_width);
-            node.min_intrinsic_height(wrapped, width)
-        }
-
-        fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-            let node = CustomWidthNode::new(self.extra_width);
-            node.max_intrinsic_height(wrapped, width)
-        }
     }
 
     // Define the element
@@ -886,6 +908,7 @@ fn custom_layout_modifier_works_via_proxy() {
 
 #[test]
 fn draw_command_updates_on_closure_change() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use crate::draw::DrawCommand;
     use cranpose_ui_graphics::{DrawPrimitive, Size};
 
@@ -941,24 +964,18 @@ fn draw_command_updates_on_closure_change() {
     );
 }
 
-/// Test that exposes state fidelity issue: proxies that reconstruct nodes lose state.
-///
-/// This test demonstrates the limitation of Phase 1's proxy implementation where
-/// `Node::new()` reconstruction loses any internal state accumulated during the
-/// node's lifecycle. A stateful modifier (one that tracks measure count) will have
-/// its state reset on each proxy invocation.
-///
-/// Phase 2 will fix this by making proxies snapshot live node state instead.
+/// Stateful layout modifier nodes retain their internal state across repeated
+/// measurement because the coordinator chain invokes the live retained node.
 #[test]
-fn stateful_measure_exposes_proxy_reconstruction_issue() {
+fn stateful_measure_uses_live_retained_node_state() {
+    let _app_context = crate::render_state::app_context_test_scope();
     use cranpose_foundation::{
-        Constraints, DelegatableNode, LayoutModifierNode, Measurable, MeasurementProxy,
-        ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
+        Constraints, DelegatableNode, LayoutModifierNode, Measurable, ModifierNode,
+        ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
     };
     use std::hash::{Hash, Hasher};
 
-    /// A layout modifier node that counts how many times it's been measured.
-    /// This demonstrates state that should be preserved across proxy invocations.
+    /// A layout modifier node that counts how many times it has been measured.
     #[derive(Debug)]
     struct StatefulMeasureNode {
         state: NodeState,
@@ -1011,48 +1028,6 @@ fn stateful_measure_exposes_proxy_reconstruction_issue() {
                 width: placeable.width() + self.initial_value as f32,
                 height: placeable.height(),
             })
-        }
-
-        fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
-            // Phase 1 approach: Reconstruct node (LOSES STATE!)
-            // This creates a fresh node with initial_value=10 but measure_count=0
-            Some(Box::new(StatefulMeasureProxy {
-                initial_value: self.initial_value,
-            }))
-        }
-    }
-
-    struct StatefulMeasureProxy {
-        initial_value: i32,
-    }
-
-    impl MeasurementProxy for StatefulMeasureProxy {
-        fn measure_proxy(
-            &self,
-            context: &mut dyn ModifierNodeContext,
-            wrapped: &dyn Measurable,
-            constraints: Constraints,
-        ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-            // Phase 1: Reconstruct the node (simulates current implementation pattern)
-            // This creates a fresh node, losing measure_count state from the original
-            let node = StatefulMeasureNode::new(self.initial_value);
-            node.measure(context, wrapped, constraints)
-        }
-
-        fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-            wrapped.min_intrinsic_width(height) + self.initial_value as f32
-        }
-
-        fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-            wrapped.max_intrinsic_width(height) + self.initial_value as f32
-        }
-
-        fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, _width: f32) -> f32 {
-            wrapped.min_intrinsic_height(_width)
-        }
-
-        fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, _width: f32) -> f32 {
-            wrapped.max_intrinsic_height(_width)
         }
     }
 
@@ -1117,23 +1092,13 @@ fn stateful_measure_exposes_proxy_reconstruction_issue() {
         "First measure should increment count to 1"
     );
 
-    // Second measurement: This time via the proxy
-    // Phase 1's proxy will reconstruct the node, resetting measure_count to 0
-    let proxy = node.create_measurement_proxy().expect("Should have proxy");
-    let size2 = proxy.measure_proxy(&mut context, &measurable, constraints);
+    let size2 = node.measure(&mut context, &measurable, constraints);
     assert_eq!(size2.size.width, 110.0); // Still 100 + 10 (initial_value preserved)
     assert_eq!(size2.size.height, 50.0);
 
-    // The original node's count should still be 1 (proxy didn't touch it)
-    let count_after_proxy = node.measure_count.get();
+    let count_after_second = node.measure_count.get();
     assert_eq!(
-        count_after_proxy, 1,
-        "Original node count unchanged - proxy creates fresh node"
+        count_after_second, 2,
+        "live retained node state should observe both measurements"
     );
-
-    // This demonstrates the Phase 1 limitation:
-    // - The proxy correctly preserves initial_value (constructor parameter)
-    // - But it LOSES measure_count state (internal node state)
-    //
-    // Phase 2 will make proxies snapshot ALL live node state, not just constructor params.
 }

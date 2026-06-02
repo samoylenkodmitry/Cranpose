@@ -3,7 +3,7 @@ use super::{
     NodeLifecycle, NodeRecord, PayloadAnchorLifecycle, PayloadKind, PayloadRecord,
     SlotDebugEntryKind, SlotInvariantError, SlotLifecycleCoordinator, SlotPassMode,
     SlotRetentionDebugStats, SlotTable, SlotTableDebugStats, SlotTreeContext, SlotWriteSession,
-    SlotWriteSessionState,
+    SlotWriteSessionState, ValueSlotError,
 };
 use crate::{
     retention::{RetainKey, RetentionManager},
@@ -285,6 +285,19 @@ fn restore_detached_child(
     key: GroupKey,
     detached: DetachedSubtree,
 ) -> AnchorId {
+    match try_restore_detached_child(table, parent_anchor, insert_index, key, detached) {
+        Ok(anchor) => anchor,
+        Err(_) => panic!("test detached subtree restore should succeed"),
+    }
+}
+
+fn try_restore_detached_child(
+    table: &mut SlotTable,
+    parent_anchor: AnchorId,
+    insert_index: usize,
+    key: GroupKey,
+    detached: DetachedSubtree,
+) -> Result<AnchorId, DetachedSubtree> {
     table.restore_subtree(ChildCursor::new(parent_anchor, insert_index), key, detached)
 }
 

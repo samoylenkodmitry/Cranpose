@@ -10,8 +10,6 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::OnceLock;
 
 use cranpose_core::hash::default;
 
@@ -27,7 +25,7 @@ mod graphics_layer;
 mod local;
 mod offset;
 mod padding;
-mod pointer_input;
+pub(crate) mod pointer_input;
 mod scroll;
 mod semantics;
 mod shadow;
@@ -190,8 +188,7 @@ where
 pub(crate) fn modifier_debug_enabled() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        static ENV_DEBUG: OnceLock<bool> = OnceLock::new();
-        *ENV_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some())
+        std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some()
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -207,7 +204,7 @@ fn inspector_metadata_enabled() -> bool {
 ///
 /// All modifiers are either empty or a flat vector of elements. The `then()`
 /// method eagerly concatenates elements, eliminating recursive tree traversal
-/// and Rc drop overhead from the old `Combined` variant.
+/// and Rc drop overhead.
 #[derive(Clone)]
 enum ModifierKind {
     /// Empty modifier (like Modifier.companion in Kotlin)
@@ -409,6 +406,14 @@ impl Modifier {
         Self::default()
     }
 
+    /// Creates a modifier from a custom modifier node element.
+    pub fn from_element<E>(element: E) -> Self
+    where
+        E: ModifierNodeElement,
+    {
+        Self::with_element(element)
+    }
+
     /// Clip the content to the bounds of this modifier.
     ///
     /// Example: `Modifier::empty().clip_to_bounds()`
@@ -495,7 +500,7 @@ impl Modifier {
     /// The requester can be used to programmatically request focus for
     /// this component from application code.
     pub fn focus_requester(self, requester: &FocusRequester) -> Self {
-        let element = FocusRequesterElement::new(requester.id());
+        let element = FocusRequesterElement::new(requester.token());
         let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
     }
@@ -617,22 +622,11 @@ impl Modifier {
             return self.clone();
         }
 
-        // Collect elements from both sides into a single Vec
-        let (self_elements, self_inspector) = match &self.kind {
-            ModifierKind::Empty => unreachable!(),
-            ModifierKind::Single {
-                elements,
-                inspector,
-                ..
-            } => (elements.as_ref(), inspector.as_ref()),
+        let Some((self_elements, self_inspector)) = self.single_parts() else {
+            return next;
         };
-        let (next_elements, next_inspector) = match &next.kind {
-            ModifierKind::Empty => unreachable!(),
-            ModifierKind::Single {
-                elements,
-                inspector,
-                ..
-            } => (elements.as_ref(), inspector.as_ref()),
+        let Some((next_elements, next_inspector)) = next.single_parts() else {
+            return self.clone();
         };
 
         let mut merged_elements = Vec::with_capacity(self_elements.len() + next_elements.len());
@@ -806,6 +800,16 @@ impl Modifier {
 
     fn is_trivially_empty(&self) -> bool {
         matches!(self.kind, ModifierKind::Empty)
+    }
+
+    fn single_parts(&self) -> Option<(&[DynModifierElement], &[InspectorMetadata])> {
+        match &self.kind {
+            ModifierKind::Empty => None,
+            ModifierKind::Single {
+                elements,
+                inspector,
+            } => Some((elements.as_slice(), inspector.as_slice())),
+        }
     }
 
     pub(crate) fn with_inspector_metadata(self, metadata: InspectorMetadata) -> Self {

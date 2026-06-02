@@ -8,10 +8,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-static USER_OVERFLOW_LOGGED: AtomicBool = AtomicBool::new(false);
-static INDEX_OVERFLOW_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Key type for lazy list items.
 ///
@@ -59,28 +55,26 @@ impl LazyLayoutKey {
         match self {
             // NOTE: Values beyond 62 bits are mixed to preserve stability.
             LazyLayoutKey::User(k) => {
-                let value = Self::normalize_value(k, "User", &USER_OVERFLOW_LOGGED);
+                let value = Self::normalize_value(k, "User");
                 Self::USER_TAG | value
             }
             LazyLayoutKey::Index(i) => {
-                let value = Self::normalize_value(i as u64, "Index", &INDEX_OVERFLOW_LOGGED);
+                let value = Self::normalize_value(i as u64, "Index");
                 Self::INDEX_TAG | value
             }
         }
     }
 
     #[inline]
-    fn normalize_value(value: u64, kind: &'static str, logged: &AtomicBool) -> u64 {
+    fn normalize_value(value: u64, kind: &'static str) -> u64 {
         if value <= Self::VALUE_MASK {
             value
         } else {
-            if !logged.swap(true, Ordering::Relaxed) {
-                log::warn!(
-                    "LazyList {} key {:#018x} exceeds 62 bits; mixing to 62 bits to avoid overflow",
-                    kind,
-                    value
-                );
-            }
+            log::warn!(
+                "LazyList {} key {:#018x} exceeds 62 bits; mixing to 62 bits to avoid overflow",
+                kind,
+                value
+            );
             Self::mix_to_value_bits(value)
         }
     }
@@ -747,6 +741,21 @@ impl<T: LazyListScope + ?Sized> LazyListScopeExt for T {}
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn key_overflow_warning_suppression_has_no_process_global_state() {
+        let source = include_str!("lazy_list_scope.rs");
+        let user_logged = ["USER_OVERFLOW", "_LOGGED"].concat();
+        let index_logged = ["INDEX_OVERFLOW", "_LOGGED"].concat();
+        let atomic_bool = ["Atomic", "Bool"].concat();
+
+        assert!(
+            !source.contains(&user_logged)
+                && !source.contains(&index_logged)
+                && !source.contains(&atomic_bool),
+            "lazy-list key overflow diagnostics must not use process-global suppression state"
+        );
+    }
 
     #[test]
     fn test_single_item() {

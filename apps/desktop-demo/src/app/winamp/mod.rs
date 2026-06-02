@@ -9,7 +9,6 @@ mod skin;
 mod sprites;
 
 use std::rc::Rc;
-use std::sync::OnceLock;
 
 use cranpose::{
     rememberWindowState, WindowAttachPolicy, WindowConfig, WindowGroup, WindowId,
@@ -27,13 +26,11 @@ use skin::{load_skin, WinampSkin};
 use sprites::*;
 
 fn winamp_press_debug_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("WINAMP_PRESS_DEBUG").is_some())
+    std::env::var_os("WINAMP_PRESS_DEBUG").is_some()
 }
 
 fn winamp_native_trace_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_NATIVE_TRACE").is_some())
+    std::env::var_os("CRANPOSE_NATIVE_TRACE").is_some()
 }
 
 fn trace_winamp_state(action: &str, state: &WinampState) {
@@ -1813,5 +1810,14 @@ mod tests {
         assert_eq!(vertical_slider_thumb_y(2.0, 63.0, 11.0), 0.0);
         assert_eq!(vertical_slider_thumb_y_down(-1.0, 145.0, 18.0), 0.0);
         assert_eq!(vertical_slider_thumb_y_down(2.0, 145.0, 18.0), 127.0);
+    }
+
+    #[test]
+    fn winamp_debug_env_flags_are_not_process_cached() {
+        let source = include_str!("mod.rs");
+        let once_lock_bool = ["Once", "Lock<bool>"].concat();
+        let cached_env = ["get_or_init(|| ", "std::env::var_os"].concat();
+        assert!(!source.contains(&once_lock_bool));
+        assert!(!source.contains(&cached_env));
     }
 }

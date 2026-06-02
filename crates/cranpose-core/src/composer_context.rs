@@ -46,12 +46,16 @@ pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
     })
 }
 
+/// Return the current composer from the thread-local stack.
+pub fn current_composer() -> Option<Composer> {
+    COMPOSER_STACK.with(|stack| {
+        let core = stack.borrow().last()?.clone();
+        Some(Composer::from_core(core))
+    })
+}
+
 /// Try to access the current composer from the thread-local stack.
 /// Returns None if there is no active composer.
 pub fn try_with_composer<R>(f: impl FnOnce(&Composer) -> R) -> Option<R> {
-    COMPOSER_STACK.with(|stack| {
-        let core = stack.borrow().last()?.clone();
-        let composer = Composer::from_core(core);
-        Some(f(&composer))
-    })
+    current_composer().map(|composer| f(&composer))
 }

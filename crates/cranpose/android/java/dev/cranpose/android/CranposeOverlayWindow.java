@@ -8,6 +8,7 @@ import android.content.pm.PackageManager;
 import android.graphics.PixelFormat;
 import android.os.Build;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.Surface;
@@ -25,9 +26,28 @@ public final class CranposeOverlayWindow {
     public static final int RESULT_CREATE_FAILED = -5;
     public static final int RESULT_NOT_VISIBLE = -6;
 
-    private static volatile SurfaceView surfaceView;
+    private static volatile OverlayState currentOverlay;
 
     private CranposeOverlayWindow() {
+    }
+
+    public static int setActivityWindowLayout(Activity activity, int widthPx, int heightPx) {
+        try {
+            activity.runOnUiThread(() -> {
+                try {
+                    activity.getWindow().setLayout(widthPx, heightPx);
+                } catch (RuntimeException error) {
+                    Log.w(
+                            "CranposeOverlayWindow",
+                            "Failed to set Activity window layout",
+                            error
+                    );
+                }
+            });
+            return RESULT_OK;
+        } catch (RuntimeException error) {
+            return RESULT_CREATE_FAILED;
+        }
     }
 
     public static int show(
@@ -36,9 +56,10 @@ public final class CranposeOverlayWindow {
             int heightPx,
             int xPx,
             int yPx,
-            boolean focusable
+            boolean focusable,
+            long eventQueueHandle
     ) {
-        if (surfaceView != null) {
+        if (currentOverlay != null) {
             return RESULT_ALREADY_VISIBLE;
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
@@ -52,25 +73,29 @@ public final class CranposeOverlayWindow {
         }
 
         activity.runOnUiThread(() -> {
-            if (surfaceView != null) {
+            if (currentOverlay != null) {
+                nativeOverlayReleaseQueue(eventQueueHandle);
                 return;
             }
 
             WindowManager windowManager =
                     (WindowManager) activity.getSystemService(Context.WINDOW_SERVICE);
             if (windowManager == null) {
-                nativeOverlayCreateFailed("Android WindowManager is unavailable");
+                nativeOverlayCreateFailed(eventQueueHandle, "Android WindowManager is unavailable");
+                nativeOverlayReleaseQueue(eventQueueHandle);
                 return;
             }
 
+            OverlayState state = new OverlayState(eventQueueHandle);
             SurfaceView view = new SurfaceView(activity);
+            state.surfaceView = view;
             view.setZOrderOnTop(true);
             view.getHolder().setFormat(PixelFormat.TRANSLUCENT);
             view.getHolder().addCallback(new SurfaceHolder.Callback() {
                 @Override
                 public void surfaceCreated(SurfaceHolder holder) {
                     Surface surface = holder.getSurface();
-                    nativeOverlaySurfaceChanged(
+                    state.nativeSurfaceChanged(
                             surface,
                             Math.max(view.getWidth(), 1),
                             Math.max(view.getHeight(), 1)
@@ -84,16 +109,16 @@ public final class CranposeOverlayWindow {
                         int width,
                         int height
                 ) {
-                    nativeOverlaySurfaceChanged(holder.getSurface(), width, height);
+                    state.nativeSurfaceChanged(holder.getSurface(), width, height);
                 }
 
                 @Override
                 public void surfaceDestroyed(SurfaceHolder holder) {
-                    nativeOverlaySurfaceDestroyed();
+                    state.nativeSurfaceDestroyed();
                 }
             });
             view.setOnTouchListener((View touched, MotionEvent event) -> {
-                nativeOverlayPointer(event.getActionMasked(), event.getX(), event.getY());
+                state.nativePointer(event.getActionMasked(), event.getX(), event.getY());
                 return true;
             });
 
@@ -115,9 +140,10 @@ public final class CranposeOverlayWindow {
 
             try {
                 windowManager.addView(view, params);
-                surfaceView = view;
+                currentOverlay = state;
             } catch (RuntimeException error) {
-                nativeOverlayCreateFailed(error.toString());
+                state.nativeCreateFailed(error.toString());
+                state.release();
             }
         });
 
@@ -131,12 +157,16 @@ public final class CranposeOverlayWindow {
             int xPx,
             int yPx
     ) {
-        if (surfaceView == null) {
+        if (currentOverlay == null) {
             return RESULT_NOT_VISIBLE;
         }
 
         activity.runOnUiThread(() -> {
-            SurfaceView view = surfaceView;
+            OverlayState state = currentOverlay;
+            if (state == null || state.disposed) {
+                return;
+            }
+            SurfaceView view = state.surfaceView;
             if (view == null) {
                 return;
             }
@@ -144,7 +174,7 @@ public final class CranposeOverlayWindow {
             WindowManager windowManager =
                     (WindowManager) activity.getSystemService(Context.WINDOW_SERVICE);
             if (windowManager == null) {
-                nativeOverlayCreateFailed("Android WindowManager is unavailable");
+                state.nativeCreateFailed("Android WindowManager is unavailable");
                 return;
             }
 
@@ -157,7 +187,7 @@ public final class CranposeOverlayWindow {
                 params.y = yPx;
                 windowManager.updateViewLayout(view, params);
             } catch (RuntimeException error) {
-                nativeOverlayCreateFailed(error.toString());
+                state.nativeCreateFailed(error.toString());
             }
         });
 
@@ -166,18 +196,64 @@ public final class CranposeOverlayWindow {
 
     public static void hide(Activity activity) {
         activity.runOnUiThread(() -> {
-            SurfaceView view = surfaceView;
-            if (view == null) {
+            OverlayState state = currentOverlay;
+            if (state == null) {
                 return;
             }
-            surfaceView = null;
+            currentOverlay = null;
+            SurfaceView view = state.surfaceView;
             WindowManager windowManager =
                     (WindowManager) activity.getSystemService(Context.WINDOW_SERVICE);
-            if (windowManager != null) {
+            if (windowManager != null && view != null) {
                 windowManager.removeViewImmediate(view);
             }
-            nativeOverlaySurfaceDestroyed();
+            state.nativeSurfaceDestroyed();
+            state.release();
         });
+    }
+
+    private static final class OverlayState {
+        final long eventQueueHandle;
+        volatile SurfaceView surfaceView;
+        volatile boolean disposed;
+        private boolean surfaceDestroyedSent;
+
+        OverlayState(long eventQueueHandle) {
+            this.eventQueueHandle = eventQueueHandle;
+        }
+
+        void nativeCreateFailed(String message) {
+            if (!disposed) {
+                nativeOverlayCreateFailed(eventQueueHandle, message);
+            }
+        }
+
+        void nativeSurfaceChanged(Surface surface, int width, int height) {
+            if (!disposed) {
+                nativeOverlaySurfaceChanged(eventQueueHandle, surface, width, height);
+            }
+        }
+
+        void nativeSurfaceDestroyed() {
+            if (!disposed && !surfaceDestroyedSent) {
+                surfaceDestroyedSent = true;
+                nativeOverlaySurfaceDestroyed(eventQueueHandle);
+            }
+        }
+
+        void nativePointer(int action, float x, float y) {
+            if (!disposed) {
+                nativeOverlayPointer(eventQueueHandle, action, x, y);
+            }
+        }
+
+        void release() {
+            if (!disposed) {
+                disposed = true;
+                surfaceView = null;
+                nativeOverlayReleaseQueue(eventQueueHandle);
+            }
+        }
     }
 
     private static boolean declaresOverlayPermission(Activity activity) {
@@ -198,11 +274,18 @@ public final class CranposeOverlayWindow {
         return false;
     }
 
-    private static native void nativeOverlayCreateFailed(String message);
+    private static native void nativeOverlayCreateFailed(long eventQueueHandle, String message);
 
-    private static native void nativeOverlaySurfaceChanged(Surface surface, int width, int height);
+    private static native void nativeOverlaySurfaceChanged(
+            long eventQueueHandle,
+            Surface surface,
+            int width,
+            int height
+    );
 
-    private static native void nativeOverlaySurfaceDestroyed();
+    private static native void nativeOverlaySurfaceDestroyed(long eventQueueHandle);
 
-    private static native void nativeOverlayPointer(int action, float x, float y);
+    private static native void nativeOverlayPointer(long eventQueueHandle, int action, float x, float y);
+
+    private static native void nativeOverlayReleaseQueue(long eventQueueHandle);
 }

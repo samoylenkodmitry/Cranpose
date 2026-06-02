@@ -19,7 +19,7 @@ use cranpose_ui_graphics::{
 use super::images::generate_chessboard_bitmap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum ShaderSection {
+pub enum ShaderSection {
     SweepGradient,
     InteractiveEffects,
     EffectSemantics,
@@ -28,7 +28,7 @@ pub(crate) enum ShaderSection {
 }
 
 impl ShaderSection {
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::SweepGradient => "Sweep Gradient",
             Self::InteractiveEffects => "Interactive Effects",
@@ -39,7 +39,7 @@ impl ShaderSection {
     }
 
     #[cfg(any(test, target_arch = "wasm32"))]
-    pub(crate) fn from_startup_name(name: &str) -> Option<Self> {
+    pub fn from_startup_name(name: &str) -> Option<Self> {
         let normalized = name
             .chars()
             .filter(|ch| ch.is_ascii_alphanumeric())

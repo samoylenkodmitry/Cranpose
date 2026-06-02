@@ -1,12 +1,12 @@
 use crate::collections::map::HashMap;
 #[cfg(any(test, debug_assertions))]
 use crate::slot::{AnchorState, PayloadAnchorLifecycle, SlotInvariantError};
-#[cfg(any(test, debug_assertions))]
-use crate::SlotTable;
 use crate::{
     slot::{DetachedSubtree, GroupKey, NodeLifecycle},
     ScopeId,
 };
+#[cfg(any(test, debug_assertions))]
+use crate::{AnchorId, SlotTable};
 use std::cmp::Ordering;
 
 // Retained subtrees follow docs/SLOT_TABLE_LIFECYCLE.md: anchors stay detached,
@@ -147,20 +147,22 @@ impl RetentionManager {
 
     pub(crate) fn take(&mut self, key: RetainKey) -> Option<DetachedSubtree> {
         let retained = self.groups.get(&key)?;
-        retained
-            .subtree
-            .assert_root_key(key.key, "retention restore");
-        retained
-            .subtree
-            .assert_root_parent_detached("retention restore");
-        retained
-            .subtree
-            .assert_node_lifecycle(NodeLifecycle::RetainedDetached, "retention restore");
+        if !retained_subtree_matches_key(&retained.subtree, key, "restore") {
+            return None;
+        }
+        if !retained_subtree_root_is_detached(&retained.subtree, key, "restore") {
+            return None;
+        }
+        if !retained_subtree_nodes_have_lifecycle(
+            &retained.subtree,
+            key,
+            NodeLifecycle::RetainedDetached,
+            "restore",
+        ) {
+            return None;
+        }
         let restored_order = self.tick_operation();
-        let retained = self
-            .groups
-            .remove(&key)
-            .expect("validated retained subtree key must still exist");
+        let retained = self.groups.remove(&key)?;
         self.restored_at_by_key.insert(key, restored_order);
         Some(retained.subtree)
     }
@@ -168,9 +170,16 @@ impl RetentionManager {
     pub(crate) fn take_after_restore_preflight(
         &mut self,
         key: RetainKey,
-        preflight: impl FnOnce(&DetachedSubtree),
+        preflight: impl FnOnce(&DetachedSubtree) -> bool,
     ) -> Option<DetachedSubtree> {
-        preflight(&self.groups.get(&key)?.subtree);
+        if !preflight(&self.groups.get(&key)?.subtree) {
+            log::error!(
+                "retention restore preflight rejected subtree for parent_scope={:?} key={:?}",
+                key.parent_scope,
+                key.key
+            );
+            return None;
+        }
         self.take(key)
     }
 
@@ -179,18 +188,23 @@ impl RetentionManager {
         key: RetainKey,
         mut subtree: DetachedSubtree,
     ) -> Vec<DetachedSubtree> {
-        assert!(
-            !self.groups.contains_key(&key),
-            "retained subtree key collision: parent_scope={:?} key={:?}",
-            key.parent_scope,
-            key.key,
-        );
-        subtree.assert_root_key(key.key, "retention insert");
-        subtree.assert_root_parent_detached("retention insert");
+        if self.groups.contains_key(&key) {
+            log::error!(
+                "retention insert rejected duplicate key for parent_scope={:?} key={:?}",
+                key.parent_scope,
+                key.key
+            );
+            return vec![subtree];
+        }
+        if !retained_subtree_matches_key(&subtree, key, "insert") {
+            return vec![subtree];
+        }
+        if !retained_subtree_root_is_detached(&subtree, key, "insert") {
+            return vec![subtree];
+        }
         let detached_order = self.tick_operation();
         let last_restored_order = self.restored_at_by_key.remove(&key).unwrap_or_default();
         subtree.mark_nodes_retained_detached();
-        subtree.assert_node_lifecycle(NodeLifecycle::RetainedDetached, "retention insert");
         self.groups.insert(
             key,
             RetainedGroup {
@@ -246,36 +260,41 @@ impl RetentionManager {
     pub(crate) fn validate(&self, table: &SlotTable) -> Result<(), SlotInvariantError> {
         for (key, retained) in &self.groups {
             let subtree = &retained.subtree;
-            if subtree.root_key() != key.key {
+            subtree.validate_detached()?;
+            let Some(root_key) = subtree.root_key_checked() else {
+                return Err(SlotInvariantError::DetachedSubtreeEmpty);
+            };
+            if root_key != key.key {
                 return Err(SlotInvariantError::RetainedRootKeyMismatch {
                     parent_scope: key.parent_scope,
                     expected: key.key,
-                    actual: subtree.root_key(),
+                    actual: root_key,
                 });
             }
 
-            if subtree.root_parent_anchor().is_valid() {
+            let root_parent_anchor = subtree
+                .root_parent_anchor_checked()
+                .unwrap_or(AnchorId::INVALID);
+            if root_parent_anchor.is_valid() {
                 return Err(SlotInvariantError::RetainedRootHasActiveParent {
-                    root_key: subtree.root_key(),
-                    parent_anchor: subtree.root_parent_anchor(),
+                    root_key,
+                    parent_anchor: root_parent_anchor,
                 });
             }
-
-            subtree.validate_detached()?;
 
             for anchor in subtree.group_anchors() {
                 match table.anchor_state(anchor) {
                     Some(AnchorState::Detached) => {}
                     Some(AnchorState::Active(active_index)) => {
                         return Err(SlotInvariantError::RetainedSubtreeAnchorStillActive {
-                            root_key: subtree.root_key(),
+                            root_key,
                             anchor,
                             active_index,
                         });
                     }
                     actual => {
                         return Err(SlotInvariantError::RetainedAnchorStateMismatch {
-                            root_key: subtree.root_key(),
+                            root_key,
                             anchor,
                             actual,
                         });
@@ -286,7 +305,7 @@ impl RetentionManager {
             for scope_id in subtree.scope_ids_iter() {
                 if let Some(active_anchor) = table.scope_index_anchor(scope_id) {
                     return Err(SlotInvariantError::RetainedScopeStillActive {
-                        root_key: subtree.root_key(),
+                        root_key,
                         scope_id,
                         active_anchor,
                     });
@@ -297,11 +316,17 @@ impl RetentionManager {
                 match table.payload_anchor_lifecycle(payload_anchor) {
                     Some(PayloadAnchorLifecycle::Detached) => {}
                     Some(PayloadAnchorLifecycle::Active) => {
-                        let (active_owner, active_index) = table
-                            .payload_anchor_active_location(payload_anchor)
-                            .expect("active retained payload anchor must expose its location");
+                        let Some((active_owner, active_index)) =
+                            table.payload_anchor_active_location(payload_anchor)
+                        else {
+                            return Err(SlotInvariantError::RetainedPayloadAnchorStateMismatch {
+                                root_key,
+                                payload_anchor,
+                                actual: Some(PayloadAnchorLifecycle::Active),
+                            });
+                        };
                         return Err(SlotInvariantError::RetainedPayloadAnchorStillActive {
-                            root_key: subtree.root_key(),
+                            root_key,
                             payload_anchor,
                             active_owner,
                             active_index,
@@ -309,7 +334,7 @@ impl RetentionManager {
                     }
                     actual => {
                         return Err(SlotInvariantError::RetainedPayloadAnchorStateMismatch {
-                            root_key: subtree.root_key(),
+                            root_key,
                             payload_anchor,
                             actual,
                         });
@@ -320,7 +345,7 @@ impl RetentionManager {
             for (node_id, lifecycle) in subtree.node_states() {
                 if lifecycle != NodeLifecycle::RetainedDetached {
                     return Err(SlotInvariantError::RetainedNodeLifecycleMismatch {
-                        root_key: subtree.root_key(),
+                        root_key,
                         node_id,
                         actual: lifecycle,
                     });
@@ -361,15 +386,21 @@ impl RetentionManager {
             };
             self.restored_at_by_key.remove(&key);
             self.evictions_total = self.evictions_total.saturating_add(1);
-            retained
-                .subtree
-                .assert_root_key(key.key, "retention eviction");
-            retained
-                .subtree
-                .assert_root_parent_detached("retention eviction");
-            retained
-                .subtree
-                .assert_node_lifecycle(NodeLifecycle::RetainedDetached, "retention eviction");
+            if !retained_subtree_matches_key(&retained.subtree, key, "eviction")
+                || !retained_subtree_root_is_detached(&retained.subtree, key, "eviction")
+                || !retained_subtree_nodes_have_lifecycle(
+                    &retained.subtree,
+                    key,
+                    NodeLifecycle::RetainedDetached,
+                    "eviction",
+                )
+            {
+                log::error!(
+                    "retention eviction returned malformed retained subtree for caller-owned disposal"
+                );
+                evicted.push(retained.subtree);
+                continue;
+            }
             evicted.push(retained.subtree);
         }
         evicted
@@ -462,6 +493,75 @@ impl RetentionManager {
     fn retained_heap_bytes(&self) -> usize {
         self.groups.values().map(RetainedGroup::heap_bytes).sum()
     }
+}
+
+fn retained_subtree_matches_key(
+    subtree: &DetachedSubtree,
+    key: RetainKey,
+    context: &'static str,
+) -> bool {
+    let Some(root_key) = subtree.root_key_checked() else {
+        log::error!(
+            "retention {context} rejected empty subtree for parent_scope={:?} key={:?}",
+            key.parent_scope,
+            key.key
+        );
+        return false;
+    };
+    if root_key != key.key {
+        log::error!(
+            "retention {context} rejected root key mismatch for parent_scope={:?}: expected {:?}, actual {:?}",
+            key.parent_scope,
+            key.key,
+            root_key
+        );
+        return false;
+    }
+    true
+}
+
+fn retained_subtree_root_is_detached(
+    subtree: &DetachedSubtree,
+    key: RetainKey,
+    context: &'static str,
+) -> bool {
+    let Some(parent_anchor) = subtree.root_parent_anchor_checked() else {
+        log::error!(
+            "retention {context} rejected empty subtree for parent_scope={:?} key={:?}",
+            key.parent_scope,
+            key.key
+        );
+        return false;
+    };
+    if parent_anchor.is_valid() {
+        log::error!(
+            "retention {context} rejected attached root parent {:?} for parent_scope={:?} key={:?}",
+            parent_anchor,
+            key.parent_scope,
+            key.key
+        );
+        return false;
+    }
+    true
+}
+
+fn retained_subtree_nodes_have_lifecycle(
+    subtree: &DetachedSubtree,
+    key: RetainKey,
+    expected: NodeLifecycle,
+    context: &'static str,
+) -> bool {
+    if let Some((node_id, actual)) = subtree.first_node_lifecycle_mismatch(expected) {
+        log::error!(
+            "retention {context} rejected node lifecycle mismatch for node {node_id} parent_scope={:?} key={:?}: expected {:?}, actual {:?}",
+            key.parent_scope,
+            key.key,
+            expected,
+            actual
+        );
+        return false;
+    }
+    true
 }
 
 fn retain_key_cmp(left: &RetainKey, right: &RetainKey) -> Ordering {

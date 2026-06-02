@@ -1,7 +1,9 @@
 #!/bin/bash
+set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+PLATFORM_DIR="$SCRIPT_DIR/../desktop-demo-platform"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/../../scripts/dev_build_common.sh"
 
@@ -76,7 +78,10 @@ if [ "$BUILD_MODE" = "fast" ]; then
         echo "Using local cargo build jobs: $CARGO_BUILD_JOBS"
     fi
     echo "Building WASM module (fast dev build, no wasm-opt)..."
-    "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --dev --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
+    (
+        cd "$PLATFORM_DIR"
+        "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --dev --target web --out-dir "$SCRIPT_DIR/pkg" --features web,renderer-wgpu --no-default-features
+    )
 else
     # Check if wasm-opt is available (from binaryen) for size optimization
     if command -v wasm-opt &> /dev/null; then
@@ -89,11 +94,9 @@ else
         echo ""
     fi
 
-    # Build the WASM module with web feature
-    # Release profile settings from root Cargo.toml will be used:
-    # - LTO enabled for cross-crate optimization
-    # - codegen-units=1 for better optimization
-    # - wasm-opt runs with -Oz for size optimization
+    # Build the WASM module with the workspace wasm-release profile. The native
+    # release profile uses heavier LTO/codegen settings than local and CI web
+    # builds can rely on consistently.
     if [ -n "${TMPDIR:-}" ]; then
         echo "Using local tmpdir: $TMPDIR"
     fi
@@ -104,7 +107,10 @@ else
 
     # Run wasm-pack build, don't exit on error so we can handle it
     set +e
-    "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
+    (
+        cd "$PLATFORM_DIR"
+        "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --profile wasm-release --target web --out-dir "$SCRIPT_DIR/pkg" --features web,renderer-wgpu --no-default-features
+    )
     BUILD_RESULT=$?
     set -e
 
@@ -117,7 +123,10 @@ else
 
         if [ "${ALLOW_UNOPTIMIZED_WASM:-0}" = "1" ]; then
             echo "ALLOW_UNOPTIMIZED_WASM=1 set - retrying with --dev (unoptimized)."
-            "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --dev --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
+            (
+                cd "$PLATFORM_DIR"
+                "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --dev --target web --out-dir "$SCRIPT_DIR/pkg" --features web,renderer-wgpu --no-default-features
+            )
             BUILD_RESULT=$?
             if [ $BUILD_RESULT -ne 0 ]; then
                 echo "Build failed even with --dev"
@@ -132,8 +141,23 @@ fi
 # Show resulting binary size
 if [ -f "pkg/desktop_app_bg.wasm" ]; then
     SIZE=$(du -h pkg/desktop_app_bg.wasm | cut -f1)
+    SIZE_BYTES=$(wc -c < pkg/desktop_app_bg.wasm | tr -d '[:space:]')
     echo ""
     echo "WASM binary size: $SIZE"
+    if [ "$BUILD_MODE" = "release" ]; then
+        MAX_WASM_BYTES="${CRANPOSE_WEB_RELEASE_MAX_WASM_BYTES:-14680064}"
+        case "$MAX_WASM_BYTES" in
+            ''|*[!0-9]*)
+                echo "Invalid CRANPOSE_WEB_RELEASE_MAX_WASM_BYTES: $MAX_WASM_BYTES"
+                exit 1
+                ;;
+        esac
+        echo "WASM release size budget: $SIZE_BYTES / $MAX_WASM_BYTES bytes"
+        if [ "$SIZE_BYTES" -gt "$MAX_WASM_BYTES" ]; then
+            echo "WASM release size budget failed: $SIZE_BYTES bytes exceeds $MAX_WASM_BYTES bytes"
+            exit 1
+        fi
+    fi
 fi
 
 echo ""

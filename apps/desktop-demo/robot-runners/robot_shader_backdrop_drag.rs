@@ -179,9 +179,22 @@ fn wait_for_nested_backdrop_region_change(
         let screenshot = capture_screenshot(robot)?;
         let raw = changed_pixel_count_in_region(baseline, &screenshot, region, 10);
         let net = raw.saturating_sub(baseline_noise);
-        println!(
-            "Nested child backdrop diff attempt {attempt}: raw={raw} baseline={baseline_noise} net={net}"
-        );
+        if let Ok(Some(stats)) = robot.get_render_stats() {
+            println!(
+                "Nested child backdrop diff attempt {attempt}: raw={raw} baseline={baseline_noise} net={net} blur={} composite={} layer_cache_hit={} layer_cache_miss={} isolated={} pass={} submit={}",
+                stats.blur_passes,
+                stats.composite_passes,
+                stats.layer_cache_hits,
+                stats.layer_cache_misses,
+                stats.isolated_layer_renders,
+                stats.pass_count,
+                stats.submit_count
+            );
+        } else {
+            println!(
+                "Nested child backdrop diff attempt {attempt}: raw={raw} baseline={baseline_noise} net={net}"
+            );
+        }
         last = Some((raw, net));
         if net >= NESTED_BACKDROP_MIN_CHANGED_PIXELS {
             break;

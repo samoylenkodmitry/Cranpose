@@ -1,8 +1,8 @@
 use cranpose_ui::text::{Hyphens, TextUnit};
 use cranpose_ui::text_layout_result::TextLayoutResult;
 use cranpose_ui::{
-    prepare_text_layout, set_text_measurer, ParagraphStyle, SpanStyle, TextLayoutOptions,
-    TextMeasurer, TextMetrics, TextOverflow, TextStyle,
+    prepare_text_layout, set_text_measurer, AppContext, ParagraphStyle, SpanStyle,
+    TextLayoutOptions, TextMeasurer, TextMetrics, TextOverflow, TextStyle,
 };
 
 struct ContractMeasurer;
@@ -72,7 +72,7 @@ impl TextMeasurer for ContractMeasurer {
 
 #[test]
 fn prepare_text_layout_uses_measurer_hyphen_contract() {
-    set_text_measurer(ContractMeasurer);
+    let app_context = AppContext::new();
 
     let style = TextStyle {
         span_style: SpanStyle {
@@ -91,12 +91,15 @@ fn prepare_text_layout_uses_measurer_hyphen_contract() {
         min_lines: 1,
     };
 
-    let prepared = prepare_text_layout(
-        &cranpose_ui::text::AnnotatedString::from("Transformation"),
-        &style,
-        options,
-        Some(24.0),
-    );
+    let prepared = app_context.enter(|| {
+        set_text_measurer(ContractMeasurer);
+        prepare_text_layout(
+            &cranpose_ui::text::AnnotatedString::from("Transformation"),
+            &style,
+            options,
+            Some(24.0),
+        )
+    });
     assert_eq!(
         prepared.text.text.lines().collect::<Vec<_>>(),
         vec!["Tra", "nsf", "orm", "ati", "on"]

@@ -10,7 +10,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::{Rc, Weak as RcWeak};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
 use crate::snapshot_pinning::lowest_pinned_snapshot;
@@ -51,6 +51,36 @@ pub struct StateRecord {
     tombstone: Cell<bool>,
     next: Cell<Option<Rc<StateRecord>>>,
     value: RefCell<Option<Box<dyn Any>>>,
+}
+
+#[derive(Debug)]
+struct StateReadFailure {
+    state_id: ObjectId,
+    snapshot_id: SnapshotId,
+    fresh_snapshot_id: SnapshotId,
+    fresh_invalid: SnapshotIdSet,
+    record_chain: Vec<(SnapshotId, bool)>,
+}
+
+impl std::fmt::Display for StateReadFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Reading a state that was created after the snapshot was taken or in a snapshot that has not yet been applied\n\
+             state={:?}, snapshot_id={}, fresh_snapshot_id={}, fresh_invalid={:?}\n\
+             record_chain={:?}",
+            self.state_id,
+            self.snapshot_id,
+            self.fresh_snapshot_id,
+            self.fresh_invalid,
+            self.record_chain
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum StateRecordValueError {
+    MissingOrWrongType { expected: &'static str },
 }
 
 impl StateRecord {
@@ -108,12 +138,14 @@ impl StateRecord {
     }
 
     pub(crate) fn with_value<T: Any, R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        self.try_with_value(f)
+            .unwrap_or_else(|| panic!("StateRecord value missing or wrong type"))
+    }
+
+    pub(crate) fn try_with_value<T: Any, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         let guard = self.value.borrow();
-        let value = guard
-            .as_ref()
-            .and_then(|boxed| boxed.downcast_ref::<T>())
-            .expect("StateRecord value missing or wrong type");
-        f(value)
+        let value = guard.as_ref().and_then(|boxed| boxed.downcast_ref::<T>())?;
+        Some(f(value))
     }
 
     /// Clears the value from this record to free memory.
@@ -129,12 +161,17 @@ impl StateRecord {
     /// into a reused record, and during cleanup to preserve data in records being
     /// marked as INVALID_SNAPSHOT.
     ///
-    /// # Type Safety
-    /// The caller must ensure both records contain values of type `T`.
-    /// Panics if the source record doesn't contain a value of type `T`.
-    pub(crate) fn assign_value<T: Any + Clone>(&self, source: &StateRecord) {
-        let cloned_value = source.with_value(|value: &T| value.clone());
+    pub(crate) fn assign_value<T: Any + Clone>(
+        &self,
+        source: &StateRecord,
+    ) -> Result<(), StateRecordValueError> {
+        let cloned_value = source.try_with_value(|value: &T| value.clone()).ok_or(
+            StateRecordValueError::MissingOrWrongType {
+                expected: std::any::type_name::<T>(),
+            },
+        )?;
         self.replace_value(cloned_value);
+        Ok(())
     }
 }
 
@@ -346,12 +383,11 @@ pub(crate) fn new_overwritable_record_locked(state: &dyn StateObject) -> Rc<Stat
         return reusable;
     }
 
-    // No reusable record found - create a new one
-    // The new record is prepended to the chain with a placeholder value
-    // Caller must use replace_value() to set the actual value
+    // No reusable record found; create an invisible record and let the caller
+    // replace the unit initializer before publishing the final snapshot id.
     let new_record = StateRecord::new(
         SNAPSHOT_ID_MAX,
-        (),   // Placeholder value - caller will replace this
+        (),
         None, // next will be set by prepend_state_record
     );
 
@@ -451,7 +487,12 @@ pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateO
             } else {
                 // We have two records below the reuse limit - one obscures the other
                 // Overwrite the older one (lower snapshot_id)
-                let valid = valid_record.as_ref().unwrap();
+                let Some(valid) = valid_record.as_ref() else {
+                    valid_record = Some(Rc::clone(&record));
+                    retained_records += 1;
+                    current = record.next();
+                    continue;
+                };
                 let record_to_overwrite = if current_id < valid.snapshot_id() {
                     Rc::clone(&record)
                 } else {
@@ -462,15 +503,19 @@ pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateO
                 };
 
                 // Lazily find a young record to copy data from
-                if overwrite_record.is_none() {
-                    // Find the youngest record, or first record >= reuseLimit
-                    overwrite_record =
-                        Some(find_youngest_or(&head, |r| r.snapshot_id() >= reuse_limit));
-                }
+                let source_record = overwrite_record.get_or_insert_with(|| {
+                    find_youngest_or(&head, |r| r.snapshot_id() >= reuse_limit)
+                });
 
                 // Mark the old record as invalid and copy valid data into it
                 record_to_overwrite.set_snapshot_id(INVALID_SNAPSHOT_ID);
-                record_to_overwrite.assign_value::<T>(overwrite_record.as_ref().unwrap());
+                if let Err(error) = record_to_overwrite.assign_value::<T>(source_record) {
+                    log::error!(
+                        "snapshot cleanup could not copy retained state record value for state {:?}: {:?}",
+                        state.object_id(),
+                        error
+                    );
+                }
             }
         } else {
             // Record is above reuse limit - it's still visible and must be kept
@@ -507,6 +552,11 @@ impl<T> MutationPolicy<T> for NeverEqual {
 pub trait StateObject: Any {
     fn object_id(&self) -> ObjectId;
     fn first_record(&self) -> Rc<StateRecord>;
+    fn try_readable_record(
+        &self,
+        snapshot_id: SnapshotId,
+        invalid: &SnapshotIdSet,
+    ) -> Option<Rc<StateRecord>>;
     fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord>;
 
     /// Prepends a record to the head of the record chain.
@@ -591,13 +641,59 @@ fn should_check_chain_integrity() -> bool {
 
     #[cfg(not(debug_assertions))]
     {
-        use std::sync::OnceLock;
-        static CHECK: OnceLock<bool> = OnceLock::new();
-        *CHECK.get_or_init(|| std::env::var_os("CRANPOSE_ASSERT_STATE_CHAIN").is_some())
+        std::env::var_os("CRANPOSE_ASSERT_STATE_CHAIN").is_some()
     }
 }
 
 impl<T: Clone + 'static> SnapshotMutableState<T> {
+    fn record_chain_debug(&self) -> Vec<(SnapshotId, bool)> {
+        let mut chain_ids = Vec::new();
+        let mut cursor = Some(self.first_record());
+        while let Some(record) = cursor {
+            chain_ids.push((record.snapshot_id(), record.is_tombstone()));
+            cursor = record.next();
+        }
+        chain_ids
+    }
+
+    fn readable_record_for_active_snapshot(&self) -> Result<Rc<StateRecord>, StateReadFailure> {
+        let snapshot = active_snapshot();
+        if let Some(state) = self.upgrade_self() {
+            snapshot.record_read(&*state);
+        }
+
+        let snapshot_id = snapshot.snapshot_id();
+        let invalid = snapshot.invalid();
+
+        if let Some(record) = self.readable_for(snapshot_id, &invalid) {
+            return Ok(record);
+        }
+
+        let fresh_snapshot = active_snapshot();
+        let fresh_id = fresh_snapshot.snapshot_id();
+        let fresh_invalid = fresh_snapshot.invalid();
+
+        if let Some(record) = self.readable_for(fresh_id, &fresh_invalid) {
+            return Ok(record);
+        }
+
+        let global = GlobalSnapshot::get_or_create();
+        let global_id = global.snapshot_id();
+        let global_invalid = global.invalid();
+
+        if let Some(record) = self.readable_for(global_id, &global_invalid) {
+            return Ok(record);
+        }
+
+        Err(StateReadFailure {
+            state_id: self.id,
+            snapshot_id,
+            fresh_snapshot_id: fresh_id,
+            fresh_invalid,
+            record_chain: self.record_chain_debug(),
+        })
+    }
+
     fn readable_for(
         &self,
         snapshot_id: SnapshotId,
@@ -649,7 +745,13 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         };
 
         let overwritable = new_overwritable_record_locked(self);
-        overwritable.assign_value::<T>(&refreshed);
+        if let Err(error) = overwritable.assign_value::<T>(&refreshed) {
+            log::error!(
+                "snapshot writable record could not copy refreshed value for state {:?}: {:?}",
+                self.id,
+                error
+            );
+        }
         overwritable.set_snapshot_id(snapshot_id);
         overwritable.set_tombstone(false);
 
@@ -674,9 +776,11 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         });
 
         let id = ObjectId::new(&state);
-        Arc::get_mut(&mut state).expect("fresh Arc").id = id;
+        if let Some(state_inner) = Arc::get_mut(&mut state) {
+            state_inner.id = id;
+        }
 
-        *state.weak_self.lock().expect("Weak self lock poisoned") = Some(Arc::downgrade(&state));
+        *state.lock_weak_self() = Some(Arc::downgrade(&state));
 
         // No need to advance the global snapshot for initial state creation
 
@@ -684,20 +788,32 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     }
 
     pub(crate) fn add_apply_observer(&self, observer: Box<dyn Fn() + 'static>) {
-        self.apply_observers
-            .lock()
-            .expect("Observers lock poisoned")
-            .push(observer);
+        self.lock_apply_observers().push(observer);
     }
 
     fn notify_applied(&self) {
-        let observers = self
-            .apply_observers
-            .lock()
-            .expect("Observers lock poisoned");
+        let observers = self.lock_apply_observers();
         for observer in observers.iter() {
             observer();
         }
+    }
+
+    fn lock_weak_self(&self) -> MutexGuard<'_, Option<Weak<Self>>> {
+        self.weak_self
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_apply_observers(&self) -> MutexGuard<'_, Vec<Box<dyn Fn() + 'static>>> {
+        self.apply_observers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn upgrade_self(&self) -> Option<Arc<Self>> {
+        self.lock_weak_self()
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
     }
 
     #[inline]
@@ -705,62 +821,20 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         self.id
     }
 
+    pub(crate) fn try_with_value<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
+        let record = self.readable_record_for_active_snapshot().ok()?;
+        record.try_with_value(f)
+    }
+
+    pub(crate) fn try_get(&self) -> Option<T> {
+        self.try_with_value(Clone::clone)
+    }
+
     pub(crate) fn get(&self) -> T {
-        let snapshot = active_snapshot();
-        if let Some(state) = self
-            .weak_self
-            .lock()
-            .expect("Weak self lock poisoned")
-            .as_ref()
-            .and_then(|weak| weak.upgrade())
-        {
-            snapshot.record_read(&*state);
-        }
-
-        let snapshot_id = snapshot.snapshot_id();
-        let invalid = snapshot.invalid();
-
-        if let Some(record) = self.readable_for(snapshot_id, &invalid) {
-            return record.with_value(|value: &T| value.clone());
-        }
-
-        // Retry with fresh snapshot in case global snapshot was advanced
-        let fresh_snapshot = active_snapshot();
-        let fresh_id = fresh_snapshot.snapshot_id();
-        let fresh_invalid = fresh_snapshot.invalid();
-
-        if let Some(record) = self.readable_for(fresh_id, &fresh_invalid) {
-            return record.with_value(|value: &T| value.clone());
-        }
-
-        // Fallback: try reading directly from the global snapshot.
-        // This handles the case where sibling mutable snapshots have been applied
-        // but our current snapshot's invalid set was fixed at creation time.
-        // The global snapshot should have all applied changes visible.
-        let global = GlobalSnapshot::get_or_create();
-        let global_id = global.snapshot_id();
-        let global_invalid = global.invalid();
-
-        if let Some(record) = self.readable_for(global_id, &global_invalid) {
-            return record.with_value(|value: &T| value.clone());
-        }
-
-        // Debug: print the record chain to understand what's available
-        let head = self.first_record();
-        let mut chain_ids = Vec::new();
-        let mut cursor = Some(head);
-        while let Some(record) = cursor {
-            chain_ids.push((record.snapshot_id(), record.is_tombstone()));
-            cursor = record.next();
-        }
-
-        // If still null, this is an error condition
-        panic!(
-            "Reading a state that was created after the snapshot was taken or in a snapshot that has not yet been applied\n\
-             state={:?}, snapshot_id={}, fresh_snapshot_id={}, fresh_invalid={:?}\n\
-             record_chain={:?}",
-            self.id, snapshot_id, fresh_id, fresh_invalid, chain_ids
-        );
+        let record = self
+            .readable_record_for_active_snapshot()
+            .unwrap_or_else(|failure| panic!("{failure}"));
+        record.with_value(|value: &T| value.clone())
     }
 
     pub(crate) fn set(&self, new_value: T) -> bool {
@@ -806,13 +880,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 }
 
                 let mut written_state: Option<Arc<dyn StateObject>> = None;
-                if let Some(state) = self
-                    .weak_self
-                    .lock()
-                    .expect("Weak self lock poisoned")
-                    .as_ref()
-                    .and_then(|weak| weak.upgrade())
-                {
+                if let Some(state) = self.upgrade_self() {
                     let trait_object: Arc<dyn StateObject> = state.clone();
                     snapshot.record_write(trait_object.clone());
                     written_state = Some(trait_object);
@@ -860,13 +928,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                     return false;
                 }
 
-                if let Some(state) = self
-                    .weak_self
-                    .lock()
-                    .expect("Weak self lock poisoned")
-                    .as_ref()
-                    .and_then(|weak| weak.upgrade())
-                {
+                if let Some(state) = self.upgrade_self() {
                     let trait_object: Arc<dyn StateObject> = state.clone();
                     snapshot.record_write(trait_object);
                 }
@@ -968,6 +1030,14 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         self.head.clone_head()
     }
 
+    fn try_readable_record(
+        &self,
+        snapshot_id: SnapshotId,
+        invalid: &SnapshotIdSet,
+    ) -> Option<Rc<StateRecord>> {
+        self.try_readable_record(snapshot_id, invalid)
+    }
+
     fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
         self.try_readable_record(snapshot_id, invalid)
             .unwrap_or_else(|| {
@@ -988,22 +1058,39 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         current: Rc<StateRecord>,
         applied: Rc<StateRecord>,
     ) -> Option<Rc<StateRecord>> {
-        let current_vs_applied = current.with_value(|current: &T| {
-            applied.with_value(|applied_value: &T| self.policy.equivalent(current, applied_value))
-        });
-        if current_vs_applied {
+        let Some(current_value) = current.try_with_value(|value: &T| value.clone()) else {
+            log::error!(
+                "SnapshotMutableState::merge_records current record value missing or wrong type (state {:?}, current_id={})",
+                self.id,
+                current.snapshot_id()
+            );
+            return None;
+        };
+        let Some(applied_value) = applied.try_with_value(|value: &T| value.clone()) else {
+            log::error!(
+                "SnapshotMutableState::merge_records applied record value missing or wrong type (state {:?}, applied_id={})",
+                self.id,
+                applied.snapshot_id()
+            );
+            return None;
+        };
+        if self.policy.equivalent(&current_value, &applied_value) {
             return Some(current);
         }
 
-        previous
-            .with_value(|prev: &T| {
-                current.with_value(|current_value: &T| {
-                    applied.with_value(|applied_value: &T| {
-                        self.policy.merge(prev, current_value, applied_value)
-                    })
-                })
-            })
-            .map(|merged| StateRecord::new(applied.snapshot_id(), merged, None))
+        let Some(previous_value) = previous.try_with_value(|value: &T| value.clone()) else {
+            log::error!(
+                "SnapshotMutableState::merge_records previous record value missing or wrong type (state {:?}, previous_id={})",
+                self.id,
+                previous.snapshot_id()
+            );
+            return None;
+        };
+        let merged = self
+            .policy
+            .merge(&previous_value, &current_value, &applied_value)?;
+
+        Some(StateRecord::new(applied.snapshot_id(), merged, None))
     }
 
     fn promote_record(&self, child_id: SnapshotId) -> Result<(), &'static str> {
@@ -1011,7 +1098,14 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         let mut cursor = Some(head);
         while let Some(record) = cursor {
             if record.snapshot_id() == child_id {
-                let cloned = record.with_value(|value: &T| value.clone());
+                let Some(cloned) = record.try_with_value(|value: &T| value.clone()) else {
+                    log::error!(
+                        "SnapshotMutableState::promote_record child record value missing or wrong type (state {:?}, child_id={})",
+                        self.id,
+                        child_id
+                    );
+                    return Err("child record value missing or wrong type");
+                };
                 let new_id = allocate_record_id();
                 let current_head = self.head.clone_head();
                 let new_head = StateRecord::new(new_id, cloned, Some(current_head));
@@ -1023,14 +1117,23 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
             }
             cursor = record.next();
         }
-        panic!(
+        log::error!(
             "SnapshotMutableState::promote_record missing child record (state {:?}, child_id={})",
-            self.id, child_id
+            self.id,
+            child_id
         );
+        Err("missing child record")
     }
 
     fn commit_merged_record(&self, merged: Rc<StateRecord>) -> Result<SnapshotId, &'static str> {
-        let value = merged.with_value(|value: &T| value.clone());
+        let Some(value) = merged.try_with_value(|value: &T| value.clone()) else {
+            log::error!(
+                "SnapshotMutableState::commit_merged_record merged record value missing or wrong type (state {:?}, merged_id={})",
+                self.id,
+                merged.snapshot_id()
+            );
+            return Err("merged record value missing or wrong type");
+        };
         let new_id = allocate_record_id();
         let current_head = self.head.clone_head();
         let new_head = StateRecord::new(new_id, value, Some(current_head));
@@ -1228,13 +1331,34 @@ impl<T: Clone + 'static> State<T> {
             .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
     }
 
+    fn runtime_handle_opt(&self) -> Option<RuntimeHandle> {
+        runtime::runtime_handle_by_id(self.runtime_id())
+    }
+
     fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
         self.runtime_handle()
             .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
     }
 
+    fn try_with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> Option<R> {
+        self.runtime_handle_opt()?
+            .try_with_state_arena(|arena| arena.with_typed_opt::<T, R>(self.state_id(), f))?
+    }
+
     fn subscribe_current_scope(&self) {
         self.with_inner(register_current_state_scope::<T>);
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.try_with_inner(|_| ()).is_some()
+    }
+
+    pub fn try_with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
+        self.try_with_inner(|inner| inner.state.try_with_value(f))?
+    }
+
+    pub fn try_value(&self) -> Option<T> {
+        self.try_with_inner(|inner| inner.state.try_get())?
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
@@ -1282,14 +1406,18 @@ impl<T: Clone + 'static> MutableState<T> {
             .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
     }
 
+    fn runtime_handle_opt(&self) -> Option<RuntimeHandle> {
+        runtime::runtime_handle_by_id(self.runtime_id())
+    }
+
     fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
         self.runtime_handle()
             .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
     }
 
     fn try_with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> Option<R> {
-        self.runtime_handle()
-            .with_state_arena(|arena| arena.with_typed_opt::<T, R>(self.state_id(), f))
+        self.runtime_handle_opt()?
+            .try_with_state_arena(|arena| arena.with_typed_opt::<T, R>(self.state_id(), f))?
     }
 
     pub fn is_alive(&self) -> bool {
@@ -1297,11 +1425,11 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     pub fn try_with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
-        self.try_with_inner(|inner| inner.with_value(f))
+        self.try_with_inner(|inner| inner.state.try_with_value(f))?
     }
 
     pub fn try_value(&self) -> Option<T> {
-        self.try_with_inner(|inner| inner.state.get())
+        self.try_with_inner(|inner| inner.state.try_get())?
     }
 
     pub fn as_state(&self) -> State<T> {
@@ -1313,7 +1441,9 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     pub fn try_retain(&self) -> Option<OwnedMutableState<T>> {
-        let lease = self.runtime_handle().retain_state_lease(self.state_id())?;
+        let lease = self
+            .runtime_handle_opt()?
+            .retain_state_lease(self.state_id())?;
         Some(OwnedMutableState {
             state: *self,
             _lease: lease,
@@ -1349,24 +1479,30 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     pub fn replace(&self, value: T) {
-        let runtime = self.runtime_handle();
+        let Some(runtime) = self.runtime_handle_opt() else {
+            log::debug!(
+                "MutableState::replace skipped: runtime {:?} dropped",
+                self.runtime_id()
+            );
+            return;
+        };
         runtime.assert_ui_thread();
-        runtime.with_state_arena(|arena| {
-            if arena
-                .with_typed_opt::<T, ()>(self.state_id(), |inner| {
+        let replaced = runtime
+            .try_with_state_arena(|arena| {
+                arena.with_typed_opt::<T, ()>(self.state_id(), |inner| {
                     if inner.state.set(value) {
                         inner.invalidate_watchers();
                     }
                 })
-                .is_none()
-            {
-                log::debug!(
-                    "MutableState::replace skipped: state cell released (slot={}, gen={})",
-                    self.state_id().slot(),
-                    self.state_id().generation(),
-                );
-            }
-        });
+            })
+            .flatten();
+        if replaced.is_none() {
+            log::debug!(
+                "MutableState::replace skipped: state cell released (slot={}, gen={})",
+                self.state_id().slot(),
+                self.state_id().generation(),
+            );
+        }
     }
 
     pub fn set_value(&self, value: T) {
@@ -1470,13 +1606,13 @@ impl<T: Clone + 'static> State<T> {
 
 impl<T: fmt::Debug + Clone + 'static> fmt::Debug for MutableState<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.with_inner(|inner| {
-            inner.with_value(|value| {
-                f.debug_struct("MutableState")
-                    .field("value", value)
-                    .finish()
-            })
-        })
+        if let Some(value) = self.try_value() {
+            f.debug_struct("MutableState")
+                .field("value", &value)
+                .finish()
+        } else {
+            f.write_str("MutableState { value: <unavailable> }")
+        }
     }
 }
 
@@ -1711,9 +1847,11 @@ impl<T: Clone + 'static> DerivedState<T> {
 
 impl<T: fmt::Debug + Clone + 'static> fmt::Debug for State<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.with_inner(|inner| {
-            inner.with_value(|value| f.debug_struct("State").field("value", value).finish())
-        })
+        if let Some(value) = self.try_value() {
+            f.debug_struct("State").field("value", &value).finish()
+        } else {
+            f.write_str("State { value: <unavailable> }")
+        }
     }
 }
 
@@ -1752,6 +1890,10 @@ mod tests {
             Rc::clone(&self.head)
         }
 
+        fn try_readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Option<Rc<StateRecord>> {
+            Some(Rc::clone(&self.head))
+        }
+
         fn readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Rc<StateRecord> {
             Rc::clone(&self.head)
         }
@@ -1764,6 +1906,109 @@ mod tests {
 
         fn as_any(&self) -> &dyn Any {
             self
+        }
+    }
+
+    fn poison_mutex<T>(mutex: &Mutex<T>) {
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            panic!("poison snapshot state mutex for recovery test");
+        }));
+
+        assert!(poison_result.is_err());
+    }
+
+    #[test]
+    fn snapshot_mutable_state_recovers_poisoned_weak_self_lock() {
+        let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+
+        poison_mutex(&state.weak_self);
+
+        assert_eq!(state.get(), 100);
+        assert!(state.set(101));
+        assert_eq!(state.get(), 101);
+    }
+
+    #[test]
+    fn snapshot_mutable_state_recovers_poisoned_apply_observer_lock() {
+        let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+        let calls = Rc::new(Cell::new(0usize));
+        let observed_calls = Rc::clone(&calls);
+
+        poison_mutex(&state.apply_observers);
+
+        state.add_apply_observer(Box::new(move || {
+            observed_calls.set(observed_calls.get() + 1);
+        }));
+        state.notify_applied();
+
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn snapshot_mutable_state_promote_missing_record_returns_error() {
+        let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+        let missing_snapshot = usize::MAX - 17;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            StateObject::promote_record(&*state, missing_snapshot)
+        }));
+
+        assert!(
+            matches!(result, Ok(Err("missing child record"))),
+            "missing child record should be reported through Result, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_mutable_state_promote_wrong_record_type_returns_error() {
+        let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+        let child_snapshot = usize::MAX - 31;
+        let wrong_record = StateRecord::new(child_snapshot, "wrong type", None);
+        StateObject::prepend_state_record(&*state, wrong_record);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            StateObject::promote_record(&*state, child_snapshot)
+        }));
+
+        assert!(
+            matches!(result, Ok(Err("child record value missing or wrong type"))),
+            "wrong child record type should be reported through Result, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_mutable_state_commit_wrong_record_type_returns_error() {
+        let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+        let merged = StateRecord::new(usize::MAX - 43, "wrong type", None);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            StateObject::commit_merged_record(&*state, merged)
+        }));
+
+        assert!(
+            matches!(result, Ok(Err("merged record value missing or wrong type"))),
+            "wrong merged record type should be reported through Result, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_mutable_state_merge_wrong_record_type_returns_none() {
+        let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+        let previous = StateRecord::new(usize::MAX - 51, 1i32, None);
+        let current = StateRecord::new(usize::MAX - 52, "wrong type", None);
+        let applied = StateRecord::new(usize::MAX - 53, 2i32, None);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            StateObject::merge_records(&*state, previous, current, applied)
+        }));
+
+        match result {
+            Ok(None) => {}
+            Ok(Some(_)) => panic!("wrong merge record type unexpectedly produced a merged record"),
+            Err(_) => panic!("wrong merge record type should not panic"),
         }
     }
 
@@ -2037,6 +2282,13 @@ mod tests {
             fn first_record(&self) -> Rc<StateRecord> {
                 Rc::clone(&self.head)
             }
+            fn try_readable_record(
+                &self,
+                _: SnapshotId,
+                _: &SnapshotIdSet,
+            ) -> Option<Rc<StateRecord>> {
+                Some(Rc::clone(&self.head))
+            }
             fn readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Rc<StateRecord> {
                 Rc::clone(&self.head)
             }
@@ -2079,6 +2331,18 @@ mod tests {
 
         // With only one record, should return false
         assert!(!should_retain, "Single record should return false");
+    }
+
+    #[test]
+    fn snapshot_state_try_get_reports_missing_visible_record_without_panicking() {
+        crate::snapshot_pinning::reset_pinning_table();
+
+        let state = SnapshotMutableState::new_in_arc(42i32, Arc::new(NeverEqual));
+        let head = state.first_record();
+        head.set_snapshot_id(SNAPSHOT_ID_MAX);
+        head.set_next(None);
+
+        assert_eq!(state.try_get(), None);
     }
 
     #[test]
@@ -2153,7 +2417,7 @@ mod tests {
         let source = StateRecord::new(10, 42i32, None);
         let target = StateRecord::new(20, 0i32, None);
 
-        target.assign_value::<i32>(&source);
+        target.assign_value::<i32>(&source).expect("copy int value");
 
         // Verify the value was copied
         target.with_value(|val: &i32| {
@@ -2175,7 +2439,9 @@ mod tests {
         let source = StateRecord::new(10, "hello".to_string(), None);
         let target = StateRecord::new(20, "world".to_string(), None);
 
-        target.assign_value::<String>(&source);
+        target
+            .assign_value::<String>(&source)
+            .expect("copy string value");
 
         // Verify the value was copied
         target.with_value(|val: &String| {
@@ -2189,16 +2455,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "StateRecord value missing or wrong type")]
-    fn test_assign_value_copies_from_cleared_source_panics() {
+    fn test_assign_value_reports_cleared_source() {
         let source = StateRecord::new(10, 42i32, None);
         let target = StateRecord::new(20, 0i32, None);
 
-        // Clear the source value
         source.clear_value();
 
-        // Should panic because source has no value
-        target.assign_value::<i32>(&source);
+        assert_eq!(
+            target.assign_value::<i32>(&source),
+            Err(StateRecordValueError::MissingOrWrongType {
+                expected: std::any::type_name::<i32>(),
+            })
+        );
+        assert_eq!(target.with_value(|val: &i32| *val), 0);
     }
 
     #[test]
@@ -2212,7 +2481,9 @@ mod tests {
         });
 
         // Assign from source
-        target.assign_value::<i32>(&source);
+        target
+            .assign_value::<i32>(&source)
+            .expect("overwrite int value");
 
         // Verify target now has source's value
         target.with_value(|val: &i32| {
@@ -2231,7 +2502,9 @@ mod tests {
         let source = StateRecord::new(10, Point { x: 1.5, y: 2.5 }, None);
         let target = StateRecord::new(20, Point { x: 0.0, y: 0.0 }, None);
 
-        target.assign_value::<Point>(&source);
+        target
+            .assign_value::<Point>(&source)
+            .expect("copy point value");
 
         target.with_value(|val: &Point| {
             assert_eq!(val, &Point { x: 1.5, y: 2.5 });
@@ -2243,7 +2516,9 @@ mod tests {
         let record = StateRecord::new(10, 42i32, None);
 
         // Self-assignment should work (though not useful in practice)
-        record.assign_value::<i32>(&record);
+        record
+            .assign_value::<i32>(&record)
+            .expect("self-assign int value");
 
         record.with_value(|val: &i32| {
             assert_eq!(*val, 42);
@@ -2255,7 +2530,9 @@ mod tests {
         let source = StateRecord::new(10, vec![1, 2, 3, 4, 5], None);
         let target = StateRecord::new(20, Vec::<i32>::new(), None);
 
-        target.assign_value::<Vec<i32>>(&source);
+        target
+            .assign_value::<Vec<i32>>(&source)
+            .expect("copy vec value");
 
         target.with_value(|val: &Vec<i32>| {
             assert_eq!(val, &vec![1, 2, 3, 4, 5]);

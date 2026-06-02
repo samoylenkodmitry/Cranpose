@@ -3,13 +3,26 @@ use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadAnchorRegistry, PayloadRecord,
     ScopeIndex, SlotLifecycleCoordinator, SlotWriteSessionState,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::rc::Rc;
 
 mod metadata;
 mod mutation;
 mod values;
 
-static NEXT_SLOT_STORAGE_ID: AtomicUsize = AtomicUsize::new(1);
+#[cfg(test)]
+pub(crate) use values::ValueSlotError;
+
+struct SlotStorageIdentity(Rc<()>);
+
+impl SlotStorageIdentity {
+    fn new() -> Self {
+        Self(Rc::new(()))
+    }
+
+    fn id(&self) -> usize {
+        Rc::as_ptr(&self.0).addr()
+    }
+}
 
 pub(crate) struct SlotWriteSession<'a> {
     pub(super) table: &'a mut SlotTable,
@@ -18,7 +31,7 @@ pub(crate) struct SlotWriteSession<'a> {
 }
 
 pub struct SlotTable {
-    storage_id: usize,
+    storage_id: SlotStorageIdentity,
     pub(super) groups: Vec<GroupRecord>,
     pub(super) payloads: Vec<PayloadRecord>,
     pub(super) nodes: Vec<NodeRecord>,
@@ -32,7 +45,7 @@ pub struct SlotTable {
 impl SlotTable {
     pub fn new() -> Self {
         Self {
-            storage_id: NEXT_SLOT_STORAGE_ID.fetch_add(1, Ordering::Relaxed),
+            storage_id: SlotStorageIdentity::new(),
             groups: Vec::new(),
             payloads: Vec::new(),
             nodes: Vec::new(),
@@ -57,7 +70,22 @@ impl SlotTable {
     }
 
     pub(crate) fn storage_id(&self) -> usize {
-        self.storage_id
+        self.storage_id.id()
+    }
+
+    #[cfg(test)]
+    pub(in crate::slot) fn set_next_group_generation_for_test(&mut self, generation: u32) {
+        self.next_group_generation = generation;
+    }
+
+    #[cfg(test)]
+    pub(in crate::slot) fn set_next_group_anchor_for_test(&mut self, next_anchor: usize) {
+        self.anchors.set_next_anchor_for_test(next_anchor);
+    }
+
+    #[cfg(test)]
+    pub(in crate::slot) fn set_next_payload_anchor_for_test(&mut self, next_anchor: usize) {
+        self.payload_anchors.set_next_id_for_test(next_anchor);
     }
 
     pub(crate) fn compact_storage(&mut self) {

@@ -10,18 +10,8 @@ license = "Apache-2.0"
 clone_on_copy = "deny"
 redundant_locals = "deny"
 
-[package.metadata.wasm-pack.profile.release]
-# Enable wasm-opt with size optimization (can reduce WASM size by 20-40%)
-# --all-features enables all standard WASM features that Rust 1.83+ uses by default
-# (bulk-memory, nontrapping-float-to-int, sign-ext, mutable-globals)
-wasm-opt = ["-Oz", "--all-features"]
-
-# Support both binary (desktop) and cdylib (Android)
-# IMPORTANT: The cdylib name (libdesktop_app.so) must match the android.app.lib_name
-# in apps/android-demo/android/app/src/main/AndroidManifest.xml.
-# Cargo converts hyphens to underscores: "desktop-app" → "libdesktop_app.so"
 [lib]
-crate-type = ["cdylib", "staticlib", "rlib"]
+crate-type = ["rlib"]
 path = "src/lib.rs"
 
 [[bin]]
@@ -30,13 +20,28 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 [features]
-default = ["renderer-wgpu", "desktop"]
+default = ["renderer-wgpu", "desktop-http"]
 renderer-pixels = ["cranpose/renderer-pixels"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
-desktop = ["cranpose/desktop"]
-ios = ["cranpose/ios"]
-android =["cranpose/android"]
-web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-logger"]
+desktop = [
+    "cranpose/desktop",
+    "cranpose-services/uri-native",
+]
+desktop-http = ["desktop", "cranpose-services/http-native"]
+system-theme = ["cranpose-services/system-theme"]
+android = [
+    "cranpose/android",
+    "cranpose-services/http-native",
+    "cranpose-services/uri-android",
+]
+web = [
+    "cranpose/web",
+    "cranpose-services/system-theme-web",
+    "cranpose-services/uri-web",
+    "cranpose-services/web-http",
+    "dep:wasm-bindgen",
+    "dep:wasm-logger",
+]
 # Enable real app robot testing
 robot-app = ["logging", "cranpose-ui/test-helpers"]
 # Enable env_logger (adds ~600KB from regex)
@@ -56,7 +61,7 @@ getrandom = { version = "0.3.4", features = ["wasm_js"] }
 anyhow = "1.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-cranpose-services = { path = "../../crates/cranpose-services" }
+cranpose-services = { path = "../../crates/cranpose-services", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 cranpose-ui-graphics = { workspace = true }
@@ -82,10 +87,15 @@ cranpose-app-shell = { path = "../../crates/cranpose-app-shell", features = ["te
 cranpose-macros = { path = "../../crates/cranpose-macros" }
 cranpose-render-common = { path = "../../crates/cranpose-render/common" }
 cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
-cranpose-testing = { path = "../../crates/cranpose-testing" }
+cranpose-testing = { path = "../../crates/cranpose-testing", features = ["desktop-robot"] }
 pollster = "0.4.0"
 
 # Robot test runners
+[[example]]
+name = "robot_tab_walk_text_visual_contract"
+path = "examples/robot_tab_walk_text_visual_contract.rs"
+required-features = ["robot-app"]
+
 [[example]]
 name = "robot_memory_leak"
 path = "robot-runners/robot_memory_leak.rs"
@@ -569,6 +579,11 @@ path = "robot-runners/robot_text_showcase_gradient.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_text_strikeout_presented"
+path = "robot-runners/robot_text_strikeout_presented.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_render_translation_contract"
 path = "robot-runners/robot_render_translation_contract.rs"
 required-features = ["robot-app"]
@@ -581,6 +596,21 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_underline_screenshot"
 path = "robot-runners/robot_underline_screenshot.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_presented_window_redraw"
+path = "robot-runners/robot_presented_window_redraw.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_presented_window_geometry"
+path = "robot-runners/robot_presented_window_geometry.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_presented_window_hidpi_geometry"
+path = "robot-runners/robot_presented_window_hidpi_geometry.rs"
 required-features = ["robot-app"]
 
 [[example]]

@@ -1,12 +1,10 @@
 //! Image bitmap primitives used by render backends.
 
 use crate::{BlendMode, Color, Size};
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
-
-static NEXT_IMAGE_BITMAP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Errors returned while constructing an [`ImageBitmap`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -22,9 +20,9 @@ pub enum ImageBitmapError {
 /// Immutable RGBA image data used by UI primitives and render backends.
 #[derive(Clone, Debug)]
 pub struct ImageBitmap {
-    id: u64,
     width: u32,
     height: u32,
+    id: u64,
     pixels: Arc<[u8]>,
 }
 
@@ -208,15 +206,16 @@ impl ImageBitmap {
             });
         }
 
+        let id = bitmap_content_id(width, height, pixels);
         Ok(Self {
-            id: NEXT_IMAGE_BITMAP_ID.fetch_add(1, Ordering::Relaxed),
             width,
             height,
+            id,
             pixels: Arc::from(pixels),
         })
     }
 
-    /// Stable bitmap identity used by caches.
+    /// Content-derived bitmap identity used by renderer caches.
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -247,7 +246,7 @@ impl ImageBitmap {
 
 impl PartialEq for ImageBitmap {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.id() == other.id()
     }
 }
 
@@ -255,13 +254,33 @@ impl Eq for ImageBitmap {}
 
 impl Hash for ImageBitmap {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
+        self.id().hash(state);
     }
+}
+
+fn bitmap_content_id(width: u32, height: u32, pixels: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    width.hash(&mut hasher);
+    height.hash(&mut hasher);
+    pixels.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_bitmap_ids_do_not_use_process_global_or_allocation_identity() {
+        let source = include_str!("image.rs");
+        let image_counter = ["static ", "NEXT_IMAGE_BITMAP_ID"].concat();
+        let pixel_pointer = ["Arc::", "as_ptr(&self.pixels)"].concat();
+
+        assert!(
+            !source.contains(&image_counter) && !source.contains(&pixel_pointer),
+            "image bitmap ids must be derived from bitmap content, not global counters or allocation addresses"
+        );
+    }
 
     #[test]
     fn from_rgba8_accepts_valid_data() {
@@ -299,10 +318,17 @@ mod tests {
     }
 
     #[test]
-    fn ids_are_unique() {
+    fn ids_are_content_derived() {
         let a = ImageBitmap::from_rgba8(1, 1, vec![0, 0, 0, 255]).expect("bitmap a");
+        let a_clone = a.clone();
         let b = ImageBitmap::from_rgba8(1, 1, vec![0, 0, 0, 255]).expect("bitmap b");
-        assert_ne!(a.id(), b.id());
+        let c = ImageBitmap::from_rgba8(1, 1, vec![0, 0, 1, 255]).expect("bitmap c");
+        let d = ImageBitmap::from_rgba8(2, 1, vec![0, 0, 0, 255, 0, 0, 0, 255]).expect("bitmap d");
+
+        assert_eq!(a.id(), a_clone.id());
+        assert_eq!(a.id(), b.id());
+        assert_ne!(a.id(), c.id());
+        assert_ne!(a.id(), d.id());
     }
 
     #[test]

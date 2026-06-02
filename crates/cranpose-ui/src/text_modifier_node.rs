@@ -22,8 +22,8 @@
 use crate::text::{AnnotatedString, TextLayoutOptions, TextStyle};
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
-    LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
-    ModifierNodeElement, NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
+    LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
+    NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
 use std::cell::{Cell, RefCell};
 use std::hash::{Hash, Hasher};
@@ -33,7 +33,7 @@ use std::rc::Rc;
 ///
 /// This node implements three capabilities:
 /// - **Layout**: Measures text and returns appropriate size
-/// - **Draw**: Renders the text (placeholder for now)
+/// - **Draw**: Supplies prepared text state consumed by scene building
 /// - **Semantics**: Provides text content for accessibility
 ///
 /// Matches Jetpack Compose: `TextStringSimpleNode` in
@@ -166,10 +166,6 @@ impl TextPreparedLayoutHandle {
     pub(crate) fn prepare(&self, max_width: Option<f32>) -> crate::text::PreparedTextLayout {
         self.owner.prepare(max_width)
     }
-
-    fn measure_text_content(&self, max_width: Option<f32>) -> Size {
-        self.owner.measure_text_content(max_width)
-    }
 }
 
 impl TextModifierNode {
@@ -298,85 +294,12 @@ impl LayoutModifierNode for TextModifierNode {
         self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
             .height
     }
-
-    fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
-        Some(Box::new(TextMeasurementProxy {
-            layout: self.prepared_layout_handle(),
-        }))
-    }
-}
-
-/// Measurement proxy for TextModifierNode that snapshots live state.
-///
-/// Phase 2: Instead of reconstructing nodes via `TextModifierNode::new()`, this proxy
-/// directly implements measurement logic using the snapshotted text content.
-struct TextMeasurementProxy {
-    layout: TextPreparedLayoutHandle,
-}
-
-impl TextMeasurementProxy {
-    /// Measure the text content dimensions.
-    /// Matches TextModifierNode::measure_text_content() logic.
-    fn measure_text_content(&self, max_width: Option<f32>) -> Size {
-        self.layout.measure_text_content(max_width)
-    }
-}
-
-impl MeasurementProxy for TextMeasurementProxy {
-    fn measure_proxy(
-        &self,
-        _context: &mut dyn ModifierNodeContext,
-        _measurable: &dyn Measurable,
-        constraints: Constraints,
-    ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        // Directly implement text measurement logic (no node reconstruction)
-        let max_width = constraints
-            .max_width
-            .is_finite()
-            .then_some(constraints.max_width);
-        let text_size = self.measure_text_content(max_width);
-
-        // Constrain text size to the provided constraints
-        let width = text_size
-            .width
-            .clamp(constraints.min_width, constraints.max_width);
-        let height = text_size
-            .height
-            .clamp(constraints.min_height, constraints.max_height);
-
-        // Text is a leaf node - return the text size directly with no offset
-        cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size { width, height })
-    }
-
-    fn min_intrinsic_width_proxy(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content(None).width
-    }
-
-    fn max_intrinsic_width_proxy(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content(None).width
-    }
-
-    fn min_intrinsic_height_proxy(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
-            .height
-    }
-
-    fn max_intrinsic_height_proxy(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
-            .height
-    }
 }
 
 impl DrawModifierNode for TextModifierNode {
     fn draw(&self, _draw_scope: &mut dyn DrawScope) {
-        // In a full implementation, this would:
-        // 1. Get the text paragraph layout cache
-        // 2. Paint the text using draw_scope canvas
-        //
-        // For now, this is a placeholder. The actual rendering will be handled
-        // by the renderer which can read text from the modifier chain.
-        //
-        // Future: Implement actual text drawing here using DrawScope
+        // Text drawing is emitted by the scene builder from the retained node
+        // state, so the modifier draw hook remains side-effect free.
     }
 }
 
@@ -439,11 +362,6 @@ impl ModifierNodeElement for TextModifierElement {
                 self.options,
                 current.node_id(),
             ));
-            // Text/Style changed - need to invalidate layout, draw, and semantics
-            // Note: In the full implementation, we would call context.invalidate here
-            // but update() doesn't currently have access to context.
-            // The invalidation will happen on the next recomposition when the node
-            // is reconciled.
         }
     }
 
@@ -583,22 +501,25 @@ mod tests {
 
         std::thread::spawn(move || {
             let recorded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-            crate::text::set_text_measurer(RecordingPreparedLayoutMeasurer {
-                recorded: recorded.clone(),
+            let app_context = crate::AppContext::new();
+            app_context.enter(|| {
+                crate::text::set_text_measurer(RecordingPreparedLayoutMeasurer {
+                    recorded: recorded.clone(),
+                });
+
+                let mut node = TextModifierNode::new(
+                    Rc::new(AnnotatedString::from("identity")),
+                    TextStyle::default(),
+                    TextLayoutOptions::default(),
+                );
+                let mut context = BasicModifierNodeContext::new();
+                context.set_node_id(Some(77));
+                node.on_attach(&mut context);
+
+                let size = node.measure_text_content(Some(96.0));
+                tx.send((recorded.borrow().clone(), size.width, size.height))
+                    .expect("send measurement result");
             });
-
-            let mut node = TextModifierNode::new(
-                Rc::new(AnnotatedString::from("identity")),
-                TextStyle::default(),
-                TextLayoutOptions::default(),
-            );
-            let mut context = BasicModifierNodeContext::new();
-            context.set_node_id(Some(77));
-            node.on_attach(&mut context);
-
-            let size = node.measure_text_content(Some(96.0));
-            tx.send((recorded.borrow().clone(), size.width, size.height))
-                .expect("send measurement result");
         });
 
         let (recorded, width, height) = rx.recv().expect("receive measurement result");
@@ -613,29 +534,32 @@ mod tests {
 
         std::thread::spawn(move || {
             let recorded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-            crate::text::set_text_measurer(RecordingPreparedLayoutMeasurer {
-                recorded: recorded.clone(),
+            let app_context = crate::AppContext::new();
+            app_context.enter(|| {
+                crate::text::set_text_measurer(RecordingPreparedLayoutMeasurer {
+                    recorded: recorded.clone(),
+                });
+
+                let mut node = TextModifierNode::new(
+                    Rc::new(AnnotatedString::from("reuse")),
+                    TextStyle::default(),
+                    TextLayoutOptions::default(),
+                );
+                let mut context = BasicModifierNodeContext::new();
+                context.set_node_id(Some(88));
+                node.on_attach(&mut context);
+
+                let measured = node.measure_text_content(Some(120.0));
+                let prepared = node.prepared_layout_handle().prepare(Some(120.0));
+                tx.send((
+                    recorded.borrow().clone(),
+                    measured.width,
+                    measured.height,
+                    prepared.metrics.width,
+                    prepared.metrics.height,
+                ))
+                .expect("send cached layout result");
             });
-
-            let mut node = TextModifierNode::new(
-                Rc::new(AnnotatedString::from("reuse")),
-                TextStyle::default(),
-                TextLayoutOptions::default(),
-            );
-            let mut context = BasicModifierNodeContext::new();
-            context.set_node_id(Some(88));
-            node.on_attach(&mut context);
-
-            let measured = node.measure_text_content(Some(120.0));
-            let prepared = node.prepared_layout_handle().prepare(Some(120.0));
-            tx.send((
-                recorded.borrow().clone(),
-                measured.width,
-                measured.height,
-                prepared.metrics.width,
-                prepared.metrics.height,
-            ))
-            .expect("send cached layout result");
         });
 
         let (recorded, measured_width, measured_height, prepared_width, prepared_height) =

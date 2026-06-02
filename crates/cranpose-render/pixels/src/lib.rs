@@ -1,10 +1,12 @@
+#![deny(unsafe_code)]
+
 mod draw;
 mod pipeline;
 pub mod scene;
 pub mod style;
 
 use cranpose_render_common::{RenderScene, Renderer};
-use cranpose_ui::{set_text_measurer, LayoutTree};
+use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;
 
 pub use draw::draw_scene;
@@ -17,6 +19,7 @@ pub enum PixelsRendererError {
 
 pub struct PixelsRenderer {
     scene: Scene,
+    text_resources: draw::PixelsTextResources,
 }
 
 impl Default for PixelsRenderer {
@@ -27,20 +30,33 @@ impl Default for PixelsRenderer {
 
 impl PixelsRenderer {
     pub fn new() -> Self {
-        set_text_measurer(draw::CachedFontTextMeasurer::new(64));
         Self {
             scene: Scene::new(),
+            text_resources: draw::PixelsTextResources::default(),
         }
     }
 
     pub fn draw(&self, frame: &mut [u8], width: u32, height: u32) {
-        draw::draw_scene(frame, width, height, &self.scene);
+        draw::draw_scene_with_text_resources(
+            frame,
+            width,
+            height,
+            &self.scene,
+            &self.text_resources,
+        );
     }
 }
 
 impl Renderer for PixelsRenderer {
     type Scene = Scene;
     type Error = PixelsRendererError;
+
+    fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
+        app_context.set_text_measurer(draw::CachedFontTextMeasurer::with_text_resources(
+            self.text_resources.clone(),
+            64,
+        ));
+    }
 
     fn scene(&self) -> &Self::Scene {
         &self.scene

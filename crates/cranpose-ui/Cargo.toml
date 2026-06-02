@@ -21,13 +21,14 @@ cranpose-ui-graphics = { workspace = true }
 smallvec = "1.15"
 futures-task = "0.3"
 # WASM-compatible time - web-time is what winit uses internally
-web-time = "1.1"
+web-time = { workspace = true }
 log = "0.4"
-resvg = { version = "0.47.0", default-features = false }
+tiny-skia = { version = "0.11.4", default-features = false, features = ["std", "simd"], optional = true }
 thiserror = "2.0.18"
 
 [features]
 default = []
+svg = ["dep:tiny-skia"]
 # Enable test helpers like last_fling_velocity() for robot test verification.
 # This adds global state for cross-thread test access, so only enable in test builds.
 test-helpers = []
@@ -42,3 +43,7 @@ harness = false
 [[bench]]
 name = "slot_table_v2"
 harness = false
+
+[[test]]
+name = "svg_painter_integration"
+required-features = ["svg"]

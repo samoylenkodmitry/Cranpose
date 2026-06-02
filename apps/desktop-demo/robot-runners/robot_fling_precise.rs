@@ -14,7 +14,6 @@
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{exit_with_timeout, find_bounds_by_text, visible_bounds_in_viewport};
 use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
-use cranpose_ui::{last_fling_velocity, reset_last_fling_velocity};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -232,7 +231,9 @@ fn main() {
             // TEST 4: Fast swipe triggers fling (check console output)
             // =========================================================
             test!("Fast swipe triggers fling", {
-                reset_last_fling_velocity();
+                robot
+                    .reset_last_fling_velocity()
+                    .map_err(|err| format!("failed to reset fling velocity: {err}"))?;
 
                 // Get starting position
                 let before = find_item(&robot, "Item #0");
@@ -263,7 +264,9 @@ fn main() {
                 match after {
                     Some((_, after_y)) => {
                         let total_movement = before_y - after_y;
-                        let velocity = last_fling_velocity();
+                        let velocity = robot
+                            .last_fling_velocity()
+                            .map_err(|err| format!("failed to query fling velocity: {err}"))?;
                         if velocity.abs() < 50.0 {
                             return Err(format!(
                                 "Fling velocity {:.1} < 50px/sec (expected fling momentum)",

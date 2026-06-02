@@ -44,23 +44,32 @@ impl AnchorRegistry {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn allocate(&mut self) -> AnchorId {
+        self.try_allocate().unwrap_or(AnchorId::INVALID)
+    }
+
+    pub(super) fn try_allocate(&mut self) -> Option<AnchorId> {
         let anchor = if let Some(Reverse(id)) = self.free_ids.pop() {
             AnchorId {
                 id,
                 generation: self.reused_generations.remove(&id).unwrap_or(2),
             }
         } else {
+            if self.next_anchor > u32::MAX as usize {
+                log::error!(
+                    "slot table rejected group anchor allocation because id counter {} exceeds u32 storage",
+                    self.next_anchor
+                );
+                return None;
+            }
             let anchor = AnchorId::new(self.next_anchor);
-            self.next_anchor = self
-                .next_anchor
-                .checked_add(1)
-                .expect("anchor counter overflow");
+            self.next_anchor = self.next_anchor.saturating_add(1);
             anchor
         };
         let replaced = self.set_state(anchor, AnchorState::Invalidated);
         debug_assert!(replaced.is_none(), "group anchors must stay unique");
-        anchor
+        Some(anchor)
     }
 
     pub(super) fn state(&self, anchor: AnchorId) -> Option<AnchorState> {
@@ -84,6 +93,11 @@ impl AnchorRegistry {
 
     pub(super) fn active_len(&self) -> usize {
         self.storage.active_len()
+    }
+
+    #[cfg(test)]
+    pub(in crate::slot) fn set_next_anchor_for_test(&mut self, next_anchor: usize) {
+        self.next_anchor = next_anchor;
     }
 
     pub(super) fn slot_len(&self) -> usize {
@@ -110,13 +124,16 @@ impl AnchorRegistry {
         self.storage
             .slots()
             .filter_map(|(id, slot)| match slot.state {
-                AnchorState::Active(group_index) => Some((
-                    AnchorId {
-                        id: u32::try_from(id).expect("anchor id must fit u32"),
-                        generation: slot.generation,
-                    },
-                    group_index,
-                )),
+                AnchorState::Active(group_index) => {
+                    let id = u32::try_from(id).ok()?;
+                    Some((
+                        AnchorId {
+                            id,
+                            generation: slot.generation,
+                        },
+                        group_index,
+                    ))
+                }
                 AnchorState::Detached | AnchorState::Invalidated => None,
             })
     }
@@ -194,21 +211,17 @@ impl AnchorRegistry {
 
     pub(super) fn set_active(&mut self, anchor: AnchorId, group_index: usize) {
         let previous = self.set_state(anchor, AnchorState::Active(group_index));
-        assert!(
-            previous.is_some(),
-            "group anchor must be registered with a matching generation before activation: {:?}",
-            anchor
-        );
+        if previous.is_none() {
+            log::error!("slot table ignored active-state update for stale group anchor {anchor:?}");
+        }
     }
 
     pub(super) fn mark_detached(&mut self, anchor: AnchorId) {
         if anchor.is_valid() {
             let previous = self.set_state(anchor, AnchorState::Detached);
-            assert!(
-                previous.is_some(),
-                "group anchor must be registered with a matching generation before detach: {:?}",
-                anchor
-            );
+            if previous.is_none() {
+                log::error!("slot table ignored detach for stale group anchor {anchor:?}");
+            }
         }
     }
 
@@ -241,10 +254,12 @@ impl AnchorRegistry {
         if slot.generation != anchor.generation {
             return false;
         }
-        assert!(
-            self.storage.remove_state(anchor.id as usize).is_some(),
-            "validated anchor state must remove"
-        );
+        if self.storage.remove_state(anchor.id as usize).is_none() {
+            log::error!(
+                "slot table ignored invalidation for group anchor removed during validation {anchor:?}"
+            );
+            return false;
+        }
         self.enqueue_reuse(anchor);
         true
     }
@@ -258,11 +273,13 @@ impl AnchorRegistry {
     }
 
     fn enqueue_reuse(&mut self, anchor: AnchorId) {
+        let Some(next_generation) = anchor.generation.checked_add(1) else {
+            log::error!(
+                "slot table cannot reuse group anchor {anchor:?}: generation counter overflow"
+            );
+            return;
+        };
         self.free_ids.push(Reverse(anchor.id));
-        let next_generation = anchor
-            .generation
-            .checked_add(1)
-            .expect("anchor generation counter overflow");
         if next_generation == 2 {
             self.reused_generations.remove(&anchor.id);
             return;
@@ -403,17 +420,17 @@ mod tests {
         assert_eq!(registry.free_len(), 0);
         assert_eq!(registry.invalidated_len(), 1);
 
-        let stale_set_active = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            registry.set_active(stale_anchor, 99);
-        }));
-        assert!(
-            stale_set_active.is_err(),
-            "stale generation must be rejected before it can reactivate a reused group anchor id"
-        );
+        registry.set_active(stale_anchor, 99);
         assert_eq!(
             registry.state(reused_anchor),
             Some(AnchorState::Invalidated),
             "stale generation must not reactivate a reused anchor id"
+        );
+        registry.mark_detached(stale_anchor);
+        assert_eq!(
+            registry.state(reused_anchor),
+            Some(AnchorState::Invalidated),
+            "stale generation must not detach a reused anchor id"
         );
 
         registry.set_active(reused_anchor, 7);

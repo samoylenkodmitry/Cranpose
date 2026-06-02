@@ -1,5 +1,5 @@
 use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal};
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "web-http"))]
 use futures_util::{stream, StreamExt};
 use std::future::Future;
 use std::pin::Pin;
@@ -19,6 +19,13 @@ pub enum HttpError {
     InvalidResponse { url: String, message: String },
     #[error("No window object available")]
     NoWindow,
+    #[error("{operation} worker thread panicked")]
+    WorkerPanicked { operation: &'static str },
+    #[error("{operation} requires cranpose-services feature `{feature}`")]
+    UnsupportedFeature {
+        operation: &'static str,
+        feature: &'static str,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,7 +49,7 @@ pub async fn map_ordered_concurrent<I, T, F, Fut>(
     items: &[I],
     concurrency: usize,
     task: F,
-) -> Vec<T>
+) -> Result<Vec<T>, HttpError>
 where
     I: Clone + Send,
     T: Send,
@@ -53,32 +60,34 @@ where
     let mut results = Vec::with_capacity(items.len());
 
     for chunk in items.chunks(concurrency.max(1)) {
-        std::thread::scope(|scope| {
+        let chunk_results = std::thread::scope(|scope| {
             let mut handles = Vec::with_capacity(chunk.len());
             for item in chunk.iter().cloned() {
                 let task = Arc::clone(&task);
                 handles.push(scope.spawn(move || pollster::block_on(task(item))));
             }
 
+            let mut chunk_results = Vec::with_capacity(handles.len());
             for handle in handles {
-                results.push(
-                    handle
-                        .join()
-                        .unwrap_or_else(|_| panic!("ordered concurrent worker thread panicked")),
-                );
+                let value = handle.join().map_err(|_| HttpError::WorkerPanicked {
+                    operation: "ordered concurrent task",
+                })?;
+                chunk_results.push(value);
             }
-        });
+            Ok::<Vec<T>, HttpError>(chunk_results)
+        })?;
+        results.extend(chunk_results);
     }
 
-    results
+    Ok(results)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "web-http"))]
 pub async fn map_ordered_concurrent<I, T, F, Fut>(
     items: &[I],
     concurrency: usize,
     task: F,
-) -> Vec<T>
+) -> Result<Vec<T>, HttpError>
 where
     I: Clone,
     F: Fn(I) -> Fut + Clone,
@@ -93,17 +102,118 @@ where
     .await;
 
     results.sort_by_key(|(index, _)| *index);
-    results.into_iter().map(|(_, value)| value).collect()
+    Ok(results.into_iter().map(|(_, value)| value).collect())
 }
 
-struct DefaultHttpClient;
+#[cfg(all(target_arch = "wasm32", not(feature = "web-http")))]
+pub async fn map_ordered_concurrent<I, T, F, Fut>(
+    items: &[I],
+    _concurrency: usize,
+    task: F,
+) -> Result<Vec<T>, HttpError>
+where
+    I: Clone,
+    F: Fn(I) -> Fut,
+    Fut: Future<Output = T>,
+{
+    Ok(map_ordered_sequential(items, task).await)
+}
+
+#[cfg(all(target_arch = "wasm32", not(feature = "web-http")))]
+async fn map_ordered_sequential<I, T, F, Fut>(items: &[I], task: F) -> Vec<T>
+where
+    I: Clone,
+    F: Fn(I) -> Fut,
+    Fut: Future<Output = T>,
+{
+    let mut results = Vec::with_capacity(items.len());
+    for item in items.iter().cloned() {
+        results.push(task(item).await);
+    }
+    results
+}
+
+struct DefaultHttpClient {
+    #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+    native_client: Result<reqwest::blocking::Client, HttpError>,
+}
+
+impl DefaultHttpClient {
+    fn new() -> Self {
+        Self {
+            #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+            native_client: build_native_client(),
+        }
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+    fn native_response(&self, url: &str) -> Result<reqwest::blocking::Response, HttpError> {
+        let response = self
+            .native_client
+            .as_ref()
+            .map_err(Clone::clone)?
+            .get(url)
+            .send()
+            .map_err(|err| HttpError::RequestFailed {
+                url: url.to_string(),
+                message: err.to_string(),
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(HttpError::HttpStatus {
+                url: url.to_string(),
+                status: status.as_u16(),
+            });
+        }
+
+        Ok(response)
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+    fn fetch_text_native(&self, url: &str) -> Result<String, HttpError> {
+        self.native_response(url)?
+            .text()
+            .map_err(|err| HttpError::BodyReadFailed {
+                url: url.to_string(),
+                message: err.to_string(),
+            })
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "http-native")))]
+    fn fetch_text_native(&self, _url: &str) -> Result<String, HttpError> {
+        Err(HttpError::UnsupportedFeature {
+            operation: "native HTTP text requests",
+            feature: "http-native",
+        })
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+    fn fetch_bytes_native(&self, url: &str) -> Result<Vec<u8>, HttpError> {
+        self.native_response(url)?
+            .bytes()
+            .map(|bytes| bytes.to_vec())
+            .map_err(|err| HttpError::BodyReadFailed {
+                url: url.to_string(),
+                message: err.to_string(),
+            })
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "http-native")))]
+    fn fetch_bytes_native(&self, _url: &str) -> Result<Vec<u8>, HttpError> {
+        Err(HttpError::UnsupportedFeature {
+            operation: "native HTTP byte requests",
+            feature: "http-native",
+        })
+    }
+}
 
 impl HttpClient for DefaultHttpClient {
     fn get_text<'a>(&'a self, url: &'a str) -> HttpFuture<'a, String> {
         Box::pin(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                fetch_text_native(url)
+                self.fetch_text_native(url)
             }
 
             #[cfg(target_arch = "wasm32")]
@@ -117,7 +227,7 @@ impl HttpClient for DefaultHttpClient {
         Box::pin(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                fetch_bytes_native(url)
+                self.fetch_bytes_native(url)
             }
 
             #[cfg(target_arch = "wasm32")]
@@ -128,60 +238,7 @@ impl HttpClient for DefaultHttpClient {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn fetch_text_native(url: &str) -> Result<String, HttpError> {
-    native_response(url)?
-        .text()
-        .map_err(|err| HttpError::BodyReadFailed {
-            url: url.to_string(),
-            message: err.to_string(),
-        })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn fetch_bytes_native(url: &str) -> Result<Vec<u8>, HttpError> {
-    native_response(url)?
-        .bytes()
-        .map(|bytes| bytes.to_vec())
-        .map_err(|err| HttpError::BodyReadFailed {
-            url: url.to_string(),
-            message: err.to_string(),
-        })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn native_response(url: &str) -> Result<reqwest::blocking::Response, HttpError> {
-    let response = native_client()?
-        .get(url)
-        .send()
-        .map_err(|err| HttpError::RequestFailed {
-            url: url.to_string(),
-            message: err.to_string(),
-        })?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(HttpError::HttpStatus {
-            url: url.to_string(),
-            status: status.as_u16(),
-        });
-    }
-
-    Ok(response)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn native_client() -> Result<&'static reqwest::blocking::Client, HttpError> {
-    use std::sync::OnceLock;
-
-    static CLIENT: OnceLock<Result<reqwest::blocking::Client, HttpError>> = OnceLock::new();
-    CLIENT
-        .get_or_init(build_native_client)
-        .as_ref()
-        .map_err(Clone::clone)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 fn build_native_client() -> Result<reqwest::blocking::Client, HttpError> {
     use std::time::Duration;
 
@@ -194,7 +251,7 @@ fn build_native_client() -> Result<reqwest::blocking::Client, HttpError> {
     .map_err(|err| HttpError::ClientInit(err.to_string()))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 fn configure_native_client_builder(
     builder: reqwest::blocking::ClientBuilder,
 ) -> Result<reqwest::blocking::ClientBuilder, HttpError> {
@@ -209,7 +266,7 @@ fn configure_native_client_builder(
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "http-native"))]
 fn android_root_certificates() -> Result<Vec<reqwest::Certificate>, HttpError> {
     certificates_from_der_chain(
         webpki_root_certs::TLS_SERVER_ROOT_CERTS
@@ -218,7 +275,10 @@ fn android_root_certificates() -> Result<Vec<reqwest::Certificate>, HttpError> {
     )
 }
 
-#[cfg(any(test, target_os = "android"))]
+#[cfg(any(
+    all(test, not(target_arch = "wasm32"), feature = "http-native"),
+    all(target_os = "android", feature = "http-native")
+))]
 fn certificates_from_der_chain<'a, I>(
     certificates: I,
 ) -> Result<Vec<reqwest::Certificate>, HttpError>
@@ -238,7 +298,7 @@ where
         .collect()
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "web-http"))]
 async fn fetch_text_web(url: &str) -> Result<String, HttpError> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
@@ -296,7 +356,15 @@ async fn fetch_text_web(url: &str) -> Result<String, HttpError> {
         })
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(feature = "web-http")))]
+async fn fetch_text_web(_url: &str) -> Result<String, HttpError> {
+    Err(HttpError::UnsupportedFeature {
+        operation: "web HTTP text requests",
+        feature: "web-http",
+    })
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "web-http"))]
 async fn fetch_bytes_web(url: &str) -> Result<Vec<u8>, HttpError> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
@@ -352,8 +420,16 @@ async fn fetch_bytes_web(url: &str) -> Result<Vec<u8>, HttpError> {
     Ok(array.to_vec())
 }
 
+#[cfg(all(target_arch = "wasm32", not(feature = "web-http")))]
+async fn fetch_bytes_web(_url: &str) -> Result<Vec<u8>, HttpError> {
+    Err(HttpError::UnsupportedFeature {
+        operation: "web HTTP byte requests",
+        feature: "web-http",
+    })
+}
+
 pub fn default_http_client() -> HttpClientRef {
-    Arc::new(DefaultHttpClient)
+    Arc::new(DefaultHttpClient::new())
 }
 
 pub fn local_http_client() -> CompositionLocal<HttpClientRef> {
@@ -363,15 +439,8 @@ pub fn local_http_client() -> CompositionLocal<HttpClientRef> {
 
     LOCAL_HTTP_CLIENT.with(|cell| {
         let mut local = cell.borrow_mut();
-        if local.is_none() {
-            *local = Some(compositionLocalOfWithPolicy(
-                default_http_client,
-                Arc::ptr_eq,
-            ));
-        }
         local
-            .as_ref()
-            .expect("HTTP client composition local must be initialized")
+            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_http_client, Arc::ptr_eq))
             .clone()
     })
 }
@@ -383,7 +452,7 @@ mod tests {
     use cranpose_core::CompositionLocalProvider;
     use std::cell::RefCell;
     use std::rc::Rc;
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     use std::thread;
 
     struct TestHttpClient;
@@ -404,6 +473,21 @@ mod tests {
     }
 
     #[test]
+    fn default_http_client_has_no_process_global_native_client_cache() {
+        let source = include_str!("http.rs");
+        let once_lock = ["Once", "Lock"].concat();
+        let static_client = ["static ", "CLIENT"].concat();
+        let native_client_fn = ["fn ", "native_client()"].concat();
+
+        assert!(
+            !source.contains(&static_client)
+                && !source.contains(&native_client_fn)
+                && !source.contains(&once_lock),
+            "native HTTP client state must be owned by DefaultHttpClient instead of a process-global cache"
+        );
+    }
+
+    #[test]
     fn test_client_uses_default_get_bytes_from_text() {
         let client = TestHttpClient;
         let bytes = pollster::block_on(client.get_bytes("https://example.com")).expect("bytes");
@@ -415,9 +499,50 @@ mod tests {
         let inputs = [3usize, 1, 4, 1, 5];
         let outputs = pollster::block_on(map_ordered_concurrent(&inputs, 2, |value| async move {
             value * 10
-        }));
+        }))
+        .expect("ordered concurrent mapping");
 
         assert_eq!(outputs, vec![30, 10, 40, 10, 50]);
+    }
+
+    #[test]
+    fn native_ordered_concurrency_is_not_tied_to_native_http_client_feature() {
+        let source = include_str!("http.rs");
+        assert!(
+            source.contains(
+                "#[cfg(not(target_arch = \"wasm32\"))]\npub async fn map_ordered_concurrent"
+            ),
+            "native ordered concurrency must stay available without the HTTP client feature"
+        );
+        assert!(
+            !source.contains(
+                "all(not(target_arch = \"wasm32\"), feature = \"http-native\")]\npub async fn map_ordered_concurrent"
+            ) && !source.contains(
+                "all(not(target_arch = \"wasm32\"), not(feature = \"http-native\"))]\npub async fn map_ordered_concurrent"
+            ),
+            "native ordered concurrency must not split into HTTP-enabled and HTTP-disabled behavior"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn map_ordered_concurrent_reports_worker_panic() {
+        let inputs = [1usize];
+        let should_panic = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let should_panic_for_task = Arc::clone(&should_panic);
+
+        let error = pollster::block_on(map_ordered_concurrent(&inputs, 1, move |_| {
+            let should_panic = Arc::clone(&should_panic_for_task);
+            async move {
+                if should_panic.load(std::sync::atomic::Ordering::SeqCst) {
+                    panic!("test worker panic");
+                }
+                1usize
+            }
+        }))
+        .expect_err("worker panic should be reported");
+
+        assert!(matches!(error, HttpError::WorkerPanicked { .. }));
     }
 
     #[test]
@@ -450,13 +575,28 @@ mod tests {
         assert!(!Arc::ptr_eq(&current, &default_client));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "http-native")))]
+    #[test]
+    fn default_http_client_reports_disabled_native_http_feature() {
+        let error = pollster::block_on(default_http_client().get_text("https://example.com"))
+            .expect_err("native HTTP should be feature-gated");
+
+        assert!(matches!(
+            error,
+            HttpError::UnsupportedFeature {
+                feature: "http-native",
+                ..
+            }
+        ));
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     #[test]
     fn native_http_client_builds() {
         build_native_client().expect("native HTTP client should initialize");
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     #[test]
     fn certificates_from_der_chain_accepts_valid_roots() {
         let certificates = certificates_from_der_chain(
@@ -470,7 +610,7 @@ mod tests {
         assert_eq!(certificates.len(), 3);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     #[test]
     fn default_http_client_fetches_text_from_local_server() {
         use std::io::{Read, Write};

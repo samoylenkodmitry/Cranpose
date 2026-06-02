@@ -26,7 +26,7 @@ pub const DRAG_THRESHOLD: f32 = 8.0;
 
 /// Maximum fling velocity in logical pixels per second.
 ///
-/// Matches Android's default maximum fling velocity (ViewConfiguration) on a
-/// baseline density. This will be replaced by a platform-driven configuration
-/// when ViewConfiguration is plumbed through.
+/// Matches Android's default maximum fling velocity (ViewConfiguration) at
+/// baseline density. Platform-specific configuration should feed this value
+/// through the input runtime when host APIs expose it.
 pub const MAX_FLING_VELOCITY: f32 = 8_000.0;

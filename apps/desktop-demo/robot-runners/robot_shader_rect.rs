@@ -6,7 +6,8 @@
 
 use cranpose::AppLauncher;
 use cranpose_testing::{
-    find_button_in_semantics, find_text_in_semantics, sample_screenshot_pixel_logical,
+    find_button_in_semantics, find_in_semantics, find_text_exact, find_text_in_semantics,
+    sample_screenshot_pixel_logical,
 };
 use desktop_app::app;
 use std::time::Duration;
@@ -34,6 +35,21 @@ fn wait_for_text(
 ) -> Option<(f32, f32, f32, f32)> {
     for _ in 0..attempts {
         if let Some(bounds) = find_text_in_semantics(robot, text) {
+            return Some(bounds);
+        }
+        std::thread::sleep(delay);
+    }
+    None
+}
+
+fn wait_for_exact_text(
+    robot: &cranpose::Robot,
+    text: &str,
+    attempts: usize,
+    delay: Duration,
+) -> Option<(f32, f32, f32, f32)> {
+    for _ in 0..attempts {
+        if let Some(bounds) = find_in_semantics(robot, |elem| find_text_exact(elem, text)) {
             return Some(bounds);
         }
         std::thread::sleep(delay);
@@ -123,7 +139,7 @@ fn main() {
             std::thread::sleep(Duration::from_millis(200));
 
             // The fire shader box should be visible (may need to scroll)
-            let fire_text = find_text_in_semantics(&robot, "Fire");
+            let fire_text = find_in_semantics(&robot, |elem| find_text_exact(elem, "Classic Fire"));
             if fire_text.is_none() {
                 // Try scrolling down
                 robot.mouse_scroll(0.0, -300.0).ok();
@@ -140,9 +156,9 @@ fn main() {
             };
 
             let Some((fire_x, fire_y, fire_w, fire_h)) =
-                wait_for_text(&robot, "Fire", 20, Duration::from_millis(100))
+                wait_for_exact_text(&robot, "Classic Fire", 20, Duration::from_millis(100))
             else {
-                println!("FATAL: Fire text not found (even after scroll)");
+                println!("FATAL: Classic Fire text not found (even after scroll)");
                 robot.exit().ok();
                 std::process::exit(1);
             };

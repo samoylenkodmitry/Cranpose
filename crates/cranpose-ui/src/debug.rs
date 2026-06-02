@@ -26,7 +26,7 @@ use crate::modifier::{ModifierChainInspectorNode, ModifierInspectorRecord};
 use crate::renderer::{RecordedRenderScene, RenderOp};
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities};
 use std::fmt::Write;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 /// Logs the current layout tree through the logger with indentation showing hierarchy.
 pub fn log_layout_tree(layout: &LayoutTree) {
@@ -247,22 +247,15 @@ fn describe_inspector(record: &ModifierInspectorRecord) -> String {
     }
 }
 
-type TraceCallback = dyn Fn(&[ModifierChainInspectorNode]) + Send + Sync + 'static;
-
-fn trace_slot() -> &'static Mutex<Option<Arc<TraceCallback>>> {
-    static TRACE: OnceLock<Mutex<Option<Arc<TraceCallback>>>> = OnceLock::new();
-    TRACE.get_or_init(|| Mutex::new(None))
-}
-
 /// RAII guard returned when installing a modifier chain trace subscriber.
 pub struct ModifierChainTraceGuard {
-    active: bool,
+    context_id: Option<crate::render_state::AppContextId>,
 }
 
 impl Drop for ModifierChainTraceGuard {
     fn drop(&mut self) {
-        if self.active {
-            *trace_slot().lock().unwrap() = None;
+        if let Some(context_id) = self.context_id.take() {
+            crate::render_state::clear_modifier_chain_trace(context_id);
         }
     }
 }
@@ -272,15 +265,14 @@ pub fn install_modifier_chain_trace<F>(callback: F) -> ModifierChainTraceGuard
 where
     F: Fn(&[ModifierChainInspectorNode]) + Send + Sync + 'static,
 {
-    *trace_slot().lock().unwrap() = Some(Arc::new(callback));
-    ModifierChainTraceGuard { active: true }
+    let context_id = crate::render_state::set_modifier_chain_trace(Arc::new(callback));
+    ModifierChainTraceGuard {
+        context_id: Some(context_id),
+    }
 }
 
 pub(crate) fn emit_modifier_chain_trace(nodes: &[ModifierChainInspectorNode]) {
-    let maybe = trace_slot().lock().unwrap().clone();
-    if let Some(callback) = maybe {
-        callback(nodes);
-    }
+    crate::render_state::emit_modifier_chain_trace(nodes);
 }
 
 #[cfg(test)]

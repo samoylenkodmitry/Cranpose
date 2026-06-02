@@ -1,7 +1,12 @@
 use super::StdRuntime;
-use cranpose_core::{location_key, Composition, MemoryApplier, MutableState};
+use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, RuntimeScheduler};
 use std::cell::{Cell, RefCell};
+use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
 
 #[test]
 fn std_runtime_requests_frame_and_recomposes_on_state_change() {
@@ -75,4 +80,80 @@ fn std_runtime_requests_frame_and_recomposes_on_state_change() {
         "state change should trigger recomposition"
     );
     assert_eq!(state.value(), 1);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_frame_waker_replacement_panic_does_not_poison_scheduler() {
+    struct PanicOnDrop;
+
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("frame waker drop panic");
+        }
+    }
+
+    let runtime = StdRuntime::new();
+    let drop_marker = PanicOnDrop;
+    runtime.set_frame_waker(move || {
+        let _ = &drop_marker;
+    });
+
+    let replacement = panic::catch_unwind(AssertUnwindSafe(|| {
+        runtime.set_frame_waker(|| {});
+    }));
+    assert!(
+        replacement.is_err(),
+        "replacing the panic-on-drop waker should still surface the waker drop panic"
+    );
+
+    let woke = Arc::new(AtomicBool::new(false));
+    let woke_for_waker = Arc::clone(&woke);
+    runtime.set_frame_waker(move || {
+        woke_for_waker.store(true, Ordering::SeqCst);
+    });
+
+    runtime.scheduler().schedule_frame();
+    assert!(
+        woke.load(Ordering::SeqCst),
+        "scheduler should recover the frame-waker lock after a replacement panic"
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_frame_waker_clear_panic_does_not_poison_scheduler() {
+    struct PanicOnDrop;
+
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("frame waker drop panic");
+        }
+    }
+
+    let runtime = StdRuntime::new();
+    let drop_marker = PanicOnDrop;
+    runtime.set_frame_waker(move || {
+        let _ = &drop_marker;
+    });
+
+    let clear = panic::catch_unwind(AssertUnwindSafe(|| {
+        runtime.clear_frame_waker();
+    }));
+    assert!(
+        clear.is_err(),
+        "clearing the panic-on-drop waker should still surface the waker drop panic"
+    );
+
+    let woke = Arc::new(AtomicBool::new(false));
+    let woke_for_waker = Arc::clone(&woke);
+    runtime.set_frame_waker(move || {
+        woke_for_waker.store(true, Ordering::SeqCst);
+    });
+
+    runtime.scheduler().schedule_frame();
+    assert!(
+        woke.load(Ordering::SeqCst),
+        "scheduler should recover the frame-waker lock after a clear panic"
+    );
 }

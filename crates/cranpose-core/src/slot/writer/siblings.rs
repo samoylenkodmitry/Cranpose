@@ -1,4 +1,4 @@
-use super::super::{ActiveSubtreeRoot, GroupKey, SlotTable};
+use super::super::{ActiveSubtreeRoot, ChildCursor, DirectChildRange, GroupKey, SlotTable};
 use super::state::SlotWriteSessionState;
 use crate::{collections::map::HashMap, AnchorId};
 use smallvec::SmallVec;
@@ -58,22 +58,25 @@ pub(in crate::slot) struct SiblingIndex {
 }
 
 impl SiblingIndex {
-    fn build(table: &SlotTable, parent_anchor: AnchorId, search_start: usize) -> Self {
-        let siblings = table.direct_child_range(parent_anchor);
-        assert!(
-            search_start >= siblings.start(),
-            "sibling index search must start inside the parent child range"
-        );
+    fn build(table: &mut SlotTable, parent_anchor: AnchorId, search_start: usize) -> Self {
+        let Some(siblings) = repaired_sibling_range(
+            table,
+            parent_anchor,
+            search_start,
+            "later sibling index parent range",
+        ) else {
+            return Self::default();
+        };
         let mut by_key: HashMap<GroupKey, SmallVec<[AnchorId; 2]>> = HashMap::default();
         let mut index = search_start;
         while index < siblings.end() {
-            let group = table.group_sibling_record_at_index(index);
-            debug_assert_eq!(
-                group.parent_anchor, parent_anchor,
-                "later sibling index must stay on direct children"
-            );
+            let Some((group, next_index)) =
+                repaired_sibling_step(table, parent_anchor, index, "later sibling index build")
+            else {
+                break;
+            };
             by_key.entry(group.key).or_default().push(group.anchor);
-            index += group.subtree_len;
+            index = next_index;
         }
         Self { by_key }
     }
@@ -115,7 +118,7 @@ impl SlotWriteSessionState {
 
     pub(in crate::slot) fn find_later_sibling(
         &mut self,
-        table: &SlotTable,
+        table: &mut SlotTable,
         parent_anchor: AnchorId,
         key: GroupKey,
         search_start: usize,
@@ -124,11 +127,12 @@ impl SlotWriteSessionState {
             return sibling_index.find(table, parent_anchor, key, search_start);
         }
 
-        let siblings = table.direct_child_range(parent_anchor);
-        assert!(
-            search_start >= siblings.start(),
-            "later sibling search must start inside the parent child range"
-        );
+        let siblings = repaired_sibling_range(
+            table,
+            parent_anchor,
+            search_start,
+            "later sibling search parent range",
+        )?;
         if search_start >= siblings.end() {
             return None;
         }
@@ -136,16 +140,13 @@ impl SlotWriteSessionState {
         let mut index = search_start;
         let mut direct_children_seen = 0usize;
         while index < siblings.end() && direct_children_seen < COMPILED_SIBLING_INDEX_THRESHOLD {
-            let group = table.group_sibling_record_at_index(index);
-            debug_assert_eq!(
-                group.parent_anchor, parent_anchor,
-                "later sibling scans must stay on direct children"
-            );
+            let (group, next_index) =
+                repaired_sibling_step(table, parent_anchor, index, "later sibling linear scan")?;
             if group.key == key {
                 return Some(ActiveSubtreeRoot::new(group.anchor));
             }
             direct_children_seen += 1;
-            index += group.subtree_len;
+            index = next_index;
         }
 
         if index >= siblings.end() {
@@ -157,6 +158,75 @@ impl SlotWriteSessionState {
         *self.current_sibling_index() = Some(sibling_index);
         found
     }
+}
+
+fn repaired_sibling_range(
+    table: &mut SlotTable,
+    parent_anchor: AnchorId,
+    search_start: usize,
+    operation: &'static str,
+) -> Option<DirectChildRange> {
+    if !table.repair_child_cursor_parent_subtree(
+        ChildCursor::new(parent_anchor, search_start),
+        operation,
+    ) {
+        return None;
+    }
+
+    let siblings = table.direct_child_range(parent_anchor);
+    if search_start < siblings.start() {
+        log::error!(
+            "slot writer rejected later sibling search for parent {parent_anchor:?} during {operation}: search start {search_start} is before child range start {}",
+            siblings.start()
+        );
+        return None;
+    }
+    Some(siblings)
+}
+
+fn repaired_sibling_step(
+    table: &mut SlotTable,
+    parent_anchor: AnchorId,
+    index: usize,
+    operation: &'static str,
+) -> Option<(SiblingStep, usize)> {
+    let next_index = table
+        .repair_group_subtree_range_at_index(index, operation)?
+        .as_group_range()
+        .end();
+    if next_index <= index {
+        log::error!(
+            "slot writer rejected later sibling step at group index {index} during {operation}: repaired next index {next_index} does not advance"
+        );
+        return None;
+    }
+
+    let Some(group) = table.group_sibling_record_at_index_checked(index) else {
+        log::error!(
+            "slot writer rejected later sibling step at missing group index {index} during {operation}"
+        );
+        return None;
+    };
+    if group.parent_anchor != parent_anchor {
+        log::error!(
+            "slot writer rejected later sibling step at group index {index} during {operation}: group parent {:?} does not match expected parent {parent_anchor:?}",
+            group.parent_anchor
+        );
+        return None;
+    }
+
+    Some((
+        SiblingStep {
+            key: group.key,
+            anchor: group.anchor,
+        },
+        next_index,
+    ))
+}
+
+struct SiblingStep {
+    key: GroupKey,
+    anchor: AnchorId,
 }
 
 #[cfg(test)]

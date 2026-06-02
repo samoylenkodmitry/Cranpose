@@ -1,10 +1,11 @@
 //! Robot test: full LeetCode Daily Composer layout scroll stability repro for issue #269.
 
+mod output_paths;
 mod perf_robot_stats;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
 
-use cranpose::{fps_stats, AppLauncher};
+use cranpose::AppLauncher;
 use cranpose_core::{remember, useState, MutableState};
 use cranpose_foundation::{
     text::{TextFieldLineLimits, TextFieldState},
@@ -24,10 +25,9 @@ use cranpose_ui::{widgets::BasicTextFieldWithOptions, Column, ColumnSpec};
 use image::{imageops::FilterType, ImageBuffer, RgbaImage};
 use perf_robot_stats::{print_render_summary, RenderStatsAccumulator};
 use scroll_stability_external_helpers::{run_scroll_stability_capture, ScrollStabilityConfig};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
 
@@ -107,8 +107,8 @@ const WORKSPACE_STRIP_ACTIVE_MAX_DIFFERING_RATIO: f32 = 0.0025;
 const WORKSPACE_STRIP_ACTIVE_MAX_PIXEL_DIFF: u32 = 72;
 const WORKSPACE_STRIP_ACTIVE_MAX_EDGE_LOSS_RATIO: f32 = 0.025;
 const WORKSPACE_STRIP_ACTIVE_MAX_EXTRA_COLORS: usize = 96;
-const WORKSPACE_STRIP_ACTIVE_CAPTURE_ATTEMPTS: usize = 12;
-const WORKSPACE_STRIP_ACTIVE_CAPTURE_SLEEP_MS: u64 = 8;
+const WORKSPACE_STRIP_ACTIVE_CAPTURE_ATTEMPTS: usize = 36;
+const WORKSPACE_STRIP_ACTIVE_CAPTURE_SLEEP_MS: u64 = 16;
 const WORKSPACE_ACTIVE_VIEWPORT_STABILITY_STEPS: usize = 1;
 const WORKSPACE_ACTIVE_VIEWPORT_SCROLL_DELTA_Y: f32 = -1.0;
 const WORKSPACE_ACTIVE_VIEWPORT_DIFF_TOLERANCE: u32 = 4;
@@ -156,6 +156,12 @@ const WORKSPACE_TOP_BAND_FRACTIONAL_HORIZONTAL_SEARCH_RADIUS_PX: f32 = 1.5;
 const WORKSPACE_TOP_BAND_FRACTIONAL_HORIZONTAL_STEP_PX: f32 = 0.25;
 const WORKSPACE_TOP_BAND_FRACTIONAL_HORIZONTAL_MIN_ABS_SHIFT_PX: f32 = 0.20;
 const WORKSPACE_TOP_BAND_FRACTIONAL_HORIZONTAL_SHIFT_MIN_IMPROVEMENT_RATIO: f32 = 0.015;
+const FULL_FRAME_COLORFUL_MIN_SPAN: u8 = 45;
+const FULL_FRAME_COLORFUL_MIN_VALUE: u8 = 100;
+const FULL_FRAME_MIN_COLORFUL_RATIO: f32 = 0.16;
+const FULL_FRAME_MIN_BLUE_CYAN_RATIO: f32 = 0.20;
+const FULL_FRAME_MAX_DARK_RATIO: f32 = 0.18;
+const FULL_FRAME_MIN_UNIQUE_RGB_COUNT: usize = 40_000;
 const BOTTOM_CLEAR_STABILITY_STEPS: usize = 12;
 const BOTTOM_CLEAR_SCROLL_DELTA_Y: f32 = -1.0;
 const BOTTOM_CLEAR_TARGET_MIN_STABLE_RATIO: f32 = 0.36;
@@ -212,7 +218,139 @@ const BUTTON_REFERENCE_CAPTURE_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_BUTTON_R
 const BUTTON_REFERENCE_OUTSIDE_TAG: &str = "LeetcodeDailyFullOutsideReferenceClear";
 const BUTTON_REFERENCE_INSIDE_TAG: &str = "LeetcodeDailyFullInsideReferenceClear";
 const BOTTOM_CLEAR_CAPTURE_ENV: &str = "CRANPOSE_LEETCODEDAILY_FULL_BOTTOM_CLEAR_CAPTURE";
-static NEXT_X11_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    static X11_CAPTURE_STATE: RefCell<X11CaptureState> = RefCell::new(X11CaptureState::default());
+    static LEETCODEDAILY_IMAGE_CACHE: RefCell<LeetcodeDailyImageCache> =
+        RefCell::new(LeetcodeDailyImageCache::default());
+}
+
+struct X11CaptureState {
+    window_id: Option<String>,
+    next_capture_id: u64,
+}
+
+impl Default for X11CaptureState {
+    fn default() -> Self {
+        Self {
+            window_id: None,
+            next_capture_id: 1,
+        }
+    }
+}
+
+impl X11CaptureState {
+    fn next_capture(&mut self) -> (String, u64) {
+        let window_id = self
+            .window_id
+            .get_or_insert_with(|| find_window_id(WINDOW_TITLE))
+            .clone();
+        let capture_id = self.next_capture_id;
+        self.next_capture_id = self.next_capture_id.saturating_add(1);
+        (window_id, capture_id)
+    }
+}
+
+#[derive(Default)]
+struct LeetcodeDailyImageCache {
+    app_background: Option<Option<ImageBitmap>>,
+    hero: Option<[Option<ImageBitmap>; 5]>,
+    app_logo: Option<Option<ImageBitmap>>,
+    ui_icons: Option<Option<ImageBitmap>>,
+    ui_icons_24: Option<Option<ImageBitmap>>,
+    ui_icons_44: Option<Option<ImageBitmap>>,
+    ui_icons_58: Option<Option<ImageBitmap>>,
+    preview: Option<ImageBitmap>,
+    sharp: HashMap<SharpBitmapKey, ImageBitmap>,
+}
+
+impl LeetcodeDailyImageCache {
+    fn app_background_bitmap(&mut self) -> Option<ImageBitmap> {
+        self.app_background
+            .get_or_insert_with(|| bitmap_from_png(APP_BACKGROUND_PNG))
+            .clone()
+    }
+
+    fn hero_bitmap(&mut self, stage: WorkStage) -> Option<ImageBitmap> {
+        self.hero.get_or_insert_with(|| {
+            [
+                bitmap_from_png(HERO_PREPARE_PNG),
+                bitmap_from_png(HERO_WRITE_PNG),
+                bitmap_from_png(HERO_CODE_PNG),
+                bitmap_from_png(HERO_REVIEW_PNG),
+                bitmap_from_png(HERO_SHIP_PNG),
+            ]
+        })[stage.sort_index() as usize]
+            .clone()
+    }
+
+    fn app_logo_bitmap(&mut self) -> Option<ImageBitmap> {
+        self.app_logo
+            .get_or_insert_with(|| bitmap_from_png(APP_LOGO_PNG))
+            .clone()
+    }
+
+    fn ui_icons_bitmap(&mut self) -> Option<ImageBitmap> {
+        self.ui_icons
+            .get_or_insert_with(|| bitmap_from_png(UI_ICONS_PNG))
+            .clone()
+    }
+
+    fn ui_icons_bitmap_24(&mut self) -> Option<ImageBitmap> {
+        self.ui_icons_24
+            .get_or_insert_with(|| bitmap_from_png(UI_ICONS_24_PNG))
+            .clone()
+    }
+
+    fn ui_icons_bitmap_44(&mut self) -> Option<ImageBitmap> {
+        self.ui_icons_44
+            .get_or_insert_with(|| bitmap_from_png(UI_ICONS_44_PNG))
+            .clone()
+    }
+
+    fn ui_icons_bitmap_58(&mut self) -> Option<ImageBitmap> {
+        self.ui_icons_58
+            .get_or_insert_with(|| bitmap_from_png(UI_ICONS_58_PNG))
+            .clone()
+    }
+
+    fn preview_bitmap(&mut self) -> ImageBitmap {
+        self.preview
+            .get_or_insert_with(build_preview_bitmap)
+            .clone()
+    }
+
+    fn sharp_bitmap_for_draw(
+        &mut self,
+        bitmap: &ImageBitmap,
+        key: SharpBitmapKey,
+    ) -> Option<ImageBitmap> {
+        if let Some(cached) = self.sharp.get(&key).cloned() {
+            return Some(cached);
+        }
+
+        let source =
+            RgbaImage::from_raw(bitmap.width(), bitmap.height(), bitmap.pixels().to_vec())?;
+        let cropped =
+            image::imageops::crop_imm(&source, key.src_x, key.src_y, key.src_width, key.src_height)
+                .to_image();
+        let resized = if key.src_width == key.target_width && key.src_height == key.target_height {
+            cropped
+        } else {
+            image::imageops::resize(
+                &cropped,
+                key.target_width,
+                key.target_height,
+                FilterType::Lanczos3,
+            )
+        };
+        let sharp_bitmap =
+            ImageBitmap::from_rgba8(resized.width(), resized.height(), resized.into_raw()).ok()?;
+        self.sharp.insert(key, sharp_bitmap.clone());
+        Some(sharp_bitmap)
+    }
+}
+
 const APP_BACKGROUND_PNG: &[u8] = include_bytes!("../assets/leetcodedaily/app-background.png");
 const APP_LOGO_PNG: &[u8] = include_bytes!("../assets/leetcodedaily/app-logo.png");
 const UI_ICONS_PNG: &[u8] = include_bytes!("../assets/leetcodedaily/ui-icons.png");
@@ -4307,55 +4445,31 @@ const ICON_SHEET_CELL: u32 = 256;
 const SHARP_IMAGE_MAX_PIXELS: u32 = 4_000_000;
 
 fn app_background_bitmap() -> Option<ImageBitmap> {
-    static BITMAP: OnceLock<Option<ImageBitmap>> = OnceLock::new();
-    BITMAP
-        .get_or_init(|| bitmap_from_png(APP_BACKGROUND_PNG))
-        .clone()
+    LEETCODEDAILY_IMAGE_CACHE.with(|cache| cache.borrow_mut().app_background_bitmap())
 }
 
 fn hero_bitmap(stage: WorkStage) -> Option<ImageBitmap> {
-    static BITMAPS: OnceLock<[Option<ImageBitmap>; 5]> = OnceLock::new();
-    BITMAPS.get_or_init(|| {
-        [
-            bitmap_from_png(HERO_PREPARE_PNG),
-            bitmap_from_png(HERO_WRITE_PNG),
-            bitmap_from_png(HERO_CODE_PNG),
-            bitmap_from_png(HERO_REVIEW_PNG),
-            bitmap_from_png(HERO_SHIP_PNG),
-        ]
-    })[stage.sort_index() as usize]
-        .clone()
+    LEETCODEDAILY_IMAGE_CACHE.with(|cache| cache.borrow_mut().hero_bitmap(stage))
 }
 
 fn app_logo_bitmap() -> Option<ImageBitmap> {
-    static BITMAP: OnceLock<Option<ImageBitmap>> = OnceLock::new();
-    BITMAP.get_or_init(|| bitmap_from_png(APP_LOGO_PNG)).clone()
+    LEETCODEDAILY_IMAGE_CACHE.with(|cache| cache.borrow_mut().app_logo_bitmap())
 }
 
 fn ui_icons_bitmap() -> Option<ImageBitmap> {
-    static BITMAP: OnceLock<Option<ImageBitmap>> = OnceLock::new();
-    BITMAP.get_or_init(|| bitmap_from_png(UI_ICONS_PNG)).clone()
+    LEETCODEDAILY_IMAGE_CACHE.with(|cache| cache.borrow_mut().ui_icons_bitmap())
 }
 
 fn ui_icons_bitmap_24() -> Option<ImageBitmap> {
-    static BITMAP: OnceLock<Option<ImageBitmap>> = OnceLock::new();
-    BITMAP
-        .get_or_init(|| bitmap_from_png(UI_ICONS_24_PNG))
-        .clone()
+    LEETCODEDAILY_IMAGE_CACHE.with(|cache| cache.borrow_mut().ui_icons_bitmap_24())
 }
 
 fn ui_icons_bitmap_44() -> Option<ImageBitmap> {
-    static BITMAP: OnceLock<Option<ImageBitmap>> = OnceLock::new();
-    BITMAP
-        .get_or_init(|| bitmap_from_png(UI_ICONS_44_PNG))
-        .clone()
+    LEETCODEDAILY_IMAGE_CACHE.with(|cache| cache.borrow_mut().ui_icons_bitmap_44())
 }
 
 fn ui_icons_bitmap_58() -> Option<ImageBitmap> {
-    static BITMAP: OnceLock<Option<ImageBitmap>> = OnceLock::new();
-    BITMAP
-        .get_or_init(|| bitmap_from_png(UI_ICONS_58_PNG))
-        .clone()
+    LEETCODEDAILY_IMAGE_CACHE.with(|cache| cache.borrow_mut().ui_icons_bitmap_58())
 }
 
 fn bitmap_from_png(bytes: &[u8]) -> Option<ImageBitmap> {
@@ -4364,30 +4478,29 @@ fn bitmap_from_png(bytes: &[u8]) -> Option<ImageBitmap> {
 }
 
 fn preview_bitmap() -> ImageBitmap {
-    static BITMAP: OnceLock<ImageBitmap> = OnceLock::new();
-    BITMAP
-        .get_or_init(|| {
-            let width = 1200u32;
-            let height = 675u32;
-            let mut pixels = vec![0u8; (width * height * 4) as usize];
-            for y in 0..height {
-                for x in 0..width {
-                    let index = ((y * width + x) * 4) as usize;
-                    let stripe = ((x / 40) + (y / 36)) % 2 == 0;
-                    let panel = x > 78 && x < width - 78 && y > 70 && y < height - 70;
-                    let rgba = if panel && stripe {
-                        [226, 248, 255, 255]
-                    } else if panel {
-                        [196, 236, 244, 255]
-                    } else {
-                        [28, 66, 104, 255]
-                    };
-                    pixels[index..index + 4].copy_from_slice(&rgba);
-                }
-            }
-            ImageBitmap::from_rgba8(width, height, pixels).expect("preview bitmap")
-        })
-        .clone()
+    LEETCODEDAILY_IMAGE_CACHE.with(|cache| cache.borrow_mut().preview_bitmap())
+}
+
+fn build_preview_bitmap() -> ImageBitmap {
+    let width = 1200u32;
+    let height = 675u32;
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let index = ((y * width + x) * 4) as usize;
+            let stripe = ((x / 40) + (y / 36)) % 2 == 0;
+            let panel = x > 78 && x < width - 78 && y > 70 && y < height - 70;
+            let rgba = if panel && stripe {
+                [226, 248, 255, 255]
+            } else if panel {
+                [196, 236, 244, 255]
+            } else {
+                [28, 66, 104, 255]
+            };
+            pixels[index..index + 4].copy_from_slice(&rgba);
+        }
+    }
+    ImageBitmap::from_rgba8(width, height, pixels).expect("preview bitmap")
 }
 
 fn draw_sharp_image_src<S: DrawScope + ?Sized>(
@@ -4424,7 +4537,6 @@ fn sharp_bitmap_for_draw(bitmap: &ImageBitmap, src: Rect, dst: Rect) -> Option<I
         return Some(bitmap.clone());
     }
 
-    static CACHE: OnceLock<Mutex<HashMap<SharpBitmapKey, ImageBitmap>>> = OnceLock::new();
     let key = SharpBitmapKey {
         image_id: bitmap.id(),
         src_x,
@@ -4434,23 +4546,7 @@ fn sharp_bitmap_for_draw(bitmap: &ImageBitmap, src: Rect, dst: Rect) -> Option<I
         target_width,
         target_height,
     };
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(cached) = cache.lock().ok()?.get(&key).cloned() {
-        return Some(cached);
-    }
-
-    let source = RgbaImage::from_raw(bitmap.width(), bitmap.height(), bitmap.pixels().to_vec())?;
-    let cropped =
-        image::imageops::crop_imm(&source, src_x, src_y, src_width, src_height).to_image();
-    let resized = if src_width == target_width && src_height == target_height {
-        cropped
-    } else {
-        image::imageops::resize(&cropped, target_width, target_height, FilterType::Lanczos3)
-    };
-    let sharp_bitmap =
-        ImageBitmap::from_rgba8(resized.width(), resized.height(), resized.into_raw()).ok()?;
-    cache.lock().ok()?.insert(key, sharp_bitmap.clone());
-    Some(sharp_bitmap)
+    LEETCODEDAILY_IMAGE_CACHE.with(|cache| cache.borrow_mut().sharp_bitmap_for_draw(bitmap, key))
 }
 
 fn source_rect_pixels(bitmap: &ImageBitmap, src: Rect) -> Option<(u32, u32, u32, u32)> {
@@ -5407,6 +5503,29 @@ struct WorkspaceTopBandStabilitySample {
     target_bounds: Bounds,
     region: Bounds,
     screenshot: cranpose::RobotScreenshot,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScreenshotColorHealth {
+    total_pixels: usize,
+    colorful_pixels: usize,
+    blue_cyan_pixels: usize,
+    dark_pixels: usize,
+    unique_rgb_count: usize,
+}
+
+impl ScreenshotColorHealth {
+    fn colorful_ratio(self) -> f32 {
+        self.colorful_pixels as f32 / self.total_pixels.max(1) as f32
+    }
+
+    fn blue_cyan_ratio(self) -> f32 {
+        self.blue_cyan_pixels as f32 / self.total_pixels.max(1) as f32
+    }
+
+    fn dark_ratio(self) -> f32 {
+        self.dark_pixels as f32 / self.total_pixels.max(1) as f32
+    }
 }
 
 #[derive(Debug)]
@@ -6793,6 +6912,11 @@ fn capture_workspace_top_band_stability_sample(
     .clipped_to(viewport)
     .unwrap_or_else(|| fail_with_robot(robot, "workspace top-band stability region is empty"));
     let screenshot = capture_visible_window_screenshot("workspace-top-band-stability");
+    assert_leetcodedaily_full_frame_color_health(
+        robot,
+        "workspace top-band stability",
+        &screenshot,
+    );
 
     WorkspaceTopBandStabilitySample {
         target_bounds,
@@ -7998,16 +8122,19 @@ fn row_micro_output_size(screenshot: &cranpose::RobotScreenshot, region: Bounds)
     )
 }
 
+fn leetcodedaily_diagnostic_dir(name: &str) -> PathBuf {
+    let dir = output_paths::diagnostic_path(name).join(std::process::id().to_string());
+    std::fs::create_dir_all(&dir)
+        .unwrap_or_else(|err| panic!("failed to create {}: {err}", dir.display()));
+    dir
+}
+
 fn save_row_micro_failure(
     step: usize,
     before: &cranpose::RobotScreenshot,
     after: &cranpose::RobotScreenshot,
 ) {
-    let mut dir = std::env::temp_dir();
-    dir.push("cranpose-leetcodedaily-row-micro-stability");
-    dir.push(std::process::id().to_string());
-    std::fs::create_dir_all(&dir)
-        .unwrap_or_else(|err| panic!("failed to create {}: {err}", dir.display()));
+    let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-row-micro-stability");
     let before_path = dir.join(format!("step{step:02}_before.png"));
     let after_path = dir.join(format!("step{step:02}_after.png"));
     save_robot_screenshot_png(&before_path, before);
@@ -8033,11 +8160,7 @@ fn save_workspace_strip_failure(
     };
     let after = normalize_workspace_strip(current, current_region);
 
-    let mut dir = std::env::temp_dir();
-    dir.push("cranpose-leetcodedaily-workspace-strip-stability");
-    dir.push(std::process::id().to_string());
-    std::fs::create_dir_all(&dir)
-        .unwrap_or_else(|err| panic!("failed to create {}: {err}", dir.display()));
+    let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-workspace-strip-stability");
     let before_path = dir.join(format!("step{step:02}_before.png"));
     let after_path = dir.join(format!("step{step:02}_after.png"));
     save_robot_screenshot_png(&before_path, &before);
@@ -8063,11 +8186,7 @@ fn save_workspace_top_band_failure(
     };
     let after = normalize_workspace_region(current, current_region);
 
-    let mut dir = std::env::temp_dir();
-    dir.push("cranpose-leetcodedaily-workspace-top-band-stability");
-    dir.push(std::process::id().to_string());
-    std::fs::create_dir_all(&dir)
-        .unwrap_or_else(|err| panic!("failed to create {}: {err}", dir.display()));
+    let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-workspace-top-band-stability");
     let before_path = dir.join(format!("step{step:02}_before.png"));
     let after_path = dir.join(format!("step{step:02}_after.png"));
     save_robot_screenshot_png(&before_path, &before);
@@ -8096,11 +8215,7 @@ fn save_workspace_top_band_sample_if_requested(
     .expect("top-band full screenshot crop should be inside screenshot");
     let band = normalize_workspace_region(&sample.screenshot, sample.region);
 
-    let mut dir = std::env::temp_dir();
-    dir.push("cranpose-leetcodedaily-workspace-top-band-samples");
-    dir.push(std::process::id().to_string());
-    std::fs::create_dir_all(&dir)
-        .unwrap_or_else(|err| panic!("failed to create {}: {err}", dir.display()));
+    let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-workspace-top-band-samples");
     let full_path = dir.join(format!("step{step:02}_full.png"));
     let band_path = dir.join(format!("step{step:02}_band.png"));
     save_robot_screenshot_png(&full_path, &full);
@@ -8139,11 +8254,7 @@ fn save_row_micro_feature_failure(
         return;
     };
 
-    let mut dir = std::env::temp_dir();
-    dir.push("cranpose-leetcodedaily-row-micro-stability");
-    dir.push(std::process::id().to_string());
-    std::fs::create_dir_all(&dir)
-        .unwrap_or_else(|err| panic!("failed to create {}: {err}", dir.display()));
+    let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-row-micro-stability");
     let before_path = dir.join(format!("step{step:02}_{label}_before.png"));
     let after_path = dir.join(format!("step{step:02}_{label}_after.png"));
     save_robot_screenshot_png(&before_path, &before);
@@ -8156,12 +8267,7 @@ fn save_row_micro_feature_failure(
 }
 
 fn bottom_clear_capture_dir() -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    dir.push("cranpose-leetcodedaily-bottom-clear-stability");
-    dir.push(std::process::id().to_string());
-    std::fs::create_dir_all(&dir)
-        .unwrap_or_else(|err| panic!("failed to create {}: {err}", dir.display()));
-    dir
+    leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-bottom-clear-stability")
 }
 
 fn save_bottom_clear_sample_if_requested(step: usize, sample: &BottomClearStabilitySample) {
@@ -8765,13 +8871,108 @@ fn screenshot_unique_rgb_count(screenshot: &cranpose::RobotScreenshot) -> usize 
     colors.len()
 }
 
+fn assert_leetcodedaily_full_frame_color_health(
+    robot: &cranpose::Robot,
+    label: &str,
+    screenshot: &cranpose::RobotScreenshot,
+) {
+    let health = screenshot_color_health(screenshot);
+    println!(
+        "leetcodedaily_full_frame_color_health label={} colorful_ratio={:.4} blue_cyan_ratio={:.4} dark_ratio={:.4} unique_rgb={}",
+        label,
+        health.colorful_ratio(),
+        health.blue_cyan_ratio(),
+        health.dark_ratio(),
+        health.unique_rgb_count,
+    );
+    if health.colorful_ratio() < FULL_FRAME_MIN_COLORFUL_RATIO
+        || health.blue_cyan_ratio() < FULL_FRAME_MIN_BLUE_CYAN_RATIO
+        || health.dark_ratio() > FULL_FRAME_MAX_DARK_RATIO
+        || health.unique_rgb_count < FULL_FRAME_MIN_UNIQUE_RGB_COUNT
+    {
+        let path = save_full_frame_color_health_failure(label, screenshot);
+        fail_with_robot(
+            robot,
+            &format!(
+                "LeetCodeDaily full frame lost expected color coverage: label={} colorful_ratio={:.4} min={:.4} blue_cyan_ratio={:.4} min={:.4} dark_ratio={:.4} max={:.4} unique_rgb={} min={} capture={}",
+                label,
+                health.colorful_ratio(),
+                FULL_FRAME_MIN_COLORFUL_RATIO,
+                health.blue_cyan_ratio(),
+                FULL_FRAME_MIN_BLUE_CYAN_RATIO,
+                health.dark_ratio(),
+                FULL_FRAME_MAX_DARK_RATIO,
+                health.unique_rgb_count,
+                FULL_FRAME_MIN_UNIQUE_RGB_COUNT,
+                path.display()
+            ),
+        );
+    }
+}
+
+fn assert_initial_leetcodedaily_frame_health(robot: &cranpose::Robot) {
+    let screenshot = capture_visible_window_screenshot("initial-frame-health");
+    assert_leetcodedaily_full_frame_color_health(robot, "initial frame", &screenshot);
+}
+
+fn screenshot_color_health(screenshot: &cranpose::RobotScreenshot) -> ScreenshotColorHealth {
+    let mut colors = BTreeSet::new();
+    let mut colorful_pixels = 0usize;
+    let mut blue_cyan_pixels = 0usize;
+    let mut dark_pixels = 0usize;
+
+    for rgba in screenshot.pixels.chunks_exact(4) {
+        let pixel = [rgba[0], rgba[1], rgba[2], rgba[3]];
+        if pixel[3] == 0 {
+            continue;
+        }
+        colors.insert([pixel[0], pixel[1], pixel[2]]);
+        if colorful_full_frame_pixel(pixel) {
+            colorful_pixels += 1;
+        }
+        if blue_cyan_full_frame_pixel(pixel) {
+            blue_cyan_pixels += 1;
+        }
+        if screenshot_luma(rgba) < 90 {
+            dark_pixels += 1;
+        }
+    }
+
+    ScreenshotColorHealth {
+        total_pixels: screenshot.pixels.len() / 4,
+        colorful_pixels,
+        blue_cyan_pixels,
+        dark_pixels,
+        unique_rgb_count: colors.len(),
+    }
+}
+
+fn colorful_full_frame_pixel(pixel: [u8; 4]) -> bool {
+    let max_channel = pixel[0].max(pixel[1]).max(pixel[2]);
+    let min_channel = pixel[0].min(pixel[1]).min(pixel[2]);
+    max_channel >= FULL_FRAME_COLORFUL_MIN_VALUE
+        && max_channel.saturating_sub(min_channel) >= FULL_FRAME_COLORFUL_MIN_SPAN
+}
+
+fn blue_cyan_full_frame_pixel(pixel: [u8; 4]) -> bool {
+    let red = pixel[0] as i32;
+    let green = pixel[1] as i32;
+    let blue = pixel[2] as i32;
+    (blue >= 120 && green >= 80 && blue > red + 25) || (green >= 120 && blue >= 130 && red <= 120)
+}
+
+fn save_full_frame_color_health_failure(
+    label: &str,
+    screenshot: &cranpose::RobotScreenshot,
+) -> PathBuf {
+    let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-full-frame-color-health");
+    let path = dir.join(format!("{}.png", sanitize_capture_name(label)));
+    save_robot_screenshot_png(&path, screenshot);
+    path
+}
+
 fn button_reference_capture_dir() -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    dir.push("cranpose-leetcodedaily-button-reference");
-    dir.push(std::process::id().to_string());
-    std::fs::create_dir_all(&dir)
-        .unwrap_or_else(|err| panic!("failed to create {}: {err}", dir.display()));
-    dir
+    leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-button-reference")
 }
 
 fn save_button_reference_crop(
@@ -8819,11 +9020,7 @@ fn save_button_quality_crop_if_requested(
     screenshot: &cranpose::RobotScreenshot,
 ) -> Option<PathBuf> {
     std::env::var_os(BUTTON_QUALITY_CAPTURE_ENV)?;
-    let mut dir = std::env::temp_dir();
-    dir.push("cranpose-leetcodedaily-button-quality");
-    dir.push(std::process::id().to_string());
-    std::fs::create_dir_all(&dir)
-        .unwrap_or_else(|err| panic!("failed to create {}: {err}", dir.display()));
+    let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-button-quality");
     let path = dir.join(format!(
         "{}_{}.png",
         sanitize_capture_name(label),
@@ -8834,13 +9031,9 @@ fn save_button_quality_crop_if_requested(
 }
 
 fn capture_visible_window_screenshot(label: &str) -> cranpose::RobotScreenshot {
-    static WINDOW_ID: OnceLock<String> = OnceLock::new();
-
-    let window_id = WINDOW_ID.get_or_init(|| find_window_id(WINDOW_TITLE));
+    let (window_id, capture_id) = X11_CAPTURE_STATE.with(|state| state.borrow_mut().next_capture());
     let (logical_width, logical_height) = app_window_size();
-    let capture_id = NEXT_X11_CAPTURE_ID.fetch_add(1, Ordering::Relaxed);
-    let mut path = std::env::temp_dir();
-    path.push(format!(
+    let path = output_paths::diagnostic_path(&format!(
         "cranpose-leetcodedaily-x11-{}-{}-{}.png",
         std::process::id(),
         capture_id,
@@ -8848,7 +9041,7 @@ fn capture_visible_window_screenshot(label: &str) -> cranpose::RobotScreenshot {
     ));
 
     let path_string = path.to_string_lossy().into_owned();
-    take_x11_screenshot(window_id, &path_string);
+    take_x11_screenshot(&window_id, &path_string);
     let image = image::open(&path)
         .unwrap_or_else(|err| panic!("failed to read X11 screenshot {}: {err}", path.display()))
         .to_rgba8();
@@ -8943,7 +9136,9 @@ fn run_leetcodedaily_perf_probe(robot: &cranpose::Robot) {
     std::thread::sleep(Duration::from_millis(250));
     let _ = robot.wait_for_idle();
 
-    let start_stats = fps_stats();
+    let start_stats = robot
+        .fps_stats()
+        .unwrap_or_else(|err| fail_with_robot(robot, &format!("failed to read FPS stats: {err}")));
     let start = Instant::now();
     let duration = Duration::from_secs(duration_secs);
     let mut render_stats = RenderStatsAccumulator::default();
@@ -8969,7 +9164,9 @@ fn run_leetcodedaily_perf_probe(robot: &cranpose::Robot) {
     }
 
     let elapsed_secs = start.elapsed().as_secs_f32();
-    let end_stats = fps_stats();
+    let end_stats = robot
+        .fps_stats()
+        .unwrap_or_else(|err| fail_with_robot(robot, &format!("failed to read FPS stats: {err}")));
     let total_frames = end_stats
         .frame_count
         .saturating_sub(start_stats.frame_count);
@@ -8986,10 +9183,19 @@ fn run_leetcodedaily_perf_probe(robot: &cranpose::Robot) {
 
     print_render_summary(PERF_SCENARIO_NAME, render_stats);
     println!(
-        "PERF_FPS_SUMMARY scenario={} fps={:.1} avg_frame_ms={:.2} total_frames={} rolling_fps={:.1} rolling_avg_frame_ms={:.2} recompositions={} recompositions_per_second={}",
+        "PERF_FPS_SUMMARY scenario={} fps={:.1} avg_frame_ms={:.2} p95_frame_ms={:.2} p99_frame_ms={:.2} max_frame_ms={:.2} work_avg_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} missed_60hz={} stalls_50ms={} total_frames={} rolling_fps={:.1} rolling_avg_frame_ms={:.2} recompositions={} recompositions_per_second={}",
         PERF_SCENARIO_NAME,
         fps,
         avg_ms,
+        end_stats.p95_ms,
+        end_stats.p99_ms,
+        end_stats.max_ms,
+        end_stats.work_avg_ms,
+        end_stats.work_p95_ms,
+        end_stats.work_max_ms,
+        end_stats.missed_120hz_budget,
+        end_stats.missed_60hz_budget,
+        end_stats.stalled_50ms_frames,
         total_frames,
         end_stats.fps,
         end_stats.avg_ms,
@@ -9050,6 +9256,7 @@ fn main() {
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(1000));
             let _ = robot.wait_for_idle();
+            assert_initial_leetcodedaily_frame_health(&robot);
 
             if perf_only {
                 run_leetcodedaily_perf_probe(&robot);
@@ -9161,6 +9368,7 @@ fn main() {
                     compare_stabilized_guard_px: COMPARE_STABILIZED_GUARD_PX,
                     compare_viewport_inset_px: COMPARE_VIEWPORT_INSET_PX,
                     render_stats_env: Some(RENDER_STATS_ENV),
+                    active_frame: None,
                 },
                 None,
             );

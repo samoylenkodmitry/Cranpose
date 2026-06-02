@@ -8,14 +8,14 @@ use crate::{
 use cranpose_ui::{Point, Size};
 use jni::{
     jni_sig, jni_str,
-    objects::{Global, JClass, JObject, JString, JValue},
-    sys::{jfloat, jint},
-    Env, EnvUnowned, Outcome,
+    objects::{JClass, JObject, JValue},
+    sys::jlong,
+    Env,
 };
 use ndk::native_window::NativeWindow;
 use std::{
     collections::VecDeque,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 const OVERLAY_CLASS: &str = "dev/cranpose/android/CranposeOverlayWindow";
@@ -55,20 +55,59 @@ pub(crate) enum AndroidOverlayPointerAction {
     Cancel,
 }
 
+#[derive(Default)]
+pub(crate) struct AndroidOverlayEventQueue {
+    events: Mutex<VecDeque<AndroidOverlayWindowEvent>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AndroidOverlayEventQueueHandle(jlong);
+
+impl AndroidOverlayEventQueueHandle {
+    pub(crate) fn raw(self) -> jlong {
+        self.0
+    }
+}
+
+impl AndroidOverlayEventQueue {
+    pub(crate) fn push(&self, event: AndroidOverlayWindowEvent) {
+        self.lock_events().push_back(event);
+    }
+
+    fn drain(&self) -> Vec<AndroidOverlayWindowEvent> {
+        self.lock_events().drain(..).collect()
+    }
+
+    fn lock_events(&self) -> MutexGuard<'_, VecDeque<AndroidOverlayWindowEvent>> {
+        self.events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+pub(crate) fn retain_android_overlay_event_queue_handle(
+    queue: &Arc<AndroidOverlayEventQueue>,
+) -> AndroidOverlayEventQueueHandle {
+    let pointer = Arc::into_raw(Arc::clone(queue));
+    AndroidOverlayEventQueueHandle(pointer as usize as jlong)
+}
+
 pub(crate) fn show_android_overlay_window(
     app: &android_activity::AndroidApp,
     options: AndroidOverlayWindowOptions,
     density: f32,
+    event_queue: &Arc<AndroidOverlayEventQueue>,
 ) -> Result<(), String> {
     let bounds = overlay_options_to_physical_bounds(options, density)?;
+    let event_queue_handle = retain_android_overlay_event_queue_handle(event_queue);
 
-    with_android_activity_env(app, |env, activity| {
-        let class = find_overlay_class(env, &activity)?;
+    let result = with_android_activity_env(app, |env, activity| {
+        let class = find_android_overlay_class(env, &activity)?;
         let result = env
             .call_static_method(
                 class,
                 jni_str!("show"),
-                jni_sig!("(Landroid/app/Activity;IIIIZ)I"),
+                jni_sig!("(Landroid/app/Activity;IIIIZJ)I"),
                 &[
                     JValue::Object(&activity),
                     JValue::Int(bounds.width_px),
@@ -76,6 +115,7 @@ pub(crate) fn show_android_overlay_window(
                     JValue::Int(bounds.x_px),
                     JValue::Int(bounds.y_px),
                     JValue::Bool(options.focusable),
+                    JValue::Long(event_queue_handle.raw()),
                 ],
             )
             .and_then(|value| value.i())
@@ -84,11 +124,24 @@ pub(crate) fn show_android_overlay_window(
                 format!("failed to show Android overlay window: {error}")
             })?;
 
-        match result {
-            RESULT_OK | RESULT_ALREADY_VISIBLE => Ok(()),
-            code => Err(format_android_overlay_result(code)),
+        Ok(result)
+    });
+
+    match result {
+        Ok(RESULT_OK) => Ok(()),
+        Ok(RESULT_ALREADY_VISIBLE) => {
+            crate::android_jni::release_android_overlay_event_queue_handle(event_queue_handle);
+            Ok(())
         }
-    })
+        Ok(code) => {
+            crate::android_jni::release_android_overlay_event_queue_handle(event_queue_handle);
+            Err(format_android_overlay_result(code))
+        }
+        Err(error) => {
+            crate::android_jni::release_android_overlay_event_queue_handle(event_queue_handle);
+            Err(error)
+        }
+    }
 }
 
 pub(crate) fn update_android_overlay_window_bounds(
@@ -100,7 +153,7 @@ pub(crate) fn update_android_overlay_window_bounds(
     let bounds = overlay_bounds_to_physical(position, size, density)?;
 
     with_android_activity_env(app, |env, activity| {
-        let class = find_overlay_class(env, &activity)?;
+        let class = find_android_overlay_class(env, &activity)?;
         let result = env
             .call_static_method(
                 class,
@@ -129,7 +182,7 @@ pub(crate) fn update_android_overlay_window_bounds(
 
 pub(crate) fn hide_android_overlay_window(app: &android_activity::AndroidApp) {
     let _ = with_android_activity_env(app, |env, activity| {
-        let class = find_overlay_class(env, &activity)?;
+        let class = find_android_overlay_class(env, &activity)?;
         env.call_static_method(
             class,
             jni_str!("hide"),
@@ -144,33 +197,17 @@ pub(crate) fn hide_android_overlay_window(app: &android_activity::AndroidApp) {
     });
 }
 
-pub(crate) fn drain_android_overlay_window_events() -> Vec<AndroidOverlayWindowEvent> {
-    let mut events = overlay_events()
-        .lock()
-        .expect("overlay event queue poisoned");
-    events.drain(..).collect()
+pub(crate) fn drain_android_overlay_window_events(
+    queue: &AndroidOverlayEventQueue,
+) -> Vec<AndroidOverlayWindowEvent> {
+    queue.drain()
 }
 
-fn find_overlay_class<'local>(
+pub(crate) fn find_android_overlay_class<'local>(
     env: &mut Env<'local>,
     activity: &JObject<'local>,
-) -> Result<&'static Global<JClass<'static>>, String> {
-    static OVERLAY_CLASS_REF: OnceLock<Global<JClass<'static>>> = OnceLock::new();
-
-    if let Some(class) = OVERLAY_CLASS_REF.get() {
-        return Ok(class);
-    }
-
-    let class = load_overlay_class(env, activity)?;
-    let global_class = env.new_global_ref(class).map_err(|error| {
-        clear_pending_android_jni_exception(env);
-        format!("failed to cache Android overlay helper class: {error}")
-    })?;
-
-    let _ = OVERLAY_CLASS_REF.set(global_class);
-    OVERLAY_CLASS_REF.get().ok_or_else(|| {
-        "failed to cache Android overlay helper class in process-global storage".to_string()
-    })
+) -> Result<JClass<'local>, String> {
+    load_overlay_class(env, activity)
 }
 
 fn load_overlay_class<'local>(
@@ -188,20 +225,11 @@ fn load_overlay_class<'local>(
     let class = env
         .call_method(
             activity,
-            jni_str!("getClass"),
-            jni_sig!("()Ljava/lang/Class;"),
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
             &[],
         )
         .and_then(|value| value.l())
-        .and_then(|class| {
-            env.call_method(
-                &class,
-                jni_str!("getClassLoader"),
-                jni_sig!("()Ljava/lang/ClassLoader;"),
-                &[],
-            )
-            .and_then(|value| value.l())
-        })
         .and_then(|class_loader| {
             env.call_method(
                 &class_loader,
@@ -286,118 +314,6 @@ fn format_android_overlay_result(code: i32) -> String {
     }
 }
 
-fn push_overlay_event(event: AndroidOverlayWindowEvent) {
-    overlay_events()
-        .lock()
-        .expect("overlay event queue poisoned")
-        .push_back(event);
-}
-
-fn overlay_events() -> &'static Mutex<VecDeque<AndroidOverlayWindowEvent>> {
-    static EVENTS: OnceLock<Mutex<VecDeque<AndroidOverlayWindowEvent>>> = OnceLock::new();
-    EVENTS.get_or_init(|| Mutex::new(VecDeque::new()))
-}
-
-fn native_window_from_surface(
-    env: &mut Env<'_>,
-    surface: JObject<'_>,
-) -> Result<NativeWindow, String> {
-    // SAFETY: The callback is invoked by the Java helper with the current JNI
-    // environment and a live android.view.Surface from SurfaceHolder.
-    unsafe { NativeWindow::from_surface(env.get_raw().cast(), surface.as_raw()) }.ok_or_else(|| {
-        clear_pending_android_jni_exception(env);
-        "Android overlay Surface did not provide an ANativeWindow".to_string()
-    })
-}
-
-#[doc(hidden)]
-#[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayCreateFailed<
-    'local,
->(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    message: JString<'local>,
-) {
-    let message = match env
-        .with_env(|env| -> jni::errors::Result<String> { message.try_to_string(env) })
-        .into_outcome()
-    {
-        Outcome::Ok(message) => message,
-        Outcome::Err(_) | Outcome::Panic(_) => "Android overlay window creation failed".to_string(),
-    };
-    push_overlay_event(AndroidOverlayWindowEvent::CreateFailed(message));
-}
-
-#[doc(hidden)]
-#[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlaySurfaceChanged<
-    'local,
->(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    surface: JObject<'local>,
-    width: jint,
-    height: jint,
-) {
-    match env
-        .with_env(|env| -> jni::errors::Result<Result<NativeWindow, String>> {
-            Ok(native_window_from_surface(env, surface))
-        })
-        .into_outcome()
-    {
-        Outcome::Ok(Ok(native_window)) if width > 0 && height > 0 => {
-            push_overlay_event(AndroidOverlayWindowEvent::SurfaceChanged {
-                native_window,
-                width: width as u32,
-                height: height as u32,
-            });
-        }
-        Outcome::Ok(Ok(_)) => {}
-        Outcome::Ok(Err(message)) => {
-            push_overlay_event(AndroidOverlayWindowEvent::CreateFailed(message));
-        }
-        Outcome::Err(error) => {
-            push_overlay_event(AndroidOverlayWindowEvent::CreateFailed(format!(
-                "failed to access Android overlay Surface: {error}"
-            )));
-        }
-        Outcome::Panic(_) => {
-            push_overlay_event(AndroidOverlayWindowEvent::CreateFailed(
-                "failed to access Android overlay Surface".to_string(),
-            ));
-        }
-    }
-}
-
-#[doc(hidden)]
-#[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlaySurfaceDestroyed(
-    _env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-) {
-    push_overlay_event(AndroidOverlayWindowEvent::SurfaceDestroyed);
-}
-
-#[doc(hidden)]
-#[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayPointer(
-    _env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    action: jint,
-    x: jfloat,
-    y: jfloat,
-) {
-    let action = match action {
-        0 | 5 => AndroidOverlayPointerAction::Down,
-        1 | 6 => AndroidOverlayPointerAction::Up,
-        2 => AndroidOverlayPointerAction::Move,
-        3 => AndroidOverlayPointerAction::Cancel,
-        _ => return,
-    };
-    push_overlay_event(AndroidOverlayWindowEvent::Pointer { action, x, y });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,5 +374,32 @@ mod tests {
                 y_px: -9,
             }
         );
+    }
+
+    #[test]
+    fn overlay_events_are_isolated_by_queue() {
+        let first = std::sync::Arc::new(AndroidOverlayEventQueue::default());
+        let second = std::sync::Arc::new(AndroidOverlayEventQueue::default());
+
+        first.push(AndroidOverlayWindowEvent::CreateFailed("first".to_string()));
+        second.push(AndroidOverlayWindowEvent::CreateFailed(
+            "second".to_string(),
+        ));
+
+        assert_create_failed_events(drain_android_overlay_window_events(&first), &["first"]);
+        assert_create_failed_events(drain_android_overlay_window_events(&second), &["second"]);
+        assert!(drain_android_overlay_window_events(&first).is_empty());
+        assert!(drain_android_overlay_window_events(&second).is_empty());
+    }
+
+    fn assert_create_failed_events(events: Vec<AndroidOverlayWindowEvent>, expected: &[&str]) {
+        let messages: Vec<String> = events
+            .into_iter()
+            .map(|event| match event {
+                AndroidOverlayWindowEvent::CreateFailed(message) => message,
+                other => panic!("expected create failure event, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(messages, expected);
     }
 }

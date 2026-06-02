@@ -12,6 +12,7 @@ use cranpose_ui_graphics::{
 pub(crate) struct DrawShape {
     pub rect: Rect,
     pub snap_anchor: Option<Point>,
+    pub snap_to_pixel_grid: bool,
     pub brush: Brush,
     pub shape: Option<RoundedCornerShape>,
     pub z_index: usize,
@@ -79,6 +80,29 @@ impl RasterScene {
         self.shapes.push(DrawShape {
             rect,
             snap_anchor: None,
+            snap_to_pixel_grid: false,
+            brush,
+            shape,
+            z_index,
+            clip,
+            blend_mode,
+        });
+    }
+
+    pub fn push_pixel_snapped_shape(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        shape: Option<RoundedCornerShape>,
+        clip: Option<Rect>,
+        blend_mode: BlendMode,
+    ) {
+        let z_index = self.next_z;
+        self.next_z += 1;
+        self.shapes.push(DrawShape {
+            rect,
+            snap_anchor: None,
+            snap_to_pixel_grid: true,
             brush,
             shape,
             z_index,

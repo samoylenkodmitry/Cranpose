@@ -141,6 +141,10 @@ tasks.register<Exec>("buildRustDebug") {
     inputs.files(fileTree("../../../../apps/desktop-demo/src") {
         include("**/*.rs")
     })
+    inputs.files(fileTree("../../../../apps/desktop-demo-platform/src") {
+        include("**/*.rs")
+    })
+    inputs.file("../../../../apps/desktop-demo-platform/Cargo.toml")
     inputs.file("../../../../Cargo.toml")
     inputs.file("../../../../Cargo.lock")
     
@@ -161,7 +165,7 @@ tasks.register<Exec>("buildRustDebug") {
             -t x86_64 \
             -o target/android \
             build \
-            -p desktop-app \
+            -p desktop-app-platform \
             --lib \
             --features android,renderer-wgpu \
             --no-default-features
@@ -180,6 +184,10 @@ tasks.register<Exec>("buildRustRelease") {
     inputs.files(fileTree("../../../../apps/desktop-demo/src") {
         include("**/*.rs")
     })
+    inputs.files(fileTree("../../../../apps/desktop-demo-platform/src") {
+        include("**/*.rs")
+    })
+    inputs.file("../../../../apps/desktop-demo-platform/Cargo.toml")
     inputs.file("../../../../Cargo.toml")
     inputs.file("../../../../Cargo.lock")
     outputs.upToDateWhen { false }
@@ -203,7 +211,7 @@ tasks.register<Exec>("buildRustRelease") {
             -o target/android \
             build \
             $releaseRustProfileFlag \
-            -p desktop-app \
+            -p desktop-app-platform \
             --lib \
             --features android,renderer-wgpu \
             --no-default-features

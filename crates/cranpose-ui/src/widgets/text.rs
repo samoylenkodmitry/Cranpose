@@ -239,6 +239,7 @@ mod tests {
 
     #[test]
     fn basic_text_creates_node() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let composition = run_test_composition(|| {
             BasicTextWithOptions(
                 "Hello",
@@ -253,6 +254,7 @@ mod tests {
 
     #[test]
     fn text_with_options_creates_node() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let composition = run_test_composition(|| {
             TextWithOptions(
                 "Hello",
@@ -272,6 +274,7 @@ mod tests {
 
     #[test]
     fn basic_text_recomposes_when_dynamic_source_changes() {
+        let _app_context = crate::render_state::app_context_test_scope();
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
         let state = MutableState::with_runtime("Hello".to_string(), runtime);

@@ -723,9 +723,8 @@ impl SemanticsNode for TextFieldModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
         let text = self.state.text();
         config.content_description = Some(text);
-        // TODO: Add editable text semantics properties
-        // - is_editable = true
-        // - text_selection_range = self.state.selection()
+        config.is_editable_text = true;
+        config.text_selection = Some(self.state.selection());
     }
 }
 
@@ -775,7 +774,7 @@ pub struct TextFieldElement {
     /// The text field state
     state: TextFieldState,
     /// Text style
-    style: TextStyle, // Add style
+    style: TextStyle,
     /// Cursor color
     cursor_color: Color,
     /// Line limits configuration
@@ -785,7 +784,6 @@ pub struct TextFieldElement {
 impl TextFieldElement {
     /// Creates a new text field element.
     pub fn new(state: TextFieldState, style: TextStyle) -> Self {
-        // Update constructor
         Self {
             state,
             style,
@@ -827,7 +825,8 @@ impl Hash for TextFieldElement {
         self.cursor_color.1.to_bits().hash(state);
         self.cursor_color.2.to_bits().hash(state);
         self.cursor_color.3.to_bits().hash(state);
-        // TODO: Hash style
+        self.style.render_hash().hash(state);
+        self.line_limits.hash(state);
     }
 }
 
@@ -904,6 +903,7 @@ mod tests {
 
     #[test]
     fn text_field_node_creation() {
+        let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state = TextFieldState::new("Hello");
             let node = TextFieldModifierNode::new(state, TextStyle::default());
@@ -914,6 +914,7 @@ mod tests {
 
     #[test]
     fn text_field_node_focus() {
+        let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state = TextFieldState::new("Test");
             let mut node = TextFieldModifierNode::new(state, TextStyle::default());
@@ -929,6 +930,7 @@ mod tests {
 
     #[test]
     fn text_field_element_creates_node() {
+        let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state = TextFieldState::new("Hello World");
             let element = TextFieldElement::new(state, TextStyle::default());
@@ -940,6 +942,7 @@ mod tests {
 
     #[test]
     fn text_field_element_equality() {
+        let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state1 = TextFieldState::new("Hello");
             let state2 = TextFieldState::new("Hello"); // Different Rc, same text
@@ -957,6 +960,7 @@ mod tests {
 
     #[test]
     fn text_field_element_update_refreshes_existing_node_style() {
+        let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state = TextFieldState::new("themed text");
             let dark_style = TextStyle::from_span_style(crate::text::SpanStyle {
@@ -985,6 +989,7 @@ mod tests {
     /// 2. For text at cursor end, x = full text width
     #[test]
     fn test_cursor_x_position_calculation() {
+        let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             // Test that text measurement works correctly for cursor positioning
             let style = crate::text::TextStyle::default();
@@ -1050,6 +1055,7 @@ mod tests {
     /// Test cursor is created when focused node is in slices.
     #[test]
     fn test_focused_node_creates_cursor() {
+        let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state = TextFieldState::new("Test");
             let element = TextFieldElement::new(state.clone(), TextStyle::default());

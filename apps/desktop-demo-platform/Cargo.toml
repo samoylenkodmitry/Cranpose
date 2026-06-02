@@ -1,0 +1,49 @@
+[package]
+name = "desktop-app-platform"
+version = "0.1.0"
+edition = "2021"
+description = "Cranpose desktop demo platform export library."
+repository = "https://github.com/samoylenkodmitry/cranpose"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--all-features"]
+
+[package.metadata.wasm-pack.profile.custom]
+wasm-opt = ["-Oz", "--all-features", "--enable-bulk-memory-opt"]
+
+[lib]
+name = "desktop_app"
+crate-type = ["cdylib", "staticlib"]
+path = "src/lib.rs"
+
+[features]
+default = ["renderer-wgpu"]
+renderer-wgpu = ["cranpose/renderer-wgpu", "desktop_demo/renderer-wgpu"]
+android = ["cranpose/android", "desktop_demo/android"]
+web = [
+    "cranpose/web",
+    "desktop_demo/web",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:wasm-logger",
+]
+logging = ["dep:env_logger", "desktop_demo/logging"]
+
+[dependencies]
+cranpose = { path = "../../crates/cranpose", default-features = false }
+desktop_demo = { package = "desktop-app", path = "../desktop-demo", default-features = false }
+log = "0.4"
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4.71", optional = true }
+wasm-logger = { version = "0.2", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = { version = "0.11", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"

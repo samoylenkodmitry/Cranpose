@@ -11,6 +11,14 @@ categories.workspace = true
 readme = "README.md"
 description = "Testing utilities and harness for Cranpose"
 
+[features]
+default = []
+desktop-robot = [
+    "cranpose/desktop",
+    "cranpose/renderer-wgpu",
+    "cranpose/robot",
+]
+
 [dependencies]
 cranpose-core = { workspace = true }
 cranpose-foundation = { workspace = true }
@@ -20,7 +28,7 @@ cranpose-render-common = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 
 # Dependencies for real app testing
-cranpose = { workspace = true, features = ["robot"] }
+cranpose = { workspace = true, default-features = false }
 
 [dev-dependencies]
 cranpose-macros = { workspace = true }

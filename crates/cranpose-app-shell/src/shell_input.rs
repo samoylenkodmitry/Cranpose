@@ -61,9 +61,10 @@ where
     }
 
     pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
-        enter_event_handler();
-        let result = run_in_mutable_snapshot(|| self.set_cursor_inner(x, y)).unwrap_or(false);
-        exit_event_handler();
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        let result = app_context
+            .enter(|| run_in_mutable_snapshot(|| self.set_cursor_inner(x, y)).unwrap_or(false));
         if result {
             self.mark_dirty();
         }
@@ -139,9 +140,10 @@ where
     }
 
     pub fn pointer_pressed(&mut self) -> bool {
-        enter_event_handler();
-        let result = run_in_mutable_snapshot(|| self.pointer_pressed_inner()).unwrap_or(false);
-        exit_event_handler();
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        let result = app_context
+            .enter(|| run_in_mutable_snapshot(|| self.pointer_pressed_inner()).unwrap_or(false));
         if result {
             self.mark_dirty();
         }
@@ -208,9 +210,10 @@ where
     }
 
     pub fn pointer_released(&mut self) -> bool {
-        enter_event_handler();
-        let result = run_in_mutable_snapshot(|| self.pointer_released_inner()).unwrap_or(false);
-        exit_event_handler();
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        let result = app_context
+            .enter(|| run_in_mutable_snapshot(|| self.pointer_released_inner()).unwrap_or(false));
         if result {
             self.mark_dirty();
         }
@@ -253,10 +256,12 @@ where
     ///
     /// Returns `true` if a handler consumed the event.
     pub fn pointer_scrolled(&mut self, delta_x: f32, delta_y: f32) -> bool {
-        enter_event_handler();
-        let result = run_in_mutable_snapshot(|| self.pointer_scrolled_inner(delta_x, delta_y))
-            .unwrap_or(false);
-        exit_event_handler();
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        let result = app_context.enter(|| {
+            run_in_mutable_snapshot(|| self.pointer_scrolled_inner(delta_x, delta_y))
+                .unwrap_or(false)
+        });
         if result {
             self.mark_dirty();
         }
@@ -305,11 +310,13 @@ where
     /// - Mouse leaves window while button pressed
     /// - Any other gesture abort scenario
     pub fn cancel_gesture(&mut self) {
-        enter_event_handler();
-        let _ = run_in_mutable_snapshot(|| {
-            self.cancel_gesture_inner();
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        let _ = app_context.enter(|| {
+            run_in_mutable_snapshot(|| {
+                self.cancel_gesture_inner();
+            })
         });
-        exit_event_handler();
     }
 
     fn cancel_gesture_inner(&mut self) {
@@ -354,13 +361,12 @@ where
     ///
     /// Returns `true` if the event was consumed by a text field.
     ///
-    /// On desktop, Ctrl+C/X/V are handled here with system clipboard (arboard).
+    /// On desktop, Ctrl+C/X/V are handled here when native clipboard support is enabled.
     /// On web, these keys are NOT handled here - they bubble to browser for native copy/paste events.
     pub fn on_key_event(&mut self, event: &KeyEvent) -> bool {
-        enter_event_handler();
-        let result = self.on_key_event_inner(event);
-        exit_event_handler();
-        result
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.on_key_event_inner(event))
     }
 
     /// Internal keyboard event handler wrapped by on_key_event.
@@ -369,9 +375,9 @@ where
 
         // Only process KeyDown events for clipboard shortcuts
         if event.event_type == KeyDown && event.modifiers.command_or_ctrl() {
-            // Desktop-only clipboard handling via arboard
-            // Use persistent self.clipboard to keep content alive on Linux X11
+            // Use persistent self.clipboard to keep content alive on Linux X11.
             #[cfg(all(
+                feature = "clipboard-native",
                 not(target_arch = "wasm32"),
                 not(target_os = "android"),
                 not(target_os = "ios")
@@ -381,7 +387,7 @@ where
                     // Ctrl+C - Copy
                     KeyCode::C => {
                         // Get text first, then access clipboard to avoid borrow conflict
-                        let text = self.on_copy();
+                        let text = self.on_copy_inner();
                         if let (Some(text), Some(clipboard)) = (text, self.clipboard.as_mut()) {
                             let _ = clipboard.set_text(&text);
                             return true;
@@ -390,7 +396,7 @@ where
                     // Ctrl+X - Cut
                     KeyCode::X => {
                         // Get text first (this also deletes it), then access clipboard
-                        let text = self.on_cut();
+                        let text = self.on_cut_inner();
                         if let (Some(text), Some(clipboard)) = (text, self.clipboard.as_mut()) {
                             let _ = clipboard.set_text(&text);
                             self.mark_dirty();
@@ -403,7 +409,7 @@ where
                         // Get text from clipboard first, then paste
                         let text = self.clipboard.as_mut().and_then(|cb| cb.get_text().ok());
                         if let Some(text) = text {
-                            if self.on_paste(&text) {
+                            if self.on_paste_inner(&text) {
                                 return true;
                             }
                         }
@@ -441,6 +447,12 @@ where
     /// Returns `true` if the paste was consumed by a focused text field.
     /// O(1) operation using stored handler.
     pub fn on_paste(&mut self, text: &str) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.on_paste_inner(text))
+    }
+
+    fn on_paste_inner(&mut self, text: &str) -> bool {
         // Wrap paste in a mutable snapshot so changes are atomically applied.
         // This ensures paste modifications are visible to subsequent snapshot contexts
         // (like button click handlers that run in their own mutable snapshots).
@@ -460,6 +472,11 @@ where
     /// Returns the selected text from focused text field, or None.
     /// O(1) operation using stored handler.
     pub fn on_copy(&mut self) -> Option<String> {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.on_copy_inner())
+    }
+
+    fn on_copy_inner(&mut self) -> Option<String> {
         // Use O(1) dispatch instead of tree scan
         cranpose_ui::text_field_focus::dispatch_copy()
     }
@@ -468,8 +485,14 @@ where
     /// Returns the cut text from focused text field, or None.
     /// O(1) operation using stored handler.
     pub fn on_cut(&mut self) -> Option<String> {
-        // Use O(1) dispatch instead of tree scan
-        let text = cranpose_ui::text_field_focus::dispatch_cut();
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.on_cut_inner())
+    }
+
+    fn on_cut_inner(&mut self) -> Option<String> {
+        let text =
+            run_in_mutable_snapshot(cranpose_ui::text_field_focus::dispatch_cut).unwrap_or(None);
 
         if text.is_some() {
             self.mark_dirty();
@@ -482,7 +505,11 @@ where
     /// Sets the Linux primary selection (for middle-click paste).
     /// This is called when text is selected in a text field.
     /// On non-Linux platforms, this is a no-op.
-    #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+    #[cfg(all(
+        feature = "clipboard-native",
+        target_os = "linux",
+        not(target_arch = "wasm32")
+    ))]
     pub fn set_primary_selection(&mut self, text: &str) {
         use arboard::{LinuxClipboardKind, SetExtLinux};
         if let Some(ref mut clipboard) = self.clipboard {
@@ -497,9 +524,20 @@ where
         }
     }
 
+    #[cfg(not(all(
+        feature = "clipboard-native",
+        target_os = "linux",
+        not(target_arch = "wasm32")
+    )))]
+    pub fn set_primary_selection(&mut self, _text: &str) {}
+
     /// Gets text from the Linux primary selection (for middle-click paste).
     /// On non-Linux platforms, returns None.
-    #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+    #[cfg(all(
+        feature = "clipboard-native",
+        target_os = "linux",
+        not(target_arch = "wasm32")
+    ))]
     pub fn get_primary_selection(&mut self) -> Option<String> {
         use arboard::{GetExtLinux, LinuxClipboardKind};
         if let Some(ref mut clipboard) = self.clipboard {
@@ -513,11 +551,11 @@ where
         }
     }
 
-    #[cfg(all(
-        not(target_os = "linux"),
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(not(all(
+        feature = "clipboard-native",
+        target_os = "linux",
+        not(target_arch = "wasm32")
+    )))]
     pub fn get_primary_selection(&mut self) -> Option<String> {
         None
     }
@@ -541,6 +579,12 @@ where
     ///
     /// Returns `true` if a text field consumed the event.
     pub fn on_ime_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.on_ime_preedit_inner(text, cursor))
+    }
+
+    fn on_ime_preedit_inner(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
         // Wrap in mutable snapshot for atomic changes
         let handled = run_in_mutable_snapshot(|| {
             cranpose_ui::text_field_focus::dispatch_ime_preedit(text, cursor)
@@ -559,6 +603,12 @@ where
     /// Handles IME delete-surrounding events.
     /// Returns `true` if a text field consumed the event.
     pub fn on_ime_delete_surrounding(&mut self, before_bytes: usize, after_bytes: usize) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.on_ime_delete_surrounding_inner(before_bytes, after_bytes))
+    }
+
+    fn on_ime_delete_surrounding_inner(&mut self, before_bytes: usize, after_bytes: usize) -> bool {
         let handled = run_in_mutable_snapshot(|| {
             cranpose_ui::text_field_focus::dispatch_delete_surrounding(before_bytes, after_bytes)
         })

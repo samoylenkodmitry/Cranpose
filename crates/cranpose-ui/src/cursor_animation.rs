@@ -14,12 +14,6 @@ use web_time::{Duration, Instant};
 /// Cursor blink interval in milliseconds.
 pub const BLINK_INTERVAL_MS: u64 = 500;
 
-thread_local! {
-    /// Global cursor animation state.
-    /// Shared by all text fields - only the focused one renders the cursor.
-    static CURSOR_STATE: CursorAnimationState = const { CursorAnimationState::new() };
-}
-
 /// Cursor blink animation state.
 ///
 /// Manages timed visibility transitions instead of continuous redraw.
@@ -98,19 +92,19 @@ impl CursorAnimationState {
 }
 
 // ============================================================================
-// Global accessor functions (thread-local)
+// Accessor functions
 // ============================================================================
 
-/// Starts the global cursor blink animation.
+/// Starts the active context's cursor blink animation.
 /// Called when a text field gains focus.
 pub fn start_cursor_blink() {
-    CURSOR_STATE.with(|state| state.start());
+    crate::render_state::with_cursor_animation(|state| state.start());
 }
 
-/// Stops the global cursor blink animation.
+/// Stops the active context's cursor blink animation.
 /// Called when no text field is focused.
 pub fn stop_cursor_blink() {
-    CURSOR_STATE.with(|state| state.stop());
+    crate::render_state::with_cursor_animation(|state| state.stop());
 }
 
 /// Resets cursor to visible and restarts the blink timer.
@@ -122,19 +116,19 @@ pub fn reset_cursor_blink() {
 
 /// Returns whether the cursor should be visible right now.
 pub fn is_cursor_visible() -> bool {
-    CURSOR_STATE.with(|state| state.is_visible())
+    crate::render_state::with_cursor_animation(|state| state.is_visible())
 }
 
 /// Advances the cursor blink state if needed.
 /// Returns `true` if a redraw is needed.
 pub fn tick_cursor_blink() -> bool {
-    CURSOR_STATE.with(|state| state.tick(Instant::now()))
+    crate::render_state::with_cursor_animation(|state| state.tick(Instant::now()))
 }
 
 /// Returns the next cursor blink transition time, if any.
 /// Use this for `WaitUntil` scheduling in the event loop.
 pub fn next_cursor_blink_time() -> Option<Instant> {
-    CURSOR_STATE.with(|state| state.next_blink_time())
+    crate::render_state::with_cursor_animation(|state| state.next_blink_time())
 }
 
 #[cfg(test)]
@@ -187,5 +181,27 @@ mod tests {
 
         assert!(changed2);
         assert!(state.is_visible()); // Should toggle back
+    }
+
+    #[test]
+    fn cursor_blink_is_scoped_by_app_context() {
+        let first = crate::render_state::AppContext::new_with_density(1.0);
+        let second = crate::render_state::AppContext::new_with_density(1.0);
+
+        first.enter(|| {
+            stop_cursor_blink();
+            start_cursor_blink();
+            assert!(next_cursor_blink_time().is_some());
+        });
+
+        second.enter(|| {
+            stop_cursor_blink();
+            assert!(next_cursor_blink_time().is_none());
+        });
+
+        first.enter(|| {
+            assert!(next_cursor_blink_time().is_some());
+            stop_cursor_blink();
+        });
     }
 }

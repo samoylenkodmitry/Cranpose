@@ -9,11 +9,11 @@
 //! use cranpose::AppLauncher;
 //!
 //! AppLauncher::new()
-//!     .with_recording("/tmp/my_test.rs")
+//!     .with_recording(".cranpose-tmp/my_test.rs")
 //!     .run(|| {
 //!         // Your app - interact with it, then close
 //!     });
-//! // Generated test file will be at /tmp/my_test.rs
+//! // Generated test file will be at .cranpose-tmp/my_test.rs
 //! ```
 //!
 //! # Data-Driven Tests
@@ -36,7 +36,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// An action that can be executed by a robot test.
 ///
@@ -241,7 +241,7 @@ impl InputRecorder {
 
         // Write header
         writeln!(file, "//! Auto-generated robot test from recording")?;
-        writeln!(file, "//! Generated at: {}", chrono_lite())?;
+        writeln!(file, "//! Generated at: {}", generated_timestamp())?;
         writeln!(file, "//! Events: {}", self.events.len())?;
         writeln!(file, "//! Actions: {}", actions.len())?;
         writeln!(file)?;
@@ -289,10 +289,7 @@ impl InputRecorder {
         writeln!(file, "            let _ = robot.exit();")?;
         writeln!(file, "        }})")?;
         writeln!(file, "        .run(|| {{")?;
-        writeln!(
-            file,
-            "            // TODO: Replace with your app's composable"
-        )?;
+        writeln!(file, "            // Insert your app's composable here")?;
         writeln!(file, "            // desktop_app::app::combined_app();")?;
         writeln!(file, "        }});")?;
         writeln!(file, "}}")?;
@@ -349,20 +346,43 @@ impl Drop for InputRecorder {
     }
 }
 
-/// Simple timestamp without chrono
-fn chrono_lite() -> String {
-    // Just use a placeholder - actual time would require chrono crate
-    "timestamp".to_string()
+fn generated_timestamp() -> String {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("unix_ms_{}", duration.as_millis())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Read;
+    use std::path::PathBuf;
+
+    fn workspace_test_output_path(filename: &str) -> PathBuf {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("../../target/test-output/cranpose-recorder");
+        std::fs::create_dir_all(&path).expect("create recorder test output directory");
+        path.push(filename);
+        path
+    }
+
+    #[test]
+    fn generated_timestamp_uses_unix_millis() {
+        let timestamp = generated_timestamp();
+        assert!(timestamp.starts_with("unix_ms_"));
+        assert_ne!(timestamp, "timestamp");
+        assert!(
+            timestamp["unix_ms_".len()..]
+                .chars()
+                .all(|ch| ch.is_ascii_digit()),
+            "timestamp should contain only decimal milliseconds after the prefix: {timestamp}"
+        );
+    }
 
     #[test]
     fn test_recorder_generates_data_driven_code() {
-        let temp_path = std::env::temp_dir().join("test_recording.rs");
+        let temp_path = workspace_test_output_path("test_recording.rs");
         {
             let mut recorder = InputRecorder::new(&temp_path);
             recorder.record_mouse_move(100.0, 200.0);
@@ -379,6 +399,8 @@ mod tests {
 
         // Verify data-driven format
         assert!(content.contains("use cranpose::recorder::{RobotAction, execute_actions};"));
+        assert!(content.contains("//! Generated at: unix_ms_"));
+        assert!(!content.contains("//! Generated at: timestamp"));
         assert!(content.contains("const ACTIONS: &[RobotAction] = &["));
         assert!(content.contains("MouseMove(100.0, 200.0)"));
         assert!(content.contains("MouseDown,"));

@@ -45,20 +45,17 @@ impl ReadonlySnapshot {
         ReadonlySnapshot::new(
             self.state.id.get(),
             self.state.invalid.borrow().clone(),
-            self.state.read_observer.clone(),
+            self.state.read_observer.borrow().clone(),
         )
     }
 
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
-        let previous = current_snapshot();
-        set_current_snapshot(Some(AnySnapshot::Readonly(self.root_readonly())));
-        let result = f();
-        set_current_snapshot(previous);
-        result
+        enter_snapshot_scope(AnySnapshot::Readonly(self.root_readonly()), f)
     }
 
     pub fn take_nested_snapshot(&self, read_observer: Option<ReadObserver>) -> Arc<Self> {
-        let merged_observer = merge_read_observers(read_observer, self.state.read_observer.clone());
+        let merged_observer =
+            merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
         ReadonlySnapshot::new(
             self.state.id.get(),
             self.state.invalid.borrow().clone(),
@@ -115,6 +112,14 @@ mod tests {
 
         fn first_record(&self) -> Rc<crate::state::StateRecord> {
             mock_state_record()
+        }
+
+        fn try_readable_record(
+            &self,
+            snapshot_id: crate::snapshot_id_set::SnapshotId,
+            invalid: &SnapshotIdSet,
+        ) -> Option<Rc<crate::state::StateRecord>> {
+            Some(self.readable_record(snapshot_id, invalid))
         }
 
         fn readable_record(

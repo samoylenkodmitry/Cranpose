@@ -16,7 +16,7 @@ use cranpose_ui::{
     PointerInputScope, RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, TextStyle,
     VerticalAlignment,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 mod animations;
@@ -39,9 +39,12 @@ use hacker_news::{HackerNewsScrollStabilityFixtureTab, HackerNewsTab};
 use images::images_tab;
 use interactive_anim::InteractiveAnimTab;
 use lazy_list::lazy_list_example;
-use markdown::{markdown_viewer_tab, MarkdownScrollStabilityFixtureTab};
+use markdown::{
+    markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
+    MarkdownScrollStressFixtureTabWithState,
+};
 use shader_rect::ShaderRectTab;
-pub(crate) use shaders::ShaderSection;
+pub use shaders::ShaderSection;
 use shaders::ShadersTab;
 use text_showcase::TextShowcaseTab;
 use web_fetch::web_fetch_example;
@@ -50,7 +53,7 @@ use winamp::{remember_winamp_tab_state, WinampTab, WinampTabState};
 use xkcd::xkcd_tab;
 
 pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
-pub use markdown::MARKDOWN_SCROLL_STABILITY_TARGET_TEXT;
+pub use markdown::{markdown_scroll_stress_fixture, MARKDOWN_SCROLL_STABILITY_TARGET_TEXT};
 
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
@@ -111,7 +114,7 @@ impl DemoTab {
     }
 
     #[cfg(any(test, target_arch = "wasm32"))]
-    pub(crate) fn from_startup_name(name: &str) -> Option<Self> {
+    pub fn from_startup_name(name: &str) -> Option<Self> {
         let normalized = name
             .chars()
             .filter(|ch| ch.is_ascii_alphanumeric())
@@ -171,14 +174,14 @@ pub fn demo_tab_labels() -> Vec<&'static str> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) struct StartupSelection {
-    pub(crate) initial_tab: Option<DemoTab>,
-    pub(crate) initial_shader_section: Option<ShaderSection>,
+pub struct StartupSelection {
+    pub initial_tab: Option<DemoTab>,
+    pub initial_shader_section: Option<ShaderSection>,
 }
 
 impl StartupSelection {
     #[cfg(any(test, target_arch = "wasm32"))]
-    pub(crate) fn from_requested(
+    pub fn from_requested(
         initial_tab: Option<DemoTab>,
         initial_shader_section: Option<ShaderSection>,
     ) -> Self {
@@ -245,17 +248,33 @@ fn local_holder() -> CompositionLocal<Holder> {
     }
     LOCAL_HOLDER.with(|cell| {
         let mut opt = cell.borrow_mut();
-        if opt.is_none() {
-            *opt = Some(compositionLocalOf(|| Holder { count: 0 }));
-        }
-        opt.as_ref().expect("Local holder not initialized").clone()
+        opt.get_or_insert_with(|| compositionLocalOf(|| Holder { count: 0 }))
+            .clone()
     })
 }
 
 fn random() -> i32 {
+    (demo_random_u32() % 10000) as i32
+}
+
+fn demo_random_u32() -> u32 {
     let mut buf = [0u8; 4];
-    getrandom::fill(&mut buf).expect("getrandom failed");
-    (u32::from_le_bytes(buf) % 10000) as i32
+    match getrandom::fill(&mut buf) {
+        Ok(()) => u32::from_le_bytes(buf),
+        Err(_) => fallback_demo_random_u32(),
+    }
+}
+
+fn fallback_demo_random_u32() -> u32 {
+    thread_local! {
+        static FALLBACK_RANDOM_STATE: Cell<u32> = const { Cell::new(0x9E37_79B9) };
+    }
+
+    FALLBACK_RANDOM_STATE.with(|state| {
+        let next = state.get().wrapping_add(0x9E37_79B9);
+        state.set(next);
+        next ^ next.rotate_left(13) ^ next.rotate_right(9)
+    })
 }
 
 fn cached_recursive_static_text(value: &'static str) -> Rc<cranpose_ui::text::AnnotatedString> {
@@ -411,7 +430,7 @@ pub fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
 }
 
 #[composable]
-pub(crate) fn combined_app_with_startup(startup: StartupSelection) {
+pub fn combined_app_with_startup(startup: StartupSelection) {
     let initial_tab = startup.initial_tab.unwrap_or(DemoTab::Counter);
     let active_tab = cranpose_core::useState(move || initial_tab);
     let winamp_tab_state = remember_winamp_tab_state();
@@ -456,6 +475,18 @@ pub fn HackerNewsScrollStabilityRobotApp() {
 #[composable]
 pub fn MarkdownScrollStabilityRobotApp() {
     MarkdownScrollStabilityFixtureTab();
+}
+
+#[allow(non_snake_case)]
+#[composable]
+pub fn MarkdownScrollStressRobotApp() {
+    MarkdownScrollStressFixtureTab();
+}
+
+#[allow(non_snake_case)]
+#[composable]
+pub fn MarkdownScrollStressRobotAppWithState(list_state: LazyListState) {
+    MarkdownScrollStressFixtureTabWithState(list_state);
 }
 
 fn tab_requires_scroll(tab: DemoTab) -> bool {
@@ -1355,9 +1386,7 @@ fn counter_app() {
                         thread::sleep(Duration::from_millis(80));
                     }
                 }
-                let mut buf = [0u8; 4];
-                getrandom::fill(&mut buf).expect("getrandom failed");
-                let val = u32::from_le_bytes(buf) % 1000;
+                let val = demo_random_u32() % 1000;
                 format!("Background fetch #{fetch_key}: {val}")
             },
             move |value| {

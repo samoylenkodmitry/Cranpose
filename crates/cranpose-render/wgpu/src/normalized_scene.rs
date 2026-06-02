@@ -1,7 +1,7 @@
 use crate::effect_renderer::CompositeSampleMode;
 use crate::pipeline::{
     emitted_scene_bounds, push_draw_primitive, push_layer_shadow, push_text_style_draws,
-    scene_emission_counts, SceneEmissionCounts,
+    scene_emission_counts, SceneEmissionCounts, TextLayoutResolver, UiTextLayoutResolver,
 };
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
@@ -607,11 +607,9 @@ fn flush_translated_local_picture(
                 z_end,
                 SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
             );
-            let layer = scene
-                .effect_layers
-                .last_mut()
-                .expect("effect layer was just pushed");
-            layer.snap_anchor = snap_anchor;
+            if let Some(layer) = scene.effect_layers.last_mut() {
+                layer.snap_anchor = snap_anchor;
+            }
         }
     }
     *state = Some(TranslatedLocalPictureState {
@@ -648,6 +646,7 @@ struct LocalPrimitiveContext<'a> {
 
 fn push_local_primitive(
     local_scene: &mut CompositorScene,
+    text_layout: &mut impl TextLayoutResolver,
     primitive: &PrimitiveEntry,
     context: &LocalPrimitiveContext<'_>,
 ) {
@@ -692,6 +691,7 @@ fn push_local_primitive(
                 .translate(context.layer_bounds.x, context.layer_bounds.y);
             push_text_style_draws(
                 local_scene,
+                text_layout,
                 text.node_id,
                 context.layer_bounds,
                 text_rect,
@@ -720,6 +720,7 @@ pub(crate) fn translate_quad(quad: [[f32; 2]; 4], delta: Point) -> [[f32; 2]; 4]
 #[allow(clippy::too_many_arguments)]
 fn collect_layer_contents_into<'a>(
     layer: &'a LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
     inherited_clip: Option<Rect>,
     layer_offset: Point,
     inherited_translated_snap_anchor: Option<SnapAnchor>,
@@ -811,7 +812,12 @@ fn collect_layer_contents_into<'a>(
         match child {
             RenderNode::Primitive(primitive) => match primitive.phase {
                 PrimitivePhase::BeforeChildren => {
-                    push_local_primitive(local_scene, primitive, &local_primitive_context);
+                    push_local_primitive(
+                        local_scene,
+                        text_layout,
+                        primitive,
+                        &local_primitive_context,
+                    );
                 }
                 PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
             },
@@ -821,55 +827,55 @@ fn collect_layer_contents_into<'a>(
                     layer_surface_requirements_cache,
                 );
                 if !child_requirements.has_isolating_requirement() {
-                    let translation = child_requirements
-                        .direct_translation
-                        .expect("direct child layers must keep a pure translation transform");
-                    let child_offset = Point::new(
-                        layer_offset.x + translation.x,
-                        layer_offset.y + translation.y,
-                    );
-                    let child_bounds = child_layer
-                        .local_bounds
-                        .translate(child_offset.x, child_offset.y);
-                    let child_translated_snap_anchor = translated_snap_anchor.or_else(|| {
-                        if effective_translated_content_context {
-                            let child_isolation =
-                                effective_layer_isolation(&child_layer.graphics_layer);
-                            let child_content_layer = layer_for_content(
-                                &child_layer.graphics_layer,
-                                child_isolation.as_ref(),
-                            );
-                            let child_local_layer = local_content_layer(&child_content_layer);
-                            rigid_snap_anchor(child_bounds, &child_local_layer)
-                        } else {
-                            None
-                        }
-                    });
-                    let child_shadow_clip = resolve_clip(
-                        visual_clip,
-                        child_layer
-                            .shadow_clip
-                            .map(|clip| clip.translate(child_offset.x, child_offset.y)),
-                    );
-                    push_layer_shadow(
-                        local_scene,
-                        &child_layer.graphics_layer,
-                        child_bounds,
-                        child_bounds,
-                        child_shadow_clip,
-                    );
-                    collect_layer_contents_into(
-                        child_layer.as_ref(),
-                        visual_clip,
-                        child_offset,
-                        child_translated_snap_anchor,
-                        child_translation_context,
-                        local_scene,
-                        child_layers,
-                        layer_surface_rect_cache,
-                        layer_surface_requirements_cache,
-                    );
-                    continue;
+                    if let Some(translation) = child_requirements.direct_translation {
+                        let child_offset = Point::new(
+                            layer_offset.x + translation.x,
+                            layer_offset.y + translation.y,
+                        );
+                        let child_bounds = child_layer
+                            .local_bounds
+                            .translate(child_offset.x, child_offset.y);
+                        let child_translated_snap_anchor = translated_snap_anchor.or_else(|| {
+                            if effective_translated_content_context {
+                                let child_isolation =
+                                    effective_layer_isolation(&child_layer.graphics_layer);
+                                let child_content_layer = layer_for_content(
+                                    &child_layer.graphics_layer,
+                                    child_isolation.as_ref(),
+                                );
+                                let child_local_layer = local_content_layer(&child_content_layer);
+                                rigid_snap_anchor(child_bounds, &child_local_layer)
+                            } else {
+                                None
+                            }
+                        });
+                        let child_shadow_clip = resolve_clip(
+                            visual_clip,
+                            child_layer
+                                .shadow_clip
+                                .map(|clip| clip.translate(child_offset.x, child_offset.y)),
+                        );
+                        push_layer_shadow(
+                            local_scene,
+                            &child_layer.graphics_layer,
+                            child_bounds,
+                            child_bounds,
+                            child_shadow_clip,
+                        );
+                        collect_layer_contents_into(
+                            child_layer.as_ref(),
+                            text_layout,
+                            visual_clip,
+                            child_offset,
+                            child_translated_snap_anchor,
+                            child_translation_context,
+                            local_scene,
+                            child_layers,
+                            layer_surface_rect_cache,
+                            layer_surface_requirements_cache,
+                        );
+                        continue;
+                    }
                 }
                 flush_translated_local_picture(
                     local_scene,
@@ -878,8 +884,9 @@ fn collect_layer_contents_into<'a>(
                     layer_snap_anchor,
                 );
                 let mut shadow_scene = CompositorScene::new();
-                let child_logical_rect = estimate_layer_surface_rect_cached(
+                let child_logical_rect = estimate_layer_surface_rect_cached_with_text_layout(
                     child_layer.as_ref(),
+                    text_layout,
                     layer_surface_rect_cache,
                     layer_surface_requirements_cache,
                 );
@@ -968,7 +975,12 @@ fn collect_layer_contents_into<'a>(
     }
 
     for primitive in deferred_primitives {
-        push_local_primitive(local_scene, primitive, &local_primitive_context);
+        push_local_primitive(
+            local_scene,
+            text_layout,
+            primitive,
+            &local_primitive_context,
+        );
     }
     flush_translated_local_picture(
         local_scene,
@@ -978,6 +990,7 @@ fn collect_layer_contents_into<'a>(
     );
 }
 
+#[cfg(test)]
 pub(crate) fn collect_layer_contents<'a>(
     layer: &'a LayerNode,
     inherited_clip: Option<Rect>,
@@ -985,8 +998,10 @@ pub(crate) fn collect_layer_contents<'a>(
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
 ) -> CollectedLayer<'a> {
-    collect_layer_contents_with_translation_context(
+    let mut text_layout = UiTextLayoutResolver;
+    collect_layer_contents_with_translation_context_and_text_layout(
         layer,
+        &mut text_layout,
         inherited_clip,
         inherited_translated_snap_anchor,
         TranslationRenderContext::default(),
@@ -995,8 +1010,30 @@ pub(crate) fn collect_layer_contents<'a>(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn collect_layer_contents_with_translation_context<'a>(
     layer: &'a LayerNode,
+    inherited_clip: Option<Rect>,
+    inherited_translated_snap_anchor: Option<SnapAnchor>,
+    translation_context: TranslationRenderContext,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) -> CollectedLayer<'a> {
+    let mut text_layout = UiTextLayoutResolver;
+    collect_layer_contents_with_translation_context_and_text_layout(
+        layer,
+        &mut text_layout,
+        inherited_clip,
+        inherited_translated_snap_anchor,
+        translation_context,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+    )
+}
+
+pub(crate) fn collect_layer_contents_with_translation_context_and_text_layout<'a>(
+    layer: &'a LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
     inherited_clip: Option<Rect>,
     inherited_translated_snap_anchor: Option<SnapAnchor>,
     translation_context: TranslationRenderContext,
@@ -1007,6 +1044,7 @@ pub(crate) fn collect_layer_contents_with_translation_context<'a>(
     let mut child_layers = Vec::new();
     collect_layer_contents_with_translation_context_into(
         layer,
+        text_layout,
         inherited_clip,
         inherited_translated_snap_anchor,
         translation_context,
@@ -1025,6 +1063,7 @@ pub(crate) fn collect_layer_contents_with_translation_context<'a>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_layer_contents_with_translation_context_into<'a>(
     layer: &'a LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
     inherited_clip: Option<Rect>,
     inherited_translated_snap_anchor: Option<SnapAnchor>,
     translation_context: TranslationRenderContext,
@@ -1037,6 +1076,7 @@ pub(crate) fn collect_layer_contents_with_translation_context_into<'a>(
     child_layers.clear();
     collect_layer_contents_into(
         layer,
+        text_layout,
         inherited_clip,
         Point::default(),
         inherited_translated_snap_anchor,
@@ -1064,15 +1104,32 @@ pub(crate) fn estimate_layer_surface_rect_cached(
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
 ) -> Rect {
+    let mut text_layout = UiTextLayoutResolver;
+    estimate_layer_surface_rect_cached_with_text_layout(
+        layer,
+        &mut text_layout,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+    )
+}
+
+pub(crate) fn estimate_layer_surface_rect_cached_with_text_layout(
+    layer: &LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) -> Rect {
     let cache_key = layer_cache_key(layer);
     if let Some(cached_rect) = layer_surface_rect_cache.get(&cache_key) {
         return *cached_rect;
     }
 
-    let collected = collect_layer_contents(
+    let collected = collect_layer_contents_with_translation_context_and_text_layout(
         layer,
+        text_layout,
         None,
         None,
+        TranslationRenderContext::default(),
         layer_surface_rect_cache,
         layer_surface_requirements_cache,
     );

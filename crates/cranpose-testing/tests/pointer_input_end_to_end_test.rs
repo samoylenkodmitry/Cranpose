@@ -7,9 +7,6 @@ use cranpose_macros::composable;
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::*;
 
-/// This test attempts to simulate the full pipeline to identify where
-/// pointer_input events might be getting lost
-
 #[composable]
 fn test_hover_app(position: MutableState<Point>, event_count: MutableState<i32>) {
     Column(
@@ -63,6 +60,9 @@ fn test_hover_app(position: MutableState<Point>, event_count: MutableState<i32>)
 
 #[test]
 fn test_pointer_input_async_handler_lifecycle() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
@@ -78,29 +78,13 @@ fn test_pointer_input_async_handler_lifecycle() {
     })
     .expect("initial render succeeds");
 
-    // Give async tasks a chance to start
     rule.pump_until_idle().expect("pump after initial render");
 
-    // Check if async handler started
-    let count_after_start = event_count.get();
-    if count_after_start == -1 {
-        println!("✓ Async handler started successfully");
-    } else if count_after_start == 0 {
-        println!("⚠️ Async handler did NOT start (count still 0)");
-        println!("   This suggests on_attach() may not be called");
-    }
-
-    // At this point we'd need to:
-    // 1. Build the layout tree
-    // 2. Render to a scene
-    // 3. Call hit_test()
-    // 4. Call dispatch() on the result
-    // 5. Check if the state updated
-    //
-    // This requires access to internal APIs that aren't exposed in the test rule
-    // For now, we validate that the composition structure is correct
-
-    println!("Test completed - composition structure validated");
+    assert_eq!(
+        event_count.get(),
+        -1,
+        "async pointer handler should be attached and waiting for input"
+    );
 }
 
 #[composable]
@@ -156,6 +140,9 @@ fn pause_button_app(is_running: MutableState<bool>, click_count: MutableState<i3
 
 #[test]
 fn test_pause_button_with_dynamic_content() {
+    let _app_context = cranpose_ui::AppContext::new();
+    let _app_context_scope = _app_context.enter_scope();
+    _app_context.enter(cranpose_ui::reset_render_state_for_tests);
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 

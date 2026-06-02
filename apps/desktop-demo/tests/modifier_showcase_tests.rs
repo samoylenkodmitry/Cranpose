@@ -6,6 +6,15 @@ use cranpose_ui::{
     Row, RowSpec, Size, Spacer, Text, TextStyle,
 };
 
+fn app_context_scope() -> (
+    std::rc::Rc<cranpose_ui::AppContext>,
+    cranpose_ui::AppContextScope,
+) {
+    let context = cranpose_ui::AppContext::new();
+    let scope = context.enter_scope();
+    (context, scope)
+}
+
 // Re-implement showcase functions for testing
 #[composable]
 fn simple_card_showcase() {
@@ -292,6 +301,7 @@ fn collect_all_nodes(applier: &mut MemoryApplier, node_id: usize) -> Vec<usize> 
 
 #[test]
 fn test_simple_card_layout() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     composition
         .render(
@@ -324,6 +334,7 @@ fn test_simple_card_layout() {
 
 #[test]
 fn test_positioned_boxes_layout() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     composition
         .render(
@@ -353,6 +364,7 @@ fn test_positioned_boxes_layout() {
 
 #[test]
 fn test_item_list_layout() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     composition
         .render(
@@ -383,6 +395,7 @@ fn test_item_list_layout() {
 
 #[test]
 fn test_complex_chain_layout() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     composition
         .render(
@@ -413,6 +426,7 @@ fn test_complex_chain_layout() {
 
 #[test]
 fn test_dynamic_modifiers_layout() {
+    let (_app_context, _app_context_scope) = app_context_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let root_key = location_key(file!(), line!(), column!());
 
@@ -468,6 +482,8 @@ fn test_dynamic_modifiers_layout() {
 
 #[test]
 fn test_long_list_performance() {
+    let (_app_context, _app_context_scope) = app_context_scope();
+
     #[composable]
     fn long_list_showcase() {
         Column(

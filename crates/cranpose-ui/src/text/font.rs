@@ -30,13 +30,29 @@ pub struct FileBackedFontFamily {
     pub fonts: Vec<FontFile>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontFamilyError {
+    EmptyFileList,
+}
+
+impl std::fmt::Display for FontFamilyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FontFamilyError::EmptyFileList => {
+                write!(f, "file-backed font family requires at least one font file")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FontFamilyError {}
+
 impl FileBackedFontFamily {
-    pub fn new(fonts: Vec<FontFile>) -> Self {
-        assert!(
-            !fonts.is_empty(),
-            "FileBackedFontFamily requires at least one font file"
-        );
-        Self { fonts }
+    pub fn new(fonts: Vec<FontFile>) -> Result<Self, FontFamilyError> {
+        if fonts.is_empty() {
+            return Err(FontFamilyError::EmptyFileList);
+        }
+        Ok(Self { fonts })
     }
 }
 
@@ -82,8 +98,8 @@ impl FontFamily {
         }
     }
 
-    pub fn file_backed(fonts: Vec<FontFile>) -> Self {
-        Self::FileBacked(FileBackedFontFamily::new(fonts))
+    pub fn file_backed(fonts: Vec<FontFile>) -> Result<Self, FontFamilyError> {
+        FileBackedFontFamily::new(fonts).map(Self::FileBacked)
     }
 
     pub fn loaded_typeface_path(path: impl Into<String>) -> Self {
@@ -114,11 +130,8 @@ impl From<String> for FontFamily {
 pub struct FontWeight(pub u16);
 
 impl FontWeight {
-    pub fn new(weight: u16) -> Self {
-        match Self::try_new(weight) {
-            Some(value) => value,
-            None => panic!("Font weight must be in range [1, 1000], got {weight}"),
-        }
+    pub const fn new(weight: u16) -> Self {
+        Self::clamped(weight)
     }
 
     pub const fn try_new(weight: u16) -> Option<Self> {
@@ -126,6 +139,16 @@ impl FontWeight {
             Some(Self(weight))
         } else {
             None
+        }
+    }
+
+    pub const fn clamped(weight: u16) -> Self {
+        if weight < 1 {
+            Self(1)
+        } else if weight > 1000 {
+            Self(1000)
+        } else {
+            Self(weight)
         }
     }
 
@@ -199,42 +222,48 @@ mod tests {
     #[test]
     fn font_family_file_backed_preserves_font_entries() {
         let family = FontFamily::file_backed(vec![
-            FontFile::new("/tmp/Roboto-Regular.ttf"),
-            FontFile::new("/tmp/Roboto-Bold.ttf").with_weight(FontWeight::BOLD),
-        ]);
+            FontFile::new("fixtures/fonts/Roboto-Regular.ttf"),
+            FontFile::new("fixtures/fonts/Roboto-Bold.ttf").with_weight(FontWeight::BOLD),
+        ])
+        .expect("valid file-backed font family");
         let FontFamily::FileBacked(file_backed) = family else {
             panic!("expected file-backed family");
         };
         assert_eq!(file_backed.fonts.len(), 2);
-        assert_eq!(file_backed.fonts[0].path, "/tmp/Roboto-Regular.ttf");
+        assert_eq!(
+            file_backed.fonts[0].path,
+            "fixtures/fonts/Roboto-Regular.ttf"
+        );
         assert_eq!(file_backed.fonts[0].weight, FontWeight::NORMAL);
-        assert_eq!(file_backed.fonts[1].path, "/tmp/Roboto-Bold.ttf");
+        assert_eq!(file_backed.fonts[1].path, "fixtures/fonts/Roboto-Bold.ttf");
         assert_eq!(file_backed.fonts[1].weight, FontWeight::BOLD);
     }
 
     #[test]
     fn font_file_builder_applies_style_and_weight() {
-        let file = FontFile::new("/tmp/Roboto-Italic.ttf")
+        let file = FontFile::new("fixtures/fonts/Roboto-Italic.ttf")
             .with_weight(FontWeight::MEDIUM)
             .with_style(FontStyle::Italic);
-        assert_eq!(file.path, "/tmp/Roboto-Italic.ttf");
+        assert_eq!(file.path, "fixtures/fonts/Roboto-Italic.ttf");
         assert_eq!(file.weight, FontWeight::MEDIUM);
         assert_eq!(file.style, FontStyle::Italic);
     }
 
     #[test]
-    #[should_panic(expected = "requires at least one font file")]
     fn file_backed_font_family_rejects_empty_font_list() {
-        let _ = FileBackedFontFamily::new(Vec::new());
+        assert_eq!(
+            FileBackedFontFamily::new(Vec::new()),
+            Err(FontFamilyError::EmptyFileList)
+        );
     }
 
     #[test]
     fn font_family_loaded_typeface_path_preserves_path() {
-        let family = FontFamily::loaded_typeface_path("/tmp/FiraSans-Regular.ttf");
+        let family = FontFamily::loaded_typeface_path("fixtures/fonts/FiraSans-Regular.ttf");
         let FontFamily::LoadedTypeface(typeface) = family else {
             panic!("expected loaded typeface family");
         };
-        assert_eq!(typeface.path, "/tmp/FiraSans-Regular.ttf");
+        assert_eq!(typeface.path, "fixtures/fonts/FiraSans-Regular.ttf");
     }
 
     #[test]
@@ -248,5 +277,12 @@ mod tests {
         assert_eq!(FontWeight::try_new(1), Some(FontWeight(1)));
         assert_eq!(FontWeight::try_new(1000), Some(FontWeight(1000)));
         assert_eq!(FontWeight::try_new(1001), None);
+    }
+
+    #[test]
+    fn font_weight_new_clamps_invalid_input() {
+        assert_eq!(FontWeight::new(0), FontWeight(1));
+        assert_eq!(FontWeight::new(500), FontWeight(500));
+        assert_eq!(FontWeight::new(1001), FontWeight(1000));
     }
 }

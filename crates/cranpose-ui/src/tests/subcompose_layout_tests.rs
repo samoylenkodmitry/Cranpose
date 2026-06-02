@@ -96,6 +96,7 @@ fn measure_once(
 
 #[test]
 fn measure_subcomposes_content() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let (handle, _composition) = runtime_handle();
     let mut slots = SlotTable::default();
     let mut applier = cranpose_core::MemoryApplier::new();
@@ -138,6 +139,7 @@ fn measure_subcomposes_content() {
 
 #[test]
 fn subcompose_reuses_nodes_across_measures() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let (handle, _composition) = runtime_handle();
     let mut slots = SlotTable::default();
     let mut applier = cranpose_core::MemoryApplier::new();
@@ -188,6 +190,7 @@ fn subcompose_reuses_nodes_across_measures() {
 
 #[test]
 fn handle_reports_modifier_capabilities() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
     let mut node = SubcomposeLayoutNode::new(
@@ -207,6 +210,7 @@ fn handle_reports_modifier_capabilities() {
 
 #[test]
 fn inactive_slots_move_to_reusable_pool() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let (handle, _composition) = runtime_handle();
     let mut slots = SlotTable::default();
     let mut applier = cranpose_core::MemoryApplier::new();
@@ -255,6 +259,7 @@ fn inactive_slots_move_to_reusable_pool() {
 
 #[test]
 fn active_children_follow_last_rendered_placements() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
     let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
@@ -270,7 +275,71 @@ fn active_children_follow_last_rendered_placements() {
 }
 
 #[test]
+fn subcompose_reuses_measured_children_scratch_map() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let policy: Rc<MeasurePolicy> =
+        Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
+    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    let handle = node.handle();
+
+    let first = handle.measured_children_scratch();
+    let first_ptr = Rc::as_ptr(&first);
+    first.borrow_mut().reserve(8);
+    let retained_capacity = first.borrow().capacity();
+    drop(first);
+
+    let second = handle.measured_children_scratch();
+    assert_eq!(
+        Rc::as_ptr(&second),
+        first_ptr,
+        "SubcomposeLayout should reuse the measured-child scratch map"
+    );
+    assert!(
+        second.borrow().capacity() >= retained_capacity,
+        "SubcomposeLayout should retain measured-child scratch capacity"
+    );
+}
+
+#[test]
+fn subcompose_scope_layout_uses_retained_placement_scratch() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let (handle, _composition) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = cranpose_core::MemoryApplier::new();
+    let policy: Rc<MeasurePolicy> = Rc::new(|scope, _constraints| {
+        scope.layout(
+            10.0,
+            20.0,
+            [
+                Placement::new(101, 1.0, 2.0, 0),
+                Placement::new(102, 3.0, 4.0, 0),
+            ],
+        )
+    });
+    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    let node_handle = node.handle();
+    node_handle.recycle_placement_scratch(Vec::with_capacity(16));
+    let node_id = applier.create(Box::new(node));
+
+    let result = measure_once(
+        &mut slots,
+        &mut applier,
+        &handle,
+        node_id,
+        Constraints::tight(0.0, 0.0),
+    );
+
+    assert_eq!(result.size, Size::new(10.0, 20.0));
+    assert_eq!(result.placements.len(), 2);
+    assert!(
+        result.placements.capacity() >= 16,
+        "SubcomposeLayout should return placements backed by retained scratch"
+    );
+}
+
+#[test]
 fn subcompose_modifier_slices_cache_reuses_unique_snapshot_allocation() {
+    let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
     let mut node =

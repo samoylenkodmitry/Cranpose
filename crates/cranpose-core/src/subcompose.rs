@@ -52,7 +52,7 @@ pub trait SlotReusePolicy: 'static {
     ///
     /// Implementations should document what constitutes compatibility (for
     /// example, identical slot identifiers, matching layout classes, or node
-    /// types). Returning `true` allows [`SubcomposeState`] to migrate the node
+    /// types). Returning `true` allows [`SubcomposeState`] to move the node
     /// across slots instead of disposing it.
     fn are_compatible(&self, existing: SlotId, requested: SlotId) -> bool;
 
@@ -275,7 +275,7 @@ pub struct SubcomposeState {
     active_order: Vec<SlotId>,
     live_slots: HashSet<SlotId>,
     current_pass_active_slots: HashSet<SlotId>,
-    /// Per-content-type reusable node pools for O(1) compatible node lookup.
+    /// Per-content-type reusable node pools used to narrow compatible node lookup.
     /// Key is content type, value is a deque of (SlotId, NodeId) pairs.
     /// Nodes without content type go to `reusable_nodes_untyped`.
     reusable_by_type: HashMap<u64, VecDeque<(SlotId, NodeId)>>,
@@ -376,7 +376,7 @@ impl SubcomposeState {
         self.policy.register_content_type(slot_id, content_type);
     }
 
-    /// Updates the content type for a slot, handling Some→None transitions.
+    /// Updates the content type for a slot, handling optional content types.
     ///
     /// If `content_type` is `Some(type)`, registers the type for the slot.
     /// If `content_type` is `None`, removes any previously registered type.
@@ -434,7 +434,6 @@ impl SubcomposeState {
         node_ids: &[NodeId],
         scopes: &[RecomposeScope],
     ) {
-        // Track whether this slot was reused (had existing nodes before this call)
         let was_reused = self.mapping.get_nodes(&slot_id).is_some();
         self.last_slot_reused = Some(was_reused);
         self.live_slots.insert(slot_id);
@@ -495,11 +494,11 @@ impl SubcomposeState {
     }
 
     fn decrement_reusable_slot(&mut self, slot_id: SlotId) {
-        let entry = self
-            .reusable_node_counts
-            .get_mut(&slot_id)
-            .expect("reusable slot count must exist when removing a pooled node");
-        *entry -= 1;
+        let Some(entry) = self.reusable_node_counts.get_mut(&slot_id) else {
+            self.reusable_count = self.reusable_count.saturating_sub(1);
+            return;
+        };
+        *entry = entry.saturating_sub(1);
         if *entry == 0 {
             self.reusable_node_counts.remove(&slot_id);
         }
@@ -526,48 +525,32 @@ impl SubcomposeState {
     }
 
     /// Returns the node that previously rendered this slot, if it is still
-    /// considered reusable. Uses O(1) content-type based lookup when available.
+    /// considered reusable. Content-type buckets narrow the candidate set, then
+    /// the reuse policy makes the final compatibility decision.
     ///
     /// Lookup order:
     /// 1. Exact slot match in the appropriate pool
-    /// 2. Any compatible node from the same content-type pool (O(1) pop)
+    /// 2. Any policy-compatible node from the same content-type pool
     /// 3. Fallback to untyped pool with policy compatibility check
     pub fn take_node_from_reusables(&mut self, slot_id: SlotId) -> Option<NodeId> {
-        // First, try to find an exact slot match in mapping
-        // CRITICAL FIX: Return active nodes directly without requiring them to be in
-        // reusable pools. During multi-pass measurement, nodes registered via register_active
-        // are in the mapping but NOT in reusable pools (pools only get populated in finish_pass).
-        // Without this fix, new virtual nodes are created each measure pass, losing children.
         if let Some(nodes) = self.mapping.get_nodes(&slot_id) {
             let first_node = nodes.first().copied();
             if let Some(node_id) = first_node {
-                // Try to remove from reusable pools if present (for nodes that were deactivated)
                 let _ = self.remove_from_reusable_pools(node_id);
                 return Some(node_id);
             }
         }
 
-        // Get the content type for the requested slot
         let content_type = self.slot_content_types.get(&slot_id).copied();
 
-        // Try to get a node from the same content-type pool (O(1))
         if let Some(ct) = content_type {
-            let (reused, remove_pool) = if let Some(pool) = self.reusable_by_type.get_mut(&ct) {
-                (pool.pop_front(), pool.is_empty())
-            } else {
-                (None, false)
-            };
-            if remove_pool {
-                self.reusable_by_type.remove(&ct);
-            }
-            if let Some((old_slot, node_id)) = reused {
+            if let Some((old_slot, node_id)) = self.take_compatible_typed_reusable(ct, slot_id) {
                 self.decrement_reusable_slot(old_slot);
-                self.migrate_node_to_slot(node_id, old_slot, slot_id);
+                self.move_node_to_slot(node_id, old_slot, slot_id);
                 return Some(node_id);
             }
         }
 
-        // Fallback: check untyped pool with policy compatibility
         let position = self
             .reusable_nodes_untyped
             .iter()
@@ -576,12 +559,38 @@ impl SubcomposeState {
         if let Some(index) = position {
             if let Some((old_slot, node_id)) = self.reusable_nodes_untyped.remove(index) {
                 self.decrement_reusable_slot(old_slot);
-                self.migrate_node_to_slot(node_id, old_slot, slot_id);
+                self.move_node_to_slot(node_id, old_slot, slot_id);
                 return Some(node_id);
             }
         }
 
         None
+    }
+
+    fn take_compatible_typed_reusable(
+        &mut self,
+        content_type: u64,
+        requested_slot: SlotId,
+    ) -> Option<(SlotId, NodeId)> {
+        let reused = {
+            let policy = &self.policy;
+            let pool = self.reusable_by_type.get_mut(&content_type)?;
+            let index = pool.iter().position(|(existing_slot, _)| {
+                policy.are_compatible(*existing_slot, requested_slot)
+            })?;
+            pool.remove(index)
+        };
+
+        if self
+            .reusable_by_type
+            .get(&content_type)
+            .map(|pool| pool.is_empty())
+            .unwrap_or(false)
+        {
+            self.reusable_by_type.remove(&content_type);
+        }
+
+        reused
     }
 
     /// Removes a node from whatever reusable pool it's in.
@@ -598,17 +607,9 @@ impl SubcomposeState {
             }
         }
         if let Some((content_type, position)) = typed_match {
-            let (slot, _) = self
-                .reusable_by_type
-                .get_mut(&content_type)
-                .expect("typed reusable pool must exist")
-                .remove(position)
-                .expect("typed reusable pool entry must exist");
-            let remove_pool = self
-                .reusable_by_type
-                .get(&content_type)
-                .is_some_and(VecDeque::is_empty);
-            if remove_pool {
+            let pool = self.reusable_by_type.get_mut(&content_type)?;
+            let (slot, _) = pool.remove(position)?;
+            if pool.is_empty() {
                 self.reusable_by_type.remove(&content_type);
             }
             self.decrement_reusable_slot(slot);
@@ -620,18 +621,16 @@ impl SubcomposeState {
             .iter()
             .position(|(_, n)| *n == node_id)
         {
-            let (slot, _) = self
-                .reusable_nodes_untyped
-                .remove(position)
-                .expect("untyped reusable pool entry must exist");
-            self.decrement_reusable_slot(slot);
-            return Some(slot);
+            if let Some((slot, _)) = self.reusable_nodes_untyped.remove(position) {
+                self.decrement_reusable_slot(slot);
+                return Some(slot);
+            }
         }
         None
     }
 
-    /// Migrates a node from one slot to another, updating mappings.
-    fn migrate_node_to_slot(&mut self, node_id: NodeId, old_slot: SlotId, new_slot: SlotId) {
+    /// Moves a node from one slot to another, updating mappings.
+    fn move_node_to_slot(&mut self, node_id: NodeId, old_slot: SlotId, new_slot: SlotId) {
         self.mapping.remove_by_node(&node_id);
         self.mapping.add_node(new_slot, node_id);
         if let Some(nodes) = self.precomposed_nodes.get_mut(&old_slot) {
@@ -659,7 +658,9 @@ impl SubcomposeState {
             .get_slots_to_retain(&self.active_order[start_index..]);
         let mut retained = Vec::new();
         while self.active_order.len() > start_index {
-            let slot = self.active_order.pop().expect("active_order not empty");
+            let Some(slot) = self.active_order.pop() else {
+                break;
+            };
             if retain.contains(&slot) {
                 retained.push(slot);
                 continue;

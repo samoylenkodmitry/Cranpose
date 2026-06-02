@@ -52,12 +52,9 @@ impl<T> ParamSlot<T> {
         *self.val.borrow_mut() = Some(v);
     }
 
-    /// Takes the value out temporarily (for recomposition callback)
-    pub fn take(&self) -> T {
-        self.val
-            .borrow_mut()
-            .take()
-            .expect("ParamSlot take() called before set")
+    /// Takes the value out temporarily for a recomposition callback.
+    pub fn take(&self) -> Option<T> {
+        self.val.borrow_mut().take()
     }
 }
 
@@ -85,17 +82,14 @@ impl Drop for CallbackScopeGuard {
 
 fn with_callback_scope<R>(scope: &CallbackScopeCell, f: impl FnOnce() -> R) -> R {
     let captured_scope = scope.borrow().clone();
-    let mut f = Some(f);
     if let Some(saved_scope) = captured_scope {
-        if let Some(result) = composer_context::try_with_composer(|composer| {
-            let _scope_guard = CallbackScopeGuard::push(composer, saved_scope);
-            f.take().expect("callback closure already taken")()
-        }) {
-            return result;
+        if let Some(composer) = composer_context::current_composer() {
+            let _scope_guard = CallbackScopeGuard::push(&composer, saved_scope);
+            return f();
         }
     }
 
-    f.take().expect("callback closure already taken")()
+    f()
 }
 
 fn callback_owner_scope(composer: &Composer) -> Option<RecomposeScope> {
@@ -223,9 +217,19 @@ impl<T> Default for ReturnSlot<T> {
 
 #[cfg(test)]
 mod callback_holder_tests {
-    use super::{CallbackHolder, CallbackHolder1};
+    use super::{CallbackHolder, CallbackHolder1, ParamSlot};
     use std::cell::Cell;
     use std::rc::Rc;
+
+    #[test]
+    fn param_slot_take_reports_absence_instead_of_panicking() {
+        let slot = ParamSlot::default();
+
+        assert_eq!(slot.take(), None);
+        slot.set(11);
+        assert_eq!(slot.take(), Some(11));
+        assert_eq!(slot.take(), None);
+    }
 
     #[test]
     fn callback_holder_default_forwarder_is_noop() {

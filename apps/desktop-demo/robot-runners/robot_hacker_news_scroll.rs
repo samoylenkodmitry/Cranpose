@@ -7,7 +7,7 @@
 //!
 //! Run with:
 //! ```bash
-//! cargo run --package desktop-app --example robot_hacker_news_scroll --features robot-app
+//! ./run_robot_test.sh --sequential --example robot_hacker_news_scroll
 //! ```
 
 pub mod hacker_news_robot_support;

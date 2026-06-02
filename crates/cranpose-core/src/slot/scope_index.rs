@@ -52,22 +52,32 @@ impl ScopeIndex {
     ) -> Option<usize> {
         let anchor = self.anchor(scope_id)?;
         let group_index = anchors.active_index(anchor)?;
-        let group = &groups[group_index];
+        let Some(group) = groups.get(group_index) else {
+            log::error!(
+                "scope id {scope_id:?} points to active group index {group_index}, but the slot table has only {} active groups",
+                groups.len()
+            );
+            return None;
+        };
         (group.scope_id == Some(scope_id)).then_some(group_index)
     }
 
-    pub(super) fn assign(&mut self, group: &mut GroupRecord, scope_id: ScopeId) {
+    pub(super) fn assign(&mut self, group: &mut GroupRecord, scope_id: ScopeId) -> bool {
         if let Some(existing_anchor) = self.anchor(scope_id) {
-            assert_eq!(
-                existing_anchor, group.anchor,
-                "scope id must resolve to a single active group"
-            );
+            if existing_anchor != group.anchor {
+                log::error!(
+                    "scope id {scope_id:?} is already assigned to group anchor {existing_anchor:?}; rejecting assignment to {:?}",
+                    group.anchor
+                );
+                return false;
+            }
         }
 
         if let Some(previous) = group.scope_id.replace(scope_id) {
             self.by_scope.remove(&previous);
         }
         self.by_scope.insert(scope_id, group.anchor);
+        true
     }
 
     pub(super) fn remove_groups(&mut self, groups: &[GroupRecord]) {
@@ -84,24 +94,30 @@ impl ScopeIndex {
     ) {
         for (scope_id, group_anchor) in entries {
             if let Some(existing_anchor) = self.anchor(scope_id) {
-                assert_eq!(
-                    existing_anchor, group_anchor,
-                    "restored scope id must resolve to a single active group"
-                );
+                if existing_anchor != group_anchor {
+                    log::error!(
+                        "restored scope id {scope_id:?} is already assigned to active group anchor {existing_anchor:?}; skipping restored anchor {group_anchor:?}"
+                    );
+                    continue;
+                }
             }
             self.by_scope.insert(scope_id, group_anchor);
         }
     }
 
-    pub(super) fn assert_restore_entries_available(&self, entries: &[(ScopeId, AnchorId)]) {
+    pub(super) fn restore_entries_available(&self, entries: &[(ScopeId, AnchorId)]) -> bool {
+        let mut available = true;
         for &(scope_id, group_anchor) in entries {
             if let Some(existing_anchor) = self.anchor(scope_id) {
-                assert_eq!(
-                    existing_anchor, group_anchor,
-                    "restored scope id must resolve to a single active group"
-                );
+                if existing_anchor != group_anchor {
+                    available = false;
+                    log::error!(
+                        "restored scope id {scope_id:?} is already assigned to active group anchor {existing_anchor:?}; restored anchor {group_anchor:?} needs a fresh scope"
+                    );
+                }
             }
         }
+        available
     }
 
     #[cfg(any(test, debug_assertions))]
@@ -150,12 +166,30 @@ impl SlotTable {
         let group_index =
             self.scope_index
                 .active_group_index(scope_id, &self.anchors, &self.groups)?;
-        Some(self.active_group_id_at_index(group_index))
+        self.active_group_id_at_index(group_index)
     }
 
-    pub(super) fn assign_active_group_scope(&mut self, group: ActiveGroupId, scope_id: ScopeId) {
-        let group_index = self.checked_active_group_index(group);
+    pub(super) fn assign_active_group_scope(
+        &mut self,
+        group: ActiveGroupId,
+        scope_id: ScopeId,
+    ) -> bool {
+        let group_index = group.index();
+        let Some(record) = self.groups.get(group_index) else {
+            log::error!(
+                "scope id {scope_id:?} assignment ignored for missing active group index {group_index}"
+            );
+            return false;
+        };
+        if record.generation != group.generation() {
+            log::error!(
+                "scope id {scope_id:?} assignment ignored for stale active group handle at index {group_index}: handle generation {:?}, current generation {:?}",
+                group.generation(),
+                record.generation
+            );
+            return false;
+        }
         self.scope_index
-            .assign(&mut self.groups[group_index], scope_id);
+            .assign(&mut self.groups[group_index], scope_id)
     }
 }

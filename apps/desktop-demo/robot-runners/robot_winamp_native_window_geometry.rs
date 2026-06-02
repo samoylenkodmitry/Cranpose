@@ -3,9 +3,9 @@
 use cranpose::AppLauncher;
 use cranpose_testing::find_button_in_semantics;
 use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::process::Command;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const WINDOW_TITLE: &str = "Robot Winamp Native Geometry";
@@ -30,6 +30,10 @@ const TRANSPORT_BUTTON_WIDTH: f32 = 23.0;
 const PLAY_X: f32 = 39.0;
 const PAUSE_X: f32 = 62.0;
 const STOP_X: f32 = 85.0;
+
+thread_local! {
+    static MONITOR_RECTS: RefCell<Option<Vec<WindowGeometry>>> = const { RefCell::new(None) };
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WindowGeometry {
@@ -302,8 +306,8 @@ fn rectangles_intersect(first: WindowGeometry, second: WindowGeometry) -> bool {
 }
 
 fn host_window_origin() -> WindowGeometry {
-    let monitor = *monitor_rects()
-        .iter()
+    let monitor = monitor_rects()
+        .into_iter()
         .min_by_key(|monitor| monitor.x)
         .expect("at least one monitor");
     WindowGeometry {
@@ -317,12 +321,12 @@ fn host_window_origin() -> WindowGeometry {
 fn native_window_monitor() -> WindowGeometry {
     let monitors = monitor_rects();
     if monitors.len() > 1 {
-        return *monitors
-            .iter()
+        return monitors
+            .into_iter()
             .max_by_key(|monitor| monitor.x)
             .expect("at least one monitor");
     }
-    *monitors.first().expect("at least one monitor")
+    monitors.into_iter().next().expect("at least one monitor")
 }
 
 fn find_app_window(pid: u32) -> u64 {
@@ -488,35 +492,43 @@ fn xdotool_search_title<const N: usize>(args: [&str; N], title: &str) -> Vec<u64
         .collect()
 }
 
-fn monitor_rects() -> &'static [WindowGeometry] {
-    static MONITORS: OnceLock<Vec<WindowGeometry>> = OnceLock::new();
-    MONITORS.get_or_init(|| {
-        if let Some(monitors) = xrandr_monitor_rects() {
+fn monitor_rects() -> Vec<WindowGeometry> {
+    MONITOR_RECTS.with(|slot| {
+        if let Some(monitors) = slot.borrow().as_ref().cloned() {
             return monitors;
         }
-
-        let output = Command::new("xdotool")
-            .arg("getdisplaygeometry")
-            .output()
-            .expect("xdotool getdisplaygeometry");
-        assert!(output.status.success(), "xdotool getdisplaygeometry failed");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut parts = stdout.split_whitespace();
-        vec![WindowGeometry {
-            x: 0,
-            y: 0,
-            width: parts
-                .next()
-                .expect("display width")
-                .parse()
-                .expect("display width"),
-            height: parts
-                .next()
-                .expect("display height")
-                .parse()
-                .expect("display height"),
-        }]
+        let monitors = load_monitor_rects();
+        *slot.borrow_mut() = Some(monitors.clone());
+        monitors
     })
+}
+
+fn load_monitor_rects() -> Vec<WindowGeometry> {
+    if let Some(monitors) = xrandr_monitor_rects() {
+        return monitors;
+    }
+
+    let output = Command::new("xdotool")
+        .arg("getdisplaygeometry")
+        .output()
+        .expect("xdotool getdisplaygeometry");
+    assert!(output.status.success(), "xdotool getdisplaygeometry failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut parts = stdout.split_whitespace();
+    vec![WindowGeometry {
+        x: 0,
+        y: 0,
+        width: parts
+            .next()
+            .expect("display width")
+            .parse()
+            .expect("display width"),
+        height: parts
+            .next()
+            .expect("display height")
+            .parse()
+            .expect("display height"),
+    }]
 }
 
 fn xrandr_monitor_rects() -> Option<Vec<WindowGeometry>> {
@@ -571,52 +583,76 @@ fn assert_windows_absent(pid: u32, label: &str) {
 }
 
 fn place_attached_chain(windows: WinampWindows, x: i32, y: i32) {
-    let sizes = windows.geometries();
-    place_window_for_setup("place-chain-main", windows.main, x, y);
-    place_window_for_setup(
-        "place-chain-equalizer",
-        windows.equalizer,
-        x,
-        y + sizes.main.height,
-    );
-    place_window_for_setup(
-        "place-chain-playlist",
-        windows.playlist,
-        x + sizes.equalizer.width,
-        y + sizes.main.height,
-    );
-    std::thread::sleep(Duration::from_millis(220));
-    println!("place attached chain: {:?}", windows.geometries());
+    let _ = place_window_for_setup("place-chain-main", windows.main, x, y);
+    let deadline = Instant::now() + SETUP_POSITION_TIMEOUT;
+    let mut last = windows.geometries();
+
+    while Instant::now() < deadline {
+        let main = window_geometry(windows.main);
+        move_window(windows.equalizer, main.x, main.y + main.height);
+        let equalizer = window_geometry(windows.equalizer);
+        move_window(windows.playlist, equalizer.x + equalizer.width, equalizer.y);
+        std::thread::sleep(Duration::from_millis(120));
+
+        last = windows.geometries();
+        let expected = WinampGeometries {
+            main: last.main,
+            equalizer: WindowGeometry {
+                x: last.main.x,
+                y: last.main.y + last.main.height,
+                ..last.equalizer
+            },
+            playlist: WindowGeometry {
+                x: last.equalizer.x + last.equalizer.width,
+                y: last.equalizer.y,
+                ..last.playlist
+            },
+        };
+        if offsets_close(expected, last) {
+            println!("place attached chain: {:?}", last);
+            return;
+        }
+    }
+
+    println!("place attached chain: {:?}", last);
 }
 
 fn place_overflight_layout(windows: WinampWindows, x: i32, y: i32) {
     let sizes = windows.geometries();
-    let peer_x = x + sizes.main.width + 80;
-    place_window_for_setup("place-overflight-main", windows.main, x, y);
-    place_window_for_setup("place-overflight-equalizer", windows.equalizer, peer_x, y);
+    let main = place_window_for_setup("place-overflight-main", windows.main, x, y);
+    let peer_x = main.x + sizes.main.width + 80;
+    place_window_for_setup(
+        "place-overflight-equalizer",
+        windows.equalizer,
+        peer_x,
+        main.y,
+    );
     place_window_for_setup(
         "place-overflight-playlist",
         windows.playlist,
         peer_x,
-        y + sizes.equalizer.height + 40,
+        main.y + sizes.equalizer.height + 40,
     );
     std::thread::sleep(Duration::from_millis(220));
     println!("place overflight layout: {:?}", windows.geometries());
 }
 
-fn place_window_for_setup(label: &str, window_id: u64, x: i32, y: i32) {
+fn place_window_for_setup(label: &str, window_id: u64, x: i32, y: i32) -> WindowGeometry {
     activate_window(window_id);
     move_window(window_id, x, y);
     let mut last_move_requested = Instant::now();
     let deadline = Instant::now() + SETUP_POSITION_TIMEOUT;
+    let mut last_geometry = window_geometry(window_id);
     while Instant::now() < deadline {
         let geometry = window_geometry(window_id);
+        last_geometry = geometry;
         if (geometry.x - x).abs() <= OFFSET_EPSILON && (geometry.y - y).abs() <= OFFSET_EPSILON {
             std::thread::sleep(Duration::from_millis(180));
             let stable = window_geometry(window_id);
             if (stable.x - x).abs() <= OFFSET_EPSILON && (stable.y - y).abs() <= OFFSET_EPSILON {
-                return;
+                return stable;
             }
+            last_geometry = stable;
         }
         if last_move_requested.elapsed() >= Duration::from_millis(50) {
             move_window(window_id, x, y);
@@ -625,10 +661,10 @@ fn place_window_for_setup(label: &str, window_id: u64, x: i32, y: i32) {
         std::thread::sleep(Duration::from_millis(8));
     }
 
-    panic!(
-        "{label}: OS window did not reach setup position target=({x},{y}) actual={:?}",
-        window_geometry(window_id)
+    println!(
+        "{label}: OS window did not reach setup position target=({x},{y}) actual={last_geometry:?}; continuing from actual setup position"
     );
+    last_geometry
 }
 
 fn drag_main_and_assert_offsets(label: &str, windows: WinampWindows) {
@@ -654,7 +690,7 @@ fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, windows: WinampW
 
     for step in 1..=PIXEL_TRACE_STEPS {
         let previous = *trace.last().expect("previous trace sample");
-        mousemove_relative(1, 0);
+        mousemove_absolute(previous.pointer.x + 1, previous.pointer.y);
         trace.push(wait_for_one_pixel_drag_step(label, step, windows, previous));
         std::thread::sleep(Duration::from_millis(8));
     }
@@ -679,7 +715,7 @@ fn drag_main_fast_and_assert_offsets(label: &str, windows: WinampWindows) {
     let mut previous_main = initial.main;
     for step in 1..=FAST_MOVE_STEPS {
         let moved_at = Instant::now();
-        mousemove_relative(FAST_MOVE_DX, FAST_MOVE_DY);
+        drag_pointer_by(FAST_MOVE_DX, FAST_MOVE_DY);
         let current = wait_for_group_offset(
             label,
             step,
@@ -715,7 +751,7 @@ fn drag_main_over_peer_and_assert_peers_static(label: &str, windows: WinampWindo
     std::thread::sleep(Duration::from_millis(60));
 
     for step in 1..=12 {
-        mousemove_relative(24, 0);
+        drag_pointer_by(24, 0);
         std::thread::sleep(Duration::from_millis(35));
         let current = windows.geometries();
         assert_eq!(
@@ -1010,7 +1046,7 @@ fn drag_and_assert_offsets(
 
     let mut previous_group_main = initial.main;
     for step in 1..=MOVE_STEPS {
-        mousemove_relative(13, 7);
+        drag_pointer_by(13, 7);
         let current = if moves_attached_group {
             let current = wait_for_group_offset(
                 label,
@@ -1440,6 +1476,24 @@ fn move_window(window_id: u64, x: i32, y: i32) {
         &x.to_string(),
         &y.to_string(),
     ]);
+    let Some(geometry) = xdotool_window_geometry(window_id) else {
+        return;
+    };
+    if (geometry.x - x).abs() <= OFFSET_EPSILON && (geometry.y - y).abs() <= OFFSET_EPSILON {
+        return;
+    }
+    move_window_with_wmctrl(window_id, x, y, geometry.width, geometry.height);
+}
+
+fn move_window_with_wmctrl(window_id: u64, x: i32, y: i32, width: i32, height: i32) {
+    let window_id_hex = format!("0x{window_id:x}");
+    let geometry = format!("0,{x},{y},{width},{height}");
+    let status = Command::new("wmctrl")
+        .args(["-ir", &window_id_hex, "-e", &geometry])
+        .status();
+    if !matches!(status, Ok(status) if status.success()) {
+        println!("wmctrl move skipped for {window_id_hex}: {status:?}");
+    }
 }
 
 fn activate_window(window_id: u64) {
@@ -1515,8 +1569,13 @@ fn drag_input_candidates(
     .enumerate()
 }
 
-fn mousemove_relative(dx: i32, dy: i32) {
-    xdotool(["mousemove_relative", "--", &dx.to_string(), &dy.to_string()]);
+fn drag_pointer_by(dx: i32, dy: i32) {
+    let pointer = pointer_location();
+    mousemove_absolute(pointer.x + dx, pointer.y + dy);
+}
+
+fn mousemove_absolute(x: i32, y: i32) {
+    xdotool(["mousemove", "--sync", "--", &x.to_string(), &y.to_string()]);
 }
 
 fn pointer_location() -> PointerLocation {

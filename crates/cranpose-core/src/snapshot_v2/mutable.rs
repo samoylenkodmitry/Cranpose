@@ -181,11 +181,7 @@ impl MutableSnapshot {
     }
 
     pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
-        let previous = current_snapshot();
-        set_current_snapshot(Some(AnySnapshot::Mutable(self.clone())));
-        let result = f();
-        set_current_snapshot(previous);
-        result
+        enter_snapshot_scope(AnySnapshot::Mutable(self.clone()), f)
     }
 
     pub fn take_nested_snapshot(
@@ -195,7 +191,8 @@ impl MutableSnapshot {
         self.validate_not_disposed();
         self.validate_not_applied();
 
-        let merged_observer = merge_read_observers(read_observer, self.state.read_observer.clone());
+        let merged_observer =
+            merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
 
         // Create a nested read-only snapshot
         let nested = ReadonlySnapshot::new(
@@ -245,13 +242,6 @@ impl MutableSnapshot {
         self.validate_not_applied();
         self.validate_not_disposed();
         self.state.record_write(state, self.state.id.get());
-    }
-
-    pub fn notify_objects_initialized(&self) {
-        if !self.applied.get() && !self.state.disposed.get() {
-            // Mark that objects are initialized
-            // In a full implementation, this would update internal state
-        }
     }
 
     pub fn close(&self) {
@@ -313,9 +303,17 @@ impl MutableSnapshot {
                 None => return SnapshotApplyResult::Failure,
             };
 
-            let current =
+            let Some(current) =
                 crate::state::readable_record_for(&head, parent_snapshot_id, &next_invalid)
-                    .unwrap_or_else(|| state.readable_record(parent_snapshot_id, &parent_invalid));
+                    .or_else(|| state.try_readable_record(parent_snapshot_id, &parent_invalid))
+            else {
+                log::error!(
+                    "MutableSnapshot::apply missing parent readable record (object_id={:?}, parent_snapshot_id={})",
+                    obj_id,
+                    parent_snapshot_id
+                );
+                return SnapshotApplyResult::Failure;
+            };
             // Use this snapshot's invalid set to find previous (matching Kotlin's
             // `readable(first, snapshotId, applyingSnapshot.invalid)`)
             let this_invalid = self.state.invalid.borrow();
@@ -463,8 +461,10 @@ impl MutableSnapshot {
         self.validate_not_disposed();
         self.validate_not_applied();
 
-        let merged_read = merge_read_observers(read_observer, self.state.read_observer.clone());
-        let merged_write = merge_write_observers(write_observer, self.state.write_observer.clone());
+        let merged_read =
+            merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
+        let merged_write =
+            merge_write_observers(write_observer, self.state.write_observer.borrow().clone());
 
         // Get parent's current state BEFORE allocating child
         let parent_id = self.state.id.get();
@@ -591,12 +591,71 @@ mod tests {
             mock_state_record()
         }
 
+        fn try_readable_record(
+            &self,
+            snapshot_id: crate::snapshot_id_set::SnapshotId,
+            invalid: &SnapshotIdSet,
+        ) -> Option<Rc<crate::state::StateRecord>> {
+            Some(self.readable_record(snapshot_id, invalid))
+        }
+
         fn readable_record(
             &self,
             _snapshot_id: crate::snapshot_id_set::SnapshotId,
             _invalid: &SnapshotIdSet,
         ) -> Rc<crate::state::StateRecord> {
             mock_state_record()
+        }
+
+        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
+
+        fn promote_record(
+            &self,
+            _child_id: crate::snapshot_id_set::SnapshotId,
+        ) -> Result<(), &'static str> {
+            Ok(())
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    struct MissingParentReadableStateObject {
+        record: Rc<crate::state::StateRecord>,
+    }
+
+    impl MissingParentReadableStateObject {
+        fn new(writer_id: SnapshotId) -> Self {
+            Self {
+                record: crate::state::StateRecord::new(writer_id, (), None),
+            }
+        }
+    }
+
+    impl StateObject for MissingParentReadableStateObject {
+        fn object_id(&self) -> crate::state::ObjectId {
+            crate::state::ObjectId(10_001)
+        }
+
+        fn first_record(&self) -> Rc<crate::state::StateRecord> {
+            Rc::clone(&self.record)
+        }
+
+        fn try_readable_record(
+            &self,
+            _: SnapshotId,
+            _: &SnapshotIdSet,
+        ) -> Option<Rc<crate::state::StateRecord>> {
+            None
+        }
+
+        fn readable_record(
+            &self,
+            _: SnapshotId,
+            _: &SnapshotIdSet,
+        ) -> Rc<crate::state::StateRecord> {
+            panic!("apply must use a fallible parent readable-record lookup")
         }
 
         fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
@@ -686,9 +745,7 @@ mod tests {
         snapshot.record_write(mock_state.clone());
         snapshot.record_write(mock_state.clone()); // Second write should not call observer
 
-        // Note: Current implementation calls observer on every write
-        // In full implementation, it would only call on first write
-        assert!(*write_count.lock().unwrap() >= 1);
+        assert_eq!(*write_count.lock().unwrap(), 1);
     }
 
     #[test]
@@ -698,6 +755,21 @@ mod tests {
         let result = snapshot.apply();
         assert!(result.is_success());
         assert!(snapshot.applied.get());
+    }
+
+    #[test]
+    fn mutable_apply_returns_failure_when_parent_readable_record_is_missing() {
+        let _guard = reset_runtime();
+        let snapshot = MutableSnapshot::new(7, SnapshotIdSet::new(), None, None, 1);
+        let state = Arc::new(MissingParentReadableStateObject::new(
+            snapshot.snapshot_id(),
+        ));
+
+        snapshot.record_write(state);
+
+        let result = snapshot.apply();
+
+        assert!(result.is_failure());
     }
 
     #[test]
