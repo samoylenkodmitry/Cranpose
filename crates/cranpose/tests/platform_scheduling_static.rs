@@ -430,6 +430,16 @@ fn ios_feature_is_reserved_without_demo_native_entries() {
             "{script_path} must fail clearly instead of building the reserved ios feature"
         );
     }
+
+    let release_workflow =
+        std::fs::read_to_string(workspace_dir.join(".github/workflows/release.yml"))
+            .expect("failed to read release workflow");
+    assert!(
+        !release_workflow.contains("ios-sim")
+            && !release_workflow.contains("aarch64-apple-ios")
+            && !release_workflow.contains("--features ios"),
+        "release artifacts must not ship an iOS target until the real iOS backend exists"
+    );
 }
 
 #[test]
