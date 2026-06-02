@@ -26,7 +26,7 @@ use image::{imageops::FilterType, ImageBuffer, RgbaImage};
 use perf_robot_stats::{print_render_summary, RenderStatsAccumulator};
 use scroll_stability_external_helpers::{run_scroll_stability_capture, ScrollStabilityConfig};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
@@ -8864,7 +8864,7 @@ fn screenshot_red_strength_edge_energy(screenshot: &cranpose::RobotScreenshot) -
 }
 
 fn screenshot_unique_rgb_count(screenshot: &cranpose::RobotScreenshot) -> usize {
-    let mut colors = BTreeSet::new();
+    let mut colors = HashSet::new();
     for rgba in screenshot.pixels.chunks_exact(4) {
         colors.insert([rgba[0], rgba[1], rgba[2]]);
     }
@@ -8916,7 +8916,7 @@ fn assert_initial_leetcodedaily_frame_health(robot: &cranpose::Robot) {
 }
 
 fn screenshot_color_health(screenshot: &cranpose::RobotScreenshot) -> ScreenshotColorHealth {
-    let mut colors = BTreeSet::new();
+    let mut colors = HashSet::new();
     let mut colorful_pixels = 0usize;
     let mut blue_cyan_pixels = 0usize;
     let mut dark_pixels = 0usize;

@@ -214,6 +214,7 @@ struct CargoBinaryOptions {
     bin: String,
     profile: String,
     target: Option<String>,
+    manifest_path: Option<PathBuf>,
 }
 
 impl Default for CargoBinaryOptions {
@@ -223,6 +224,7 @@ impl Default for CargoBinaryOptions {
             bin: "desktop-app".to_owned(),
             profile: "release".to_owned(),
             target: None,
+            manifest_path: None,
         }
     }
 }
@@ -268,6 +270,13 @@ impl BinarySizeOptions {
                 }
                 "--target" => {
                     options.binary.target = Some(required_value(args, &mut index, "--target")?)
+                }
+                "--manifest-path" => {
+                    options.binary.manifest_path = Some(PathBuf::from(required_value(
+                        args,
+                        &mut index,
+                        "--manifest-path",
+                    )?))
                 }
                 "--max-bytes" => {
                     let value = required_value(args, &mut index, "--max-bytes")?;
@@ -349,7 +358,7 @@ fn print_bundle_usage() {
 
 fn print_binary_size_usage() {
     eprintln!(
-        "usage: cargo xtask binary-size [--package desktop-app] [--bin desktop-app] [--profile release] [--max-bytes N] [--no-build]"
+        "usage: cargo xtask binary-size [--manifest-path path] [--package desktop-app] [--bin desktop-app] [--profile release] [--max-bytes N] [--no-build]"
     );
 }
 
@@ -458,6 +467,7 @@ fn bundle_binary_options(options: &BundleMacosOptions) -> CargoBinaryOptions {
         bin: options.bin.clone(),
         profile: options.profile.clone(),
         target: options.target.clone(),
+        manifest_path: None,
     }
 }
 
@@ -511,8 +521,11 @@ fn unescape_json_string(value: &str) -> String {
 
 fn build_binary(options: &CargoBinaryOptions) -> Result<(), String> {
     let mut command = Command::new("cargo");
+    command.arg("build");
+    if let Some(manifest_path) = options.manifest_path.as_deref() {
+        command.arg("--manifest-path").arg(manifest_path);
+    }
     command.args([
-        "build",
         "-p",
         options.package.as_str(),
         "--bin",
@@ -535,13 +548,28 @@ fn build_binary(options: &CargoBinaryOptions) -> Result<(), String> {
 }
 
 fn built_binary_path(workspace: &Path, options: &CargoBinaryOptions) -> PathBuf {
-    let mut path = workspace.join("target");
+    let mut path = cargo_target_root(workspace, options);
     if let Some(target) = options.target.as_deref() {
         path.push(target);
     }
     path.push(cargo_profile_dir(&options.profile));
     path.push(binary_file_name(&options.bin));
     path
+}
+
+fn cargo_target_root(workspace: &Path, options: &CargoBinaryOptions) -> PathBuf {
+    let Some(manifest_path) = options.manifest_path.as_deref() else {
+        return workspace.join("target");
+    };
+    let manifest_path = if manifest_path.is_absolute() {
+        manifest_path.to_path_buf()
+    } else {
+        workspace.join(manifest_path)
+    };
+    manifest_path
+        .parent()
+        .map(|parent| parent.join("target"))
+        .unwrap_or_else(|| workspace.join("target"))
 }
 
 fn cargo_profile_dir(profile: &str) -> &str {
@@ -1242,6 +1270,8 @@ mod tests {
             "dev".into(),
             "--target".into(),
             "x86_64-unknown-linux-gnu".into(),
+            "--manifest-path".into(),
+            "apps/isolated-demo/Cargo.toml".into(),
             "--max-bytes".into(),
             "29360128".into(),
             "--no-build".into(),
@@ -1253,6 +1283,10 @@ mod tests {
         assert_eq!(
             options.binary.target.as_deref(),
             Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            options.binary.manifest_path.as_deref(),
+            Some(Path::new("apps/isolated-demo/Cargo.toml"))
         );
         assert_eq!(options.max_bytes, Some(29_360_128));
         assert!(!options.build);

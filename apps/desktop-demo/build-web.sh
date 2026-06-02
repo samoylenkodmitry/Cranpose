@@ -94,9 +94,12 @@ else
         echo ""
     fi
 
-    # Build the WASM module with the workspace wasm-release profile. The native
-    # release profile uses heavier LTO/codegen settings than local and CI web
-    # builds can rely on consistently.
+    # wasm-pack 0.13 forwards custom profile builds to cargo before applying
+    # web packaging options. Use wasm-pack's release mode with wasm-oriented
+    # Cargo release overrides for stable CI output.
+    export CARGO_PROFILE_RELEASE_OPT_LEVEL="${CARGO_PROFILE_RELEASE_OPT_LEVEL:-z}"
+    export CARGO_PROFILE_RELEASE_LTO="${CARGO_PROFILE_RELEASE_LTO:-thin}"
+    export CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-16}"
     if [ -n "${TMPDIR:-}" ]; then
         echo "Using local tmpdir: $TMPDIR"
     fi
@@ -109,7 +112,7 @@ else
     set +e
     (
         cd "$PLATFORM_DIR"
-        "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --profile wasm-release --target web --out-dir "$SCRIPT_DIR/pkg" --features web,renderer-wgpu --no-default-features
+        "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --release --target web --out-dir "$SCRIPT_DIR/pkg" --features web,renderer-wgpu --no-default-features
     )
     BUILD_RESULT=$?
     set -e

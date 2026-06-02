@@ -649,7 +649,7 @@ impl Composer {
     ) -> Result<(R, SlotPassOutcome), NodeError> {
         let mut guard = self.begin_slot_host_pass(&slots, mode);
         let result = f(self);
-        let outcome = self.finish_slot_host_pass(&slots)?;
+        let outcome = self.finish_slot_host_pass(&guard.host)?;
         guard.close();
         Ok((result, outcome))
     }
@@ -662,7 +662,7 @@ impl Composer {
     ) -> (R, SlotPassOutcome) {
         let mut guard = self.begin_slot_host_pass(&slots, mode);
         let result = f(self);
-        let outcome = match self.finish_slot_host_pass(&slots) {
+        let outcome = match self.finish_slot_host_pass(&guard.host) {
             Ok(outcome) => outcome,
             Err(err) => {
                 log::error!("slot host pass finalization failed: {err}");
@@ -686,12 +686,12 @@ impl Composer {
         slots: &Rc<SlotsHost>,
         mode: crate::slot::SlotPassMode,
     ) -> SlotHostPassGuard {
-        bind_slots_host_to_runtime_state(&self.core.shared_state, slots);
+        let slots = bind_slots_host_to_runtime_state(&self.core.shared_state, slots);
         slots.begin_pass(mode);
-        self.core.slot_hosts.borrow_mut().push(Rc::clone(slots));
+        self.core.slot_hosts.borrow_mut().push(Rc::clone(&slots));
         SlotHostPassGuard {
             core: self.clone_core(),
-            host: Rc::clone(slots),
+            host: slots,
             active: true,
         }
     }

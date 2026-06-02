@@ -91,6 +91,7 @@ jobs:
       - name: Check desktop binary size budget
         run: >
           cargo xtask binary-size
+          --manifest-path apps/isolated-demo/Cargo.toml
           --package isolated-demo
           --bin isolated-demo
           --profile release-small

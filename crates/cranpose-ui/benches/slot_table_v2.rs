@@ -9,8 +9,8 @@ use cranpose_foundation::lazy::{
 };
 use cranpose_macros::composable;
 use cranpose_ui::{
-    measure_layout, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier,
-    Size, Text, TextStyle,
+    measure_layout, AppContext, AppContextScope, Column, ColumnSpec, LazyColumn, LazyColumnSpec,
+    LinearArrangement, Modifier, Size, Text, TextStyle,
 };
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use std::cell::Cell;
@@ -215,7 +215,24 @@ enum LazyListScrollScenario {
     JumpFar,
 }
 
+struct BenchAppContext {
+    _context: Rc<AppContext>,
+    _scope: AppContextScope,
+}
+
+impl BenchAppContext {
+    fn new() -> Self {
+        let context = AppContext::new();
+        let scope = context.enter_scope();
+        Self {
+            _context: context,
+            _scope: scope,
+        }
+    }
+}
+
 struct KeyedReorderFixture {
+    _app_context: BenchAppContext,
     composition: Composition<MemoryApplier>,
     root_key: Key,
     orders: Vec<KeyedOrder>,
@@ -225,6 +242,7 @@ struct KeyedReorderFixture {
 impl KeyedReorderFixture {
     fn new(item_count: usize, scenario: KeyedOrderScenario) -> Self {
         Self {
+            _app_context: BenchAppContext::new(),
             composition: Composition::new(MemoryApplier::new()),
             root_key: location_key(file!(), line!(), column!()),
             orders: build_keyed_orders(item_count, scenario),
@@ -246,6 +264,7 @@ impl KeyedReorderFixture {
 }
 
 struct ConditionalToggleFixture {
+    _app_context: BenchAppContext,
     composition: Composition<MemoryApplier>,
     root_key: Key,
     item_count: usize,
@@ -256,6 +275,7 @@ struct ConditionalToggleFixture {
 impl ConditionalToggleFixture {
     fn new(item_count: usize, position: ConditionalTogglePosition) -> Self {
         Self {
+            _app_context: BenchAppContext::new(),
             composition: Composition::new(MemoryApplier::new()),
             root_key: location_key(file!(), line!(), column!()),
             item_count,
@@ -282,6 +302,7 @@ impl ConditionalToggleFixture {
 }
 
 struct TabSwitchFixture {
+    _app_context: BenchAppContext,
     composition: Composition<MemoryApplier>,
     root_key: Key,
     first_tab_key: Key,
@@ -293,6 +314,7 @@ struct TabSwitchFixture {
 impl TabSwitchFixture {
     fn new(groups: usize) -> Self {
         Self {
+            _app_context: BenchAppContext::new(),
             composition: Composition::new(MemoryApplier::new()),
             root_key: location_key(file!(), line!(), column!()),
             first_tab_key: location_key(file!(), line!(), column!()),
@@ -327,6 +349,7 @@ struct SubcomposeScrollFixture {
 }
 
 struct LazyListScrollFixture {
+    _app_context: BenchAppContext,
     composition: Composition<MemoryApplier>,
     root_key: Key,
     state_capture: Rc<Cell<Option<LazyListState>>>,
@@ -336,6 +359,7 @@ struct LazyListScrollFixture {
 }
 
 struct AnimationFrameFixture {
+    _app_context: BenchAppContext,
     composition: Composition<MemoryApplier>,
     root_key: Key,
     state_capture: Rc<Cell<Option<MutableState<f32>>>>,
@@ -345,6 +369,7 @@ struct AnimationFrameFixture {
 impl LazyListScrollFixture {
     fn new(scenario: LazyListScrollScenario) -> Self {
         let mut fixture = Self {
+            _app_context: BenchAppContext::new(),
             composition: Composition::new(MemoryApplier::new()),
             root_key: location_key(file!(), line!(), column!()),
             state_capture: Rc::new(Cell::new(None)),
@@ -447,6 +472,7 @@ impl LazyListScrollFixture {
 impl AnimationFrameFixture {
     fn new() -> Self {
         let mut fixture = Self {
+            _app_context: BenchAppContext::new(),
             composition: Composition::new(MemoryApplier::new()),
             root_key: location_key(file!(), line!(), column!()),
             state_capture: Rc::new(Cell::new(None)),
