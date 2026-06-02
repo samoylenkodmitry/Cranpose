@@ -505,18 +505,27 @@ fn heavy_shell_entrypoints_use_local_resource_guards() {
     let workspace_manifest = fs::read_to_string(workspace_root.join("Cargo.toml"))
         .expect("failed to read workspace manifest");
     assert!(
-        web_build_source.contains("build --profile wasm-release")
+        web_build_source.contains("build --release")
+            && web_build_source
+                .contains("CARGO_PROFILE_RELEASE_OPT_LEVEL=\"${CARGO_PROFILE_RELEASE_OPT_LEVEL:-z}\"")
+            && web_build_source
+                .contains("CARGO_PROFILE_RELEASE_LTO=\"${CARGO_PROFILE_RELEASE_LTO:-thin}\"")
+            && web_build_source.contains(
+                "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=\"${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-16}\""
+            )
             && workspace_manifest.contains("[profile.wasm-release]")
             && workspace_manifest.contains("lto = \"thin\"")
             && workspace_manifest.contains("codegen-units = 16")
-            && desktop_platform_manifest.contains("[package.metadata.wasm-pack.profile.custom]")
-            && desktop_platform_manifest.contains("\"--enable-bulk-memory-opt\"")
+            && desktop_platform_manifest.contains("[package.metadata.wasm-pack.profile.release]")
+            && desktop_platform_manifest.contains("\"-Oz\"")
+            && desktop_platform_manifest.contains("\"--all-features\"")
             && web_build_source.contains("CRANPOSE_WEB_RELEASE_MAX_WASM_BYTES:-14680064")
             && web_build_source.contains("WASM release size budget")
             && web_build_source.contains("SIZE_BYTES=$(wc -c < pkg/desktop_app_bg.wasm")
+            && !desktop_platform_manifest.contains("[package.metadata.wasm-pack.profile.custom]")
             && !desktop_manifest.contains("[package.metadata.wasm-pack.profile.wasm-release]")
             && !desktop_platform_manifest.contains("[package.metadata.wasm-pack.profile.wasm-release]"),
-        "optimized web builds must use the wasm-release profile, matching wasm-opt feature flags, and a release WASM size budget instead of native release LTO/codegen settings"
+        "optimized web builds must use wasm-oriented Cargo release overrides, wasm-opt release metadata, and a release WASM size budget instead of native release LTO/codegen settings"
     );
 
     let fps_gate_source = fs::read_to_string(workspace_root.join("perf_robot_fps.sh"))

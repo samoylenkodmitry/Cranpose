@@ -10,9 +10,6 @@ publish = false
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz", "--all-features"]
 
-[package.metadata.wasm-pack.profile.custom]
-wasm-opt = ["-Oz", "--all-features", "--enable-bulk-memory-opt"]
-
 [lib]
 name = "desktop_app"
 crate-type = ["cdylib", "staticlib"]
