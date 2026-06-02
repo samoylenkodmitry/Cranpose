@@ -122,6 +122,154 @@ fn composer_new_with_shared_state_quarantines_mismatched_bound_host() {
         .is_some());
 }
 
+struct MismatchedSlotPassFixture {
+    composer: Composer,
+    mismatched_host: Rc<SlotsHost>,
+    owner_state: Rc<crate::composer::ComposerRuntimeState>,
+    other_state: Rc<crate::composer::ComposerRuntimeState>,
+    original_storage_key: usize,
+    _owner_applier: Rc<dyn ApplierHost>,
+    _runtime: Runtime,
+}
+
+fn mismatched_slot_pass_fixture() -> MismatchedSlotPassFixture {
+    let owner_state = Rc::new(crate::composer::ComposerRuntimeState::default());
+    let other_state = Rc::new(crate::composer::ComposerRuntimeState::default());
+    let mismatched_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    let original_storage_key = mismatched_host.storage_key();
+    let owner_applier: Rc<dyn ApplierHost> =
+        Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
+    owner_state.bind_applier_host(&owner_applier);
+    owner_state.bind_slots_host(&mismatched_host);
+
+    let (handle, _runtime) = runtime_handle();
+    let local_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    let applier: Rc<dyn ApplierHost> = Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let composer = Composer::new_with_shared_state(
+        Rc::clone(&other_state),
+        local_host,
+        applier,
+        handle,
+        observer,
+        None,
+    );
+
+    MismatchedSlotPassFixture {
+        composer,
+        mismatched_host,
+        owner_state,
+        other_state,
+        original_storage_key,
+        _owner_applier: owner_applier,
+        _runtime,
+    }
+}
+
+fn inspect_mismatched_slot_pass_host(
+    composer: &Composer,
+    other_state: &Rc<crate::composer::ComposerRuntimeState>,
+    mismatched_host: &Rc<SlotsHost>,
+) -> (usize, bool, bool, bool) {
+    let active_host = composer.active_slots_host();
+    let active_storage_key = active_host.storage_key();
+    let rebound_to_other_state = active_host
+        .runtime_state()
+        .map(|state| Rc::ptr_eq(&state, other_state))
+        .unwrap_or(false);
+    let registered_during_pass = other_state
+        .host_for_storage_key(active_storage_key)
+        .is_some();
+    (
+        active_storage_key,
+        Rc::ptr_eq(&active_host, mismatched_host),
+        rebound_to_other_state,
+        registered_during_pass,
+    )
+}
+
+fn assert_mismatched_slot_pass_uses_replacement(
+    fixture: &MismatchedSlotPassFixture,
+    active_storage_key: usize,
+    used_original_host: bool,
+    rebound_to_other_state: bool,
+    registered_during_pass: bool,
+) {
+    assert!(!used_original_host);
+    assert!(rebound_to_other_state);
+    assert!(registered_during_pass);
+    assert_ne!(active_storage_key, fixture.original_storage_key);
+    assert!(fixture
+        .owner_state
+        .host_for_storage_key(fixture.original_storage_key)
+        .is_some());
+    assert!(!fixture.mismatched_host.has_active_pass());
+    assert!(fixture
+        .mismatched_host
+        .runtime_state()
+        .map(|state| Rc::ptr_eq(&state, &fixture.owner_state))
+        .unwrap_or(false));
+}
+
+#[test]
+fn try_slot_host_pass_quarantines_mismatched_bound_host() {
+    let fixture = mismatched_slot_pass_fixture();
+
+    let (
+        (active_storage_key, used_original_host, rebound_to_other_state, registered_during_pass),
+        _,
+    ) = fixture
+        .composer
+        .try_with_slot_host_pass(
+            Rc::clone(&fixture.mismatched_host),
+            crate::slot::SlotPassMode::Compose,
+            |composer| {
+                inspect_mismatched_slot_pass_host(
+                    composer,
+                    &fixture.other_state,
+                    &fixture.mismatched_host,
+                )
+            },
+        )
+        .expect("replacement slot host pass should finalize");
+
+    assert_mismatched_slot_pass_uses_replacement(
+        &fixture,
+        active_storage_key,
+        used_original_host,
+        rebound_to_other_state,
+        registered_during_pass,
+    );
+}
+
+#[test]
+fn slot_host_pass_wrapper_quarantines_mismatched_bound_host() {
+    let fixture = mismatched_slot_pass_fixture();
+
+    let (
+        (active_storage_key, used_original_host, rebound_to_other_state, registered_during_pass),
+        _,
+    ) = fixture.composer.with_slot_host_pass(
+        Rc::clone(&fixture.mismatched_host),
+        crate::slot::SlotPassMode::Compose,
+        |composer| {
+            inspect_mismatched_slot_pass_host(
+                composer,
+                &fixture.other_state,
+                &fixture.mismatched_host,
+            )
+        },
+    );
+
+    assert_mismatched_slot_pass_uses_replacement(
+        &fixture,
+        active_storage_key,
+        used_original_host,
+        rebound_to_other_state,
+        registered_during_pass,
+    );
+}
+
 #[test]
 fn composer_retention_uses_checked_detached_root_key() {
     let source = include_str!("../composer.rs");
