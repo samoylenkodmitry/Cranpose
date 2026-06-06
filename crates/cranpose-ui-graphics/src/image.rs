@@ -23,6 +23,7 @@ pub struct ImageBitmap {
     width: u32,
     height: u32,
     id: u64,
+    opaque: bool,
     pixels: Arc<[u8]>,
 }
 
@@ -207,10 +208,12 @@ impl ImageBitmap {
         }
 
         let id = bitmap_content_id(width, height, pixels);
+        let opaque = pixels.chunks_exact(4).all(|pixel| pixel[3] == u8::MAX);
         Ok(Self {
             width,
             height,
             id,
+            opaque,
             pixels: Arc::from(pixels),
         })
     }
@@ -233,6 +236,11 @@ impl ImageBitmap {
     /// Returns the raw RGBA8 pixel data.
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
+    }
+
+    /// Returns true when every source pixel has full alpha.
+    pub fn is_opaque(&self) -> bool {
+        self.opaque
     }
 
     /// Returns intrinsic size in logical units.
@@ -290,6 +298,15 @@ mod tests {
         assert_eq!(bitmap.width(), 2);
         assert_eq!(bitmap.height(), 1);
         assert_eq!(bitmap.pixels().len(), 8);
+        assert!(bitmap.is_opaque());
+    }
+
+    #[test]
+    fn from_rgba8_tracks_transparency() {
+        let bitmap = ImageBitmap::from_rgba8(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 128])
+            .expect("valid bitmap");
+
+        assert!(!bitmap.is_opaque());
     }
 
     #[test]

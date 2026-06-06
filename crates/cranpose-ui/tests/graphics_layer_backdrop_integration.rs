@@ -52,15 +52,15 @@ fn collecting_slices_does_not_eagerly_evaluate_lazy_graphics_layer() {
 
     assert_eq!(
         reads.get(),
-        2,
-        "lazy graphics layers should only resolve during node setup before slice access"
+        0,
+        "direct slice collection should not resolve lazy graphics layers before slice access"
     );
 
     let layer = slices.graphics_layer().expect("layer");
     assert!((layer.alpha - 0.42).abs() < 1e-6);
     assert_eq!(
         reads.get(),
-        3,
+        1,
         "reading the composed graphics layer should evaluate the resolver"
     );
 }
@@ -120,7 +120,10 @@ fn graphics_layer_state_writes_auto_request_render_invalidation() {
         assert!((layer.translation_x - 10.0).abs() < 1e-6);
 
         x_state.set(42.0);
-        assert!(cranpose_ui::take_render_invalidation());
+        assert!(
+            !cranpose_ui::take_render_invalidation(),
+            "unattached slice collectors have no node id to schedule a draw repass"
+        );
         let updated = slices.graphics_layer().expect("layer expected");
         assert!((updated.translation_x - 42.0).abs() < 1e-6);
     });

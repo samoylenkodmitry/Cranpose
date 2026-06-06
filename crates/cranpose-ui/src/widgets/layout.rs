@@ -16,13 +16,35 @@ use cranpose_ui_layout::{MeasurePolicy, Placement};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+struct RetainedMeasurePolicy<P> {
+    value: P,
+    policy: Rc<dyn MeasurePolicy>,
+}
+
 #[composable]
 pub fn Layout<F, P>(modifier: Modifier, measure_policy: P, mut content: F) -> NodeId
 where
     F: FnMut() + 'static,
     P: MeasurePolicy + Clone + PartialEq + 'static,
 {
-    let policy: Rc<dyn MeasurePolicy> = Rc::new(measure_policy);
+    let policy_holder = cranpose_core::remember({
+        let measure_policy = measure_policy.clone();
+        move || {
+            Rc::new(RefCell::new(RetainedMeasurePolicy {
+                value: measure_policy.clone(),
+                policy: Rc::new(measure_policy),
+            }))
+        }
+    })
+    .with(|holder| holder.clone());
+    let policy = {
+        let mut holder = policy_holder.borrow_mut();
+        if holder.value != measure_policy {
+            holder.value = measure_policy.clone();
+            holder.policy = Rc::new(measure_policy);
+        }
+        Rc::clone(&holder.policy)
+    };
     let modifier_for_reset = modifier.clone();
     let policy_for_reset = Rc::clone(&policy);
     let id = cranpose_core::with_current_composer(|composer| {

@@ -11,7 +11,7 @@ use cranpose_testing::{
     find_button_in_semantics, logical_region_to_pixel_bounds, scroll_prefix_into_view,
     scroll_text_into_view, ScrollConfig,
 };
-use desktop_app::app;
+use desktop_app::app::{self, DemoTab, ShaderSection, StartupSelection};
 use image::{ImageBuffer, Rgba, RgbaImage};
 use std::fs;
 use std::path::Path;
@@ -357,5 +357,10 @@ fn main() {
             println!("PASS: Shadow Fields demo shows visible pixel changes from shadow controls");
             let _ = robot.exit();
         })
-        .run(app::combined_app);
+        .run(|| {
+            app::combined_app_with_startup(StartupSelection {
+                initial_tab: Some(DemoTab::Shaders),
+                initial_shader_section: Some(ShaderSection::GraphicsLayerFields),
+            });
+        });
 }

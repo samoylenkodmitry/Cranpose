@@ -107,6 +107,13 @@ fn layer_contains_draw_primitives(layer: &LayerNode) -> bool {
     })
 }
 
+fn layer_contains_rendered_content(layer: &LayerNode) -> bool {
+    layer.children.iter().any(|child| match child {
+        RenderNode::Primitive(_) => true,
+        RenderNode::Layer(child_layer) => layer_contains_rendered_content(child_layer),
+    })
+}
+
 fn span_has_foreground_override(span_style: &cranpose_ui::text::SpanStyle) -> bool {
     matches!(
         span_style.brush.as_ref(),
@@ -248,7 +255,6 @@ pub(crate) fn root_can_render_directly_cached(
         .has_isolating_requirement()
         && layer.backdrop().is_none()
         && layer.graphics_layer.shadow_elevation <= 0.0
-        && !layer_contains_descendant_backdrop(layer)
 }
 
 pub(crate) fn layer_uses_external_backdrop_input(
@@ -382,6 +388,9 @@ pub(crate) fn layer_surface_requirements_cached(
     if layer.isolation.blend_mode || layer.blend_mode() != BlendMode::SrcOver {
         surface_requirements.insert(SurfaceRequirement::BlendMode);
     }
+    if layer.isolation.shape_clip {
+        surface_requirements.insert(SurfaceRequirement::ShapeClip);
+    }
     let direct_translation = direct_translation(layer.transform_to_parent);
     let mut contains_translated_content = layer.translated_content_context;
     let mut translated_content_axes = translated_content_axes_for_layer(layer);
@@ -447,6 +456,14 @@ pub(crate) fn layer_surface_requirements_cached(
         surface_requirements.insert(SurfaceRequirement::NonTranslationTransform);
     }
 
+    if layer.translated_content_context
+        && layer.motion_context_animated
+        && layer.clip_rect().is_none()
+        && layer_contains_rendered_content(layer)
+    {
+        surface_requirements.insert(SurfaceRequirement::MotionStableCapture);
+    }
+
     if has_pixel_sensitive_content && direct_translation.is_some() {
         surface_requirements.insert(SurfaceRequirement::PixelStableComposite);
     }
@@ -490,6 +507,7 @@ mod tests {
             motion_context_animated: false,
             translated_content_context: false,
             translated_content_offset: cranpose_ui_graphics::Point::default(),
+            content_offset: cranpose_ui_graphics::Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -577,6 +595,27 @@ mod tests {
             CompositeSampleMode::Box4
         );
         assert_eq!(effect_layer_target_scale(&layer, 3.0), 3.0);
+    }
+
+    #[test]
+    fn shape_clip_marks_layer_isolated_without_render_effect_requirement() {
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+        layer.isolation.shape_clip = true;
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(requirements.has_isolating_requirement());
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::ShapeClip));
+        assert!(!requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::RenderEffect));
     }
 
     #[test]

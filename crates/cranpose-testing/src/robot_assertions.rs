@@ -5,10 +5,10 @@
 
 use cranpose_ui_graphics::Rect;
 
-/// Pump a bounded frame window and assert the measured FPS is above `min_fps`.
+/// Pump a bounded frame window and assert measured frame work stays above `min_fps`.
 ///
 /// The metric line is printed in a stable machine-readable form:
-/// `{metric} stage=<stage> fps=<fps> avg_ms=<ms> frames=<count> ...`.
+/// `{metric} stage=<stage> work_fps=<fps> work_avg_ms=<ms> frames=<count> ...`.
 #[cfg(feature = "desktop-robot")]
 pub fn assert_robot_fps_over(
     robot: &cranpose::Robot,
@@ -20,10 +20,11 @@ pub fn assert_robot_fps_over(
     robot.pump_frames(frames).expect("pump robot frames");
     let stats = robot.fps_stats().expect("read robot FPS stats");
     println!(
-        "{} stage={} fps={:.1} avg_ms={:.2} p95_ms={:.2} p99_ms={:.2} max_ms={:.2} work_avg_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} missed_60hz={} stalls_50ms={} frames={} recompositions={} recomps_per_second={}",
+        "{} stage={} fps={:.1} work_fps={:.1} avg_ms={:.2} p95_ms={:.2} p99_ms={:.2} max_ms={:.2} work_avg_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} missed_60hz={} stalls_50ms={} work_missed_120hz={} work_missed_60hz={} work_stalls_50ms={} frames={} recompositions={} recomps_per_second={}",
         metric,
         stage,
         stats.fps,
+        stats.work_fps,
         stats.avg_ms,
         stats.p95_ms,
         stats.p99_ms,
@@ -34,14 +35,17 @@ pub fn assert_robot_fps_over(
         stats.missed_120hz_budget,
         stats.missed_60hz_budget,
         stats.stalled_50ms_frames,
+        stats.work_missed_120hz_budget,
+        stats.work_missed_60hz_budget,
+        stats.work_stalled_50ms_frames,
         stats.frame_count,
         stats.recompositions,
         stats.recomps_per_second
     );
-    if stats.fps <= min_fps {
+    if stats.work_fps <= min_fps {
         println!(
-            "FAIL: {stage} FPS must be >{min_fps:.1}, got {:.1} ({:.2}ms)",
-            stats.fps, stats.avg_ms
+            "FAIL: {stage} work FPS must be >{min_fps:.1}, got {:.1} ({:.2}ms)",
+            stats.work_fps, stats.work_avg_ms
         );
         robot.exit().ok();
         std::process::exit(1);

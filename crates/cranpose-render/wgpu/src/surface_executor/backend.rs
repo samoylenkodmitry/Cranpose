@@ -1,5 +1,6 @@
 use crate::effect_renderer::{
-    CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
+    CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
+    ShaderCompositeBatchItem,
 };
 use crate::normalized_scene::CollectedLayer;
 use crate::offscreen::OffscreenTarget;
@@ -12,7 +13,7 @@ use crate::TextSystemState;
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::LayerNode;
 use cranpose_render_common::raster_cache::LayerRasterCacheKey;
-use cranpose_ui_graphics::{BlendMode, Rect, RenderEffect, RuntimeShader};
+use cranpose_ui_graphics::{BlendMode, LayerShape, Rect, RenderEffect, RuntimeShader};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -21,9 +22,75 @@ pub(crate) struct LayerSurface {
     pub(crate) logical_rect: Rect,
     pub(crate) composite_alpha: f32,
     pub(crate) blend_mode: BlendMode,
+    pub(crate) rounded_clip: Option<LayerSurfaceRoundedClip>,
     pub(crate) backdrop: Option<RenderEffect>,
     pub(crate) deferred_effect: Option<RenderEffect>,
     pub(crate) sample_mode: CompositeSampleMode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LayerSurfaceRoundedClip {
+    pub(crate) rect: Rect,
+    pub(crate) radii: [f32; 4],
+}
+
+impl LayerSurfaceRoundedClip {
+    pub(crate) fn from_layer(layer: &LayerNode) -> Option<Self> {
+        if !layer.graphics_layer.clip {
+            return None;
+        }
+        let LayerShape::Rounded(shape) = layer.graphics_layer.shape else {
+            return None;
+        };
+        let radii = shape.resolve(layer.local_bounds.width, layer.local_bounds.height);
+        if radii.top_left <= f32::EPSILON
+            && radii.top_right <= f32::EPSILON
+            && radii.bottom_left <= f32::EPSILON
+            && radii.bottom_right <= f32::EPSILON
+        {
+            return None;
+        }
+        Some(Self {
+            rect: layer.local_bounds,
+            radii: [
+                radii.top_left,
+                radii.top_right,
+                radii.bottom_left,
+                radii.bottom_right,
+            ],
+        })
+    }
+
+    pub(crate) fn composite_mask(
+        self,
+        surface_logical_rect: Rect,
+        dest_rect: Rect,
+    ) -> RoundedCompositeMask {
+        let scale_x = if surface_logical_rect.width.abs() > f32::EPSILON {
+            dest_rect.width / surface_logical_rect.width
+        } else {
+            1.0
+        };
+        let scale_y = if surface_logical_rect.height.abs() > f32::EPSILON {
+            dest_rect.height / surface_logical_rect.height
+        } else {
+            1.0
+        };
+        let mask_x = dest_rect.x + (self.rect.x - surface_logical_rect.x) * scale_x;
+        let mask_y = dest_rect.y + (self.rect.y - surface_logical_rect.y) * scale_y;
+        let mask_width = self.rect.width * scale_x;
+        let mask_height = self.rect.height * scale_y;
+        let radius_scale = scale_x.abs().min(scale_y.abs());
+        RoundedCompositeMask {
+            rect: [mask_x, mask_y, mask_width, mask_height],
+            radii: [
+                self.radii[0] * radius_scale,
+                self.radii[1] * radius_scale,
+                self.radii[2] * radius_scale,
+                self.radii[3] * radius_scale,
+            ],
+        }
+    }
 }
 
 pub(crate) enum LayerSurfaceTexture {
@@ -64,6 +131,7 @@ pub(crate) trait SurfaceExecutionBackend {
         &mut self,
         key: &LayerRasterCacheKey,
     ) -> Option<(Rc<OffscreenTarget>, Rect)>;
+    fn admit_layer_surface_cache_miss(&mut self, key: &LayerRasterCacheKey) -> bool;
     fn insert_cached_layer_surface(
         &mut self,
         key: LayerRasterCacheKey,
@@ -105,6 +173,26 @@ pub(crate) trait SurfaceExecutionBackend {
         z_start: usize,
         z_end: usize,
         effect_z_ranges: &[Range<usize>],
+        width: u32,
+        height: u32,
+        root_scale: f32,
+        initial_load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<(), String>;
+    #[allow(clippy::too_many_arguments)]
+    fn render_non_effect_segment_with_composites(
+        &mut self,
+        text_state: &mut TextSystemState,
+        target_view: &wgpu::TextureView,
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        shadow_draws: &[ShadowDraw],
+        draw_ops: &[DrawOp],
+        z_start: usize,
+        z_end: usize,
+        effect_z_ranges: &[Range<usize>],
+        composites: &[(usize, CompositeBatchItem<'_>)],
+        shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         width: u32,
         height: u32,
         root_scale: f32,
@@ -161,6 +249,27 @@ pub(crate) trait SurfaceExecutionBackend {
         viewport: (u32, u32),
         composites: &[ProjectiveSurfaceComposite<'_>],
     );
+    fn composite_surface_batch_to_view(
+        &mut self,
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        composites: &[CompositeBatchItem<'_>],
+    );
+    fn copy_texture_region_to_target(
+        &mut self,
+        source: &OffscreenTarget,
+        source_origin: (u32, u32),
+        target: &OffscreenTarget,
+        size: (u32, u32),
+    ) -> bool;
+    fn shader_composite_batch_to_view(
+        &mut self,
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        composites: &[ShaderCompositeBatchItem<'_>],
+    ) -> bool;
     #[allow(clippy::too_many_arguments)]
     fn composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
         &mut self,
@@ -247,4 +356,41 @@ pub(crate) trait SurfaceExecutionBackend {
         logical_rect: Rect,
         requirements: SurfaceRequirementSet,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LayerSurfaceRoundedClip;
+    use cranpose_ui_graphics::Rect;
+
+    #[test]
+    fn rounded_clip_mask_maps_surface_subrect_to_destination_pixels() {
+        let clip = LayerSurfaceRoundedClip {
+            rect: Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 40.0,
+            },
+            radii: [4.0, 8.0, 12.0, 16.0],
+        };
+
+        let mask = clip.composite_mask(
+            Rect {
+                x: 0.0,
+                y: 10.0,
+                width: 200.0,
+                height: 100.0,
+            },
+            Rect {
+                x: 40.0,
+                y: 80.0,
+                width: 400.0,
+                height: 200.0,
+            },
+        );
+
+        assert_eq!(mask.rect, [60.0, 100.0, 200.0, 80.0]);
+        assert_eq!(mask.radii, [8.0, 16.0, 24.0, 32.0]);
+    }
 }

@@ -4,11 +4,13 @@ use std::collections::VecDeque;
 use web_time::Instant;
 
 const FRAME_HISTORY_SIZE: usize = 60;
+const EVENT_DRIVEN_IDLE_GAP_MS: f32 = 50.0;
 
 #[derive(Debug)]
 pub(crate) struct FpsMonitor {
     tracker: FpsTracker,
     recomposition_count: u64,
+    recomposition_reset_baseline: u64,
 }
 
 impl FpsMonitor {
@@ -16,6 +18,7 @@ impl FpsMonitor {
         Self {
             tracker: FpsTracker::new(),
             recomposition_count: 0,
+            recomposition_reset_baseline: 0,
         }
     }
 
@@ -42,6 +45,7 @@ impl FpsMonitor {
 
     pub(crate) fn reset_stats(&mut self) {
         self.tracker.reset(self.recomposition_count);
+        self.recomposition_reset_baseline = self.recomposition_count;
     }
 
     pub(crate) fn current_fps(&self) -> f32 {
@@ -49,7 +53,10 @@ impl FpsMonitor {
     }
 
     pub(crate) fn stats(&self) -> FpsStats {
-        self.tracker.stats(self.recomposition_count)
+        self.tracker.stats(
+            self.recomposition_count
+                .saturating_sub(self.recomposition_reset_baseline),
+        )
     }
 }
 
@@ -121,16 +128,14 @@ impl FpsTracker {
     ) {
         if let Some(previous) = self.frame_times.back() {
             let interval_ms = frame_started_at.duration_since(*previous).as_secs_f32() * 1000.0;
-            self.frame_intervals_ms.push_back(interval_ms);
-            while self.frame_intervals_ms.len() > FRAME_HISTORY_SIZE {
-                self.frame_intervals_ms.pop_front();
+            if interval_ms <= EVENT_DRIVEN_IDLE_GAP_MS {
+                self.frame_intervals_ms.push_back(interval_ms);
+                while self.frame_intervals_ms.len() > FRAME_HISTORY_SIZE {
+                    self.frame_intervals_ms.pop_front();
+                }
+                self.intervals = FrameIntervalStats::from_samples(&self.frame_intervals_ms);
+                self.last_fps = fps_from_avg_ms(self.intervals.avg_ms);
             }
-            self.intervals = FrameIntervalStats::from_samples(&self.frame_intervals_ms);
-            self.last_fps = if self.intervals.avg_ms > 0.0 {
-                1000.0 / self.intervals.avg_ms
-            } else {
-                0.0
-            };
         }
 
         let work_ms = frame_finished_at
@@ -169,9 +174,13 @@ impl FpsTracker {
             max_ms: self.intervals.max_ms,
             p95_ms: self.intervals.p95_ms,
             p99_ms: self.intervals.p99_ms,
+            work_fps: fps_from_avg_ms(self.work.avg_ms),
             work_avg_ms: self.work.avg_ms,
             work_p95_ms: self.work.p95_ms,
             work_max_ms: self.work.max_ms,
+            work_missed_120hz_budget: self.work.missed_120hz_budget,
+            work_missed_60hz_budget: self.work.missed_60hz_budget,
+            work_stalled_50ms_frames: self.work.stalled_50ms_frames,
             interval_count: self.intervals.count,
             missed_120hz_budget: self.intervals.missed_120hz_budget,
             missed_60hz_budget: self.intervals.missed_60hz_budget,
@@ -250,6 +259,14 @@ impl FrameIntervalStats {
     }
 }
 
+fn fps_from_avg_ms(avg_ms: f32) -> f32 {
+    if avg_ms > 0.0 {
+        1000.0 / avg_ms
+    } else {
+        0.0
+    }
+}
+
 fn nearest_rank_percentile(sorted_samples: &[f32], percentile: usize) -> f32 {
     if sorted_samples.is_empty() {
         return 0.0;
@@ -265,9 +282,9 @@ fn nearest_rank_percentile(sorted_samples: &[f32], percentile: usize) -> f32 {
 /// Frame statistics snapshot.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FpsStats {
-    /// Current FPS in frames per second.
+    /// Current presented-frame cadence in frames per second.
     pub fps: f32,
-    /// Average frame time in milliseconds.
+    /// Average presented-frame interval in milliseconds.
     pub avg_ms: f32,
     /// Last recorded frame interval in milliseconds.
     pub latest_ms: f32,
@@ -279,12 +296,20 @@ pub struct FpsStats {
     pub p95_ms: f32,
     /// 99th percentile frame interval in the rolling history.
     pub p99_ms: f32,
+    /// AppShell work capacity in frames per second.
+    pub work_fps: f32,
     /// Average measured AppShell frame work in milliseconds.
     pub work_avg_ms: f32,
     /// 95th percentile measured AppShell frame work in milliseconds.
     pub work_p95_ms: f32,
     /// Maximum measured AppShell frame work in milliseconds.
     pub work_max_ms: f32,
+    /// Rolling count of measured AppShell work samples above the 120 Hz frame budget.
+    pub work_missed_120hz_budget: u32,
+    /// Rolling count of measured AppShell work samples above the 60 Hz frame budget.
+    pub work_missed_60hz_budget: u32,
+    /// Rolling count of measured AppShell work samples above 50 ms.
+    pub work_stalled_50ms_frames: u32,
     /// Number of frame intervals in the rolling history.
     pub interval_count: u32,
     /// Rolling count of intervals above the 120 Hz frame budget.
@@ -295,7 +320,7 @@ pub struct FpsStats {
     pub stalled_50ms_frames: u32,
     /// Total frame count since monitor creation.
     pub frame_count: u64,
-    /// Total recomposition count since monitor creation.
+    /// Recomposition count since the last stats reset.
     pub recompositions: u64,
     /// Recompositions in the last second.
     pub recomps_per_second: u64,
@@ -323,6 +348,19 @@ mod tests {
         assert_eq!(second_stats.recompositions, 0);
         assert_eq!(first_stats.frame_count, 1);
         assert_eq!(second_stats.frame_count, 1);
+    }
+
+    #[test]
+    fn reset_stats_reports_recompositions_since_reset() {
+        let mut monitor = FpsMonitor::new();
+        monitor.record_recomposition();
+        monitor.record_recomposition();
+
+        monitor.reset_stats();
+        assert_eq!(monitor.stats().recompositions, 0);
+
+        monitor.record_recomposition();
+        assert_eq!(monitor.stats().recompositions, 1);
     }
 
     #[test]
@@ -379,16 +417,25 @@ mod tests {
         assert!((stats.work_avg_ms - 3.0).abs() < 0.1);
         assert!((stats.work_p95_ms - 4.0).abs() < 0.1);
         assert!((stats.work_max_ms - 4.0).abs() < 0.1);
+        assert_eq!(stats.missed_120hz_budget, 2);
+        assert_eq!(stats.work_missed_120hz_budget, 0);
+        assert!(
+            stats.work_fps > 300.0,
+            "work FPS must measure renderer capacity, not input cadence: {stats:?}"
+        );
     }
 
     #[test]
-    fn reset_stats_drops_idle_gap_before_measurement_window() {
+    fn reset_stats_drops_active_history_before_measurement_window() {
         let mut tracker = FpsTracker::new();
         let start = web_time::Instant::now();
 
         tracker.record_frame_at(start, 3);
+        tracker.record_frame_at(start + Duration::from_millis(8), 3);
         tracker.record_frame_at(start + Duration::from_secs(4), 3);
-        assert!(tracker.stats(3).max_ms > 3000.0);
+        let before_reset = tracker.stats(3);
+        assert_eq!(before_reset.interval_count, 1);
+        assert!((before_reset.max_ms - 8.0).abs() < 0.1);
 
         tracker.reset(3);
         tracker.record_frame_at(start + Duration::from_secs(4) + Duration::from_millis(8), 3);
@@ -402,5 +449,79 @@ mod tests {
         assert_eq!(stats.interval_count, 1);
         assert!((stats.max_ms - 8.0).abs() < 0.1);
         assert_eq!(stats.recomps_per_second, 0);
+    }
+
+    #[test]
+    fn frame_stats_ignore_idle_gap_between_event_driven_frames() {
+        let mut tracker = FpsTracker::new();
+        let start = web_time::Instant::now();
+
+        tracker.record_frame_work(start, start + Duration::from_millis(2), 0);
+        tracker.record_frame_work(
+            start + Duration::from_millis(8),
+            start + Duration::from_millis(10),
+            0,
+        );
+        tracker.record_frame_work(
+            start + Duration::from_secs(4),
+            start + Duration::from_secs(4) + Duration::from_millis(1),
+            0,
+        );
+        tracker.record_frame_work(
+            start + Duration::from_secs(4) + Duration::from_millis(8),
+            start + Duration::from_secs(4) + Duration::from_millis(9),
+            0,
+        );
+
+        let stats = tracker.stats(0);
+
+        assert_eq!(stats.interval_count, 2);
+        assert!(
+            stats.max_ms < 10.0,
+            "idle wait must not be reported as active frame pacing: {stats:?}"
+        );
+        assert!(
+            stats.fps > 120.0,
+            "cheap event-driven frames should report active rendering capacity: {stats:?}"
+        );
+        assert!(
+            stats.work_fps > 500.0,
+            "cheap event-driven work should keep separate capacity stats: {stats:?}"
+        );
+        assert!((stats.work_max_ms - 2.0).abs() < 0.1);
+        assert_eq!(stats.work_missed_120hz_budget, 0);
+    }
+
+    #[test]
+    fn frame_stats_ignore_post_interaction_idle_gap_before_next_redraw() {
+        let mut tracker = FpsTracker::new();
+        let start = web_time::Instant::now();
+
+        tracker.record_frame_work(start, start + Duration::from_millis(3), 0);
+        tracker.record_frame_work(
+            start + Duration::from_millis(8),
+            start + Duration::from_millis(11),
+            0,
+        );
+        tracker.record_frame_work(
+            start + Duration::from_millis(16),
+            start + Duration::from_millis(19),
+            0,
+        );
+        tracker.record_frame_work(
+            start + Duration::from_millis(165),
+            start + Duration::from_millis(168),
+            0,
+        );
+
+        let stats = tracker.stats(0);
+
+        assert_eq!(
+            stats.interval_count, 2,
+            "post-interaction idle gaps must not dilute active redraw cadence: {stats:?}"
+        );
+        assert!((stats.max_ms - 8.0).abs() < 0.1);
+        assert_eq!(stats.stalled_50ms_frames, 0);
+        assert_eq!(stats.work_stalled_50ms_frames, 0);
     }
 }

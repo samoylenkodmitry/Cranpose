@@ -414,6 +414,12 @@ run_test() {
         robot_markdown_end_drag_up)
             timeout_secs=600
             ;;
+        robot_markdown_default_visual_contract)
+            timeout_secs=180
+            ;;
+        robot_markdown_full_demo_code_block_visual_contract)
+            timeout_secs=240
+            ;;
         robot_lazy_varheight_lifecycle)
             timeout_secs=150
             ;;
@@ -437,6 +443,12 @@ run_test() {
             ;;
         robot_shader_backdrop_drag)
             timeout_secs=300
+            ;;
+        robot_shader_external_x11_drag)
+            timeout_secs=180
+            ;;
+        robot_shader_rect_external_animation)
+            timeout_secs=180
             ;;
         robot_shader_rect)
             timeout_secs=180
@@ -473,7 +485,7 @@ run_test() {
 
     local headless_env="CRANPOSE_HEADLESS=1"
     case "$example" in
-        robot_hacker_news_scroll_exact_external_contract|robot_leetcodedaily_full_layout_scroll_stability|robot_markdown_scroll_exact_external_contract|robot_presented_window_geometry|robot_presented_window_hidpi_geometry|robot_presented_window_redraw|robot_renderer_micro_contract|robot_tab_walk_text_visual_contract|robot_text_scroll_exact_external_contract|robot_text_strikeout_presented|robot_underline_screenshot|robot_winamp_native_window_geometry)
+        robot_hacker_news_scroll_exact_external_contract|robot_leetcodedaily_full_layout_scroll_stability|robot_markdown_default_visual_contract|robot_markdown_scroll_exact_external_contract|robot_presented_window_geometry|robot_presented_window_hidpi_geometry|robot_presented_window_redraw|robot_renderer_micro_contract|robot_shader_external_x11_drag|robot_shader_rect_external_animation|robot_tab_walk_text_visual_contract|robot_text_scroll_exact_external_contract|robot_text_strikeout_presented|robot_underline_screenshot|robot_winamp_native_window_geometry)
             headless_env="CRANPOSE_HEADLESS=0"
             ;;
     esac

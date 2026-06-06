@@ -1,6 +1,7 @@
 use crate::offscreen::OffscreenTarget;
 use std::cell::{Cell, OnceCell};
 use std::fmt;
+use std::time::Instant;
 
 #[derive(Default)]
 pub(crate) struct WgpuFrameGraphExecutor {
@@ -169,6 +170,12 @@ impl CommandPassNode<'_> {
 }
 
 impl PassNode<'_> {
+    fn label(&self) -> Option<&'static str> {
+        match self {
+            Self::Command(pass) => pass.label,
+        }
+    }
+
     fn reads(&self) -> &[TextureHandle] {
         match self {
             Self::Command(pass) => pass.reads(),
@@ -454,28 +461,27 @@ impl WgpuFrameGraphExecutor {
         if graph.node_count() == 0 {
             return Err(FrameGraphError::EmptyGraph);
         }
-        let ordered_passes = build_pass_schedule(&graph.passes)?;
         let mut pass_count = 0u32;
         let mut transient_texture_bytes = 0u64;
         let mut staged_upload_cursor = 0u64;
         let mut pending_transient_releases = Vec::new();
         let mut encoder = Self::create_command_encoder(device, graph.label);
-        let mut passes = graph.passes.into_iter().map(Some).collect::<Vec<_>>();
-        for pass_index in ordered_passes {
-            let Some(pass) = passes[pass_index].take() else {
-                return Err(FrameGraphError::ScheduledPassTwice { pass_index });
-            };
-            let mut context = PassContext {
-                queue_handle: queue,
-                encoder: &mut encoder,
-                uploads: &mut self.upload_allocators,
-                transient_textures: &mut self.transient_textures,
-                pending_transient_releases: &mut pending_transient_releases,
-                transient_texture_bytes: &mut transient_texture_bytes,
-                staged_upload_cursor: &mut staged_upload_cursor,
-                pass_count: 0,
-            };
-            match pass.encode(pass_index, &mut context) {
+
+        if graph.passes.len() == 1 {
+            let pass = graph
+                .passes
+                .into_iter()
+                .next()
+                .expect("single-pass graph should contain one pass");
+            match self.encode_pass_node(
+                queue,
+                &mut encoder,
+                &mut pending_transient_releases,
+                &mut transient_texture_bytes,
+                &mut staged_upload_cursor,
+                0,
+                pass,
+            ) {
                 Ok(recorded_pass_count) => {
                     pass_count = pass_count.saturating_add(recorded_pass_count);
                 }
@@ -485,6 +491,34 @@ impl WgpuFrameGraphExecutor {
                         pending_transient_releases,
                     );
                     return Err(error);
+                }
+            }
+        } else {
+            let ordered_passes = build_pass_schedule(&graph.passes)?;
+            let mut passes = graph.passes.into_iter().map(Some).collect::<Vec<_>>();
+            for pass_index in ordered_passes {
+                let Some(pass) = passes[pass_index].take() else {
+                    return Err(FrameGraphError::ScheduledPassTwice { pass_index });
+                };
+                match self.encode_pass_node(
+                    queue,
+                    &mut encoder,
+                    &mut pending_transient_releases,
+                    &mut transient_texture_bytes,
+                    &mut staged_upload_cursor,
+                    pass_index,
+                    pass,
+                ) {
+                    Ok(recorded_pass_count) => {
+                        pass_count = pass_count.saturating_add(recorded_pass_count);
+                    }
+                    Err(error) => {
+                        release_pending_transients(
+                            &mut self.transient_textures,
+                            pending_transient_releases,
+                        );
+                        return Err(error);
+                    }
                 }
             }
         }
@@ -508,6 +542,34 @@ impl WgpuFrameGraphExecutor {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn encode_pass_node(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        pending_transient_releases: &mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
+        transient_texture_bytes: &mut u64,
+        staged_upload_cursor: &mut u64,
+        pass_index: usize,
+        pass: PassNode<'_>,
+    ) -> Result<u32, FrameGraphError> {
+        let pass_label = pass.label();
+        let pass_start = Instant::now();
+        let mut context = PassContext {
+            queue_handle: queue,
+            encoder,
+            uploads: &mut self.upload_allocators,
+            transient_textures: &mut self.transient_textures,
+            pending_transient_releases,
+            transient_texture_bytes,
+            staged_upload_cursor,
+            pass_count: 0,
+        };
+        let recorded_pass_count = pass.encode(pass_index, &mut context)?;
+        log_frame_graph_pass_timing(pass_start, pass_label, pass_index);
+        Ok(recorded_pass_count)
+    }
+
     fn create_command_encoder(
         device: &wgpu::Device,
         label: Option<&'static str>,
@@ -518,6 +580,28 @@ impl WgpuFrameGraphExecutor {
     fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
         queue.submit(std::iter::once(encoder.finish()))
     }
+}
+
+fn frame_graph_pass_telemetry_threshold_ms() -> Option<f64> {
+    std::env::var("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .filter(|threshold| *threshold >= 0.0)
+}
+
+fn log_frame_graph_pass_timing(start: Instant, label: Option<&'static str>, pass_index: usize) {
+    let Some(threshold_ms) = frame_graph_pass_telemetry_threshold_ms() else {
+        return;
+    };
+    let total_ms = start.elapsed().as_secs_f64() * 1000.0;
+    if total_ms < threshold_ms {
+        return;
+    }
+    log::warn!(
+        "[wgpu-render-stage:frame-graph-pass] total_ms={total_ms:.2} index={} label={}",
+        pass_index,
+        label.unwrap_or("<unnamed>")
+    );
 }
 
 pub(crate) trait FrameCommandRecorder {
@@ -888,6 +972,7 @@ pub(crate) enum UploadAllocatorId {
     ProjectiveBlitUniform,
     ProjectiveBlitVertex,
     EffectUniform,
+    BlurRoundedMask,
 }
 
 impl UploadAllocatorId {
@@ -900,6 +985,7 @@ impl UploadAllocatorId {
             Self::ProjectiveBlitUniform => 4,
             Self::ProjectiveBlitVertex => 5,
             Self::EffectUniform => 6,
+            Self::BlurRoundedMask => 7,
         }
     }
 }

@@ -713,6 +713,22 @@ pub trait ModifierNodeElement: fmt::Debug + Hash + PartialEq + 'static {
     fn always_update(&self) -> bool {
         false
     }
+
+    /// Whether modifier reconciliation should request capability-wide invalidations
+    /// after updating an existing node.
+    fn auto_invalidate_on_update(&self) -> bool {
+        true
+    }
+
+    /// Optional targeted invalidation requested after updating an existing node.
+    ///
+    /// This is for nodes whose attach/remove capability is broader than the
+    /// work needed for a value-only update. For example, an offset node
+    /// participates in layout on attach but an x/y change only needs placement
+    /// data and draw output refreshed.
+    fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
+        None
+    }
 }
 
 /// Capability flags indicating which specialized traits a modifier node implements.
@@ -862,6 +878,10 @@ pub trait AnyModifierElement: fmt::Debug {
 
     fn requires_update(&self) -> bool;
 
+    fn auto_invalidates_on_update(&self) -> bool;
+
+    fn update_invalidation_kind(&self) -> Option<InvalidationKind>;
+
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -950,8 +970,31 @@ where
         self.element.always_update()
     }
 
+    fn auto_invalidates_on_update(&self) -> bool {
+        self.element.auto_invalidate_on_update()
+    }
+
+    fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
+        self.element.update_invalidation_kind()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+fn request_update_auto_invalidations(
+    element: &dyn AnyModifierElement,
+    context: &mut dyn ModifierNodeContext,
+    capabilities: NodeCapabilities,
+) {
+    if let Some(kind) = element.update_invalidation_kind() {
+        let capabilities = NodeCapabilities::for_invalidation(kind);
+        context.push_active_capabilities(capabilities);
+        context.invalidate(kind);
+        context.pop_active_capabilities();
+    } else if element.auto_invalidates_on_update() {
+        request_auto_invalidations(context, capabilities);
     }
 }
 
@@ -1463,7 +1506,7 @@ impl ModifierNodeChain {
                         element.update_node(&mut **entry.node.borrow_mut());
                         entry.element = element.clone();
                         entry.hash_code = element.hash_code();
-                        request_auto_invalidations(context, capabilities);
+                        request_update_auto_invalidations(element.as_ref(), context, capabilities);
                     }
 
                     // Always update metadata
@@ -1590,7 +1633,11 @@ impl ModifierNodeChain {
                     element.update_node(&mut **entry.node.borrow_mut());
                     entry.element = element;
                     entry.hash_code = hash_code;
-                    request_auto_invalidations(context, capabilities);
+                    request_update_auto_invalidations(
+                        entry.element.as_ref(),
+                        context,
+                        capabilities,
+                    );
                 }
                 if moved {
                     request_auto_invalidations(context, capabilities);

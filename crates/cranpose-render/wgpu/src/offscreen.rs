@@ -10,7 +10,7 @@ use std::cell::OnceCell;
 /// A GPU texture that can serve as both a render target and a texture source.
 pub(crate) struct OffscreenTarget {
     // Texture kept alive for the view's lifetime; the view borrows from it implicitly.
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
@@ -47,12 +47,15 @@ impl OffscreenTarget {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Self {
-            _texture: texture,
+            texture,
             view,
             width,
             height,
@@ -95,6 +98,10 @@ impl OffscreenTarget {
                 ],
             })
         })
+    }
+
+    pub(crate) fn texture(&self) -> &wgpu::Texture {
+        &self.texture
     }
 }
 

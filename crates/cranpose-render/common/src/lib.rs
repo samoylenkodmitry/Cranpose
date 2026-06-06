@@ -131,6 +131,16 @@ pub trait Renderer {
         self.rebuild_scene_from_applier(applier, root, viewport)
     }
 
+    fn update_visual_scene_from_applier(
+        &mut self,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        viewport: Size,
+        dirty_nodes: &[cranpose_core::NodeId],
+    ) -> Result<(), Self::Error> {
+        self.update_scene_from_applier(applier, root, viewport, dirty_nodes)
+    }
+
     /// Draw a development overlay (e.g., FPS counter) on top of the scene.
     ///
     /// This is called after rebuild_scene when dev options are enabled.
@@ -139,5 +149,10 @@ pub trait Renderer {
     /// Default implementation does nothing.
     fn draw_dev_overlay(&mut self, _text: &str, _viewport: Size) {
         // Default: no-op
+    }
+
+    /// Returns whether renderer-side cache materialization needs a visible follow-up frame.
+    fn needs_frame_warmup(&self) -> bool {
+        false
     }
 }

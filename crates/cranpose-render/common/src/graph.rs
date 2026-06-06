@@ -197,6 +197,7 @@ impl Default for ProjectiveTransform {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct IsolationReasons {
     pub explicit_offscreen: bool,
+    pub shape_clip: bool,
     pub effect: bool,
     pub backdrop: bool,
     pub group_opacity: bool,
@@ -206,6 +207,7 @@ pub struct IsolationReasons {
 impl IsolationReasons {
     pub fn has_any(self) -> bool {
         self.explicit_offscreen
+            || self.shape_clip
             || self.effect
             || self.backdrop
             || self.group_opacity
@@ -268,6 +270,7 @@ pub struct LayerNode {
     pub node_id: Option<NodeId>,
     pub local_bounds: Rect,
     pub transform_to_parent: ProjectiveTransform,
+    pub content_offset: Point,
     pub motion_context_animated: bool,
     pub translated_content_context: bool,
     pub translated_content_offset: Point,
@@ -314,6 +317,10 @@ impl LayerNode {
         } else {
             crate::graph_hash::layer_raster_cache_hashes(self).target_content
         }
+    }
+
+    pub fn motion_source_content_hash(&self) -> u64 {
+        crate::graph_hash::layer_motion_source_content_hash(self)
     }
 
     pub fn effect_hash(&self) -> u64 {
@@ -551,6 +558,7 @@ mod tests {
             node_id: None,
             local_bounds,
             transform_to_parent: ProjectiveTransform::identity(),
+            content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
             translated_content_offset: Point::default(),
@@ -672,5 +680,46 @@ mod tests {
             expected.target_content_hash()
         );
         assert_eq!(graph.root.effect_hash(), expected.effect_hash());
+    }
+
+    #[test]
+    fn motion_source_content_hash_ignores_translated_content_offset() {
+        let primitive = PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 1.0,
+                        y: 2.0,
+                        width: 8.0,
+                        height: 6.0,
+                    },
+                    brush: Brush::solid(Color::WHITE),
+                },
+                clip: None,
+            }),
+        };
+        let mut base = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            vec![RenderNode::Primitive(primitive)],
+        );
+        base.translated_content_context = true;
+        base.translated_content_offset = Point::new(0.0, -24.0);
+        base.recompute_raster_cache_hashes();
+
+        let mut moved = base.clone();
+        moved.translated_content_offset = Point::new(0.0, -72.0);
+        moved.recompute_raster_cache_hashes();
+
+        assert_ne!(base.target_content_hash(), moved.target_content_hash());
+        assert_eq!(
+            base.motion_source_content_hash(),
+            moved.motion_source_content_hash()
+        );
     }
 }

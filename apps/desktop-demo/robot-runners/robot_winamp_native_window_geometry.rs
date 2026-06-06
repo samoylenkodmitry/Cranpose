@@ -1,8 +1,11 @@
 //! Robot test for native Winamp sub-window geometry.
 
+mod output_paths;
+
 use cranpose::AppLauncher;
 use cranpose_testing::find_button_in_semantics;
 use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
+use image::RgbaImage;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::process::Command;
@@ -14,6 +17,12 @@ const FAST_MOVE_STEPS: usize = 8;
 const FAST_MOVE_DX: i32 = 24;
 const FAST_MOVE_DY: i32 = 11;
 const PIXEL_TRACE_STEPS: usize = 48;
+const LONG_DRAG_TRACE_STEPS: usize = 128;
+const LONG_DRAG_DX: i32 = 3;
+const LONG_DRAG_DY: i32 = 1;
+const LONG_DRAG_STEP_DELAY: Duration = Duration::from_millis(5);
+const LONG_DRAG_MAX_POINTER_WINDOW_DRIFT: i32 = 4;
+const LONG_DRAG_MAX_WINDOW_STEP: i32 = 18;
 const PIXEL_TRACE_STALL_TIMEOUT: Duration = Duration::from_millis(90);
 const GROUP_MOVE_STEP_TIMEOUT: Duration = Duration::from_millis(500);
 const POST_RELEASE_STABILITY_TIMEOUT: Duration = Duration::from_millis(800);
@@ -27,9 +36,12 @@ const TRANSPORT_CLICK_SETTLE: Duration = Duration::from_millis(160);
 const WINAMP_MAIN_SKIN_WIDTH: f32 = 275.0;
 const TRANSPORT_Y: f32 = 88.0;
 const TRANSPORT_BUTTON_WIDTH: f32 = 23.0;
+const TRANSPORT_BUTTON_HEIGHT: f32 = 18.0;
 const PLAY_X: f32 = 39.0;
 const PAUSE_X: f32 = 62.0;
 const STOP_X: f32 = 85.0;
+const BUTTON_HOLD_SETTLE: Duration = Duration::from_millis(180);
+const BUTTON_HOLD_SAMPLE_DELAY: Duration = Duration::from_millis(220);
 
 thread_local! {
     static MONITOR_RECTS: RefCell<Option<Vec<WindowGeometry>>> = const { RefCell::new(None) };
@@ -145,6 +157,8 @@ fn main() {
             drag_main_one_pixel_trace_and_assert_continuity("drag-main-pixel-trace", windows);
             place_attached_chain(windows, origin.x + 20, origin.y + 10);
             drag_main_fast_and_assert_offsets("drag-main-fast", windows);
+            place_attached_chain(windows, origin.x + 30, origin.y + 15);
+            drag_main_long_continuous_trace_and_assert_sync("drag-main-long-trace", windows);
             place_attached_chain(windows, origin.x + 40, origin.y + 20);
             drag_and_assert_only_dragged("drag-playlist", windows, windows.playlist);
             place_attached_chain(windows, origin.x + 80, origin.y + 40);
@@ -154,6 +168,10 @@ fn main() {
             drag_main_over_peer_and_assert_peers_static("drag-main-over-peer", windows);
             place_attached_chain(windows, origin.x + 100, origin.y + 50);
             move_main_with_window_manager_and_assert_offsets("wm-move-main", windows, 31, 19);
+            hold_transport_button_and_assert_pressed_until_release(
+                "transport-button-hold",
+                windows,
+            );
             click_transport_buttons_and_assert_windows_remain("transport-buttons", windows);
             drag_volume_to_zero_and_assert_windows_remain("volume-zero", windows);
 
@@ -193,9 +211,12 @@ fn main() {
 
 fn arrange_origin(windows: WinampWindows) -> WindowGeometry {
     let geometries = windows.geometries();
-    let total_width = geometries.main.width + geometries.playlist.width;
-    let total_height =
-        geometries.main.height + geometries.equalizer.height.max(geometries.playlist.height);
+    let long_drag_travel_x = (LONG_DRAG_DX * LONG_DRAG_TRACE_STEPS as i32).max(0);
+    let long_drag_travel_y = (LONG_DRAG_DY * LONG_DRAG_TRACE_STEPS as i32).max(0);
+    let total_width = geometries.main.width + geometries.playlist.width + long_drag_travel_x;
+    let total_height = geometries.main.height
+        + geometries.equalizer.height.max(geometries.playlist.height)
+        + long_drag_travel_y;
     let monitor = native_window_monitor();
     let desired_margin_x = 120.max(total_width / 2);
     let desired_margin_y = 120.max(total_height / 2);
@@ -740,6 +761,51 @@ fn drag_main_fast_and_assert_offsets(label: &str, windows: WinampWindows) {
     assert_windows_stop_after_release(label, windows, final_geometries);
 }
 
+fn drag_main_long_continuous_trace_and_assert_sync(label: &str, windows: WinampWindows) {
+    let initial = assert_attached_offsets(label, windows.geometries());
+    let (start_x, start_y) = drag_start_for_window(windows, windows.main);
+
+    activate_window(windows.main);
+    mousemove_in_window_exact(label, windows.main, start_x, start_y);
+    std::thread::sleep(Duration::from_millis(100));
+    xdotool(["mousedown", "1"]);
+    std::thread::sleep(Duration::from_millis(60));
+
+    let origin_pointer = pointer_location();
+    let started = Instant::now();
+    let mut trace = Vec::with_capacity(LONG_DRAG_TRACE_STEPS + 1);
+    trace.push(DragTraceSample {
+        pointer: origin_pointer,
+        geometries: windows.geometries(),
+        elapsed: Duration::ZERO,
+    });
+
+    for step in 1..=LONG_DRAG_TRACE_STEPS {
+        mousemove_absolute_unsynced(
+            origin_pointer.x + LONG_DRAG_DX * step as i32,
+            origin_pointer.y + LONG_DRAG_DY * step as i32,
+        );
+        std::thread::sleep(LONG_DRAG_STEP_DELAY);
+        trace.push(DragTraceSample {
+            pointer: pointer_location(),
+            geometries: windows.geometries(),
+            elapsed: started.elapsed(),
+        });
+    }
+
+    std::thread::sleep(Duration::from_millis(80));
+    trace.push(DragTraceSample {
+        pointer: pointer_location(),
+        geometries: windows.geometries(),
+        elapsed: started.elapsed(),
+    });
+    xdotool(["mouseup", "1"]);
+    std::thread::sleep(Duration::from_millis(160));
+
+    assert_long_drag_trace_sync(label, initial, &trace);
+    assert_windows_stop_after_release(label, windows, windows.geometries());
+}
+
 fn drag_main_over_peer_and_assert_peers_static(label: &str, windows: WinampWindows) {
     let initial = windows.geometries();
     let (start_x, start_y) = drag_start_for_window(windows, windows.main);
@@ -856,11 +922,75 @@ fn click_transport_buttons_and_assert_windows_remain(label: &str, windows: Winam
     }
 }
 
+fn hold_transport_button_and_assert_pressed_until_release(label: &str, windows: WinampWindows) {
+    let initial = windows.geometries();
+    activate_window(windows.main);
+
+    let baseline = capture_winamp_button_crop(label, windows.main, "baseline", PLAY_X, TRANSPORT_Y);
+    let (screen_x, screen_y) = winamp_button_center(windows.main, PLAY_X, TRANSPORT_Y);
+    println!(
+        "{label}: hold play window={} screen=({screen_x},{screen_y})",
+        windows.main
+    );
+    xdotool([
+        "mousemove",
+        "--sync",
+        "--",
+        &screen_x.to_string(),
+        &screen_y.to_string(),
+    ]);
+    std::thread::sleep(Duration::from_millis(60));
+    xdotool(["mousedown", "1"]);
+    std::thread::sleep(BUTTON_HOLD_SETTLE);
+    let pressed = capture_winamp_button_crop(label, windows.main, "pressed", PLAY_X, TRANSPORT_Y);
+
+    mousemove_absolute(screen_x + 1, screen_y);
+    std::thread::sleep(BUTTON_HOLD_SAMPLE_DELAY);
+    let held = capture_winamp_button_crop(label, windows.main, "held", PLAY_X, TRANSPORT_Y);
+    xdotool(["mouseup", "1"]);
+    std::thread::sleep(Duration::from_millis(180));
+    let released = capture_winamp_button_crop(label, windows.main, "released", PLAY_X, TRANSPORT_Y);
+
+    let press_delta = image_changed_pixels(&baseline, &pressed, 8);
+    let held_from_baseline = image_changed_pixels(&baseline, &held, 8);
+    let held_from_pressed = image_changed_pixels(&pressed, &held, 8);
+    let released_from_baseline = image_changed_pixels(&baseline, &released, 8);
+    println!(
+        "{label}: button crop deltas press={press_delta} held_from_baseline={held_from_baseline} held_from_pressed={held_from_pressed} released_from_baseline={released_from_baseline}"
+    );
+
+    assert!(
+        press_delta >= 8,
+        "{label}: play button did not enter a visible pressed state; baseline/pressed crop changed only {press_delta} pixels"
+    );
+    assert!(
+        held_from_baseline >= press_delta.saturating_div(2).max(4),
+        "{label}: play button returned to unpressed pixels before mouseup; press_delta={press_delta} held_from_baseline={held_from_baseline} held_from_pressed={held_from_pressed}"
+    );
+    assert!(
+        held_from_pressed <= press_delta.saturating_div(2).max(6),
+        "{label}: play button held crop drifted away from the pressed crop before mouseup; press_delta={press_delta} held_from_pressed={held_from_pressed}"
+    );
+    assert!(
+        released_from_baseline <= press_delta.saturating_div(2).max(6),
+        "{label}: play button stayed visually pressed after mouseup; press_delta={press_delta} released_from_baseline={released_from_baseline}"
+    );
+
+    let current = windows.geometries();
+    assert_eq!(initial.main, current.main, "{label}: main window moved");
+    assert_eq!(
+        initial.equalizer, current.equalizer,
+        "{label}: equalizer window moved"
+    );
+    assert_eq!(
+        initial.playlist, current.playlist,
+        "{label}: playlist window moved"
+    );
+}
+
 fn click_winamp_main_button(label: &str, window_id: u64, button: &str, x: f32, y: f32) {
     let geometry = window_geometry(window_id);
-    let scale = geometry.width as f32 / WINAMP_MAIN_SKIN_WIDTH;
-    let screen_x = geometry.x + ((x + TRANSPORT_BUTTON_WIDTH * 0.5) * scale).round() as i32;
-    let screen_y = geometry.y + ((y + 9.0) * scale).round() as i32;
+    let (screen_x, screen_y) = winamp_button_center(window_id, x, y);
     println!(
         "{label}: click {button} window={window_id} geometry={geometry:?} screen=({screen_x},{screen_y})"
     );
@@ -873,6 +1003,91 @@ fn click_winamp_main_button(label: &str, window_id: u64, button: &str, x: f32, y
     ]);
     std::thread::sleep(Duration::from_millis(40));
     xdotool(["click", "1"]);
+}
+
+fn winamp_button_center(window_id: u64, x: f32, y: f32) -> (i32, i32) {
+    let geometry = window_geometry(window_id);
+    let scale = geometry.width as f32 / WINAMP_MAIN_SKIN_WIDTH;
+    (
+        geometry.x + ((x + TRANSPORT_BUTTON_WIDTH * 0.5) * scale).round() as i32,
+        geometry.y + ((y + TRANSPORT_BUTTON_HEIGHT * 0.5) * scale).round() as i32,
+    )
+}
+
+fn capture_winamp_button_crop(
+    label: &str,
+    window_id: u64,
+    phase: &str,
+    x: f32,
+    y: f32,
+) -> RgbaImage {
+    let path = output_paths::diagnostic_path(&format!(
+        "cranpose-winamp-{label}-{phase}-{}.png",
+        std::process::id()
+    ));
+    let image = capture_x11_window_image(window_id, &path);
+    crop_winamp_button(&image, x, y)
+}
+
+fn capture_x11_window_image(window_id: u64, path: &std::path::Path) -> RgbaImage {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|err| panic!("failed to create {}: {err}", parent.display()));
+    }
+    let window_id_hex = format!("0x{window_id:x}");
+    let path_text = path.to_string_lossy().into_owned();
+    let status = Command::new("import")
+        .args(["-silent", "-window", &window_id_hex, &path_text])
+        .status()
+        .unwrap_or_else(|err| panic!("import {window_id_hex} failed: {err}"));
+    assert!(
+        status.success(),
+        "import failed for window {window_id_hex} -> {}",
+        path.display()
+    );
+    image::open(path)
+        .unwrap_or_else(|err| panic!("failed to open X11 capture {}: {err}", path.display()))
+        .to_rgba8()
+}
+
+fn crop_winamp_button(image: &RgbaImage, x: f32, y: f32) -> RgbaImage {
+    let scale = image.width() as f32 / WINAMP_MAIN_SKIN_WIDTH;
+    let crop_x = (x * scale).floor().max(0.0) as u32;
+    let crop_y = (y * scale).floor().max(0.0) as u32;
+    let crop_w = (TRANSPORT_BUTTON_WIDTH * scale).ceil().max(1.0) as u32;
+    let crop_h = (TRANSPORT_BUTTON_HEIGHT * scale).ceil().max(1.0) as u32;
+    let crop_w = crop_w.min(image.width().saturating_sub(crop_x));
+    let crop_h = crop_h.min(image.height().saturating_sub(crop_y));
+    assert!(
+        crop_w > 0 && crop_h > 0,
+        "Winamp button crop outside captured image: image={}x{} crop=({}, {}, {}, {})",
+        image.width(),
+        image.height(),
+        crop_x,
+        crop_y,
+        crop_w,
+        crop_h
+    );
+    image::imageops::crop_imm(image, crop_x, crop_y, crop_w, crop_h).to_image()
+}
+
+fn image_changed_pixels(before: &RgbaImage, after: &RgbaImage, tolerance: u8) -> usize {
+    assert_eq!(
+        before.dimensions(),
+        after.dimensions(),
+        "image crop sizes differ"
+    );
+    before
+        .pixels()
+        .zip(after.pixels())
+        .filter(|(left, right)| {
+            left.0
+                .iter()
+                .zip(right.0.iter())
+                .take(3)
+                .any(|(a, b)| (*a).abs_diff(*b) > tolerance)
+        })
+        .count()
 }
 
 fn print_drag_trace(label: &str, trace: &[DragTraceSample]) {
@@ -1022,6 +1237,62 @@ fn assert_pixel_drag_trace_continuity(
         "{label}: total main movement should match pointer pixels expected={} actual={total_dx} trace={trace:?}",
         PIXEL_TRACE_STEPS
     );
+}
+
+fn assert_long_drag_trace_sync(
+    label: &str,
+    expected_offsets: WinampGeometries,
+    trace: &[DragTraceSample],
+) {
+    assert!(
+        trace.len() >= LONG_DRAG_TRACE_STEPS,
+        "{label}: expected a long drag trace, got {} samples",
+        trace.len()
+    );
+    let first = trace.first().expect("first long trace sample");
+    let mut max_drift_x = 0;
+    let mut max_drift_y = 0;
+
+    for index in 1..trace.len() {
+        let previous = &trace[index - 1];
+        let current = &trace[index];
+        let pointer_dx = current.pointer.x - first.pointer.x;
+        let pointer_dy = current.pointer.y - first.pointer.y;
+        let main_dx = current.geometries.main.x - first.geometries.main.x;
+        let main_dy = current.geometries.main.y - first.geometries.main.y;
+        let step_main_dx = current.geometries.main.x - previous.geometries.main.x;
+        let step_main_dy = current.geometries.main.y - previous.geometries.main.y;
+        let drift_x = (pointer_dx - main_dx).abs();
+        let drift_y = (pointer_dy - main_dy).abs();
+        max_drift_x = max_drift_x.max(drift_x);
+        max_drift_y = max_drift_y.max(drift_y);
+
+        assert_offsets_close(label, index, expected_offsets, current.geometries);
+        assert!(
+            current.geometries.main.x + 1 >= previous.geometries.main.x,
+            "{label} sample {index}: main window reversed on a monotonic drag previous={previous:?} current={current:?}"
+        );
+        assert!(
+            current.geometries.main.y + 1 >= previous.geometries.main.y,
+            "{label} sample {index}: main window reversed vertically on a monotonic drag previous={previous:?} current={current:?}"
+        );
+        assert!(
+            step_main_dx <= LONG_DRAG_MAX_WINDOW_STEP && step_main_dy <= LONG_DRAG_MAX_WINDOW_STEP,
+            "{label} sample {index}: main window jumped too far in one sample step=({step_main_dx},{step_main_dy}) previous={previous:?} current={current:?}"
+        );
+        if index > 8 {
+            assert!(
+                drift_x <= LONG_DRAG_MAX_POINTER_WINDOW_DRIFT
+                    && drift_y <= LONG_DRAG_MAX_POINTER_WINDOW_DRIFT,
+                "{label} sample {index}: pointer/window drift exceeded {}px drift=({drift_x},{drift_y}) max_so_far=({max_drift_x},{max_drift_y}) first={first:?} current={current:?}",
+                LONG_DRAG_MAX_POINTER_WINDOW_DRIFT
+            );
+        }
+    }
+
+    let last = trace.last().expect("last long trace sample");
+    assert_window_moved(label, first.geometries.main, last.geometries.main);
+    println!("{label}: max pointer/window drift=({max_drift_x},{max_drift_y})");
 }
 
 fn drag_and_assert_only_dragged(label: &str, windows: WinampWindows, dragged_window: u64) {
@@ -1576,6 +1847,10 @@ fn drag_pointer_by(dx: i32, dy: i32) {
 
 fn mousemove_absolute(x: i32, y: i32) {
     xdotool(["mousemove", "--sync", "--", &x.to_string(), &y.to_string()]);
+}
+
+fn mousemove_absolute_unsynced(x: i32, y: i32) {
+    xdotool(["mousemove", "--", &x.to_string(), &y.to_string()]);
 }
 
 fn pointer_location() -> PointerLocation {

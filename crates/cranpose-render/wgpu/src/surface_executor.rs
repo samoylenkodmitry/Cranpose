@@ -7,10 +7,12 @@ pub(crate) use backend::{CachedLayerSurface, LayerSurfaceTexture, SurfaceExecuti
 pub(crate) use geometry::{
     axis_aligned_quad_rect, device_pixel_bounds_for_rect, offscreen_byte_size, scaled_quad,
     snap_delta_for_anchor, snap_motion_stable_dest_quad, surface_target_size,
+    unclamped_device_pixel_bounds_for_rect,
 };
 #[cfg(test)]
 pub(crate) use geometry::{clamp_effect_surface_scale, visible_layer_rect};
 pub(crate) use render_paths::{
-    apply_backdrop_layer_to_target, composite_surface_to_view, render_effect_layer_to_target,
-    render_layer_surface, render_root_direct,
+    apply_backdrop_layer_to_target, backdrop_underlay_is_covered_by_local_content,
+    composite_surface_to_view, render_effect_layer_to_target, render_layer_surface,
+    render_root_direct, root_direct_scene_events_are_supported,
 };

@@ -12,8 +12,8 @@ const SPOT_OFFSET_Y_FACTOR: f32 = 0.62;
 const AMBIENT_BLUR_FACTOR: f32 = 0.95;
 const SPOT_BLUR_FACTOR: f32 = 0.72;
 const SPOT_SPREAD_FACTOR: f32 = 0.72;
-const AMBIENT_ALPHA_FACTOR: f32 = 0.44;
-const SPOT_ALPHA_FACTOR: f32 = 0.62;
+const AMBIENT_ALPHA_FACTOR: f32 = 0.72;
+const SPOT_ALPHA_FACTOR: f32 = 0.96;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LayerShadowPass {
@@ -111,7 +111,7 @@ mod tests {
             }
         );
         assert!((ambient.blur_radius - 9.5).abs() < 1e-6);
-        assert!((ambient.alpha - 0.352).abs() < 1e-6);
+        assert!((ambient.alpha - 0.576).abs() < 1e-6);
 
         let spot = geometry.spot.expect("spot shadow pass");
         assert_eq!(
@@ -124,6 +124,6 @@ mod tests {
             }
         );
         assert!((spot.blur_radius - 7.2).abs() < 1e-6);
-        assert!((spot.alpha - 0.558).abs() < 1e-6);
+        assert!((spot.alpha - 0.864).abs() < 1e-6);
     }
 }

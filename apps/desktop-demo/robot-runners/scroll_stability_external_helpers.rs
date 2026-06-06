@@ -1,6 +1,4 @@
-#[path = "output_paths.rs"]
-mod output_paths;
-
+use crate::output_paths;
 use crate::text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
 use cranpose_testing::{find_in_semantics, find_text_exact, print_semantics_with_bounds};
 use image::{ImageBuffer, RgbaImage};

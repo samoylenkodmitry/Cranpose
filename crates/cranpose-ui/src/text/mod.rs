@@ -20,7 +20,7 @@ pub use measure::{
     get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
     measure_text_for_node, measure_text_with_options, measure_text_with_options_for_node,
     prepare_text_layout, prepare_text_layout_for_node, set_text_measurer, PreparedTextLayout,
-    TextMeasurer, TextMetrics,
+    TextLinePrefixWidths, TextMeasurer, TextMetrics,
 };
 pub use paragraph::{
     resolve_text_direction, Hyphens, LineBreak, ResolvedTextDirection, TextAlign, TextDirection,

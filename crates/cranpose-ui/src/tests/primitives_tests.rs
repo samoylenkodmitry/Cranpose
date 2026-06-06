@@ -87,9 +87,17 @@ fn run_subcompose_measure(
         typed.handle()
     };
     let measurer = Box::new(|_child_id: NodeId, _constraints: Constraints| Size::default());
+    let cached_measure_registrar = Box::new(|_child_id: NodeId, _constraints: Constraints| None);
     let error = Rc::new(RefCell::new(None));
     node_handle
-        .measure(&composer, node_id, constraints, measurer, &error)
+        .measure(
+            &composer,
+            node_id,
+            constraints,
+            measurer,
+            cached_measure_registrar,
+            &error,
+        )
         .expect("measure succeeds");
     assert!(
         error.borrow().is_none(),
@@ -182,8 +190,16 @@ fn capture_subcompose_child_constraints(
         captured_handle.borrow_mut().push(child_constraints);
         Size::default()
     });
+    let cached_measure_registrar = Box::new(|_child_id: NodeId, _constraints: Constraints| None);
     node_handle
-        .measure(&composer, root, constraints, measurer, &error)
+        .measure(
+            &composer,
+            root,
+            constraints,
+            measurer,
+            cached_measure_registrar,
+            &error,
+        )
         .expect("measure succeeds");
     assert!(
         error.borrow().is_none(),

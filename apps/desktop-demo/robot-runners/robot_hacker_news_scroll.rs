@@ -18,8 +18,10 @@ use cranpose_services::local_http_client;
 use cranpose_testing::{find_in_semantics, find_text_exact, root_bounds};
 use desktop_app::app::{self, DemoTab};
 use hacker_news_robot_support::{
-    click_button, click_first_visible_comments_button, create_mock_client, fail, semantics_bounds,
-    visible_mock_story_numbers, wait_for_no_text, wait_for_text, Bounds,
+    click_button, click_first_visible_comments_button, create_mock_client, fail,
+    long_comment_body_text, scroll_until_comment_visible, scroll_until_text_visible_in_bounds,
+    semantics_bounds, visible_comment_numbers, visible_mock_story_numbers, wait_for_comments_data,
+    wait_for_no_text, wait_for_text, Bounds, LONG_COMMENT_SUFFIX,
 };
 use std::time::Duration;
 
@@ -47,21 +49,46 @@ fn assert_within_root(robot: &Robot, name: &str, bounds: Bounds) {
     }
 }
 
-fn comment_intersects_viewport(robot: &Robot, comments_list_bounds: Bounds, label: &str) -> bool {
-    let (comments_x, comments_y, comments_w, comments_h) = comments_list_bounds;
-    semantics_bounds(robot, label).is_some_and(|(x, y, w, h)| {
-        let right = x + w;
-        let bottom = y + h;
-        bottom > comments_y
-            && y < comments_y + comments_h
-            && right > comments_x
-            && x < comments_x + comments_w
-    })
-}
-
 fn reopened_discussion(robot: &Robot) -> bool {
     find_in_semantics(robot, |elem| find_text_exact(elem, "Back")).is_some()
         || find_in_semantics(robot, |elem| find_text_exact(elem, "commenter-1")).is_some()
+}
+
+fn assert_long_comment_bottom_gap(robot: &Robot, comments_list_bounds: Bounds) {
+    let body = long_comment_body_text();
+    if !scroll_until_text_visible_in_bounds(robot, comments_list_bounds, &body, 8) {
+        fail(
+            robot,
+            format!("long mock comment body {LONG_COMMENT_SUFFIX} did not become visible"),
+        );
+    }
+    let author = format!("commenter-{LONG_COMMENT_SUFFIX}");
+    let next_author = format!("commenter-{}", LONG_COMMENT_SUFFIX + 1);
+    let author_bounds = required_bounds(robot, &author);
+    let body_bounds = required_bounds(robot, &body);
+    let next_author_bounds = required_bounds(robot, &next_author);
+    let (_, author_y, _, author_h) = author_bounds;
+    let (_, body_y, _, body_h) = body_bounds;
+    let (_, next_y, _, _) = next_author_bounds;
+    let body_bottom = body_y + body_h;
+    let bottom_gap = next_y - body_bottom;
+    println!(
+        "  • Long comment bounds author_y={author_y:.1} author_h={author_h:.1} body_y={body_y:.1} body_h={body_h:.1} next_author_y={next_y:.1} bottom_gap={bottom_gap:.1}"
+    );
+    if body_h < 80.0 {
+        fail(
+            robot,
+            format!("long mock comment did not wrap enough to exercise lazy item measurement: body_h={body_h:.1}"),
+        );
+    }
+    if bottom_gap > 72.0 {
+        fail(
+            robot,
+            format!(
+                "Long comment left an excessive blank bottom gap before {next_author}: gap={bottom_gap:.1} body_bounds={body_bounds:?} next_author_bounds={next_author_bounds:?}"
+            ),
+        );
+    }
 }
 
 fn main() {
@@ -103,8 +130,8 @@ fn main() {
                 fail(&robot, "could not select the target story");
             }
 
-            if !wait_for_text(&robot, "commenter-1") {
-                fail(&robot, "mock comments did not appear");
+            if !wait_for_comments_data(&robot) {
+                fail(&robot, "mock comments did not load");
             }
 
             let comments_list_bounds = required_bounds(&robot, "HackerNewsCommentsList");
@@ -119,9 +146,14 @@ fn main() {
             let scroll_start_x = comments_x + comments_w * 0.5;
             let scroll_start_y = comments_y + comments_h * 0.75;
             let scroll_end_y = comments_y + comments_h * 0.25;
-            let comment1_before_y = semantics_bounds(&robot, "commenter-1")
-                .map(|(_, y, _, _)| y)
-                .unwrap_or(comments_y);
+            let initial_comment_numbers =
+                scroll_until_comment_visible(&robot, comments_list_bounds, 8);
+            if initial_comment_numbers.is_empty() {
+                fail(&robot, "mock comments did not become visible");
+            }
+            assert_long_comment_bottom_gap(&robot, comments_list_bounds);
+            let max_comment_before_scroll =
+                initial_comment_numbers.iter().copied().max().unwrap_or(0);
 
             for _ in 0..4 {
                 robot
@@ -131,18 +163,11 @@ fn main() {
                 let _ = robot.wait_for_idle();
             }
 
-            let comment1_after_y = semantics_bounds(&robot, "commenter-1")
-                .map(|(_, y, _, _)| y)
-                .unwrap_or(comments_y - 100.0);
-            let first_comment_still_in_view =
-                comment_intersects_viewport(&robot, comments_list_bounds, "commenter-1");
-            let later_comment_visible =
-                comment_intersects_viewport(&robot, comments_list_bounds, "commenter-8")
-                    || comment_intersects_viewport(&robot, comments_list_bounds, "commenter-12")
-                    || comment_intersects_viewport(&robot, comments_list_bounds, "commenter-18");
-            let comment1_moved = comment1_after_y < comment1_before_y - 80.0;
+            let scrolled_comment_numbers = visible_comment_numbers(&robot, comments_list_bounds);
+            let max_comment_after_scroll =
+                scrolled_comment_numbers.iter().copied().max().unwrap_or(0);
 
-            if first_comment_still_in_view && !later_comment_visible && !comment1_moved {
+            if max_comment_after_scroll <= max_comment_before_scroll {
                 fail(&robot, "Comments pane did not scroll after first load");
             }
 

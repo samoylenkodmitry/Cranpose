@@ -156,6 +156,51 @@ fn app_shell_frame_schedule_targets_platform_frame_driver() {
 }
 
 #[test]
+fn desktop_no_vsync_chains_dirty_presented_frames_only() {
+    let source = crate_source("src/desktop.rs");
+
+    assert!(
+        source.contains(
+            "fn should_chain_no_vsync_redraw(frame_interval: Option<Duration>, needs_frame: bool) -> bool"
+        ) && source.contains("frame_interval.is_none() && needs_frame"),
+        "desktop no-vsync frame chaining must require both an uncapped present mode and pending frame work"
+    );
+    assert!(
+        source.contains(
+            "if should_chain_no_vsync_redraw(\n                        frame_interval,\n                        app.frame_schedule().needs_frame,"
+        )
+            && source.contains("request_redraw_once(window, &mut self.primary_redraw_pending);"),
+        "primary desktop frames should request the next no-vsync redraw immediately after presenting a dirty frame"
+    );
+    assert!(
+        source.contains(
+            "native.frame_interval(),\n            native.app.frame_schedule().needs_frame"
+        ) && source.contains("native.window.request_redraw();"),
+        "native desktop frames should use the same no-vsync redraw chaining rule"
+    );
+}
+
+#[test]
+fn desktop_renderer_warmup_reaches_primary_and_native_surfaces() {
+    let source = crate_source("src/desktop.rs");
+
+    assert!(
+        source.contains("fn surface_present_required(")
+            && source.contains("surface_dirty || update_visual_changed || app_needs_redraw")
+            && source.contains(
+                "surface_present_required(\n            native.surface_dirty,\n            update_result.visual_changed,\n            native.app.needs_redraw(),"
+            ),
+        "native windows must still render when renderer-side warmup is the only pending frame work"
+    );
+    assert!(
+        source.contains(
+            "surface_present_required(\n                    primary_surface_dirty_before_update || robot_surface_dirty_before_update,\n                    update_result.visual_changed,\n                    app.needs_redraw(),"
+        ),
+        "primary windows must not skip a redraw requested only by renderer-side warmup"
+    );
+}
+
+#[test]
 fn web_idle_does_not_request_recursive_raf() {
     let source = crate_source("src/web.rs");
 
@@ -617,6 +662,26 @@ fn fps_monitor_runtime_state_is_shell_owned() {
             && !source.contains("pub fn fps_stats()")
             && !source.contains("pub fn current_fps()"),
         "public FPS snapshots must come from the owning AppShell, not from process-global publication"
+    );
+}
+
+#[test]
+fn fps_monitor_counts_presented_frames_not_shell_updates() {
+    let shell_frame = workspace_source("crates/cranpose-app-shell/src/shell_frame.rs");
+    let app_shell = workspace_source("crates/cranpose-app-shell/src/lib.rs");
+    let desktop = workspace_source("crates/cranpose/src/desktop.rs");
+
+    assert!(
+        !shell_frame.contains("record_frame_work"),
+        "AppShell update processing must not mutate presented-frame FPS stats"
+    );
+    assert!(
+        app_shell.contains("pub fn record_presented_frame"),
+        "AppShell should expose an explicit presented-frame sampling boundary"
+    );
+    assert!(
+        desktop.contains("record_presented_frame"),
+        "desktop presentation paths should record FPS after real redraws"
     );
 }
 

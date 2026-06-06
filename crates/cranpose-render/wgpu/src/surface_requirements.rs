@@ -9,6 +9,7 @@ pub(crate) enum SurfaceRequirement {
     Backdrop,
     GroupOpacity,
     BlendMode,
+    ShapeClip,
     ImmediateShadow,
     TextMaterialMask,
     MotionStableCapture,
@@ -28,12 +29,13 @@ impl SurfaceRequirementSet {
     const BACKDROP: u16 = 1 << 2;
     const GROUP_OPACITY: u16 = 1 << 3;
     const BLEND_MODE: u16 = 1 << 4;
-    const IMMEDIATE_SHADOW: u16 = 1 << 5;
-    const TEXT_MATERIAL_MASK: u16 = 1 << 6;
-    const MOTION_STABLE_CAPTURE: u16 = 1 << 7;
-    const NON_TRANSLATION_TRANSFORM: u16 = 1 << 8;
-    const MIXED_DIRECT_CONTENT: u16 = 1 << 9;
-    const PIXEL_STABLE_COMPOSITE: u16 = 1 << 10;
+    const SHAPE_CLIP: u16 = 1 << 5;
+    const IMMEDIATE_SHADOW: u16 = 1 << 6;
+    const TEXT_MATERIAL_MASK: u16 = 1 << 7;
+    const MOTION_STABLE_CAPTURE: u16 = 1 << 8;
+    const NON_TRANSLATION_TRANSFORM: u16 = 1 << 9;
+    const MIXED_DIRECT_CONTENT: u16 = 1 << 10;
+    const PIXEL_STABLE_COMPOSITE: u16 = 1 << 11;
 
     pub(crate) fn insert(&mut self, requirement: SurfaceRequirement) {
         self.bits |= Self::bit(requirement);
@@ -72,6 +74,7 @@ impl SurfaceRequirementSet {
             || self.contains(SurfaceRequirement::Backdrop)
             || self.contains(SurfaceRequirement::GroupOpacity)
             || self.contains(SurfaceRequirement::BlendMode)
+            || self.contains(SurfaceRequirement::ShapeClip)
     }
 
     #[cfg(test)]
@@ -82,6 +85,7 @@ impl SurfaceRequirementSet {
             (SurfaceRequirement::Backdrop, "backdrop"),
             (SurfaceRequirement::GroupOpacity, "group_opacity"),
             (SurfaceRequirement::BlendMode, "blend_mode"),
+            (SurfaceRequirement::ShapeClip, "shape_clip"),
             (SurfaceRequirement::ImmediateShadow, "immediate_shadow"),
             (SurfaceRequirement::TextMaterialMask, "text_material_mask"),
             (
@@ -146,6 +150,7 @@ impl SurfaceRequirementSet {
             SurfaceRequirement::Backdrop => Self::BACKDROP,
             SurfaceRequirement::GroupOpacity => Self::GROUP_OPACITY,
             SurfaceRequirement::BlendMode => Self::BLEND_MODE,
+            SurfaceRequirement::ShapeClip => Self::SHAPE_CLIP,
             SurfaceRequirement::ImmediateShadow => Self::IMMEDIATE_SHADOW,
             SurfaceRequirement::TextMaterialMask => Self::TEXT_MATERIAL_MASK,
             SurfaceRequirement::MotionStableCapture => Self::MOTION_STABLE_CAPTURE,

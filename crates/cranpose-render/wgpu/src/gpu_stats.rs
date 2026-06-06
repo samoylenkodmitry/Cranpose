@@ -19,6 +19,7 @@ pub struct LayerSurfaceReasons {
     pub backdrop: bool,
     pub group_opacity: bool,
     pub blend_mode: bool,
+    pub shape_clip: bool,
     pub immediate_shadow: bool,
     pub text_local_surface: bool,
     pub motion_stable_capture: bool,
@@ -38,13 +39,14 @@ impl LayerSurfaceReasons {
             || self.backdrop
             || self.group_opacity
             || self.blend_mode
+            || self.shape_clip
             || self.text_local_surface
             || self.motion_stable_capture
             || self.non_translation_transform
     }
 
     pub fn labels(self) -> impl Iterator<Item = &'static str> {
-        let mut labels = [None; 11];
+        let mut labels = [None; 12];
         let mut len = 0usize;
 
         if self.explicit_offscreen {
@@ -65,6 +67,10 @@ impl LayerSurfaceReasons {
         }
         if self.blend_mode {
             labels[len] = Some("blend_mode");
+            len += 1;
+        }
+        if self.shape_clip {
+            labels[len] = Some("shape_clip");
             len += 1;
         }
         if self.immediate_shadow {
@@ -122,6 +128,7 @@ impl From<SurfaceRequirementSet> for LayerSurfaceReasons {
             backdrop: requirements.contains(SurfaceRequirement::Backdrop),
             group_opacity: requirements.contains(SurfaceRequirement::GroupOpacity),
             blend_mode: requirements.contains(SurfaceRequirement::BlendMode),
+            shape_clip: requirements.contains(SurfaceRequirement::ShapeClip),
             immediate_shadow: requirements.contains(SurfaceRequirement::ImmediateShadow),
             text_local_surface: requirements.contains(SurfaceRequirement::TextMaterialMask),
             motion_stable_capture: requirements.contains(SurfaceRequirement::MotionStableCapture),
@@ -184,12 +191,25 @@ pub struct FrameStatsSnapshot {
     pub layer_cache_evictions: u32,
     pub layer_cache_hit_pixels: u64,
     pub layer_cache_miss_pixels: u64,
+    pub shadow_shape_cache_hits: u32,
+    pub shadow_shape_cache_misses: u32,
+    pub shadow_shape_cache_hit_pixels: u64,
+    pub shadow_shape_cache_miss_pixels: u64,
+    pub shadow_text_blur_fallbacks: u32,
     pub blur_passes: u32,
     pub composite_passes: u32,
     pub effect_applies: u32,
     pub shape_passes: u32,
     pub image_passes: u32,
     pub text_passes: u32,
+    pub text_image_cache_hits: u32,
+    pub text_image_cache_misses: u32,
+    pub text_image_cache_hit_pixels: u64,
+    pub text_image_cache_miss_pixels: u64,
+    pub text_image_raster_bytes: u64,
+    pub text_glyph_atlas_hits: u32,
+    pub text_glyph_atlas_misses: u32,
+    pub text_glyph_atlas_miss_pixels: u64,
     pub offscreen_pool_size: u32,
     pub offscreen_pool_bytes: u64,
     pub text_pool_size: u32,
@@ -240,6 +260,8 @@ impl FrameStatsSnapshot {
         let pool_mb = self.offscreen_pool_bytes as f64 / (1024.0 * 1024.0);
         let layer_cache_hit_mpx = self.layer_cache_hit_pixels as f64 / 1_000_000.0;
         let layer_cache_miss_mpx = self.layer_cache_miss_pixels as f64 / 1_000_000.0;
+        let shadow_cache_hit_mpx = self.shadow_shape_cache_hit_pixels as f64 / 1_000_000.0;
+        let shadow_cache_miss_mpx = self.shadow_shape_cache_miss_pixels as f64 / 1_000_000.0;
         let layer_cache_mb = self.layer_cache_bytes as f64 / (1024.0 * 1024.0);
         let isolated_layer_mpx = self.isolated_layer_pixels as f64 / 1_000_000.0;
         eprintln!(
@@ -247,7 +269,10 @@ impl FrameStatsSnapshot {
              uploads={:.2}MB | \
              isolated_layers={} area={:.2}MP | \
              layer_cache: hit={} miss={} {:.1}% evict={} hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) | \
+             shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
              blur={} composite={} effect={} | shape={} image={} text={} | \
+             text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
+             text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
             frame_count,
             self.encoder_count,
@@ -270,12 +295,25 @@ impl FrameStatsSnapshot {
             layer_cache_miss_mpx,
             self.layer_cache_size,
             layer_cache_mb,
+            self.shadow_shape_cache_hits,
+            self.shadow_shape_cache_misses,
+            shadow_cache_hit_mpx,
+            shadow_cache_miss_mpx,
+            self.shadow_text_blur_fallbacks,
             self.blur_passes,
             self.composite_passes,
             self.effect_applies,
             self.shape_passes,
             self.image_passes,
             self.text_passes,
+            self.text_image_cache_hits,
+            self.text_image_cache_misses,
+            self.text_image_cache_hit_pixels as f64 / 1_000_000.0,
+            self.text_image_cache_miss_pixels as f64 / 1_000_000.0,
+            self.text_image_raster_bytes as f64 / (1024.0 * 1024.0),
+            self.text_glyph_atlas_hits,
+            self.text_glyph_atlas_misses,
+            self.text_glyph_atlas_miss_pixels as f64 / 1_000_000.0,
             self.text_pool_size,
             self.image_cache_size,
             self.text_cache_size,
@@ -318,12 +356,25 @@ pub(crate) struct FrameStats {
     pub layer_cache_evictions: Cell<u32>,
     pub layer_cache_hit_pixels: Cell<u64>,
     pub layer_cache_miss_pixels: Cell<u64>,
+    pub shadow_shape_cache_hits: Cell<u32>,
+    pub shadow_shape_cache_misses: Cell<u32>,
+    pub shadow_shape_cache_hit_pixels: Cell<u64>,
+    pub shadow_shape_cache_miss_pixels: Cell<u64>,
+    pub shadow_text_blur_fallbacks: Cell<u32>,
     pub blur_passes: Cell<u32>,
     pub composite_passes: Cell<u32>,
     pub effect_applies: Cell<u32>,
     pub shape_passes: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
+    pub text_image_cache_hits: Cell<u32>,
+    pub text_image_cache_misses: Cell<u32>,
+    pub text_image_cache_hit_pixels: Cell<u64>,
+    pub text_image_cache_miss_pixels: Cell<u64>,
+    pub text_image_raster_bytes: Cell<u64>,
+    pub text_glyph_atlas_hits: Cell<u32>,
+    pub text_glyph_atlas_misses: Cell<u32>,
+    pub text_glyph_atlas_miss_pixels: Cell<u64>,
     // Pool/cache sizes snapshotted at end of frame
     pub offscreen_pool_size: Cell<u32>,
     pub offscreen_pool_bytes: Cell<u64>,
@@ -334,6 +385,7 @@ pub(crate) struct FrameStats {
     pub text_cache_size: Cell<u32>,
     top_isolated_layers: RefCell<[Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT]>,
     top_isolated_layer_count: Cell<usize>,
+    shadow_shape_cache_miss_log_count: Cell<u32>,
 }
 
 impl FrameStats {
@@ -436,6 +488,72 @@ impl FrameStats {
             .set(self.layer_cache_evictions.get().saturating_add(1));
     }
 
+    pub fn record_shadow_shape_cache_hit(&self, width: u32, height: u32) {
+        self.shadow_shape_cache_hits
+            .set(self.shadow_shape_cache_hits.get().saturating_add(1));
+        self.shadow_shape_cache_hit_pixels.set(
+            self.shadow_shape_cache_hit_pixels
+                .get()
+                .saturating_add((width as u64) * (height as u64)),
+        );
+    }
+
+    pub fn record_shadow_shape_cache_miss(&self, width: u32, height: u32) {
+        self.shadow_shape_cache_misses
+            .set(self.shadow_shape_cache_misses.get().saturating_add(1));
+        self.shadow_shape_cache_miss_pixels.set(
+            self.shadow_shape_cache_miss_pixels
+                .get()
+                .saturating_add((width as u64) * (height as u64)),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn maybe_print_shadow_shape_cache_miss(
+        &self,
+        width: u32,
+        height: u32,
+        content_hash: u64,
+        blur_radius: f32,
+        viewport_offset: [f32; 2],
+        shape_count: usize,
+        clip: Option<Rect>,
+    ) {
+        if !shadow_cache_diagnostics_enabled() {
+            return;
+        }
+
+        let count = self.shadow_shape_cache_miss_log_count.get();
+        if count >= 16 {
+            return;
+        }
+        self.shadow_shape_cache_miss_log_count.set(count + 1);
+
+        let clip_text = clip
+            .map(|clip| {
+                format!(
+                    "({:.1},{:.1},{:.1},{:.1})",
+                    clip.x, clip.y, clip.width, clip.height
+                )
+            })
+            .unwrap_or_else(|| "none".to_string());
+        eprintln!(
+            "[shadow-cache-miss #{count}] size={}x{} content_hash={content_hash} blur={:.2} viewport_offset=({:.1},{:.1}) shapes={} clip={}",
+            width,
+            height,
+            blur_radius,
+            viewport_offset[0],
+            viewport_offset[1],
+            shape_count,
+            clip_text,
+        );
+    }
+
+    pub fn record_shadow_text_blur_fallback(&self) {
+        self.shadow_text_blur_fallbacks
+            .set(self.shadow_text_blur_fallbacks.get().saturating_add(1));
+    }
+
     pub fn bump_shapes(&self) {
         self.shape_passes.set(self.shape_passes.get() + 1);
     }
@@ -448,15 +566,48 @@ impl FrameStats {
         self.text_passes.set(self.text_passes.get() + 1);
     }
 
+    pub fn record_text_image_cache_hit(&self, width: u32, height: u32) {
+        self.text_image_cache_hits
+            .set(self.text_image_cache_hits.get().saturating_add(1));
+        self.text_image_cache_hit_pixels.set(
+            self.text_image_cache_hit_pixels
+                .get()
+                .saturating_add((width as u64) * (height as u64)),
+        );
+    }
+
+    pub fn record_text_image_cache_miss(&self, width: u32, height: u32) {
+        let pixels = (width as u64) * (height as u64);
+        self.text_image_cache_misses
+            .set(self.text_image_cache_misses.get().saturating_add(1));
+        self.text_image_cache_miss_pixels.set(
+            self.text_image_cache_miss_pixels
+                .get()
+                .saturating_add(pixels),
+        );
+        self.text_image_raster_bytes.set(
+            self.text_image_raster_bytes
+                .get()
+                .saturating_add(pixels * 4),
+        );
+    }
+
+    pub fn record_text_glyph_atlas_hit(&self) {
+        self.text_glyph_atlas_hits
+            .set(self.text_glyph_atlas_hits.get().saturating_add(1));
+    }
+
+    pub fn record_text_glyph_atlas_miss(&self, width: u32, height: u32) {
+        self.text_glyph_atlas_misses
+            .set(self.text_glyph_atlas_misses.get().saturating_add(1));
+        self.text_glyph_atlas_miss_pixels.set(
+            self.text_glyph_atlas_miss_pixels
+                .get()
+                .saturating_add((width as u64) * (height as u64)),
+        );
+    }
+
     pub fn snapshot(&self) -> FrameStatsSnapshot {
-        let pass_count = self
-            .blur_passes
-            .get()
-            .saturating_add(self.composite_passes.get())
-            .saturating_add(self.effect_applies.get())
-            .saturating_add(self.shape_passes.get())
-            .saturating_add(self.image_passes.get())
-            .saturating_add(self.text_passes.get());
         let retained_texture_bytes = self
             .offscreen_pool_bytes
             .get()
@@ -465,7 +616,7 @@ impl FrameStats {
             submits: self.submits.get(),
             encoder_count: self.command_encoder_count.get(),
             submit_count: self.command_submit_count.get(),
-            pass_count: self.command_pass_count.get().saturating_add(pass_count),
+            pass_count: self.command_pass_count.get(),
             offscreen_acquires: self.offscreen_acquires.get(),
             offscreen_news: self.offscreen_news.get(),
             offscreen_total_bytes: self.offscreen_total_bytes.get(),
@@ -486,12 +637,25 @@ impl FrameStats {
             layer_cache_evictions: self.layer_cache_evictions.get(),
             layer_cache_hit_pixels: self.layer_cache_hit_pixels.get(),
             layer_cache_miss_pixels: self.layer_cache_miss_pixels.get(),
+            shadow_shape_cache_hits: self.shadow_shape_cache_hits.get(),
+            shadow_shape_cache_misses: self.shadow_shape_cache_misses.get(),
+            shadow_shape_cache_hit_pixels: self.shadow_shape_cache_hit_pixels.get(),
+            shadow_shape_cache_miss_pixels: self.shadow_shape_cache_miss_pixels.get(),
+            shadow_text_blur_fallbacks: self.shadow_text_blur_fallbacks.get(),
             blur_passes: self.blur_passes.get(),
             composite_passes: self.composite_passes.get(),
             effect_applies: self.effect_applies.get(),
             shape_passes: self.shape_passes.get(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
+            text_image_cache_hits: self.text_image_cache_hits.get(),
+            text_image_cache_misses: self.text_image_cache_misses.get(),
+            text_image_cache_hit_pixels: self.text_image_cache_hit_pixels.get(),
+            text_image_cache_miss_pixels: self.text_image_cache_miss_pixels.get(),
+            text_image_raster_bytes: self.text_image_raster_bytes.get(),
+            text_glyph_atlas_hits: self.text_glyph_atlas_hits.get(),
+            text_glyph_atlas_misses: self.text_glyph_atlas_misses.get(),
+            text_glyph_atlas_miss_pixels: self.text_glyph_atlas_miss_pixels.get(),
             offscreen_pool_size: self.offscreen_pool_size.get(),
             offscreen_pool_bytes: self.offscreen_pool_bytes.get(),
             text_pool_size: self.text_pool_size.get(),
@@ -523,14 +687,28 @@ impl FrameStats {
         self.layer_cache_evictions.set(0);
         self.layer_cache_hit_pixels.set(0);
         self.layer_cache_miss_pixels.set(0);
+        self.shadow_shape_cache_hits.set(0);
+        self.shadow_shape_cache_misses.set(0);
+        self.shadow_shape_cache_hit_pixels.set(0);
+        self.shadow_shape_cache_miss_pixels.set(0);
+        self.shadow_text_blur_fallbacks.set(0);
         self.blur_passes.set(0);
         self.composite_passes.set(0);
         self.effect_applies.set(0);
         self.shape_passes.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);
+        self.text_image_cache_hits.set(0);
+        self.text_image_cache_misses.set(0);
+        self.text_image_cache_hit_pixels.set(0);
+        self.text_image_cache_miss_pixels.set(0);
+        self.text_image_raster_bytes.set(0);
+        self.text_glyph_atlas_hits.set(0);
+        self.text_glyph_atlas_misses.set(0);
+        self.text_glyph_atlas_miss_pixels.set(0);
         *self.top_isolated_layers.borrow_mut() = [None; TOP_ISOLATED_LAYER_LIMIT];
         self.top_isolated_layer_count.set(0);
+        self.shadow_shape_cache_miss_log_count.set(0);
     }
 
     pub fn maybe_print_snapshot(
@@ -591,6 +769,12 @@ pub(crate) fn gpu_stats_enabled() -> bool {
         .unwrap_or(false)
 }
 
+fn shadow_cache_diagnostics_enabled() -> bool {
+    std::env::var("CRANPOSE_GPU_SHADOW_CACHE_DIAG")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,7 +786,7 @@ mod tests {
         stats.record_command_stats(FrameCommandStats {
             encoder_count: 1,
             submit_count: 1,
-            pass_count: 0,
+            pass_count: 2,
             transient_texture_bytes: 256,
             retained_texture_bytes: 128,
             upload_bytes: 64,
@@ -615,12 +799,22 @@ mod tests {
         stats.record_layer_cache_hit(3, 4);
         stats.record_layer_cache_miss(5, 6);
         stats.record_layer_cache_eviction();
+        stats.record_shadow_shape_cache_hit(8, 9);
+        stats.record_shadow_shape_cache_miss(10, 11);
+        stats.record_shadow_text_blur_fallback();
+        stats.record_text_image_cache_hit(13, 17);
+        stats.record_text_image_cache_miss(19, 23);
 
         assert_eq!(stats.layer_cache_hits.get(), 2);
         assert_eq!(stats.layer_cache_misses.get(), 1);
         assert_eq!(stats.layer_cache_evictions.get(), 1);
         assert_eq!(stats.layer_cache_hit_pixels.get(), 212);
         assert_eq!(stats.layer_cache_miss_pixels.get(), 30);
+        assert_eq!(stats.shadow_shape_cache_hits.get(), 1);
+        assert_eq!(stats.shadow_shape_cache_misses.get(), 1);
+        assert_eq!(stats.shadow_shape_cache_hit_pixels.get(), 72);
+        assert_eq!(stats.shadow_shape_cache_miss_pixels.get(), 110);
+        assert_eq!(stats.shadow_text_blur_fallbacks.get(), 1);
 
         stats.record_isolated_layer_render(
             7,
@@ -649,6 +843,16 @@ mod tests {
         assert_eq!(snapshot.retained_texture_bytes, 2176);
         assert_eq!(snapshot.layer_cache_hits, 2);
         assert_eq!(snapshot.layer_cache_misses, 1);
+        assert_eq!(snapshot.shadow_shape_cache_hits, 1);
+        assert_eq!(snapshot.shadow_shape_cache_misses, 1);
+        assert_eq!(snapshot.shadow_shape_cache_hit_pixels, 72);
+        assert_eq!(snapshot.shadow_shape_cache_miss_pixels, 110);
+        assert_eq!(snapshot.shadow_text_blur_fallbacks, 1);
+        assert_eq!(snapshot.text_image_cache_hits, 1);
+        assert_eq!(snapshot.text_image_cache_misses, 1);
+        assert_eq!(snapshot.text_image_cache_hit_pixels, 221);
+        assert_eq!(snapshot.text_image_cache_miss_pixels, 437);
+        assert_eq!(snapshot.text_image_raster_bytes, 1748);
         let top_layers = snapshot.top_isolated_layers().collect::<Vec<_>>();
         assert_eq!(top_layers.len(), 1);
         assert_eq!(top_layers[0].node_id, Some(9));
@@ -662,6 +866,16 @@ mod tests {
         assert_eq!(stats.layer_cache_evictions.get(), 0);
         assert_eq!(stats.layer_cache_hit_pixels.get(), 0);
         assert_eq!(stats.layer_cache_miss_pixels.get(), 0);
+        assert_eq!(stats.shadow_shape_cache_hits.get(), 0);
+        assert_eq!(stats.shadow_shape_cache_misses.get(), 0);
+        assert_eq!(stats.shadow_shape_cache_hit_pixels.get(), 0);
+        assert_eq!(stats.shadow_shape_cache_miss_pixels.get(), 0);
+        assert_eq!(stats.shadow_text_blur_fallbacks.get(), 0);
+        assert_eq!(stats.text_image_cache_hits.get(), 0);
+        assert_eq!(stats.text_image_cache_misses.get(), 0);
+        assert_eq!(stats.text_image_cache_hit_pixels.get(), 0);
+        assert_eq!(stats.text_image_cache_miss_pixels.get(), 0);
+        assert_eq!(stats.text_image_raster_bytes.get(), 0);
         assert_eq!(stats.upload_bytes.get(), 0);
         assert_eq!(stats.isolated_layer_renders.get(), 0);
         assert_eq!(stats.isolated_layer_pixels.get(), 0);
@@ -686,7 +900,7 @@ mod tests {
         assert_eq!(snapshot.submits, 2);
         assert_eq!(snapshot.encoder_count, 2);
         assert_eq!(snapshot.submit_count, 2);
-        assert_eq!(snapshot.pass_count, 6);
+        assert_eq!(snapshot.pass_count, 5);
         assert_eq!(snapshot.transient_texture_bytes, 1024);
         assert_eq!(snapshot.retained_texture_bytes, 2048);
         assert_eq!(snapshot.upload_bytes, 512);
@@ -811,6 +1025,7 @@ mod tests {
             SurfaceRequirement::Backdrop,
             SurfaceRequirement::GroupOpacity,
             SurfaceRequirement::BlendMode,
+            SurfaceRequirement::ShapeClip,
             SurfaceRequirement::ImmediateShadow,
             SurfaceRequirement::TextMaterialMask,
             SurfaceRequirement::MotionStableCapture,

@@ -17,7 +17,10 @@ use crate::snapshot_pinning::lowest_pinned_snapshot;
 use crate::snapshot_v2::{
     advance_global_snapshot, allocate_record_id, current_snapshot, AnySnapshot, GlobalSnapshot,
 };
-use crate::{runtime, with_current_composer_opt, RecomposeScope, RuntimeHandle, ScopeId, StateId};
+use crate::{
+    runtime, with_current_composer_opt, RecomposeScope, RecomposeScopeInner, RuntimeHandle,
+    ScopeId, StateId,
+};
 
 pub(crate) const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
 
@@ -1155,12 +1158,12 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
 
 pub(crate) struct MutableStateInner<T: Clone + 'static> {
     pub(crate) state: Arc<SnapshotMutableState<T>>,
-    pub(crate) watchers: RefCell<HashMap<ScopeId, RcWeak<crate::RecomposeScopeInner>>>,
+    pub(crate) watchers: RefCell<HashMap<ScopeId, RcWeak<RecomposeScopeInner>>>,
     runtime: RuntimeHandle,
     state_id: Cell<Option<StateId>>,
 }
 
-fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, RcWeak<crate::RecomposeScopeInner>>) {
+fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, RcWeak<RecomposeScopeInner>>) {
     let len = watchers.len();
     let capacity = watchers.capacity();
     if capacity > len.saturating_mul(4).max(32) {
@@ -1227,8 +1230,8 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         let watchers: Vec<RecomposeScope> = {
             let mut watchers = self.watchers.borrow_mut();
             let mut live = Vec::with_capacity(watchers.len());
-            watchers.retain(|_, weak| {
-                if let Some(inner) = weak.upgrade() {
+            watchers.retain(|_, scope| {
+                if let Some(inner) = scope.upgrade() {
                     live.push(RecomposeScope { inner });
                     true
                 } else {
@@ -1241,14 +1244,18 @@ impl<T: Clone + 'static> MutableStateInner<T> {
 
         for watcher in watchers {
             debug_record_scope_invalidation::<T>(watcher.id(), self.state_id.get());
-            watcher.invalidate();
+            if let Some(state_id) = self.state_id.get() {
+                watcher.invalidate_from_state(state_id);
+            } else {
+                watcher.invalidate();
+            }
         }
     }
 }
 
 fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>) {
     let Some(Some(scope)) =
-        with_current_composer_opt(|composer| composer.current_recranpose_scope())
+        with_current_composer_opt(|composer| composer.current_state_invalidation_scope())
     else {
         return;
     };
@@ -1524,6 +1531,16 @@ impl<T: Clone + 'static> MutableState<T> {
 
     pub fn get_non_reactive(&self) -> T {
         self.with_inner(|inner| inner.state.get())
+    }
+
+    #[doc(hidden)]
+    pub fn runtime_state_id(&self) -> StateId {
+        self.state_id()
+    }
+
+    #[doc(hidden)]
+    pub fn subscribe_current_scope_only(&self) {
+        self.subscribe_current_scope();
     }
 
     fn subscribe_current_scope(&self) {

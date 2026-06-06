@@ -447,6 +447,7 @@ pub(crate) struct RecomposeScopeInner {
     slots_storage_key: Cell<usize>,
     slots_runtime_state: RefCell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
     state_subscriptions: RefCell<HashSet<StateId>>,
+    invalidation_sources: RefCell<Option<HashSet<StateId>>>,
 }
 
 impl RecomposeScopeInner {
@@ -469,6 +470,7 @@ impl RecomposeScopeInner {
             slots_storage_key: Cell::new(0),
             slots_runtime_state: RefCell::new(None),
             state_subscriptions: RefCell::new(HashSet::default()),
+            invalidation_sources: RefCell::new(Some(HashSet::default())),
         }
     }
 
@@ -552,7 +554,18 @@ impl RecomposeScope {
         self.inner.state_subscriptions.borrow_mut().insert(state_id);
     }
 
-    fn invalidate(&self) {
+    fn record_unknown_invalidation_source(&self) {
+        *self.inner.invalidation_sources.borrow_mut() = None;
+    }
+
+    fn record_state_invalidation_source(&self, state_id: StateId) {
+        let mut sources = self.inner.invalidation_sources.borrow_mut();
+        if let Some(source_set) = sources.as_mut() {
+            source_set.insert(state_id);
+        }
+    }
+
+    fn enqueue_invalidation(&self) {
         self.inner.invalid.set(true);
         if !self.inner.active.get() {
             return;
@@ -564,10 +577,24 @@ impl RecomposeScope {
         }
     }
 
+    fn invalidate(&self) {
+        self.record_unknown_invalidation_source();
+        self.enqueue_invalidation();
+    }
+
+    pub(crate) fn invalidate_from_state(&self, state_id: StateId) {
+        self.record_state_invalidation_source(state_id);
+        self.enqueue_invalidation();
+    }
+
     fn mark_recomposed(&self) {
         self.inner.invalid.set(false);
         self.inner.force_reuse.set(false);
         self.inner.force_recompose.set(false);
+        self.inner
+            .invalidation_sources
+            .borrow_mut()
+            .replace(HashSet::default());
         if self.inner.enqueued.replace(false) {
             self.inner.runtime.mark_scope_recomposed(self.id());
         }
@@ -724,6 +751,23 @@ impl RecomposeScope {
     fn mark_composed_once(&self) {
         self.inner.composed_once.set(true);
     }
+
+    fn invalidated_only_by(&self, allowed_sources: &HashSet<StateId>) -> Option<bool> {
+        let sources = self.inner.invalidation_sources.borrow();
+        let sources = sources.as_ref()?;
+        if sources.is_empty() {
+            return None;
+        }
+        Some(
+            sources
+                .iter()
+                .all(|source| allowed_sources.contains(source)),
+        )
+    }
+
+    fn has_unknown_invalidation_source(&self) -> bool {
+        self.inner.invalidation_sources.borrow().is_none()
+    }
 }
 
 #[cfg(test)]
@@ -820,6 +864,30 @@ pub fn withCurrentComposer<R>(f: impl FnOnce(&Composer) -> R) -> R {
 
 fn with_current_composer_opt<R>(f: impl FnOnce(&Composer) -> R) -> Option<R> {
     composer_context::try_with_composer(f)
+}
+
+#[doc(hidden)]
+pub fn current_recompose_scope_invalidated_only_by(
+    allowed_sources: impl IntoIterator<Item = StateId>,
+) -> Option<bool> {
+    with_current_composer_opt(|composer| {
+        let allowed_sources = allowed_sources.into_iter().collect();
+        let mut scope = composer.current_recranpose_scope();
+        let mut saw_unknown_source = false;
+        while let Some(current) = scope {
+            if current.has_unknown_invalidation_source() {
+                saw_unknown_source = true;
+                scope = current.parent_scope();
+                continue;
+            }
+            if let Some(matches) = current.invalidated_only_by(&allowed_sources) {
+                return Some(matches);
+            }
+            scope = current.parent_scope();
+        }
+        saw_unknown_source.then_some(false)
+    })
+    .flatten()
 }
 
 #[track_caller]

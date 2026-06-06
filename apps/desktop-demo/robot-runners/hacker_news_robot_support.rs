@@ -10,6 +10,8 @@ use std::time::Duration;
 
 pub const MOCK_STORY_COUNT: usize = 60;
 pub const MOCK_COMMENT_COUNT: usize = 40;
+pub const LONG_COMMENT_SUFFIX: usize = 3;
+pub const INITIAL_COMMENTS_STATUS: &str = "24 comments shown. Scroll near the end to load more.";
 pub type Bounds = (f32, f32, f32, f32);
 const ROBOT_VIEWPORT_WIDTH: f32 = 390.0;
 
@@ -74,10 +76,7 @@ impl MockHackerNewsClient {
             json!({
                 "id": id,
                 "by": format!("commenter-{suffix}"),
-                "text": format!(
-                    "Mock comment #{suffix}. {}",
-                    "This body is long enough to produce a realistic multi-line row in the discussion view.".repeat((suffix as usize % 3) + 1)
-                ),
+                "text": comment_body_text(suffix as usize),
                 "kids": [],
                 "type": "comment"
             })
@@ -147,8 +146,47 @@ fn find_mock_story_number(elem: &SemanticElement) -> Option<usize> {
     None
 }
 
+fn find_comment_number(elem: &SemanticElement) -> Option<usize> {
+    if let Some(text) = elem.text.as_deref() {
+        if let Some(number) = text.strip_prefix("commenter-") {
+            if let Ok(number) = number.parse::<usize>() {
+                return Some(number);
+            }
+        }
+    }
+    for child in &elem.children {
+        if let Some(number) = find_comment_number(child) {
+            return Some(number);
+        }
+    }
+    None
+}
+
 pub fn create_mock_client() -> HttpClientRef {
     Arc::new(MockHackerNewsClient::new())
+}
+
+pub fn long_comment_body_text() -> String {
+    comment_body_text(LONG_COMMENT_SUFFIX)
+}
+
+fn comment_body_text(suffix: usize) -> String {
+    if suffix == LONG_COMMENT_SUFFIX {
+        return format!(
+            "Mock comment #{suffix}. {}",
+            [
+                "This intentionally long comment exercises a retained lazy-list item whose measured height must stay locked to its text layout.",
+                "The body wraps across many lines in the narrow single-pane thread view, but it must not leave a large empty tail before the next comment.",
+                "A stale cached item height is visible as excessive blank space after this paragraph, so the robot checks the semantic gap to the next author row.",
+                "The text repeats enough natural words to force wrapping without relying on remote Hacker News content or timing-sensitive network state."
+            ].join(" ")
+        );
+    }
+    format!(
+        "Mock comment #{suffix}. {}",
+        "This body is long enough to produce a realistic multi-line row in the discussion view."
+            .repeat((suffix % 3) + 1)
+    )
 }
 
 fn bounds_center(bounds: Bounds) -> (f32, f32) {
@@ -280,6 +318,10 @@ pub fn wait_for_no_text(robot: &cranpose::Robot, text: &str) -> bool {
     false
 }
 
+pub fn wait_for_comments_data(robot: &cranpose::Robot) -> bool {
+    wait_for_text(robot, INITIAL_COMMENTS_STATUS)
+}
+
 pub fn semantics_bounds(robot: &cranpose::Robot, label: &str) -> Option<Bounds> {
     let elements = robot.get_semantics().ok()?;
     find_element_by_text_exact(&elements, label).map(|elem| {
@@ -290,6 +332,105 @@ pub fn semantics_bounds(robot: &cranpose::Robot, label: &str) -> Option<Bounds> 
             elem.bounds.height,
         )
     })
+}
+
+pub fn scroll_until_text_visible_in_bounds(
+    robot: &cranpose::Robot,
+    viewport: Bounds,
+    text: &str,
+    max_drags: usize,
+) -> bool {
+    for _ in 0..=max_drags {
+        if semantics_bounds(robot, text).is_some_and(|bounds| bounds_intersect(bounds, viewport)) {
+            return true;
+        }
+
+        let (x, y, w, h) = viewport;
+        raw_drag(
+            robot,
+            x + w * 0.5,
+            y + h * 0.78,
+            y + h * 0.24,
+            12,
+            Duration::from_millis(16),
+        );
+        let _ = robot.wait_for_idle();
+        std::thread::sleep(Duration::from_millis(80));
+    }
+
+    false
+}
+
+fn bounds_intersect(a: Bounds, b: Bounds) -> bool {
+    let (ax, ay, aw, ah) = a;
+    let (bx, by, bw, bh) = b;
+    ax + aw > bx && ax < bx + bw && ay + ah > by && ay < by + bh
+}
+
+pub fn visible_comment_numbers(robot: &cranpose::Robot, list_bounds: Bounds) -> Vec<usize> {
+    let Ok(elements) = robot.get_semantics() else {
+        return Vec::new();
+    };
+
+    let mut numbers = Vec::new();
+    for root in &elements {
+        collect_visible_comment_numbers(root, list_bounds, &mut numbers);
+    }
+
+    numbers.sort_unstable();
+    numbers.dedup();
+    numbers
+}
+
+pub fn scroll_until_comment_visible(
+    robot: &cranpose::Robot,
+    viewport: Bounds,
+    max_drags: usize,
+) -> Vec<usize> {
+    for _ in 0..=max_drags {
+        let numbers = visible_comment_numbers(robot, viewport);
+        if !numbers.is_empty() {
+            return numbers;
+        }
+
+        let (x, y, w, h) = viewport;
+        raw_drag(
+            robot,
+            x + w * 0.5,
+            y + h * 0.72,
+            y + h * 0.38,
+            10,
+            Duration::from_millis(16),
+        );
+        let _ = robot.wait_for_idle();
+        std::thread::sleep(Duration::from_millis(80));
+    }
+
+    Vec::new()
+}
+
+fn collect_visible_comment_numbers(
+    elem: &SemanticElement,
+    list_bounds: Bounds,
+    numbers: &mut Vec<usize>,
+) {
+    if bounds_intersect(
+        (
+            elem.bounds.x,
+            elem.bounds.y,
+            elem.bounds.width,
+            elem.bounds.height,
+        ),
+        list_bounds,
+    ) {
+        if let Some(number) = find_comment_number(elem) {
+            numbers.push(number);
+        }
+    }
+
+    for child in &elem.children {
+        collect_visible_comment_numbers(child, list_bounds, numbers);
+    }
 }
 
 pub fn visible_mock_story_numbers(robot: &cranpose::Robot, list_bounds: Bounds) -> Vec<usize> {

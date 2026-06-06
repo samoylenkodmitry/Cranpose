@@ -36,6 +36,7 @@ pub(crate) struct DrawShape {
     pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
+    pub motion_context_animated: bool,
 }
 
 #[derive(Clone)]
@@ -72,7 +73,7 @@ pub(crate) struct ImageDraw {
     pub motion_context_animated: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum DrawOpKind {
     Shape(usize),
     Image(usize),
@@ -80,7 +81,7 @@ pub(crate) enum DrawOpKind {
     Shadow(usize),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct DrawOp {
     pub z_index: usize,
     pub kind: DrawOpKind,
@@ -126,6 +127,7 @@ pub(crate) struct EffectLayer {
 /// A backdrop effect applied to already-rendered content behind a node.
 #[derive(Clone)]
 pub(crate) struct BackdropLayer {
+    pub node_id: Option<NodeId>,
     pub rect: Rect,
     pub clip: Option<Rect>,
     pub effect: RenderEffect,
@@ -185,6 +187,7 @@ impl CompositorScene {
             shape,
             clip,
             blend_mode,
+            false,
         );
     }
 
@@ -198,6 +201,7 @@ impl CompositorScene {
         shape: Option<RoundedCornerShape>,
         clip: Option<Rect>,
         blend_mode: BlendMode,
+        motion_context_animated: bool,
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
@@ -212,6 +216,7 @@ impl CompositorScene {
             z_index,
             clip,
             blend_mode,
+            motion_context_animated,
         });
         self.draw_ops.push(DrawOp {
             z_index,

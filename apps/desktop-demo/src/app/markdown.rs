@@ -102,6 +102,8 @@ struct BlockBuilder {
     builder_raw: Option<cranpose_ui::text::annotated_string::Builder>,
     blocks: Vec<MarkdownBlock>,
     list_item_depth: u32,
+    in_code_block: bool,
+    pending_code_newlines: String,
 }
 
 impl BlockBuilder {
@@ -111,6 +113,8 @@ impl BlockBuilder {
             builder_raw: None,
             blocks: Vec::new(),
             list_item_depth: 0,
+            in_code_block: false,
+            pending_code_newlines: String::new(),
         }
     }
 
@@ -167,6 +171,26 @@ impl BlockBuilder {
         self.builder_raw = Some(b.append(text));
     }
 
+    fn append_code_text(&mut self, text: &str) {
+        let trimmed = text.trim_end_matches(['\n', '\r']);
+        if !trimmed.is_empty() {
+            if !self.pending_code_newlines.is_empty() {
+                let pending = std::mem::take(&mut self.pending_code_newlines);
+                self.append(&pending);
+            }
+            self.append(trimmed);
+        }
+        let trailing = &text[trimmed.len()..];
+        if !trailing.is_empty() {
+            self.pending_code_newlines.push_str(trailing);
+        }
+    }
+
+    fn finish_code_block(&mut self) {
+        self.pending_code_newlines.clear();
+        self.in_code_block = false;
+    }
+
     fn flush_block(&mut self) {
         if let Some(b) = self.builder_raw.take() {
             let s = b.to_annotated_string();
@@ -209,6 +233,8 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
             Event::Start(Tag::CodeBlock(_)) => {
                 b.flush_block();
                 b.style.code = true;
+                b.in_code_block = true;
+                b.pending_code_newlines.clear();
                 b.push_inline_style();
             }
             Event::Start(Tag::Item) => {
@@ -256,7 +282,13 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 b.append(&text);
                 b.pop_style();
             }
-            Event::Text(text) => b.append(&text),
+            Event::Text(text) => {
+                if b.in_code_block {
+                    b.append_code_text(&text);
+                } else {
+                    b.append(&text);
+                }
+            }
             Event::SoftBreak => b.append(" "),
             Event::HardBreak => b.append("\n"),
             Event::Rule => b.push_rule(),
@@ -277,6 +309,7 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 b.flush_block();
             }
             Event::End(TagEnd::CodeBlock) => {
+                b.finish_code_block();
                 b.pop_style();
                 b.style.code = false;
                 b.flush_block();
@@ -1154,6 +1187,24 @@ mod tests {
             }),
             "stress fixture must include linked text"
         );
+    }
+
+    #[test]
+    fn markdown_code_blocks_drop_fence_terminator_newlines() {
+        let blocks = markdown_to_blocks(
+            "```kotlin\nfun a() {\n    println(1)\n}\n```\n```rust\nfn b() {}\n```\n",
+        );
+        let texts = blocks
+            .iter()
+            .filter_map(|block| match block {
+                MarkdownBlock::Text(annotated) => Some(annotated.text.as_str()),
+                MarkdownBlock::Rule => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(texts.len(), 2);
+        assert_eq!(texts[0], "fun a() {\n    println(1)\n}");
+        assert_eq!(texts[1], "fn b() {}");
     }
 
     #[test]

@@ -1,21 +1,25 @@
 //! GPU rendering implementation using WGPU
 
 use crate::effect_renderer::{
-    projective_dest_bounds_rect, CompositeSampleMode, EffectRenderer, EffectScratchTargetProvider,
-    ProjectiveSurfaceComposite, RoundedCompositeMask,
+    projective_dest_bounds_rect, CompositeBatchItem, CompositeSampleMode, EffectRenderer,
+    EffectScratchTargetProvider, ProjectiveSurfaceComposite, RoundedCompositeMask,
+    ShaderCompositeBatchItem,
 };
 use crate::frame_graph::{
     FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
+};
+use crate::layer_events::{
+    collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind,
 };
 use crate::layer_surface_cache::LayerSurfaceCache;
 #[cfg(test)]
 use crate::normalized_scene::{
     build_scene_window, collect_layer_contents, collect_layer_contents_with_translation_context,
-    filtered_effect_layer_index, scene_bounds, visible_draw_rect, SceneWindowSource,
+    filtered_effect_layer_index, scene_bounds, SceneWindowSource,
 };
 use crate::normalized_scene::{
-    collect_layer_contents_with_translation_context_and_text_layout, effect_layer_in_range,
-    estimate_layer_surface_rect_cached, scene_has_layer_events, translate_quad, CollectedLayer,
+    collect_layer_contents_with_translation_context_and_text_layout,
+    estimate_layer_surface_rect_cached, translate_quad, ChildLayerComposite, CollectedLayer,
 };
 #[cfg(test)]
 use crate::normalized_scene::{estimate_layer_surface_rect, motion_stable_capture_bounds};
@@ -28,12 +32,13 @@ use crate::scene::{
 use crate::shaders;
 use crate::surface_executor::{
     apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
-    axis_aligned_quad_rect, composite_surface_to_view as execute_composite_surface_to_view,
-    device_pixel_bounds_for_rect, offscreen_byte_size,
-    render_effect_layer_to_target as execute_render_effect_layer_to_target,
+    axis_aligned_quad_rect, backdrop_underlay_is_covered_by_local_content,
+    composite_surface_to_view as execute_composite_surface_to_view, device_pixel_bounds_for_rect,
+    offscreen_byte_size, render_effect_layer_to_target as execute_render_effect_layer_to_target,
     render_layer_surface as execute_render_layer_surface,
-    render_root_direct as execute_render_root_direct, scaled_quad, snap_delta_for_anchor,
-    snap_motion_stable_dest_quad, surface_target_size, DevicePixelBounds, LayerSurfaceTexture,
+    render_root_direct as execute_render_root_direct, root_direct_scene_events_are_supported,
+    scaled_quad, snap_delta_for_anchor, snap_motion_stable_dest_quad, surface_target_size,
+    unclamped_device_pixel_bounds_for_rect, DevicePixelBounds, LayerSurfaceTexture,
     SurfaceExecutionBackend,
 };
 #[cfg(test)]
@@ -65,7 +70,10 @@ use cranpose_render_common::graph::{
 };
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_render_common::software_text_raster::{
-    measure_text_with_font, rasterize_text_to_image, SoftwareTextFontSet,
+    collect_solid_text_atlas_run, measure_text_with_font,
+    rasterize_annotated_text_to_image_with_glyph_cache, rasterize_text_to_image_with_glyph_cache,
+    SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasPlacement,
+    SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
 };
 #[cfg(test)]
 use cranpose_ui_graphics::GraphicsLayer;
@@ -73,27 +81,55 @@ use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect, RenderEffect,
     RenderHash, RuntimeShader, TileMode,
 };
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::gpu_stats;
 use crate::gpu_stats::gpu_stats_enabled;
 use crate::pipeline::push_layer_shadow;
 
-// Chunked rendering constants for robustness with large scenes
-// Shader declares: var<uniform> shape_data: array<ShapeData, 200>
-// ShapeData is 80 bytes (with clip_rect), 16KB/80 = 200 shapes (WebGL minimum).
+#[cfg(target_arch = "wasm32")]
 const MAX_SHAPES_PER_BATCH: usize = 200;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_SHAPES_PER_BATCH: usize = 768;
+#[cfg(target_arch = "wasm32")]
 const MAX_GRADIENT_STOPS: usize = 256;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_GRADIENT_STOPS: usize = 1024;
 const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer (vertex/index only)
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TEXT_IMAGE_CACHE_ITEMS: usize = 1024;
+const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
+const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;
+const MAX_TEXT_GLYPH_RUN_CACHE_ITEMS: usize = 1024;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS: usize = 1024;
+#[cfg(not(target_arch = "wasm32"))]
+const MIN_RETAINED_TEXT_GLYPH_QUADS: usize = 192;
+#[cfg(not(target_arch = "wasm32"))]
+const OFFSCREEN_TEXT_GLYPH_PREWARM_BUDGET_MS: f64 = 0.75;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CANDIDATES: usize = 2;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_UNCACHED_CHARS: usize = 160;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CACHED_GLYPHS: usize = 160;
+const TEXT_GLYPH_ATLAS_WIDTH: u32 = 4096;
+const TEXT_GLYPH_ATLAS_HEIGHT: u32 = 4096;
+const TEXT_GLYPH_ATLAS_PADDING: u32 = 1;
+const MAX_TEXT_LINE_INDEX_CACHE_ITEMS: usize = 512;
+const MIN_MULTILINE_TEXT_LINES_FOR_CLIPPED_RASTER: usize = 2;
+const MAX_OBSERVED_SCENE_RANGE_CACHE_MISSES: usize = 128;
+const CACHE_MISS_WARMUP_FRAMES: u8 = 1;
 pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 18.0 / 255.0,
     g: 18.0 / 255.0,
@@ -102,12 +138,178 @@ pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 };
 #[cfg(not(target_arch = "wasm32"))]
 const INITIAL_UPLOAD_BUFFER_BYTES: u64 = 4 * 1024;
+#[cfg(not(target_arch = "wasm32"))]
+const INITIAL_RETAINED_GLYPH_UNIFORM_SLOTS: usize = 128;
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 const RETAINED_STAGED_UPLOAD_BYTES: usize = 256 * 1024;
 const RETAINED_STAGED_UPLOAD_COPIES: usize = 128;
 const RETAINED_LAYER_REQUIREMENTS_CAPACITY: usize = 512;
+const DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
+#[cfg(not(target_arch = "wasm32"))]
+static SEGMENT_DIAG_LINES: AtomicUsize = AtomicUsize::new(0);
 // Reclaim oversized text scratch allocations only after a meaningful 4x collapse
 // from a previously large frame; smaller swings are left alone to avoid churn.
+
+fn wgpu_render_stage_telemetry_threshold_ms() -> Option<f64> {
+    static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    *THRESHOLD_MS.get_or_init(|| {
+        let explicit = std::env::var("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0);
+        explicit.or_else(|| {
+            std::env::var_os("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY")
+                .is_some()
+                .then_some(DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS)
+        })
+    })
+}
+
+fn instant_ms(start: Instant, end: Instant) -> f64 {
+    end.duration_since(start).as_secs_f64() * 1000.0
+}
+
+fn should_log_wgpu_render_stage(start: Instant, end: Instant) -> Option<f64> {
+    let threshold_ms = wgpu_render_stage_telemetry_threshold_ms()?;
+    let total_ms = instant_ms(start, end);
+    (total_ms >= threshold_ms).then_some(total_ms)
+}
+
+fn admit_layer_surface_cache_miss_impl(
+    key: &LayerRasterCacheKey,
+    observed_scene_range_misses: &mut BoundedLruCache<LayerRasterCacheKey, ()>,
+) -> bool {
+    if !key.is_scene_range() {
+        return true;
+    }
+    if observed_scene_range_misses.contains(key) {
+        return true;
+    }
+    observed_scene_range_misses.put(*key, ());
+    false
+}
+
+#[cfg(test)]
+fn first_cache_miss_admission(key: &LayerRasterCacheKey) -> bool {
+    let mut observed_scene_range_misses =
+        BoundedLruCache::with_capacity_at_least_one(MAX_OBSERVED_SCENE_RANGE_CACHE_MISSES);
+    admit_layer_surface_cache_miss_impl(key, &mut observed_scene_range_misses)
+}
+
+#[cfg(test)]
+fn repeated_cache_miss_admission(key: &LayerRasterCacheKey) -> bool {
+    let mut observed_scene_range_misses =
+        BoundedLruCache::with_capacity_at_least_one(MAX_OBSERVED_SCENE_RANGE_CACHE_MISSES);
+    let _ = admit_layer_surface_cache_miss_impl(key, &mut observed_scene_range_misses);
+    admit_layer_surface_cache_miss_impl(key, &mut observed_scene_range_misses)
+}
+
+fn frame_stats_need_warmup_frame(snapshot: &gpu_stats::FrameStatsSnapshot) -> bool {
+    snapshot.layer_cache_misses > 0
+        || snapshot.shadow_shape_cache_misses > 0
+        || snapshot.text_image_cache_misses > 0
+        || snapshot.text_glyph_atlas_misses > 0
+}
+
+fn text_atlas_fallback_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_TEXT_ATLAS_FALLBACK_DIAG").is_some())
+}
+
+fn text_glyph_run_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_TEXT_GLYPH_RUN_DIAG").is_some())
+}
+
+fn root_direct_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_ROOT_DIRECT_DIAG").is_some())
+}
+
+fn scene_layer_events_precede_z(scene: &CompositorScene, z_index: usize) -> bool {
+    scene
+        .effect_layers
+        .iter()
+        .any(|layer| layer.z_start < z_index && 0 < layer.z_end)
+        || scene
+            .backdrop_layers
+            .iter()
+            .any(|layer| layer.z_index < z_index)
+}
+
+fn direct_root_child_can_be_replayed_into_later_underlay(child: &ChildLayerComposite<'_>) -> bool {
+    child.layer.backdrop().is_none()
+        && child.layer.effect().is_none()
+        && child.shadow_draws.is_empty()
+        && axis_aligned_quad_rect(child.dest_quad).is_some()
+}
+
+fn rects_overlap(a: Rect, b: Rect) -> bool {
+    let a_right = a.x + a.width;
+    let a_bottom = a.y + a.height;
+    let b_right = b.x + b.width;
+    let b_bottom = b.y + b.height;
+    a.x < b_right && b.x < a_right && a.y < b_bottom && b.y < a_bottom
+}
+
+fn direct_root_child_underlays_are_supported(collected: &CollectedLayer<'_>) -> bool {
+    for (child_index, child) in collected.child_layers.iter().enumerate() {
+        if child.layer.backdrop().is_some() {
+            if root_direct_diag_enabled() {
+                log::warn!(
+                    "[root-direct-diag] reject self-backdrop child node={:?}",
+                    child.layer.node_id
+                );
+            }
+            return false;
+        }
+        if child.needs_nested_underlay {
+            let Some(dest_rect) = axis_aligned_quad_rect(child.dest_quad) else {
+                if root_direct_diag_enabled() {
+                    log::warn!(
+                        "[root-direct-diag] reject projective underlay child node={:?}",
+                        child.layer.node_id
+                    );
+                }
+                return false;
+            };
+            let translation_only = (dest_rect.width - child.logical_rect.width).abs() <= 0.001
+                && (dest_rect.height - child.logical_rect.height).abs() <= 0.001;
+            let unsupported_preceding_child_layer = collected.child_layers[..child_index]
+                .iter()
+                .any(|preceding| {
+                    if direct_root_child_can_be_replayed_into_later_underlay(preceding) {
+                        return false;
+                    }
+                    axis_aligned_quad_rect(preceding.dest_quad)
+                        .is_none_or(|preceding_rect| rects_overlap(preceding_rect, dest_rect))
+                });
+            let preceding_scene_events =
+                scene_layer_events_precede_z(&collected.scene, child.z_index);
+            if unsupported_preceding_child_layer || preceding_scene_events || !translation_only {
+                if root_direct_diag_enabled() {
+                    log::warn!(
+                        "[root-direct-diag] reject underlay child node={:?} unsupported_preceding_child_layer={} preceding_scene_events={} translation_only={} dest=({:.1},{:.1},{:.1},{:.1}) logical=({:.1},{:.1},{:.1},{:.1})",
+                        child.layer.node_id,
+                        unsupported_preceding_child_layer,
+                        preceding_scene_events,
+                        translation_only,
+                        dest_rect.x,
+                        dest_rect.y,
+                        dest_rect.width,
+                        dest_rect.height,
+                        child.logical_rect.x,
+                        child.logical_rect.y,
+                        child.logical_rect.width,
+                        child.logical_rect.height
+                    );
+                }
+                return false;
+            }
+        }
+    }
+    true
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct ShadowSurfaceCacheKey {
@@ -122,11 +324,115 @@ struct CachedShadowSurface {
     byte_size: u64,
 }
 
+struct CachedShadowComposite {
+    source: Rc<OffscreenTarget>,
+    scissor: Option<(u32, u32, u32, u32)>,
+    rounded_mask: Option<RoundedCompositeMask>,
+    dest_viewport: Option<(f32, f32, f32, f32)>,
+}
+
+impl CachedShadowComposite {
+    fn batch_item(&self) -> CompositeBatchItem<'_> {
+        CompositeBatchItem {
+            source: &self.source,
+            alpha: 1.0,
+            scissor: self.scissor,
+            rounded_mask: self.rounded_mask,
+            blend_mode: BlendMode::SrcOver,
+            dest_viewport: self.dest_viewport,
+            source_viewport: None,
+            sample_mode: CompositeSampleMode::Linear,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct TextImageCacheKey(u64);
 
 struct CachedTextImage {
     image: ImageBitmap,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TextGlyphRunCacheKey(u64);
+
+#[derive(Clone, Copy)]
+struct CachedTextGlyphQuad {
+    x: i32,
+    y: i32,
+    width: usize,
+    height: usize,
+    color: (f32, f32, f32, f32),
+    uv: ImageUvRect,
+}
+
+struct CachedTextGlyphRun {
+    glyphs: Rc<[SoftwareGlyphAtlasPlacement]>,
+    quads: Option<Rc<[CachedTextGlyphQuad]>>,
+    atlas_generation: u64,
+}
+
+const TEXT_GLYPH_PREWARM_VIEWPORT_MULTIPLIER: f32 = 2.0;
+
+#[cfg(not(target_arch = "wasm32"))]
+struct CachedGpuTextGlyphRun {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    atlas_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TextLineIndexCacheKey(usize);
+
+struct CachedTextLineIndex {
+    text: Weak<cranpose_ui::text::AnnotatedString>,
+    len: usize,
+    starts: Rc<[usize]>,
+}
+
+struct TextLineIndexCache {
+    entries: BoundedLruCache<TextLineIndexCacheKey, CachedTextLineIndex>,
+}
+
+impl TextLineIndexCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: BoundedLruCache::with_capacity_at_least_one(capacity),
+        }
+    }
+
+    fn line_starts(&mut self, text: &Rc<cranpose_ui::text::AnnotatedString>) -> Rc<[usize]> {
+        let key = TextLineIndexCacheKey(Rc::as_ptr(text) as usize);
+        if let Some(cached) = self.entries.get(&key) {
+            if cached.len == text.text.len()
+                && cached
+                    .text
+                    .upgrade()
+                    .is_some_and(|cached_text| Rc::ptr_eq(&cached_text, text))
+            {
+                return cached.starts.clone();
+            }
+        }
+
+        let starts = Rc::<[usize]>::from(line_start_offsets(text.text.as_str()));
+        self.entries.put(
+            key,
+            CachedTextLineIndex {
+                text: Rc::downgrade(text),
+                len: text.text.len(),
+                starts: starts.clone(),
+            },
+        );
+        starts
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShapeShadowSurfacePlan {
+    source_device_bounds: DevicePixelBounds,
+    processing_scissor: Option<(u32, u32, u32, u32)>,
+    pixel_radius: f32,
 }
 
 #[derive(Default)]
@@ -174,6 +480,70 @@ fn supported_blend_mode(mode: BlendMode) -> BlendMode {
     BlendMode::SrcOver
 }
 
+fn direct_shader_composite_viewport(
+    alpha: f32,
+    blend_mode: BlendMode,
+    dest_viewport: Option<(f32, f32, f32, f32)>,
+    sample_mode: CompositeSampleMode,
+    source_size: (u32, u32),
+) -> Option<(f32, f32, f32, f32)> {
+    if alpha != 1.0 || supported_blend_mode(blend_mode) != BlendMode::SrcOver {
+        return None;
+    }
+    let viewport = dest_viewport?;
+    if viewport.2 <= 0.0 || viewport.3 <= 0.0 {
+        return None;
+    }
+    match sample_mode {
+        CompositeSampleMode::Linear => Some(viewport),
+        CompositeSampleMode::Box4
+            if shader_composite_preserves_source_pixel_grid(viewport, source_size) =>
+        {
+            Some(viewport)
+        }
+        CompositeSampleMode::Box4 => None,
+    }
+}
+
+fn shader_composite_preserves_source_pixel_grid(
+    viewport: (f32, f32, f32, f32),
+    source_size: (u32, u32),
+) -> bool {
+    const EPSILON: f32 = 0.01;
+    let (x, y, width, height) = viewport;
+    let (source_width, source_height) = source_size;
+    (x - x.round()).abs() <= EPSILON
+        && (y - y.round()).abs() <= EPSILON
+        && (width - source_width as f32).abs() <= EPSILON
+        && (height - source_height as f32).abs() <= EPSILON
+}
+
+type DirectShaderTailComposite<'a> = (&'a RenderEffect, &'a RuntimeShader, (f32, f32, f32, f32));
+
+fn direct_shader_tail_composite(
+    effect: &RenderEffect,
+    alpha: f32,
+    blend_mode: BlendMode,
+    dest_viewport: Option<(f32, f32, f32, f32)>,
+    sample_mode: CompositeSampleMode,
+    source_size: (u32, u32),
+) -> Option<DirectShaderTailComposite<'_>> {
+    let viewport = direct_shader_composite_viewport(
+        alpha,
+        blend_mode,
+        dest_viewport,
+        sample_mode,
+        source_size,
+    )?;
+    let RenderEffect::Chain { first, second } = effect else {
+        return None;
+    };
+    let RenderEffect::Shader { shader } = second.as_ref() else {
+        return None;
+    };
+    Some((first.as_ref(), shader, viewport))
+}
+
 fn hash_f32_for_cache<H: Hasher>(value: f32, state: &mut H) {
     value.to_bits().hash(state);
 }
@@ -183,6 +553,328 @@ fn hash_rect_for_cache<H: Hasher>(rect: Rect, state: &mut H) {
     hash_f32_for_cache(rect.y, state);
     hash_f32_for_cache(rect.width, state);
     hash_f32_for_cache(rect.height, state);
+}
+
+fn hash_text_raster_geometry_for_cache<H: Hasher>(
+    rect: Rect,
+    static_text_motion: bool,
+    state: &mut H,
+) {
+    hash_f32_for_cache(rect.width, state);
+    hash_f32_for_cache(rect.height, state);
+    static_text_motion.hash(state);
+    if !static_text_motion {
+        hash_f32_for_cache(rect.x.fract(), state);
+        hash_f32_for_cache(rect.y.fract(), state);
+    }
+}
+
+fn text_raster_geometry_for_draw(
+    text_draw: &TextDraw,
+    root_scale: f32,
+) -> Option<(Rect, Rect, Option<Rect>, f32, bool)> {
+    if text_draw.text.is_empty()
+        || text_draw.rect.width <= 0.0
+        || text_draw.rect.height <= 0.0
+        || !root_scale.is_finite()
+        || root_scale <= 0.0
+    {
+        return None;
+    }
+
+    let text_scale = text_draw.scale * root_scale;
+    if !text_scale.is_finite() || text_scale <= 0.0 {
+        return None;
+    }
+
+    let static_text_motion = text_draw
+        .text_style
+        .paragraph_style
+        .text_motion
+        .unwrap_or(cranpose_ui::text::TextMotion::Static)
+        == cranpose_ui::text::TextMotion::Static;
+    let snap_delta = text_draw
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default();
+    let logical_rect = text_draw.rect.translate(snap_delta.x, snap_delta.y);
+    let clip = text_draw
+        .clip
+        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    let mut raster_rect = Rect {
+        x: logical_rect.x * root_scale,
+        y: logical_rect.y * root_scale,
+        width: logical_rect.width * root_scale,
+        height: logical_rect.height * root_scale,
+    };
+    if static_text_motion {
+        raster_rect.x = raster_rect.x.round();
+        raster_rect.y = raster_rect.y.round();
+    }
+    raster_rect.width = raster_rect.width.ceil().max(1.0);
+    raster_rect.height = raster_rect.height.ceil().max(1.0);
+    Some((
+        logical_rect,
+        raster_rect,
+        clip,
+        text_scale,
+        static_text_motion,
+    ))
+}
+
+fn text_draw_is_visible_in_viewport(
+    logical_rect: Rect,
+    clip: Option<Rect>,
+    viewport: ViewportUniformParams,
+    root_scale: f32,
+) -> bool {
+    draw_rect_is_visible_in_viewport(logical_rect, clip, viewport, root_scale)
+}
+
+fn text_draw_should_prewarm_in_viewport(
+    logical_rect: Rect,
+    clip: Option<Rect>,
+    viewport: ViewportUniformParams,
+    root_scale: f32,
+) -> bool {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return false;
+    }
+    let viewport_rect = Rect {
+        x: viewport.offset[0] / root_scale,
+        y: viewport.offset[1] / root_scale,
+        width: viewport.width as f32 / root_scale,
+        height: viewport.height as f32 / root_scale,
+    };
+    let margin_x = viewport_rect.width * TEXT_GLYPH_PREWARM_VIEWPORT_MULTIPLIER;
+    let margin_y = viewport_rect.height * TEXT_GLYPH_PREWARM_VIEWPORT_MULTIPLIER;
+    let prewarm_viewport = expand_rect(viewport_rect, margin_x, margin_y);
+    let prewarm_rect = match clip {
+        Some(clip) => expand_rect(clip, margin_x, margin_y).intersect(prewarm_viewport),
+        None => Some(prewarm_viewport),
+    };
+    prewarm_rect.is_some_and(|rect| logical_rect.intersect(rect).is_some())
+}
+
+fn expand_rect(rect: Rect, margin_x: f32, margin_y: f32) -> Rect {
+    Rect {
+        x: rect.x - margin_x,
+        y: rect.y - margin_y,
+        width: rect.width + margin_x * 2.0,
+        height: rect.height + margin_y * 2.0,
+    }
+}
+
+fn draw_rect_is_visible_in_viewport(
+    rect: Rect,
+    clip: Option<Rect>,
+    viewport: ViewportUniformParams,
+    root_scale: f32,
+) -> bool {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return false;
+    }
+    let viewport_rect = Rect {
+        x: viewport.offset[0] / root_scale,
+        y: viewport.offset[1] / root_scale,
+        width: viewport.width as f32 / root_scale,
+        height: viewport.height as f32 / root_scale,
+    };
+    let visible_rect = match clip {
+        Some(clip) => clip.intersect(viewport_rect),
+        None => Some(viewport_rect),
+    };
+    visible_rect.is_some_and(|visible| rect.intersect(visible).is_some())
+}
+
+fn shape_draw_is_visible_in_viewport(
+    shape: &DrawShape,
+    viewport: ViewportUniformParams,
+    root_scale: f32,
+) -> bool {
+    let snap_delta = shape
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default();
+    let rect = quad_bounds(translate_quad(shape.quad, snap_delta));
+    let clip = shape
+        .clip
+        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    draw_rect_is_visible_in_viewport(rect, clip, viewport, root_scale)
+}
+
+fn cached_text_glyph_quad(
+    glyph: &SoftwareGlyphAtlasPlacement,
+    entry: GlyphAtlasEntry,
+) -> CachedTextGlyphQuad {
+    CachedTextGlyphQuad {
+        x: glyph.x,
+        y: glyph.y,
+        width: glyph.width,
+        height: glyph.height,
+        color: (
+            glyph.color.0.clamp(0.0, 1.0),
+            glyph.color.1.clamp(0.0, 1.0),
+            glyph.color.2.clamp(0.0, 1.0),
+            glyph.color.3.clamp(0.0, 1.0),
+        ),
+        uv: glyph_atlas_uv_rect(entry),
+    }
+}
+
+fn append_cached_text_glyph_quad(
+    source_raster_rect: Rect,
+    quad: &CachedTextGlyphQuad,
+    image_vertices: &mut Vec<Vertex>,
+    image_indices: &mut Vec<u32>,
+) -> bool {
+    if quad.width == 0 || quad.height == 0 || quad.color.3 <= 0.0 {
+        return false;
+    }
+
+    let base_vertex = image_vertices.len() as u32;
+    image_indices.extend_from_slice(&[
+        base_vertex,
+        base_vertex + 1,
+        base_vertex + 2,
+        base_vertex + 2,
+        base_vertex + 1,
+        base_vertex + 3,
+    ]);
+
+    let x0 = source_raster_rect.x + quad.x as f32;
+    let y0 = source_raster_rect.y + quad.y as f32;
+    let x1 = x0 + quad.width as f32;
+    let y1 = y0 + quad.height as f32;
+    let color = [quad.color.0, quad.color.1, quad.color.2, quad.color.3];
+
+    image_vertices.extend_from_slice(&[
+        Vertex {
+            position: [x0, y0],
+            color,
+            uv: [quad.uv.min[0], quad.uv.min[1]],
+            uv_bounds: quad.uv.sample_bounds,
+        },
+        Vertex {
+            position: [x1, y0],
+            color,
+            uv: [quad.uv.max[0], quad.uv.min[1]],
+            uv_bounds: quad.uv.sample_bounds,
+        },
+        Vertex {
+            position: [x0, y1],
+            color,
+            uv: [quad.uv.min[0], quad.uv.max[1]],
+            uv_bounds: quad.uv.sample_bounds,
+        },
+        Vertex {
+            position: [x1, y1],
+            color,
+            uv: [quad.uv.max[0], quad.uv.max[1]],
+            uv_bounds: quad.uv.sample_bounds,
+        },
+    ]);
+    true
+}
+
+fn cached_text_glyph_quad_logical_rect(
+    source_raster_rect: Rect,
+    quad: &CachedTextGlyphQuad,
+    root_scale: f32,
+) -> Option<Rect> {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return None;
+    }
+    Some(Rect {
+        x: (source_raster_rect.x + quad.x as f32) / root_scale,
+        y: (source_raster_rect.y + quad.y as f32) / root_scale,
+        width: quad.width as f32 / root_scale,
+        height: quad.height as f32 / root_scale,
+    })
+}
+
+fn cached_text_glyph_quad_is_visible_in_viewport(
+    source_raster_rect: Rect,
+    quad: &CachedTextGlyphQuad,
+    clip: Option<Rect>,
+    viewport: ViewportUniformParams,
+    root_scale: f32,
+) -> bool {
+    cached_text_glyph_quad_logical_rect(source_raster_rect, quad, root_scale)
+        .is_some_and(|rect| draw_rect_is_visible_in_viewport(rect, clip, viewport, root_scale))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TextGlyphDrawAction {
+    DrawVisible,
+    PrewarmOffscreen,
+    Skip,
+}
+
+fn text_glyph_draw_action(
+    is_visible: bool,
+    is_prewarm_candidate: bool,
+    allow_offscreen_prewarm: bool,
+) -> TextGlyphDrawAction {
+    if is_visible {
+        TextGlyphDrawAction::DrawVisible
+    } else if allow_offscreen_prewarm && is_prewarm_candidate {
+        TextGlyphDrawAction::PrewarmOffscreen
+    } else {
+        TextGlyphDrawAction::Skip
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn should_use_retained_text_glyph_run(quads_len: usize, clip: Option<Rect>) -> bool {
+    clip.is_none() && quads_len >= MIN_RETAINED_TEXT_GLYPH_QUADS
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn offscreen_text_glyph_prewarm_work_is_bounded(
+    cached_glyphs: Option<usize>,
+    text_len: usize,
+) -> bool {
+    match cached_glyphs {
+        Some(glyphs) => glyphs <= MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CACHED_GLYPHS,
+        None => text_len <= MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_UNCACHED_CHARS,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn offscreen_text_glyph_prewarm_budget_exhausted(
+    start: Instant,
+    admitted_candidates: usize,
+) -> bool {
+    admitted_candidates >= MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CANDIDATES
+        || instant_ms(start, Instant::now()) >= OFFSCREEN_TEXT_GLYPH_PREWARM_BUDGET_MS
+}
+
+fn text_draws_for_ordered_range<'a>(
+    ordered_items: &'a [(usize, SegmentDrawItem)],
+    texts: &'a [TextDraw],
+    start: usize,
+    end: usize,
+) -> Result<impl Iterator<Item = &'a TextDraw>, String> {
+    let range_items = ordered_items
+        .get(start..end)
+        .ok_or_else(|| format!("text batch range {start}..{end} is outside ordered draw items"))?;
+    for (_, item) in range_items {
+        match item {
+            SegmentDrawItem::Text(text_index) if *text_index < texts.len() => {}
+            SegmentDrawItem::Text(text_index) => {
+                return Err(format!(
+                    "text batch references missing text draw index: {text_index}"
+                ));
+            }
+            _ => return Err(format!("text batch contains non-text draw item: {item:?}")),
+        }
+    }
+
+    Ok(range_items.iter().filter_map(move |(_, item)| match item {
+        SegmentDrawItem::Text(text_index) => texts.get(*text_index),
+        _ => None,
+    }))
 }
 
 fn translated_rect_for_cache(rect: Rect, origin_x: f32, origin_y: f32) -> Rect {
@@ -257,6 +949,140 @@ fn shape_shadow_content_hash(
     hasher.finish()
 }
 
+fn shape_shadow_surface_cache_key(
+    shapes: &[(DrawShape, BlendMode)],
+    device_bounds: DevicePixelBounds,
+    pixel_radius: f32,
+    root_scale: f32,
+) -> Option<ShadowSurfaceCacheKey> {
+    (root_scale.is_finite() && root_scale > 0.0).then(|| ShadowSurfaceCacheKey {
+        content_hash: shape_shadow_content_hash(
+            shapes,
+            [device_bounds.x, device_bounds.y],
+            root_scale,
+        ),
+        pixel_size: [device_bounds.width, device_bounds.height],
+        root_scale_bits: root_scale.to_bits(),
+        blur_radius_bits: pixel_radius.to_bits(),
+    })
+}
+
+fn shape_shadow_bounds(shapes: &[(DrawShape, BlendMode)]) -> Option<Rect> {
+    shapes
+        .iter()
+        .map(|(shape, _)| shape.rect)
+        .reduce(|a, b| Rect {
+            x: a.x.min(b.x),
+            y: a.y.min(b.y),
+            width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
+            height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
+        })
+}
+
+fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
+    shadow
+        .shapes
+        .iter()
+        .map(|(shape, _)| shape.rect)
+        .chain(shadow.texts.iter().map(|text| text.rect))
+        .reduce(|a, b| Rect {
+            x: a.x.min(b.x),
+            y: a.y.min(b.y),
+            width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
+            height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
+        })
+}
+
+fn shadow_draw_may_render(
+    shadow: &ShadowDraw,
+    width: u32,
+    height: u32,
+    root_scale: f32,
+    max_texture_dim: u32,
+) -> bool {
+    if shadow.texts.is_empty() && !shadow.shapes.is_empty() && shadow.blur_radius > 0.0 {
+        return shape_shadow_surface_plan(
+            &shadow.shapes,
+            shadow.clip,
+            shadow.blur_radius,
+            width,
+            height,
+            root_scale,
+            max_texture_dim,
+        )
+        .is_some();
+    }
+
+    let Some(bounds) = shadow_draw_bounds(shadow) else {
+        return false;
+    };
+    let blur_margin = blur_extent_margin(shadow.blur_radius);
+    let mut visible_bounds = Rect {
+        x: bounds.x - blur_margin,
+        y: bounds.y - blur_margin,
+        width: bounds.width + blur_margin * 2.0,
+        height: bounds.height + blur_margin * 2.0,
+    };
+    if let Some(clip) = shadow.clip {
+        let clip_expanded = Rect {
+            x: clip.x - blur_margin,
+            y: clip.y - blur_margin,
+            width: clip.width + blur_margin * 2.0,
+            height: clip.height + blur_margin * 2.0,
+        };
+        let Some(intersection) = visible_bounds.intersect(clip_expanded) else {
+            return false;
+        };
+        visible_bounds = intersection;
+    }
+
+    scissor_rect_for_rect(visible_bounds, root_scale, width, height).is_some()
+}
+
+fn shape_shadow_surface_plan(
+    shapes: &[(DrawShape, BlendMode)],
+    clip: Option<Rect>,
+    blur_radius: f32,
+    width: u32,
+    height: u32,
+    root_scale: f32,
+    max_texture_dim: u32,
+) -> Option<ShapeShadowSurfacePlan> {
+    let shape_bounds = shape_shadow_bounds(shapes)?;
+    let blur_margin = blur_extent_margin(blur_radius);
+    let source_blur_bounds = Rect {
+        x: shape_bounds.x - blur_margin,
+        y: shape_bounds.y - blur_margin,
+        width: shape_bounds.width + blur_margin * 2.0,
+        height: shape_bounds.height + blur_margin * 2.0,
+    };
+
+    let mut visible_blur_bounds = source_blur_bounds;
+    if let Some(clip) = clip {
+        let clip_expanded = Rect {
+            x: clip.x - blur_margin,
+            y: clip.y - blur_margin,
+            width: clip.width + blur_margin * 2.0,
+            height: clip.height + blur_margin * 2.0,
+        };
+        visible_blur_bounds = visible_blur_bounds.intersect(clip_expanded)?;
+    }
+
+    let processing_scissor = scissor_rect_for_rect(visible_blur_bounds, root_scale, width, height);
+    processing_scissor?;
+    let visible_device_bounds =
+        device_pixel_bounds_for_rect(visible_blur_bounds, width, height, root_scale)?;
+    let source_device_bounds =
+        unclamped_device_pixel_bounds_for_rect(source_blur_bounds, root_scale, max_texture_dim)
+            .unwrap_or(visible_device_bounds);
+
+    Some(ShapeShadowSurfacePlan {
+        source_device_bounds,
+        processing_scissor,
+        pixel_radius: blur_radius * root_scale,
+    })
+}
+
 fn is_render_effect_supported(effect: &RenderEffect) -> bool {
     match effect {
         RenderEffect::Blur { .. } => true,
@@ -287,6 +1113,26 @@ fn gradient_tile_mode_value(tile_mode: TileMode) -> u32 {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn shape_shader_source() -> Cow<'static, str> {
+    Cow::Owned(
+        shaders::SHADER
+            .replace(
+                "array<ShapeData, 200>",
+                &format!("array<ShapeData, {MAX_SHAPES_PER_BATCH}>"),
+            )
+            .replace(
+                "array<GradientStop, 256>",
+                &format!("array<GradientStop, {MAX_GRADIENT_STOPS}>"),
+            ),
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn shape_shader_source() -> Cow<'static, str> {
+    Cow::Borrowed(shaders::SHADER)
+}
+
 fn create_shape_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
@@ -296,7 +1142,7 @@ fn create_shape_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
-        source: wgpu::ShaderSource::Wgsl(shaders::SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(shape_shader_source()),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -393,6 +1239,58 @@ fn create_image_pipeline(
     })
 }
 
+fn create_glyph_atlas_pipeline(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    uniform_layout: &wgpu::BindGroupLayout,
+    image_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Glyph Atlas Shader"),
+        source: wgpu::ShaderSource::Wgsl(shaders::GLYPH_ATLAS_SHADER.into()),
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Glyph Atlas Pipeline Layout"),
+        bind_group_layouts: &[Some(uniform_layout), Some(image_layout)],
+        immediate_size: 0,
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Glyph Atlas Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("glyph_atlas_vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[Vertex::desc()],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("glyph_atlas_fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(blend_state_for_mode(BlendMode::SrcOver)),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Vertex {
@@ -462,6 +1360,196 @@ impl CachedImageTexture {
     }
 }
 
+#[derive(Clone, Copy)]
+struct GlyphAtlasEntry {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+struct TextGlyphAtlas {
+    texture: wgpu::Texture,
+    _view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    entries: BoundedLruCache<SoftwareGlyphAtlasKey, GlyphAtlasEntry>,
+    generation: u64,
+    cursor_x: u32,
+    cursor_y: u32,
+    row_height: u32,
+    upload_scratch: Vec<u8>,
+}
+
+impl TextGlyphAtlas {
+    fn new(
+        device: &wgpu::Device,
+        image_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+    ) -> Self {
+        let texture = Self::create_texture(device);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Text Glyph Atlas Bind Group"),
+            layout: image_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
+        Self {
+            texture,
+            _view: view,
+            bind_group,
+            entries: BoundedLruCache::with_capacity_at_least_one(MAX_TEXT_GLYPH_ATLAS_ITEMS),
+            generation: 0,
+            cursor_x: TEXT_GLYPH_ATLAS_PADDING,
+            cursor_y: TEXT_GLYPH_ATLAS_PADDING,
+            row_height: 0,
+            upload_scratch: Vec::new(),
+        }
+    }
+
+    fn create_texture(device: &wgpu::Device) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Text Glyph Atlas Texture"),
+            size: wgpu::Extent3d {
+                width: TEXT_GLYPH_ATLAS_WIDTH,
+                height: TEXT_GLYPH_ATLAS_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    }
+
+    fn reset(
+        &mut self,
+        device: &wgpu::Device,
+        image_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+    ) {
+        let generation = self.generation.wrapping_add(1);
+        let mut next = Self::new(device, image_layout, sampler);
+        next.generation = generation;
+        *self = next;
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn entry(&mut self, key: &SoftwareGlyphAtlasKey) -> Option<GlyphAtlasEntry> {
+        self.entries.get(key).copied()
+    }
+
+    fn allocate(&mut self, width: u32, height: u32) -> Option<GlyphAtlasEntry> {
+        if width == 0
+            || height == 0
+            || width + TEXT_GLYPH_ATLAS_PADDING * 2 > TEXT_GLYPH_ATLAS_WIDTH
+            || height + TEXT_GLYPH_ATLAS_PADDING * 2 > TEXT_GLYPH_ATLAS_HEIGHT
+        {
+            return None;
+        }
+
+        if self.cursor_x + width + TEXT_GLYPH_ATLAS_PADDING > TEXT_GLYPH_ATLAS_WIDTH {
+            self.cursor_x = TEXT_GLYPH_ATLAS_PADDING;
+            self.cursor_y = self
+                .cursor_y
+                .saturating_add(self.row_height)
+                .saturating_add(TEXT_GLYPH_ATLAS_PADDING);
+            self.row_height = 0;
+        }
+        if self.cursor_y + height + TEXT_GLYPH_ATLAS_PADDING > TEXT_GLYPH_ATLAS_HEIGHT {
+            return None;
+        }
+
+        let entry = GlyphAtlasEntry {
+            x: self.cursor_x,
+            y: self.cursor_y,
+            width,
+            height,
+        };
+        self.cursor_x = self
+            .cursor_x
+            .saturating_add(width)
+            .saturating_add(TEXT_GLYPH_ATLAS_PADDING);
+        self.row_height = self.row_height.max(height);
+        Some(entry)
+    }
+
+    fn upload_glyph(
+        &mut self,
+        key: SoftwareGlyphAtlasKey,
+        glyph: &SoftwareGlyphAtlasGlyph,
+        queue: &wgpu::Queue,
+        executor: &mut WgpuFrameGraphExecutor,
+        frame_stats: &mut gpu_stats::FrameStats,
+    ) -> Option<GlyphAtlasEntry> {
+        if let Some(entry) = self.entry(&key) {
+            frame_stats.record_text_glyph_atlas_hit();
+            return Some(entry);
+        }
+
+        let width = u32::try_from(glyph.mask.width).ok()?;
+        let height = u32::try_from(glyph.mask.height).ok()?;
+        let entry = self.allocate(width, height)?;
+        self.upload_scratch.clear();
+        self.upload_scratch.reserve(
+            glyph
+                .mask
+                .alpha
+                .len()
+                .saturating_sub(self.upload_scratch.capacity()),
+        );
+        self.upload_scratch.extend(
+            glyph
+                .mask
+                .alpha
+                .iter()
+                .map(|alpha| (alpha.clamp(0.0, 1.0) * 255.0).round() as u8),
+        );
+
+        let upload_stats = executor.upload_texture(
+            queue,
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: entry.x,
+                    y: entry.y,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &self.upload_scratch,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(entry.width),
+                rows_per_image: Some(entry.height),
+            },
+            wgpu::Extent3d {
+                width: entry.width,
+                height: entry.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        frame_stats.record_command_stats(upload_stats);
+        frame_stats.record_text_glyph_atlas_miss(entry.width, entry.height);
+        self.entries.put(key, entry);
+        Some(entry)
+    }
+}
+
 struct ImageDrawCmd {
     index_start: u32,
     scissor: (u32, u32, u32, u32),
@@ -469,34 +1557,57 @@ struct ImageDrawCmd {
     sampling: ImageSampling,
 }
 
+#[derive(Clone, Copy)]
+enum GlyphDrawSource {
+    Shared {
+        index_start: u32,
+        index_count: u32,
+    },
+    #[cfg(not(target_arch = "wasm32"))]
+    Retained {
+        cache_key: TextGlyphRunCacheKey,
+        uniform_slot: usize,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct GlyphDrawCmd {
+    source: GlyphDrawSource,
+    scissor: (u32, u32, u32, u32),
+}
+
+impl GlyphDrawCmd {
+    fn shared(index_start: u32, index_count: u32, scissor: (u32, u32, u32, u32)) -> Self {
+        Self {
+            source: GlyphDrawSource::Shared {
+                index_start,
+                index_count,
+            },
+            scissor,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retained(
+        cache_key: TextGlyphRunCacheKey,
+        uniform_slot: usize,
+        scissor: (u32, u32, u32, u32),
+    ) -> Self {
+        Self {
+            source: GlyphDrawSource::Retained {
+                cache_key,
+                uniform_slot,
+            },
+            scissor,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ImageUvRect {
     min: [f32; 2],
     max: [f32; 2],
     sample_bounds: [f32; 4],
-}
-
-#[derive(Clone, Copy)]
-enum LayerEventKind {
-    Backdrop(usize),
-    Effect(usize),
-}
-
-#[derive(Clone, Copy)]
-struct LayerEvent {
-    z_index: usize,
-    kind: LayerEventKind,
-}
-
-impl LayerEvent {
-    fn kind_order(self) -> u8 {
-        match self.kind {
-            // Backdrop must run before same-z content/effects so it samples only
-            // already-rendered background.
-            LayerEventKind::Backdrop(_) => 0,
-            LayerEventKind::Effect(_) => 1,
-        }
-    }
 }
 
 // Text raster cache is owned by GpuRenderer and backed by software text images
@@ -546,12 +1657,15 @@ enum UploadTarget {
     ShapeGradient,
     ImageVertex,
     ImageIndex,
+    #[cfg(not(target_arch = "wasm32"))]
+    RetainedGlyphUniform,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 struct PendingBufferCopy {
     source_offset: u64,
+    target_offset: u64,
     size: u64,
     target: UploadTarget,
 }
@@ -594,6 +1708,11 @@ impl StagedBufferUploads {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn stage(&mut self, target: UploadTarget, bytes: &[u8]) {
+        self.stage_at(target, 0, bytes);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stage_at(&mut self, target: UploadTarget, target_offset: u64, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
@@ -613,9 +1732,15 @@ impl StagedBufferUploads {
         self.bytes.extend_from_slice(bytes);
         self.copies.push(PendingBufferCopy {
             source_offset,
+            target_offset,
             size: bytes.len() as u64,
             target,
         });
+    }
+
+    fn truncate(&mut self, bytes_len: usize, copies_len: usize) {
+        self.bytes.truncate(bytes_len);
+        self.copies.truncate(copies_len);
     }
 }
 
@@ -865,7 +1990,12 @@ pub struct GpuRenderer {
     shape_bind_group_layout: wgpu::BindGroupLayout,
     image_pipeline: wgpu::RenderPipeline,
     image_pipeline_dst_out: wgpu::RenderPipeline,
+    glyph_atlas_pipeline: wgpu::RenderPipeline,
+    #[cfg(not(target_arch = "wasm32"))]
+    retained_glyph_atlas_pipeline: wgpu::RenderPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
+    #[cfg(not(target_arch = "wasm32"))]
+    retained_glyph_uniform_bind_group_layout: wgpu::BindGroupLayout,
     image_nearest_sampler: wgpu::Sampler,
     image_linear_sampler: wgpu::Sampler,
     text_fonts: SoftwareTextFontSet,
@@ -882,6 +2012,16 @@ pub struct GpuRenderer {
     image_vertex_buffer: wgpu::Buffer,
     #[cfg(not(target_arch = "wasm32"))]
     image_index_buffer: wgpu::Buffer,
+    #[cfg(not(target_arch = "wasm32"))]
+    retained_glyph_uniform_buffer: wgpu::Buffer,
+    #[cfg(not(target_arch = "wasm32"))]
+    retained_glyph_uniform_bind_group: wgpu::BindGroup,
+    #[cfg(not(target_arch = "wasm32"))]
+    retained_glyph_uniform_stride: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    retained_glyph_uniform_capacity: usize,
+    #[cfg(not(target_arch = "wasm32"))]
+    retained_glyph_uniform_cursor: usize,
     #[cfg(target_arch = "wasm32")]
     wasm_uniform_batches: Vec<UniformBatchBuffer>,
     #[cfg(target_arch = "wasm32")]
@@ -896,6 +2036,12 @@ pub struct GpuRenderer {
     wasm_image_batch_cursor: usize,
     image_texture_cache: BoundedLruCache<u64, CachedImageTexture>,
     text_image_cache: BoundedLruCache<TextImageCacheKey, CachedTextImage>,
+    text_glyph_atlas: TextGlyphAtlas,
+    text_glyph_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedTextGlyphRun>,
+    #[cfg(not(target_arch = "wasm32"))]
+    text_glyph_gpu_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedGpuTextGlyphRun>,
+    text_glyph_mask_cache: SoftwareGlyphRasterCache,
+    text_line_index_cache: TextLineIndexCache,
     scratch_shape_data: Vec<ShapeData>,
     scratch_gradients: Vec<GradientStop>,
     scratch_vertices: Vec<Vertex>,
@@ -903,7 +2049,10 @@ pub struct GpuRenderer {
     scratch_image_vertices: Vec<Vertex>,
     scratch_image_indices: Vec<u32>,
     scratch_image_cmds: Vec<ImageDrawCmd>,
-    scratch_text_images: Vec<ImageDraw>,
+    scratch_glyph_cmds: Vec<GlyphDrawCmd>,
+    scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
+    scratch_text_glyph_placements: Vec<SoftwareGlyphAtlasPlacement>,
+    scratch_text_glyph_quads: Vec<CachedTextGlyphQuad>,
     scratch_segment_items: Vec<(usize, SegmentDrawItem)>,
     scratch_effect_ranges: Vec<Range<usize>>,
     scratch_layer_events: Vec<LayerEvent>,
@@ -912,12 +2061,14 @@ pub struct GpuRenderer {
     deferred_offscreen_releases: Vec<OffscreenTarget>,
     effect_renderer: EffectRenderer,
     layer_surface_cache: LayerSurfaceCache,
+    observed_scene_range_cache_misses: BoundedLruCache<LayerRasterCacheKey, ()>,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
     layer_surface_rect_cache: HashMap<usize, Rect>,
     layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
     frame_stats: gpu_stats::FrameStats,
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
+    pending_frame_warmup_frames: u8,
     frame_count: u64,
     gpu_stats_enabled: bool,
     warning_state: RendererWarningState,
@@ -953,12 +2104,26 @@ fn layer_raster_cache_candidate(
     let mut layer_surface_requirements_cache = HashMap::new();
     let surface_requirements =
         layer_surface_requirements_cached(layer, &mut layer_surface_requirements_cache);
+    let runtime_cache_is_safe = allow_runtime_cache
+        && surface_requirements
+            .surface_requirements
+            .has_isolating_requirement()
+        && !layer
+            .effect()
+            .is_some_and(RenderEffect::contains_runtime_shader);
     let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
-        || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface());
+        || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface())
+        || runtime_cache_is_safe;
     if !cache_is_allowed {
         return None;
     }
     if layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
+        return None;
+    }
+    if layer
+        .effect()
+        .is_some_and(RenderEffect::contains_runtime_shader)
+    {
         return None;
     }
 
@@ -995,6 +2160,23 @@ impl GpuRenderer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        #[cfg(not(target_arch = "wasm32"))]
+        let retained_glyph_uniform_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Retained Glyph Dynamic Uniform Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<Uniforms>() as u64
+                        ),
                     },
                     count: None,
                 }],
@@ -1081,6 +2263,19 @@ impl GpuRenderer {
             &image_bind_group_layout,
             BlendMode::DstOut,
         );
+        let glyph_atlas_pipeline = create_glyph_atlas_pipeline(
+            &device,
+            surface_format,
+            &uniform_bind_group_layout,
+            &image_bind_group_layout,
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        let retained_glyph_atlas_pipeline = create_glyph_atlas_pipeline(
+            &device,
+            surface_format,
+            &retained_glyph_uniform_bind_group_layout,
+            &image_bind_group_layout,
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
         let upload_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1115,6 +2310,8 @@ impl GpuRenderer {
             device.create_sampler(&image_sampler_descriptor(ImageSampling::Nearest));
         let image_linear_sampler =
             device.create_sampler(&image_sampler_descriptor(ImageSampling::Linear));
+        let text_glyph_atlas =
+            TextGlyphAtlas::new(&device, &image_bind_group_layout, &image_nearest_sampler);
 
         #[cfg(not(target_arch = "wasm32"))]
         let image_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1131,6 +2328,35 @@ impl GpuRenderer {
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        let retained_glyph_uniform_stride = align_usize_to(
+            std::mem::size_of::<Uniforms>(),
+            (device.limits().min_uniform_buffer_offset_alignment as usize)
+                .max(wgpu::COPY_BUFFER_ALIGNMENT as usize),
+        ) as u64;
+        #[cfg(not(target_arch = "wasm32"))]
+        let retained_glyph_uniform_capacity = INITIAL_RETAINED_GLYPH_UNIFORM_SLOTS;
+        #[cfg(not(target_arch = "wasm32"))]
+        let retained_glyph_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Retained Glyph Uniform Buffer"),
+            size: retained_glyph_uniform_stride * retained_glyph_uniform_capacity as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        let retained_glyph_uniform_bind_group =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Retained Glyph Uniform Bind Group"),
+                layout: &retained_glyph_uniform_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &retained_glyph_uniform_buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<Uniforms>() as u64),
+                    }),
+                }],
+            });
 
         let effect_renderer = EffectRenderer::new(&device, surface_format, adapter_backend);
 
@@ -1145,7 +2371,12 @@ impl GpuRenderer {
             shape_bind_group_layout,
             image_pipeline,
             image_pipeline_dst_out,
+            glyph_atlas_pipeline,
+            #[cfg(not(target_arch = "wasm32"))]
+            retained_glyph_atlas_pipeline,
             image_bind_group_layout,
+            #[cfg(not(target_arch = "wasm32"))]
+            retained_glyph_uniform_bind_group_layout,
             image_nearest_sampler,
             image_linear_sampler,
             text_fonts,
@@ -1161,6 +2392,16 @@ impl GpuRenderer {
             image_vertex_buffer,
             #[cfg(not(target_arch = "wasm32"))]
             image_index_buffer,
+            #[cfg(not(target_arch = "wasm32"))]
+            retained_glyph_uniform_buffer,
+            #[cfg(not(target_arch = "wasm32"))]
+            retained_glyph_uniform_bind_group,
+            #[cfg(not(target_arch = "wasm32"))]
+            retained_glyph_uniform_stride,
+            #[cfg(not(target_arch = "wasm32"))]
+            retained_glyph_uniform_capacity,
+            #[cfg(not(target_arch = "wasm32"))]
+            retained_glyph_uniform_cursor: 0,
             #[cfg(target_arch = "wasm32")]
             wasm_uniform_batches: Vec::new(),
             #[cfg(target_arch = "wasm32")]
@@ -1179,6 +2420,18 @@ impl GpuRenderer {
             text_image_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_TEXT_IMAGE_CACHE_ITEMS,
             ),
+            text_glyph_atlas,
+            text_glyph_run_cache: BoundedLruCache::with_capacity_at_least_one(
+                MAX_TEXT_GLYPH_RUN_CACHE_ITEMS,
+            ),
+            #[cfg(not(target_arch = "wasm32"))]
+            text_glyph_gpu_run_cache: BoundedLruCache::with_capacity_at_least_one(
+                MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
+            ),
+            text_glyph_mask_cache: SoftwareGlyphRasterCache::with_capacity_at_least_one(
+                MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
+            ),
+            text_line_index_cache: TextLineIndexCache::new(MAX_TEXT_LINE_INDEX_CACHE_ITEMS),
             scratch_shape_data: Vec::new(),
             scratch_gradients: Vec::new(),
             scratch_vertices: Vec::new(),
@@ -1186,7 +2439,10 @@ impl GpuRenderer {
             scratch_image_vertices: Vec::new(),
             scratch_image_indices: Vec::new(),
             scratch_image_cmds: Vec::new(),
-            scratch_text_images: Vec::new(),
+            scratch_glyph_cmds: Vec::new(),
+            scratch_text_glyph_run: Vec::new(),
+            scratch_text_glyph_placements: Vec::new(),
+            scratch_text_glyph_quads: Vec::new(),
             scratch_segment_items: Vec::new(),
             scratch_effect_ranges: Vec::new(),
             scratch_layer_events: Vec::new(),
@@ -1195,6 +2451,9 @@ impl GpuRenderer {
             deferred_offscreen_releases: Vec::new(),
             effect_renderer,
             layer_surface_cache: LayerSurfaceCache::new(),
+            observed_scene_range_cache_misses: BoundedLruCache::with_capacity_at_least_one(
+                MAX_OBSERVED_SCENE_RANGE_CACHE_MISSES,
+            ),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
             ),
@@ -1203,6 +2462,7 @@ impl GpuRenderer {
             layer_surface_requirements_cache: HashMap::new(),
             frame_stats: gpu_stats::FrameStats::default(),
             last_frame_stats: None,
+            pending_frame_warmup_frames: 0,
             frame_count: 0,
             gpu_stats_enabled: gpu_stats_enabled(),
             warning_state: RendererWarningState::default(),
@@ -1339,6 +2599,10 @@ impl GpuRenderer {
         self.layer_surface_cache.get(key, &self.frame_stats)
     }
 
+    fn admit_layer_surface_cache_miss(&mut self, key: &LayerRasterCacheKey) -> bool {
+        admit_layer_surface_cache_miss_impl(key, &mut self.observed_scene_range_cache_misses)
+    }
+
     fn insert_cached_layer_surface(
         &mut self,
         key: LayerRasterCacheKey,
@@ -1356,6 +2620,63 @@ impl GpuRenderer {
         self.shadow_surface_cache
             .get(key)
             .map(|cached| cached.target.clone())
+    }
+
+    fn cached_shape_shadow_composite(
+        &mut self,
+        shadow: &ShadowDraw,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Option<CachedShadowComposite> {
+        if shadow.blur_radius <= 0.0 || shadow.shapes.is_empty() || !shadow.texts.is_empty() {
+            return None;
+        }
+
+        let plan = shape_shadow_surface_plan(
+            &shadow.shapes,
+            shadow.clip,
+            shadow.blur_radius,
+            width,
+            height,
+            root_scale,
+            self.max_texture_dim(),
+        )?;
+        let key = shape_shadow_surface_cache_key(
+            &shadow.shapes,
+            plan.source_device_bounds,
+            plan.pixel_radius,
+            root_scale,
+        )?;
+        let cached = self.cached_shadow_surface(&key)?;
+        let viewport_offset = [plan.source_device_bounds.x, plan.source_device_bounds.y];
+        self.frame_stats.record_shadow_shape_cache_hit(
+            plan.source_device_bounds.width,
+            plan.source_device_bounds.height,
+        );
+
+        let clip_scissor = shadow
+            .clip
+            .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
+        let scissor = clip_scissor.or(plan.processing_scissor);
+        let rounded_mask = inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
+            mask.rect[0] -= viewport_offset[0];
+            mask.rect[1] -= viewport_offset[1];
+            mask
+        });
+        let dest_viewport = Some((
+            viewport_offset[0],
+            viewport_offset[1],
+            plan.source_device_bounds.width as f32,
+            plan.source_device_bounds.height as f32,
+        ));
+
+        Some(CachedShadowComposite {
+            source: cached,
+            scissor,
+            rounded_mask,
+            dest_viewport,
+        })
     }
 
     fn insert_cached_shadow_surface(
@@ -1395,8 +2716,16 @@ impl GpuRenderer {
     ) -> Option<(LayerRasterCacheKey, Rect)> {
         let surface_requirements =
             layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
+        let runtime_cache_is_safe = allow_runtime_cache
+            && surface_requirements
+                .surface_requirements
+                .has_isolating_requirement()
+            && !layer
+                .effect()
+                .is_some_and(RenderEffect::contains_runtime_shader);
         let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
-            || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface());
+            || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface())
+            || runtime_cache_is_safe;
         if !cache_is_allowed {
             return None;
         }
@@ -1523,14 +2852,30 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
 
                 match event.kind {
                     LayerEventKind::Backdrop(index) => {
+                        let layer = &backdrop_layers[index];
+                        let effective_backdrop_underlay = if backdrop_underlay.is_some()
+                            && backdrop_underlay_is_covered_by_local_content(
+                                shapes,
+                                images,
+                                shadow_draws,
+                                draw_ops,
+                                effect_layers,
+                                backdrop_layers,
+                                layer,
+                            ) {
+                            None
+                        } else {
+                            backdrop_underlay
+                        };
                         execute_apply_backdrop_layer_to_target(
                             self,
                             target,
-                            &backdrop_layers[index],
-                            backdrop_underlay,
+                            layer,
+                            effective_backdrop_underlay,
                             width,
                             height,
                             root_scale,
+                            None,
                         )?;
                     }
                     LayerEventKind::Effect(index) => {
@@ -1604,6 +2949,37 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
         sample_mode: CompositeSampleMode,
     ) {
         let device = self.renderer.device.clone();
+        if let Some(viewport) = direct_shader_composite_viewport(
+            alpha,
+            blend_mode,
+            dest_viewport,
+            sample_mode,
+            (source.width, source.height),
+        ) {
+            let shader_applied = self
+                .renderer
+                .effect_renderer
+                .encode_shader_src_over_to_view(
+                    self.recorder,
+                    &device,
+                    source,
+                    dest_view,
+                    shader,
+                    effect_rect,
+                    load_op,
+                    scissor,
+                    viewport,
+                );
+            if shader_applied {
+                self.renderer
+                    .effect_renderer
+                    .debug_effects
+                    .set(self.renderer.effect_renderer.debug_effects.get() + 1);
+                self.recorder.record_pass();
+                self.renderer.effect_renderer.record_composite_pass();
+                return;
+            }
+        }
         let scratch_descriptor = self.renderer.transient_offscreen_descriptor(
             "Shader Effect Composite Scratch",
             source.width,
@@ -1732,6 +3108,93 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn record_effect_with_direct_shader_tail_composite(
+        &mut self,
+        source: &OffscreenTarget,
+        first_effect: &RenderEffect,
+        shader: &RuntimeShader,
+        effect_rect: [f32; 4],
+        dest_view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        dest_viewport: (f32, f32, f32, f32),
+    ) -> Result<bool, String> {
+        let device = self.renderer.device.clone();
+        let intermediate_descriptor = self.renderer.transient_offscreen_descriptor(
+            "Render Effect Direct Shader Tail Intermediate",
+            source.width,
+            source.height,
+        );
+        let intermediate = self
+            .recorder
+            .acquire_transient_offscreen(&device, intermediate_descriptor);
+        let effect_scratch_targets = self
+            .renderer
+            .effect_renderer
+            .acquire_recorded_effect_scratch_targets(
+                self.recorder,
+                &device,
+                first_effect,
+                source.width,
+                source.height,
+                self.renderer.surface_format,
+            );
+        let first_passes = {
+            let mut effect_scratch_refs = effect_scratch_targets.refs();
+            let pass_count = self.renderer.effect_renderer.encode_effect(
+                self.recorder,
+                &device,
+                source,
+                &intermediate.view,
+                first_effect,
+                effect_rect,
+                &mut effect_scratch_refs,
+            );
+            match pass_count {
+                Ok(pass_count) => effect_scratch_refs.assert_consumed().map(|()| pass_count),
+                Err(error) => Err(error),
+            }
+        };
+        let first_passes = match first_passes {
+            Ok(pass_count) => pass_count,
+            Err(error) => {
+                effect_scratch_targets.release_into(self.recorder);
+                self.recorder
+                    .release_transient_offscreen(intermediate_descriptor, intermediate);
+                return Err(error);
+            }
+        };
+        let shader_applied = self
+            .renderer
+            .effect_renderer
+            .encode_shader_src_over_to_view(
+                self.recorder,
+                &device,
+                &intermediate,
+                dest_view,
+                shader,
+                effect_rect,
+                load_op,
+                scissor,
+                dest_viewport,
+            );
+        self.recorder
+            .record_passes(first_passes.saturating_add(u32::from(shader_applied)));
+        effect_scratch_targets.release_into(self.recorder);
+        self.recorder
+            .release_transient_offscreen(intermediate_descriptor, intermediate);
+        if !shader_applied {
+            return Ok(false);
+        }
+        self.renderer
+            .effect_renderer
+            .debug_effects
+            .set(self.renderer.effect_renderer.debug_effects.get() + 1);
+        self.renderer.effect_renderer.record_composite_pass();
+        Ok(true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn record_effect_composite(
         &mut self,
         source: &OffscreenTarget,
@@ -1745,6 +3208,92 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
         dest_viewport: Option<(f32, f32, f32, f32)>,
         sample_mode: CompositeSampleMode,
     ) -> Result<(), String> {
+        if let (
+            RenderEffect::Chain { first, second },
+            Some(viewport),
+            BlendMode::SrcOver,
+            CompositeSampleMode::Linear,
+        ) = (
+            effect,
+            dest_viewport,
+            supported_blend_mode(blend_mode),
+            sample_mode,
+        ) {
+            if let (
+                RenderEffect::Blur {
+                    radius_x,
+                    radius_y,
+                    edge_treatment,
+                },
+                RenderEffect::Shader { shader },
+            ) = (first.as_ref(), second.as_ref())
+            {
+                if *radius_x > 0.0 || *radius_y > 0.0 {
+                    let device = self.renderer.device.clone();
+                    let scratch_descriptor = self.renderer.transient_offscreen_descriptor(
+                        "Blur Rounded Mask Scratch",
+                        source.width,
+                        source.height,
+                    );
+                    let scratch = self
+                        .recorder
+                        .acquire_transient_offscreen(&device, scratch_descriptor);
+                    let fused = self
+                        .renderer
+                        .effect_renderer
+                        .encode_blur_then_rounded_mask_src_over_to_view(
+                            self.recorder,
+                            &device,
+                            source,
+                            &scratch,
+                            dest_view,
+                            *radius_x,
+                            *radius_y,
+                            *edge_treatment,
+                            shader,
+                            effect_rect,
+                            load_op,
+                            scissor,
+                            viewport,
+                        );
+                    if fused {
+                        self.recorder.record_passes(2);
+                        self.renderer.effect_renderer.record_blur_pass();
+                        self.renderer
+                            .effect_renderer
+                            .debug_effects
+                            .set(self.renderer.effect_renderer.debug_effects.get() + 1);
+                        self.renderer.effect_renderer.record_composite_pass();
+                        self.recorder
+                            .release_transient_offscreen(scratch_descriptor, scratch);
+                        return Ok(());
+                    }
+                    self.recorder
+                        .release_transient_offscreen(scratch_descriptor, scratch);
+                }
+            }
+        }
+        if let Some((first_effect, shader, viewport)) = direct_shader_tail_composite(
+            effect,
+            alpha,
+            blend_mode,
+            dest_viewport,
+            sample_mode,
+            (source.width, source.height),
+        ) {
+            if self.record_effect_with_direct_shader_tail_composite(
+                source,
+                first_effect,
+                shader,
+                effect_rect,
+                dest_view,
+                load_op,
+                scissor,
+                viewport,
+            )? {
+                return Ok(());
+            }
+        }
         let device = self.renderer.device.clone();
         let scratch_descriptor = self.renderer.transient_offscreen_descriptor(
             "Render Effect Composite Scratch",
@@ -1946,6 +3495,10 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         self.renderer.cached_layer_surface(key)
     }
 
+    fn admit_layer_surface_cache_miss(&mut self, key: &LayerRasterCacheKey) -> bool {
+        self.renderer.admit_layer_surface_cache_miss(key)
+    }
+
     fn insert_cached_layer_surface(
         &mut self,
         key: LayerRasterCacheKey,
@@ -2028,6 +3581,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         self.recorder.record_pass();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_non_effect_segment(
         &mut self,
         text_state: &mut TextSystemState,
@@ -2045,6 +3599,46 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         root_scale: f32,
         initial_load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<(), String> {
+        self.render_non_effect_segment_with_composites(
+            text_state,
+            target_view,
+            shapes,
+            images,
+            texts,
+            shadow_draws,
+            draw_ops,
+            z_start,
+            z_end,
+            effect_z_ranges,
+            &[],
+            &[],
+            width,
+            height,
+            root_scale,
+            initial_load_op,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_non_effect_segment_with_composites(
+        &mut self,
+        text_state: &mut TextSystemState,
+        target_view: &wgpu::TextureView,
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        shadow_draws: &[ShadowDraw],
+        draw_ops: &[DrawOp],
+        z_start: usize,
+        z_end: usize,
+        effect_z_ranges: &[Range<usize>],
+        composites: &[(usize, CompositeBatchItem<'_>)],
+        shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
+        width: u32,
+        height: u32,
+        root_scale: f32,
+        initial_load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<(), String> {
         let mut ordered_items = std::mem::take(&mut self.renderer.scratch_segment_items);
         collect_non_effect_segment_items(
             shapes,
@@ -2055,7 +3649,80 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             z_start,
             z_end,
             effect_z_ranges,
+            width,
+            height,
+            root_scale,
             &mut ordered_items,
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        let raw_shadow_items = ordered_items
+            .iter()
+            .filter(|(_, item)| matches!(item, SegmentDrawItem::Shadow(_)))
+            .count();
+        let culled_shadow_items = retain_renderable_shadow_items(
+            &mut ordered_items,
+            shadow_draws,
+            width,
+            height,
+            root_scale,
+            self.renderer.max_texture_dim(),
+        );
+        #[cfg(target_arch = "wasm32")]
+        let _ = culled_shadow_items;
+        let mut cached_shadow_composites: Vec<(usize, CachedShadowComposite)> = Vec::new();
+        ordered_items.extend(
+            composites
+                .iter()
+                .enumerate()
+                .map(|(index, (z_index, _))| (*z_index, SegmentDrawItem::Composite(index))),
+        );
+        ordered_items.extend(
+            shader_composites
+                .iter()
+                .enumerate()
+                .map(|(index, (z_index, _))| (*z_index, SegmentDrawItem::ShaderComposite(index))),
+        );
+        for (z_index, item) in &mut ordered_items {
+            let SegmentDrawItem::Shadow(shadow_index) = *item else {
+                continue;
+            };
+            let Some(composite) = self.renderer.cached_shape_shadow_composite(
+                &shadow_draws[shadow_index],
+                width,
+                height,
+                root_scale,
+            ) else {
+                continue;
+            };
+            let composite_index = composites.len() + cached_shadow_composites.len();
+            cached_shadow_composites.push((*z_index, composite));
+            *item = SegmentDrawItem::Composite(composite_index);
+        }
+        let mut merged_composites = Vec::with_capacity(
+            composites
+                .len()
+                .saturating_add(cached_shadow_composites.len()),
+        );
+        merged_composites.extend(composites.iter().copied());
+        merged_composites.extend(
+            cached_shadow_composites
+                .iter()
+                .map(|(z_index, composite)| (*z_index, composite.batch_item())),
+        );
+        ordered_items.sort_by_key(|(z_index, _)| *z_index);
+        #[cfg(not(target_arch = "wasm32"))]
+        maybe_print_segment_diag(
+            z_start..z_end,
+            &ordered_items,
+            shapes,
+            images,
+            SegmentDiagCounts {
+                raw_shadow_items,
+                culled_shadow_items,
+                cached_shadow_composites: cached_shadow_composites.len(),
+                composite_items: merged_composites.len(),
+                shader_composite_items: shader_composites.len(),
+            },
         );
         let result = if ordered_items.is_empty() {
             Ok(SegmentCommandEncodeOutcome { first_batch: true })
@@ -2065,6 +3732,8 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 self.recorder,
                 target_view,
                 &ordered_items,
+                &merged_composites,
+                shader_composites,
                 shapes,
                 images,
                 texts,
@@ -2227,6 +3896,111 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 .debug_composites
                 .set(self.renderer.effect_renderer.debug_composites.get() + composite_count);
         }
+    }
+
+    fn composite_surface_batch_to_view(
+        &mut self,
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        composites: &[CompositeBatchItem<'_>],
+    ) {
+        if composites.is_empty() {
+            return;
+        }
+        let device = self.renderer.device.clone();
+        self.renderer
+            .effect_renderer
+            .encode_composite_batch_to_view_pass(
+                self.recorder,
+                &device,
+                dest_view,
+                viewport,
+                load_op,
+                composites,
+            );
+        self.recorder.record_pass();
+        self.renderer.effect_renderer.record_composite_pass();
+    }
+
+    fn copy_texture_region_to_target(
+        &mut self,
+        source: &OffscreenTarget,
+        source_origin: (u32, u32),
+        target: &OffscreenTarget,
+        size: (u32, u32),
+    ) -> bool {
+        let (width, height) = size;
+        if width == 0 || height == 0 || width > target.width || height > target.height {
+            return false;
+        }
+        let Some(source_right) = source_origin.0.checked_add(width) else {
+            return false;
+        };
+        let Some(source_bottom) = source_origin.1.checked_add(height) else {
+            return false;
+        };
+        if source_right > source.width || source_bottom > source.height {
+            return false;
+        }
+
+        self.recorder.encoder().copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: source.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: source_origin.0,
+                    y: source_origin.1,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: target.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        true
+    }
+
+    fn shader_composite_batch_to_view(
+        &mut self,
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        composites: &[ShaderCompositeBatchItem<'_>],
+    ) -> bool {
+        if composites.is_empty() {
+            return true;
+        }
+        let device = self.renderer.device.clone();
+        let encoded = self
+            .renderer
+            .effect_renderer
+            .encode_shader_batch_src_over_to_view(
+                self.recorder,
+                &device,
+                dest_view,
+                viewport,
+                load_op,
+                composites,
+            );
+        if encoded {
+            self.recorder.record_pass();
+            self.renderer.effect_renderer.record_composite_pass();
+            self.renderer
+                .effect_renderer
+                .debug_effects
+                .set(self.renderer.effect_renderer.debug_effects.get() + composites.len() as u32);
+        }
+        encoded
     }
 
     fn composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
@@ -2422,11 +4196,13 @@ impl GpuRenderer {
         text_state: &mut TextSystemState,
         view: &wgpu::TextureView,
         graph: &RenderGraph,
+        overlay_graph: Option<&RenderGraph>,
         width: u32,
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
         log::trace!("🎨 Rendering graph to {}x{}", width, height);
+        let render_start = Instant::now();
 
         #[cfg(target_arch = "wasm32")]
         {
@@ -2434,8 +4210,21 @@ impl GpuRenderer {
             self.wasm_shape_batch_cursor = 0;
             self.wasm_image_batch_cursor = 0;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.retained_glyph_uniform_cursor = 0;
+        }
 
-        let result = self.render_graph(text_state, view, graph, width, height, root_scale);
+        let result = self.render_graph(
+            text_state,
+            view,
+            graph,
+            overlay_graph,
+            width,
+            height,
+            root_scale,
+        );
+        let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
 
         #[cfg(target_arch = "wasm32")]
@@ -2454,7 +4243,6 @@ impl GpuRenderer {
                     .saturating_add(WASM_BATCH_POOL_MARGIN),
             );
         }
-
         self.layer_surface_rect_cache.clear();
         self.layer_surface_requirements_cache.clear();
         if self.layer_surface_requirements_cache.capacity() > RETAINED_LAYER_REQUIREMENTS_CAPACITY {
@@ -2490,17 +4278,34 @@ impl GpuRenderer {
         self.frame_graph_executor.reset_upload_allocators();
         let snapshot = self.frame_stats.snapshot();
         self.last_frame_stats = Some(snapshot);
+        if frame_stats_need_warmup_frame(&snapshot) {
+            self.pending_frame_warmup_frames = CACHE_MISS_WARMUP_FRAMES;
+        } else {
+            self.pending_frame_warmup_frames = self.pending_frame_warmup_frames.saturating_sub(1);
+        }
         self.frame_stats.maybe_print_snapshot(
             snapshot,
             &mut self.frame_count,
             self.gpu_stats_enabled,
         );
         self.frame_stats.reset();
+        let after_stats = Instant::now();
+        if let Some(total_ms) = should_log_wgpu_render_stage(render_start, after_stats) {
+            log::warn!(
+                "[wgpu-render-stage:render] total_ms={total_ms:.2} graph_ms={:.2} cleanup_stats_ms={:.2}",
+                instant_ms(render_start, after_graph),
+                instant_ms(after_graph, after_stats),
+            );
+        }
         result
     }
 
     pub fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
         self.last_frame_stats
+    }
+
+    pub fn needs_frame_warmup(&self) -> bool {
+        self.pending_frame_warmup_frames > 0
     }
 
     pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
@@ -2550,6 +4355,7 @@ impl GpuRenderer {
         &mut self,
         text_state: &mut TextSystemState,
         graph: &RenderGraph,
+        overlay_graph: Option<&RenderGraph>,
         width: u32,
         height: u32,
         root_scale: f32,
@@ -2574,7 +4380,15 @@ impl GpuRenderer {
         });
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.render(text_state, &output_view, graph, width, height, root_scale)?;
+        self.render(
+            text_state,
+            &output_view,
+            graph,
+            overlay_graph,
+            width,
+            height,
+            root_scale,
+        )?;
 
         let bytes_per_pixel = 4u32;
         let unpadded_bytes_per_row = width
@@ -2663,17 +4477,20 @@ impl GpuRenderer {
         Ok(pixels)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_graph(
         &mut self,
         text_state: &mut TextSystemState,
         surface_view: &wgpu::TextureView,
         graph: &RenderGraph,
+        overlay_graph: Option<&RenderGraph>,
         width: u32,
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
         let device = self.device.clone();
         let queue = self.queue.clone();
+        let graph_start = Instant::now();
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -2689,6 +4506,7 @@ impl GpuRenderer {
                         text_state,
                         surface_view,
                         graph,
+                        overlay_graph,
                         width,
                         height,
                         root_scale,
@@ -2696,8 +4514,17 @@ impl GpuRenderer {
                     )
                 },
             );
+            let after_build = Instant::now();
             let execution = executor.execute_recorded_graph(&device, &queue, frame_graph);
+            let after_execute = Instant::now();
             self.frame_graph_executor = executor;
+            if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
+                log::warn!(
+                    "[wgpu-render-stage:graph] total_ms={total_ms:.2} build_ms={:.2} execute_ms={:.2}",
+                    instant_ms(graph_start, after_build),
+                    instant_ms(after_build, after_execute),
+                );
+            }
 
             match execution {
                 Ok(execution) => {
@@ -2722,6 +4549,7 @@ impl GpuRenderer {
                     text_state,
                     surface_view,
                     graph,
+                    overlay_graph,
                     width,
                     height,
                     root_scale,
@@ -2735,7 +4563,11 @@ impl GpuRenderer {
                     };
                 (result, execution)
             };
+            let after_execute = Instant::now();
             self.frame_graph_executor = executor;
+            if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
+                log::warn!("[wgpu-render-stage:graph] total_ms={total_ms:.2}",);
+            }
             if let Some(execution) = execution {
                 self.frame_stats.record_command_stats(execution.stats);
             }
@@ -2749,11 +4581,13 @@ impl GpuRenderer {
         text_state: &mut TextSystemState,
         surface_view: &wgpu::TextureView,
         graph: &RenderGraph,
+        overlay_graph: Option<&RenderGraph>,
         width: u32,
         height: u32,
         root_scale: f32,
         frame_encoder: &mut C,
     ) -> Result<(), String> {
+        let recorded_start = Instant::now();
         self.layer_surface_rect_cache.clear();
         self.layer_surface_requirements_cache.clear();
         let direct_root = if root_can_render_directly_cached(
@@ -2769,14 +4603,15 @@ impl GpuRenderer {
                 &mut self.layer_surface_rect_cache,
                 &mut self.layer_surface_requirements_cache,
             );
-            if !scene_has_layer_events(&collected.scene) {
-                Some(collected)
+            if root_direct_scene_events_are_supported(&collected.scene) {
+                direct_root_child_underlays_are_supported(&collected).then_some(collected)
             } else {
                 None
             }
         } else {
             None
         };
+        let after_root_collect = Instant::now();
 
         let mut backend = RecordingSurfaceBackend {
             renderer: self,
@@ -2784,7 +4619,8 @@ impl GpuRenderer {
         };
 
         if let Some(collected) = direct_root {
-            return execute_render_root_direct(
+            let direct_render_start = Instant::now();
+            let result = execute_render_root_direct(
                 &mut backend,
                 text_state,
                 surface_view,
@@ -2792,7 +4628,32 @@ impl GpuRenderer {
                 width,
                 height,
                 root_scale,
+                wgpu::LoadOp::Clear(CLEAR_COLOR),
             );
+            if result.is_ok() {
+                if let Some(overlay_graph) = overlay_graph {
+                    Self::render_overlay_graph_recorded(
+                        &mut backend,
+                        text_state,
+                        surface_view,
+                        overlay_graph,
+                        width,
+                        height,
+                        root_scale,
+                    )?;
+                }
+            }
+            let after_direct_render = Instant::now();
+            if let Some(total_ms) =
+                should_log_wgpu_render_stage(recorded_start, after_direct_render)
+            {
+                log::warn!(
+                    "[wgpu-render-stage:recorded-direct-root] total_ms={total_ms:.2} collect_ms={:.2} render_ms={:.2}",
+                    instant_ms(recorded_start, after_root_collect),
+                    instant_ms(direct_render_start, after_direct_render),
+                );
+            }
+            return result;
         }
 
         // The root layer's visible area is always the viewport — content
@@ -2840,6 +4701,7 @@ impl GpuRenderer {
                     &mut backend,
                     &composite_target,
                     &BackdropLayer {
+                        node_id: graph.root.node_id,
                         rect: quad_bounds(
                             graph
                                 .root
@@ -2857,6 +4719,7 @@ impl GpuRenderer {
                     width,
                     height,
                     root_scale,
+                    None,
                 )?;
             }
 
@@ -2931,7 +4794,65 @@ impl GpuRenderer {
             )?;
         }
         backend.release_layer_surface_target(root_surface.target);
+        if let Some(overlay_graph) = overlay_graph {
+            Self::render_overlay_graph_recorded(
+                &mut backend,
+                text_state,
+                surface_view,
+                overlay_graph,
+                width,
+                height,
+                root_scale,
+            )?;
+        }
+        let after_layer_render = Instant::now();
+        if let Some(total_ms) = should_log_wgpu_render_stage(recorded_start, after_layer_render) {
+            log::warn!(
+                "[wgpu-render-stage:recorded-layer-root] total_ms={total_ms:.2} collect_ms={:.2} render_ms={:.2}",
+                instant_ms(recorded_start, after_root_collect),
+                instant_ms(after_root_collect, after_layer_render),
+            );
+        }
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_overlay_graph_recorded<C: FrameCommandRecorder>(
+        backend: &mut RecordingSurfaceBackend<'_, '_, C>,
+        text_state: &mut TextSystemState,
+        surface_view: &wgpu::TextureView,
+        graph: &RenderGraph,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Result<(), String> {
+        backend.renderer.layer_surface_rect_cache.clear();
+        backend.renderer.layer_surface_requirements_cache.clear();
+        let collected = collect_layer_contents_with_translation_context_and_text_layout(
+            &graph.root,
+            text_state,
+            None,
+            None,
+            TranslationRenderContext::default(),
+            &mut backend.renderer.layer_surface_rect_cache,
+            &mut backend.renderer.layer_surface_requirements_cache,
+        );
+        if !collected.child_layers.is_empty()
+            || !root_direct_scene_events_are_supported(&collected.scene)
+            || !direct_root_child_underlays_are_supported(&collected)
+        {
+            return Err("dev overlay graph must stay directly renderable".to_string());
+        }
+        execute_render_root_direct(
+            backend,
+            text_state,
+            surface_view,
+            collected,
+            width,
+            height,
+            root_scale,
+            wgpu::LoadOp::Load,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2941,6 +4862,8 @@ impl GpuRenderer {
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         ordered_items: &[(usize, SegmentDrawItem)],
+        composites: &[(usize, CompositeBatchItem<'_>)],
+        shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
@@ -2964,6 +4887,8 @@ impl GpuRenderer {
                         frame_encoder,
                         target_view,
                         ordered_items,
+                        composites,
+                        shader_composites,
                         shapes,
                         images,
                         texts,
@@ -3022,6 +4947,475 @@ impl GpuRenderer {
         Ok(SegmentCommandEncodeOutcome { first_batch })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn render_segment_draw_chunk_fused_native<C: FrameCommandRecorder>(
+        &mut self,
+        frame_encoder: &mut C,
+        target_view: &wgpu::TextureView,
+        ordered_items: &[(usize, SegmentDrawItem)],
+        composites: &[(usize, CompositeBatchItem<'_>)],
+        shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        chunk: &SegmentDrawChunkPlan,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<Option<SegmentRenderOutcome>, String> {
+        let Some(partitions) = native_segment_fusion_partitions(ordered_items, shapes, chunk)?
+        else {
+            return Ok(None);
+        };
+
+        let mut rendered_any = false;
+        let mut pass_count = 0_u32;
+        let mut next_load_op = load_op;
+        for partition in partitions {
+            let outcome = self.render_segment_draw_chunk_fused_native_partition(
+                frame_encoder,
+                target_view,
+                ordered_items,
+                composites,
+                shader_composites,
+                shapes,
+                images,
+                texts,
+                &partition.chunk,
+                partition.budget,
+                width,
+                height,
+                root_scale,
+                next_load_op,
+            )?;
+            if outcome.rendered_any {
+                rendered_any = true;
+                pass_count = pass_count.saturating_add(outcome.pass_count);
+                next_load_op = wgpu::LoadOp::Load;
+            }
+        }
+
+        Ok(Some(SegmentRenderOutcome {
+            rendered_any,
+            pass_count,
+        }))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn render_segment_draw_chunk_fused_native_partition<C: FrameCommandRecorder>(
+        &mut self,
+        frame_encoder: &mut C,
+        target_view: &wgpu::TextureView,
+        ordered_items: &[(usize, SegmentDrawItem)],
+        composites: &[(usize, CompositeBatchItem<'_>)],
+        shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        chunk: &SegmentDrawChunkPlan,
+        budget: NativeSegmentFusionBudget,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<SegmentRenderOutcome, String> {
+        let partition_start = Instant::now();
+        let mut staged_uploads = self.take_staged_uploads();
+        staged_uploads.clear();
+        let mut image_vertices = std::mem::take(&mut self.scratch_image_vertices);
+        let mut image_indices = std::mem::take(&mut self.scratch_image_indices);
+        let mut image_cmds = std::mem::take(&mut self.scratch_image_cmds);
+        let mut glyph_cmds = std::mem::take(&mut self.scratch_glyph_cmds);
+
+        image_vertices.clear();
+        image_indices.clear();
+        image_cmds.clear();
+        glyph_cmds.clear();
+
+        let result = (|| {
+            let viewport = ViewportUniformParams {
+                width,
+                height,
+                offset: [0.0, 0.0],
+            };
+            self.prewarm_offscreen_text_glyph_draws_in_chunk(
+                ordered_items,
+                texts,
+                chunk,
+                viewport,
+                root_scale,
+                &mut staged_uploads,
+                &mut image_vertices,
+                &mut image_indices,
+                &mut glyph_cmds,
+            )?;
+            let mut shape_refs = Vec::with_capacity(budget.shape_count);
+            for batch in chunk.iter() {
+                let SegmentBatchPlan::Shape { start, end, .. } = batch else {
+                    continue;
+                };
+                for (_, item) in &ordered_items[start..end] {
+                    let SegmentDrawItem::Shape(shape_index) = item else {
+                        return Err(format!(
+                            "shape batch contains non-shape draw item: {item:?}"
+                        ));
+                    };
+                    shape_refs.push(&shapes[*shape_index]);
+                }
+            }
+            let after_shape_refs = Instant::now();
+
+            if !shape_refs.is_empty() {
+                let Some(_) = self.prepare_shapes_batch(
+                    shape_refs.iter().copied(),
+                    root_scale,
+                    viewport,
+                    &mut staged_uploads,
+                ) else {
+                    return Err(
+                        "native fused segment shape preparation produced no draw batch".to_string(),
+                    );
+                };
+            }
+            let after_shape_prepare = Instant::now();
+
+            let mut fused_batches = Vec::with_capacity(chunk.batches.len());
+            let mut shape_cursor = 0_u32;
+            let mut composite_cursor = 0usize;
+            let mut shader_composite_cursor = 0usize;
+            for batch in chunk.iter() {
+                match batch {
+                    SegmentBatchPlan::Shape {
+                        start,
+                        end,
+                        blend_mode,
+                    } => {
+                        for (_, item) in &ordered_items[start..end] {
+                            if !matches!(item, SegmentDrawItem::Shape(_)) {
+                                return Err(format!(
+                                    "shape batch contains non-shape draw item: {item:?}"
+                                ));
+                            }
+                        }
+                        let shape_count = end - start;
+                        if shape_count > 0 {
+                            let index_start = shape_cursor * 6;
+                            let index_count = shape_count as u32 * 6;
+                            fused_batches.push(FusedSegmentBatch::Shape {
+                                batch: PreparedShapeBatch {
+                                    index_start,
+                                    index_count,
+                                },
+                                blend_mode,
+                            });
+                            shape_cursor += shape_count as u32;
+                        }
+                    }
+                    SegmentBatchPlan::Image {
+                        start,
+                        end,
+                        blend_mode,
+                    } => {
+                        let cmd_start = image_cmds.len();
+                        for (_, item) in &ordered_items[start..end] {
+                            let SegmentDrawItem::Image(image_index) = item else {
+                                return Err(format!(
+                                    "image batch contains non-image draw item: {item:?}"
+                                ));
+                            };
+                            self.append_image_draw_cmd(
+                                &images[*image_index],
+                                viewport,
+                                root_scale,
+                                &mut image_vertices,
+                                &mut image_indices,
+                                &mut image_cmds,
+                            )?;
+                        }
+                        let cmd_end = image_cmds.len();
+                        if cmd_start < cmd_end {
+                            fused_batches.push(FusedSegmentBatch::Image {
+                                cmd_range: cmd_start..cmd_end,
+                                blend_mode,
+                            });
+                        }
+                    }
+                    SegmentBatchPlan::Text { start, end } => {
+                        let glyph_cmd_start = glyph_cmds.len();
+                        let image_cmd_start = image_cmds.len();
+                        let text_draws =
+                            text_draws_for_ordered_range(ordered_items, texts, start, end)?;
+                        if !self.append_text_glyph_draws(
+                            text_draws,
+                            viewport,
+                            root_scale,
+                            false,
+                            &mut staged_uploads,
+                            &mut image_vertices,
+                            &mut image_indices,
+                            &mut glyph_cmds,
+                        )? {
+                            let text_draws =
+                                text_draws_for_ordered_range(ordered_items, texts, start, end)?;
+                            self.append_text_image_draw_cmds(
+                                text_draws,
+                                viewport,
+                                root_scale,
+                                &mut image_vertices,
+                                &mut image_indices,
+                                &mut image_cmds,
+                            )?;
+                        }
+                        let image_cmd_end = image_cmds.len();
+                        let glyph_cmd_end = glyph_cmds.len();
+                        if image_cmd_start < image_cmd_end || glyph_cmd_start < glyph_cmd_end {
+                            fused_batches.push(FusedSegmentBatch::Text {
+                                image_cmd_range: image_cmd_start..image_cmd_end,
+                                glyph_cmd_range: glyph_cmd_start..glyph_cmd_end,
+                            });
+                        }
+                    }
+                    SegmentBatchPlan::Composite { start, end } => {
+                        for (_, item) in &ordered_items[start..end] {
+                            if !matches!(item, SegmentDrawItem::Composite(_)) {
+                                return Err(format!(
+                                    "composite batch contains non-composite draw item: {item:?}"
+                                ));
+                            }
+                        }
+                        let draw_count = end - start;
+                        if draw_count > 0 {
+                            let draw_start = composite_cursor;
+                            composite_cursor += draw_count;
+                            fused_batches.push(FusedSegmentBatch::Composite {
+                                draw_range: draw_start..composite_cursor,
+                            });
+                        }
+                    }
+                    SegmentBatchPlan::ShaderComposite { start, end } => {
+                        for (_, item) in &ordered_items[start..end] {
+                            if !matches!(item, SegmentDrawItem::ShaderComposite(_)) {
+                                return Err(format!(
+                                    "shader composite batch contains non-shader-composite draw item: {item:?}"
+                                ));
+                            }
+                        }
+                        let draw_count = end - start;
+                        if draw_count > 0 {
+                            let draw_start = shader_composite_cursor;
+                            shader_composite_cursor += draw_count;
+                            fused_batches.push(FusedSegmentBatch::ShaderComposite {
+                                draw_range: draw_start..shader_composite_cursor,
+                            });
+                        }
+                    }
+                }
+            }
+            let after_batch_prepare = Instant::now();
+
+            if !image_indices.is_empty() {
+                self.stage_native_image_buffers(
+                    &mut staged_uploads,
+                    viewport,
+                    &image_vertices,
+                    &image_indices,
+                );
+            }
+
+            let device = self.device.clone();
+            let composite_items: Vec<_> = chunk
+                .iter()
+                .filter_map(|batch| match batch {
+                    SegmentBatchPlan::Composite { start, end } => Some((start, end)),
+                    _ => None,
+                })
+                .flat_map(|(start, end)| {
+                    ordered_items[start..end].iter().filter_map(|(_, item)| {
+                        let SegmentDrawItem::Composite(composite_index) = item else {
+                            return None;
+                        };
+                        composites
+                            .get(*composite_index)
+                            .map(|(_, composite)| *composite)
+                    })
+                })
+                .collect();
+            let prepared_composites = self.effect_renderer.prepare_composite_batch_draws(
+                frame_encoder,
+                &device,
+                load_op,
+                &composite_items,
+            );
+            let shader_items: Vec<_> = chunk
+                .iter()
+                .filter_map(|batch| match batch {
+                    SegmentBatchPlan::ShaderComposite { start, end } => Some((start, end)),
+                    _ => None,
+                })
+                .flat_map(|(start, end)| {
+                    ordered_items[start..end].iter().filter_map(|(_, item)| {
+                        let SegmentDrawItem::ShaderComposite(composite_index) = item else {
+                            return None;
+                        };
+                        shader_composites
+                            .get(*composite_index)
+                            .map(|(_, composite)| *composite)
+                    })
+                })
+                .collect();
+            let prepared_shaders = self
+                .effect_renderer
+                .prepare_shader_batch_draws(frame_encoder, &device, &shader_items)
+                .ok_or_else(|| "shader composite batch preparation failed".to_string())?;
+            if !shader_items.is_empty() {
+                self.effect_renderer.record_composite_pass();
+                self.effect_renderer
+                    .debug_effects
+                    .set(self.effect_renderer.debug_effects.get() + shader_items.len() as u32);
+            }
+            let after_composite_prepare = Instant::now();
+
+            if fused_batches.is_empty() {
+                return Ok(SegmentRenderOutcome {
+                    rendered_any: false,
+                    pass_count: 0,
+                });
+            }
+
+            let upload_offset =
+                frame_encoder.allocate_staged_upload_bytes(staged_uploads.bytes.len() as u64);
+            self.flush_staged_uploads_at(frame_encoder.encoder(), &staged_uploads, upload_offset);
+            let after_upload = Instant::now();
+
+            {
+                let mut render_pass =
+                    frame_encoder
+                        .encoder()
+                        .begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Fused Segment Draw Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: target_view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: load_op,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+
+                for batch in &fused_batches {
+                    match batch {
+                        FusedSegmentBatch::Shape { batch, blend_mode } => {
+                            self.draw_prepared_shapes(
+                                &mut render_pass,
+                                *blend_mode,
+                                *batch,
+                                width,
+                                height,
+                            );
+                        }
+                        FusedSegmentBatch::Image {
+                            cmd_range,
+                            blend_mode,
+                        } => {
+                            self.draw_native_prepared_image_cmd_range(
+                                &mut render_pass,
+                                &image_cmds,
+                                cmd_range.clone(),
+                                *blend_mode,
+                            )?;
+                        }
+                        FusedSegmentBatch::Text {
+                            image_cmd_range,
+                            glyph_cmd_range,
+                        } => {
+                            if !image_cmd_range.is_empty() {
+                                self.draw_native_prepared_image_cmd_range(
+                                    &mut render_pass,
+                                    &image_cmds,
+                                    image_cmd_range.clone(),
+                                    BlendMode::SrcOver,
+                                )?;
+                                self.frame_stats.bump_text();
+                            }
+                            if !glyph_cmd_range.is_empty() {
+                                self.draw_native_prepared_glyph_cmd_range(
+                                    &mut render_pass,
+                                    &glyph_cmds,
+                                    glyph_cmd_range.clone(),
+                                )?;
+                            }
+                        }
+                        FusedSegmentBatch::Composite { draw_range } => {
+                            for draw in
+                                prepared_composites.get(draw_range.clone()).ok_or_else(|| {
+                                    "composite draw range is outside the prepared command buffer"
+                                        .to_string()
+                                })?
+                            {
+                                self.effect_renderer.draw_prepared_composite(
+                                    &mut render_pass,
+                                    (width, height),
+                                    draw,
+                                );
+                            }
+                        }
+                        FusedSegmentBatch::ShaderComposite { draw_range } => {
+                            for draw in prepared_shaders.get(draw_range.clone()).ok_or_else(|| {
+                                "shader composite draw range is outside the prepared command buffer"
+                                    .to_string()
+                            })? {
+                                self.effect_renderer.draw_prepared_shader_src_over(
+                                    &device,
+                                    &mut render_pass,
+                                    (width, height),
+                                    draw,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            let after_pass = Instant::now();
+            if let Some(total_ms) = should_log_wgpu_render_stage(partition_start, after_pass) {
+                log::warn!(
+                    "[wgpu-render-stage:fused-segment] total_ms={total_ms:.2} shape_refs_ms={:.2} shape_prepare_ms={:.2} batch_prepare_ms={:.2} composite_prepare_ms={:.2} upload_ms={:.2} pass_ms={:.2} batches={} shapes={} image_cmds={} glyph_cmds={} staged_bytes={}",
+                    instant_ms(partition_start, after_shape_refs),
+                    instant_ms(after_shape_refs, after_shape_prepare),
+                    instant_ms(after_shape_prepare, after_batch_prepare),
+                    instant_ms(after_batch_prepare, after_composite_prepare),
+                    instant_ms(after_composite_prepare, after_upload),
+                    instant_ms(after_upload, after_pass),
+                    fused_batches.len(),
+                    budget.shape_count,
+                    image_cmds.len(),
+                    glyph_cmds.len(),
+                    staged_uploads.bytes.len(),
+                );
+            }
+
+            Ok(SegmentRenderOutcome {
+                rendered_any: true,
+                pass_count: 1,
+            })
+        })();
+
+        self.scratch_image_vertices = image_vertices;
+        self.scratch_image_indices = image_indices;
+        self.scratch_image_cmds = image_cmds;
+        self.scratch_glyph_cmds = glyph_cmds;
+        self.restore_staged_uploads(staged_uploads);
+        result
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_segment_draw_chunk<C: FrameCommandRecorder>(
         &mut self,
@@ -3029,6 +5423,8 @@ impl GpuRenderer {
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         ordered_items: &[(usize, SegmentDrawItem)],
+        composites: &[(usize, CompositeBatchItem<'_>)],
+        shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
@@ -3038,6 +5434,25 @@ impl GpuRenderer {
         root_scale: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<SegmentRenderOutcome, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(outcome) = self.render_segment_draw_chunk_fused_native(
+            frame_encoder,
+            target_view,
+            ordered_items,
+            composites,
+            shader_composites,
+            shapes,
+            images,
+            texts,
+            &chunk,
+            width,
+            height,
+            root_scale,
+            load_op,
+        )? {
+            return Ok(outcome);
+        }
+
         let mut staged_uploads = self.take_staged_uploads();
         let result = (|| {
             let mut rendered_any = false;
@@ -3108,7 +5523,13 @@ impl GpuRenderer {
                                     multiview_mask: None,
                                 },
                             );
-                            self.draw_prepared_shapes(&mut render_pass, blend_mode, prepared);
+                            self.draw_prepared_shapes(
+                                &mut render_pass,
+                                blend_mode,
+                                prepared,
+                                width,
+                                height,
+                            );
                         }
                         pass_count = pass_count.saturating_add(1);
                         rendered_any = true;
@@ -3192,63 +5613,171 @@ impl GpuRenderer {
                             height,
                             offset: [0.0, 0.0],
                         };
-                        for (_, item) in &ordered_items[start..end] {
-                            if !matches!(item, SegmentDrawItem::Text(_)) {
-                                return Err(format!(
-                                    "text batch contains non-text draw item: {item:?}"
-                                ));
-                            }
-                        }
-                        let prepared_images = self.prepare_text_image_draw_cmds(
-                            ordered_items[start..end]
-                                .iter()
-                                .filter_map(|(_, item)| match item {
-                                    SegmentDrawItem::Text(text_index) => Some(&texts[*text_index]),
-                                    _ => None,
-                                }),
+                        let text_draws =
+                            text_draws_for_ordered_range(ordered_items, texts, start, end)?;
+                        if let Some(prepared_glyphs) = self.prepare_text_glyph_draw_cmds(
+                            text_draws,
                             viewport,
                             root_scale,
                             &mut staged_uploads,
-                        )?;
-                        if prepared_images.is_empty() {
-                            self.scratch_image_cmds = prepared_images.into_cmds();
-                            continue;
-                        }
-                        let upload_offset = frame_encoder
-                            .allocate_staged_upload_bytes(staged_uploads.bytes.len() as u64);
-                        self.flush_staged_uploads_at(
-                            frame_encoder.encoder(),
-                            &staged_uploads,
-                            upload_offset,
-                        );
-                        {
-                            let mut render_pass = frame_encoder.encoder().begin_render_pass(
-                                &wgpu::RenderPassDescriptor {
-                                    label: Some("Segment Text Pass"),
-                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: target_view,
-                                        resolve_target: None,
-                                        depth_slice: None,
-                                        ops: wgpu::Operations {
-                                            load: next_load_op,
-                                            store: wgpu::StoreOp::Store,
-                                        },
-                                    })],
-                                    depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                    multiview_mask: None,
-                                },
+                        )? {
+                            if prepared_glyphs.is_empty() {
+                                self.scratch_glyph_cmds = prepared_glyphs.into_cmds();
+                                continue;
+                            }
+                            let upload_offset = frame_encoder
+                                .allocate_staged_upload_bytes(staged_uploads.bytes.len() as u64);
+                            self.flush_staged_uploads_at(
+                                frame_encoder.encoder(),
+                                &staged_uploads,
+                                upload_offset,
                             );
-                            self.draw_prepared_images(
-                                &mut render_pass,
-                                &prepared_images,
-                                BlendMode::SrcOver,
+                            {
+                                let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                                    &wgpu::RenderPassDescriptor {
+                                        label: Some("Segment Text Glyph Atlas Pass"),
+                                        color_attachments: &[Some(
+                                            wgpu::RenderPassColorAttachment {
+                                                view: target_view,
+                                                resolve_target: None,
+                                                depth_slice: None,
+                                                ops: wgpu::Operations {
+                                                    load: next_load_op,
+                                                    store: wgpu::StoreOp::Store,
+                                                },
+                                            },
+                                        )],
+                                        depth_stencil_attachment: None,
+                                        timestamp_writes: None,
+                                        occlusion_query_set: None,
+                                        multiview_mask: None,
+                                    },
+                                );
+                                self.draw_prepared_glyphs(&mut render_pass, &prepared_glyphs)?;
+                            }
+                            pass_count = pass_count.saturating_add(1);
+                            self.scratch_glyph_cmds = prepared_glyphs.into_cmds();
+                            rendered_any = true;
+                            next_load_op = wgpu::LoadOp::Load;
+                        } else {
+                            let text_draws =
+                                text_draws_for_ordered_range(ordered_items, texts, start, end)?;
+                            let prepared_images = self.prepare_text_image_draw_cmds(
+                                text_draws,
+                                viewport,
+                                root_scale,
+                                &mut staged_uploads,
                             )?;
+                            if prepared_images.is_empty() {
+                                self.scratch_image_cmds = prepared_images.into_cmds();
+                                continue;
+                            }
+                            let upload_offset = frame_encoder
+                                .allocate_staged_upload_bytes(staged_uploads.bytes.len() as u64);
+                            self.flush_staged_uploads_at(
+                                frame_encoder.encoder(),
+                                &staged_uploads,
+                                upload_offset,
+                            );
+                            {
+                                let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                                    &wgpu::RenderPassDescriptor {
+                                        label: Some("Segment Text Pass"),
+                                        color_attachments: &[Some(
+                                            wgpu::RenderPassColorAttachment {
+                                                view: target_view,
+                                                resolve_target: None,
+                                                depth_slice: None,
+                                                ops: wgpu::Operations {
+                                                    load: next_load_op,
+                                                    store: wgpu::StoreOp::Store,
+                                                },
+                                            },
+                                        )],
+                                        depth_stencil_attachment: None,
+                                        timestamp_writes: None,
+                                        occlusion_query_set: None,
+                                        multiview_mask: None,
+                                    },
+                                );
+                                self.draw_prepared_images(
+                                    &mut render_pass,
+                                    &prepared_images,
+                                    BlendMode::SrcOver,
+                                )?;
+                            }
+                            self.frame_stats.bump_text();
+                            pass_count = pass_count.saturating_add(1);
+                            self.scratch_image_cmds = prepared_images.into_cmds();
+                            rendered_any = true;
+                            next_load_op = wgpu::LoadOp::Load;
                         }
-                        self.frame_stats.bump_text();
+                    }
+                    SegmentBatchPlan::Composite { start, end } => {
+                        let batch_items: Vec<_> = ordered_items[start..end]
+                            .iter()
+                            .map(|(_, item)| match item {
+                                SegmentDrawItem::Composite(composite_index) => composites
+                                    .get(*composite_index)
+                                    .map(|(_, composite)| *composite)
+                                    .ok_or_else(|| {
+                                        "composite item index is outside the composite buffer"
+                                            .to_string()
+                                    }),
+                                other => Err(format!(
+                                    "composite batch contains non-composite draw item: {other:?}"
+                                )),
+                            })
+                            .collect::<Result<_, _>>()?;
+                        let device = self.device.clone();
+                        self.effect_renderer.encode_composite_batch_to_view_pass(
+                            frame_encoder,
+                            &device,
+                            target_view,
+                            (width, height),
+                            next_load_op,
+                            &batch_items,
+                        );
+                        self.effect_renderer.record_composite_pass();
                         pass_count = pass_count.saturating_add(1);
-                        self.scratch_image_cmds = prepared_images.into_cmds();
+                        rendered_any = true;
+                        next_load_op = wgpu::LoadOp::Load;
+                    }
+                    SegmentBatchPlan::ShaderComposite { start, end } => {
+                        let batch_items: Vec<_> = ordered_items[start..end]
+                            .iter()
+                            .map(|(_, item)| match item {
+                                SegmentDrawItem::ShaderComposite(composite_index) => {
+                                    shader_composites
+                                        .get(*composite_index)
+                                        .map(|(_, composite)| *composite)
+                                        .ok_or_else(|| {
+                                            "shader composite item index is outside the shader composite buffer"
+                                                .to_string()
+                                        })
+                                }
+                                other => Err(format!(
+                                    "shader composite batch contains non-shader-composite draw item: {other:?}"
+                                )),
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let device = self.device.clone();
+                        let encoded = self.effect_renderer.encode_shader_batch_src_over_to_view(
+                            frame_encoder,
+                            &device,
+                            target_view,
+                            (width, height),
+                            next_load_op,
+                            &batch_items,
+                        );
+                        if !encoded {
+                            return Err("shader composite batch failed to encode".to_string());
+                        }
+                        self.effect_renderer.record_composite_pass();
+                        self.effect_renderer.debug_effects.set(
+                            self.effect_renderer.debug_effects.get() + batch_items.len() as u32,
+                        );
+                        pass_count = pass_count.saturating_add(1);
                         rendered_any = true;
                         next_load_op = wgpu::LoadOp::Load;
                     }
@@ -3278,6 +5807,73 @@ impl GpuRenderer {
     ) {
         let uniforms = Self::viewport_uniforms(params);
         staged_uploads.stage(UploadTarget::Uniform, bytemuck::bytes_of(&uniforms));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stage_retained_glyph_viewport_uniforms(
+        &mut self,
+        staged_uploads: &mut StagedBufferUploads,
+        params: ViewportUniformParams,
+    ) -> usize {
+        let slot = self.claim_retained_glyph_uniform_slot();
+        let uniforms = Self::viewport_uniforms(params);
+        staged_uploads.stage_at(
+            UploadTarget::RetainedGlyphUniform,
+            self.retained_glyph_uniform_offset(slot),
+            bytemuck::bytes_of(&uniforms),
+        );
+        slot
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn claim_retained_glyph_uniform_slot(&mut self) -> usize {
+        let slot = self.retained_glyph_uniform_cursor;
+        self.retained_glyph_uniform_cursor = self.retained_glyph_uniform_cursor.saturating_add(1);
+        self.ensure_retained_glyph_uniform_capacity(slot.saturating_add(1));
+        slot
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retained_glyph_uniform_offset(&self, slot: usize) -> u64 {
+        self.retained_glyph_uniform_stride * slot as u64
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retained_glyph_uniform_dynamic_offset(&self, slot: usize) -> Result<u32, String> {
+        let offset = self.retained_glyph_uniform_offset(slot);
+        u32::try_from(offset).map_err(|_| {
+            "retained glyph uniform offset exceeded WGPU dynamic offset range".to_string()
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_retained_glyph_uniform_capacity(&mut self, required_slots: usize) {
+        if required_slots <= self.retained_glyph_uniform_capacity {
+            return;
+        }
+        let new_capacity = required_slots
+            .next_power_of_two()
+            .max(INITIAL_RETAINED_GLYPH_UNIFORM_SLOTS);
+        self.retained_glyph_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Retained Glyph Uniform Buffer"),
+            size: self.retained_glyph_uniform_stride * new_capacity as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.retained_glyph_uniform_bind_group =
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Retained Glyph Uniform Bind Group"),
+                layout: &self.retained_glyph_uniform_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.retained_glyph_uniform_buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<Uniforms>() as u64),
+                    }),
+                }],
+            });
+        self.retained_glyph_uniform_capacity = new_capacity;
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -3420,12 +6016,13 @@ impl GpuRenderer {
                     UploadTarget::ShapeGradient => &self.shape_buffers.gradient_buffer,
                     UploadTarget::ImageVertex => &self.image_vertex_buffer,
                     UploadTarget::ImageIndex => &self.image_index_buffer,
+                    UploadTarget::RetainedGlyphUniform => &self.retained_glyph_uniform_buffer,
                 };
                 encoder.copy_buffer_to_buffer(
                     &self.upload_buffer,
                     upload_buffer_offset + copy.source_offset,
                     target_buffer,
-                    0,
+                    copy.target_offset,
                     copy.size,
                 );
             }
@@ -3486,12 +6083,13 @@ impl GpuRenderer {
         };
 
         let blur_margin = blur_extent_margin(shadow.blur_radius);
-        let mut blur_bounds = Rect {
+        let source_blur_bounds = Rect {
             x: shape_bounds.x - blur_margin,
             y: shape_bounds.y - blur_margin,
             width: shape_bounds.width + blur_margin * 2.0,
             height: shape_bounds.height + blur_margin * 2.0,
         };
+        let mut visible_blur_bounds = source_blur_bounds;
         if let Some(clip) = shadow.clip {
             let clip_expanded = Rect {
                 x: clip.x - blur_margin,
@@ -3499,12 +6097,13 @@ impl GpuRenderer {
                 width: clip.width + blur_margin * 2.0,
                 height: clip.height + blur_margin * 2.0,
             };
-            let Some(intersection) = blur_bounds.intersect(clip_expanded) else {
+            let Some(intersection) = visible_blur_bounds.intersect(clip_expanded) else {
                 return;
             };
-            blur_bounds = intersection;
+            visible_blur_bounds = intersection;
         }
-        let processing_scissor = scissor_rect_for_rect(blur_bounds, root_scale, width, height);
+        let processing_scissor =
+            scissor_rect_for_rect(visible_blur_bounds, root_scale, width, height);
         if processing_scissor.is_none() {
             return;
         }
@@ -3593,7 +6192,7 @@ impl GpuRenderer {
 
         // Compute pixel-space bounds for the offscreen textures, clamped to viewport.
         let Some(device_bounds) =
-            device_pixel_bounds_for_rect(blur_bounds, width, height, root_scale)
+            device_pixel_bounds_for_rect(visible_blur_bounds, width, height, root_scale)
         else {
             return;
         };
@@ -3603,21 +6202,34 @@ impl GpuRenderer {
         let bounds_h = device_bounds.height;
         let pixel_radius = shadow.blur_radius * root_scale;
 
-        if shadow.texts.is_empty()
-            && !shadow.shapes.is_empty()
-            && self.encode_shape_only_blurred_shadow_draw(
-                frame_encoder,
-                target_view,
-                shadow,
-                device_bounds,
-                pixel_radius,
-                processing_scissor,
+        if shadow.texts.is_empty() && !shadow.shapes.is_empty() {
+            if let Some(plan) = shape_shadow_surface_plan(
+                &shadow.shapes,
+                shadow.clip,
+                shadow.blur_radius,
                 width,
                 height,
                 root_scale,
-            )
-        {
-            return;
+                self.max_texture_dim(),
+            ) {
+                if self.encode_shape_only_blurred_shadow_draw(
+                    frame_encoder,
+                    target_view,
+                    shadow,
+                    plan.source_device_bounds,
+                    plan.pixel_radius,
+                    plan.processing_scissor,
+                    width,
+                    height,
+                    root_scale,
+                ) {
+                    return;
+                }
+            }
+        }
+
+        if !shadow.texts.is_empty() {
+            self.frame_stats.record_shadow_text_blur_fallback();
         }
 
         let device = self.device.clone();
@@ -3850,7 +6462,13 @@ impl GpuRenderer {
                             occlusion_query_set: None,
                             multiview_mask: None,
                         });
-                self.draw_prepared_shapes(&mut render_pass, blend_mode, prepared_shape);
+                self.draw_prepared_shapes(
+                    &mut render_pass,
+                    blend_mode,
+                    prepared_shape,
+                    width,
+                    height,
+                );
             }
 
             pass_count = pass_count.saturating_add(1);
@@ -3883,19 +6501,12 @@ impl GpuRenderer {
         let bounds_h = device_bounds.height;
         let viewport_offset = [device_bounds.x, device_bounds.y];
         let cache_key =
-            (root_scale.is_finite() && root_scale > 0.0).then(|| ShadowSurfaceCacheKey {
-                content_hash: shape_shadow_content_hash(
-                    &shadow.shapes,
-                    viewport_offset,
-                    root_scale,
-                ),
-                pixel_size: [bounds_w, bounds_h],
-                root_scale_bits: root_scale.to_bits(),
-                blur_radius_bits: pixel_radius.to_bits(),
-            });
+            shape_shadow_surface_cache_key(&shadow.shapes, device_bounds, pixel_radius, root_scale);
 
         if let Some(key) = cache_key {
             if let Some(cached) = self.cached_shadow_surface(&key) {
+                self.frame_stats
+                    .record_shadow_shape_cache_hit(bounds_w, bounds_h);
                 let clip_scissor = shadow
                     .clip
                     .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
@@ -3932,6 +6543,17 @@ impl GpuRenderer {
                 self.effect_renderer.record_composite_pass();
                 return true;
             }
+            self.frame_stats
+                .record_shadow_shape_cache_miss(bounds_w, bounds_h);
+            self.frame_stats.maybe_print_shadow_shape_cache_miss(
+                bounds_w,
+                bounds_h,
+                key.content_hash,
+                pixel_radius,
+                viewport_offset,
+                shadow.shapes.len(),
+                shadow.clip,
+            );
         }
 
         let device = self.device.clone();
@@ -4047,7 +6669,11 @@ impl GpuRenderer {
         self.scratch_vertices.clear();
         self.scratch_indices.clear();
 
-        for (idx, shape) in layer_shapes.take(MAX_SHAPES_PER_BATCH).enumerate() {
+        for (idx, shape) in layer_shapes
+            .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale))
+            .take(MAX_SHAPES_PER_BATCH)
+            .enumerate()
+        {
             let snap_delta = shape
                 .snap_anchor
                 .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
@@ -4334,6 +6960,7 @@ impl GpuRenderer {
         let uniform_slot = self.prepare_wasm_viewport_uniforms(viewport);
 
         Some(PreparedShapeBatch {
+            index_start: 0,
             index_count: shape_count as u32 * 6,
             #[cfg(target_arch = "wasm32")]
             shape_slot,
@@ -4347,8 +6974,11 @@ impl GpuRenderer {
         render_pass: &mut wgpu::RenderPass<'_>,
         blend_mode: BlendMode,
         batch: PreparedShapeBatch,
+        width: u32,
+        height: u32,
     ) {
         self.frame_stats.bump_shapes();
+        render_pass.set_scissor_rect(0, 0, width, height);
         render_pass.set_pipeline(match blend_mode {
             BlendMode::DstOut => &self.pipeline_dst_out,
             _ => &self.pipeline,
@@ -4367,7 +6997,11 @@ impl GpuRenderer {
             shape_buffers.index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        render_pass.draw_indexed(0..batch.index_count, 0, 0..1);
+        render_pass.draw_indexed(
+            batch.index_start..batch.index_start + batch.index_count,
+            0,
+            0..1,
+        );
     }
 
     /// Stage shape buffer writes and record a shape render pass onto the
@@ -4422,7 +7056,7 @@ impl GpuRenderer {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-        self.draw_prepared_shapes(&mut render_pass, blend_mode, batch);
+        self.draw_prepared_shapes(&mut render_pass, blend_mode, batch, width, height);
     }
 
     fn draw_prepared_images(
@@ -4469,6 +7103,324 @@ impl GpuRenderer {
         Ok(())
     }
 
+    fn draw_prepared_glyphs(
+        &mut self,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        batch: &PreparedGlyphBatch,
+    ) -> Result<(), String> {
+        if batch.cmds.is_empty() {
+            return Ok(());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.draw_native_prepared_glyph_cmd_range(
+                render_pass,
+                &batch.cmds,
+                0..batch.cmds.len(),
+            )?;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.frame_stats.bump_text();
+            render_pass.set_pipeline(&self.glyph_atlas_pipeline);
+            let (uniform_bind_group, vertex_buffer, index_buffer) = (
+                &self.wasm_uniform_batches[batch.uniform_slot].bind_group,
+                &self.wasm_image_batches[batch.image_slot].vertex_buffer,
+                &self.wasm_image_batches[batch.image_slot].index_buffer,
+            );
+            render_pass.set_bind_group(0, uniform_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.text_glyph_atlas.bind_group, &[]);
+            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+
+            for cmd in &batch.cmds {
+                let (sx, sy, sw, sh) = cmd.scissor;
+                render_pass.set_scissor_rect(sx, sy, sw, sh);
+                let GlyphDrawSource::Shared {
+                    index_start,
+                    index_count,
+                } = cmd.source;
+                render_pass.draw_indexed(index_start..(index_start + index_count), 0, 0..1);
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_native_prepared_image_cmd_range(
+        &mut self,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        cmds: &[ImageDrawCmd],
+        cmd_range: Range<usize>,
+        blend_mode: BlendMode,
+    ) -> Result<(), String> {
+        let Some(cmds) = cmds.get(cmd_range) else {
+            return Err("image command range is outside the prepared command buffer".to_string());
+        };
+        if cmds.is_empty() {
+            return Ok(());
+        }
+
+        self.frame_stats.bump_images();
+        render_pass.set_pipeline(match blend_mode {
+            BlendMode::DstOut => &self.image_pipeline_dst_out,
+            _ => &self.image_pipeline,
+        });
+        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        render_pass.set_index_buffer(self.image_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.set_vertex_buffer(0, self.image_vertex_buffer.slice(..));
+
+        for cmd in cmds {
+            let (sx, sy, sw, sh) = cmd.scissor;
+            render_pass.set_scissor_rect(sx, sy, sw, sh);
+
+            let cached = self
+                .image_texture_cache
+                .get(&cmd.image_id)
+                .ok_or_else(|| "image texture missing from cache".to_string())?;
+            render_pass.set_bind_group(1, cached.bind_group(cmd.sampling), &[]);
+            render_pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_native_prepared_glyph_cmd_range(
+        &mut self,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        cmds: &[GlyphDrawCmd],
+        cmd_range: Range<usize>,
+    ) -> Result<(), String> {
+        let Some(cmds) = cmds.get(cmd_range) else {
+            return Err("glyph command range is outside the prepared command buffer".to_string());
+        };
+        if cmds.is_empty() {
+            return Ok(());
+        }
+
+        self.frame_stats.bump_text();
+
+        let mut shared_buffers_bound = false;
+        let mut retained_pipeline_bound = false;
+        for cmd in cmds {
+            let (sx, sy, sw, sh) = cmd.scissor;
+            render_pass.set_scissor_rect(sx, sy, sw, sh);
+            match cmd.source {
+                GlyphDrawSource::Shared {
+                    index_start,
+                    index_count,
+                } => {
+                    if retained_pipeline_bound || !shared_buffers_bound {
+                        render_pass.set_pipeline(&self.glyph_atlas_pipeline);
+                        render_pass.set_bind_group(1, &self.text_glyph_atlas.bind_group, &[]);
+                        retained_pipeline_bound = false;
+                    }
+                    if !shared_buffers_bound {
+                        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        render_pass.set_index_buffer(
+                            self.image_index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        render_pass.set_vertex_buffer(0, self.image_vertex_buffer.slice(..));
+                        shared_buffers_bound = true;
+                    }
+                    render_pass.draw_indexed(index_start..(index_start + index_count), 0, 0..1);
+                }
+                GlyphDrawSource::Retained {
+                    cache_key,
+                    uniform_slot,
+                } => {
+                    shared_buffers_bound = false;
+                    if !retained_pipeline_bound {
+                        render_pass.set_pipeline(&self.retained_glyph_atlas_pipeline);
+                        render_pass.set_bind_group(1, &self.text_glyph_atlas.bind_group, &[]);
+                        retained_pipeline_bound = true;
+                    }
+                    let cached = self
+                        .text_glyph_gpu_run_cache
+                        .peek(&cache_key)
+                        .ok_or_else(|| "retained glyph buffer missing from cache".to_string())?;
+                    let dynamic_offset =
+                        self.retained_glyph_uniform_dynamic_offset(uniform_slot)?;
+                    render_pass.set_bind_group(
+                        0,
+                        &self.retained_glyph_uniform_bind_group,
+                        &[dynamic_offset],
+                    );
+                    render_pass
+                        .set_index_buffer(cached.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    render_pass.set_vertex_buffer(0, cached.vertex_buffer.slice(..));
+                    render_pass.draw_indexed(0..cached.index_count, 0, 0..1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn append_image_draw_cmd(
+        &mut self,
+        image_draw: &ImageDraw,
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+        image_vertices: &mut Vec<Vertex>,
+        image_indices: &mut Vec<u32>,
+        image_cmds: &mut Vec<ImageDrawCmd>,
+    ) -> Result<(), String> {
+        let snap_delta = image_draw
+            .snap_anchor
+            .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+            .unwrap_or_default();
+        let rect = image_draw.rect.translate(snap_delta.x, snap_delta.y);
+        if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
+            return Ok(());
+        }
+
+        let (tint, cpu_filter) = tint_for_image(image_draw.color_filter, image_draw.alpha);
+        if tint[3] <= 0.0 {
+            return Ok(());
+        }
+
+        let prepared_image = if let Some(filter) = cpu_filter {
+            apply_filter_to_bitmap(&image_draw.image, filter)?
+        } else {
+            image_draw.image.clone()
+        };
+        self.ensure_image_cached(&prepared_image)?;
+
+        let mut adjusted_image = ImageDraw {
+            rect,
+            local_rect: image_draw.local_rect.translate(snap_delta.x, snap_delta.y),
+            quad: translate_quad(image_draw.quad, snap_delta),
+            snap_anchor: image_draw.snap_anchor,
+            image: image_draw.image.clone(),
+            alpha: image_draw.alpha,
+            color_filter: image_draw.color_filter,
+            sampling: image_draw.sampling,
+            z_index: image_draw.z_index,
+            clip: image_draw
+                .clip
+                .map(|clip| clip.translate(snap_delta.x, snap_delta.y)),
+            blend_mode: image_draw.blend_mode,
+            src_rect: image_draw.src_rect,
+            motion_context_animated: image_draw.motion_context_animated,
+        };
+        snap_nearest_image_to_device_pixels(&mut adjusted_image, root_scale);
+        let Some(scissor) =
+            scissor_rect_for_image(&adjusted_image, root_scale, viewport.width, viewport.height)
+        else {
+            return Ok(());
+        };
+
+        let Some(uv_rect) = image_uv_rect(&image_draw.image, image_draw.src_rect) else {
+            return Ok(());
+        };
+        let device_quad = nearest_image_device_quad(&adjusted_image, root_scale).unwrap_or([
+            [
+                adjusted_image.quad[0][0] * root_scale,
+                adjusted_image.quad[0][1] * root_scale,
+            ],
+            [
+                adjusted_image.quad[1][0] * root_scale,
+                adjusted_image.quad[1][1] * root_scale,
+            ],
+            [
+                adjusted_image.quad[2][0] * root_scale,
+                adjusted_image.quad[2][1] * root_scale,
+            ],
+            [
+                adjusted_image.quad[3][0] * root_scale,
+                adjusted_image.quad[3][1] * root_scale,
+            ],
+        ]);
+
+        let base_vertex = image_vertices.len() as u32;
+        let index_start = image_indices.len() as u32;
+        image_indices.extend_from_slice(&[
+            base_vertex,
+            base_vertex + 1,
+            base_vertex + 2,
+            base_vertex + 2,
+            base_vertex + 1,
+            base_vertex + 3,
+        ]);
+        image_vertices.extend_from_slice(&[
+            Vertex {
+                position: device_quad[0],
+                color: tint,
+                uv: [uv_rect.min[0], uv_rect.min[1]],
+                uv_bounds: uv_rect.sample_bounds,
+            },
+            Vertex {
+                position: device_quad[1],
+                color: tint,
+                uv: [uv_rect.max[0], uv_rect.min[1]],
+                uv_bounds: uv_rect.sample_bounds,
+            },
+            Vertex {
+                position: device_quad[2],
+                color: tint,
+                uv: [uv_rect.min[0], uv_rect.max[1]],
+                uv_bounds: uv_rect.sample_bounds,
+            },
+            Vertex {
+                position: device_quad[3],
+                color: tint,
+                uv: [uv_rect.max[0], uv_rect.max[1]],
+                uv_bounds: uv_rect.sample_bounds,
+            },
+        ]);
+
+        image_cmds.push(ImageDrawCmd {
+            index_start,
+            scissor,
+            image_id: prepared_image.id(),
+            sampling: image_draw.sampling,
+        });
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stage_native_image_buffers(
+        &mut self,
+        staged_uploads: &mut StagedBufferUploads,
+        viewport: ViewportUniformParams,
+        image_vertices: &[Vertex],
+        image_indices: &[u32],
+    ) {
+        if image_indices.is_empty() {
+            return;
+        }
+
+        self.stage_viewport_uniforms(staged_uploads, viewport);
+        let needed_bytes = std::mem::size_of_val(image_vertices) as u64;
+        if needed_bytes > self.image_vertex_buffer.size() {
+            self.image_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Image Vertex Buffer"),
+                size: needed_bytes,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        let needed_index_bytes = std::mem::size_of_val(image_indices) as u64;
+        if needed_index_bytes > self.image_index_buffer.size() {
+            self.image_index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Image Index Buffer"),
+                size: needed_index_bytes,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+
+        staged_uploads.stage(
+            UploadTarget::ImageVertex,
+            bytemuck::cast_slice(image_vertices),
+        );
+        staged_uploads.stage(
+            UploadTarget::ImageIndex,
+            bytemuck::cast_slice(image_indices),
+        );
+    }
+
     /// Prepare image vertices, indices, ensure caching, and write to GPU buffers.
     /// Returns the draw commands needed by `encode_images_pass`.
     fn prepare_image_draw_cmds<'a, I>(
@@ -4492,151 +7444,23 @@ impl GpuRenderer {
         image_cmds.clear();
 
         for image_draw in layer_images {
-            let snap_delta = image_draw
-                .snap_anchor
-                .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-                .unwrap_or_default();
-            let rect = image_draw.rect.translate(snap_delta.x, snap_delta.y);
-            if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
-                continue;
-            }
-
-            let (tint, cpu_filter) = tint_for_image(image_draw.color_filter, image_draw.alpha);
-            if tint[3] <= 0.0 {
-                continue;
-            }
-
-            let prepared_image = if let Some(filter) = cpu_filter {
-                apply_filter_to_bitmap(&image_draw.image, filter)?
-            } else {
-                image_draw.image.clone()
-            };
-            self.ensure_image_cached(&prepared_image)?;
-
-            let mut adjusted_image = ImageDraw {
-                rect,
-                local_rect: image_draw.local_rect.translate(snap_delta.x, snap_delta.y),
-                quad: translate_quad(image_draw.quad, snap_delta),
-                snap_anchor: image_draw.snap_anchor,
-                image: image_draw.image.clone(),
-                alpha: image_draw.alpha,
-                color_filter: image_draw.color_filter,
-                sampling: image_draw.sampling,
-                z_index: image_draw.z_index,
-                clip: image_draw
-                    .clip
-                    .map(|clip| clip.translate(snap_delta.x, snap_delta.y)),
-                blend_mode: image_draw.blend_mode,
-                src_rect: image_draw.src_rect,
-                motion_context_animated: image_draw.motion_context_animated,
-            };
-            snap_nearest_image_to_device_pixels(&mut adjusted_image, root_scale);
-            let scissor = scissor_rect_for_image(
-                &adjusted_image,
+            self.append_image_draw_cmd(
+                image_draw,
+                viewport,
                 root_scale,
-                viewport.width,
-                viewport.height,
-            );
-            let Some(scissor) = scissor else {
-                continue;
-            };
-
-            let Some(uv_rect) = image_uv_rect(&image_draw.image, image_draw.src_rect) else {
-                continue;
-            };
-            let device_quad = nearest_image_device_quad(&adjusted_image, root_scale).unwrap_or([
-                [
-                    adjusted_image.quad[0][0] * root_scale,
-                    adjusted_image.quad[0][1] * root_scale,
-                ],
-                [
-                    adjusted_image.quad[1][0] * root_scale,
-                    adjusted_image.quad[1][1] * root_scale,
-                ],
-                [
-                    adjusted_image.quad[2][0] * root_scale,
-                    adjusted_image.quad[2][1] * root_scale,
-                ],
-                [
-                    adjusted_image.quad[3][0] * root_scale,
-                    adjusted_image.quad[3][1] * root_scale,
-                ],
-            ]);
-
-            let base_vertex = image_vertices.len() as u32;
-            let index_start = image_indices.len() as u32;
-            image_indices.extend_from_slice(&[
-                base_vertex,
-                base_vertex + 1,
-                base_vertex + 2,
-                base_vertex + 2,
-                base_vertex + 1,
-                base_vertex + 3,
-            ]);
-            image_vertices.extend_from_slice(&[
-                Vertex {
-                    position: device_quad[0],
-                    color: tint,
-                    uv: [uv_rect.min[0], uv_rect.min[1]],
-                    uv_bounds: uv_rect.sample_bounds,
-                },
-                Vertex {
-                    position: device_quad[1],
-                    color: tint,
-                    uv: [uv_rect.max[0], uv_rect.min[1]],
-                    uv_bounds: uv_rect.sample_bounds,
-                },
-                Vertex {
-                    position: device_quad[2],
-                    color: tint,
-                    uv: [uv_rect.min[0], uv_rect.max[1]],
-                    uv_bounds: uv_rect.sample_bounds,
-                },
-                Vertex {
-                    position: device_quad[3],
-                    color: tint,
-                    uv: [uv_rect.max[0], uv_rect.max[1]],
-                    uv_bounds: uv_rect.sample_bounds,
-                },
-            ]);
-
-            image_cmds.push(ImageDrawCmd {
-                index_start,
-                scissor,
-                image_id: prepared_image.id(),
-                sampling: image_draw.sampling,
-            });
+                &mut image_vertices,
+                &mut image_indices,
+                &mut image_cmds,
+            )?;
         }
 
         #[cfg(not(target_arch = "wasm32"))]
         if !image_cmds.is_empty() {
-            self.stage_viewport_uniforms(staged_uploads, viewport);
-            let needed_bytes = (image_vertices.len() * std::mem::size_of::<Vertex>()) as u64;
-            if needed_bytes > self.image_vertex_buffer.size() {
-                self.image_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Image Vertex Buffer"),
-                    size: needed_bytes,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-            }
-            let needed_index_bytes = (image_indices.len() * std::mem::size_of::<u32>()) as u64;
-            if needed_index_bytes > self.image_index_buffer.size() {
-                self.image_index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Image Index Buffer"),
-                    size: needed_index_bytes,
-                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-            }
-
-            staged_uploads.stage(
-                UploadTarget::ImageVertex,
-                bytemuck::cast_slice(&image_vertices),
-            );
-            staged_uploads.stage(
-                UploadTarget::ImageIndex,
-                bytemuck::cast_slice(&image_indices),
+            self.stage_native_image_buffers(
+                staged_uploads,
+                viewport,
+                &image_vertices,
+                &image_indices,
             );
         }
 
@@ -4676,35 +7500,959 @@ impl GpuRenderer {
         })
     }
 
-    fn prepare_text_image_draw_cmds<'a, I>(
+    fn glyph_atlas_entry_for(
+        &mut self,
+        glyph: &SoftwareGlyphAtlasGlyph,
+    ) -> Result<GlyphAtlasEntry, String> {
+        if let Some(entry) = self.text_glyph_atlas.upload_glyph(
+            glyph.key,
+            glyph,
+            &self.queue,
+            &mut self.frame_graph_executor,
+            &mut self.frame_stats,
+        ) {
+            return Ok(entry);
+        }
+
+        self.text_glyph_atlas.reset(
+            &self.device,
+            &self.image_bind_group_layout,
+            &self.image_nearest_sampler,
+        );
+        Err("text glyph atlas filled and was reset".to_string())
+    }
+
+    fn glyph_atlas_entry_for_cached(
+        &mut self,
+        glyph: &SoftwareGlyphAtlasPlacement,
+    ) -> Option<GlyphAtlasEntry> {
+        let entry = self.text_glyph_atlas.entry(&glyph.key)?;
+        self.frame_stats.record_text_glyph_atlas_hit();
+        Some(entry)
+    }
+
+    fn glyph_atlas_entry_for_placement(
+        &mut self,
+        glyph: &SoftwareGlyphAtlasPlacement,
+    ) -> Result<GlyphAtlasEntry, String> {
+        if let Some(entry) = self.glyph_atlas_entry_for_cached(glyph) {
+            return Ok(entry);
+        }
+
+        let Some(upload_glyph) = self.text_glyph_mask_cache.atlas_glyph_for_placement(glyph) else {
+            return Err("text glyph placement has no retained raster mask".to_string());
+        };
+        self.glyph_atlas_entry_for(&upload_glyph)
+    }
+
+    fn prepare_text_glyph_quads(
+        &mut self,
+        run_key: TextGlyphRunCacheKey,
+        atlas_generation: u64,
+        cached_glyph_run: Option<&[SoftwareGlyphAtlasPlacement]>,
+        collected_run: &[SoftwareGlyphAtlasRunGlyph],
+        generated_quads: &mut Vec<CachedTextGlyphQuad>,
+    ) -> Result<Rc<[CachedTextGlyphQuad]>, String> {
+        generated_quads.clear();
+        if let Some(glyph_run) = cached_glyph_run {
+            for glyph in glyph_run {
+                if glyph.width == 0 || glyph.height == 0 || glyph.color.3 <= 0.0 {
+                    continue;
+                }
+                let entry = self.glyph_atlas_entry_for_placement(glyph)?;
+                generated_quads.push(cached_text_glyph_quad(glyph, entry));
+            }
+        } else {
+            for run_glyph in collected_run {
+                let placement = run_glyph.placement();
+                if placement.width == 0 || placement.height == 0 || placement.color.3 <= 0.0 {
+                    continue;
+                }
+                let entry = match run_glyph {
+                    SoftwareGlyphAtlasRunGlyph::Cached(placement) => {
+                        self.glyph_atlas_entry_for_placement(placement)?
+                    }
+                    SoftwareGlyphAtlasRunGlyph::New(glyph) => self.glyph_atlas_entry_for(glyph)?,
+                };
+                generated_quads.push(cached_text_glyph_quad(&placement, entry));
+            }
+        }
+
+        let quads: Rc<[CachedTextGlyphQuad]> = Rc::from(generated_quads.clone().into_boxed_slice());
+        if let Some(cached) = self.text_glyph_run_cache.get_mut(&run_key) {
+            cached.quads = Some(Rc::clone(&quads));
+            cached.atlas_generation = atlas_generation;
+        }
+        Ok(quads)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn append_text_glyph_quad_run(
+        &mut self,
+        source_raster_rect: Rect,
+        quads: &[CachedTextGlyphQuad],
+        clip: Option<Rect>,
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+        image_vertices: &mut Vec<Vertex>,
+        image_indices: &mut Vec<u32>,
+        record_cached_hits: bool,
+    ) -> usize {
+        let mut appended = 0usize;
+        for quad in quads {
+            if !cached_text_glyph_quad_is_visible_in_viewport(
+                source_raster_rect,
+                quad,
+                clip,
+                viewport,
+                root_scale,
+            ) {
+                continue;
+            }
+            if append_cached_text_glyph_quad(
+                source_raster_rect,
+                quad,
+                image_vertices,
+                image_indices,
+            ) {
+                if record_cached_hits {
+                    self.frame_stats.record_text_glyph_atlas_hit();
+                }
+                appended = appended.saturating_add(1);
+            }
+        }
+        appended
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retained_glyph_viewport(
+        viewport: ViewportUniformParams,
+        source_raster_rect: Rect,
+    ) -> ViewportUniformParams {
+        ViewportUniformParams {
+            width: viewport.width,
+            height: viewport.height,
+            offset: [
+                viewport.offset[0] - source_raster_rect.x,
+                viewport.offset[1] - source_raster_rect.y,
+            ],
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retained_text_glyph_run_ready(&mut self, cache_key: TextGlyphRunCacheKey) -> bool {
+        let atlas_generation = self.text_glyph_atlas.generation();
+        self.text_glyph_gpu_run_cache
+            .peek(&cache_key)
+            .is_some_and(|cached| cached.atlas_generation == atlas_generation)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn emit_retained_text_glyph_run_if_ready(
+        &mut self,
+        cache_key: TextGlyphRunCacheKey,
+        quads: &[CachedTextGlyphQuad],
+        clip: Option<Rect>,
+        viewport: ViewportUniformParams,
+        source_raster_rect: Rect,
+        scissor: (u32, u32, u32, u32),
+        staged_uploads: &mut StagedBufferUploads,
+        glyph_cmds: &mut Vec<GlyphDrawCmd>,
+    ) -> bool {
+        if !should_use_retained_text_glyph_run(quads.len(), clip) {
+            return false;
+        }
+        if !self.retained_text_glyph_run_ready(cache_key)
+            && !self.ensure_retained_text_glyph_run(cache_key, quads)
+        {
+            return false;
+        }
+
+        let uniform_slot = self.stage_retained_glyph_viewport_uniforms(
+            staged_uploads,
+            Self::retained_glyph_viewport(viewport, source_raster_rect),
+        );
+        glyph_cmds.push(GlyphDrawCmd::retained(cache_key, uniform_slot, scissor));
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_retained_text_glyph_run(
+        &mut self,
+        cache_key: TextGlyphRunCacheKey,
+        quads: &[CachedTextGlyphQuad],
+    ) -> bool {
+        let atlas_generation = self.text_glyph_atlas.generation();
+        if self
+            .text_glyph_gpu_run_cache
+            .peek(&cache_key)
+            .is_some_and(|cached| cached.atlas_generation == atlas_generation)
+        {
+            return true;
+        }
+
+        let mut vertices = Vec::with_capacity(quads.len().saturating_mul(4));
+        let mut indices = Vec::with_capacity(quads.len().saturating_mul(6));
+        let origin = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+        for quad in quads {
+            append_cached_text_glyph_quad(origin, quad, &mut vertices, &mut indices);
+        }
+        if indices.is_empty() {
+            return false;
+        }
+
+        let vertex_bytes = bytemuck::cast_slice(&vertices);
+        let index_bytes = bytemuck::cast_slice(&indices);
+        let vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Retained Text Glyph Vertex Buffer"),
+            size: vertex_bytes.len() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Retained Text Glyph Index Buffer"),
+            size: index_bytes.len() as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let vertex_upload =
+            self.frame_graph_executor
+                .upload_buffer(&self.queue, &vertex_buffer, 0, vertex_bytes);
+        self.frame_stats.record_command_stats(vertex_upload);
+        let index_upload =
+            self.frame_graph_executor
+                .upload_buffer(&self.queue, &index_buffer, 0, index_bytes);
+        self.frame_stats.record_command_stats(index_upload);
+
+        self.text_glyph_gpu_run_cache.put(
+            cache_key,
+            CachedGpuTextGlyphRun {
+                vertex_buffer,
+                index_buffer,
+                index_count: indices.len() as u32,
+                atlas_generation,
+            },
+        );
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn append_text_glyph_draws<'a, I>(
         &mut self,
         layer_texts: I,
         viewport: ViewportUniformParams,
         root_scale: f32,
+        allow_offscreen_prewarm: bool,
         staged_uploads: &mut StagedBufferUploads,
-    ) -> Result<PreparedImageBatch, String>
+        image_vertices: &mut Vec<Vertex>,
+        image_indices: &mut Vec<u32>,
+        glyph_cmds: &mut Vec<GlyphDrawCmd>,
+    ) -> Result<bool, String>
     where
-        I: Iterator<Item = &'a TextDraw>,
+        I: IntoIterator<Item = &'a TextDraw>,
     {
-        let mut text_images = std::mem::take(&mut self.scratch_text_images);
-        text_images.clear();
+        let append_start = Instant::now();
+        let initial_vertex_len = image_vertices.len();
+        let initial_index_len = image_indices.len();
+        let initial_cmd_len = glyph_cmds.len();
+        let initial_staged_bytes_len = staged_uploads.bytes.len();
+        let initial_staged_copies_len = staged_uploads.copies.len();
+        let mut collected_run = std::mem::take(&mut self.scratch_text_glyph_run);
+        let mut collected_placements = std::mem::take(&mut self.scratch_text_glyph_placements);
+        let mut generated_quads = std::mem::take(&mut self.scratch_text_glyph_quads);
+        generated_quads.clear();
+        let mut visited = 0usize;
+        let mut emitted_glyphs = 0usize;
+        let mut prewarmed_glyphs = 0usize;
+        let mut run_hits = 0usize;
+        let mut run_misses = 0usize;
 
         for text_draw in layer_texts {
+            visited = visited.saturating_add(1);
             let Some((logical_rect, raster_rect, clip, text_scale, static_text_motion)) =
                 self.text_raster_geometry(text_draw, root_scale)
             else {
                 continue;
             };
+            if !static_text_motion {
+                image_vertices.truncate(initial_vertex_len);
+                image_indices.truncate(initial_index_len);
+                glyph_cmds.truncate(initial_cmd_len);
+                staged_uploads.truncate(initial_staged_bytes_len, initial_staged_copies_len);
+                self.scratch_text_glyph_run = collected_run;
+                self.scratch_text_glyph_placements = collected_placements;
+                self.scratch_text_glyph_quads = generated_quads;
+                return Ok(false);
+            }
+            let is_visible =
+                text_draw_is_visible_in_viewport(logical_rect, clip, viewport, root_scale);
+            let draw_action = text_glyph_draw_action(
+                is_visible,
+                text_draw_should_prewarm_in_viewport(logical_rect, clip, viewport, root_scale),
+                allow_offscreen_prewarm,
+            );
+            if draw_action == TextGlyphDrawAction::Skip {
+                continue;
+            }
 
-            let cache_key = self.text_image_cache_key(text_draw, raster_rect, text_scale);
+            let raster_source = text_glyph_raster_source(text_draw, raster_rect);
+            let source_draw = raster_source.draw.as_ref();
+            let source_raster_rect = raster_source.raster_rect;
+
+            let run_key = Self::text_glyph_run_cache_key(
+                source_draw,
+                source_raster_rect,
+                text_scale,
+                static_text_motion,
+            );
+            let atlas_generation = self.text_glyph_atlas.generation();
+            let mut cached_quad_run = None;
+            let mut miss_collect_ms = None;
+            let mut miss_cached_glyphs = 0usize;
+            let mut miss_new_glyphs = 0usize;
+            let cached_glyph_run = if let Some(cached) = self.text_glyph_run_cache.get(&run_key) {
+                run_hits = run_hits.saturating_add(1);
+                if cached.atlas_generation == atlas_generation {
+                    cached_quad_run = cached.quads.as_ref().map(Rc::clone);
+                }
+                Some(Rc::clone(&cached.glyphs))
+            } else {
+                run_misses = run_misses.saturating_add(1);
+                collected_run.clear();
+                let collect_start = Instant::now();
+                let collect_result = collect_solid_text_atlas_run(
+                    &source_draw.text,
+                    source_raster_rect,
+                    &source_draw.text_style,
+                    source_draw.color,
+                    source_draw.font_size,
+                    text_scale,
+                    &self.text_fonts,
+                    &mut self.text_glyph_mask_cache,
+                    &mut collected_run,
+                );
+                miss_collect_ms = Some(instant_ms(collect_start, Instant::now()));
+                if collect_result.is_none() {
+                    if text_atlas_fallback_diag_enabled() {
+                        let preview: String = source_draw.text.text.chars().take(96).collect();
+                        log::warn!(
+                            "[text-atlas-fallback] node={:?} visible={} prewarm={} spans={} links={} text_len={} preview={:?} span_style={:?} paragraph_style={:?}",
+                            source_draw.node_id,
+                            is_visible,
+                            draw_action == TextGlyphDrawAction::PrewarmOffscreen,
+                            source_draw.text.span_styles.len(),
+                            source_draw.text.link_annotations.len(),
+                            source_draw.text.text.len(),
+                            preview,
+                            source_draw.text_style.span_style,
+                            source_draw.text_style.paragraph_style,
+                        );
+                    }
+                    if draw_action == TextGlyphDrawAction::PrewarmOffscreen {
+                        continue;
+                    }
+                    image_vertices.truncate(initial_vertex_len);
+                    image_indices.truncate(initial_index_len);
+                    glyph_cmds.truncate(initial_cmd_len);
+                    staged_uploads.truncate(initial_staged_bytes_len, initial_staged_copies_len);
+                    self.scratch_text_glyph_run = collected_run;
+                    self.scratch_text_glyph_placements = collected_placements;
+                    self.scratch_text_glyph_quads = generated_quads;
+                    return Ok(false);
+                }
+                if text_glyph_run_diag_enabled() {
+                    miss_cached_glyphs = collected_run
+                        .iter()
+                        .filter(|glyph| matches!(glyph, SoftwareGlyphAtlasRunGlyph::Cached(_)))
+                        .count();
+                    miss_new_glyphs = collected_run.len().saturating_sub(miss_cached_glyphs);
+                }
+                collected_placements.clear();
+                collected_placements.extend(
+                    collected_run
+                        .iter()
+                        .map(SoftwareGlyphAtlasRunGlyph::placement),
+                );
+                let glyphs: Rc<[SoftwareGlyphAtlasPlacement]> =
+                    Rc::from(collected_placements.clone().into_boxed_slice());
+                self.text_glyph_run_cache.put(
+                    run_key,
+                    CachedTextGlyphRun {
+                        glyphs,
+                        quads: None,
+                        atlas_generation: 0,
+                    },
+                );
+                None
+            };
+
+            if draw_action == TextGlyphDrawAction::PrewarmOffscreen {
+                let prewarm_quads = if let Some(quad_run) = cached_quad_run {
+                    quad_run
+                } else {
+                    let prepare_start = Instant::now();
+                    match self.prepare_text_glyph_quads(
+                        run_key,
+                        atlas_generation,
+                        cached_glyph_run.as_deref(),
+                        &collected_run,
+                        &mut generated_quads,
+                    ) {
+                        Ok(quads) => {
+                            if let Some(collect_ms) = miss_collect_ms {
+                                if text_glyph_run_diag_enabled() {
+                                    log::warn!(
+                                        "[text-glyph-run-diag] visible=false glyphs={} cached={} new={} collect_ms={:.2} prepare_ms={:.2}",
+                                        quads.len(),
+                                        miss_cached_glyphs,
+                                        miss_new_glyphs,
+                                        collect_ms,
+                                        instant_ms(prepare_start, Instant::now()),
+                                    );
+                                }
+                            }
+                            quads
+                        }
+                        Err(_) => continue,
+                    }
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                if should_use_retained_text_glyph_run(prewarm_quads.len(), source_draw.clip) {
+                    self.ensure_retained_text_glyph_run(run_key, prewarm_quads.as_ref());
+                }
+                prewarmed_glyphs = prewarmed_glyphs.saturating_add(prewarm_quads.len());
+                continue;
+            }
+
+            let draw_rect = Rect {
+                x: source_raster_rect.x / root_scale,
+                y: source_raster_rect.y / root_scale,
+                width: source_raster_rect.width / root_scale,
+                height: source_raster_rect.height / root_scale,
+            };
+            let Some(scissor) = scissor_rect_for_layer(
+                draw_rect,
+                source_draw.clip,
+                root_scale,
+                viewport.width,
+                viewport.height,
+            ) else {
+                continue;
+            };
+
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(quad_run) = cached_quad_run.as_ref() {
+                if should_use_retained_text_glyph_run(quad_run.len(), source_draw.clip)
+                    && self.emit_retained_text_glyph_run_if_ready(
+                        run_key,
+                        quad_run.as_ref(),
+                        source_draw.clip,
+                        viewport,
+                        source_raster_rect,
+                        scissor,
+                        staged_uploads,
+                        glyph_cmds,
+                    )
+                {
+                    emitted_glyphs = emitted_glyphs.saturating_add(quad_run.len());
+                    continue;
+                }
+            }
+
+            let index_start = image_indices.len() as u32;
+            if let Some(quad_run) = cached_quad_run {
+                emitted_glyphs = emitted_glyphs.saturating_add(self.append_text_glyph_quad_run(
+                    source_raster_rect,
+                    quad_run.as_ref(),
+                    source_draw.clip,
+                    viewport,
+                    root_scale,
+                    image_vertices,
+                    image_indices,
+                    true,
+                ));
+            } else {
+                let prepare_start = Instant::now();
+                let Ok(quad_run) = self.prepare_text_glyph_quads(
+                    run_key,
+                    atlas_generation,
+                    cached_glyph_run.as_deref(),
+                    &collected_run,
+                    &mut generated_quads,
+                ) else {
+                    image_vertices.truncate(initial_vertex_len);
+                    image_indices.truncate(initial_index_len);
+                    glyph_cmds.truncate(initial_cmd_len);
+                    staged_uploads.truncate(initial_staged_bytes_len, initial_staged_copies_len);
+                    self.scratch_text_glyph_run = collected_run;
+                    self.scratch_text_glyph_placements = collected_placements;
+                    self.scratch_text_glyph_quads = generated_quads;
+                    return Ok(false);
+                };
+                if let Some(collect_ms) = miss_collect_ms {
+                    if text_glyph_run_diag_enabled() {
+                        log::warn!(
+                            "[text-glyph-run-diag] visible=true glyphs={} cached={} new={} collect_ms={:.2} prepare_ms={:.2}",
+                            quad_run.len(),
+                            miss_cached_glyphs,
+                            miss_new_glyphs,
+                            collect_ms,
+                            instant_ms(prepare_start, Instant::now()),
+                        );
+                    }
+                }
+                emitted_glyphs = emitted_glyphs.saturating_add(self.append_text_glyph_quad_run(
+                    source_raster_rect,
+                    quad_run.as_ref(),
+                    source_draw.clip,
+                    viewport,
+                    root_scale,
+                    image_vertices,
+                    image_indices,
+                    false,
+                ));
+            }
+            let index_count = image_indices.len() as u32 - index_start;
+            if index_count > 0 {
+                glyph_cmds.push(GlyphDrawCmd::shared(index_start, index_count, scissor));
+            }
+        }
+
+        self.scratch_text_glyph_run = collected_run;
+        self.scratch_text_glyph_placements = collected_placements;
+        self.scratch_text_glyph_quads = generated_quads;
+        let append_end = Instant::now();
+        if let Some(total_ms) = should_log_wgpu_render_stage(append_start, append_end) {
+            log::warn!(
+                "[wgpu-render-stage:text-glyph-atlas] total_ms={total_ms:.2} visited={} cmds={} glyphs={} prewarmed={} run_hits={} run_misses={}",
+                visited,
+                glyph_cmds.len().saturating_sub(initial_cmd_len),
+                emitted_glyphs,
+                prewarmed_glyphs,
+                run_hits,
+                run_misses,
+            );
+        }
+        Ok(true)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn text_glyph_prewarm_decision(
+        &self,
+        text_draw: &TextDraw,
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+    ) -> TextGlyphPrewarmDecision {
+        let Some((logical_rect, _, clip, _, static_text_motion)) =
+            self.text_raster_geometry(text_draw, root_scale)
+        else {
+            return TextGlyphPrewarmDecision::MissingGeometry;
+        };
+        if !static_text_motion {
+            return TextGlyphPrewarmDecision::DynamicMotion;
+        }
+        if text_draw_is_visible_in_viewport(logical_rect, clip, viewport, root_scale) {
+            return TextGlyphPrewarmDecision::Visible;
+        }
+        if text_draw_should_prewarm_in_viewport(logical_rect, clip, viewport, root_scale) {
+            TextGlyphPrewarmDecision::Candidate
+        } else {
+            TextGlyphPrewarmDecision::OutsidePrewarmWindow
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn prewarm_offscreen_text_glyph_draws_in_chunk(
+        &mut self,
+        ordered_items: &[(usize, SegmentDrawItem)],
+        texts: &[TextDraw],
+        chunk: &SegmentDrawChunkPlan,
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+        staged_uploads: &mut StagedBufferUploads,
+        image_vertices: &mut Vec<Vertex>,
+        image_indices: &mut Vec<u32>,
+        glyph_cmds: &mut Vec<GlyphDrawCmd>,
+    ) -> Result<(), String> {
+        let prewarm_start = Instant::now();
+        let diag_enabled = std::env::var_os("CRANPOSE_TEXT_PREWARM_DIAG").is_some();
+        let mut text_items = 0usize;
+        let mut candidates = 0usize;
+        let mut missing_geometry = 0usize;
+        let mut dynamic_motion = 0usize;
+        let mut visible = 0usize;
+        let mut outside = 0usize;
+        let mut already_prepared = 0usize;
+        let mut admitted_candidates = 0usize;
+        let mut skipped_unbounded = 0usize;
+        let mut skipped_budget = 0usize;
+        let initial_vertex_len = image_vertices.len();
+        let initial_index_len = image_indices.len();
+        let initial_cmd_len = glyph_cmds.len();
+        let initial_staged_bytes_len = staged_uploads.bytes.len();
+        let initial_staged_copies_len = staged_uploads.copies.len();
+        'batches: for batch in chunk.iter() {
+            let SegmentBatchPlan::Text { start, end } = batch else {
+                continue;
+            };
+            for (_, item) in &ordered_items[start..end] {
+                if offscreen_text_glyph_prewarm_budget_exhausted(prewarm_start, admitted_candidates)
+                {
+                    skipped_budget = skipped_budget.saturating_add(1);
+                    break 'batches;
+                }
+                let SegmentDrawItem::Text(text_index) = item else {
+                    return Err(format!(
+                        "text prewarm batch contains non-text draw item: {item:?}"
+                    ));
+                };
+                let Some(text_draw) = texts.get(*text_index) else {
+                    continue;
+                };
+                text_items = text_items.saturating_add(1);
+                match self.text_glyph_prewarm_decision(text_draw, viewport, root_scale) {
+                    TextGlyphPrewarmDecision::Candidate => {}
+                    TextGlyphPrewarmDecision::MissingGeometry => {
+                        missing_geometry = missing_geometry.saturating_add(1);
+                        continue;
+                    }
+                    TextGlyphPrewarmDecision::DynamicMotion => {
+                        dynamic_motion = dynamic_motion.saturating_add(1);
+                        continue;
+                    }
+                    TextGlyphPrewarmDecision::Visible => {
+                        visible = visible.saturating_add(1);
+                        continue;
+                    }
+                    TextGlyphPrewarmDecision::OutsidePrewarmWindow => {
+                        outside = outside.saturating_add(1);
+                        continue;
+                    }
+                }
+
+                candidates = candidates.saturating_add(1);
+                let Some((_, raster_rect, _, text_scale, static_text_motion)) =
+                    self.text_raster_geometry(text_draw, root_scale)
+                else {
+                    missing_geometry = missing_geometry.saturating_add(1);
+                    continue;
+                };
+                let raster_source = text_glyph_raster_source(text_draw, raster_rect);
+                let source_draw = raster_source.draw.as_ref();
+                let run_key = Self::text_glyph_run_cache_key(
+                    source_draw,
+                    raster_source.raster_rect,
+                    text_scale,
+                    static_text_motion,
+                );
+                let atlas_generation = self.text_glyph_atlas.generation();
+                let cached_glyphs = if let Some(cached) = self.text_glyph_run_cache.peek(&run_key) {
+                    if cached.atlas_generation == atlas_generation && cached.quads.is_some() {
+                        already_prepared = already_prepared.saturating_add(1);
+                        continue;
+                    }
+                    Some(cached.glyphs.len())
+                } else {
+                    None
+                };
+                if !offscreen_text_glyph_prewarm_work_is_bounded(
+                    cached_glyphs,
+                    source_draw.text.text.len(),
+                ) {
+                    skipped_unbounded = skipped_unbounded.saturating_add(1);
+                    continue;
+                }
+                admitted_candidates = admitted_candidates.saturating_add(1);
+                self.append_text_glyph_draws(
+                    std::iter::once(text_draw),
+                    viewport,
+                    root_scale,
+                    true,
+                    staged_uploads,
+                    image_vertices,
+                    image_indices,
+                    glyph_cmds,
+                )?;
+                image_vertices.truncate(initial_vertex_len);
+                image_indices.truncate(initial_index_len);
+                glyph_cmds.truncate(initial_cmd_len);
+                staged_uploads.truncate(initial_staged_bytes_len, initial_staged_copies_len);
+            }
+        }
+
+        if diag_enabled && text_items > 0 {
+            log::warn!(
+                "[text-glyph-prewarm-diag] texts={text_items} candidates={candidates} admitted={admitted_candidates} cached={already_prepared} skipped_unbounded={skipped_unbounded} skipped_budget={skipped_budget} visible={visible} outside={outside} dynamic={dynamic_motion} missing={missing_geometry}"
+            );
+        }
+        if admitted_candidates > 0 {
+            if let Some(total_ms) = should_log_wgpu_render_stage(prewarm_start, Instant::now()) {
+                log::warn!(
+                    "[wgpu-render-stage:text-glyph-prewarm] total_ms={total_ms:.2} candidates={candidates} admitted={admitted_candidates} cached={already_prepared} skipped_unbounded={skipped_unbounded} skipped_budget={skipped_budget}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_text_glyph_draw_cmds<'a, I>(
+        &mut self,
+        layer_texts: I,
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+        staged_uploads: &mut StagedBufferUploads,
+    ) -> Result<Option<PreparedGlyphBatch>, String>
+    where
+        I: IntoIterator<Item = &'a TextDraw>,
+    {
+        #[cfg(target_arch = "wasm32")]
+        let _ = staged_uploads;
+
+        let mut image_vertices = std::mem::take(&mut self.scratch_image_vertices);
+        let mut image_indices = std::mem::take(&mut self.scratch_image_indices);
+        let mut glyph_cmds = std::mem::take(&mut self.scratch_glyph_cmds);
+        image_vertices.clear();
+        image_indices.clear();
+        glyph_cmds.clear();
+
+        if !self.append_text_glyph_draws(
+            layer_texts,
+            viewport,
+            root_scale,
+            false,
+            staged_uploads,
+            &mut image_vertices,
+            &mut image_indices,
+            &mut glyph_cmds,
+        )? {
+            self.scratch_image_vertices = image_vertices;
+            self.scratch_image_indices = image_indices;
+            self.scratch_glyph_cmds = glyph_cmds;
+            return Ok(None);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if !image_indices.is_empty() {
+            self.stage_native_image_buffers(
+                staged_uploads,
+                viewport,
+                &image_vertices,
+                &image_indices,
+            );
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        let image_slot = if glyph_cmds.is_empty() {
+            0
+        } else {
+            let slot = self.claim_wasm_image_batch();
+            {
+                let buffers = &mut self.wasm_image_batches[slot];
+                buffers.ensure_capacity(&self.device, image_vertices.len(), image_indices.len());
+            }
+            let buffers = &self.wasm_image_batches[slot];
+            self.write_wasm_buffer(
+                &buffers.vertex_buffer,
+                bytemuck::cast_slice(&image_vertices),
+            );
+            self.write_wasm_buffer(&buffers.index_buffer, bytemuck::cast_slice(&image_indices));
+            slot
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        let uniform_slot = if glyph_cmds.is_empty() {
+            0
+        } else {
+            self.prepare_wasm_viewport_uniforms(viewport)
+        };
+
+        self.scratch_image_vertices = image_vertices;
+        self.scratch_image_indices = image_indices;
+        Ok(Some(PreparedGlyphBatch {
+            cmds: glyph_cmds,
+            #[cfg(target_arch = "wasm32")]
+            image_slot,
+            #[cfg(target_arch = "wasm32")]
+            uniform_slot,
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn append_image_bitmap_draw_cmd(
+        &mut self,
+        image: &ImageBitmap,
+        rect: Rect,
+        clip: Option<Rect>,
+        sampling: ImageSampling,
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+        image_vertices: &mut Vec<Vertex>,
+        image_indices: &mut Vec<u32>,
+        image_cmds: &mut Vec<ImageDrawCmd>,
+    ) -> Result<(), String> {
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return Ok(());
+        }
+
+        self.ensure_image_cached(image)?;
+
+        let (device_quad, scissor_rect) =
+            if sampling == ImageSampling::Nearest && root_scale.is_finite() && root_scale > 0.0 {
+                let left_px = (rect.x * root_scale).round();
+                let top_px = (rect.y * root_scale).round();
+                let width_px = (rect.width * root_scale).round().max(1.0);
+                let height_px = (rect.height * root_scale).round().max(1.0);
+                let snapped_rect = Rect {
+                    x: left_px / root_scale,
+                    y: top_px / root_scale,
+                    width: width_px / root_scale,
+                    height: height_px / root_scale,
+                };
+                let right_px = left_px + width_px;
+                let bottom_px = top_px + height_px;
+                (
+                    [
+                        [left_px, top_px],
+                        [right_px, top_px],
+                        [left_px, bottom_px],
+                        [right_px, bottom_px],
+                    ],
+                    snapped_rect,
+                )
+            } else {
+                (
+                    rect_to_quad(rect).map(|[x, y]| [x * root_scale, y * root_scale]),
+                    rect,
+                )
+            };
+
+        let Some(scissor) = scissor_rect_for_layer(
+            scissor_rect,
+            clip,
+            root_scale,
+            viewport.width,
+            viewport.height,
+        ) else {
+            return Ok(());
+        };
+        let Some(uv_rect) = image_uv_rect(image, None) else {
+            return Ok(());
+        };
+
+        let base_vertex = image_vertices.len() as u32;
+        let index_start = image_indices.len() as u32;
+        image_indices.extend_from_slice(&[
+            base_vertex,
+            base_vertex + 1,
+            base_vertex + 2,
+            base_vertex + 2,
+            base_vertex + 1,
+            base_vertex + 3,
+        ]);
+        let color = [1.0, 1.0, 1.0, 1.0];
+        image_vertices.extend_from_slice(&[
+            Vertex {
+                position: device_quad[0],
+                color,
+                uv: [uv_rect.min[0], uv_rect.min[1]],
+                uv_bounds: uv_rect.sample_bounds,
+            },
+            Vertex {
+                position: device_quad[1],
+                color,
+                uv: [uv_rect.max[0], uv_rect.min[1]],
+                uv_bounds: uv_rect.sample_bounds,
+            },
+            Vertex {
+                position: device_quad[2],
+                color,
+                uv: [uv_rect.min[0], uv_rect.max[1]],
+                uv_bounds: uv_rect.sample_bounds,
+            },
+            Vertex {
+                position: device_quad[3],
+                color,
+                uv: [uv_rect.max[0], uv_rect.max[1]],
+                uv_bounds: uv_rect.sample_bounds,
+            },
+        ]);
+        image_cmds.push(ImageDrawCmd {
+            index_start,
+            scissor,
+            image_id: image.id(),
+            sampling,
+        });
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn append_text_image_draw_cmds<'a, I>(
+        &mut self,
+        layer_texts: I,
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+        image_vertices: &mut Vec<Vertex>,
+        image_indices: &mut Vec<u32>,
+        image_cmds: &mut Vec<ImageDrawCmd>,
+    ) -> Result<(), String>
+    where
+        I: Iterator<Item = &'a TextDraw>,
+    {
+        let append_start = Instant::now();
+        let initial_len = image_cmds.len();
+        let mut visited = 0usize;
+        let mut hit_count = 0usize;
+        let mut miss_count = 0usize;
+        for text_draw in layer_texts {
+            visited = visited.saturating_add(1);
+            let _ = text_draw.node_id;
+            let Some((logical_rect, raster_rect, clip, text_scale, static_text_motion)) =
+                self.text_raster_geometry(text_draw, root_scale)
+            else {
+                continue;
+            };
+            if !text_draw_is_visible_in_viewport(logical_rect, clip, viewport, root_scale) {
+                continue;
+            }
+
+            let raster_source = self.text_image_raster_source(
+                text_draw,
+                logical_rect,
+                raster_rect,
+                clip,
+                root_scale,
+                static_text_motion,
+            );
+            let source_draw = raster_source.draw.as_ref();
+            let source_raster_rect = raster_source.raster_rect;
+
+            let cache_key = Self::text_image_cache_key(
+                source_draw,
+                source_raster_rect,
+                text_scale,
+                static_text_motion,
+            );
             let image = if let Some(cached) = self.text_image_cache.get(&cache_key) {
+                self.frame_stats
+                    .record_text_image_cache_hit(cached.image.width(), cached.image.height());
+                hit_count = hit_count.saturating_add(1);
                 cached.image.clone()
             } else {
                 let Some(image) =
-                    self.rasterize_text_draw_to_image(text_draw, raster_rect, text_scale)
+                    self.rasterize_text_draw_to_image(source_draw, source_raster_rect, text_scale)
                 else {
                     continue;
                 };
+                self.frame_stats
+                    .record_text_image_cache_miss(image.width(), image.height());
+                miss_count = miss_count.saturating_add(1);
                 self.text_image_cache.put(
                     cache_key,
                     CachedTextImage {
@@ -4715,7 +8463,10 @@ impl GpuRenderer {
             };
 
             let draw_origin = if static_text_motion {
-                Point::new(raster_rect.x / root_scale, raster_rect.y / root_scale)
+                Point::new(
+                    source_raster_rect.x / root_scale,
+                    source_raster_rect.y / root_scale,
+                )
             } else {
                 Point::new(logical_rect.x, logical_rect.y)
             };
@@ -4725,27 +8476,137 @@ impl GpuRenderer {
                 width: image.width() as f32 / root_scale,
                 height: image.height() as f32 / root_scale,
             };
-            text_images.push(ImageDraw {
-                rect: draw_rect,
-                local_rect: draw_rect,
-                quad: rect_to_quad(draw_rect),
-                snap_anchor: None,
-                image,
-                alpha: 1.0,
-                color_filter: None,
-                sampling: ImageSampling::Nearest,
-                z_index: text_draw.z_index,
+            self.append_image_bitmap_draw_cmd(
+                &image,
+                draw_rect,
                 clip,
-                blend_mode: BlendMode::SrcOver,
-                src_rect: None,
-                motion_context_animated: text_draw.translated_content_context,
-            });
+                ImageSampling::Nearest,
+                viewport,
+                root_scale,
+                image_vertices,
+                image_indices,
+                image_cmds,
+            )?;
+        }
+        let append_end = Instant::now();
+        if let Some(total_ms) = should_log_wgpu_render_stage(append_start, append_end) {
+            log::warn!(
+                "[wgpu-render-stage:text-images] total_ms={total_ms:.2} visited={} emitted={} hits={} misses={}",
+                visited,
+                image_cmds.len().saturating_sub(initial_len),
+                hit_count,
+                miss_count,
+            );
+        }
+        Ok(())
+    }
+
+    fn text_image_raster_source<'a>(
+        &mut self,
+        text_draw: &'a TextDraw,
+        logical_rect: Rect,
+        raster_rect: Rect,
+        clip: Option<Rect>,
+        root_scale: f32,
+        static_text_motion: bool,
+    ) -> TextRasterSource<'a> {
+        let Some(clip) = clip else {
+            return TextRasterSource {
+                draw: Cow::Borrowed(text_draw),
+                raster_rect,
+            };
+        };
+        if !static_text_motion || text_draw.text.text.as_str().find('\n').is_none() {
+            return TextRasterSource {
+                draw: Cow::Borrowed(text_draw),
+                raster_rect,
+            };
         }
 
-        let result =
-            self.prepare_image_draw_cmds(text_images.iter(), viewport, root_scale, staged_uploads);
-        self.scratch_text_images = text_images;
-        result
+        let line_starts = self.text_line_index_cache.line_starts(&text_draw.text);
+        clipped_text_raster_source_with_line_starts(
+            text_draw,
+            logical_rect,
+            raster_rect,
+            clip,
+            root_scale,
+            line_starts.as_ref(),
+        )
+    }
+
+    fn prepare_text_image_draw_cmds<'a, I>(
+        &mut self,
+        layer_texts: I,
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+        staged_uploads: &mut StagedBufferUploads,
+    ) -> Result<PreparedImageBatch, String>
+    where
+        I: Iterator<Item = &'a TextDraw>,
+    {
+        #[cfg(target_arch = "wasm32")]
+        let _ = staged_uploads;
+
+        let mut image_vertices = std::mem::take(&mut self.scratch_image_vertices);
+        let mut image_indices = std::mem::take(&mut self.scratch_image_indices);
+        let mut image_cmds = std::mem::take(&mut self.scratch_image_cmds);
+        image_vertices.clear();
+        image_indices.clear();
+        image_cmds.clear();
+
+        self.append_text_image_draw_cmds(
+            layer_texts,
+            viewport,
+            root_scale,
+            &mut image_vertices,
+            &mut image_indices,
+            &mut image_cmds,
+        )?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if !image_cmds.is_empty() {
+            self.stage_native_image_buffers(
+                staged_uploads,
+                viewport,
+                &image_vertices,
+                &image_indices,
+            );
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        let image_slot = if image_cmds.is_empty() {
+            0
+        } else {
+            let slot = self.claim_wasm_image_batch();
+            {
+                let buffers = &mut self.wasm_image_batches[slot];
+                buffers.ensure_capacity(&self.device, image_vertices.len(), image_indices.len());
+            }
+            let buffers = &self.wasm_image_batches[slot];
+            self.write_wasm_buffer(
+                &buffers.vertex_buffer,
+                bytemuck::cast_slice(&image_vertices),
+            );
+            self.write_wasm_buffer(&buffers.index_buffer, bytemuck::cast_slice(&image_indices));
+            slot
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        let uniform_slot = if image_cmds.is_empty() {
+            0
+        } else {
+            self.prepare_wasm_viewport_uniforms(viewport)
+        };
+
+        self.scratch_image_vertices = image_vertices;
+        self.scratch_image_indices = image_indices;
+        Ok(PreparedImageBatch {
+            cmds: image_cmds,
+            #[cfg(target_arch = "wasm32")]
+            image_slot,
+            #[cfg(target_arch = "wasm32")]
+            uniform_slot,
+        })
     }
 
     fn text_raster_geometry(
@@ -4753,86 +8614,46 @@ impl GpuRenderer {
         text_draw: &TextDraw,
         root_scale: f32,
     ) -> Option<(Rect, Rect, Option<Rect>, f32, bool)> {
-        if text_draw.text.is_empty()
-            || text_draw.rect.width <= 0.0
-            || text_draw.rect.height <= 0.0
-            || !root_scale.is_finite()
-            || root_scale <= 0.0
-        {
-            return None;
-        }
-
-        let text_scale = text_draw.scale * root_scale;
-        if !text_scale.is_finite() || text_scale <= 0.0 {
-            return None;
-        }
-
-        let static_text_motion = text_draw
-            .text_style
-            .paragraph_style
-            .text_motion
-            .unwrap_or(cranpose_ui::text::TextMotion::Static)
-            == cranpose_ui::text::TextMotion::Static;
-        let snap_delta = if static_text_motion {
-            text_draw
-                .snap_anchor
-                .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-                .unwrap_or_default()
-        } else {
-            Point::default()
-        };
-        let logical_rect = text_draw.rect.translate(snap_delta.x, snap_delta.y);
-        let clip = text_draw
-            .clip
-            .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
-        let mut raster_rect = Rect {
-            x: logical_rect.x * root_scale,
-            y: logical_rect.y * root_scale,
-            width: logical_rect.width * root_scale,
-            height: logical_rect.height * root_scale,
-        };
-        if static_text_motion {
-            raster_rect.x = raster_rect.x.round();
-            raster_rect.y = raster_rect.y.round();
-        }
-        raster_rect.width = raster_rect.width.ceil().max(1.0);
-        raster_rect.height = raster_rect.height.ceil().max(1.0);
-        Some((
-            logical_rect,
-            raster_rect,
-            clip,
-            text_scale,
-            static_text_motion,
-        ))
+        text_raster_geometry_for_draw(text_draw, root_scale)
     }
 
     fn text_image_cache_key(
-        &self,
         text_draw: &TextDraw,
         raster_rect: Rect,
         text_scale: f32,
+        static_text_motion: bool,
     ) -> TextImageCacheKey {
         let mut state = default_hash::new();
-        text_draw.node_id.hash(&mut state);
         text_draw.text.render_hash().hash(&mut state);
         text_draw.text_style.render_hash().hash(&mut state);
         text_draw.color.render_hash().hash(&mut state);
-        hash_rect_for_cache(raster_rect, &mut state);
+        hash_text_raster_geometry_for_cache(raster_rect, static_text_motion, &mut state);
         text_draw.font_size.to_bits().hash(&mut state);
         text_scale.to_bits().hash(&mut state);
         text_draw.layout_options.hash(&mut state);
         TextImageCacheKey(state.finish())
     }
 
+    fn text_glyph_run_cache_key(
+        text_draw: &TextDraw,
+        raster_rect: Rect,
+        text_scale: f32,
+        static_text_motion: bool,
+    ) -> TextGlyphRunCacheKey {
+        TextGlyphRunCacheKey(
+            Self::text_image_cache_key(text_draw, raster_rect, text_scale, static_text_motion).0,
+        )
+    }
+
     fn rasterize_text_draw_to_image(
-        &self,
+        &mut self,
         text_draw: &TextDraw,
         raster_rect: Rect,
         text_scale: f32,
     ) -> Option<ImageBitmap> {
         if text_draw.text.span_styles.is_empty() {
             let font = self.text_fonts.resolve(&text_draw.text_style)?;
-            return rasterize_text_to_image(
+            return rasterize_text_to_image_with_glyph_cache(
                 text_draw.text.text.as_str(),
                 raster_rect,
                 &text_draw.text_style,
@@ -4840,10 +8661,30 @@ impl GpuRenderer {
                 text_draw.font_size,
                 text_scale,
                 font,
+                &mut self.text_glyph_mask_cache,
             );
         }
 
-        rasterize_spanned_text_to_image(text_draw, raster_rect, text_scale, &self.text_fonts)
+        if let Some(image) = rasterize_annotated_text_to_image_with_glyph_cache(
+            &text_draw.text,
+            raster_rect,
+            &text_draw.text_style,
+            text_draw.color,
+            text_draw.font_size,
+            text_scale,
+            &self.text_fonts,
+            &mut self.text_glyph_mask_cache,
+        ) {
+            return Some(image);
+        }
+
+        rasterize_spanned_text_to_image(
+            text_draw,
+            raster_rect,
+            text_scale,
+            &self.text_fonts,
+            &mut self.text_glyph_mask_cache,
+        )
     }
 }
 
@@ -4852,6 +8693,7 @@ fn rasterize_spanned_text_to_image(
     raster_rect: Rect,
     text_scale: f32,
     fonts: &SoftwareTextFontSet,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
 ) -> Option<ImageBitmap> {
     let width = raster_rect.width.ceil().max(1.0) as u32;
     let height = raster_rect.height.ceil().max(1.0) as u32;
@@ -4903,7 +8745,7 @@ fn rasterize_spanned_text_to_image(
                     width: (metrics.width * text_scale).ceil().max(1.0),
                     height: (metrics.height * text_scale).ceil().max(1.0),
                 };
-                if let Some(segment_image) = rasterize_text_to_image(
+                if let Some(segment_image) = rasterize_text_to_image_with_glyph_cache(
                     content,
                     segment_rect,
                     &chunk_style,
@@ -4911,6 +8753,7 @@ fn rasterize_spanned_text_to_image(
                     chunk_font_size,
                     text_scale,
                     font,
+                    glyph_cache,
                 ) {
                     composite_text_segment(
                         &mut canvas,
@@ -4934,6 +8777,146 @@ fn rasterize_spanned_text_to_image(
     }
 
     ImageBitmap::from_rgba8(width, height, canvas).ok()
+}
+
+struct TextRasterSource<'a> {
+    draw: Cow<'a, TextDraw>,
+    raster_rect: Rect,
+}
+
+fn text_glyph_raster_source(text_draw: &TextDraw, raster_rect: Rect) -> TextRasterSource<'_> {
+    TextRasterSource {
+        draw: Cow::Borrowed(text_draw),
+        raster_rect,
+    }
+}
+
+#[cfg(test)]
+fn clipped_text_raster_source<'a>(
+    text_draw: &'a TextDraw,
+    logical_rect: Rect,
+    raster_rect: Rect,
+    clip: Option<Rect>,
+    root_scale: f32,
+    static_text_motion: bool,
+) -> TextRasterSource<'a> {
+    let Some(clip) = clip else {
+        return TextRasterSource {
+            draw: Cow::Borrowed(text_draw),
+            raster_rect,
+        };
+    };
+    if !static_text_motion || text_draw.text.text.as_str().find('\n').is_none() {
+        return TextRasterSource {
+            draw: Cow::Borrowed(text_draw),
+            raster_rect,
+        };
+    }
+    let line_starts = line_start_offsets(text_draw.text.text.as_str());
+    clipped_text_raster_source_with_line_starts(
+        text_draw,
+        logical_rect,
+        raster_rect,
+        clip,
+        root_scale,
+        &line_starts,
+    )
+}
+
+fn clipped_text_raster_source_with_line_starts<'a>(
+    text_draw: &'a TextDraw,
+    logical_rect: Rect,
+    raster_rect: Rect,
+    clip: Rect,
+    root_scale: f32,
+    line_starts: &[usize],
+) -> TextRasterSource<'a> {
+    if line_starts.len() < MIN_MULTILINE_TEXT_LINES_FOR_CLIPPED_RASTER {
+        return TextRasterSource {
+            draw: Cow::Borrowed(text_draw),
+            raster_rect,
+        };
+    }
+
+    let Some(visible_rect) = logical_rect.intersect(clip) else {
+        return TextRasterSource {
+            draw: Cow::Borrowed(text_draw),
+            raster_rect,
+        };
+    };
+
+    let line_count = line_starts.len().max(1);
+    let line_height = logical_rect.height / line_count as f32;
+    if !line_height.is_finite() || line_height <= 0.0 {
+        return TextRasterSource {
+            draw: Cow::Borrowed(text_draw),
+            raster_rect,
+        };
+    }
+
+    let visible_top = ((visible_rect.y - logical_rect.y) / line_height).floor() as isize;
+    let visible_bottom =
+        ((visible_rect.y + visible_rect.height - logical_rect.y) / line_height).ceil() as isize;
+    let start_line = visible_top.saturating_sub(1).max(0) as usize;
+    let end_line = (visible_bottom + 1).max(start_line as isize + 1) as usize;
+    let end_line = end_line.min(line_count);
+    if start_line == 0 && end_line >= line_count {
+        return TextRasterSource {
+            draw: Cow::Borrowed(text_draw),
+            raster_rect,
+        };
+    }
+
+    let byte_start = line_starts[start_line];
+    let byte_end = line_end_offset(text_draw.text.text.as_str(), line_starts, end_line - 1);
+    if byte_start >= byte_end {
+        return TextRasterSource {
+            draw: Cow::Borrowed(text_draw),
+            raster_rect,
+        };
+    }
+
+    let slice_y = logical_rect.y + start_line as f32 * line_height;
+    let slice_height = (end_line - start_line) as f32 * line_height;
+    let mut slice_raster_rect = Rect {
+        x: logical_rect.x * root_scale,
+        y: slice_y * root_scale,
+        width: logical_rect.width * root_scale,
+        height: slice_height * root_scale,
+    };
+    slice_raster_rect.x = slice_raster_rect.x.round();
+    slice_raster_rect.y = slice_raster_rect.y.round();
+    slice_raster_rect.width = slice_raster_rect.width.ceil().max(1.0);
+    slice_raster_rect.height = slice_raster_rect.height.ceil().max(1.0);
+
+    let mut sliced_draw = text_draw.clone();
+    sliced_draw.rect = Rect {
+        x: logical_rect.x,
+        y: slice_y,
+        width: logical_rect.width,
+        height: slice_height,
+    };
+    sliced_draw.text = Rc::new(text_draw.text.subsequence(byte_start..byte_end));
+
+    TextRasterSource {
+        draw: Cow::Owned(sliced_draw),
+        raster_rect: slice_raster_rect,
+    }
+}
+
+fn line_start_offsets(text: &str) -> Vec<usize> {
+    let mut starts =
+        Vec::with_capacity(text.as_bytes().iter().filter(|b| **b == b'\n').count() + 1);
+    starts.push(0);
+    starts.extend(
+        text.char_indices()
+            .filter_map(|(index, ch)| (ch == '\n').then_some(index + ch.len_utf8())),
+    );
+    starts
+}
+
+fn line_end_offset(text: &str, line_starts: &[usize], line: usize) -> usize {
+    line_starts.get(line + 1).copied().unwrap_or(text.len())
 }
 
 fn composite_text_segment(
@@ -5029,6 +9012,8 @@ enum SegmentDrawItem {
     Image(usize),
     Text(usize),
     Shadow(usize),
+    Composite(usize),
+    ShaderComposite(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5047,6 +9032,14 @@ enum SegmentBatchPlan {
         start: usize,
         end: usize,
     },
+    Composite {
+        start: usize,
+        end: usize,
+    },
+    ShaderComposite {
+        start: usize,
+        end: usize,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -5061,6 +9054,53 @@ struct SegmentRenderOutcome {
 
 struct SegmentCommandEncodeOutcome {
     first_batch: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextGlyphPrewarmDecision {
+    Candidate,
+    MissingGeometry,
+    DynamicMotion,
+    Visible,
+    OutsidePrewarmWindow,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NativeSegmentFusionBudget {
+    shape_count: usize,
+    gradient_stop_count: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NativeSegmentFusionPartition {
+    chunk: SegmentDrawChunkPlan,
+    budget: NativeSegmentFusionBudget,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FusedSegmentBatch {
+    Shape {
+        batch: PreparedShapeBatch,
+        blend_mode: BlendMode,
+    },
+    Image {
+        cmd_range: Range<usize>,
+        blend_mode: BlendMode,
+    },
+    Text {
+        image_cmd_range: Range<usize>,
+        glyph_cmd_range: Range<usize>,
+    },
+    Composite {
+        draw_range: Range<usize>,
+    },
+    ShaderComposite {
+        draw_range: Range<usize>,
+    },
 }
 
 struct ShadowSourceRenderOutcome {
@@ -5151,6 +9191,7 @@ impl Iterator for SegmentCommandIter<'_> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PreparedShapeBatch {
+    index_start: u32,
     index_count: u32,
     #[cfg(target_arch = "wasm32")]
     shape_slot: usize,
@@ -5174,6 +9215,175 @@ impl PreparedImageBatch {
     fn into_cmds(self) -> Vec<ImageDrawCmd> {
         self.cmds
     }
+}
+
+struct PreparedGlyphBatch {
+    cmds: Vec<GlyphDrawCmd>,
+    #[cfg(target_arch = "wasm32")]
+    image_slot: usize,
+    #[cfg(target_arch = "wasm32")]
+    uniform_slot: usize,
+}
+
+impl PreparedGlyphBatch {
+    fn is_empty(&self) -> bool {
+        self.cmds.is_empty()
+    }
+
+    fn into_cmds(self) -> Vec<GlyphDrawCmd> {
+        self.cmds
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn gradient_stop_count_for_shape(shape: &DrawShape) -> usize {
+    match &shape.brush {
+        Brush::Solid(_) => 0,
+        Brush::LinearGradient { colors, .. }
+        | Brush::RadialGradient { colors, .. }
+        | Brush::SweepGradient { colors, .. } => colors.len(),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_segment_fusion_budget(
+    ordered_items: &[(usize, SegmentDrawItem)],
+    shapes: &[DrawShape],
+    chunk: &SegmentDrawChunkPlan,
+) -> Result<Option<NativeSegmentFusionBudget>, String> {
+    let mut shape_count = 0usize;
+    let mut gradient_stop_count = 0usize;
+
+    for batch in chunk.iter() {
+        let SegmentBatchPlan::Shape { start, end, .. } = batch else {
+            continue;
+        };
+        for (_, item) in &ordered_items[start..end] {
+            let SegmentDrawItem::Shape(shape_index) = item else {
+                return Err(format!(
+                    "shape batch contains non-shape draw item: {item:?}"
+                ));
+            };
+            let shape = &shapes[*shape_index];
+            shape_count = shape_count.saturating_add(1);
+            gradient_stop_count =
+                gradient_stop_count.saturating_add(gradient_stop_count_for_shape(shape));
+        }
+    }
+
+    if shape_count > MAX_SHAPES_PER_BATCH || gradient_stop_count > MAX_GRADIENT_STOPS {
+        return Ok(None);
+    }
+
+    Ok(Some(NativeSegmentFusionBudget {
+        shape_count,
+        gradient_stop_count,
+    }))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn push_native_segment_fusion_partition(
+    partitions: &mut Vec<NativeSegmentFusionPartition>,
+    current: &mut SegmentDrawChunkPlan,
+    current_budget: &mut NativeSegmentFusionBudget,
+) {
+    if current.is_empty() {
+        return;
+    }
+
+    partitions.push(NativeSegmentFusionPartition {
+        chunk: std::mem::take(current),
+        budget: *current_budget,
+    });
+    *current_budget = NativeSegmentFusionBudget {
+        shape_count: 0,
+        gradient_stop_count: 0,
+    };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_segment_fusion_partitions(
+    ordered_items: &[(usize, SegmentDrawItem)],
+    shapes: &[DrawShape],
+    chunk: &SegmentDrawChunkPlan,
+) -> Result<Option<Vec<NativeSegmentFusionPartition>>, String> {
+    if let Some(budget) = native_segment_fusion_budget(ordered_items, shapes, chunk)? {
+        return Ok(Some(vec![NativeSegmentFusionPartition {
+            chunk: chunk.clone(),
+            budget,
+        }]));
+    }
+
+    let mut partitions = Vec::new();
+    let mut current = SegmentDrawChunkPlan::default();
+    let mut current_budget = NativeSegmentFusionBudget {
+        shape_count: 0,
+        gradient_stop_count: 0,
+    };
+
+    for batch in chunk.iter() {
+        let SegmentBatchPlan::Shape {
+            start,
+            end,
+            blend_mode,
+        } = batch
+        else {
+            current.push(batch);
+            continue;
+        };
+
+        let mut run_start = start;
+        for (item_cursor, (_, item)) in ordered_items.iter().enumerate().take(end).skip(start) {
+            let SegmentDrawItem::Shape(shape_index) = *item else {
+                return Err(format!(
+                    "shape batch contains non-shape draw item: {:?}",
+                    item
+                ));
+            };
+            let gradient_stop_count = gradient_stop_count_for_shape(&shapes[shape_index]);
+            if gradient_stop_count > MAX_GRADIENT_STOPS {
+                return Ok(None);
+            }
+
+            let fits_shape_count =
+                current_budget.shape_count.saturating_add(1) <= MAX_SHAPES_PER_BATCH;
+            let fits_gradient_count = current_budget
+                .gradient_stop_count
+                .saturating_add(gradient_stop_count)
+                <= MAX_GRADIENT_STOPS;
+            if !fits_shape_count || !fits_gradient_count {
+                if run_start < item_cursor {
+                    current.push(SegmentBatchPlan::Shape {
+                        start: run_start,
+                        end: item_cursor,
+                        blend_mode,
+                    });
+                }
+                push_native_segment_fusion_partition(
+                    &mut partitions,
+                    &mut current,
+                    &mut current_budget,
+                );
+                run_start = item_cursor;
+            }
+
+            current_budget.shape_count = current_budget.shape_count.saturating_add(1);
+            current_budget.gradient_stop_count = current_budget
+                .gradient_stop_count
+                .saturating_add(gradient_stop_count);
+        }
+
+        if run_start < end {
+            current.push(SegmentBatchPlan::Shape {
+                start: run_start,
+                end,
+                blend_mode,
+            });
+        }
+    }
+
+    push_native_segment_fusion_partition(&mut partitions, &mut current, &mut current_budget);
+    Ok(Some(partitions))
 }
 
 fn segment_batch_plan_at_cursor(
@@ -5239,13 +9449,35 @@ fn segment_batch_plan_at_cursor(
             }
             Some((SegmentBatchPlan::Text { start, end }, end))
         }
+        SegmentDrawItem::Composite(_) => {
+            let mut end = start + 1;
+            while end < ordered_items.len() {
+                if matches!(ordered_items[end].1, SegmentDrawItem::Composite(_)) {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            Some((SegmentBatchPlan::Composite { start, end }, end))
+        }
+        SegmentDrawItem::ShaderComposite(_) => {
+            let mut end = start + 1;
+            while end < ordered_items.len() {
+                if matches!(ordered_items[end].1, SegmentDrawItem::ShaderComposite(_)) {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            Some((SegmentBatchPlan::ShaderComposite { start, end }, end))
+        }
         SegmentDrawItem::Shadow(_) => None,
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn collect_non_effect_segment_items(
-    _shapes: &[DrawShape],
+    shapes: &[DrawShape],
     _images: &[ImageDraw],
     _texts: &[TextDraw],
     _shadow_draws: &[ShadowDraw],
@@ -5253,9 +9485,17 @@ fn collect_non_effect_segment_items(
     z_start: usize,
     z_end: usize,
     effect_z_ranges: &[Range<usize>],
+    width: u32,
+    height: u32,
+    root_scale: f32,
     scratch: &mut Vec<(usize, SegmentDrawItem)>,
 ) {
     scratch.clear();
+    let viewport = ViewportUniformParams {
+        width,
+        height,
+        offset: [0.0, 0.0],
+    };
 
     scratch.extend(draw_ops.iter().filter_map(|op| {
         if op.z_index < z_start
@@ -5265,7 +9505,13 @@ fn collect_non_effect_segment_items(
             return None;
         }
         let item = match op.kind {
-            DrawOpKind::Shape(index) => SegmentDrawItem::Shape(index),
+            DrawOpKind::Shape(index) => {
+                let shape = shapes.get(index)?;
+                if !shape_draw_is_visible_in_viewport(shape, viewport, root_scale) {
+                    return None;
+                }
+                SegmentDrawItem::Shape(index)
+            }
             DrawOpKind::Image(index) => SegmentDrawItem::Image(index),
             DrawOpKind::Text(index) => SegmentDrawItem::Text(index),
             DrawOpKind::Shadow(index) => SegmentDrawItem::Shadow(index),
@@ -5274,77 +9520,91 @@ fn collect_non_effect_segment_items(
     }));
 }
 
-fn collect_effect_ranges(
-    effect_layers: &[EffectLayer],
-    z_start: usize,
-    z_end: usize,
-    excluded_effect_layer: Option<usize>,
-    out: &mut Vec<Range<usize>>,
-) {
-    out.clear();
-    for (index, layer) in effect_layers.iter().enumerate() {
-        if Some(index) == excluded_effect_layer {
-            continue;
-        }
-        if effect_layer_in_range(layer, z_start, z_end) {
-            out.push(layer.z_start..layer.z_end);
-        }
-    }
-    out.sort_by_key(|range| range.start);
+fn retain_renderable_shadow_items(
+    ordered_items: &mut Vec<(usize, SegmentDrawItem)>,
+    shadow_draws: &[ShadowDraw],
+    width: u32,
+    height: u32,
+    root_scale: f32,
+    max_texture_dim: u32,
+) -> usize {
+    let original_len = ordered_items.len();
+    ordered_items.retain(|(_, item)| match item {
+        SegmentDrawItem::Shadow(index) => shadow_draws.get(*index).is_some_and(|shadow| {
+            shadow_draw_may_render(shadow, width, height, root_scale, max_texture_dim)
+        }),
+        _ => true,
+    });
+    original_len.saturating_sub(ordered_items.len())
 }
 
-fn collect_layer_events(
-    effect_layers: &[EffectLayer],
-    backdrop_layers: &[BackdropLayer],
-    z_start: usize,
-    z_end: usize,
-    excluded_effect_layer: Option<usize>,
-    out: &mut Vec<LayerEvent>,
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct SegmentDiagCounts {
+    raw_shadow_items: usize,
+    culled_shadow_items: usize,
+    cached_shadow_composites: usize,
+    composite_items: usize,
+    shader_composite_items: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn maybe_print_segment_diag(
+    z_range: Range<usize>,
+    ordered_items: &[(usize, SegmentDrawItem)],
+    shapes: &[DrawShape],
+    images: &[ImageDraw],
+    counts: SegmentDiagCounts,
 ) {
-    out.clear();
-    for (index, layer) in backdrop_layers.iter().enumerate() {
-        if layer.z_index >= z_start && layer.z_index < z_end {
-            out.push(LayerEvent {
-                z_index: layer.z_index,
-                kind: LayerEventKind::Backdrop(index),
-            });
-        }
+    if std::env::var_os("CRANPOSE_SEGMENT_DIAG").is_none() {
+        return;
     }
-    for (index, layer) in effect_layers.iter().enumerate() {
-        if Some(index) == excluded_effect_layer {
+    let line = SEGMENT_DIAG_LINES.fetch_add(1, Ordering::Relaxed);
+    if line >= 64 {
+        return;
+    }
+
+    let remaining_shadow_items = ordered_items
+        .iter()
+        .filter(|(_, item)| matches!(item, SegmentDrawItem::Shadow(_)))
+        .count();
+    let commands: Vec<_> = SegmentCommandIter::new(ordered_items, shapes, images).collect();
+    let draw_chunks = commands
+        .iter()
+        .filter(|command| matches!(command, SegmentRenderCommand::DrawChunk(_)))
+        .count();
+    let shadow_commands = commands
+        .iter()
+        .filter(|command| matches!(command, SegmentRenderCommand::Shadow(_)))
+        .count();
+    let mut native_partitions = 0usize;
+    let mut native_unfused_chunks = 0usize;
+    for command in &commands {
+        let SegmentRenderCommand::DrawChunk(chunk) = command else {
             continue;
-        }
-        if effect_layer_in_range(layer, z_start, z_end) {
-            out.push(LayerEvent {
-                z_index: layer.z_start,
-                kind: LayerEventKind::Effect(index),
-            });
+        };
+        match native_segment_fusion_partitions(ordered_items, shapes, chunk) {
+            Ok(Some(partitions)) => native_partitions += partitions.len(),
+            Ok(None) | Err(_) => native_unfused_chunks += 1,
         }
     }
-    out.sort_by(|a, b| {
-        // Primary key: z-index ascending.
-        let z_cmp = a.z_index.cmp(&b.z_index);
-        if z_cmp != std::cmp::Ordering::Equal {
-            return z_cmp;
-        }
 
-        // Secondary key: backdrop before effect at same z-index.
-        let kind_cmp = a.kind_order().cmp(&b.kind_order());
-        if kind_cmp != std::cmp::Ordering::Equal {
-            return kind_cmp;
-        }
-
-        // Tertiary key for same-z effects: outer-most (largest z_end) first.
-        // If ranges are identical, prefer later insertion index (parents are
-        // emitted after children during scene collection).
-        match (a.kind, b.kind) {
-            (LayerEventKind::Effect(ai), LayerEventKind::Effect(bi)) => effect_layers[bi]
-                .z_end
-                .cmp(&effect_layers[ai].z_end)
-                .then_with(|| bi.cmp(&ai)),
-            _ => std::cmp::Ordering::Equal,
-        }
-    });
+    eprintln!(
+        "[segment-diag #{line}] z={}..{} items={} raw_shadows={} culled_shadows={} cached_shadows={} remaining_shadows={} composites={} shader_composites={} draw_chunks={} shadow_commands={} native_partitions={} native_unfused_chunks={}",
+        z_range.start,
+        z_range.end,
+        ordered_items.len(),
+        counts.raw_shadow_items,
+        counts.culled_shadow_items,
+        counts.cached_shadow_composites,
+        remaining_shadow_items,
+        counts.composite_items,
+        counts.shader_composite_items,
+        draw_chunks,
+        shadow_commands,
+        native_partitions,
+        native_unfused_chunks,
+    );
 }
 
 pub(crate) fn has_backdrop_layer_in_range(
@@ -5444,6 +9704,29 @@ fn image_uv_rect(image: &ImageBitmap, src_rect: Option<Rect>) -> Option<ImageUvR
         max: [u_max, v_max],
         sample_bounds: [u_bound_min, v_bound_min, u_bound_max, v_bound_max],
     })
+}
+
+fn glyph_atlas_uv_rect(entry: GlyphAtlasEntry) -> ImageUvRect {
+    let atlas_width = TEXT_GLYPH_ATLAS_WIDTH as f32;
+    let atlas_height = TEXT_GLYPH_ATLAS_HEIGHT as f32;
+    let min = [entry.x as f32 / atlas_width, entry.y as f32 / atlas_height];
+    let max = [
+        (entry.x + entry.width) as f32 / atlas_width,
+        (entry.y + entry.height) as f32 / atlas_height,
+    ];
+    let center_min = [
+        (entry.x as f32 + 0.5) / atlas_width,
+        (entry.y as f32 + 0.5) / atlas_height,
+    ];
+    let center_max = [
+        (entry.x as f32 + entry.width as f32 - 0.5).max(entry.x as f32 + 0.5) / atlas_width,
+        (entry.y as f32 + entry.height as f32 - 0.5).max(entry.y as f32 + 0.5) / atlas_height,
+    ];
+    ImageUvRect {
+        min,
+        max,
+        sample_bounds: [center_min[0], center_min[1], center_max[0], center_max[1]],
+    }
 }
 
 fn snap_nearest_image_to_device_pixels(image: &mut ImageDraw, root_scale: f32) {
@@ -5599,15 +9882,22 @@ fn inner_shadow_composite_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::normalized_scene::visible_draw_rect;
+    use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
     use cranpose_render_common::graph::{DrawPrimitiveNode, IsolationReasons, TextPrimitiveNode};
     use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
+    use cranpose_render_common::scene_builder::build_graph_from_applier;
     use cranpose_ui::text::{
         AnnotatedString, BaselineShift, RangeStyle, Shadow, SpanStyle, TextDecoration,
-        TextDrawStyle, TextGeometricTransform, TextUnit,
+        TextDrawStyle, TextGeometricTransform, TextMotion, TextUnit,
     };
-    use cranpose_ui::{TextLayoutOptions, TextStyle};
+    use cranpose_ui::{
+        LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Size, Text, TextLayoutOptions,
+        TextStyle,
+    };
     use cranpose_ui_graphics::{
         Brush, Color, CornerRadii, DrawPrimitive, Rect, RenderEffect, RoundedCornerShape,
+        RuntimeShader,
     };
 
     fn chunk(batches: &[SegmentBatchPlan]) -> SegmentDrawChunkPlan {
@@ -5621,6 +9911,24 @@ mod tests {
     fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
         let app_context = cranpose_ui::AppContext::new();
         app_context.enter(block)
+    }
+
+    fn assert_snap_anchor_close(actual: Option<SnapAnchor>, expected_origin: Point, message: &str) {
+        let Some(actual) = actual else {
+            panic!("{message}: missing snap anchor");
+        };
+        let expected = SnapAnchor::rigid(expected_origin);
+        assert_eq!(
+            actual.device_pixel_step, expected.device_pixel_step,
+            "{message}: device pixel step changed"
+        );
+        assert!(
+            (actual.origin.x - expected.origin.x).abs() <= 1e-4
+                && (actual.origin.y - expected.origin.y).abs() <= 1e-4,
+            "{message}: expected origin {:?}, got {:?}",
+            expected.origin,
+            actual.origin
+        );
     }
 
     fn effect_layer(z_start: usize, z_end: usize) -> EffectLayer {
@@ -5640,6 +9948,713 @@ mod tests {
             z_end,
             requirements: SurfaceRequirementSet::default().with(SurfaceRequirement::RenderEffect),
         }
+    }
+
+    #[test]
+    fn direct_shader_composite_accepts_box4_when_viewport_preserves_source_pixels() {
+        assert_eq!(
+            direct_shader_composite_viewport(
+                1.0,
+                BlendMode::SrcOver,
+                Some((12.0, 18.0, 64.0, 32.0)),
+                CompositeSampleMode::Box4,
+                (64, 32),
+            ),
+            Some((12.0, 18.0, 64.0, 32.0))
+        );
+    }
+
+    #[test]
+    fn direct_shader_composite_rejects_box4_when_viewport_resamples_source() {
+        assert_eq!(
+            direct_shader_composite_viewport(
+                1.0,
+                BlendMode::SrcOver,
+                Some((12.0, 18.0, 64.5, 32.0)),
+                CompositeSampleMode::Box4,
+                (64, 32),
+            ),
+            None
+        );
+        assert_eq!(
+            direct_shader_composite_viewport(
+                1.0,
+                BlendMode::SrcOver,
+                Some((12.25, 18.0, 64.0, 32.0)),
+                CompositeSampleMode::Box4,
+                (64, 32),
+            ),
+            None
+        );
+    }
+
+    fn test_text_draw(rect: Rect, text_motion: TextMotion) -> TextDraw {
+        let mut text_style = TextStyle::default();
+        text_style.paragraph_style.text_motion = Some(text_motion);
+        TextDraw {
+            node_id: 42,
+            rect,
+            snap_anchor: None,
+            translated_content_context: false,
+            text: Rc::new(AnnotatedString::new("stable markdown row".to_string())),
+            color: Color::WHITE,
+            text_style,
+            font_size: 14.0,
+            scale: 1.0,
+            layout_options: TextLayoutOptions::default(),
+            z_index: 0,
+            clip: None,
+        }
+    }
+
+    #[test]
+    fn static_text_image_cache_key_ignores_absolute_scroll_position() {
+        let base = test_text_draw(
+            Rect {
+                x: 12.25,
+                y: 40.75,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Static,
+        );
+        let scrolled = test_text_draw(
+            Rect {
+                x: 12.75,
+                y: -318.5,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Static,
+        );
+
+        let base_key = GpuRenderer::text_image_cache_key(&base, base.rect, 1.0, true);
+        let scrolled_key = GpuRenderer::text_image_cache_key(&scrolled, scrolled.rect, 1.0, true);
+
+        assert_eq!(
+            base_key, scrolled_key,
+            "scrolling static text must reuse the same raster cache entry"
+        );
+    }
+
+    #[test]
+    fn static_text_glyph_run_cache_key_ignores_absolute_scroll_position() {
+        let base = test_text_draw(
+            Rect {
+                x: 12.25,
+                y: 40.75,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Static,
+        );
+        let scrolled = test_text_draw(
+            Rect {
+                x: 12.75,
+                y: -318.5,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Static,
+        );
+
+        let base_key = GpuRenderer::text_glyph_run_cache_key(&base, base.rect, 1.0, true);
+        let scrolled_key =
+            GpuRenderer::text_glyph_run_cache_key(&scrolled, scrolled.rect, 1.0, true);
+
+        assert_eq!(
+            base_key, scrolled_key,
+            "scrolling static text must reuse the same retained glyph run"
+        );
+    }
+
+    #[test]
+    fn static_multiline_text_glyph_source_keeps_full_text_when_image_source_slices() {
+        let rect = Rect {
+            x: 8.0,
+            y: 100.0,
+            width: 240.0,
+            height: 1_000.0,
+        };
+        let mut draw = test_text_draw(rect, TextMotion::Static);
+        let lines = (0..100)
+            .map(|line| format!("line-{line:03}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        draw.text = Rc::new(AnnotatedString::from(lines));
+
+        let raster_rect = Rect {
+            x: 16.0,
+            y: 200.0,
+            width: 480.0,
+            height: 2_000.0,
+        };
+        let clipped = clipped_text_raster_source(
+            &draw,
+            rect,
+            raster_rect,
+            Some(Rect {
+                x: 0.0,
+                y: 610.0,
+                width: 800.0,
+                height: 40.0,
+            }),
+            2.0,
+            true,
+        );
+        let glyph = text_glyph_raster_source(&draw, raster_rect);
+
+        assert!(
+            matches!(clipped.draw, Cow::Owned(_)),
+            "the image source should still slice large clipped multiline text"
+        );
+        assert!(
+            matches!(glyph.draw, Cow::Borrowed(_)),
+            "the glyph source must keep a stable full-text run key while scrolling"
+        );
+
+        let clipped_key = GpuRenderer::text_glyph_run_cache_key(
+            clipped.draw.as_ref(),
+            clipped.raster_rect,
+            2.0,
+            true,
+        );
+        let glyph_key = GpuRenderer::text_glyph_run_cache_key(
+            glyph.draw.as_ref(),
+            glyph.raster_rect,
+            2.0,
+            true,
+        );
+
+        assert_ne!(
+            clipped_key, glyph_key,
+            "image slicing must not force glyph rendering onto per-scroll line-window cache keys"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_glyph_viewport_offsets_relative_vertices_by_source_origin() {
+        let viewport = ViewportUniformParams {
+            width: 800,
+            height: 600,
+            offset: [10.0, 20.0],
+        };
+        let source = Rect {
+            x: 40.0,
+            y: 90.0,
+            width: 120.0,
+            height: 48.0,
+        };
+
+        let retained = GpuRenderer::retained_glyph_viewport(viewport, source);
+
+        assert_eq!(retained.width, viewport.width);
+        assert_eq!(retained.height, viewport.height);
+        assert_eq!(retained.offset, [-30.0, -70.0]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn tiny_text_glyph_runs_stay_in_shared_uploads() {
+        assert!(
+            !should_use_retained_text_glyph_run(8, None),
+            "tiny labels must stay in the shared fused batch"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn line_sized_text_glyph_runs_stay_in_shared_uploads() {
+        assert!(
+            !should_use_retained_text_glyph_run(64, None),
+            "Markdown scroll frames contain many line-sized text runs; retaining each one creates per-run buffer binds instead of one shared glyph batch"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn large_clipped_text_glyph_runs_stay_in_shared_uploads() {
+        assert!(
+            !should_use_retained_text_glyph_run(
+                MIN_RETAINED_TEXT_GLYPH_QUADS.saturating_mul(2),
+                Some(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 200.0,
+                    height: 100.0,
+                }),
+            ),
+            "clipped lazy-list text must not draw a full retained run outside the viewport"
+        );
+    }
+
+    #[test]
+    fn normal_text_glyph_draw_skips_offscreen_prewarm_candidates() {
+        assert_eq!(
+            text_glyph_draw_action(false, true, false),
+            TextGlyphDrawAction::Skip,
+            "normal draw traversal must not prepare offscreen text"
+        );
+    }
+
+    #[test]
+    fn bounded_text_glyph_prewarm_admits_offscreen_candidates() {
+        assert_eq!(
+            text_glyph_draw_action(false, true, true),
+            TextGlyphDrawAction::PrewarmOffscreen,
+            "only the bounded prewarm path may prepare offscreen text"
+        );
+    }
+
+    #[test]
+    fn visible_text_glyph_draws_are_always_admitted() {
+        assert_eq!(
+            text_glyph_draw_action(true, false, false),
+            TextGlyphDrawAction::DrawVisible
+        );
+        assert_eq!(
+            text_glyph_draw_action(true, true, true),
+            TextGlyphDrawAction::DrawVisible
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn offscreen_text_prewarm_skips_large_uncached_text_runs() {
+        assert!(
+            !offscreen_text_glyph_prewarm_work_is_bounded(
+                None,
+                MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_UNCACHED_CHARS + 1,
+            ),
+            "offscreen prewarm must not collect large uncached text runs in an input frame"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn offscreen_text_prewarm_admits_small_uncached_text_runs() {
+        assert!(
+            offscreen_text_glyph_prewarm_work_is_bounded(
+                None,
+                MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_UNCACHED_CHARS,
+            ),
+            "small labels can be warmed without risking a frame-budget spike"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn offscreen_text_prewarm_skips_large_cached_runs_without_quads() {
+        assert!(
+            !offscreen_text_glyph_prewarm_work_is_bounded(
+                Some(MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CACHED_GLYPHS + 1),
+                0,
+            ),
+            "cached glyph placements can still be too large to prepare during input frames"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn offscreen_text_prewarm_stops_after_candidate_budget() {
+        assert!(
+            offscreen_text_glyph_prewarm_budget_exhausted(
+                Instant::now(),
+                MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CANDIDATES,
+            ),
+            "prewarm must be bounded by candidate count even when each candidate is cheap"
+        );
+    }
+
+    #[test]
+    fn clipped_cached_glyph_quads_are_filtered_to_viewport() {
+        fn quad(y: i32) -> CachedTextGlyphQuad {
+            CachedTextGlyphQuad {
+                x: 8,
+                y,
+                width: 20,
+                height: 10,
+                color: (1.0, 1.0, 1.0, 1.0),
+                uv: ImageUvRect {
+                    min: [0.0, 0.0],
+                    max: [1.0, 1.0],
+                    sample_bounds: [0.0, 0.0, 1.0, 1.0],
+                },
+            }
+        }
+
+        let source = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 400.0,
+        };
+        let clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 80.0,
+        });
+        let viewport = ViewportUniformParams {
+            width: 320,
+            height: 80,
+            offset: [0.0, 0.0],
+        };
+
+        assert!(cached_text_glyph_quad_is_visible_in_viewport(
+            source,
+            &quad(40),
+            clip,
+            viewport,
+            1.0,
+        ));
+        assert!(
+            !cached_text_glyph_quad_is_visible_in_viewport(source, &quad(140), clip, viewport, 1.0,),
+            "glyphs outside the effective clip should not enter the frame command stream"
+        );
+    }
+
+    #[test]
+    fn small_scene_range_cache_miss_observes_first_render() {
+        let key = LayerRasterCacheKey::scene_range(
+            0xCACE,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            (120, 80),
+            ScaleBucket::from_scale(1.0),
+        );
+
+        assert!(
+            !first_cache_miss_admission(&key),
+            "a small scene-range miss should render directly first instead of materializing a tiny one-frame retained target"
+        );
+        assert!(
+            repeated_cache_miss_admission(&key),
+            "a repeated small scene-range miss is stable enough to materialize into the retained cache"
+        );
+    }
+
+    #[test]
+    fn large_scene_range_cache_miss_requires_repeated_stable_key() {
+        let key = LayerRasterCacheKey::scene_range(
+            0xCACE,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1200.0,
+                height: 900.0,
+            },
+            (1200, 900),
+            ScaleBucket::from_scale(1.0),
+        );
+
+        assert!(
+            !first_cache_miss_admission(&key),
+            "a large first scene-range miss should render directly instead of materializing a multi-MB one-frame cache entry"
+        );
+        assert!(
+            repeated_cache_miss_admission(&key),
+            "a repeated scene-range miss is stable enough to materialize into the retained cache"
+        );
+    }
+
+    #[test]
+    fn renderer_warmup_frame_is_requested_for_cache_miss_stats_only() {
+        let stats = gpu_stats::FrameStats::default();
+        let mut snapshot = stats.snapshot();
+        assert!(
+            !frame_stats_need_warmup_frame(&snapshot),
+            "a clean frame must not keep a static scene redrawing"
+        );
+
+        snapshot.layer_cache_misses = 1;
+        assert!(frame_stats_need_warmup_frame(&snapshot));
+        snapshot.layer_cache_misses = 0;
+
+        snapshot.shadow_shape_cache_misses = 1;
+        assert!(frame_stats_need_warmup_frame(&snapshot));
+        snapshot.shadow_shape_cache_misses = 0;
+
+        snapshot.text_image_cache_misses = 1;
+        assert!(frame_stats_need_warmup_frame(&snapshot));
+        snapshot.text_image_cache_misses = 0;
+
+        snapshot.text_glyph_atlas_misses = 1;
+        assert!(frame_stats_need_warmup_frame(&snapshot));
+    }
+
+    #[test]
+    fn non_scene_layer_surface_cache_miss_admits_first_render() {
+        let key = LayerRasterCacheKey::new(
+            Some(77),
+            0xC0FFEE,
+            0,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            (120, 80),
+            ScaleBucket::from_scale(1.0),
+        );
+
+        assert!(
+            first_cache_miss_admission(&key),
+            "ordinary retained layer surfaces should still cache on first miss"
+        );
+    }
+
+    #[test]
+    fn text_image_cache_key_is_content_addressed_not_node_addressed() {
+        let first = test_text_draw(
+            Rect {
+                x: 12.25,
+                y: 40.75,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Static,
+        );
+        let mut second = first.clone();
+        second.node_id = first.node_id + 1;
+
+        let first_key = GpuRenderer::text_image_cache_key(&first, first.rect, 1.0, true);
+        let second_key = GpuRenderer::text_image_cache_key(&second, second.rect, 1.0, true);
+
+        assert_eq!(
+            first_key, second_key,
+            "text raster cache keys must be based on rendered pixels, not node identity"
+        );
+    }
+
+    #[test]
+    fn animated_text_image_cache_key_keeps_fractional_phase_only() {
+        let base = test_text_draw(
+            Rect {
+                x: 12.25,
+                y: 40.75,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Animated,
+        );
+        let integer_translated = test_text_draw(
+            Rect {
+                x: 44.25,
+                y: 88.75,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Animated,
+        );
+        let phase_shifted = test_text_draw(
+            Rect {
+                x: 44.5,
+                y: 88.75,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Animated,
+        );
+
+        let base_key = GpuRenderer::text_image_cache_key(&base, base.rect, 1.0, false);
+        let translated_key = GpuRenderer::text_image_cache_key(
+            &integer_translated,
+            integer_translated.rect,
+            1.0,
+            false,
+        );
+        let phase_shifted_key =
+            GpuRenderer::text_image_cache_key(&phase_shifted, phase_shifted.rect, 1.0, false);
+
+        assert_eq!(
+            base_key, translated_key,
+            "integer translation should not invalidate animated text raster cache entries"
+        );
+        assert_ne!(
+            base_key, phase_shifted_key,
+            "fractional phase affects animated text rasterization and must stay in the key"
+        );
+    }
+
+    #[test]
+    fn animated_translated_text_raster_geometry_applies_snap_anchor() {
+        let mut base = test_text_draw(
+            Rect {
+                x: 14.25,
+                y: 16.50,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Animated,
+        );
+        base.snap_anchor = Some(SnapAnchor::rigid(Point::new(14.25, 16.50)));
+
+        let mut scrolled = test_text_draw(
+            Rect {
+                x: 14.25,
+                y: 15.80,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Animated,
+        );
+        scrolled.snap_anchor = Some(SnapAnchor::rigid(Point::new(14.25, 15.80)));
+
+        let (base_logical, base_raster, _, _, base_static) =
+            text_raster_geometry_for_draw(&base, 1.0).expect("base text geometry");
+        let (scrolled_logical, scrolled_raster, _, _, scrolled_static) =
+            text_raster_geometry_for_draw(&scrolled, 1.0).expect("scrolled text geometry");
+
+        assert!(!base_static);
+        assert!(!scrolled_static);
+        assert!((base_logical.x - 14.0).abs() < f32::EPSILON);
+        assert!((base_logical.y - 17.0).abs() < f32::EPSILON);
+        assert!((scrolled_logical.x - 14.0).abs() < f32::EPSILON);
+        assert!((scrolled_logical.y - 16.0).abs() < f32::EPSILON);
+        assert_eq!(base_raster.x.fract(), 0.0);
+        assert_eq!(base_raster.y.fract(), 0.0);
+        assert_eq!(scrolled_raster.x.fract(), 0.0);
+        assert_eq!(scrolled_raster.y.fract(), 0.0);
+
+        let base_key = GpuRenderer::text_image_cache_key(&base, base_raster, 1.0, false);
+        let scrolled_key =
+            GpuRenderer::text_image_cache_key(&scrolled, scrolled_raster, 1.0, false);
+        assert_eq!(
+            base_key, scrolled_key,
+            "translated animated text should keep a stable raster phase while scrolling"
+        );
+    }
+
+    #[test]
+    fn clipped_static_multiline_text_raster_source_limits_visible_line_window() {
+        let rect = Rect {
+            x: 8.0,
+            y: 100.0,
+            width: 240.0,
+            height: 1_000.0,
+        };
+        let mut draw = test_text_draw(rect, TextMotion::Static);
+        let lines = (0..100)
+            .map(|line| format!("line-{line:03}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        draw.text = Rc::new(AnnotatedString::from(lines));
+
+        let raster_rect = Rect {
+            x: 16.0,
+            y: 200.0,
+            width: 480.0,
+            height: 2_000.0,
+        };
+        let source = clipped_text_raster_source(
+            &draw,
+            rect,
+            raster_rect,
+            Some(Rect {
+                x: 0.0,
+                y: 610.0,
+                width: 800.0,
+                height: 40.0,
+            }),
+            2.0,
+            true,
+        );
+
+        let Cow::Owned(sliced_draw) = source.draw else {
+            panic!("clipped static multiline text should rasterize only the visible line window");
+        };
+        let sliced_text = sliced_draw.text.text.as_str();
+        assert!(sliced_text.contains("line-050"));
+        assert!(sliced_text.contains("line-055"));
+        assert!(!sliced_text.contains("line-000"));
+        assert!(!sliced_text.contains("line-099"));
+        assert_eq!(source.raster_rect.x, raster_rect.x);
+        assert!(source.raster_rect.y > raster_rect.y);
+        assert!(source.raster_rect.height < raster_rect.height);
+    }
+
+    #[test]
+    fn clipped_static_multiline_text_raster_source_slices_short_multiline_text() {
+        let rect = Rect {
+            x: 8.0,
+            y: 100.0,
+            width: 240.0,
+            height: 320.0,
+        };
+        let mut draw = test_text_draw(rect, TextMotion::Static);
+        let lines = (0..24)
+            .map(|line| format!("code-line-{line:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        draw.text = Rc::new(AnnotatedString::from(lines));
+
+        let raster_rect = Rect {
+            x: 16.0,
+            y: 200.0,
+            width: 480.0,
+            height: 640.0,
+        };
+        let source = clipped_text_raster_source(
+            &draw,
+            rect,
+            raster_rect,
+            Some(Rect {
+                x: 0.0,
+                y: 190.0,
+                width: 800.0,
+                height: 120.0,
+            }),
+            2.0,
+            true,
+        );
+
+        let Cow::Owned(sliced_draw) = source.draw else {
+            panic!("clipped multiline text should rasterize only the visible line window");
+        };
+        assert!(sliced_draw.text.text.as_str().contains("code-line-06"));
+        assert!(!sliced_draw.text.text.as_str().contains("code-line-00"));
+        assert!(!sliced_draw.text.text.as_str().contains("code-line-23"));
+        assert_eq!(source.raster_rect.x, raster_rect.x);
+        assert!(source.raster_rect.y > raster_rect.y);
+        assert!(source.raster_rect.height < raster_rect.height);
+    }
+
+    #[test]
+    fn text_line_index_cache_reuses_retained_index_for_same_text_instance() {
+        let mut cache = TextLineIndexCache::new(4);
+        let text = Rc::new(AnnotatedString::from("a\nb\nc"));
+
+        let first = cache.line_starts(&text);
+        let second = cache.line_starts(&text);
+
+        assert_eq!(first.as_ref(), &[0, 2, 4]);
+        assert!(
+            Rc::ptr_eq(&first, &second),
+            "retained text should not rebuild its line index on every clipped frame"
+        );
+    }
+
+    #[test]
+    fn text_line_index_cache_is_retained_text_instance_local() {
+        let mut cache = TextLineIndexCache::new(4);
+        let first_text = Rc::new(AnnotatedString::from("a\nb\nc"));
+        let second_text = Rc::new(AnnotatedString::from("a\nb\nc"));
+
+        let first = cache.line_starts(&first_text);
+        let second = cache.line_starts(&second_text);
+
+        assert_eq!(first.as_ref(), second.as_ref());
+        assert!(
+            !Rc::ptr_eq(&first, &second),
+            "line index lookup should not hash large text contents to find unrelated retained nodes"
+        );
     }
 
     #[test]
@@ -5746,6 +10761,7 @@ mod tests {
 
     fn backdrop_layer(z_index: usize) -> BackdropLayer {
         BackdropLayer {
+            node_id: Some(700 + z_index),
             rect: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -5779,6 +10795,7 @@ mod tests {
             z_index,
             clip: None,
             blend_mode,
+            motion_context_animated: false,
         }
     }
 
@@ -5868,6 +10885,109 @@ mod tests {
             shape_shadow_content_hash(&changed_shapes, translated_viewport_offset, root_scale);
 
         assert_ne!(first_hash, changed_hash);
+    }
+
+    #[test]
+    fn shape_shadow_cache_key_uses_unclipped_source_bounds_for_scrolled_clip() {
+        fn translated_card_shadow(y: f32) -> Vec<(DrawShape, BlendMode)> {
+            let mut shape = test_shape(1, BlendMode::SrcOver);
+            shape.rect = Rect {
+                x: 24.0,
+                y,
+                width: 280.0,
+                height: 120.0,
+            };
+            shape.local_rect = shape.rect;
+            shape.quad = [[24.0, y], [304.0, y], [24.0, y + 120.0], [304.0, y + 120.0]];
+            shape.shape = Some(RoundedCornerShape::uniform(18.0));
+            vec![(shape, BlendMode::SrcOver)]
+        }
+
+        let root_scale = 1.0;
+        let pixel_radius = 18.0;
+        let first_shapes = translated_card_shadow(740.0);
+        let second_shapes = translated_card_shadow(756.0);
+        let first_source_bounds = unclamped_device_pixel_bounds_for_rect(
+            Rect {
+                x: 6.0,
+                y: 686.0,
+                width: 316.0,
+                height: 228.0,
+            },
+            root_scale,
+            4096,
+        )
+        .expect("first source bounds");
+        let second_source_bounds = unclamped_device_pixel_bounds_for_rect(
+            Rect {
+                x: 6.0,
+                y: 702.0,
+                width: 316.0,
+                height: 228.0,
+            },
+            root_scale,
+            4096,
+        )
+        .expect("second source bounds");
+
+        let first_key = shape_shadow_surface_cache_key(
+            &first_shapes,
+            first_source_bounds,
+            pixel_radius,
+            root_scale,
+        )
+        .expect("first key");
+        let second_key = shape_shadow_surface_cache_key(
+            &second_shapes,
+            second_source_bounds,
+            pixel_radius,
+            root_scale,
+        )
+        .expect("second key");
+
+        assert_eq!(first_key, second_key);
+    }
+
+    #[test]
+    fn shape_visibility_uses_nonzero_viewport_offset_for_cropped_offscreen() {
+        let mut shape = test_shape(1, BlendMode::SrcOver);
+        shape.rect = Rect {
+            x: 24.0,
+            y: 740.0,
+            width: 280.0,
+            height: 120.0,
+        };
+        shape.local_rect = shape.rect;
+        shape.quad = [[24.0, 740.0], [304.0, 740.0], [24.0, 860.0], [304.0, 860.0]];
+        let viewport = ViewportUniformParams {
+            width: 316,
+            height: 228,
+            offset: [6.0, 686.0],
+        };
+
+        assert!(shape_draw_is_visible_in_viewport(&shape, viewport, 1.0));
+    }
+
+    #[test]
+    fn text_prewarm_uses_nonzero_viewport_offset_for_cropped_offscreen() {
+        let viewport = ViewportUniformParams {
+            width: 316,
+            height: 228,
+            offset: [6.0, 686.0],
+        };
+        let text_rect = Rect {
+            x: 24.0,
+            y: 740.0,
+            width: 280.0,
+            height: 40.0,
+        };
+
+        assert!(text_draw_is_visible_in_viewport(
+            text_rect, None, viewport, 1.0
+        ));
+        assert!(text_draw_should_prewarm_in_viewport(
+            text_rect, None, viewport, 1.0
+        ));
     }
 
     fn test_shadow_draw(shapes: Vec<(DrawShape, BlendMode)>) -> ShadowDraw {
@@ -5973,6 +11093,124 @@ mod tests {
         }
     }
 
+    #[test]
+    fn text_draw_visibility_rejects_text_outside_clip_before_rasterization() {
+        let viewport = ViewportUniformParams {
+            width: 320,
+            height: 240,
+            offset: [0.0, 0.0],
+        };
+        let text_rect = Rect {
+            x: 0.0,
+            y: 260.0,
+            width: 200.0,
+            height: 40.0,
+        };
+        let clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 200.0,
+        });
+
+        assert!(
+            !text_draw_is_visible_in_viewport(text_rect, clip, viewport, 1.0),
+            "lazy-list beyond-bound text outside the clip must not be rasterized"
+        );
+    }
+
+    #[test]
+    fn text_draw_prewarm_accepts_clipped_text_near_viewport() {
+        let viewport = ViewportUniformParams {
+            width: 320,
+            height: 240,
+            offset: [0.0, 0.0],
+        };
+        let text_rect = Rect {
+            x: 0.0,
+            y: 260.0,
+            width: 200.0,
+            height: 40.0,
+        };
+        let clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 200.0,
+        });
+
+        assert!(!text_draw_is_visible_in_viewport(
+            text_rect, clip, viewport, 1.0
+        ));
+        assert!(text_draw_should_prewarm_in_viewport(
+            text_rect, clip, viewport, 1.0
+        ));
+    }
+
+    #[test]
+    fn text_draw_prewarm_rejects_far_clipped_text() {
+        let viewport = ViewportUniformParams {
+            width: 320,
+            height: 240,
+            offset: [0.0, 0.0],
+        };
+        let text_rect = Rect {
+            x: 0.0,
+            y: 1600.0,
+            width: 200.0,
+            height: 40.0,
+        };
+        let clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 200.0,
+        });
+
+        assert!(!text_draw_should_prewarm_in_viewport(
+            text_rect, clip, viewport, 1.0
+        ));
+    }
+
+    #[test]
+    fn text_draw_visibility_rejects_unclipped_text_outside_viewport() {
+        let viewport = ViewportUniformParams {
+            width: 320,
+            height: 240,
+            offset: [0.0, 0.0],
+        };
+        let text_rect = Rect {
+            x: 0.0,
+            y: 241.0,
+            width: 200.0,
+            height: 40.0,
+        };
+
+        assert!(
+            !text_draw_is_visible_in_viewport(text_rect, None, viewport, 1.0),
+            "unclipped text outside the target viewport must not be rasterized"
+        );
+    }
+
+    #[test]
+    fn text_draw_visibility_keeps_partially_visible_text() {
+        let viewport = ViewportUniformParams {
+            width: 320,
+            height: 240,
+            offset: [0.0, 0.0],
+        };
+        let text_rect = Rect {
+            x: 0.0,
+            y: 220.0,
+            width: 200.0,
+            height: 40.0,
+        };
+
+        assert!(text_draw_is_visible_in_viewport(
+            text_rect, None, viewport, 1.0
+        ));
+    }
+
     fn test_draw_ops(
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -6062,6 +11300,7 @@ mod tests {
             motion_context_animated: animated,
             translated_content_context,
             translated_content_offset: Point::default(),
+            content_offset: Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -6175,6 +11414,7 @@ mod tests {
             motion_context_animated: false,
             translated_content_context: true,
             translated_content_offset: Point::default(),
+            content_offset: Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -6421,6 +11661,7 @@ mod tests {
             motion_context_animated: animated,
             translated_content_context,
             translated_content_offset: Point::default(),
+            content_offset: Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -6560,6 +11801,337 @@ mod tests {
             vec![RenderNode::Layer(Box::new(child))],
         );
         assert!(layer_contains_descendant_backdrop(&parent));
+    }
+
+    fn child_layer_composite<'a>(
+        layer: &'a LayerNode,
+        z_index: usize,
+        rect: Rect,
+        needs_nested_underlay: bool,
+    ) -> crate::normalized_scene::ChildLayerComposite<'a> {
+        crate::normalized_scene::ChildLayerComposite {
+            z_index,
+            layer,
+            logical_rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: rect.width,
+                height: rect.height,
+            },
+            dest_quad: rect_to_quad(rect),
+            snap_anchor: None,
+            backdrop_rect: rect,
+            visual_clip: None,
+            surface_clip: None,
+            shadow_draws: Vec::new(),
+            needs_nested_underlay,
+        }
+    }
+
+    #[test]
+    fn root_direct_preflight_allows_first_translated_child_underlay() {
+        let child = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 280.0,
+            },
+            vec![],
+        );
+        let collected = CollectedLayer {
+            scene: CompositorScene::new(),
+            child_layers: vec![child_layer_composite(
+                &child,
+                3,
+                Rect {
+                    x: 48.0,
+                    y: 96.0,
+                    width: 400.0,
+                    height: 280.0,
+                },
+                true,
+            )],
+        };
+
+        assert!(direct_root_child_underlays_are_supported(&collected));
+    }
+
+    #[test]
+    fn root_direct_preflight_allows_axis_aligned_prior_child_underlay() {
+        let first = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 40.0,
+            },
+            vec![],
+        );
+        let backdrop_child = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 280.0,
+            },
+            vec![],
+        );
+        let collected = CollectedLayer {
+            scene: CompositorScene::new(),
+            child_layers: vec![
+                child_layer_composite(
+                    &first,
+                    1,
+                    Rect {
+                        x: 8.0,
+                        y: 16.0,
+                        width: 80.0,
+                        height: 40.0,
+                    },
+                    false,
+                ),
+                child_layer_composite(
+                    &backdrop_child,
+                    4,
+                    Rect {
+                        x: 48.0,
+                        y: 96.0,
+                        width: 400.0,
+                        height: 280.0,
+                    },
+                    true,
+                ),
+            ],
+        };
+
+        assert!(direct_root_child_underlays_are_supported(&collected));
+    }
+
+    #[test]
+    fn root_direct_preflight_rejects_effectful_prior_child_underlay() {
+        let mut first = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 40.0,
+            },
+            vec![],
+        );
+        first.graphics_layer.render_effect = Some(RenderEffect::blur(2.0));
+        let backdrop_child = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 280.0,
+            },
+            vec![],
+        );
+        let collected = CollectedLayer {
+            scene: CompositorScene::new(),
+            child_layers: vec![
+                child_layer_composite(
+                    &first,
+                    1,
+                    Rect {
+                        x: 64.0,
+                        y: 112.0,
+                        width: 80.0,
+                        height: 40.0,
+                    },
+                    false,
+                ),
+                child_layer_composite(
+                    &backdrop_child,
+                    4,
+                    Rect {
+                        x: 48.0,
+                        y: 96.0,
+                        width: 400.0,
+                        height: 280.0,
+                    },
+                    true,
+                ),
+            ],
+        };
+
+        assert!(!direct_root_child_underlays_are_supported(&collected));
+    }
+
+    #[test]
+    fn root_direct_preflight_ignores_non_overlapping_effectful_prior_child_underlay() {
+        let mut first = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 40.0,
+            },
+            vec![],
+        );
+        first.graphics_layer.render_effect = Some(RenderEffect::blur(2.0));
+        let backdrop_child = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 280.0,
+            },
+            vec![],
+        );
+        let collected = CollectedLayer {
+            scene: CompositorScene::new(),
+            child_layers: vec![
+                child_layer_composite(
+                    &first,
+                    1,
+                    Rect {
+                        x: 8.0,
+                        y: 16.0,
+                        width: 80.0,
+                        height: 40.0,
+                    },
+                    false,
+                ),
+                child_layer_composite(
+                    &backdrop_child,
+                    4,
+                    Rect {
+                        x: 48.0,
+                        y: 96.0,
+                        width: 400.0,
+                        height: 280.0,
+                    },
+                    true,
+                ),
+            ],
+        };
+
+        assert!(direct_root_child_underlays_are_supported(&collected));
+    }
+
+    #[test]
+    fn root_direct_preflight_rejects_underlay_that_would_replay_prior_scene_effects() {
+        let backdrop_child = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 280.0,
+            },
+            vec![],
+        );
+        let mut scene = CompositorScene::new();
+        scene.next_z = 1;
+        scene.push_effect_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 120.0,
+            },
+            None,
+            Some(RenderEffect::blur(2.0)),
+            BlendMode::SrcOver,
+            1.0,
+            0,
+            1,
+        );
+        let collected = CollectedLayer {
+            scene,
+            child_layers: vec![child_layer_composite(
+                &backdrop_child,
+                4,
+                Rect {
+                    x: 48.0,
+                    y: 96.0,
+                    width: 400.0,
+                    height: 280.0,
+                },
+                true,
+            )],
+        };
+
+        assert!(!direct_root_child_underlays_are_supported(&collected));
+    }
+
+    #[test]
+    fn root_direct_eligibility_does_not_reject_descendant_backdrop() {
+        let mut backdrop = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 40.0,
+            },
+            vec![],
+        );
+        backdrop.graphics_layer.backdrop_effect = Some(RenderEffect::blur(4.0));
+        let child = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 96.0,
+            },
+            vec![RenderNode::Layer(Box::new(backdrop))],
+        );
+        let root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 240.0,
+                height: 160.0,
+            },
+            vec![RenderNode::Layer(Box::new(child))],
+        );
+        let mut cache = HashMap::new();
+
+        assert!(root_can_render_directly_cached(&root, &mut cache));
+    }
+
+    #[test]
+    fn root_direct_scene_events_allow_root_local_effects() {
+        let mut scene = CompositorScene::new();
+        scene.effect_layers.push(EffectLayer {
+            rect: Rect {
+                x: 20.0,
+                y: 30.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            clip: None,
+            snap_anchor: None,
+            effect: Some(RenderEffect::blur(6.0)),
+            blend_mode: BlendMode::SrcOver,
+            composite_alpha: 1.0,
+            z_start: 0,
+            z_end: 1,
+            requirements: SurfaceRequirementSet::default().with(SurfaceRequirement::RenderEffect),
+        });
+
+        assert!(root_direct_scene_events_are_supported(&scene));
+    }
+
+    #[test]
+    fn root_direct_scene_events_reject_root_local_backdrops() {
+        let mut scene = CompositorScene::new();
+        scene.backdrop_layers.push(BackdropLayer {
+            node_id: Some(99),
+            rect: Rect {
+                x: 20.0,
+                y: 30.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            clip: None,
+            effect: RenderEffect::blur(6.0),
+            z_index: 1,
+        });
+
+        assert!(!root_direct_scene_events_are_supported(&scene));
     }
 
     #[test]
@@ -6975,9 +12547,9 @@ mod tests {
             ),
             Some(Rect {
                 x: -96.0,
-                y: -300.0,
+                y: -64.0,
                 width: 296.0,
-                height: 400.0,
+                height: 164.0,
             })
         );
     }
@@ -7023,9 +12595,9 @@ mod tests {
             ),
             Some(Rect {
                 x: -96.0,
-                y: -300.0,
+                y: -64.0,
                 width: 296.0,
-                height: 400.0,
+                height: 164.0,
             })
         );
     }
@@ -7132,6 +12704,48 @@ mod tests {
         assert_eq!(
             layer_raster_cache_candidate(&base, 1.25, false, false),
             layer_raster_cache_candidate(&moved, 1.25, false, false)
+        );
+    }
+
+    #[test]
+    fn layer_raster_cache_candidate_changes_for_translated_content_offset() {
+        let primitive = PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 2.0,
+                        y: 3.0,
+                        width: 6.0,
+                        height: 4.0,
+                    },
+                    brush: Brush::solid(Color::BLACK),
+                },
+                clip: None,
+            }),
+        };
+        let mut base = cacheable_layer(
+            42,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            vec![RenderNode::Primitive(primitive)],
+        );
+        base.translated_content_context = true;
+        base.translated_content_offset = Point::new(0.0, -8.0);
+        base.recompute_raster_cache_hashes();
+
+        let mut moved = base.clone();
+        moved.translated_content_offset = Point::new(0.0, -16.0);
+        moved.recompute_raster_cache_hashes();
+
+        assert_ne!(
+            layer_raster_cache_candidate(&base, 1.25, false, false),
+            layer_raster_cache_candidate(&moved, 1.25, false, false),
+            "full-surface layer cache candidates must not alias different scroll offsets"
         );
     }
 
@@ -7247,6 +12861,68 @@ mod tests {
     }
 
     #[test]
+    fn layer_raster_cache_candidate_allows_stable_runtime_child_effect_surfaces() {
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 32.0,
+            },
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 64.0,
+                            height: 32.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
+        );
+        layer.node_id = Some(78);
+        layer.graphics_layer.render_effect = Some(RenderEffect::blur(4.0));
+        layer.recompute_raster_cache_hashes();
+
+        assert!(
+            layer_raster_cache_candidate(&layer, 1.0, false, false).is_none(),
+            "root direct path should not force-cache ordinary stable effects"
+        );
+        assert!(
+            layer_raster_cache_candidate(&layer, 1.0, false, true).is_some(),
+            "child surface rendering should retain stable non-runtime effects"
+        );
+    }
+
+    #[test]
+    fn layer_raster_cache_candidate_rejects_runtime_shader_child_effect_surfaces() {
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 32.0,
+            },
+            vec![],
+        );
+        layer.node_id = Some(79);
+        layer.graphics_layer.render_effect = Some(RenderEffect::runtime_shader(
+            RuntimeShader::new("runtime shader"),
+        ));
+        layer.recompute_raster_cache_hashes();
+
+        assert!(
+            layer_raster_cache_candidate(&layer, 1.0, false, true).is_none(),
+            "runtime shaders must not fill the retained layer cache with per-frame uniform variants"
+        );
+    }
+
+    #[test]
     fn layer_surface_requirements_keep_plain_text_on_direct_path() {
         let layer = text_layer_with_style(AnnotatedString::from("plain"), TextStyle::default());
 
@@ -7304,25 +12980,20 @@ mod tests {
     }
 
     #[test]
-    fn translated_plain_text_uses_bounded_snap_effect_layer() {
+    fn translated_plain_text_uses_bounded_snap_surface() {
         let root = pure_text_leaf_root(true, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
         let collected =
             collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
 
-        assert_eq!(collected.child_layers.len(), 0);
-        assert_eq!(collected.scene.texts.len(), 1);
-        assert_eq!(
-            collected.scene.texts[0].snap_anchor,
-            Some(SnapAnchor::rigid(Point::new(11.4, 23.6))),
-            "translated plain text should use the same content-origin snap phase while active"
-        );
-        assert_eq!(collected.scene.effect_layers.len(), 1);
-        assert_eq!(
-            collected.scene.effect_layers[0].snap_anchor,
-            Some(SnapAnchor::rigid(Point::new(11.4, 23.6))),
-            "translated plain text's bounded local picture should composite at the same snap phase"
+        assert_eq!(collected.child_layers.len(), 1);
+        assert!(collected.scene.texts.is_empty());
+        assert!(collected.scene.effect_layers.is_empty());
+        assert_snap_anchor_close(
+            collected.child_layers[0].snap_anchor,
+            Point::new(11.4, 23.6),
+            "translated plain text's bounded local surface should composite at the content-origin snap phase",
         );
     }
 
@@ -7582,27 +13253,15 @@ mod tests {
         let collected =
             collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
 
-        assert_eq!(collected.child_layers.len(), 0);
-        assert_eq!(collected.scene.shapes.len(), 1);
-        assert_eq!(collected.scene.images.len(), 1);
-        assert_eq!(collected.scene.texts.len(), 1);
-        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert_eq!(collected.child_layers.len(), 1);
+        assert!(collected.scene.shapes.is_empty());
+        assert!(collected.scene.images.is_empty());
+        assert!(collected.scene.texts.is_empty());
+        assert!(collected.scene.effect_layers.is_empty());
         let expected_anchor = Some(SnapAnchor::rigid(Point::new(14.25, 16.5)));
         assert_eq!(
-            collected.scene.effect_layers[0].snap_anchor, expected_anchor,
-            "active translated leaf capture should keep the content-origin snap phase"
-        );
-        assert_eq!(
-            collected.scene.shapes[0].snap_anchor, expected_anchor,
-            "active scroll shapes should render with the same content-origin snap phase as settled content"
-        );
-        assert_eq!(
-            collected.scene.images[0].snap_anchor, expected_anchor,
-            "active scroll images should render with the same content-origin snap phase as settled content"
-        );
-        assert_eq!(
-            collected.scene.texts[0].snap_anchor, expected_anchor,
-            "active scroll text should render with the same content-origin snap phase as settled content"
+            collected.child_layers[0].snap_anchor, expected_anchor,
+            "active translated leaf surface should keep the content-origin snap phase"
         );
     }
 
@@ -7712,8 +13371,8 @@ mod tests {
         assert_eq!(collected.child_layers.len(), 1);
         assert_eq!(
             collected.child_layers[0].snap_anchor,
-            Some(SnapAnchor::rigid(Point::new(14.25, -2.0))),
-            "animated scrolled descendants should composite with the same content-origin snap phase"
+            Some(SnapAnchor::rigid(Point::new(14.25, 16.5))),
+            "animated translated content should composite the stable local surface at the viewport-origin snap phase"
         );
     }
 
@@ -7911,14 +13570,13 @@ mod tests {
         let collected =
             collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
 
-        let expected_anchor = Some(SnapAnchor::rigid(Point::new(11.4, 23.6)));
-        assert_eq!(collected.child_layers.len(), 0);
-        assert_eq!(collected.scene.texts.len(), 1);
-        assert_eq!(collected.scene.effect_layers.len(), 1);
-        assert_eq!(collected.scene.texts[0].snap_anchor, expected_anchor);
-        assert_eq!(
-            collected.scene.effect_layers[0].snap_anchor,
-            expected_anchor
+        assert_eq!(collected.child_layers.len(), 1);
+        assert!(collected.scene.texts.is_empty());
+        assert!(collected.scene.effect_layers.is_empty());
+        assert_snap_anchor_close(
+            collected.child_layers[0].snap_anchor,
+            Point::new(11.4, 23.6),
+            "animated translated pure text should use the bounded content snap phase",
         );
     }
 
@@ -7934,10 +13592,10 @@ mod tests {
         assert_eq!(collected.child_layers.len(), 0);
         assert_eq!(collected.scene.texts.len(), 1);
         assert_eq!(collected.scene.effect_layers.len(), 0);
-        assert_eq!(
+        assert_snap_anchor_close(
             collected.scene.texts[0].snap_anchor,
-            Some(SnapAnchor::rigid(Point::new(11.4, 23.6))),
-            "rested translated text should snap to device pixels"
+            Point::new(11.4, 23.6),
+            "rested translated text should snap to device pixels",
         );
     }
 
@@ -8088,6 +13746,136 @@ mod tests {
                 .iter()
                 .any(|shape| shape.rect.y >= 7.0),
             "collapsed underline geometry should also be translated into parent space"
+        );
+    }
+
+    #[test]
+    fn normalized_scene_keeps_lazy_after_bound_text_for_prewarm() {
+        use std::cell::RefCell;
+
+        fn collect_graph_text_labels(layer: &LayerNode, labels: &mut Vec<String>) {
+            for child in &layer.children {
+                match child {
+                    RenderNode::Primitive(PrimitiveEntry {
+                        node: PrimitiveNode::Text(text),
+                        ..
+                    }) => labels.push(text.text.text.clone()),
+                    RenderNode::Layer(child_layer) => {
+                        collect_graph_text_labels(child_layer, labels)
+                    }
+                    RenderNode::Primitive(_) => {}
+                }
+            }
+        }
+
+        let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
+        let state_holder_for_comp = state_holder.clone();
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let list_state = remember_lazy_list_state();
+            *state_holder_for_comp.borrow_mut() = Some(list_state);
+            let mut spec = LazyColumnSpec::new()
+                .vertical_arrangement(cranpose_ui::LinearArrangement::SpacedBy(6.0));
+            spec.beyond_bounds_item_count = 0;
+            LazyColumn(Modifier::empty().height(96.0), list_state, spec, |scope| {
+                scope.items(
+                    12,
+                    None::<fn(usize) -> u64>,
+                    None::<fn(usize) -> u64>,
+                    |index| {
+                        Text(
+                            format!("WarmRow {index}"),
+                            Modifier::empty().height(32.0),
+                            TextStyle::default(),
+                        );
+                    },
+                );
+            });
+        });
+
+        let list_state = (*state_holder.borrow()).expect("lazy list state should be captured");
+        list_state.scroll_to_item(4, 0.0);
+
+        let root = composition.root().expect("lazy column root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let _ = applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 240.0,
+                    height: 240.0,
+                },
+            )
+            .expect("lazy column layout");
+        let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("lazy column graph");
+        applier.clear_runtime_handle();
+        let mut graph_labels = Vec::new();
+        collect_graph_text_labels(&graph.root, &mut graph_labels);
+
+        let visible_indices: Vec<_> = list_state
+            .layout_info()
+            .visible_items_info
+            .iter()
+            .map(|item| item.index)
+            .collect();
+        assert_eq!(
+            visible_indices,
+            vec![4, 5, 6],
+            "test setup expects exactly three viewport-visible rows"
+        );
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let collected = with_test_app_context(|| {
+            collect_layer_contents(
+                &graph.root,
+                None,
+                None,
+                &mut rect_cache,
+                &mut requirements_cache,
+            )
+        });
+        let root_text_labels: Vec<_> = collected
+            .scene
+            .texts
+            .iter()
+            .map(|text| text.text.text.clone())
+            .collect();
+        let child_layer_count = collected.child_layers.len();
+        let warm_text = collected
+            .scene
+            .texts
+            .iter()
+            .find(|text| text.text.text == "WarmRow 7")
+            .unwrap_or_else(|| {
+                panic!(
+                    "after-bound lazy text should reach WGPU scene collection; graph_texts={graph_labels:?} root_texts={root_text_labels:?} child_layers={child_layer_count}"
+                )
+            });
+
+        assert!(
+            warm_text.rect.y >= 96.0,
+            "after-bound text should be below the viewport, got {:?}",
+            warm_text.rect
+        );
+        assert_eq!(
+            visible_draw_rect(warm_text.rect, warm_text.clip),
+            None,
+            "after-bound text should remain clipped away for drawing while staying available for glyph prewarm"
+        );
+        assert!(
+            text_draw_should_prewarm_in_viewport(
+                warm_text.rect,
+                warm_text.clip,
+                ViewportUniformParams {
+                    width: 240,
+                    height: 96,
+                    offset: [0.0, 0.0],
+                },
+                1.0,
+            ),
+            "after-bound text inside the warm window must be selected by WGPU prewarm"
         );
     }
 
@@ -8379,6 +14167,9 @@ mod tests {
             0,
             4,
             &[],
+            100,
+            100,
+            1.0,
             &mut scratch,
         );
         let items: Vec<_> = scratch.iter().map(|(_, item)| *item).collect();
@@ -8415,6 +14206,9 @@ mod tests {
             0,
             5,
             &effect_ranges,
+            100,
+            100,
+            1.0,
             &mut scratch,
         );
         let items: Vec<_> = scratch.iter().map(|(_, item)| *item).collect();
@@ -8422,6 +14216,41 @@ mod tests {
             items,
             vec![SegmentDrawItem::Shape(0), SegmentDrawItem::Text(0)]
         );
+    }
+
+    #[test]
+    fn collect_non_effect_segment_items_culls_offscreen_shapes_but_keeps_text_prewarm() {
+        let mut shape = test_shape(0, BlendMode::SrcOver);
+        shape.rect.y = 160.0;
+        shape.local_rect.y = 160.0;
+        shape.quad = [[0.0, 160.0], [8.0, 160.0], [0.0, 168.0], [8.0, 168.0]];
+
+        let shapes = vec![shape];
+        let images = Vec::new();
+        let mut text = test_text(1);
+        text.rect.y = 160.0;
+        let texts = vec![text];
+        let shadows: Vec<ShadowDraw> = Vec::new();
+        let draw_ops = test_draw_ops(&shapes, &images, &texts, &shadows);
+
+        let mut scratch = Vec::new();
+        collect_non_effect_segment_items(
+            &shapes,
+            &images,
+            &texts,
+            &shadows,
+            &draw_ops,
+            0,
+            2,
+            &[],
+            100,
+            100,
+            1.0,
+            &mut scratch,
+        );
+
+        let items: Vec<_> = scratch.iter().map(|(_, item)| *item).collect();
+        assert_eq!(items, vec![SegmentDrawItem::Text(0)]);
     }
 
     #[test]
@@ -8451,6 +14280,434 @@ mod tests {
                 },
                 SegmentBatchPlan::Text { start: 2, end: 3 },
             ]))]
+        );
+    }
+
+    #[test]
+    fn segment_command_iter_keeps_layer_composites_in_ordered_draw_chunk() {
+        let ordered_items = vec![
+            (0, SegmentDrawItem::Shape(0)),
+            (1, SegmentDrawItem::Composite(0)),
+            (2, SegmentDrawItem::Image(0)),
+            (3, SegmentDrawItem::Composite(1)),
+            (4, SegmentDrawItem::Text(0)),
+        ];
+        let shapes = vec![test_shape(0, BlendMode::SrcOver)];
+        let images = vec![test_image(2, BlendMode::SrcOver)];
+
+        let commands: Vec<_> = SegmentCommandIter::new(&ordered_items, &shapes, &images).collect();
+
+        assert_eq!(
+            commands,
+            vec![SegmentRenderCommand::DrawChunk(chunk(&[
+                SegmentBatchPlan::Shape {
+                    start: 0,
+                    end: 1,
+                    blend_mode: BlendMode::SrcOver,
+                },
+                SegmentBatchPlan::Composite { start: 1, end: 2 },
+                SegmentBatchPlan::Image {
+                    start: 2,
+                    end: 3,
+                    blend_mode: BlendMode::SrcOver,
+                },
+                SegmentBatchPlan::Composite { start: 3, end: 4 },
+                SegmentBatchPlan::Text { start: 4, end: 5 },
+            ]))]
+        );
+    }
+
+    #[test]
+    fn retain_renderable_shadow_items_culls_invisible_shadow_boundaries() {
+        let shapes = vec![test_shape(0, BlendMode::SrcOver)];
+        let images = vec![test_image(2, BlendMode::SrcOver)];
+        let mut shadow_shape = test_shape(1, BlendMode::SrcOver);
+        shadow_shape.rect = Rect {
+            x: 500.0,
+            y: 500.0,
+            width: 12.0,
+            height: 12.0,
+        };
+        let shadow_draws = vec![ShadowDraw {
+            shapes: vec![(shadow_shape, BlendMode::SrcOver)],
+            texts: Vec::new(),
+            blur_radius: 8.0,
+            clip: None,
+            z_index: 1,
+        }];
+        let mut ordered_items = vec![
+            (0, SegmentDrawItem::Shape(0)),
+            (1, SegmentDrawItem::Shadow(0)),
+            (2, SegmentDrawItem::Image(0)),
+        ];
+
+        let culled =
+            retain_renderable_shadow_items(&mut ordered_items, &shadow_draws, 100, 100, 1.0, 4096);
+        let commands: Vec<_> = SegmentCommandIter::new(&ordered_items, &shapes, &images).collect();
+
+        assert_eq!(culled, 1);
+        assert_eq!(
+            commands,
+            vec![SegmentRenderCommand::DrawChunk(chunk(&[
+                SegmentBatchPlan::Shape {
+                    start: 0,
+                    end: 1,
+                    blend_mode: BlendMode::SrcOver,
+                },
+                SegmentBatchPlan::Image {
+                    start: 1,
+                    end: 2,
+                    blend_mode: BlendMode::SrcOver,
+                },
+            ]))]
+        );
+    }
+
+    #[test]
+    fn retain_renderable_shadow_items_keeps_visible_shadow_boundaries() {
+        let mut shadow_shape = test_shape(1, BlendMode::SrcOver);
+        shadow_shape.rect = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 12.0,
+            height: 12.0,
+        };
+        let shadow_draws = vec![ShadowDraw {
+            shapes: vec![(shadow_shape, BlendMode::SrcOver)],
+            texts: Vec::new(),
+            blur_radius: 8.0,
+            clip: None,
+            z_index: 1,
+        }];
+        let mut ordered_items = vec![(1, SegmentDrawItem::Shadow(0))];
+
+        let culled =
+            retain_renderable_shadow_items(&mut ordered_items, &shadow_draws, 100, 100, 1.0, 4096);
+
+        assert_eq!(culled, 0);
+        assert_eq!(ordered_items, vec![(1, SegmentDrawItem::Shadow(0))]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_shape_shader_source_uses_native_batch_limits() {
+        let source = shape_shader_source();
+
+        assert!(source.contains(&format!("array<ShapeData, {MAX_SHAPES_PER_BATCH}>")));
+        assert!(source.contains(&format!("array<GradientStop, {MAX_GRADIENT_STOPS}>")));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_segment_fusion_budget_allows_small_interleaved_chunks() {
+        let ordered_items = vec![
+            (0, SegmentDrawItem::Shape(0)),
+            (1, SegmentDrawItem::Image(0)),
+            (2, SegmentDrawItem::Text(0)),
+            (3, SegmentDrawItem::Shape(1)),
+        ];
+        let shapes = vec![
+            test_shape(0, BlendMode::SrcOver),
+            test_shape(3, BlendMode::DstOut),
+        ];
+        let segment = chunk(&[
+            SegmentBatchPlan::Shape {
+                start: 0,
+                end: 1,
+                blend_mode: BlendMode::SrcOver,
+            },
+            SegmentBatchPlan::Image {
+                start: 1,
+                end: 2,
+                blend_mode: BlendMode::SrcOver,
+            },
+            SegmentBatchPlan::Text { start: 2, end: 3 },
+            SegmentBatchPlan::Shape {
+                start: 3,
+                end: 4,
+                blend_mode: BlendMode::DstOut,
+            },
+        ]);
+
+        let budget = native_segment_fusion_budget(&ordered_items, &shapes, &segment)
+            .expect("budget should be valid")
+            .expect("chunk should fit native fusion budget");
+
+        assert_eq!(
+            budget,
+            NativeSegmentFusionBudget {
+                shape_count: 2,
+                gradient_stop_count: 0,
+            }
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_segment_fusion_budget_rejects_shape_uniform_overflow() {
+        let ordered_items: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+            .map(|index| (index, SegmentDrawItem::Shape(index)))
+            .collect();
+        let shapes: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+            .map(|index| test_shape(index, BlendMode::SrcOver))
+            .collect();
+        let segment = chunk(&[
+            SegmentBatchPlan::Shape {
+                start: 0,
+                end: MAX_SHAPES_PER_BATCH,
+                blend_mode: BlendMode::SrcOver,
+            },
+            SegmentBatchPlan::Shape {
+                start: MAX_SHAPES_PER_BATCH,
+                end: MAX_SHAPES_PER_BATCH + 1,
+                blend_mode: BlendMode::SrcOver,
+            },
+        ]);
+
+        let budget =
+            native_segment_fusion_budget(&ordered_items, &shapes, &segment).expect("valid plan");
+
+        assert_eq!(budget, None);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_segment_fusion_budget_rejects_gradient_uniform_overflow() {
+        let ordered_items = vec![(0, SegmentDrawItem::Shape(0))];
+        let mut shape = test_shape(0, BlendMode::SrcOver);
+        shape.brush = Brush::linear_gradient(vec![Color::BLACK; MAX_GRADIENT_STOPS + 1]);
+        let shapes = vec![shape];
+        let segment = chunk(&[SegmentBatchPlan::Shape {
+            start: 0,
+            end: 1,
+            blend_mode: BlendMode::SrcOver,
+        }]);
+
+        let budget =
+            native_segment_fusion_budget(&ordered_items, &shapes, &segment).expect("valid plan");
+
+        assert_eq!(budget, None);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_segment_fusion_partitions_shape_uniform_overflow() {
+        let ordered_items: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+            .map(|index| (index, SegmentDrawItem::Shape(index)))
+            .collect();
+        let shapes: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+            .map(|index| test_shape(index, BlendMode::SrcOver))
+            .collect();
+        let segment = chunk(&[
+            SegmentBatchPlan::Shape {
+                start: 0,
+                end: MAX_SHAPES_PER_BATCH,
+                blend_mode: BlendMode::SrcOver,
+            },
+            SegmentBatchPlan::Shape {
+                start: MAX_SHAPES_PER_BATCH,
+                end: MAX_SHAPES_PER_BATCH + 1,
+                blend_mode: BlendMode::SrcOver,
+            },
+        ]);
+
+        let partitions = native_segment_fusion_partitions(&ordered_items, &shapes, &segment)
+            .expect("valid plan")
+            .expect("overflowing segment should be partitionable");
+
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(
+            partitions[0],
+            NativeSegmentFusionPartition {
+                chunk: chunk(&[SegmentBatchPlan::Shape {
+                    start: 0,
+                    end: MAX_SHAPES_PER_BATCH,
+                    blend_mode: BlendMode::SrcOver,
+                }]),
+                budget: NativeSegmentFusionBudget {
+                    shape_count: MAX_SHAPES_PER_BATCH,
+                    gradient_stop_count: 0,
+                },
+            }
+        );
+        assert_eq!(
+            partitions[1],
+            NativeSegmentFusionPartition {
+                chunk: chunk(&[SegmentBatchPlan::Shape {
+                    start: MAX_SHAPES_PER_BATCH,
+                    end: MAX_SHAPES_PER_BATCH + 1,
+                    blend_mode: BlendMode::SrcOver,
+                }]),
+                budget: NativeSegmentFusionBudget {
+                    shape_count: 1,
+                    gradient_stop_count: 0,
+                },
+            }
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_segment_fusion_partitions_gradient_uniform_overflow() {
+        const STOPS_PER_SHAPE: usize = MAX_GRADIENT_STOPS / 2;
+        let ordered_items = vec![
+            (0, SegmentDrawItem::Shape(0)),
+            (1, SegmentDrawItem::Shape(1)),
+            (2, SegmentDrawItem::Shape(2)),
+        ];
+        let mut shapes = Vec::new();
+        for index in 0..3 {
+            let mut shape = test_shape(index, BlendMode::SrcOver);
+            shape.brush = Brush::linear_gradient(vec![Color::BLACK; STOPS_PER_SHAPE]);
+            shapes.push(shape);
+        }
+        let segment = chunk(&[SegmentBatchPlan::Shape {
+            start: 0,
+            end: 3,
+            blend_mode: BlendMode::SrcOver,
+        }]);
+
+        let partitions = native_segment_fusion_partitions(&ordered_items, &shapes, &segment)
+            .expect("valid plan")
+            .expect("overflowing gradient segment should be partitionable");
+
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(
+            partitions[0],
+            NativeSegmentFusionPartition {
+                chunk: chunk(&[SegmentBatchPlan::Shape {
+                    start: 0,
+                    end: 2,
+                    blend_mode: BlendMode::SrcOver,
+                }]),
+                budget: NativeSegmentFusionBudget {
+                    shape_count: 2,
+                    gradient_stop_count: MAX_GRADIENT_STOPS,
+                },
+            }
+        );
+        assert_eq!(
+            partitions[1],
+            NativeSegmentFusionPartition {
+                chunk: chunk(&[SegmentBatchPlan::Shape {
+                    start: 2,
+                    end: 3,
+                    blend_mode: BlendMode::SrcOver,
+                }]),
+                budget: NativeSegmentFusionBudget {
+                    shape_count: 1,
+                    gradient_stop_count: STOPS_PER_SHAPE,
+                },
+            }
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_segment_fusion_accepts_layer_composite_chunks() {
+        let ordered_items = vec![
+            (0, SegmentDrawItem::Shape(0)),
+            (1, SegmentDrawItem::Composite(0)),
+            (2, SegmentDrawItem::ShaderComposite(0)),
+            (3, SegmentDrawItem::Shape(1)),
+        ];
+        let shapes = vec![
+            test_shape(0, BlendMode::SrcOver),
+            test_shape(1, BlendMode::SrcOver),
+        ];
+        let segment = chunk(&[
+            SegmentBatchPlan::Shape {
+                start: 0,
+                end: 1,
+                blend_mode: BlendMode::SrcOver,
+            },
+            SegmentBatchPlan::Composite { start: 1, end: 2 },
+            SegmentBatchPlan::ShaderComposite { start: 2, end: 3 },
+            SegmentBatchPlan::Shape {
+                start: 3,
+                end: 4,
+                blend_mode: BlendMode::SrcOver,
+            },
+        ]);
+
+        let partitions = native_segment_fusion_partitions(&ordered_items, &shapes, &segment)
+            .expect("valid plan")
+            .expect("composites are drawable inside the native fused pass");
+
+        assert_eq!(
+            partitions,
+            vec![NativeSegmentFusionPartition {
+                chunk: segment,
+                budget: NativeSegmentFusionBudget {
+                    shape_count: 2,
+                    gradient_stop_count: 0,
+                },
+            }],
+            "layer composites and shader composites must preserve order without forcing separate render passes"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_segment_fusion_partitions_preserve_non_shape_order_at_budget_boundary() {
+        let ordered_items: Vec<_> = (0..MAX_SHAPES_PER_BATCH)
+            .map(|index| (index, SegmentDrawItem::Shape(index)))
+            .chain([
+                (MAX_SHAPES_PER_BATCH, SegmentDrawItem::Image(0)),
+                (
+                    MAX_SHAPES_PER_BATCH + 1,
+                    SegmentDrawItem::Shape(MAX_SHAPES_PER_BATCH),
+                ),
+            ])
+            .collect();
+        let shapes: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+            .map(|index| test_shape(index, BlendMode::SrcOver))
+            .collect();
+        let segment = chunk(&[
+            SegmentBatchPlan::Shape {
+                start: 0,
+                end: MAX_SHAPES_PER_BATCH,
+                blend_mode: BlendMode::SrcOver,
+            },
+            SegmentBatchPlan::Image {
+                start: MAX_SHAPES_PER_BATCH,
+                end: MAX_SHAPES_PER_BATCH + 1,
+                blend_mode: BlendMode::SrcOver,
+            },
+            SegmentBatchPlan::Shape {
+                start: MAX_SHAPES_PER_BATCH + 1,
+                end: MAX_SHAPES_PER_BATCH + 2,
+                blend_mode: BlendMode::SrcOver,
+            },
+        ]);
+
+        let partitions = native_segment_fusion_partitions(&ordered_items, &shapes, &segment)
+            .expect("valid plan")
+            .expect("overflowing segment should be partitionable");
+
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(
+            partitions[0].chunk,
+            chunk(&[
+                SegmentBatchPlan::Shape {
+                    start: 0,
+                    end: MAX_SHAPES_PER_BATCH,
+                    blend_mode: BlendMode::SrcOver,
+                },
+                SegmentBatchPlan::Image {
+                    start: MAX_SHAPES_PER_BATCH,
+                    end: MAX_SHAPES_PER_BATCH + 1,
+                    blend_mode: BlendMode::SrcOver,
+                },
+            ])
+        );
+        assert_eq!(
+            partitions[1].chunk,
+            chunk(&[SegmentBatchPlan::Shape {
+                start: MAX_SHAPES_PER_BATCH + 1,
+                end: MAX_SHAPES_PER_BATCH + 2,
+                blend_mode: BlendMode::SrcOver,
+            }])
         );
     }
 
@@ -8566,6 +14823,7 @@ mod tests {
             uploads.copies,
             vec![PendingBufferCopy {
                 source_offset: 4,
+                target_offset: 0,
                 size: 4,
                 target: UploadTarget::ImageIndex,
             }]
@@ -8590,6 +14848,30 @@ mod tests {
 
         assert_eq!(uploads.payload_for_copy(uploads.copies[0]), &[1, 2, 3, 4]);
         assert_eq!(uploads.payload_for_copy(uploads.copies[1]), &[5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn staged_buffer_uploads_record_destination_offsets() {
+        let mut uploads = StagedBufferUploads::default();
+
+        uploads.stage_at(UploadTarget::ImageIndex, 256, &[1, 2, 3, 4]);
+
+        assert_eq!(uploads.copies[0].target_offset, 256);
+        assert_eq!(uploads.payload_for_copy(uploads.copies[0]), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn staged_buffer_uploads_truncate_restores_previous_state() {
+        let mut uploads = StagedBufferUploads::default();
+        uploads.stage(UploadTarget::Uniform, &[1, 2, 3, 4]);
+        let bytes_len = uploads.bytes.len();
+        let copies_len = uploads.copies.len();
+        uploads.stage(UploadTarget::ImageIndex, &[5, 6, 7, 8]);
+
+        uploads.truncate(bytes_len, copies_len);
+
+        assert_eq!(uploads.bytes, vec![1, 2, 3, 4]);
+        assert_eq!(uploads.copies.len(), 1);
     }
 
     #[test]

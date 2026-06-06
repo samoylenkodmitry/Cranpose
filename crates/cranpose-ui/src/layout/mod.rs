@@ -6,6 +6,7 @@ use std::{
     fmt,
     mem::size_of,
     rc::Rc,
+    sync::OnceLock,
 };
 
 use cranpose_core::{
@@ -22,13 +23,14 @@ use crate::modifier::{
     ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
 
-use crate::subcompose_layout::SubcomposeLayoutNode;
+use crate::subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode};
 use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState};
 use cranpose_foundation::{
     text::TextRange, InvalidationKind, ModifierNodeContext, NodeCapabilities,
     SemanticsConfiguration,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
+use web_time::Instant;
 
 /// Runtime context for modifier nodes during measurement.
 ///
@@ -96,6 +98,123 @@ impl ModifierNodeContext for LayoutNodeContext {
 #[doc(hidden)]
 pub fn invalidate_all_layout_caches() {
     crate::render_state::invalidate_layout_cache_epoch();
+}
+
+fn layout_measure_telemetry_threshold_ms() -> Option<f64> {
+    static THRESHOLD_MS: OnceLock<Option<f64>> = OnceLock::new();
+    *THRESHOLD_MS.get_or_init(|| {
+        std::env::var("CRANPOSE_LAYOUT_MEASURE_TELEMETRY_MS")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .or_else(|| {
+                std::env::var_os("CRANPOSE_LAYOUT_MEASURE_TELEMETRY")
+                    .is_some()
+                    .then_some(4.0)
+            })
+    })
+}
+
+struct LayoutMeasureTelemetry {
+    root: NodeId,
+    start: Instant,
+    after_repasses: Instant,
+    after_guard: Instant,
+    after_builder: Instant,
+    after_measure: Instant,
+    after_root_place: Instant,
+    after_aux: Instant,
+    after_builder_drop: Instant,
+    after_guard_drop: Instant,
+}
+
+fn log_layout_measure_telemetry(times: LayoutMeasureTelemetry) {
+    let Some(threshold_ms) = layout_measure_telemetry_threshold_ms() else {
+        return;
+    };
+
+    let total_ms = times
+        .after_guard_drop
+        .duration_since(times.start)
+        .as_secs_f64()
+        * 1000.0;
+    if total_ms < threshold_ms {
+        return;
+    }
+
+    let repass_ms = times
+        .after_repasses
+        .duration_since(times.start)
+        .as_secs_f64()
+        * 1000.0;
+    let guard_ms = times
+        .after_guard
+        .duration_since(times.after_repasses)
+        .as_secs_f64()
+        * 1000.0;
+    let builder_ms = times
+        .after_builder
+        .duration_since(times.after_guard)
+        .as_secs_f64()
+        * 1000.0;
+    let measure_ms = times
+        .after_measure
+        .duration_since(times.after_builder)
+        .as_secs_f64()
+        * 1000.0;
+    let root_place_ms = times
+        .after_root_place
+        .duration_since(times.after_measure)
+        .as_secs_f64()
+        * 1000.0;
+    let aux_ms = times
+        .after_aux
+        .duration_since(times.after_root_place)
+        .as_secs_f64()
+        * 1000.0;
+    let builder_drop_ms = times
+        .after_builder_drop
+        .duration_since(times.after_aux)
+        .as_secs_f64()
+        * 1000.0;
+    let guard_drop_ms = times
+        .after_guard_drop
+        .duration_since(times.after_builder_drop)
+        .as_secs_f64()
+        * 1000.0;
+    log::warn!(
+        "[layout-measure-telemetry] root={} total_ms={total_ms:.2} repass_ms={repass_ms:.2} guard_ms={guard_ms:.2} builder_ms={builder_ms:.2} measure_ms={measure_ms:.2} root_place_ms={root_place_ms:.2} aux_ms={aux_ms:.2} builder_drop_ms={builder_drop_ms:.2} guard_drop_ms={guard_drop_ms:.2}",
+        times.root
+    );
+}
+
+fn log_node_measure_telemetry(
+    kind: &'static str,
+    node_id: NodeId,
+    constraints: Constraints,
+    size: Size,
+    children: usize,
+    start: Instant,
+) {
+    let Some(threshold_ms) = layout_measure_telemetry_threshold_ms() else {
+        return;
+    };
+
+    let total_ms = start.elapsed().as_secs_f64() * 1000.0;
+    if total_ms < threshold_ms {
+        return;
+    }
+
+    log::warn!(
+        "[layout-node-telemetry] kind={kind} node={} total_ms={total_ms:.2} constraints=({:.1},{:.1},{:.1},{:.1}) size=({:.1},{:.1}) children={children}",
+        node_id,
+        constraints.min_width,
+        constraints.max_width,
+        constraints.min_height,
+        constraints.max_height,
+        size.width,
+        size.height,
+    );
 }
 
 /// RAII guard that:
@@ -787,7 +906,9 @@ pub fn measure_layout_with_options(
     max_size: Size,
     options: MeasureLayoutOptions,
 ) -> Result<LayoutMeasurements, NodeError> {
+    let telemetry_start = Instant::now();
     process_pending_layout_repasses(applier, root)?;
+    let after_repasses = Instant::now();
 
     let constraints = Constraints {
         min_width: 0.0,
@@ -846,6 +967,7 @@ pub fn measure_layout_with_options(
     let guard = ApplierSlotGuard::new(applier);
     let applier_host = guard.host();
     let slots_handle = guard.slots_handle();
+    let after_guard = Instant::now();
 
     // Give the builder the shared slots handle - both guard and builder
     // now share access to the same SlotTable via Rc<RefCell<_>>.
@@ -856,12 +978,14 @@ pub fn measure_layout_with_options(
         Rc::clone(&slots_handle),
         frame_arena,
     );
+    let after_builder = Instant::now();
 
     // ---- Measurement -------------------------------------------------------
     // If measurement fails, the guard will restore slots from the shared handle
     // on drop - this is safe because the handle always contains valid slots.
 
     let measured = builder.measure_node(root, normalize_constraints(constraints))?;
+    let after_measure = Instant::now();
 
     // Root node has no parent to place it, so we must explicitly place it at (0,0).
     // This ensures is_placed=true, allowing the renderer to traverse the tree.
@@ -878,6 +1002,7 @@ pub fn measure_layout_with_options(
             });
         }
     }
+    let after_root_place = Instant::now();
 
     let (layout_tree, semantics) = {
         let mut applier_ref = applier_host.borrow_typed();
@@ -899,13 +1024,30 @@ pub fn measure_layout_with_options(
         };
         (layout_tree, semantics)
     };
+    let after_aux = Instant::now();
 
     // Drop builder before guard - slots are already in the shared handle.
     // Guard's Drop will write them back to the applier.
     drop(builder);
+    let after_builder_drop = Instant::now();
 
     // DO NOT manually unwrap `applier_host` or replace `applier` here.
     // `ApplierSlotGuard::drop` will restore everything when this function returns.
+    drop(guard);
+    let after_guard_drop = Instant::now();
+
+    log_layout_measure_telemetry(LayoutMeasureTelemetry {
+        root,
+        start: telemetry_start,
+        after_repasses,
+        after_guard,
+        after_builder,
+        after_measure,
+        after_root_place,
+        after_aux,
+        after_builder_drop,
+        after_guard_drop,
+    });
 
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
 }
@@ -1084,6 +1226,7 @@ impl LayoutBuilderState {
         node_id: NodeId,
         constraints: Constraints,
     ) -> Result<Rc<MeasuredNode>, NodeError> {
+        let telemetry_start = Instant::now();
         // Clear is_placed at the start of measurement.
         // Nodes that are placed will have is_placed set to true via Placeable::place().
         // Nodes that drop out of placement (not placed this pass) will remain is_placed=false.
@@ -1093,6 +1236,14 @@ impl LayoutBuilderState {
         if let Some(subcompose) =
             Self::try_measure_subcompose(Rc::clone(&state_rc), node_id, constraints)?
         {
+            log_node_measure_telemetry(
+                "subcompose",
+                node_id,
+                constraints,
+                subcompose.size,
+                subcompose.children.len(),
+                telemetry_start,
+            );
             return Ok(subcompose);
         }
 
@@ -1108,25 +1259,81 @@ impl LayoutBuilderState {
         }) {
             // Applier was available, process the result
             if let Some(snapshot) = result? {
-                return Self::measure_layout_node(
+                let measured = Self::measure_layout_node(
                     Rc::clone(&state_rc),
                     node_id,
                     snapshot,
                     constraints,
+                )?;
+                log_node_measure_telemetry(
+                    "layout",
+                    node_id,
+                    constraints,
+                    measured.size,
+                    measured.children.len(),
+                    telemetry_start,
                 );
+                return Ok(measured);
             }
         }
         // If applier was busy (None) or snapshot was None, fall through to fallback
 
         // No alternate fallbacks - all widgets use LayoutNode or SubcomposeLayoutNode
         // If we reach here, it's an unknown node type (shouldn't happen in normal use)
-        Ok(Rc::new(MeasuredNode::new(
+        let measured = Rc::new(MeasuredNode::new(
             node_id,
             Size::default(),
             Point { x: 0.0, y: 0.0 },
             Point::default(), // No content offset for fallback nodes
             Vec::new(),
-        )))
+        ));
+        log_node_measure_telemetry(
+            "fallback",
+            node_id,
+            constraints,
+            measured.size,
+            measured.children.len(),
+            telemetry_start,
+        );
+        Ok(measured)
+    }
+
+    fn cached_measure_node_with_applier(
+        applier: &mut MemoryApplier,
+        node_id: NodeId,
+        constraints: Constraints,
+    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
+        let Some(data) = Self::layout_child_measure_data(applier, node_id)? else {
+            return Ok(None);
+        };
+        if data.needs_measure || data.cache.epoch() == 0 {
+            return Ok(None);
+        }
+
+        let Some(measured) = data.cache.get_measurement(constraints) else {
+            return Ok(None);
+        };
+
+        if let Some(layout_state) = data.layout_state {
+            let mut layout_state = layout_state.borrow_mut();
+            layout_state.size = measured.size;
+            layout_state.measurement_constraints = constraints;
+            drop(layout_state);
+            let _ = applier.with_node::<LayoutNode, _>(node_id, |node| {
+                if data.needs_layout {
+                    node.clear_needs_layout();
+                }
+            });
+        } else {
+            let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                node.set_measured_size(measured.size);
+                if data.needs_layout {
+                    node.clear_needs_layout();
+                }
+            });
+        }
+
+        Ok(Some(measured))
     }
 
     fn try_measure_subcompose(
@@ -1213,35 +1420,92 @@ impl LayoutBuilderState {
         let error_for_subcompose = &measure_error;
         let measured_children = node_handle.measured_children_scratch();
         let measured_children_for_subcompose = Rc::clone(&measured_children);
+        let state_rc_for_cached = Rc::clone(&state_rc_clone);
+        let error_for_cached = &measure_error;
+        let measured_children_for_cached = Rc::clone(&measured_children);
+        let measured_children_for_lookup = Rc::clone(&measured_children);
+        let measured_children_for_retained = Rc::clone(&measured_children);
 
-        let measure_result = node_handle.measure(
+        let measure_result = node_handle.measure_with_cached_batch(
             &composer,
             node_id,
             inner_constraints,
-            Box::new(
-                move |child_id: NodeId, child_constraints: Constraints| -> Size {
-                    match Self::measure_node(
-                        Rc::clone(&state_rc_for_subcompose),
-                        child_id,
-                        child_constraints,
-                    ) {
-                        Ok(measured) => {
-                            measured_children_for_subcompose
-                                .borrow_mut()
-                                .insert(child_id, Rc::clone(&measured));
-                            measured.size
-                        }
-                        Err(err) => {
-                            let mut slot = error_for_subcompose.borrow_mut();
-                            if slot.is_none() {
-                                *slot = Some(err);
+            CachedBatchMeasureInputs {
+                measurer: Box::new(
+                    move |child_id: NodeId, child_constraints: Constraints| -> Size {
+                        match Self::measure_node(
+                            Rc::clone(&state_rc_for_subcompose),
+                            child_id,
+                            child_constraints,
+                        ) {
+                            Ok(measured) => {
+                                measured_children_for_subcompose
+                                    .borrow_mut()
+                                    .insert(child_id, Rc::clone(&measured));
+                                measured.size
                             }
-                            Size::default()
+                            Err(err) => {
+                                let mut slot = error_for_subcompose.borrow_mut();
+                                if slot.is_none() {
+                                    *slot = Some(err);
+                                }
+                                Size::default()
+                            }
                         }
+                    },
+                ),
+                cached_measure_batch_registrar: Box::new(
+                    move |child_ids: &[NodeId],
+                          child_constraints: Constraints,
+                          out: &mut Vec<Option<Size>>| {
+                        out.clear();
+                        out.resize(child_ids.len(), None);
+
+                        let applier_host = {
+                            let state = state_rc_for_cached.borrow();
+                            Rc::clone(&state.applier)
+                        };
+                        let Ok(mut applier) = applier_host.try_borrow_typed() else {
+                            return;
+                        };
+
+                        let mut measured_children = measured_children_for_cached.borrow_mut();
+                        for (index, &child_id) in child_ids.iter().enumerate() {
+                            match Self::cached_measure_node_with_applier(
+                                &mut applier,
+                                child_id,
+                                child_constraints,
+                            ) {
+                                Ok(Some(measured)) => {
+                                    out[index] = Some(measured.size);
+                                    measured_children.insert(child_id, Rc::clone(&measured));
+                                }
+                                Ok(None) => {}
+                                Err(err) => {
+                                    let mut slot = error_for_cached.borrow_mut();
+                                    if slot.is_none() {
+                                        *slot = Some(err);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    },
+                ),
+                retained_measure_lookup: Box::new(move |child_id| {
+                    measured_children_for_lookup
+                        .borrow()
+                        .get(&child_id)
+                        .cloned()
+                }),
+                retained_measure_registrar: Box::new(move |measurements| {
+                    let mut measured_children = measured_children_for_retained.borrow_mut();
+                    for measured in measurements {
+                        measured_children.insert(measured.node_id(), Rc::clone(measured));
                     }
-                },
-            ),
-            &measure_error,
+                }),
+                error: &measure_error,
+            },
         )?;
         drop(composer);
         slots_guard.restore(slots_host.into_table()?);
@@ -1484,7 +1748,7 @@ impl LayoutBuilderState {
             Err(NodeError::TypeMismatch { .. }) => {
                 match applier.with_node::<SubcomposeLayoutNode, _>(child_id, |n| {
                     LayoutChildMeasureData {
-                        cache: LayoutNodeCacheHandles::default(),
+                        cache: n.cache_handles(),
                         layout_state: None,
                         needs_layout: n.needs_layout(),
                         needs_measure: n.needs_measure(),
@@ -1589,6 +1853,12 @@ impl LayoutBuilderState {
                     continue;
                 };
 
+                let child_is_dirty = data.needs_layout || data.needs_measure;
+                let child_cache_epoch = if child_is_dirty {
+                    cache_epoch
+                } else {
+                    data.cache.epoch()
+                };
                 let child_state = runtime_state.child_state(index);
                 child_state.configure(LayoutChildMeasureConfig {
                     applier: Rc::clone(&applier_host),
@@ -1596,8 +1866,8 @@ impl LayoutBuilderState {
                     error: Rc::clone(&error),
                     runtime_handle: runtime_handle.clone(),
                     cache: data.cache,
-                    cache_epoch,
-                    force_remeasure: data.needs_layout || data.needs_measure,
+                    cache_epoch: child_cache_epoch,
+                    force_remeasure: child_is_dirty,
                     measure_handle: Some(measure_handle.clone()),
                     layout_state: data.layout_state,
                 });
@@ -1872,6 +2142,25 @@ impl MeasuredNode {
             content_offset,
             children,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn leaf(node_id: NodeId, size: Size) -> Self {
+        Self::new(
+            node_id,
+            size,
+            Point::default(),
+            Point::default(),
+            Vec::new(),
+        )
+    }
+
+    pub(crate) fn node_id(&self) -> NodeId {
+        self.node_id
+    }
+
+    pub(crate) fn size(&self) -> Size {
+        self.size
     }
 }
 

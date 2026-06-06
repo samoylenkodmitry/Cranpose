@@ -74,6 +74,7 @@ pub(crate) fn apply_draw_commands(
                     None,
                     clip,
                     blend_mode.unwrap_or(BlendMode::SrcOver),
+                    false,
                 );
             }
             DrawPrimitive::RoundRect {
@@ -96,6 +97,7 @@ pub(crate) fn apply_draw_commands(
                     Some(shape),
                     clip,
                     blend_mode.unwrap_or(BlendMode::SrcOver),
+                    false,
                 );
             }
             DrawPrimitive::Image {

@@ -49,6 +49,7 @@ const PREPARED_LAYOUT_CACHE_CAPACITY: usize = 4;
 #[derive(Clone, Debug)]
 struct TextPreparedLayoutCacheEntry {
     max_width_bits: Option<u32>,
+    text_generation: u64,
     layout: crate::text::PreparedTextLayout,
 }
 
@@ -115,13 +116,13 @@ impl TextPreparedLayoutOwner {
     fn prepare(&self, max_width: Option<f32>) -> crate::text::PreparedTextLayout {
         let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
         let max_width_bits = normalized_max_width.map(f32::to_bits);
+        let text_generation = crate::text::measure::current_text_generation();
 
         {
             let mut cache = self.cache.borrow_mut();
-            if let Some(index) = cache
-                .iter()
-                .position(|entry| entry.max_width_bits == max_width_bits)
-            {
+            if let Some(index) = cache.iter().position(|entry| {
+                entry.max_width_bits == max_width_bits && entry.text_generation == text_generation
+            }) {
                 let entry = cache.remove(index);
                 let prepared = entry.layout.clone();
                 cache.insert(0, entry);
@@ -142,6 +143,7 @@ impl TextPreparedLayoutOwner {
             0,
             TextPreparedLayoutCacheEntry {
                 max_width_bits,
+                text_generation,
                 layout: prepared.clone(),
             },
         );
@@ -455,6 +457,74 @@ mod tests {
         }
     }
 
+    struct FixedPreparedLayoutMeasurer {
+        height: f32,
+        line_height: f32,
+    }
+
+    impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
+        fn measure(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+        ) -> crate::text::TextMetrics {
+            crate::text::TextMetrics {
+                width: 24.0,
+                height: self.height,
+                line_height: self.line_height,
+                line_count: (self.height / self.line_height).round().max(1.0) as usize,
+            }
+        }
+
+        fn prepare_with_options_for_node(
+            &self,
+            _node_id: Option<NodeId>,
+            text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _options: TextLayoutOptions,
+            _max_width: Option<f32>,
+        ) -> crate::text::PreparedTextLayout {
+            crate::text::PreparedTextLayout {
+                text: text.clone(),
+                visual_style: TextStyle::default(),
+                metrics: crate::text::TextMetrics {
+                    width: 24.0,
+                    height: self.height,
+                    line_height: self.line_height,
+                    line_count: (self.height / self.line_height).round().max(1.0) as usize,
+                },
+                did_overflow: false,
+            }
+        }
+
+        fn get_offset_for_position(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _x: f32,
+            _y: f32,
+        ) -> usize {
+            0
+        }
+
+        fn get_cursor_x_for_offset(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _offset: usize,
+        ) -> f32 {
+            0.0
+        }
+
+        fn layout(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+        ) -> TextLayoutResult {
+            panic!("layout is not used in this test");
+        }
+    }
+
     #[test]
     fn hash_changes_when_style_changes() {
         let text = Rc::new(AnnotatedString::from("Hello"));
@@ -567,6 +637,40 @@ mod tests {
         assert_eq!(recorded, vec![Some(88)]);
         assert_eq!(measured_width, prepared_width);
         assert_eq!(measured_height, prepared_height);
+    }
+
+    #[test]
+    fn prepared_layout_cache_refreshes_when_text_service_changes() {
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let app_context = crate::AppContext::new();
+            app_context.enter(|| {
+                crate::text::set_text_measurer(FixedPreparedLayoutMeasurer {
+                    height: 30.0,
+                    line_height: 10.0,
+                });
+
+                let node = TextModifierNode::new(
+                    Rc::new(AnnotatedString::from("a\nb\nc")),
+                    TextStyle::default(),
+                    TextLayoutOptions::default(),
+                );
+
+                let first = node.measure_text_content(Some(160.0));
+                crate::text::set_text_measurer(FixedPreparedLayoutMeasurer {
+                    height: 60.0,
+                    line_height: 20.0,
+                });
+                let second = node.measure_text_content(Some(160.0));
+                tx.send((first.height, second.height))
+                    .expect("send measurement result");
+            });
+        });
+
+        let (first_height, second_height) = rx.recv().expect("receive measurement result");
+        assert_eq!(first_height, 30.0);
+        assert_eq!(second_height, 60.0);
     }
 
     #[test]

@@ -185,6 +185,33 @@ pub(crate) fn device_pixel_bounds_for_rect(
     })
 }
 
+pub(crate) fn unclamped_device_pixel_bounds_for_rect(
+    rect: Rect,
+    root_scale: f32,
+    max_texture_dim: u32,
+) -> Option<DevicePixelBounds> {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return None;
+    }
+
+    let min_x = (rect.x * root_scale).floor();
+    let min_y = (rect.y * root_scale).floor();
+    let max_x = ((rect.x + rect.width) * root_scale).ceil();
+    let max_y = ((rect.y + rect.height) * root_scale).ceil();
+    let width = (max_x - min_x).max(0.0) as u32;
+    let height = (max_y - min_y).max(0.0) as u32;
+    if width == 0 || height == 0 || width > max_texture_dim || height > max_texture_dim {
+        return None;
+    }
+
+    Some(DevicePixelBounds {
+        x: min_x,
+        y: min_y,
+        width,
+        height,
+    })
+}
+
 pub(crate) fn target_quad(width: u32, height: u32) -> [[f32; 2]; 4] {
     [
         [0.0, 0.0],
@@ -292,6 +319,7 @@ mod tests {
     use super::{
         axis_aligned_quad_rect, fit_capture_rect_to_scale_budget_for_axes,
         quantize_motion_stable_target_scale, snap_motion_stable_dest_quad, surface_target_size,
+        unclamped_device_pixel_bounds_for_rect,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::rect_to_quad;
@@ -316,6 +344,26 @@ mod tests {
             snap_motion_stable_dest_quad(quad, CompositeSampleMode::Linear),
             quad
         );
+    }
+
+    #[test]
+    fn unclamped_device_bounds_preserve_offscreen_source_origin() {
+        let bounds = unclamped_device_pixel_bounds_for_rect(
+            Rect {
+                x: -12.25,
+                y: 8.25,
+                width: 34.5,
+                height: 10.25,
+            },
+            2.0,
+            4096,
+        )
+        .expect("bounds");
+
+        assert_eq!(bounds.x, -25.0);
+        assert_eq!(bounds.y, 16.0);
+        assert_eq!(bounds.width, 70);
+        assert_eq!(bounds.height, 21);
     }
 
     #[test]

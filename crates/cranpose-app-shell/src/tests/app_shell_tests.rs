@@ -7,12 +7,15 @@ use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyLis
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_macros::composable;
 use cranpose_ui::{
-    BlendMode, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii,
-    HeadlessRenderer, IntrinsicSize, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier,
-    PointerInputScope, Rect, RenderOp, Row, RowSpec, ScrollState, Size, Text, TextStyle,
-    VerticalAlignment,
+    Alignment, BlendMode, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
+    CornerRadii, HeadlessRenderer, IntrinsicSize, LazyColumn, LazyColumnSpec, LinearArrangement,
+    Modifier, PointerInputScope, Rect, RenderOp, Row, RowSpec, ScrollState, Size, Spacer, Text,
+    TextStyle, VerticalAlignment,
 };
-use cranpose_ui_graphics::{DrawPrimitive, GraphicsLayer, Point, RenderEffect, RoundedCornerShape};
+use cranpose_ui_graphics::{
+    CompositingStrategy, DrawPrimitive, GraphicsLayer, Point, RenderEffect, RoundedCornerShape,
+    RuntimeShader,
+};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -145,7 +148,15 @@ thread_local! {
 }
 
 thread_local! {
+    static APP_SHELL_CONTINUOUS_FRAME_COUNT: Cell<u32> = const { Cell::new(0) };
+}
+
+thread_local! {
     static APP_SHELL_INITIAL_DENSITIES: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
+}
+
+thread_local! {
+    static APP_SHELL_WHEEL_SCROLL_STATE: RefCell<Option<ScrollState>> = const { RefCell::new(None) };
 }
 
 #[composable]
@@ -451,6 +462,65 @@ fn callbackless_root_render_probe(render_count: Rc<Cell<usize>>) {
     });
 }
 
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellAnimatedLazyItem() {
+    let list_state = remember_lazy_list_state();
+    LazyColumn(
+        Modifier::empty().fill_max_width().height(120.0),
+        list_state,
+        LazyColumnSpec::default(),
+        |scope| {
+            scope.item(Some(0), None, || {
+                let pulse = useState(|| 0u32);
+                let run_token = useState(|| 0u64);
+                let current_run_token = run_token.value();
+                let pulse_for_effect = pulse;
+                launched_effect_async_impl(
+                    location_key(file!(), line!(), column!()),
+                    current_run_token,
+                    move |scope| {
+                        let pulse = pulse_for_effect;
+                        Box::pin(async move {
+                            if current_run_token == 0 {
+                                return;
+                            }
+                            let clock = scope.runtime().frame_clock();
+                            while scope.is_active() {
+                                let _ = clock.next_frame().await;
+                                if !scope.is_active() {
+                                    break;
+                                }
+                                pulse.set_value(pulse.get_non_reactive().wrapping_add(1));
+                            }
+                        })
+                    },
+                );
+                cranpose_core::SideEffect(move || {
+                    if run_token.value() == 0 {
+                        run_token.set_value(1);
+                    }
+                });
+                let pulse_value = pulse.value();
+                Text(
+                    format!("Lazy Pulse: {pulse_value}"),
+                    Modifier::empty().height(24.0),
+                    TextStyle::default(),
+                );
+            });
+        },
+    );
+}
+
+fn first_semantics_description_with_prefix(
+    shell: &mut AppShell<TestRenderer>,
+    prefix: &str,
+) -> Option<String> {
+    semantics_tree_descriptions(shell.semantics_tree()?)
+        .into_iter()
+        .find(|description| description.starts_with(prefix))
+}
+
 #[derive(Default, Clone)]
 struct TestHitTarget;
 
@@ -507,11 +577,25 @@ impl HitTestTarget for RecordingHitTarget {
 #[derive(Default)]
 struct RecordingScene {
     hits: Vec<RecordingHitTarget>,
+    hit_node_ids: Option<Vec<cranpose_core::NodeId>>,
 }
 
 impl RecordingScene {
     fn with_hits(hits: Vec<RecordingHitTarget>) -> Self {
-        Self { hits }
+        Self {
+            hits,
+            hit_node_ids: None,
+        }
+    }
+
+    fn with_hit_node_ids(
+        hits: Vec<RecordingHitTarget>,
+        hit_node_ids: Vec<cranpose_core::NodeId>,
+    ) -> Self {
+        Self {
+            hits,
+            hit_node_ids: Some(hit_node_ids),
+        }
     }
 }
 
@@ -521,6 +605,14 @@ impl RenderScene for RecordingScene {
     fn clear(&mut self) {}
 
     fn hit_test(&self, _x: f32, _y: f32) -> Vec<Self::HitTarget> {
+        if let Some(hit_node_ids) = &self.hit_node_ids {
+            return self
+                .hits
+                .iter()
+                .filter(|target| hit_node_ids.contains(&target.node_id))
+                .cloned()
+                .collect();
+        }
         self.hits.clone()
     }
 
@@ -799,6 +891,73 @@ impl Renderer for TestRenderer {
     }
 }
 
+struct WarmupRenderer {
+    scene: TestScene,
+    needs_warmup: Rc<Cell<bool>>,
+}
+
+impl Renderer for WarmupRenderer {
+    type Scene = TestScene;
+    type Error = ();
+
+    fn scene(&self) -> &Self::Scene {
+        &self.scene
+    }
+
+    fn scene_mut(&mut self) -> &mut Self::Scene {
+        &mut self.scene
+    }
+
+    fn rebuild_scene(
+        &mut self,
+        _layout_tree: &LayoutTree,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        _applier: &mut cranpose_core::MemoryApplier,
+        _root: cranpose_core::NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn needs_frame_warmup(&self) -> bool {
+        self.needs_warmup.get()
+    }
+}
+
+#[test]
+fn renderer_warmup_keeps_frame_schedule_until_renderer_clears_it() {
+    let _guard = test_guard();
+    let needs_warmup = Rc::new(Cell::new(true));
+    let mut shell = AppShell::new(
+        WarmupRenderer {
+            scene: TestScene,
+            needs_warmup: Rc::clone(&needs_warmup),
+        },
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+
+    shell.update();
+    assert!(shell.needs_redraw());
+    let warmup_schedule = shell.frame_schedule();
+    assert!(
+        !warmup_schedule.needs_update,
+        "renderer warmup requests a frame, not UI update work"
+    );
+    assert!(warmup_schedule.needs_frame);
+
+    needs_warmup.set(false);
+    shell.update();
+    assert!(!shell.needs_redraw());
+    assert!(!shell.frame_schedule().needs_frame);
+}
+
 #[test]
 fn two_app_shells_do_not_share_density_or_render_invalidations() {
     let _guard = test_guard();
@@ -924,11 +1083,33 @@ fn two_app_shells_do_not_share_fps_stats() {
     let first_start = first.fps_stats().frame_count;
     let second_start = second.fps_stats().frame_count;
 
-    first.update_at_frame_time_nanos(16_000_000);
-    first.update_at_frame_time_nanos(32_000_000);
+    first.record_presented_frame_for_test(16_000_000, 18_000_000);
+    first.record_presented_frame_for_test(32_000_000, 34_000_000);
 
     assert_eq!(first.fps_stats().frame_count, first_start + 2);
     assert_eq!(second.fps_stats().frame_count, second_start);
+}
+
+#[test]
+fn app_shell_idle_updates_do_not_advance_presented_frame_stats() {
+    let _guard = test_guard();
+    reset_public_render_state_for_test();
+
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+
+    let frame_count = shell.fps_stats().frame_count;
+    shell.update_at_frame_time_nanos(16_000_000);
+    shell.update_at_frame_time_nanos(32_000_000);
+
+    assert_eq!(
+        shell.fps_stats().frame_count,
+        frame_count,
+        "AppShell update work is not a presented redraw and must not mutate FPS stats"
+    );
 }
 
 #[test]
@@ -1163,13 +1344,22 @@ impl Renderer for RecordingRenderer {
 struct CountingRenderer {
     scene: TestScene,
     rebuilds: Rc<Cell<usize>>,
+    overlay_texts: Rc<RefCell<Vec<String>>>,
 }
 
 impl CountingRenderer {
     fn new(rebuilds: Rc<Cell<usize>>) -> Self {
+        Self::with_overlay_texts(rebuilds, Rc::new(RefCell::new(Vec::new())))
+    }
+
+    fn with_overlay_texts(
+        rebuilds: Rc<Cell<usize>>,
+        overlay_texts: Rc<RefCell<Vec<String>>>,
+    ) -> Self {
         Self {
             scene: TestScene,
             rebuilds,
+            overlay_texts,
         }
     }
 }
@@ -1204,13 +1394,17 @@ impl Renderer for CountingRenderer {
         self.rebuilds.set(self.rebuilds.get() + 1);
         Ok(())
     }
+
+    fn draw_dev_overlay(&mut self, text: &str, _viewport: Size) {
+        self.overlay_texts.borrow_mut().push(text.to_string());
+    }
 }
 
 struct ScopedUpdateCountingRenderer {
-    scene: TestScene,
-    last_scene: Option<cranpose_ui::RecordedRenderScene>,
+    scene: cranpose_render_common::graph_scene::Scene,
     rebuilds: Rc<Cell<usize>>,
     updates: Rc<Cell<usize>>,
+    visual_updates: Rc<Cell<usize>>,
     last_dirty_nodes: Rc<RefCell<Vec<cranpose_core::NodeId>>>,
 }
 
@@ -1220,18 +1414,27 @@ impl ScopedUpdateCountingRenderer {
         updates: Rc<Cell<usize>>,
         last_dirty_nodes: Rc<RefCell<Vec<cranpose_core::NodeId>>>,
     ) -> Self {
+        Self::with_visual_updates(rebuilds, updates, Rc::new(Cell::new(0)), last_dirty_nodes)
+    }
+
+    fn with_visual_updates(
+        rebuilds: Rc<Cell<usize>>,
+        updates: Rc<Cell<usize>>,
+        visual_updates: Rc<Cell<usize>>,
+        last_dirty_nodes: Rc<RefCell<Vec<cranpose_core::NodeId>>>,
+    ) -> Self {
         Self {
-            scene: TestScene,
-            last_scene: None,
+            scene: cranpose_render_common::graph_scene::Scene::default(),
             rebuilds,
             updates,
+            visual_updates,
             last_dirty_nodes,
         }
     }
 }
 
 impl Renderer for ScopedUpdateCountingRenderer {
-    type Scene = TestScene;
+    type Scene = cranpose_render_common::graph_scene::Scene;
     type Error = ();
 
     fn scene(&self) -> &Self::Scene {
@@ -1248,8 +1451,12 @@ impl Renderer for ScopedUpdateCountingRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.rebuilds.set(self.rebuilds.get() + 1);
-        let renderer = HeadlessRenderer::new();
-        self.last_scene = Some(renderer.render(layout_tree));
+        self.scene.clear();
+        let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(
+            layout_tree.root(),
+            1.0,
+        );
+        self.scene.replace_graph(graph);
         Ok(())
     }
 
@@ -1260,8 +1467,12 @@ impl Renderer for ScopedUpdateCountingRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.rebuilds.set(self.rebuilds.get() + 1);
-        let renderer = HeadlessRenderer::new();
-        self.last_scene = Some(renderer.render_from_applier(applier, root));
+        self.scene.clear();
+        if let Some(graph) =
+            cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
+        {
+            self.scene.replace_graph(graph);
+        }
         Ok(())
     }
 
@@ -1274,8 +1485,50 @@ impl Renderer for ScopedUpdateCountingRenderer {
     ) -> Result<(), Self::Error> {
         self.updates.set(self.updates.get() + 1);
         *self.last_dirty_nodes.borrow_mut() = dirty_nodes.to_vec();
-        let renderer = HeadlessRenderer::new();
-        self.last_scene = Some(renderer.render_from_applier(applier, root));
+        let updated = self.scene.graph.as_mut().is_some_and(|graph| {
+            cranpose_render_common::scene_builder::update_graph_from_applier(
+                applier,
+                graph,
+                dirty_nodes,
+                1.0,
+            )
+        });
+        if !updated {
+            self.scene.clear();
+            if let Some(graph) =
+                cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
+            {
+                self.scene.replace_graph(graph);
+            }
+        }
+        Ok(())
+    }
+
+    fn update_visual_scene_from_applier(
+        &mut self,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        _viewport: Size,
+        dirty_nodes: &[cranpose_core::NodeId],
+    ) -> Result<(), Self::Error> {
+        self.visual_updates.set(self.visual_updates.get() + 1);
+        *self.last_dirty_nodes.borrow_mut() = dirty_nodes.to_vec();
+        let updated = self.scene.graph.as_mut().is_some_and(|graph| {
+            cranpose_render_common::scene_builder::update_graph_from_applier(
+                applier,
+                graph,
+                dirty_nodes,
+                1.0,
+            )
+        });
+        if !updated {
+            self.scene.clear();
+            if let Some(graph) =
+                cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
+            {
+                self.scene.replace_graph(graph);
+            }
+        }
         Ok(())
     }
 }
@@ -1550,6 +1803,57 @@ fn one_shot_frame_request_content() {
 }
 
 #[composable]
+fn continuous_frame_request_tab() {
+    let tick = useState(|| 0u32);
+    let tick_state = tick;
+    launched_effect_async_impl(
+        location_key(file!(), line!(), column!()),
+        (),
+        move |scope| {
+            let tick = tick_state;
+            Box::pin(async move {
+                let clock = scope.runtime().frame_clock();
+                while scope.is_active() {
+                    let _ = clock.next_frame().await;
+                    if !scope.is_active() {
+                        break;
+                    }
+                    APP_SHELL_CONTINUOUS_FRAME_COUNT
+                        .with(|count| count.set(count.get().saturating_add(1)));
+                    tick.update(|value| *value = value.wrapping_add(1));
+                }
+            })
+        },
+    );
+
+    Text(
+        format!("Animated tick {}", tick.value()),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
+fn app_shell_continuous_then_static_tab_host() {
+    let active = useState(|| 0i32);
+    APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(active);
+    });
+
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            if active.value() == 0 {
+                continuous_frame_request_tab();
+            } else {
+                Text("Static tab", Modifier::empty(), TextStyle::default());
+            }
+        },
+    );
+}
+
+#[composable]
 fn frame_time_recorder_content() {
     launched_effect_async_impl(
         location_key(file!(), line!(), column!()),
@@ -1704,7 +2008,6 @@ fn draw_width_app(width_state: cranpose_core::MutableState<f32>) {
     );
 }
 
-#[composable]
 fn draw_observed_width_app(width_state: cranpose_core::MutableState<f32>) {
     Box(
         Modifier::empty()
@@ -1726,6 +2029,308 @@ fn draw_observed_width_app(width_state: cranpose_core::MutableState<f32>) {
             }),
         BoxSpec::default(),
         || {},
+    );
+}
+
+#[composable]
+fn graphics_layer_observed_offset_app(offset_state: cranpose_core::MutableState<f32>) {
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: 200.0,
+                height: 40.0,
+            })
+            .graphics_layer({
+                move || GraphicsLayer {
+                    translation_x: offset_state.get(),
+                    ..Default::default()
+                }
+            })
+            .draw_behind(|scope| {
+                scope.draw_rect_at(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 40.0,
+                        height: 20.0,
+                    },
+                    Brush::solid(Color(0.4, 0.5, 0.9, 1.0)),
+                );
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[composable]
+fn graphics_layer_composed_offset_app(offset_state: cranpose_core::MutableState<f32>) {
+    let offset = offset_state.get();
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: 200.0,
+                height: 40.0,
+            })
+            .graphics_layer(move || GraphicsLayer {
+                translation_x: offset,
+                ..Default::default()
+            })
+            .draw_behind(|scope| {
+                scope.draw_rect_at(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 40.0,
+                        height: 20.0,
+                    },
+                    Brush::solid(Color(0.4, 0.5, 0.9, 1.0)),
+                );
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+fn shader_rect_like_effect(seed: usize, time: f32, intensity: f32) -> RenderEffect {
+    let mut shader = RuntimeShader::new("shader-rect-scoped-update-test");
+    shader.set_float(0, seed as f32);
+    shader.set_float(1, time);
+    shader.set_float(2, intensity);
+    RenderEffect::runtime_shader(shader)
+}
+
+#[composable]
+fn shader_rect_like_effect_layers_app(
+    time_state: cranpose_core::MutableState<f32>,
+    intensity_state: cranpose_core::MutableState<f32>,
+) {
+    let time = time_state.get();
+    let intensity = intensity_state.get();
+
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            for row in 0..2 {
+                Row(
+                    Modifier::empty().fill_max_width(),
+                    RowSpec::default(),
+                    move || {
+                        for col in 0..2 {
+                            let seed = row * 2 + col;
+                            let effect = shader_rect_like_effect(seed, time, intensity);
+                            Box(
+                                Modifier::empty()
+                                    .size(Size {
+                                        width: 96.0,
+                                        height: 48.0,
+                                    })
+                                    .graphics_layer({
+                                        let effect = effect.clone();
+                                        move || GraphicsLayer {
+                                            render_effect: Some(effect.clone()),
+                                            compositing_strategy: CompositingStrategy::Offscreen,
+                                            ..Default::default()
+                                        }
+                                    })
+                                    .draw_behind(move |scope| {
+                                        scope.draw_rect_at(
+                                            Rect {
+                                                x: 0.0,
+                                                y: 0.0,
+                                                width: 96.0,
+                                                height: 48.0,
+                                            },
+                                            Brush::solid(Color(
+                                                0.1 + seed as f32 * 0.05,
+                                                0.2,
+                                                0.4,
+                                                1.0,
+                                            )),
+                                        );
+                                    }),
+                                BoxSpec::new().content_alignment(Alignment::CENTER),
+                                move || {
+                                    Text(
+                                        format!("Shader {seed}"),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+                        }
+                    },
+                );
+            }
+        },
+    );
+}
+
+#[composable]
+fn shader_rect_like_lazy_effect_layers_app(
+    time_state: cranpose_core::MutableState<f32>,
+    intensity_state: cranpose_core::MutableState<f32>,
+) {
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            for row in 0..2 {
+                Row(
+                    Modifier::empty().fill_max_width(),
+                    RowSpec::default(),
+                    move || {
+                        for col in 0..2 {
+                            let seed = row * 2 + col;
+                            Box(
+                                Modifier::empty()
+                                    .size(Size {
+                                        width: 96.0,
+                                        height: 48.0,
+                                    })
+                                    .graphics_layer(move || {
+                                        let effect = shader_rect_like_effect(
+                                            seed,
+                                            time_state.get(),
+                                            intensity_state.get(),
+                                        );
+                                        GraphicsLayer {
+                                            render_effect: Some(effect),
+                                            compositing_strategy: CompositingStrategy::Offscreen,
+                                            ..Default::default()
+                                        }
+                                    })
+                                    .draw_behind(move |scope| {
+                                        scope.draw_rect_at(
+                                            Rect {
+                                                x: 0.0,
+                                                y: 0.0,
+                                                width: 96.0,
+                                                height: 48.0,
+                                            },
+                                            Brush::solid(Color(
+                                                0.1 + seed as f32 * 0.05,
+                                                0.2,
+                                                0.4,
+                                                1.0,
+                                            )),
+                                        );
+                                    }),
+                                BoxSpec::new().content_alignment(Alignment::CENTER),
+                                move || {
+                                    Text(
+                                        format!("Shader {seed}"),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+                        }
+                    },
+                );
+            }
+        },
+    );
+}
+
+#[composable]
+fn graphics_layer_observed_point_app(position_state: cranpose_core::MutableState<Point>) {
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: 200.0,
+                height: 40.0,
+            })
+            .graphics_layer({
+                move || {
+                    let position = position_state.get();
+                    GraphicsLayer {
+                        translation_x: position.x,
+                        translation_y: position.y,
+                        ..Default::default()
+                    }
+                }
+            })
+            .draw_behind(|scope| {
+                scope.draw_rect_at(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 40.0,
+                        height: 20.0,
+                    },
+                    Brush::solid(Color(0.4, 0.5, 0.9, 1.0)),
+                );
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[composable]
+fn pointer_driven_graphics_layer_point_app(position_state: cranpose_core::MutableState<Point>) {
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: 320.0,
+                height: 220.0,
+            })
+            .background(Color(0.08, 0.10, 0.14, 1.0)),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .size(Size {
+                        width: 100.0,
+                        height: 80.0,
+                    })
+                    .graphics_layer({
+                        move || {
+                            let position = position_state.get();
+                            GraphicsLayer {
+                                translation_x: position.x,
+                                translation_y: position.y,
+                                ..Default::default()
+                            }
+                        }
+                    })
+                    .draw_behind(|scope| {
+                        scope.draw_rect_at(
+                            Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 100.0,
+                                height: 80.0,
+                            },
+                            Brush::solid(Color(0.4, 0.5, 0.9, 1.0)),
+                        );
+                    })
+                    .pointer_input((), {
+                        move |scope: PointerInputScope| async move {
+                            scope
+                                .await_pointer_event_scope(|await_scope| async move {
+                                    loop {
+                                        let event = await_scope.await_pointer_event().await;
+                                        match event.kind {
+                                            PointerEventKind::Down | PointerEventKind::Move => {
+                                                position_state.set(event.position);
+                                                event.consume();
+                                            }
+                                            PointerEventKind::Up
+                                            | PointerEventKind::Cancel
+                                            | PointerEventKind::Scroll
+                                            | PointerEventKind::Enter
+                                            | PointerEventKind::Exit => {}
+                                        }
+                                    }
+                                })
+                                .await;
+                        }
+                    }),
+                BoxSpec::default(),
+                || {},
+            );
+        },
     );
 }
 
@@ -1935,6 +2540,48 @@ fn pointer_scrolled_dispatches_to_hovered_targets_and_respects_consumption() {
     assert_eq!(event.kind, PointerEventKind::Scroll);
     assert_eq!(event.scroll_delta, Point { x: 12.0, y: -18.0 });
     assert_eq!(event.global_position, Point { x: 20.0, y: 30.0 });
+}
+
+#[test]
+fn pointer_scrolled_dispatches_capture_path_ancestors() {
+    let _guard = test_guard();
+    let child_events = Rc::new(RefCell::new(Vec::new()));
+    let ancestor_events = Rc::new(RefCell::new(Vec::new()));
+    let scene = RecordingScene::with_hit_node_ids(
+        vec![
+            RecordingHitTarget {
+                node_id: 1,
+                consume: false,
+                events: child_events.clone(),
+                capture_path: vec![1, 99],
+            },
+            RecordingHitTarget {
+                node_id: 99,
+                consume: true,
+                events: ancestor_events.clone(),
+                capture_path: vec![99],
+            },
+        ],
+        vec![1],
+    );
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+    shell.set_cursor(20.0, 30.0);
+    child_events.borrow_mut().clear();
+    ancestor_events.borrow_mut().clear();
+
+    let consumed = shell.pointer_scrolled(0.0, -42.0);
+    assert!(
+        consumed,
+        "wheel dispatch should report ancestor scroll consumption"
+    );
+    assert_eq!(child_events.borrow().len(), 1);
+    assert_eq!(
+        ancestor_events.borrow().len(),
+        1,
+        "scroll must bubble through capture-path ancestors"
+    );
 }
 
 #[test]
@@ -2327,6 +2974,316 @@ fn pointer_scrolled_returns_false_without_hit_targets() {
 }
 
 #[test]
+fn pointer_scrolled_reaches_real_vertical_scroll_modifier() {
+    let _guard = test_guard();
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_wheel_scroll_probe,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    let scroll_state = APP_SHELL_WHEEL_SCROLL_STATE
+        .with(|slot| slot.borrow().as_ref().cloned())
+        .expect("wheel scroll probe should expose its scroll state");
+    assert_eq!(scroll_state.value_non_reactive(), 0.0);
+
+    assert!(shell.set_cursor(80.0, 80.0), "probe should be hit-testable");
+    assert!(
+        shell.pointer_scrolled(0.0, -120.0),
+        "wheel event should be consumed by the scroll modifier"
+    );
+    shell.update();
+
+    assert!(
+        scroll_state.value_non_reactive() > 0.0,
+        "wheel event did not update vertical_scroll state"
+    );
+    assert!(
+        !shell.needs_redraw(),
+        "wheel scroll must not leave a redraw tail after the frame that applied the scroll"
+    );
+}
+
+#[test]
+fn wheel_scroll_updates_vertical_scroll_layout_tree_offset() {
+    let _guard = test_guard();
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_wheel_scroll_probe,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    let initial_bottom_y = find_layout_box_with_text(
+        shell.layout_tree().expect("initial layout tree").root(),
+        "Wheel scroll probe bottom",
+    )
+    .expect("bottom text in initial layout tree")
+    .rect
+    .y;
+
+    assert!(shell.set_cursor(80.0, 80.0), "probe should be hit-testable");
+    assert!(
+        shell.pointer_scrolled(0.0, -120.0),
+        "wheel event should be consumed by the scroll modifier"
+    );
+    shell.update();
+
+    let scroll_offset = APP_SHELL_WHEEL_SCROLL_STATE
+        .with(|slot| slot.borrow().as_ref().map(ScrollState::value_non_reactive))
+        .expect("wheel scroll probe should expose its scroll state");
+    let scrolled_bottom_y = find_layout_box_with_text(
+        shell.layout_tree().expect("scrolled layout tree").root(),
+        "Wheel scroll probe bottom",
+    )
+    .expect("bottom text in scrolled layout tree")
+    .rect
+    .y;
+
+    assert!(
+        scroll_offset > 0.0,
+        "wheel event should change the scroll state before checking layout"
+    );
+    assert!(
+        scrolled_bottom_y < initial_bottom_y - scroll_offset * 0.5,
+        "scroll layout tree did not move with scroll offset: initial_y={initial_bottom_y} scrolled_y={scrolled_bottom_y} scroll_offset={scroll_offset}"
+    );
+}
+
+#[test]
+fn consumed_child_drag_does_not_scroll_parent_vertical_scroll() {
+    let _guard = test_guard();
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_consumed_child_drag_scroll_probe,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    let scroll_state = APP_SHELL_WHEEL_SCROLL_STATE
+        .with(|slot| slot.borrow().as_ref().cloned())
+        .expect("drag scroll probe should expose its scroll state");
+    assert_eq!(scroll_state.value_non_reactive(), 0.0);
+
+    assert!(shell.set_cursor(32.0, 32.0), "child should be hit-testable");
+    assert!(shell.pointer_pressed(), "child should receive pointer down");
+    assert!(
+        shell.set_cursor(32.0, 96.0),
+        "child drag should be delivered"
+    );
+    assert!(
+        shell.pointer_released(),
+        "captured child should receive pointer up"
+    );
+    shell.update();
+
+    assert_eq!(
+        scroll_state.value_non_reactive(),
+        0.0,
+        "parent vertical_scroll must ignore a drag consumed by a child pointer handler"
+    );
+}
+
+#[test]
+fn pointer_scrolled_reaches_horizontal_scroll_under_clickable_child() {
+    let _guard = test_guard();
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_horizontal_clickable_wheel_scroll_probe,
+    );
+    shell.set_buffer_size(220, 120);
+    shell.set_viewport(220.0, 120.0);
+    shell.update();
+
+    let scroll_state = APP_SHELL_WHEEL_SCROLL_STATE
+        .with(|slot| slot.borrow().as_ref().cloned())
+        .expect("horizontal wheel probe should expose its scroll state");
+    assert_eq!(scroll_state.value_non_reactive(), 0.0);
+
+    assert!(
+        shell.set_cursor(72.0, 32.0),
+        "clickable child in horizontal scroll row should be hit-testable"
+    );
+    assert!(
+        shell.pointer_scrolled(-120.0, 0.0),
+        "horizontal wheel event should be consumed by the parent scroll modifier"
+    );
+    shell.update();
+
+    assert!(
+        scroll_state.value_non_reactive() > 0.0,
+        "horizontal wheel over a clickable child did not advance scroll state"
+    );
+}
+
+#[test]
+fn pointer_scrolled_reaches_real_lazy_column_modifier() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        AppShellScrollIndicatorLazyList,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| *slot.borrow())
+        .expect("lazy wheel probe should expose its list state");
+    assert_eq!(list_state.first_visible_item_index_non_reactive(), 0);
+    assert_eq!(
+        list_state.first_visible_item_scroll_offset_non_reactive(),
+        0.0
+    );
+
+    assert!(
+        shell.set_cursor(80.0, 120.0),
+        "lazy list should be hit-testable"
+    );
+    assert!(
+        shell.pointer_scrolled(0.0, -120.0),
+        "wheel event should be consumed by the lazy scroll modifier"
+    );
+    shell.update();
+
+    let moved_index = list_state.first_visible_item_index_non_reactive() > 0;
+    let moved_offset = list_state.first_visible_item_scroll_offset_non_reactive() > 0.0;
+    assert!(
+        moved_index || moved_offset,
+        "wheel event did not update LazyListState"
+    );
+    assert!(
+        !shell.needs_redraw(),
+        "lazy wheel scroll must not leave a redraw tail after the frame that applied the scroll"
+    );
+}
+
+#[test]
+fn pointer_drag_reaches_real_lazy_column_modifier() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        AppShellScrollIndicatorLazyList,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| *slot.borrow())
+        .expect("lazy drag probe should expose its list state");
+    assert_eq!(list_state.first_visible_item_index_non_reactive(), 0);
+    assert_eq!(
+        list_state.first_visible_item_scroll_offset_non_reactive(),
+        0.0
+    );
+
+    assert!(
+        shell.set_cursor(80.0, 180.0),
+        "lazy list should be hit-testable before drag"
+    );
+    assert!(
+        shell.pointer_pressed(),
+        "lazy list should receive pointer down"
+    );
+    assert!(
+        shell.set_cursor(80.0, 130.0),
+        "first held move should stay on the captured lazy list path"
+    );
+    assert!(
+        shell.set_cursor(80.0, 70.0),
+        "second held move should scroll through the captured lazy list path"
+    );
+    shell.update();
+    assert!(
+        shell.pointer_released(),
+        "lazy list should receive pointer release on the captured path"
+    );
+    shell.update();
+
+    let moved_index = list_state.first_visible_item_index_non_reactive() > 0;
+    let moved_offset = list_state.first_visible_item_scroll_offset_non_reactive() > 0.0;
+    assert!(
+        moved_index || moved_offset,
+        "held pointer drag did not update LazyListState"
+    );
+    let layout_tree = shell
+        .layout_tree()
+        .expect("layout tree should be available after lazy drag");
+    let layout_texts = layout_tree_texts(layout_tree);
+    if moved_index {
+        assert!(
+            !layout_texts.iter().any(|text| text == "Row 0"),
+            "retained lazy layout did not render the shifted item window after user drag: {layout_texts:?}"
+        );
+    }
+}
+
+#[test]
+fn lazy_column_scroll_observer_recomposition_settles_to_idle() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        AppShellScrollIndicatorLazyList,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    assert!(shell.set_cursor(80.0, 120.0));
+    assert!(shell.pointer_scrolled(0.0, -120.0));
+    shell.update();
+
+    let mut final_schedule = shell.frame_schedule();
+    for _ in 0..8 {
+        if !final_schedule.needs_update && !final_schedule.needs_frame {
+            break;
+        }
+        shell.update();
+        final_schedule = shell.frame_schedule();
+    }
+
+    assert!(
+        !final_schedule.needs_update && !final_schedule.needs_frame,
+        "lazy scroll observer invalidation did not settle: needs_update={} needs_frame={}",
+        final_schedule.needs_update,
+        final_schedule.needs_frame,
+    );
+}
+
+#[test]
 fn pointer_dispatch_uses_rendered_frame_handlers_when_recomposition_is_pending() {
     let _guard = test_guard();
     FRAME_STABLE_HANDLER_MODE.with(|slot| slot.borrow_mut().take());
@@ -2506,12 +3463,14 @@ fn draw_only_repass_uses_scoped_renderer_update() {
     let state_holder_for_app = Rc::clone(&state_holder);
     let rebuilds = Rc::new(Cell::new(0));
     let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
     let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
 
     let mut shell = AppShell::new(
-        ScopedUpdateCountingRenderer::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
             Rc::clone(&rebuilds),
             Rc::clone(&updates),
+            Rc::clone(&visual_updates),
             Rc::clone(&last_dirty_nodes),
         ),
         root_key,
@@ -2525,6 +3484,7 @@ fn draw_only_repass_uses_scoped_renderer_update() {
     shell.update();
     rebuilds.set(0);
     updates.set(0);
+    visual_updates.set(0);
     last_dirty_nodes.borrow_mut().clear();
 
     let width_state = state_holder
@@ -2538,8 +3498,13 @@ fn draw_only_repass_uses_scoped_renderer_update() {
 
     assert_eq!(
         updates.get(),
+        0,
+        "draw-only repass should not refresh hit data"
+    );
+    assert_eq!(
+        visual_updates.get(),
         1,
-        "draw-only repass should call the scoped renderer update"
+        "draw-only repass should call the visual scoped renderer update"
     );
     assert_eq!(
         rebuilds.get(),
@@ -2550,6 +3515,590 @@ fn draw_only_repass_uses_scoped_renderer_update() {
         !last_dirty_nodes.borrow().is_empty(),
         "scoped renderer update should receive dirty node ids"
     );
+}
+
+#[test]
+fn draw_only_scene_dirty_repass_uses_visual_scoped_renderer_update() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let state_holder_for_app = Rc::clone(&state_holder);
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&visual_updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        move || {
+            let width_state = useState(|| 24.0f32);
+            *state_holder_for_app.borrow_mut() = Some(width_state);
+            draw_observed_width_app(width_state);
+        },
+    );
+
+    shell.update();
+    rebuilds.set(0);
+    updates.set(0);
+    visual_updates.set(0);
+    last_dirty_nodes.borrow_mut().clear();
+
+    let width_state = state_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("width state should be captured");
+    width_state.set(120.0);
+    shell.scene_dirty = true;
+
+    shell.update();
+
+    assert_eq!(
+        updates.get(),
+        0,
+        "draw-only scene dirtiness should not refresh hit data"
+    );
+    assert_eq!(
+        visual_updates.get(),
+        1,
+        "draw-only scene dirtiness should use the visual scoped renderer update"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "draw-only scene dirtiness should not rebuild the full scene"
+    );
+    assert!(
+        !last_dirty_nodes.borrow().is_empty(),
+        "visual scoped update should receive dirty node ids"
+    );
+}
+
+#[test]
+fn lazy_column_scroll_repass_uses_scoped_renderer_update_without_stale_rows() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&visual_updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        AppShellScrollIndicatorLazyList,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| *slot.borrow())
+        .expect("lazy scroll probe should expose its list state");
+    let initial_labels = graph_scene_text_values(shell.renderer.scene());
+    let initial_rows = row_label_indices(&initial_labels);
+    assert!(
+        initial_rows.contains(&0),
+        "initial graph should contain row zero before scrolling: {initial_labels:?}"
+    );
+
+    rebuilds.set(0);
+    updates.set(0);
+    visual_updates.set(0);
+    last_dirty_nodes.borrow_mut().clear();
+
+    assert!(
+        list_state.dispatch_scroll_delta(-120.0).abs() > 0.0,
+        "lazy scroll state should consume the programmatic scroll delta"
+    );
+    shell.update();
+
+    assert_eq!(
+        visual_updates.get(),
+        0,
+        "lazy-list layout repasses must refresh hit data"
+    );
+    assert_eq!(
+        updates.get() + rebuilds.get(),
+        1,
+        "lazy-list layout repasses should perform exactly one renderer scene refresh"
+    );
+    if updates.get() > 0 {
+        assert!(
+            !last_dirty_nodes.borrow().is_empty(),
+            "scoped lazy-list update should pass dirty layout node ids"
+        );
+    }
+
+    let first_visible = list_state.first_visible_item_index_non_reactive();
+    let updated_labels = graph_scene_text_values(shell.renderer.scene());
+    let updated_rows = row_label_indices(&updated_labels);
+    assert!(
+        first_visible > 0,
+        "test scroll should move the retained lazy-list first visible index"
+    );
+    assert!(
+        !updated_rows.contains(&0),
+        "partial lazy-list update must not retain stale row zero after scrolling: labels={updated_labels:?}"
+    );
+    assert!(
+        updated_rows.windows(2).all(|window| window[1] == window[0] + 1),
+        "partial lazy-list update should keep a consecutive visible row window: rows={updated_rows:?}, labels={updated_labels:?}"
+    );
+    assert!(
+        !shell.needs_redraw(),
+        "lazy-list scroll must not leave a redraw tail after the applied frame"
+    );
+}
+
+#[test]
+fn graphics_layer_state_repass_does_not_recompose() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let state_holder_for_app = Rc::clone(&state_holder);
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&visual_updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        move || {
+            let offset_state = useState(|| 10.0f32);
+            *state_holder_for_app.borrow_mut() = Some(offset_state);
+            graphics_layer_observed_offset_app(offset_state);
+        },
+    );
+
+    shell.update();
+    let initial_recompositions = shell.fps_stats().recompositions;
+    rebuilds.set(0);
+    updates.set(0);
+    visual_updates.set(0);
+    last_dirty_nodes.borrow_mut().clear();
+
+    let offset_state = state_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("offset state should be captured");
+    offset_state.set(48.0);
+
+    shell.update();
+
+    assert_eq!(
+        shell.fps_stats().recompositions,
+        initial_recompositions,
+        "graphics-layer-only state changes must not invalidate composition"
+    );
+    assert_eq!(
+        updates.get(),
+        0,
+        "graphics-layer-only state changes should not use the hit-refresh update path"
+    );
+    assert_eq!(
+        visual_updates.get(),
+        1,
+        "graphics-layer-only state changes should use visual scoped renderer update"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "graphics-layer-only state changes should not rebuild the full scene"
+    );
+    assert!(
+        !last_dirty_nodes.borrow().is_empty(),
+        "graphics-layer-only state changes should carry dirty node ids"
+    );
+}
+
+#[test]
+fn recomposed_graphics_layer_update_uses_scoped_renderer_update() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let state_holder_for_app = Rc::clone(&state_holder);
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::new(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        move || {
+            let offset_state = useState(|| 10.0f32);
+            *state_holder_for_app.borrow_mut() = Some(offset_state);
+            graphics_layer_composed_offset_app(offset_state);
+        },
+    );
+
+    shell.update();
+    let initial_recompositions = shell.fps_stats().recompositions;
+    rebuilds.set(0);
+    updates.set(0);
+    last_dirty_nodes.borrow_mut().clear();
+
+    let offset_state = state_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("offset state should be captured");
+    offset_state.set(48.0);
+
+    shell.update();
+
+    assert!(
+        shell.fps_stats().recompositions > initial_recompositions,
+        "composition-read graphics-layer state changes should still recompose the owning scope"
+    );
+    assert_eq!(
+        updates.get(),
+        1,
+        "recomposed graphics-layer changes should use scoped renderer update"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "recomposed graphics-layer changes should not rebuild the full scene"
+    );
+    assert!(
+        !last_dirty_nodes.borrow().is_empty(),
+        "recomposed graphics-layer changes should carry dirty node ids"
+    );
+}
+
+#[test]
+fn recomposed_shader_effect_layers_use_scoped_renderer_update() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let time_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let intensity_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let time_holder_for_app = Rc::clone(&time_holder);
+    let intensity_holder_for_app = Rc::clone(&intensity_holder);
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&visual_updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        move || {
+            let time_state = useState(|| 0.0f32);
+            let intensity_state = useState(|| 1.0f32);
+            *time_holder_for_app.borrow_mut() = Some(time_state);
+            *intensity_holder_for_app.borrow_mut() = Some(intensity_state);
+            shader_rect_like_effect_layers_app(time_state, intensity_state);
+        },
+    );
+
+    shell.update();
+    let initial_recompositions = shell.fps_stats().recompositions;
+    rebuilds.set(0);
+    updates.set(0);
+    visual_updates.set(0);
+    last_dirty_nodes.borrow_mut().clear();
+
+    let time_state = time_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("time state should be captured");
+    let intensity_state = intensity_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("intensity state should be captured");
+    time_state.set(0.25);
+    intensity_state.set(1.5);
+
+    shell.update();
+
+    assert!(
+        shell.fps_stats().recompositions > initial_recompositions,
+        "shader-effect payload state changes should recompose the owning scope"
+    );
+    assert_eq!(
+        updates.get(),
+        1,
+        "shader-effect payload changes should use one scoped renderer update"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "shader-effect payload changes should not rebuild the full scene"
+    );
+    assert!(
+        last_dirty_nodes.borrow().len() >= 4,
+        "all changed shader layer nodes should be delivered to the scoped renderer update"
+    );
+}
+
+#[test]
+fn lazy_shader_effect_layers_use_draw_repass_without_recomposition() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let time_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let intensity_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let time_holder_for_app = Rc::clone(&time_holder);
+    let intensity_holder_for_app = Rc::clone(&intensity_holder);
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&visual_updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        move || {
+            let time_state = useState(|| 0.0f32);
+            let intensity_state = useState(|| 1.0f32);
+            *time_holder_for_app.borrow_mut() = Some(time_state);
+            *intensity_holder_for_app.borrow_mut() = Some(intensity_state);
+            shader_rect_like_lazy_effect_layers_app(time_state, intensity_state);
+        },
+    );
+
+    shell.update();
+    let initial_recompositions = shell.fps_stats().recompositions;
+    rebuilds.set(0);
+    updates.set(0);
+    visual_updates.set(0);
+    last_dirty_nodes.borrow_mut().clear();
+
+    let time_state = time_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("time state should be captured");
+    let intensity_state = intensity_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("intensity state should be captured");
+    time_state.set(0.25);
+    intensity_state.set(1.5);
+
+    shell.update();
+
+    assert_eq!(
+        shell.fps_stats().recompositions,
+        initial_recompositions,
+        "lazy shader-effect payload state changes must not recompose"
+    );
+    assert_eq!(
+        updates.get(),
+        0,
+        "lazy shader-effect payload changes should not use the hit-refresh update path"
+    );
+    assert_eq!(
+        visual_updates.get(),
+        1,
+        "lazy shader-effect payload changes should use one visual scoped renderer update"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "lazy shader-effect payload changes should not rebuild the full scene"
+    );
+    assert!(
+        last_dirty_nodes.borrow().len() >= 4,
+        "all changed shader layer nodes should be delivered to the scoped renderer update"
+    );
+}
+
+#[test]
+fn graphics_layer_point_state_repass_does_not_recompose() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<Point>>>> =
+        Rc::new(RefCell::new(None));
+    let state_holder_for_app = Rc::clone(&state_holder);
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&visual_updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        move || {
+            let position_state = useState(|| Point { x: 10.0, y: 20.0 });
+            *state_holder_for_app.borrow_mut() = Some(position_state);
+            graphics_layer_observed_point_app(position_state);
+        },
+    );
+
+    shell.update();
+    let initial_recompositions = shell.fps_stats().recompositions;
+    rebuilds.set(0);
+    updates.set(0);
+    visual_updates.set(0);
+    last_dirty_nodes.borrow_mut().clear();
+
+    let position_state = state_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("position state should be captured");
+    position_state.set(Point { x: 48.0, y: 64.0 });
+
+    shell.update();
+
+    assert_eq!(
+        shell.fps_stats().recompositions,
+        initial_recompositions,
+        "graphics-layer point state changes must not invalidate composition"
+    );
+    assert_eq!(
+        updates.get(),
+        0,
+        "graphics-layer point state changes should not use the hit-refresh update path"
+    );
+    assert_eq!(
+        visual_updates.get(),
+        1,
+        "graphics-layer point state changes should use visual scoped renderer update"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "graphics-layer point state changes should not rebuild the full scene"
+    );
+    assert!(
+        !last_dirty_nodes.borrow().is_empty(),
+        "scoped renderer update should receive the graphics-layer node id"
+    );
+}
+
+#[test]
+fn pointer_driven_graphics_layer_point_state_does_not_recompose() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<Point>>>> =
+        Rc::new(RefCell::new(None));
+    let state_holder_for_app = Rc::clone(&state_holder);
+
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, move || {
+        let position_state = useState(Point::default);
+        *state_holder_for_app.borrow_mut() = Some(position_state);
+        pointer_driven_graphics_layer_point_app(position_state);
+    });
+
+    shell.update();
+    let initial_recompositions = shell.fps_stats().recompositions;
+
+    assert!(
+        shell.set_cursor(20.0, 20.0),
+        "initial hover should hit the draggable"
+    );
+    assert!(
+        shell.pointer_pressed(),
+        "pointer down should hit the draggable"
+    );
+    shell.update();
+
+    for point in [
+        Point { x: 28.0, y: 26.0 },
+        Point { x: 36.0, y: 32.0 },
+        Point { x: 44.0, y: 38.0 },
+    ] {
+        assert!(
+            shell.set_cursor(point.x, point.y),
+            "drag move should dispatch through the captured hit path"
+        );
+        shell.update();
+    }
+
+    assert!(
+        shell.pointer_released(),
+        "pointer release should dispatch through the captured hit path"
+    );
+    shell.update();
+
+    assert_eq!(
+        shell.fps_stats().recompositions,
+        initial_recompositions,
+        "pointer-driven graphics-layer state changes must not invalidate composition"
+    );
+}
+
+#[test]
+fn active_pointer_gesture_keeps_frame_schedule_until_release() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, || {
+        let position_state = useState(Point::default);
+        pointer_driven_graphics_layer_point_app(position_state);
+    });
+
+    shell.update();
+    assert!(!shell.frame_schedule().needs_frame);
+
+    assert!(shell.set_cursor(20.0, 20.0));
+    assert!(shell.pointer_pressed());
+    assert!(shell.has_active_pointer_gesture());
+    assert!(shell.frame_schedule().needs_frame);
+
+    shell.update();
+    assert!(
+        shell.frame_schedule().needs_frame,
+        "an active pointer gesture should keep the frame driver awake after the dirty frame is consumed"
+    );
+
+    assert!(shell.set_cursor(44.0, 38.0));
+    shell.update();
+    assert!(shell.frame_schedule().needs_frame);
+
+    assert!(shell.pointer_released());
+    shell.update();
+    assert!(!shell.has_active_pointer_gesture());
+    assert!(!shell.frame_schedule().needs_frame);
 }
 
 #[composable]
@@ -2581,6 +4130,40 @@ fn rendered_text_values(scene: &cranpose_ui::RecordedRenderScene) -> Vec<String>
         .filter_map(|op| match op {
             RenderOp::Text { value, .. } => Some(value.clone()),
             _ => None,
+        })
+        .collect()
+}
+
+fn graph_scene_text_values(scene: &cranpose_render_common::graph_scene::Scene) -> Vec<String> {
+    fn collect(layer: &cranpose_render_common::graph::LayerNode, out: &mut Vec<String>) {
+        for child in &layer.children {
+            match child {
+                cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
+                    collect(child_layer, out);
+                }
+                cranpose_render_common::graph::RenderNode::Primitive(entry) => {
+                    if let cranpose_render_common::graph::PrimitiveNode::Text(text) = &entry.node {
+                        out.push(text.text.text.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut values = Vec::new();
+    if let Some(graph) = &scene.graph {
+        collect(&graph.root, &mut values);
+    }
+    values
+}
+
+fn row_label_indices(values: &[String]) -> Vec<usize> {
+    values
+        .iter()
+        .filter_map(|value| {
+            value
+                .strip_prefix("Row ")
+                .and_then(|index| index.parse::<usize>().ok())
         })
         .collect()
 }
@@ -2678,17 +4261,138 @@ fn render_invalidation_without_scene_changes_rebuilds_scene() {
 
     let app_context = Rc::clone(&shell.app_context);
     app_context.enter(cranpose_ui::request_render_invalidation);
-    shell.run_render_phase();
+    assert!(
+        shell.debug_enter_app_context(cranpose_ui::peek_render_invalidation),
+        "test setup must install a render invalidation"
+    );
+    let result = shell.run_render_phase();
 
     assert_eq!(
         rebuilds.get(),
         1,
         "pure render invalidation should rebuild scene for render-only updates"
     );
+    assert!(
+        result.visual_changed,
+        "pure render invalidation should report visual work"
+    );
 }
 
 #[test]
-fn pointer_invalidation_without_scene_changes_rebuilds_scene() {
+fn clean_frame_reports_no_visual_work_with_dev_overlay_enabled() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        CountingRenderer::new(Rc::clone(&rebuilds)),
+        root_key,
+        box_content,
+    );
+
+    let options = DevOptions {
+        fps_counter: true,
+        ..Default::default()
+    };
+    shell.set_dev_options(options);
+    assert!(
+        shell.debug_enter_app_context(cranpose_ui::peek_render_invalidation),
+        "dev option changes must request a renderer update"
+    );
+
+    let overlay_result = shell.update();
+    assert!(
+        overlay_result.visual_changed,
+        "enabling the dev overlay must produce one visual scene update"
+    );
+
+    rebuilds.set(0);
+    let clean_result = shell.update();
+
+    assert!(
+        !clean_result.visual_changed,
+        "clean app-shell frames must not be presented as visual work"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "clean frames must not rebuild the scene just to refresh FPS text"
+    );
+    assert!(
+        !shell.needs_redraw(),
+        "the overlay must not keep the shell dirty after a clean frame"
+    );
+}
+
+#[test]
+fn dev_overlay_reuses_text_inside_refresh_window_and_updates_after_it() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let overlay_texts = Rc::new(RefCell::new(Vec::new()));
+    let mut shell = AppShell::new(
+        CountingRenderer::with_overlay_texts(Rc::clone(&rebuilds), Rc::clone(&overlay_texts)),
+        root_key,
+        box_content,
+    );
+
+    let options = DevOptions {
+        fps_counter: true,
+        frame_pacing_controls: true,
+        ..Default::default()
+    };
+    shell.set_dev_options(options);
+    shell.update();
+    overlay_texts.borrow_mut().clear();
+
+    shell.reset_fps_stats();
+    shell.record_presented_frame_for_test(0, 1_000_000);
+    shell.record_presented_frame_for_test(20_000_000, 21_000_000);
+    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.update();
+    let slow_overlay = overlay_texts
+        .borrow()
+        .last()
+        .expect("slow overlay text should be drawn")
+        .clone();
+    assert!(
+        slow_overlay.starts_with("50 FPS"),
+        "test setup should draw the slow frame history first: {slow_overlay}"
+    );
+
+    overlay_texts.borrow_mut().clear();
+    for index in 1..=60u64 {
+        let started = 20_000_000 + index * 4_000_000;
+        shell.record_presented_frame_for_test(started, started + 1_000_000);
+    }
+    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.update();
+    let cached_overlay = overlay_texts
+        .borrow()
+        .last()
+        .expect("cached overlay text should be drawn")
+        .clone();
+    assert_eq!(
+        cached_overlay, slow_overlay,
+        "the dev overlay must not rebuild dynamic FPS text on every visual frame"
+    );
+
+    overlay_texts.borrow_mut().clear();
+    shell.dev_overlay_last_refresh = Some(web_time::Instant::now() - Duration::from_millis(300));
+    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.update();
+    let fast_overlay = overlay_texts
+        .borrow()
+        .last()
+        .expect("refreshed overlay text should be drawn")
+        .clone();
+    assert!(
+        fast_overlay.starts_with("250 FPS"),
+        "the dev overlay must report current FPS stats after the refresh window: slow={slow_overlay:?} fast={fast_overlay:?}"
+    );
+}
+
+#[test]
+fn pointer_invalidation_without_scene_changes_skips_scene_rebuild() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let rebuilds = Rc::new(Cell::new(0));
@@ -2719,8 +4423,8 @@ fn pointer_invalidation_without_scene_changes_rebuilds_scene() {
 
     assert_eq!(
         rebuilds.get(),
-        1,
-        "pure pointer invalidation should rebuild the scene so hit handlers stay fresh"
+        0,
+        "pure pointer invalidation should refresh dispatch state without rebuilding the visual scene"
     );
     let needs_pointer_pass = shell
         .composition
@@ -2802,6 +4506,30 @@ fn semantics_collection_is_opt_in_for_app_shell() {
         shell.semantics_tree().is_none(),
         "disabling semantics should drop the cached tree"
     );
+}
+
+#[test]
+fn lazy_item_animation_updates_semantics_after_app_shell_frame() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, AppShellAnimatedLazyItem);
+
+    shell.set_semantics_enabled(true);
+    shell.update_at_frame_time_nanos(0);
+
+    let initial = first_semantics_description_with_prefix(&mut shell, "Lazy Pulse:")
+        .expect("initial lazy pulse semantics");
+
+    for frame in 1..80 {
+        shell.update_at_frame_time_nanos(frame * 16_666_667);
+        let current = first_semantics_description_with_prefix(&mut shell, "Lazy Pulse:")
+            .expect("lazy pulse semantics after frame");
+        if current != initial {
+            return;
+        }
+    }
+
+    panic!("lazy item animation semantics stayed frozen at {initial}");
 }
 
 #[test]
@@ -3184,6 +4912,127 @@ fn app_shell_scrollable_test_tab(label: &'static str) {
                 Modifier::empty().padding(8.0),
                 TextStyle::default(),
             );
+        },
+    );
+}
+
+#[composable]
+fn app_shell_wheel_scroll_probe() {
+    let scroll_state =
+        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(scroll_state.clone());
+    });
+
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll_state, false),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                "Wheel scroll probe top",
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            Spacer(Size {
+                width: 0.0,
+                height: 900.0,
+            });
+            Text(
+                "Wheel scroll probe bottom",
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+
+#[composable]
+fn app_shell_consumed_child_drag_scroll_probe() {
+    let scroll_state =
+        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(scroll_state.clone());
+    });
+
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll_state, false),
+        ColumnSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .size(Size {
+                        width: 180.0,
+                        height: 120.0,
+                    })
+                    .pointer_input((), move |scope: PointerInputScope| async move {
+                        scope
+                            .await_pointer_event_scope(|await_scope| async move {
+                                loop {
+                                    let event = await_scope.await_pointer_event().await;
+                                    match event.kind {
+                                        PointerEventKind::Down | PointerEventKind::Move => {
+                                            event.consume();
+                                        }
+                                        PointerEventKind::Up
+                                        | PointerEventKind::Cancel
+                                        | PointerEventKind::Scroll
+                                        | PointerEventKind::Enter
+                                        | PointerEventKind::Exit => {}
+                                    }
+                                }
+                            })
+                            .await;
+                    }),
+                BoxSpec::default(),
+                || {},
+            );
+            Spacer(Size {
+                width: 0.0,
+                height: 900.0,
+            });
+            Text(
+                "Consumed child drag bottom",
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+
+#[composable]
+fn app_shell_horizontal_clickable_wheel_scroll_probe() {
+    let scroll_state =
+        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(scroll_state.clone());
+    });
+
+    Row(
+        Modifier::empty()
+            .fill_max_width()
+            .height(72.0)
+            .clip_to_bounds()
+            .horizontal_scroll(scroll_state, false),
+        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            for index in 0..8 {
+                Button(
+                    Modifier::empty().width(112.0).height(48.0),
+                    ButtonSpec::default(),
+                    || {},
+                    move || {
+                        Text(
+                            format!("Tab {index}"),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
+                    },
+                );
+            }
         },
     );
 }
@@ -4622,6 +6471,60 @@ fn headless_shell_counter_click_updates_after_tab_button_roundtrip() {
 }
 
 #[test]
+fn parent_pointer_listener_releases_after_child_button_click_recomposes() {
+    let _guard = test_guard();
+    APP_SHELL_COUNTER_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_interactive_clickable_tab_host,
+    );
+
+    shell.set_semantics_enabled(true);
+    shell.update();
+
+    let increment = find_layout_box_with_text(
+        shell.layout_tree().expect("counter layout tree").root(),
+        "Increment",
+    )
+    .expect("increment button in layout tree");
+    let button_x = increment.rect.x + increment.rect.width * 0.5;
+    let button_y = increment.rect.y + increment.rect.height * 0.5;
+
+    assert!(shell.set_cursor(button_x, button_y));
+    shell.update();
+    assert!(shell.pointer_pressed(), "pointer down should hit increment");
+    shell.update();
+
+    let pressed_texts = layout_tree_texts(shell.layout_tree().expect("pressed counter layout"));
+    assert!(
+        pressed_texts.iter().any(|text| text.contains("down=true")),
+        "parent pointer listener did not observe Down before child click: {pressed_texts:?}",
+    );
+
+    assert!(
+        shell.pointer_released(),
+        "pointer up should reach captured child and parent targets"
+    );
+    shell.update();
+
+    let released_texts = layout_tree_texts(shell.layout_tree().expect("released counter layout"));
+    assert!(
+        released_texts
+            .iter()
+            .any(|text| text.contains("Counter value 1")),
+        "button click did not update counter after release: {released_texts:?}",
+    );
+    assert!(
+        released_texts
+            .iter()
+            .any(|text| text.contains("down=false")),
+        "parent pointer listener stayed pressed after child button release: {released_texts:?}",
+    );
+}
+
+#[test]
 fn headless_shell_render_graph_survives_restored_draw_state() {
     let _guard = test_guard();
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| slot.borrow_mut().take());
@@ -4854,6 +6757,63 @@ fn app_shell_single_frame_callback_returns_to_idle() {
     assert!(
         !shell.needs_redraw(),
         "shell kept requesting redraw after the one-shot frame callback completed"
+    );
+}
+
+#[test]
+fn app_shell_hidden_frame_loop_tab_returns_to_idle() {
+    let _guard = test_guard();
+    APP_SHELL_ACTIVE_TAB_STATE.with(|slot| slot.borrow_mut().take());
+    APP_SHELL_CONTINUOUS_FRAME_COUNT.with(|count| count.set(0));
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_continuous_then_static_tab_host,
+    );
+
+    for _ in 0..4 {
+        pump_like_robot(&mut shell);
+    }
+
+    let active = APP_SHELL_ACTIVE_TAB_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("active tab registered");
+    let animated_frames = APP_SHELL_CONTINUOUS_FRAME_COUNT.with(Cell::get);
+    assert!(
+        animated_frames > 0,
+        "test setup did not drive the animated tab"
+    );
+
+    active.set_value(1);
+    shell.update();
+    let texts = layout_tree_texts(shell.layout_tree().expect("static tab layout"));
+    assert!(
+        texts.iter().any(|text| text == "Static tab"),
+        "static tab did not render after switching away: {texts:?}"
+    );
+    let after_switch_frame = APP_SHELL_CONTINUOUS_FRAME_COUNT.with(Cell::get);
+
+    for _ in 0..4 {
+        pump_like_robot(&mut shell);
+    }
+
+    let after_idle_pumps = APP_SHELL_CONTINUOUS_FRAME_COUNT.with(Cell::get);
+    assert_eq!(
+        after_idle_pumps, after_switch_frame,
+        "hidden frame loop kept advancing after the tab was removed"
+    );
+    assert!(
+        !shell.has_active_animations(),
+        "hidden frame loop kept AppShell active"
+    );
+    assert!(
+        !shell.needs_redraw(),
+        "hidden frame loop kept requesting redraw"
+    );
+    assert!(
+        !shell.frame_schedule().needs_frame,
+        "idle shell must not schedule a platform frame after hidden frame loops settle"
     );
 }
 

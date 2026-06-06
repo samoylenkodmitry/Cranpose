@@ -319,6 +319,7 @@ fn shadow_shape(
             z_index: 0, // populated by CompositorScene::push_shadow_draw()
             clip: None,
             blend_mode: BlendMode::SrcOver,
+            motion_context_animated: false,
         },
         BlendMode::SrcOver,
     )
@@ -2174,18 +2175,27 @@ pub(crate) fn update_from_applier(
     scene: &mut Scene,
     scale: f32,
     dirty_nodes: &[NodeId],
+    refresh_hits: bool,
 ) {
-    let updated = scene.graph.as_mut().is_some_and(|graph| {
-        cranpose_render_common::scene_builder::update_graph_from_applier(
+    let Some(update_report) = scene.graph.as_mut().map(|graph| {
+        cranpose_render_common::scene_builder::update_graph_from_applier_report(
             applier,
             graph,
             dirty_nodes,
             scale,
         )
-    });
-    if !updated {
+    }) else {
         scene.clear();
         render_from_applier(applier, root, scene, scale);
+        return;
+    };
+    if !update_report.applied {
+        scene.clear();
+        render_from_applier(applier, root, scene, scale);
+        return;
+    }
+
+    if !refresh_hits && !update_report.hit_graph_dirty {
         return;
     }
 
@@ -2267,6 +2277,7 @@ pub(crate) fn push_draw_primitive(
                 params.shape,
                 params.clip,
                 params.blend_mode,
+                params.motion_context_animated,
             );
         }
 
@@ -2334,6 +2345,7 @@ fn push_shadow_primitive(
                 z_index: 0,
                 clip: params.clip,
                 blend_mode: params.blend_mode,
+                motion_context_animated: params.motion_context_animated,
             },
             params.blend_mode,
         ))
@@ -2651,6 +2663,7 @@ mod tests {
             motion_context_animated: false,
             translated_content_context: false,
             translated_content_offset: Point::default(),
+            content_offset: Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,

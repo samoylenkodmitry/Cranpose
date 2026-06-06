@@ -7,7 +7,7 @@
 
 mod output_paths;
 
-use cranpose::AppLauncher;
+use cranpose::{AppLauncher, RobotScreenshot, SemanticElement};
 use cranpose_testing::{
     find_button_exact_in_semantics, find_button_in_semantics, find_text_in_semantics,
     normalize_screenshot_region, screenshot_difference_stats,
@@ -26,6 +26,7 @@ const CAPTURE_SCALE: f32 = 2.0;
 const UNDERLINE_TRACK_STEPS: usize = 12;
 const UNDERLINE_TRACK_SCROLL_DELTA_Y: f32 = -0.7;
 const UNDERLINE_LOCAL_Y_TOLERANCE: f32 = 0.35;
+const MIN_NORMALIZED_TEXT_INK_PIXELS: usize = 500;
 
 fn main() {
     env_logger::init();
@@ -83,7 +84,7 @@ fn verify_underline_row_tracks_fractional_scroll(robot: &cranpose::Robot) {
             robot.mouse_move(center_x, center_y).expect("move cursor");
             std::thread::sleep(Duration::from_millis(30));
             robot
-                .mouse_scroll(0.0, UNDERLINE_TRACK_SCROLL_DELTA_Y)
+                .mouse_scroll_and_wait_for_frame(0.0, UNDERLINE_TRACK_SCROLL_DELTA_Y)
                 .expect("fractional underline tracking scroll");
             std::thread::sleep(Duration::from_millis(150));
             let _ = robot.wait_for_idle();
@@ -187,33 +188,31 @@ fn verify_scroll_decoration_invariance(robot: &cranpose::Robot) {
     // With smooth rendering, the coefficient of variation should be low.
     let spike_ratio_threshold: f32 = 3.0;
 
-    let initial_bounds = find_text_in_semantics(robot, TARGET_TEXT).expect("target text bounds");
-    let center_x = initial_bounds.0 + initial_bounds.2 * 0.5;
-    let center_y = initial_bounds.1 + initial_bounds.3 * 0.5;
+    let initial_capture = capture_visible_text_region(robot).expect("initial visible text region");
+    let center_x = initial_capture.bounds.0 + initial_capture.bounds.2 * 0.5;
+    let center_y = initial_capture.bounds.1 + initial_capture.bounds.3 * 0.5;
 
-    let mut prev_region = text_capture_region(initial_bounds);
-    let mut prev_shot = robot
-        .screenshot_with_scale(CAPTURE_SCALE)
-        .expect("initial screenshot");
+    let mut prev_region = initial_capture.region;
+    let mut prev_shot = initial_capture.screenshot;
 
     let mut diffs: Vec<usize> = Vec::new();
 
     for step in 0..num_steps {
         robot.mouse_move(center_x, center_y).expect("move cursor");
         std::thread::sleep(Duration::from_millis(30));
-        robot.mouse_scroll(0.0, scroll_step).expect("scroll");
+        robot
+            .mouse_scroll_and_wait_for_frame(0.0, scroll_step)
+            .expect("scroll");
         std::thread::sleep(Duration::from_millis(150));
         let _ = robot.wait_for_idle();
 
-        let Some(curr_bounds) = find_text_in_semantics(robot, TARGET_TEXT) else {
+        let Some(curr_capture) = capture_visible_text_region(robot) else {
             println!("  step {step}: text scrolled out of view, stopping");
             break;
         };
 
-        let curr_region = text_capture_region(curr_bounds);
-        let curr_shot = robot
-            .screenshot_with_scale(CAPTURE_SCALE)
-            .expect("screenshot");
+        let curr_region = curr_capture.region;
+        let curr_shot = curr_capture.screenshot;
 
         let output_size = region_output_size(prev_region);
         let prev_normalized =
@@ -229,7 +228,7 @@ fn verify_scroll_decoration_invariance(robot: &cranpose::Robot) {
 
         println!(
             "  step {step}: y={:.2} diff_pixels={} max_diff={}",
-            curr_bounds.1, stats.differing_pixels, stats.max_difference,
+            curr_capture.bounds.1, stats.differing_pixels, stats.max_difference,
         );
 
         let max_consecutive_diff_pixels =
@@ -279,6 +278,200 @@ fn verify_scroll_decoration_invariance(robot: &cranpose::Robot) {
             );
         }
     }
+}
+
+struct TextRegionCapture {
+    bounds: (f32, f32, f32, f32),
+    region: (f32, f32, f32, f32),
+    screenshot: RobotScreenshot,
+}
+
+fn capture_visible_text_region(robot: &cranpose::Robot) -> Option<TextRegionCapture> {
+    let mut best_ink = 0usize;
+    let mut best_bounds = None;
+    let mut best_candidate_count = 0usize;
+    let mut first_candidate_bounds = None;
+    let mut skipped_out_of_view = 0usize;
+    let mut first_screenshot = None;
+    for _ in 0..8 {
+        let candidates = exact_text_bounds_in_semantics(robot, TARGET_TEXT);
+        best_candidate_count = best_candidate_count.max(candidates.len());
+        let screenshot = robot.screenshot_with_scale(CAPTURE_SCALE).ok()?;
+        first_screenshot.get_or_insert_with(|| screenshot.clone());
+
+        for bounds in candidates {
+            first_candidate_bounds.get_or_insert(bounds);
+            let center_y = bounds.1 + bounds.3 * 0.5;
+            if !(80.0..=(WINDOW_HEIGHT as f32 - 40.0)).contains(&center_y) {
+                skipped_out_of_view += 1;
+                continue;
+            }
+
+            let region = text_capture_region(bounds);
+            let output_size = region_output_size(region);
+            let normalized =
+                normalize_screenshot_region(&screenshot, region, output_size.0, output_size.1)?;
+            let ink_pixels = normalized_region_ink_pixels(&normalized);
+            if ink_pixels > best_ink {
+                best_ink = ink_pixels;
+                best_bounds = Some(bounds);
+            }
+            if ink_pixels >= MIN_NORMALIZED_TEXT_INK_PIXELS {
+                return Some(TextRegionCapture {
+                    bounds,
+                    region,
+                    screenshot,
+                });
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(60));
+        let _ = robot.wait_for_idle();
+    }
+
+    println!(
+        "  visible text capture failed: candidates_seen={best_candidate_count} skipped_out_of_view={skipped_out_of_view} first_candidate_bounds={first_candidate_bounds:?} best_ink={best_ink} best_bounds={best_bounds:?}"
+    );
+    if let Ok(semantics) = robot.get_semantics() {
+        println!(
+            "  semantic tree at capture failure:\n{}",
+            cranpose::Robot::format_semantics(&semantics, 0)
+        );
+    }
+    if let (Some(screenshot), Some(bounds)) = (first_screenshot.as_ref(), first_candidate_bounds) {
+        let region = text_capture_region(bounds);
+        let output_size = region_output_size(region);
+        let direct_ink = direct_region_ink_pixels(screenshot, region);
+        let best_red_row = best_red_decoration_row_in_screenshot(screenshot);
+        println!(
+            "  capture failure detail: screenshot={}x{} logical={:.1}x{:.1} scale=({:.3},{:.3}) region={region:?} output={output_size:?} direct_ink={direct_ink} best_red_row={best_red_row:?}",
+            screenshot.width,
+            screenshot.height,
+            screenshot.logical_width,
+            screenshot.logical_height,
+            screenshot.width as f32 / screenshot.logical_width.max(1.0),
+            screenshot.height as f32 / screenshot.logical_height.max(1.0),
+        );
+        if let Some(normalized) =
+            normalize_screenshot_region(screenshot, region, output_size.0, output_size.1)
+        {
+            save_debug_images(
+                "capture_failed",
+                screenshot,
+                screenshot,
+                &normalized,
+                &normalized,
+            );
+        }
+    }
+    None
+}
+
+fn exact_text_bounds_in_semantics(
+    robot: &cranpose::Robot,
+    text: &str,
+) -> Vec<(f32, f32, f32, f32)> {
+    let Ok(roots) = robot.get_semantics() else {
+        return Vec::new();
+    };
+    let mut bounds = Vec::new();
+    for root in &roots {
+        collect_matching_text_bounds(root, text, &mut bounds);
+    }
+    if let Some(bounds_from_helper) = find_text_in_semantics(robot, text) {
+        if !bounds.contains(&bounds_from_helper) {
+            bounds.push(bounds_from_helper);
+        }
+    }
+    bounds
+}
+
+fn collect_matching_text_bounds(
+    elem: &SemanticElement,
+    text: &str,
+    out: &mut Vec<(f32, f32, f32, f32)>,
+) {
+    if elem
+        .text
+        .as_deref()
+        .is_some_and(|candidate| candidate.contains(text))
+    {
+        out.push((
+            elem.bounds.x,
+            elem.bounds.y,
+            elem.bounds.width,
+            elem.bounds.height,
+        ));
+    }
+    for child in &elem.children {
+        collect_matching_text_bounds(child, text, out);
+    }
+}
+
+fn normalized_region_ink_pixels(screenshot: &RobotScreenshot) -> usize {
+    let Some(background) = screenshot.pixels.get(0..4) else {
+        return 0;
+    };
+    screenshot
+        .pixels
+        .chunks_exact(4)
+        .filter(|pixel| {
+            let color_delta = pixel[0].abs_diff(background[0]) as u16
+                + pixel[1].abs_diff(background[1]) as u16
+                + pixel[2].abs_diff(background[2]) as u16;
+            pixel[3] > 0 && color_delta > 24
+        })
+        .count()
+}
+
+fn direct_region_ink_pixels(screenshot: &RobotScreenshot, region: (f32, f32, f32, f32)) -> usize {
+    let scale_x = screenshot.width as f32 / screenshot.logical_width.max(1.0);
+    let scale_y = screenshot.height as f32 / screenshot.logical_height.max(1.0);
+    let left = (region.0 * scale_x).floor().max(0.0) as usize;
+    let top = (region.1 * scale_y).floor().max(0.0) as usize;
+    let right = ((region.0 + region.2) * scale_x)
+        .ceil()
+        .min(screenshot.width as f32) as usize;
+    let bottom = ((region.1 + region.3) * scale_y)
+        .ceil()
+        .min(screenshot.height as f32) as usize;
+    let Some(background) = screenshot.pixels.get(0..4) else {
+        return 0;
+    };
+    let mut count = 0usize;
+    for y in top..bottom {
+        for x in left..right {
+            let index = (y * screenshot.width as usize + x) * 4;
+            let Some(pixel) = screenshot.pixels.get(index..index + 4) else {
+                continue;
+            };
+            let color_delta = pixel[0].abs_diff(background[0]) as u16
+                + pixel[1].abs_diff(background[1]) as u16
+                + pixel[2].abs_diff(background[2]) as u16;
+            if pixel[3] > 0 && color_delta > 24 {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn best_red_decoration_row_in_screenshot(screenshot: &RobotScreenshot) -> Option<(usize, usize)> {
+    let width = screenshot.width as usize;
+    let height = screenshot.height as usize;
+    let mut best = None;
+    for y in 0..height {
+        let mut row_red = 0usize;
+        for x in 0..width {
+            if is_red_decoration_pixel(screenshot, x, y) {
+                row_red += 1;
+            }
+        }
+        if best.is_none_or(|(_, best_count)| row_red > best_count) {
+            best = Some((y, row_red));
+        }
+    }
+    best.filter(|(_, count)| *count > 0)
 }
 
 fn text_capture_region(bounds: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
@@ -338,7 +531,7 @@ fn scroll_text_into_view(robot: &cranpose::Robot, text: &str, max_attempts: usiz
             .expect("move cursor to center");
         std::thread::sleep(Duration::from_millis(30));
         robot
-            .mouse_scroll(0.0, -80.0)
+            .mouse_scroll_and_wait_for_frame(0.0, -80.0)
             .expect("scroll down to find text");
         std::thread::sleep(Duration::from_millis(200));
         let _ = robot.wait_for_idle();

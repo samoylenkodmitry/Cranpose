@@ -8,6 +8,7 @@
 mod effect_renderer;
 mod frame_graph;
 pub(crate) mod gpu_stats;
+mod layer_events;
 mod layer_surface_cache;
 mod normalized_scene;
 mod offscreen;
@@ -117,7 +118,7 @@ pub(crate) struct TextSystemState {
 impl TextSystemState {
     fn from_font_set(fonts: SoftwareTextFontSet) -> Self {
         Self {
-            measurer: SoftwareTextMeasurer::from_font_set(fonts, 1024),
+            measurer: SoftwareTextMeasurer::from_font_set(fonts, 8192),
         }
     }
 
@@ -168,7 +169,7 @@ pub fn headless_text_measurer() -> Rc<dyn TextMeasurer> {
 
 /// Create an accurate WGPU text measurer for headless tests with explicit fonts.
 pub fn headless_text_measurer_with_fonts(fonts: &[&[u8]]) -> Rc<dyn TextMeasurer> {
-    Rc::new(SoftwareTextMeasurer::from_fonts_or_default(fonts, 1024))
+    Rc::new(SoftwareTextMeasurer::from_fonts_or_default(fonts, 8192))
 }
 
 /// WGPU-based renderer for GPU-accelerated 2D rendering.
@@ -186,6 +187,15 @@ pub struct WgpuRenderer {
     app_context: Option<Weak<cranpose_ui::AppContext>>,
     /// Root scale factor for text rendering (use for density scaling)
     root_scale: f32,
+    dev_overlay_cache: Option<DevOverlayCache>,
+    dev_overlay_graph: Option<RenderGraph>,
+}
+
+#[derive(Clone, Debug)]
+struct DevOverlayCache {
+    text: String,
+    viewport_width_bits: u32,
+    viewport_height_bits: u32,
 }
 
 impl WgpuRenderer {
@@ -207,6 +217,8 @@ impl WgpuRenderer {
             text_fonts: text_system.software_fonts(),
             app_context: None,
             root_scale: 1.0,
+            dev_overlay_cache: None,
+            dev_overlay_graph: None,
         }
     }
 
@@ -254,10 +266,26 @@ impl WgpuRenderer {
             let app_context = self.app_context.as_ref().and_then(Weak::upgrade);
             let result = if let Some(app_context) = app_context {
                 app_context.enter(|| {
-                    gpu_renderer.render(text_state, view, graph, width, height, root_scale)
+                    gpu_renderer.render(
+                        text_state,
+                        view,
+                        graph,
+                        self.dev_overlay_graph.as_ref(),
+                        width,
+                        height,
+                        root_scale,
+                    )
                 })
             } else {
-                gpu_renderer.render(text_state, view, graph, width, height, root_scale)
+                gpu_renderer.render(
+                    text_state,
+                    view,
+                    graph,
+                    self.dev_overlay_graph.as_ref(),
+                    width,
+                    height,
+                    root_scale,
+                )
             };
             result.map_err(WgpuRendererError::Wgpu)
         } else {
@@ -295,10 +323,24 @@ impl WgpuRenderer {
             let app_context = self.app_context.as_ref().and_then(Weak::upgrade);
             let pixels = if let Some(app_context) = app_context {
                 app_context.enter(|| {
-                    gpu_renderer.render_to_rgba_pixels(text_state, graph, width, height, root_scale)
+                    gpu_renderer.render_to_rgba_pixels(
+                        text_state,
+                        graph,
+                        self.dev_overlay_graph.as_ref(),
+                        width,
+                        height,
+                        root_scale,
+                    )
                 })
             } else {
-                gpu_renderer.render_to_rgba_pixels(text_state, graph, width, height, root_scale)
+                gpu_renderer.render_to_rgba_pixels(
+                    text_state,
+                    graph,
+                    self.dev_overlay_graph.as_ref(),
+                    width,
+                    height,
+                    root_scale,
+                )
             }
             .map_err(WgpuRendererError::Wgpu)?;
             Ok(CapturedFrame {
@@ -363,7 +405,7 @@ impl Renderer for WgpuRenderer {
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
         app_context.set_text_measurer(SoftwareTextMeasurer::from_font_set(
             self.text_fonts.clone(),
-            1024,
+            8192,
         ));
         self.app_context = Some(app_context.downgrade());
     }
@@ -382,6 +424,8 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.scene.clear();
+        self.dev_overlay_graph = None;
+        self.dev_overlay_cache = None;
         // Build scene in logical dp - scaling happens in GPU vertex upload
         pipeline::render_layout_tree(layout_tree.root(), &mut self.scene);
         Ok(())
@@ -394,6 +438,8 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.scene.clear();
+        self.dev_overlay_graph = None;
+        self.dev_overlay_cache = None;
         // Build scene in logical dp - scaling happens in GPU vertex upload
         // Traverse layout nodes via applier instead of rebuilding LayoutTree
         pipeline::render_from_applier(applier, root, &mut self.scene, 1.0);
@@ -410,7 +456,21 @@ impl Renderer for WgpuRenderer {
         if dirty_nodes.is_empty() {
             return self.rebuild_scene_from_applier(applier, root, viewport);
         }
-        pipeline::update_from_applier(applier, root, &mut self.scene, 1.0, dirty_nodes);
+        pipeline::update_from_applier(applier, root, &mut self.scene, 1.0, dirty_nodes, true);
+        Ok(())
+    }
+
+    fn update_visual_scene_from_applier(
+        &mut self,
+        applier: &mut MemoryApplier,
+        root: NodeId,
+        viewport: Size,
+        dirty_nodes: &[NodeId],
+    ) -> Result<(), Self::Error> {
+        if dirty_nodes.is_empty() {
+            return self.rebuild_scene_from_applier(applier, root, viewport);
+        }
+        pipeline::update_from_applier(applier, root, &mut self.scene, 1.0, dirty_nodes, false);
         Ok(())
     }
 
@@ -419,6 +479,18 @@ impl Renderer for WgpuRenderer {
         let padding = 8.0;
         let font_size = 14.0;
         let char_width = 7.0;
+        let viewport_width_bits = viewport.width.to_bits();
+        let viewport_height_bits = viewport.height.to_bits();
+        if self.dev_overlay_graph.is_some()
+            && self.dev_overlay_cache.as_ref().is_some_and(|cache| {
+                cache.text == text
+                    && cache.viewport_width_bits == viewport_width_bits
+                    && cache.viewport_height_bits == viewport_height_bits
+            })
+        {
+            return;
+        }
+
         let text_width = text.len() as f32 * char_width;
         let text_height = font_size * 1.4;
         let x = (viewport.width - text_width - padding * 2.0).max(padding);
@@ -433,6 +505,7 @@ impl Renderer for WgpuRenderer {
                 height: text_height + padding / 2.0,
             },
             transform_to_parent: ProjectiveTransform::translation(x, y),
+            content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
             translated_content_offset: Point::default(),
@@ -483,38 +556,38 @@ impl Renderer for WgpuRenderer {
         };
         overlay_layer.recompute_raster_cache_hashes();
 
-        let graph = self.scene.graph.get_or_insert_with(|| {
-            RenderGraph::new(LayerNode {
-                node_id: None,
-                local_bounds: Rect::from_size(viewport),
-                transform_to_parent: ProjectiveTransform::identity(),
-                motion_context_animated: false,
-                translated_content_context: false,
-                translated_content_offset: Point::default(),
-                graphics_layer: GraphicsLayer::default(),
-                clip_to_bounds: false,
-                shadow_clip: None,
-                hit_test: None,
-                has_hit_targets: false,
-                isolation: IsolationReasons::default(),
-                cache_policy: CachePolicy::None,
-                cache_hashes: LayerRasterCacheHashes::default(),
-                cache_hashes_valid: false,
-                children: Vec::new(),
-            })
+        let mut graph = RenderGraph::new(LayerNode {
+            node_id: None,
+            local_bounds: Rect::from_size(viewport),
+            transform_to_parent: ProjectiveTransform::identity(),
+            content_offset: Point::default(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            translated_content_offset: Point::default(),
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            has_hit_targets: false,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
+            children: vec![RenderNode::Layer(Box::new(overlay_layer))],
         });
-
-        graph.root.children.retain(|child| {
-            !matches!(
-                child,
-                RenderNode::Layer(layer) if layer.node_id == Some(DEV_OVERLAY_NODE_ID)
-            )
-        });
-        graph
-            .root
-            .children
-            .push(RenderNode::Layer(Box::new(overlay_layer)));
         graph.root.recompute_raster_cache_hashes();
+        self.dev_overlay_graph = Some(graph);
+        self.dev_overlay_cache = Some(DevOverlayCache {
+            text: text.to_string(),
+            viewport_width_bits,
+            viewport_height_bits,
+        });
+    }
+
+    fn needs_frame_warmup(&self) -> bool {
+        self.gpu_renderer
+            .as_ref()
+            .is_some_and(GpuRenderer::needs_frame_warmup)
     }
 }
 
@@ -526,6 +599,44 @@ mod tests {
 
     static TEST_FONT: &[u8] =
         cranpose_render_common::software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
+
+    #[test]
+    fn dev_overlay_is_recorded_outside_app_graph() {
+        let mut renderer = WgpuRenderer::new(&[]);
+        renderer.draw_dev_overlay(
+            "240 FPS | avg 4.0ms | p95 4.5ms",
+            Size {
+                width: 800.0,
+                height: 600.0,
+            },
+        );
+
+        assert!(
+            renderer
+                .scene
+                .graph
+                .as_ref()
+                .is_none_or(|graph| graph.root.children.iter().all(|child| {
+                    !matches!(
+                        child,
+                        RenderNode::Layer(layer) if layer.node_id == Some(NodeId::MAX)
+                    )
+                })),
+            "dev overlay must not be mixed into the app scene graph"
+        );
+
+        let graph = renderer.dev_overlay_graph.as_ref().expect("overlay graph");
+        let Some(RenderNode::Layer(overlay)) = graph.root.children.last() else {
+            panic!("dev overlay should be the final top-level layer");
+        };
+
+        assert_eq!(overlay.node_id, Some(NodeId::MAX));
+        assert_eq!(
+            overlay.graphics_layer.compositing_strategy,
+            GraphicsLayer::default().compositing_strategy,
+            "dev overlay should not allocate an offscreen surface"
+        );
+    }
 
     struct CountingTextMeasurer {
         inner: SoftwareTextMeasurer,
@@ -601,7 +712,19 @@ mod tests {
 
         let metrics = app_context.enter(|| {
             let text = cranpose_ui::text::AnnotatedString::from("phase local text cache");
-            let style = cranpose_ui::text::TextStyle::default();
+            let style = cranpose_ui::text::TextStyle {
+                span_style: cranpose_ui::text::SpanStyle {
+                    font_size: cranpose_ui::text::TextUnit::Sp(14.0),
+                    ..Default::default()
+                },
+                paragraph_style: cranpose_ui::text::ParagraphStyle {
+                    platform_style: Some(cranpose_ui::text::PlatformParagraphStyle {
+                        include_font_padding: None,
+                        shaping: Some(cranpose_ui::text::TextShaping::Basic),
+                    }),
+                    ..Default::default()
+                },
+            };
             cranpose_ui::text::measure_text(&text, &style)
         });
 
@@ -613,6 +736,41 @@ mod tests {
             renderer.text_state.text_cache_len(),
             0,
             "WGPU must not keep a renderer-side shaping cache for measurement"
+        );
+    }
+
+    #[test]
+    fn renderer_attached_text_service_measures_long_multiline_text_with_software_line_height() {
+        let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
+        let app_context = cranpose_ui::AppContext::new();
+        renderer.attach_app_context_services(&app_context);
+
+        let prepared = app_context.enter(|| {
+            let text = cranpose_ui::text::AnnotatedString::from(
+                (0..48)
+                    .map(|line| format!("// markdown code line {line:02}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+            let style = cranpose_ui::text::TextStyle::default();
+            cranpose_ui::text::prepare_text_layout(
+                &text,
+                &style,
+                cranpose_ui::text::TextLayoutOptions::default(),
+                Some(952.0),
+            )
+        });
+
+        assert_eq!(prepared.metrics.line_count, 48);
+        assert!(
+            prepared.metrics.line_height > 18.0,
+            "renderer-attached text service must not use fallback monospaced line height: {:?}",
+            prepared.metrics
+        );
+        assert!(
+            prepared.metrics.height > 900.0,
+            "48 software-measured lines should not collapse to a viewport-sized block: {:?}",
+            prepared.metrics
         );
     }
 

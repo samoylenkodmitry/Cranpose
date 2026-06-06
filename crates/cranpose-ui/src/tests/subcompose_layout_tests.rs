@@ -81,9 +81,18 @@ fn measure_once(
     };
     let measurer =
         Box::new(|_child_id: cranpose_core::NodeId, _constraints: Constraints| Size::default());
+    let cached_measure_registrar =
+        Box::new(|_child_id: cranpose_core::NodeId, _constraints: Constraints| None);
     let error = Rc::new(RefCell::new(None));
     let result = node_handle
-        .measure(&composer, node_id, constraints, measurer, &error)
+        .measure(
+            &composer,
+            node_id,
+            constraints,
+            measurer,
+            cached_measure_registrar,
+            &error,
+        )
         .expect("measure result");
     assert!(
         error.borrow().is_none(),
@@ -92,6 +101,176 @@ fn measure_once(
     drop(composer);
     teardown_composer(slots, applier, slots_host, applier_host);
     result
+}
+
+#[test]
+fn cached_measurement_node_ids_are_registered_in_one_batch() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let (handle, _composition) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = cranpose_core::MemoryApplier::new();
+
+    let registered_count = Rc::new(RefCell::new(0usize));
+    let registered_count_for_policy = Rc::clone(&registered_count);
+    let policy: Rc<MeasurePolicy> = Rc::new(move |scope, _constraints| {
+        let count = scope.ensure_cached_measurement_node_ids(
+            vec![101usize, 102usize, 103usize],
+            Constraints::tight(24.0, 12.0),
+        );
+        *registered_count_for_policy.borrow_mut() = count;
+        scope.layout(0.0, 0.0, Vec::new())
+    });
+
+    let node_id = applier.create(Box::new(SubcomposeLayoutNode::new(
+        crate::modifier::Modifier::empty(),
+        Rc::clone(&policy),
+    )));
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), Some(node_id));
+    composer.enter_phase(Phase::Measure);
+    let node_handle = {
+        let mut applier_ref = applier_host.borrow_typed();
+        let node = applier_ref.get_mut(node_id).expect("node available");
+        node.as_any_mut()
+            .downcast_mut::<SubcomposeLayoutNode>()
+            .expect("subcompose layout node")
+            .handle()
+    };
+
+    let batch_calls = Rc::new(RefCell::new(0usize));
+    let batch_nodes = Rc::new(RefCell::new(Vec::<Vec<cranpose_core::NodeId>>::new()));
+    let batch_calls_for_registrar = Rc::clone(&batch_calls);
+    let batch_nodes_for_registrar = Rc::clone(&batch_nodes);
+    let measure_calls = Rc::new(RefCell::new(0usize));
+    let measure_calls_for_measurer = Rc::clone(&measure_calls);
+    let error = Rc::new(RefCell::new(None));
+
+    node_handle
+        .measure_with_cached_batch(
+            &composer,
+            node_id,
+            Constraints::tight(0.0, 0.0),
+            CachedBatchMeasureInputs {
+                measurer: Box::new(move |_child_id, _constraints| {
+                    *measure_calls_for_measurer.borrow_mut() += 1;
+                    Size::default()
+                }),
+                cached_measure_batch_registrar: Box::new(move |node_ids, _constraints, out| {
+                    *batch_calls_for_registrar.borrow_mut() += 1;
+                    batch_nodes_for_registrar
+                        .borrow_mut()
+                        .push(node_ids.to_vec());
+                    out.clear();
+                    out.extend(node_ids.iter().map(|_| {
+                        Some(Size {
+                            width: 24.0,
+                            height: 12.0,
+                        })
+                    }));
+                }),
+                retained_measure_lookup: Box::new(|_| None),
+                retained_measure_registrar: Box::new(|_| {}),
+                error: &error,
+            },
+        )
+        .expect("measure result");
+
+    assert!(error.borrow().is_none());
+    assert_eq!(*registered_count.borrow(), 3);
+    assert_eq!(*measure_calls.borrow(), 0);
+    assert_eq!(*batch_calls.borrow(), 1);
+    assert_eq!(batch_nodes.borrow().as_slice(), &[vec![101, 102, 103]]);
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
+fn retained_measurements_skip_cached_batch_registration() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let (handle, _composition) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = cranpose_core::MemoryApplier::new();
+
+    let retained = Rc::new(crate::layout::MeasuredNode::leaf(
+        101,
+        Size {
+            width: 24.0,
+            height: 12.0,
+        },
+    ));
+    let retained_for_policy = Rc::clone(&retained);
+    let registered_count = Rc::new(RefCell::new(0usize));
+    let registered_count_for_policy = Rc::clone(&registered_count);
+    let policy: Rc<MeasurePolicy> = Rc::new(move |scope, _constraints| {
+        scope.register_retained_measurements(std::slice::from_ref(&retained_for_policy));
+        let count = scope.ensure_cached_measurement_node_ids(
+            vec![101usize, 102usize],
+            Constraints::tight(24.0, 12.0),
+        );
+        *registered_count_for_policy.borrow_mut() = count;
+        scope.layout(0.0, 0.0, Vec::new())
+    });
+
+    let node_id = applier.create(Box::new(SubcomposeLayoutNode::new(
+        crate::modifier::Modifier::empty(),
+        Rc::clone(&policy),
+    )));
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), Some(node_id));
+    composer.enter_phase(Phase::Measure);
+    let node_handle = {
+        let mut applier_ref = applier_host.borrow_typed();
+        let node = applier_ref.get_mut(node_id).expect("node available");
+        node.as_any_mut()
+            .downcast_mut::<SubcomposeLayoutNode>()
+            .expect("subcompose layout node")
+            .handle()
+    };
+
+    let batch_nodes = Rc::new(RefCell::new(Vec::<Vec<cranpose_core::NodeId>>::new()));
+    let batch_nodes_for_registrar = Rc::clone(&batch_nodes);
+    let retained_registrations = Rc::new(RefCell::new(Vec::<cranpose_core::NodeId>::new()));
+    let retained_registrations_for_registrar = Rc::clone(&retained_registrations);
+    let error = Rc::new(RefCell::new(None));
+
+    node_handle
+        .measure_with_cached_batch(
+            &composer,
+            node_id,
+            Constraints::tight(0.0, 0.0),
+            CachedBatchMeasureInputs {
+                measurer: Box::new(|_, _| Size::default()),
+                cached_measure_batch_registrar: Box::new(move |node_ids, _constraints, out| {
+                    batch_nodes_for_registrar
+                        .borrow_mut()
+                        .push(node_ids.to_vec());
+                    out.clear();
+                    out.extend(node_ids.iter().map(|_| {
+                        Some(Size {
+                            width: 24.0,
+                            height: 12.0,
+                        })
+                    }));
+                }),
+                retained_measure_lookup: Box::new(|_| None),
+                retained_measure_registrar: Box::new(move |measurements| {
+                    retained_registrations_for_registrar
+                        .borrow_mut()
+                        .extend(measurements.iter().map(|measured| measured.node_id()));
+                }),
+                error: &error,
+            },
+        )
+        .expect("measure result");
+
+    assert!(error.borrow().is_none());
+    assert_eq!(*registered_count.borrow(), 1);
+    assert_eq!(batch_nodes.borrow().as_slice(), &[vec![102]]);
+    assert_eq!(retained_registrations.borrow().as_slice(), &[101]);
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
 
 #[test]

@@ -3,11 +3,108 @@ use super::*;
 const DEV_OVERLAY_PADDING: f32 = 8.0;
 const DEV_OVERLAY_FONT_SIZE: f32 = 14.0;
 const DEV_OVERLAY_CHAR_WIDTH: f32 = 7.0;
+const DEV_OVERLAY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+const DEFAULT_FRAME_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 
 #[derive(Copy, Clone)]
 enum DispatchInvalidationKind {
     Pointer,
     Focus,
+}
+
+fn frame_stage_telemetry_threshold_ms() -> Option<f64> {
+    static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    *THRESHOLD_MS.get_or_init(|| {
+        let explicit = std::env::var("CRANPOSE_FRAME_STAGE_TELEMETRY_MS")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0);
+        explicit.or_else(|| {
+            std::env::var_os("CRANPOSE_FRAME_STAGE_TELEMETRY")
+                .is_some()
+                .then_some(DEFAULT_FRAME_STAGE_TELEMETRY_THRESHOLD_MS)
+        })
+    })
+}
+
+fn log_frame_stage_telemetry(
+    frame_start: Instant,
+    after_initial_layout: Instant,
+    after_layout: Instant,
+    after_dispatch: Instant,
+    after_render: Instant,
+) {
+    let Some(threshold_ms) = frame_stage_telemetry_threshold_ms() else {
+        return;
+    };
+
+    let total_ms = after_render.duration_since(frame_start).as_secs_f64() * 1000.0;
+    if total_ms < threshold_ms {
+        return;
+    }
+
+    let layout_ms = after_layout.duration_since(frame_start).as_secs_f64() * 1000.0;
+    let initial_layout_ms = after_initial_layout
+        .duration_since(frame_start)
+        .as_secs_f64()
+        * 1000.0;
+    let post_layout_ms = after_layout
+        .duration_since(after_initial_layout)
+        .as_secs_f64()
+        * 1000.0;
+    let dispatch_ms = after_dispatch.duration_since(after_layout).as_secs_f64() * 1000.0;
+    let scene_ms = after_render.duration_since(after_dispatch).as_secs_f64() * 1000.0;
+    log::warn!(
+        "[frame-stage-telemetry] total_ms={total_ms:.2} layout_ms={layout_ms:.2} initial_layout_ms={initial_layout_ms:.2} post_layout_ms={post_layout_ms:.2} dispatch_ms={dispatch_ms:.2} scene_ms={scene_ms:.2}",
+    );
+}
+
+fn render_phase_dirty_diagnostics_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_RENDER_PHASE_DIRTY_DIAG").is_some())
+}
+
+struct RenderPhaseDirtyDiagnostics<'a> {
+    render_dirty: bool,
+    pointer_dirty: bool,
+    scene_dirty: bool,
+    draw_repass_pending: bool,
+    draw_dirty_nodes: usize,
+    layout_dirty_nodes: usize,
+    partial_dirty_nodes: usize,
+    dirty_node_ids: Option<String>,
+    render_only_dirty: bool,
+    recomposed_this_frame: bool,
+    path: &'a str,
+}
+
+fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'_>) {
+    if !render_phase_dirty_diagnostics_enabled() {
+        return;
+    }
+
+    let RenderPhaseDirtyDiagnostics {
+        render_dirty,
+        pointer_dirty,
+        scene_dirty,
+        draw_repass_pending,
+        draw_dirty_nodes,
+        layout_dirty_nodes,
+        partial_dirty_nodes,
+        dirty_node_ids,
+        render_only_dirty,
+        recomposed_this_frame,
+        path,
+    } = diagnostics;
+    if let Some(dirty_node_ids) = dirty_node_ids {
+        log::warn!(
+            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layout_dirty_nodes={layout_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame} ids={dirty_node_ids}",
+        );
+    } else {
+        log::warn!(
+            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layout_dirty_nodes={layout_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame}",
+        );
+    }
 }
 
 impl<R> AppShell<R>
@@ -28,27 +125,40 @@ where
         }
     }
 
-    pub(crate) fn process_frame(&mut self) {
+    pub(crate) fn process_frame(&mut self) -> FrameUpdateResult {
         let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.process_frame_in_context());
+        app_context.enter(|| self.process_frame_in_context(false))
     }
 
-    pub(crate) fn process_frame_in_context(&mut self) {
+    pub(crate) fn process_frame_in_context(
+        &mut self,
+        recomposed_before_frame: bool,
+    ) -> FrameUpdateResult {
         let frame_start = Instant::now();
 
         self.run_layout_phase();
+        let after_initial_layout = Instant::now();
 
-        #[cfg(debug_assertions)]
-        let _after_layout = Instant::now();
+        let recomposed_this_frame = recomposed_before_frame || self.run_post_layout_recomposition();
+
+        let after_layout = Instant::now();
 
         self.run_dispatch_queues();
 
-        #[cfg(debug_assertions)]
-        let _after_dispatch = Instant::now();
+        let after_dispatch = Instant::now();
 
-        self.run_render_phase();
-        self.fps_monitor
-            .record_frame_work(frame_start, Instant::now());
+        clear_transient_scroll_motion_contexts();
+
+        let result = self.run_render_phase_with_recomposition_state(recomposed_this_frame);
+        let after_render = Instant::now();
+        log_frame_stage_telemetry(
+            frame_start,
+            after_initial_layout,
+            after_layout,
+            after_dispatch,
+            after_render,
+        );
+        result
     }
 
     pub(crate) fn run_layout_phase(&mut self) {
@@ -58,11 +168,18 @@ where
 
     fn run_layout_phase_in_context(&mut self) {
         let has_scoped_repasses = cranpose_ui::has_pending_layout_repasses();
+        let scoped_layout_nodes = if has_scoped_repasses {
+            cranpose_ui::pending_layout_repass_nodes_snapshot()
+        } else {
+            Vec::new()
+        };
 
         // Global layout invalidation is reserved for app-wide inputs such as
         // viewport, density, font-scale, or debug layout changes. Normal node
         // updates should arrive through scoped repasses.
         let invalidation_requested = take_layout_invalidation();
+        let global_layout_invalidation = invalidation_requested && !has_scoped_repasses;
+        let force_layout_pass = self.force_layout_pass;
 
         if invalidation_requested && !has_scoped_repasses {
             cranpose_ui::layout::invalidate_all_layout_caches();
@@ -142,12 +259,22 @@ where
                     if self.semantics_enabled {
                         self.semantics_tree = None;
                     }
+                    if has_scoped_repasses
+                        && !global_layout_invalidation
+                        && !force_layout_pass
+                        && !scoped_layout_nodes.is_empty()
+                    {
+                        self.scoped_layout_scene_nodes = scoped_layout_nodes;
+                    } else {
+                        self.scoped_layout_scene_nodes.clear();
+                    }
                     self.scene_dirty = true;
                 }
                 Err(err) => {
                     log::error!("failed to compute layout: {err}");
                     self.layout_tree = None;
                     self.semantics_tree = None;
+                    self.scoped_layout_scene_nodes.clear();
                     self.scene_dirty = true;
                 }
             }
@@ -155,9 +282,50 @@ where
         } else {
             self.layout_tree = None;
             self.semantics_tree = None;
+            self.scoped_layout_scene_nodes.clear();
             self.scene_dirty = true;
             self.layout_requested = false;
             self.force_layout_pass = false;
+        }
+    }
+
+    fn run_post_layout_recomposition(&mut self) -> bool {
+        if !self.composition.should_render() {
+            return false;
+        }
+
+        let Some(root_key) = self.composition.root_key() else {
+            return false;
+        };
+
+        match self.composition.reconcile(root_key, &mut *self.content) {
+            Ok(changed) => {
+                if !changed {
+                    return false;
+                }
+                self.fps_monitor.record_recomposition();
+                if self.composition_tree_needs_layout() {
+                    self.request_layout_pass();
+                    self.run_layout_phase_in_context();
+                }
+                request_render_invalidation();
+                true
+            }
+            Err(NodeError::Missing { id }) => {
+                log::debug!(
+                    "Post-layout recomposition skipped: node {} no longer exists",
+                    id
+                );
+                self.request_layout_pass();
+                request_render_invalidation();
+                true
+            }
+            Err(err) => {
+                log::error!("post-layout recomposition failed: {err}");
+                self.request_layout_pass();
+                request_render_invalidation();
+                true
+            }
         }
     }
 
@@ -220,7 +388,25 @@ where
         if dirty_nodes.is_empty() {
             return dirty_nodes;
         }
+        self.refresh_draw_nodes(dirty_nodes)
+    }
 
+    fn refresh_retained_redraw_nodes(&mut self) -> Vec<NodeId> {
+        let Some(root) = self.composition.root() else {
+            return Vec::new();
+        };
+        let mut dirty_nodes = Vec::new();
+        {
+            let mut applier = self.composition.applier_mut();
+            collect_retained_redraw_nodes(&mut applier, root, &mut dirty_nodes);
+        }
+        if dirty_nodes.is_empty() {
+            return dirty_nodes;
+        }
+        self.refresh_draw_nodes(dirty_nodes)
+    }
+
+    fn refresh_draw_nodes(&mut self, dirty_nodes: Vec<NodeId>) -> Vec<NodeId> {
         let Some(layout_tree) = self.layout_tree.as_mut() else {
             return dirty_nodes;
         };
@@ -237,49 +423,131 @@ where
         dirty_set.into_iter().collect()
     }
 
-    pub(crate) fn run_render_phase(&mut self) {
+    #[cfg(test)]
+    pub(crate) fn run_render_phase(&mut self) -> FrameUpdateResult {
         let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.run_render_phase_in_context());
+        app_context.enter(|| self.run_render_phase_in_context(false))
     }
 
-    fn run_render_phase_in_context(&mut self) {
+    fn run_render_phase_with_recomposition_state(
+        &mut self,
+        recomposed_this_frame: bool,
+    ) -> FrameUpdateResult {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.run_render_phase_in_context(recomposed_this_frame))
+    }
+
+    fn run_render_phase_in_context(&mut self, recomposed_this_frame: bool) -> FrameUpdateResult {
         let render_dirty = take_render_invalidation();
         let pointer_dirty = take_pointer_invalidation();
         take_focus_invalidation();
         let draw_repass_pending = cranpose_ui::has_pending_draw_repasses();
+        let mut draw_dirty_nodes = self.refresh_draw_repasses();
+        if render_dirty && !draw_repass_pending && draw_dirty_nodes.is_empty() {
+            draw_dirty_nodes = self.refresh_retained_redraw_nodes();
+        }
+        let layout_dirty_nodes = std::mem::take(&mut self.scoped_layout_scene_nodes);
+        let mut partial_dirty_nodes = draw_dirty_nodes.clone();
+        partial_dirty_nodes.extend(layout_dirty_nodes.iter().copied());
+        partial_dirty_nodes.sort_unstable();
+        partial_dirty_nodes.dedup();
+        let draw_dirty_node_count = draw_dirty_nodes.len();
+        let layout_dirty_node_count = layout_dirty_nodes.len();
+        let partial_dirty_node_count = partial_dirty_nodes.len();
         // Tick cursor blink timer - only marks dirty when visibility state changes
         let cursor_blink_dirty = cranpose_ui::tick_cursor_blink();
 
-        let render_only_dirty = (render_dirty && !draw_repass_pending) || cursor_blink_dirty;
-        // Pointer invalidations can replace hit-test handler closures inside modifier nodes.
-        // The scene caches those closures, so it must be rebuilt to avoid dispatching stale input.
+        let render_only_dirty =
+            (render_dirty && partial_dirty_nodes.is_empty() && !draw_repass_pending)
+                || cursor_blink_dirty;
         let scene_dirty = self.scene_dirty;
-        let needs_scene_rebuild =
-            scene_dirty || draw_repass_pending || render_only_dirty || pointer_dirty;
+        let draw_only_partial_dirty = !draw_dirty_nodes.is_empty()
+            && layout_dirty_nodes.is_empty()
+            && !pointer_dirty
+            && !recomposed_this_frame;
+        let scoped_scene_dirty = scene_dirty && !layout_dirty_nodes.is_empty();
+        let full_scene_dirty = scene_dirty && !scoped_scene_dirty && !draw_only_partial_dirty;
+        let partial_scene_dirty = !partial_dirty_nodes.is_empty();
+        let needs_scene_rebuild = full_scene_dirty
+            || scoped_scene_dirty
+            || partial_scene_dirty
+            || draw_repass_pending
+            || render_only_dirty;
 
         if !needs_scene_rebuild {
-            return;
+            log_render_phase_dirty_diagnostics(RenderPhaseDirtyDiagnostics {
+                render_dirty,
+                pointer_dirty,
+                scene_dirty,
+                draw_repass_pending,
+                draw_dirty_nodes: draw_dirty_node_count,
+                layout_dirty_nodes: layout_dirty_node_count,
+                partial_dirty_nodes: partial_dirty_node_count,
+                dirty_node_ids: render_phase_dirty_diagnostics_enabled().then(|| {
+                    format!(
+                        "draw={:?} layout={:?} partial={:?}",
+                        draw_dirty_nodes, layout_dirty_nodes, partial_dirty_nodes
+                    )
+                }),
+                render_only_dirty,
+                recomposed_this_frame,
+                path: "skip",
+            });
+            self.scoped_layout_scene_nodes = layout_dirty_nodes;
+            return FrameUpdateResult::default();
         }
         self.scene_dirty = false;
-        let draw_dirty_nodes = self.refresh_draw_repasses();
         let viewport_size = Size {
             width: self.viewport.0,
             height: self.viewport.1,
         };
+        let visual_update_only =
+            draw_only_partial_dirty && !partial_dirty_nodes.is_empty() && !full_scene_dirty;
+        let structure_changed = !render_only_dirty && !visual_update_only;
 
         // Use new direct traversal rendering
         if let Some(root) = self.composition.root() {
             let mut applier = self.composition.applier_mut();
-            let rebuild_result = if !draw_dirty_nodes.is_empty()
-                && !render_only_dirty
-                && !pointer_dirty
-                && !scene_dirty
-            {
+            let use_partial_update =
+                !partial_dirty_nodes.is_empty() && !render_only_dirty && !full_scene_dirty;
+            let use_visual_update = use_partial_update && draw_only_partial_dirty;
+            log_render_phase_dirty_diagnostics(RenderPhaseDirtyDiagnostics {
+                render_dirty,
+                pointer_dirty,
+                scene_dirty,
+                draw_repass_pending,
+                draw_dirty_nodes: draw_dirty_node_count,
+                layout_dirty_nodes: layout_dirty_node_count,
+                partial_dirty_nodes: partial_dirty_node_count,
+                dirty_node_ids: render_phase_dirty_diagnostics_enabled().then(|| {
+                    format!(
+                        "draw={:?} layout={:?} partial={:?}",
+                        draw_dirty_nodes, layout_dirty_nodes, partial_dirty_nodes
+                    )
+                }),
+                render_only_dirty,
+                recomposed_this_frame,
+                path: if use_visual_update {
+                    "visual-update"
+                } else if use_partial_update {
+                    "update"
+                } else {
+                    "rebuild"
+                },
+            });
+            let rebuild_result = if use_visual_update {
+                self.renderer.update_visual_scene_from_applier(
+                    &mut applier,
+                    root,
+                    viewport_size,
+                    &partial_dirty_nodes,
+                )
+            } else if use_partial_update {
                 self.renderer.update_scene_from_applier(
                     &mut applier,
                     root,
                     viewport_size,
-                    &draw_dirty_nodes,
+                    &partial_dirty_nodes,
                 )
             } else {
                 self.renderer
@@ -296,9 +564,37 @@ where
 
         // Draw FPS overlay if enabled (directly by renderer, no composition)
         if self.dev_options.fps_counter {
-            let text = self.build_dev_overlay_text(viewport_size);
-            self.renderer.draw_dev_overlay(&text, viewport_size);
+            self.refresh_dev_overlay_text_for_frame_at(viewport_size, Instant::now());
+            let renderer = &mut self.renderer;
+            let text = self.dev_overlay_text.as_str();
+            renderer.draw_dev_overlay(text, viewport_size);
         }
+
+        FrameUpdateResult {
+            visual_changed: true,
+            structure_changed,
+        }
+    }
+
+    fn refresh_dev_overlay_text_for_frame_at(&mut self, viewport_size: Size, now: Instant) {
+        if !self.dev_overlay_text_needs_refresh(viewport_size, now) {
+            return;
+        }
+        self.dev_overlay_text = self.build_dev_overlay_text(viewport_size);
+        self.dev_overlay_last_refresh = Some(now);
+        self.dev_overlay_viewport = Some(viewport_size);
+    }
+
+    fn dev_overlay_text_needs_refresh(&self, viewport_size: Size, now: Instant) -> bool {
+        if self.dev_overlay_text.is_empty() || self.dev_overlay_viewport != Some(viewport_size) {
+            return true;
+        }
+
+        self.dev_overlay_last_refresh
+            .map(|last| {
+                now.checked_duration_since(last).unwrap_or_default() >= DEV_OVERLAY_REFRESH_INTERVAL
+            })
+            .unwrap_or(true)
     }
 
     fn build_dev_overlay_text(&mut self, viewport_size: Size) -> String {
@@ -306,12 +602,12 @@ where
 
         let stats = self.fps_monitor.stats();
         let mut text = format!(
-            "{:.0} FPS | avg {:.1}ms | p95 {:.1}ms | work {:.1}ms | max {:.1}ms | {} recomp/s",
+            "{:.0} FPS | avg {:.1}ms | p95 {:.1}ms | max {:.1}ms | work {:.1}ms | {} recomp/s",
             stats.fps,
             stats.avg_ms,
             stats.p95_ms,
-            stats.work_p95_ms,
             stats.max_ms,
+            stats.work_avg_ms,
             stats.recomps_per_second
         );
 
@@ -425,6 +721,44 @@ pub(crate) fn build_draw_refresh_scope(
         }
     }
     refresh_scope
+}
+
+fn collect_retained_redraw_nodes(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    dirty_nodes: &mut Vec<NodeId>,
+) {
+    let children = match applier.get_mut(node_id) {
+        Ok(node) => node.children(),
+        Err(_) => return,
+    };
+
+    let redraw = match applier.with_node::<LayoutNode, _>(node_id, |node| {
+        let needs_redraw = node.needs_redraw();
+        if needs_redraw {
+            node.clear_needs_redraw();
+        }
+        needs_redraw
+    }) {
+        Ok(needs_redraw) => needs_redraw,
+        Err(NodeError::TypeMismatch { .. }) => applier
+            .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                let needs_redraw = node.needs_redraw();
+                if needs_redraw {
+                    node.clear_needs_redraw();
+                }
+                needs_redraw
+            })
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    if redraw {
+        dirty_nodes.push(node_id);
+    }
+
+    for child in children {
+        collect_retained_redraw_nodes(applier, child, dirty_nodes);
+    }
 }
 
 fn refresh_layout_box_data(

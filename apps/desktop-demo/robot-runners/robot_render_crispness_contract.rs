@@ -92,13 +92,13 @@ fn edge_energy(screenshot: &cranpose::RobotScreenshot) -> f32 {
             let index = (y * width + x) * 4;
             let current = luma(&screenshot.pixels[index..index + 4]);
             if x + 1 < width {
-                let right = ((y * width + x + 1) * 4) as usize;
+                let right = (y * width + x + 1) * 4;
                 total +=
                     (current - luma(&screenshot.pixels[right..right + 4])).unsigned_abs() as u64;
                 samples += 1;
             }
             if y + 1 < height {
-                let down = (((y + 1) * width + x) * 4) as usize;
+                let down = ((y + 1) * width + x) * 4;
                 total += (current - luma(&screenshot.pixels[down..down + 4])).unsigned_abs() as u64;
                 samples += 1;
             }

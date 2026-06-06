@@ -10,9 +10,11 @@
 //! - Non-reactive internals (caches, callbacks, prefetch, diagnostic counters) are in inner state
 
 use std::cell::RefCell;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::rc::Rc;
 
-use cranpose_core::{MutableState, NodeId};
+use cranpose_core::{MutableState, NodeId, StateId};
 use cranpose_macros::composable;
 
 use super::diagnostics;
@@ -20,7 +22,7 @@ use super::nearest_range::NearestRangeState;
 use super::prefetch::{PrefetchScheduler, PrefetchStrategy};
 
 const MAX_PENDING_SCROLL_DELTA: f32 = 2000.0;
-const ITEM_SIZE_CACHE_CAPACITY: usize = 100;
+const ITEM_SIZE_CACHE_CAPACITY: usize = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct LazyListMeasureStateSnapshot {
@@ -72,6 +74,10 @@ pub struct LazyListScrollPosition {
 
 /// Non-reactive internal state for scroll position.
 struct ScrollPositionInner {
+    /// Authoritative first visible item index used by layout and non-reactive reads.
+    current_index: usize,
+    /// Authoritative first visible item offset used by layout and non-reactive reads.
+    current_scroll_offset: f32,
     /// The last known key of the item at index position.
     /// Used for scroll position stability across data changes.
     last_known_first_item_key: Option<u64>,
@@ -85,33 +91,36 @@ impl LazyListScrollPosition {
     }
 
     fn current_index(&self) -> usize {
-        self.index.try_value().unwrap_or(0)
+        self.inner
+            .try_with(|rc| rc.borrow().current_index)
+            .unwrap_or(0)
     }
 
     fn current_scroll_offset(&self) -> f32 {
-        self.scroll_offset.try_value().unwrap_or(0.0)
+        self.inner
+            .try_with(|rc| rc.borrow().current_scroll_offset)
+            .unwrap_or(0.0)
     }
 
     /// Returns the index of the first visible item (reactive read).
     pub fn index(&self) -> usize {
-        if !self.index.is_alive() {
+        if !self.index.is_alive() || !self.inner.is_alive() {
             return 0;
         }
-        self.index.get()
+        self.index.subscribe_current_scope_only();
+        self.current_index()
     }
 
     /// Returns the scroll offset of the first visible item (reactive read).
     pub fn scroll_offset(&self) -> f32 {
-        if !self.scroll_offset.is_alive() {
+        if !self.scroll_offset.is_alive() || !self.inner.is_alive() {
             return 0.0;
         }
-        self.scroll_offset.get()
+        self.scroll_offset.subscribe_current_scope_only();
+        self.current_scroll_offset()
     }
 
-    /// Updates the scroll position from a measurement result.
-    ///
-    /// Called after layout measurement to update the reactive scroll position.
-    /// This stores the key for scroll position stability and updates the nearest range.
+    /// Updates the retained scroll position from a measurement result.
     pub(crate) fn update_from_measure_result(
         &self,
         first_visible_index: usize,
@@ -124,17 +133,16 @@ impl LazyListScrollPosition {
         // Update internal state (key tracking, nearest range)
         self.inner.with(|rc| {
             let mut inner = rc.borrow_mut();
+            inner.current_index = first_visible_index;
+            inner.current_scroll_offset = first_visible_scroll_offset;
             inner.last_known_first_item_key = first_visible_item_key;
             inner.nearest_range_state.update(first_visible_index);
         });
 
-        // Only update reactive state if value changed (avoids recomposition loops)
-        let old_index = self.index.get_non_reactive();
-        if old_index != first_visible_index {
+        if self.index.get_non_reactive() != first_visible_index {
             self.index.set(first_visible_index);
         }
-        let old_offset = self.scroll_offset.get_non_reactive();
-        if (old_offset - first_visible_scroll_offset).abs() > 0.001 {
+        if (self.scroll_offset.get_non_reactive() - first_visible_scroll_offset).abs() > 0.001 {
             self.scroll_offset.set(first_visible_scroll_offset);
         }
     }
@@ -149,19 +157,20 @@ impl LazyListScrollPosition {
         if !self.is_alive() {
             return;
         }
-        // Update reactive state
+        self.inner.with(|rc| {
+            let mut inner = rc.borrow_mut();
+            inner.current_index = index;
+            inner.current_scroll_offset = scroll_offset;
+            inner.last_known_first_item_key = None;
+            inner.nearest_range_state.update(index);
+        });
+
         if self.index.get_non_reactive() != index {
             self.index.set(index);
         }
         if (self.scroll_offset.get_non_reactive() - scroll_offset).abs() > 0.001 {
             self.scroll_offset.set(scroll_offset);
         }
-        // Clear key and update nearest range
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
-            inner.last_known_first_item_key = None;
-            inner.nearest_range_state.update(index);
-        });
     }
 
     /// Adjusts scroll position if the first visible item was moved.
@@ -178,7 +187,7 @@ impl LazyListScrollPosition {
             return 0;
         }
 
-        let current_index = self.index.get_non_reactive();
+        let current_index = self.current_index();
         let last_key = self
             .inner
             .try_with(|rc| rc.borrow().last_known_first_item_key)
@@ -191,10 +200,12 @@ impl LazyListScrollPosition {
         };
 
         if current_index != new_index {
-            self.index.set(new_index);
             self.inner.with(|rc| {
-                rc.borrow_mut().nearest_range_state.update(new_index);
+                let mut inner = rc.borrow_mut();
+                inner.current_index = new_index;
+                inner.nearest_range_state.update(new_index);
             });
+            self.index.set(new_index);
         }
         new_index
     }
@@ -265,6 +276,12 @@ impl PartialEq for LazyListState {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CachedItemSize {
+    size: f32,
+    last_used: u64,
+}
+
 /// Non-reactive internal state for LazyListState.
 struct LazyListStateInner {
     /// Scroll delta to be consumed in the next layout pass.
@@ -275,6 +292,8 @@ struct LazyListStateInner {
 
     /// Layout info from the last measure pass.
     layout_info: LazyListLayoutInfo,
+    current_can_scroll_forward: bool,
+    current_can_scroll_backward: bool,
 
     /// Invalidation callbacks.
     invalidate_callbacks: Vec<(u64, Rc<dyn Fn()>)>,
@@ -291,8 +310,9 @@ struct LazyListStateInner {
     reuse_count: usize,
 
     /// Cache of recently measured item sizes (index -> main_axis_size).
-    item_size_cache: std::collections::HashMap<usize, f32>,
-    item_size_lru: std::collections::VecDeque<usize>,
+    item_size_cache: std::collections::HashMap<usize, CachedItemSize>,
+    item_size_eviction_queue: BinaryHeap<Reverse<(u64, usize)>>,
+    item_size_clock: u64,
 
     /// Running average of measured item sizes for estimation.
     average_item_size: f32,
@@ -343,6 +363,8 @@ pub fn remember_lazy_list_state_with_position(
         scroll_offset: cranpose_core::useState(|| initial_first_visible_item_scroll_offset),
         inner: cranpose_core::useState(|| {
             Rc::new(RefCell::new(ScrollPositionInner {
+                current_index: initial_first_visible_item_index,
+                current_scroll_offset: initial_first_visible_item_scroll_offset,
                 last_known_first_item_key: None,
                 nearest_range_state: NearestRangeState::new(initial_first_visible_item_index),
             }))
@@ -355,6 +377,8 @@ pub fn remember_lazy_list_state_with_position(
             scroll_to_be_consumed: 0.0,
             pending_scroll_to_index: None,
             layout_info: LazyListLayoutInfo::default(),
+            current_can_scroll_forward: false,
+            current_can_scroll_backward: false,
             invalidate_callbacks: Vec::new(),
             next_callback_id: 1,
             layout_invalidation_callback_id: None,
@@ -362,7 +386,8 @@ pub fn remember_lazy_list_state_with_position(
             total_composed: 0,
             reuse_count: 0,
             item_size_cache: std::collections::HashMap::new(),
-            item_size_lru: std::collections::VecDeque::new(),
+            item_size_eviction_queue: BinaryHeap::new(),
+            item_size_clock: 0,
             average_item_size: super::DEFAULT_ITEM_SIZE_ESTIMATE,
             total_measured_items: 0,
             next_measure_cycle_id: 1,
@@ -407,6 +432,14 @@ impl LazyListState {
         self.scroll_position.index()
     }
 
+    /// Returns the first visible item index without subscribing the current composition scope.
+    ///
+    /// Use this from draw/input/diagnostic code that needs the latest position but must not
+    /// recompose when the scroll position changes.
+    pub fn first_visible_item_index_non_reactive(&self) -> usize {
+        self.scroll_position.current_index()
+    }
+
     /// Returns the scroll offset of the first visible item.
     ///
     /// This is the amount the first item is scrolled off-screen (positive = scrolled up/left).
@@ -415,6 +448,25 @@ impl LazyListState {
     pub fn first_visible_item_scroll_offset(&self) -> f32 {
         // Delegate to scroll_position (reactive read)
         self.scroll_position.scroll_offset()
+    }
+
+    /// Returns the first visible item scroll offset without subscribing the current composition scope.
+    ///
+    /// Use this from draw/input/diagnostic code that needs the latest position but must not
+    /// recompose when the scroll position changes.
+    pub fn first_visible_item_scroll_offset_non_reactive(&self) -> f32 {
+        self.scroll_position.current_scroll_offset()
+    }
+
+    #[doc(hidden)]
+    pub fn reactive_state_ids(&self) -> [StateId; 5] {
+        [
+            self.scroll_position.index.runtime_state_id(),
+            self.scroll_position.scroll_offset.runtime_state_id(),
+            self.can_scroll_forward_state.runtime_state_id(),
+            self.can_scroll_backward_state.runtime_state_id(),
+            self.stats_state.runtime_state_id(),
+        ]
     }
 
     /// Returns whether the list is positioned away from its origin without creating
@@ -623,10 +675,10 @@ impl LazyListState {
             .with(|rc| rc.borrow().layout_info.total_items_count > 0);
         let pushing_forward = delta < -0.001;
         let pushing_backward = delta > 0.001;
-        let can_scroll_forward = self.can_scroll_forward_state.is_alive()
-            && self.can_scroll_forward_state.get_non_reactive();
-        let can_scroll_backward = self.can_scroll_backward_state.is_alive()
-            && self.can_scroll_backward_state.get_non_reactive();
+        let can_scroll_forward =
+            self.can_scroll_forward_state.is_alive() && self.can_scroll_forward_non_reactive();
+        let can_scroll_backward =
+            self.can_scroll_backward_state.is_alive() && self.can_scroll_backward_non_reactive();
         let blocked_by_bounds = has_scroll_bounds
             && ((pushing_forward && !can_scroll_forward)
                 || (pushing_backward && !can_scroll_backward));
@@ -655,8 +707,10 @@ impl LazyListState {
             return 0.0;
         }
 
+        let mut accepted_delta = 0.0f32;
         let should_invalidate = self.inner.with(|rc| {
             let mut inner = rc.borrow_mut();
+            accepted_delta = delta;
             let pending_before = inner.scroll_to_be_consumed;
             let pending = inner.scroll_to_be_consumed;
             let reverse_input = pending.abs() > 0.001
@@ -692,7 +746,7 @@ impl LazyListState {
         if should_invalidate {
             self.invalidate();
         }
-        delta // Will be adjusted during layout
+        accepted_delta
     }
 
     /// Peeks at the pending scroll delta without consuming it.
@@ -712,9 +766,9 @@ impl LazyListState {
             .inner
             .try_with(|rc| {
                 let mut inner = rc.borrow_mut();
+                let pending_scroll_to = inner.pending_scroll_to_index.take();
                 let pending_scroll_delta = inner.scroll_to_be_consumed;
                 inner.scroll_to_be_consumed = 0.0;
-                let pending_scroll_to = inner.pending_scroll_to_index.take();
                 (
                     pending_scroll_delta,
                     pending_scroll_to,
@@ -760,35 +814,72 @@ impl LazyListState {
         inner.average_item_size = inner.average_item_size * ((n - 1.0) / n) + size / n;
     }
 
+    fn next_item_size_cache_tick(inner: &mut LazyListStateInner) -> u64 {
+        inner.item_size_clock = inner.item_size_clock.saturating_add(1);
+        inner.item_size_clock
+    }
+
     fn insert_item_size(inner: &mut LazyListStateInner, index: usize, size: f32) -> bool {
         use std::collections::hash_map::Entry;
 
+        let tick = Self::next_item_size_cache_tick(inner);
         if let Entry::Occupied(mut entry) = inner.item_size_cache.entry(index) {
-            entry.insert(size);
-            if let Some(pos) = inner
-                .item_size_lru
-                .iter()
-                .position(|&cached| cached == index)
-            {
-                inner.item_size_lru.remove(pos);
-            }
-            inner.item_size_lru.push_back(index);
+            entry.insert(CachedItemSize {
+                size,
+                last_used: tick,
+            });
+            Self::push_item_size_cache_ticket(inner, tick, index);
             return false;
         }
 
-        while inner.item_size_cache.len() >= ITEM_SIZE_CACHE_CAPACITY {
-            if let Some(oldest) = inner.item_size_lru.pop_front() {
-                if inner.item_size_cache.remove(&oldest).is_some() {
-                    break;
-                }
-            } else {
-                break;
-            }
+        if inner.item_size_cache.len() >= ITEM_SIZE_CACHE_CAPACITY {
+            Self::evict_one_item_size(inner);
         }
 
-        inner.item_size_cache.insert(index, size);
-        inner.item_size_lru.push_back(index);
+        inner.item_size_cache.insert(
+            index,
+            CachedItemSize {
+                size,
+                last_used: tick,
+            },
+        );
+        Self::push_item_size_cache_ticket(inner, tick, index);
         true
+    }
+
+    fn push_item_size_cache_ticket(inner: &mut LazyListStateInner, last_used: u64, index: usize) {
+        inner
+            .item_size_eviction_queue
+            .push(Reverse((last_used, index)));
+        let compact_limit = inner
+            .item_size_cache
+            .len()
+            .saturating_mul(4)
+            .max(ITEM_SIZE_CACHE_CAPACITY);
+        if inner.item_size_eviction_queue.len() > compact_limit {
+            Self::rebuild_item_size_eviction_queue(inner);
+        }
+    }
+
+    fn rebuild_item_size_eviction_queue(inner: &mut LazyListStateInner) {
+        inner.item_size_eviction_queue = inner
+            .item_size_cache
+            .iter()
+            .map(|(index, item)| Reverse((item.last_used, *index)))
+            .collect();
+    }
+
+    fn evict_one_item_size(inner: &mut LazyListStateInner) {
+        while let Some(Reverse((last_used, index))) = inner.item_size_eviction_queue.pop() {
+            let Some(current) = inner.item_size_cache.get(&index) else {
+                continue;
+            };
+            if current.last_used != last_used {
+                continue;
+            }
+            inner.item_size_cache.remove(&index);
+            return;
+        }
     }
 
     /// Caches the measured size of an item for scroll estimation.
@@ -827,7 +918,15 @@ impl LazyListState {
     /// Gets a cached item size if available.
     pub fn get_cached_size(&self, index: usize) -> Option<f32> {
         self.inner
-            .try_with(|rc| rc.borrow().item_size_cache.get(&index).copied())
+            .try_with(|rc| {
+                let mut inner = rc.borrow_mut();
+                let tick = Self::next_item_size_cache_tick(&mut inner);
+                let item = inner.item_size_cache.get_mut(&index)?;
+                item.last_used = tick;
+                let size = item.size;
+                Self::push_item_size_cache_ticket(&mut inner, tick, index);
+                Some(size)
+            })
             .flatten()
     }
 
@@ -915,7 +1014,18 @@ impl LazyListState {
         if !self.can_scroll_forward_state.is_alive() {
             return false;
         }
-        self.can_scroll_forward_state.get()
+        self.can_scroll_forward_state.subscribe_current_scope_only();
+        self.can_scroll_forward_non_reactive()
+    }
+
+    /// Returns whether the list can scroll forward without subscribing the current composition scope.
+    pub fn can_scroll_forward_non_reactive(&self) -> bool {
+        if !self.can_scroll_forward_state.is_alive() {
+            return false;
+        }
+        self.inner
+            .try_with(|rc| rc.borrow().current_can_scroll_forward)
+            .unwrap_or(false)
     }
 
     /// Returns whether we can scroll backward (more items above/left).
@@ -926,7 +1036,19 @@ impl LazyListState {
         if !self.can_scroll_backward_state.is_alive() {
             return false;
         }
-        self.can_scroll_backward_state.get()
+        self.can_scroll_backward_state
+            .subscribe_current_scope_only();
+        self.can_scroll_backward_non_reactive()
+    }
+
+    /// Returns whether the list can scroll backward without subscribing the current composition scope.
+    pub fn can_scroll_backward_non_reactive(&self) -> bool {
+        if !self.can_scroll_backward_state.is_alive() {
+            return false;
+        }
+        self.inner
+            .try_with(|rc| rc.borrow().current_can_scroll_backward)
+            .unwrap_or(false)
     }
 
     /// Updates the scroll bounds after layout measurement.
@@ -958,7 +1080,12 @@ impl LazyListState {
         let can_backward = self.scroll_position.current_index() > 0
             || self.scroll_position.current_scroll_offset() > 0.0;
 
-        // Update reactive state only if changed
+        self.inner.with(|rc| {
+            let mut inner = rc.borrow_mut();
+            inner.current_can_scroll_forward = can_forward;
+            inner.current_can_scroll_backward = can_backward;
+        });
+
         if self.can_scroll_forward_state.get_non_reactive() != can_forward {
             self.can_scroll_forward_state.set(can_forward);
         }
@@ -1162,6 +1289,8 @@ pub mod test_helpers {
             index: cranpose_core::mutableStateOf(initial_first_visible_item_index),
             scroll_offset: cranpose_core::mutableStateOf(initial_first_visible_item_scroll_offset),
             inner: cranpose_core::mutableStateOf(Rc::new(RefCell::new(ScrollPositionInner {
+                current_index: initial_first_visible_item_index,
+                current_scroll_offset: initial_first_visible_item_scroll_offset,
                 last_known_first_item_key: None,
                 nearest_range_state: NearestRangeState::new(initial_first_visible_item_index),
             }))),
@@ -1172,6 +1301,8 @@ pub mod test_helpers {
             scroll_to_be_consumed: 0.0,
             pending_scroll_to_index: None,
             layout_info: LazyListLayoutInfo::default(),
+            current_can_scroll_forward: false,
+            current_can_scroll_backward: false,
             invalidate_callbacks: Vec::new(),
             next_callback_id: 1,
             layout_invalidation_callback_id: None,
@@ -1179,7 +1310,8 @@ pub mod test_helpers {
             total_composed: 0,
             reuse_count: 0,
             item_size_cache: std::collections::HashMap::new(),
-            item_size_lru: std::collections::VecDeque::new(),
+            item_size_eviction_queue: BinaryHeap::new(),
+            item_size_clock: 0,
             average_item_size: super::super::DEFAULT_ITEM_SIZE_ESTIMATE,
             total_measured_items: 0,
             next_measure_cycle_id: 1,
@@ -1214,9 +1346,18 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
+    fn set_scroll_bounds(state: &LazyListState, can_forward: bool, can_backward: bool) {
+        state.can_scroll_forward_state.set(can_forward);
+        state.can_scroll_backward_state.set(can_backward);
+        state.inner.with(|rc| {
+            let mut inner = rc.borrow_mut();
+            inner.current_can_scroll_forward = can_forward;
+            inner.current_can_scroll_backward = can_backward;
+        });
+    }
+
     fn enable_bidirectional_scroll(state: &LazyListState) {
-        state.can_scroll_forward_state.set(true);
-        state.can_scroll_backward_state.set(true);
+        set_scroll_bounds(state, true, true);
     }
 
     fn mark_scroll_bounds_known(state: &LazyListState) {
@@ -1248,6 +1389,46 @@ mod tests {
             assert_eq!(first.next_item_measure_pass_id(), 1);
             assert_eq!(first.next_item_measure_pass_id(), 2);
             assert_eq!(second.next_item_measure_pass_id(), 1);
+        });
+    }
+
+    #[test]
+    fn measure_result_updates_retained_and_reactive_scroll_position() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+
+            state.update_scroll_position_with_key(8, 17.5, 123);
+
+            assert_eq!(state.scroll_position.index.get_non_reactive(), 8);
+            assert!((state.scroll_position.scroll_offset.get_non_reactive() - 17.5).abs() < 0.001);
+            assert_eq!(state.first_visible_item_index_non_reactive(), 8);
+            assert!((state.first_visible_item_scroll_offset_non_reactive() - 17.5).abs() < 0.001);
+        });
+    }
+
+    #[test]
+    fn update_scroll_bounds_updates_retained_and_reactive_capabilities() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+
+            state.update_layout_info(LazyListLayoutInfo {
+                visible_items_info: vec![visible_item(0, 0.0, 40.0), visible_item(1, 40.0, 40.0)],
+                total_items_count: 10,
+                viewport_size: 80.0,
+                ..Default::default()
+            });
+            state.update_scroll_bounds();
+
+            assert!(state.can_scroll_forward_state.get_non_reactive());
+            assert!(!state.can_scroll_backward_state.get_non_reactive());
+            assert!(state.can_scroll_forward_non_reactive());
+            assert!(!state.can_scroll_backward_non_reactive());
+
+            state.update_scroll_position(3, 2.0);
+            state.update_scroll_bounds();
+
+            assert!(state.can_scroll_backward_state.get_non_reactive());
+            assert!(state.can_scroll_backward_non_reactive());
         });
     }
 
@@ -1362,6 +1543,43 @@ mod tests {
     }
 
     #[test]
+    fn begin_measure_pass_consumes_large_pending_scroll_delta_coherently() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            enable_bidirectional_scroll(&state);
+            let invalidations = Rc::new(Cell::new(0u32));
+            let invalidations_clone = Rc::clone(&invalidations);
+            state.add_invalidate_callback(Rc::new(move || {
+                invalidations_clone.set(invalidations_clone.get() + 1);
+            }));
+
+            state.dispatch_scroll_delta(-1_000.0);
+            assert!((state.peek_scroll_delta() + 1_000.0).abs() < 0.001);
+
+            let first = state.begin_measure_pass();
+            assert!(
+                (first.pending_scroll_delta + 1_000.0).abs() < 0.001,
+                "first pass should consume the whole coherent scroll input"
+            );
+            assert!(
+                state.peek_scroll_delta().abs() < 0.001,
+                "measure pass should not retain a synthetic scroll backlog"
+            );
+            assert_eq!(
+                invalidations.get(),
+                1,
+                "dispatch should request layout once; consuming scroll should not schedule follow-up frames"
+            );
+
+            let second = state.begin_measure_pass();
+            assert!(
+                second.pending_scroll_delta.abs() < 0.001,
+                "second pass should not receive synthetic remainder"
+            );
+        });
+    }
+
+    #[test]
     fn dispatch_scroll_delta_skips_invalidate_when_clamped_value_is_unchanged() {
         with_test_runtime(|| {
             let state = new_lazy_list_state();
@@ -1422,6 +1640,55 @@ mod tests {
             assert_eq!(
                 state.get_cached_size(super::ITEM_SIZE_CACHE_CAPACITY),
                 Some(123.0),
+            );
+        });
+    }
+
+    #[test]
+    fn item_size_cache_read_promotes_entry_for_large_scroll_reuse() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            for index in 0..super::ITEM_SIZE_CACHE_CAPACITY {
+                state.cache_item_size(index, index as f32 + 10.0);
+            }
+
+            assert_eq!(state.get_cached_size(0), Some(10.0));
+            state.cache_item_size(super::ITEM_SIZE_CACHE_CAPACITY, 123.0);
+
+            assert_eq!(state.get_cached_size(0), Some(10.0));
+            assert_eq!(state.get_cached_size(1), None);
+            let cache_len = state
+                .inner
+                .try_with(|rc| rc.borrow().item_size_cache.len())
+                .unwrap_or(0);
+            assert_eq!(cache_len, super::ITEM_SIZE_CACHE_CAPACITY);
+        });
+    }
+
+    #[test]
+    fn item_size_cache_promotion_queue_stays_bounded_under_hot_reuse() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            state.cache_item_size(0, 32.0);
+
+            for _ in 0..super::ITEM_SIZE_CACHE_CAPACITY * 8 {
+                assert_eq!(state.get_cached_size(0), Some(32.0));
+            }
+
+            let (cache_len, queue_len) = state
+                .inner
+                .try_with(|rc| {
+                    let inner = rc.borrow();
+                    (
+                        inner.item_size_cache.len(),
+                        inner.item_size_eviction_queue.len(),
+                    )
+                })
+                .unwrap_or((0, 0));
+            assert_eq!(cache_len, 1);
+            assert!(
+                queue_len <= super::ITEM_SIZE_CACHE_CAPACITY,
+                "stale promotion tickets must be compacted, got {queue_len}"
             );
         });
     }
@@ -1543,8 +1810,7 @@ mod tests {
         with_test_runtime(|| {
             let state = new_lazy_list_state();
             mark_scroll_bounds_known(&state);
-            state.can_scroll_forward_state.set(false);
-            state.can_scroll_backward_state.set(true);
+            set_scroll_bounds(&state, false, true);
 
             let consumed = state.dispatch_scroll_delta(-24.0);
 
@@ -1630,7 +1896,7 @@ mod tests {
             state.dispatch_scroll_delta(-300.0);
             assert!((state.peek_scroll_delta() + 300.0).abs() < 0.001);
 
-            state.can_scroll_forward_state.set(false);
+            set_scroll_bounds(&state, false, true);
 
             let blocked_consumed = state.dispatch_scroll_delta(-10.0);
             assert_eq!(blocked_consumed, 0.0);

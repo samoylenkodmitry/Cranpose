@@ -26,6 +26,10 @@ pub(crate) fn layer_raster_cache_hashes(layer: &LayerNode) -> LayerRasterCacheHa
     }
 }
 
+pub(crate) fn layer_motion_source_content_hash(layer: &LayerNode) -> u64 {
+    finish_hash(|state| hash_layer_content(layer, state, false))
+}
+
 fn finish_hash(write: impl FnOnce(&mut DefaultHasher)) -> u64 {
     let mut hasher = DefaultHasher::new();
     write(&mut hasher);
@@ -33,17 +37,30 @@ fn finish_hash(write: impl FnOnce(&mut DefaultHasher)) -> u64 {
 }
 
 fn hash_layer_target_content<H: Hasher>(layer: &LayerNode, state: &mut H) {
+    hash_layer_content(layer, state, true);
+}
+
+fn hash_layer_content<H: Hasher>(
+    layer: &LayerNode,
+    state: &mut H,
+    include_translated_content_offset: bool,
+) {
     layer.local_bounds.render_hash().hash(state);
-    layer.motion_context_animated.hash(state);
     layer.translated_content_context.hash(state);
-    hash_point(layer.translated_content_offset, state);
     hash_optional_rect(layer.clip_rect(), state);
     let isolation = effective_layer_isolation(&layer.graphics_layer);
     let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
     let local_layer = local_content_layer(&content_layer);
     hash_f32_bits(local_layer.alpha, state);
     hash_optional_color_filter(local_layer.color_filter, state);
+    layer.motion_context_animated.hash(state);
+    if include_translated_content_offset && layer.translated_content_context {
+        hash_point(layer.translated_content_offset, state);
+    }
     layer.children.len().hash(state);
+    let translated_content_offset = layer
+        .translated_content_context
+        .then_some(layer.translated_content_offset);
     for child in &layer.children {
         match child {
             RenderNode::Primitive(primitive) => {
@@ -52,19 +69,28 @@ fn hash_layer_target_content<H: Hasher>(layer: &LayerNode, state: &mut H) {
             }
             RenderNode::Layer(child_layer) => {
                 1u8.hash(state);
-                hash_child_layer_contribution(child_layer, state);
+                hash_child_layer_contribution(child_layer, translated_content_offset, state);
             }
         }
     }
 }
 
-fn hash_child_layer_contribution<H: Hasher>(layer: &LayerNode, state: &mut H) {
-    hash_projective_transform(layer.transform_to_parent, state);
-    layer.motion_context_animated.hash(state);
+fn hash_child_layer_contribution<H: Hasher>(
+    layer: &LayerNode,
+    parent_translated_content_offset: Option<Point>,
+    state: &mut H,
+) {
+    let transform = match parent_translated_content_offset {
+        Some(offset) if offset != Point::default() => layer
+            .transform_to_parent
+            .then(ProjectiveTransform::translation(-offset.x, -offset.y)),
+        _ => layer.transform_to_parent,
+    };
+    hash_projective_transform(transform, state);
     layer.translated_content_context.hash(state);
-    hash_point(layer.translated_content_offset, state);
     hash_optional_rect(layer.shadow_clip, state);
     hash_child_shadow_state(layer, state);
+    layer.graphics_layer.clip.hash(state);
     hash_optional_render_effect_to(layer.effect(), state);
     hash_optional_render_effect_to(layer.backdrop(), state);
     let isolation = effective_layer_isolation(&layer.graphics_layer);

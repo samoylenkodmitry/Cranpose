@@ -8,9 +8,7 @@
 //! The actual `Modifier.horizontal_scroll()` and `Modifier.vertical_scroll()`
 //! extension methods are defined in `modifier/scroll.rs`.
 
-use cranpose_core::{
-    current_runtime_handle, ownedMutableStateOf, NodeId, OwnedMutableState, RuntimeHandle,
-};
+use cranpose_core::{ownedMutableStateOf, NodeId, OwnedMutableState};
 use cranpose_foundation::{
     Constraints, DelegatableNode, LayoutModifierNode, Measurable, ModifierNode,
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -21,8 +19,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::{Rc, Weak};
-
-const SCROLL_MOTION_ACTIVE_FRAME_COUNT: u8 = 6;
 
 /// State object for scroll position tracking.
 ///
@@ -183,6 +179,7 @@ pub(crate) enum ScrollMotionContextKey {
 
 struct ScrollMotionContextInner {
     active: Cell<bool>,
+    transient_active: Cell<bool>,
     generation: Cell<u64>,
     invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
     next_invalidate_callback_id: Cell<u64>,
@@ -211,6 +208,21 @@ impl ScrollMotionContextStore {
         contexts.retain(|_, weak| weak.strong_count() > 0);
         context
     }
+
+    pub(crate) fn clear_transient_after_frame(&self) {
+        let contexts = {
+            let mut contexts = self.contexts.borrow_mut();
+            let live = contexts
+                .values()
+                .filter_map(Weak::upgrade)
+                .collect::<Vec<_>>();
+            contexts.retain(|_, weak| weak.strong_count() > 0);
+            live
+        };
+        for inner in contexts {
+            ScrollMotionContext { inner }.clear_transient_after_frame();
+        }
+    }
 }
 
 pub(crate) fn scroll_motion_context_for_key(key: ScrollMotionContextKey) -> ScrollMotionContext {
@@ -222,6 +234,7 @@ impl ScrollMotionContext {
         Self {
             inner: Rc::new(ScrollMotionContextInner {
                 active: Cell::new(false),
+                transient_active: Cell::new(false),
                 generation: Cell::new(0),
                 invalidate_callbacks: RefCell::new(HashMap::new()),
                 next_invalidate_callback_id: Cell::new(1),
@@ -231,7 +244,7 @@ impl ScrollMotionContext {
     }
 
     pub(crate) fn is_active(&self) -> bool {
-        self.inner.active.get()
+        self.inner.active.get() || self.inner.transient_active.get()
     }
 
     pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
@@ -243,22 +256,23 @@ impl ScrollMotionContext {
     }
 
     pub(crate) fn set_active(&self, active: bool) {
-        if self.inner.active.replace(active) != active {
+        let was_active = self.is_active();
+        self.inner.active.set(active);
+        if !active {
+            self.inner.transient_active.set(false);
+        }
+        if was_active != self.is_active() {
             self.bump_generation();
             self.invalidate();
         }
     }
 
-    pub(crate) fn activate_for_next_frame(&self) {
-        let was_active = self.inner.active.replace(true);
-        let generation = self.bump_generation();
+    pub(crate) fn activate_for_current_frame(&self) {
+        let was_active = self.is_active();
+        self.inner.transient_active.set(true);
+        self.bump_generation();
         if !was_active {
             self.invalidate();
-        }
-        if let Some(runtime) = current_runtime_handle() {
-            self.schedule_clear_after_frames(runtime, generation, SCROLL_MOTION_ACTIVE_FRAME_COUNT);
-        } else {
-            self.clear_if_generation(generation);
         }
     }
 
@@ -288,35 +302,14 @@ impl ScrollMotionContext {
         next
     }
 
-    fn clear_if_generation(&self, generation: u64) {
-        if self.inner.generation.get() == generation {
-            self.set_active(false);
+    fn clear_transient_after_frame(&self) {
+        let was_active = self.is_active();
+        if self.inner.transient_active.replace(false) {
+            self.bump_generation();
+            if was_active != self.is_active() {
+                self.invalidate();
+            }
         }
-    }
-
-    fn schedule_clear_after_frames(
-        &self,
-        runtime: RuntimeHandle,
-        generation: u64,
-        frames_remaining: u8,
-    ) {
-        let state = self.clone();
-        let runtime_for_next = runtime.clone();
-        let _ = runtime.register_frame_callback(move |_| {
-            if state.inner.generation.get() != generation {
-                return;
-            }
-            if frames_remaining <= 1 {
-                state.clear_if_generation(generation);
-            } else {
-                state.schedule_clear_after_frames(
-                    runtime_for_next,
-                    generation,
-                    frames_remaining - 1,
-                );
-            }
-        });
-        runtime.schedule();
     }
 
     fn invalidate(&self) {

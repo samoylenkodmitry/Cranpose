@@ -15,13 +15,12 @@ pub fn layer_uniform_scale(layer: &GraphicsLayer) -> f32 {
 }
 
 pub fn apply_layer_affine_to_rect(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> Rect {
-    let offset_x = rect.x - layer_bounds.x;
-    let offset_y = rect.y - layer_bounds.y;
     let scale_x = layer_scale_x(layer);
     let scale_y = layer_scale_y(layer);
+    let (pivot_x, pivot_y) = layer_rotation_pivot(layer_bounds, layer);
     Rect {
-        x: layer_bounds.x + offset_x * scale_x + layer.translation_x,
-        y: layer_bounds.y + offset_y * scale_y + layer.translation_y,
+        x: pivot_x + (rect.x - pivot_x) * scale_x + layer.translation_x,
+        y: pivot_y + (rect.y - pivot_y) * scale_y + layer.translation_y,
         width: rect.width * scale_x,
         height: rect.height * scale_y,
     }
@@ -80,21 +79,28 @@ fn apply_rotation_and_perspective(
     [pivot.0 + x * perspective, pivot.1 + y * perspective]
 }
 
+fn apply_layer_to_point(point: [f32; 2], pivot: (f32, f32), layer: &GraphicsLayer) -> [f32; 2] {
+    let scaled = [
+        pivot.0 + (point[0] - pivot.0) * layer_scale_x(layer),
+        pivot.1 + (point[1] - pivot.1) * layer_scale_y(layer),
+    ];
+    let rotated = apply_rotation_and_perspective(scaled, pivot, layer);
+    [
+        rotated[0] + layer.translation_x,
+        rotated[1] + layer.translation_y,
+    ]
+}
+
 pub fn apply_layer_to_quad(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> [[f32; 2]; 4] {
-    let affine_rect = apply_layer_affine_to_rect(rect, layer_bounds, layer);
-    let affine_layer_bounds = apply_layer_affine_to_rect(layer_bounds, layer_bounds, layer);
-    let pivot = layer_rotation_pivot(affine_layer_bounds, layer);
+    let pivot = layer_rotation_pivot(layer_bounds, layer);
     let quad = [
-        [affine_rect.x, affine_rect.y],
-        [affine_rect.x + affine_rect.width, affine_rect.y],
-        [affine_rect.x, affine_rect.y + affine_rect.height],
-        [
-            affine_rect.x + affine_rect.width,
-            affine_rect.y + affine_rect.height,
-        ],
+        [rect.x, rect.y],
+        [rect.x + rect.width, rect.y],
+        [rect.x, rect.y + rect.height],
+        [rect.x + rect.width, rect.y + rect.height],
     ];
 
-    quad.map(|point| apply_rotation_and_perspective(point, pivot, layer))
+    quad.map(|point| apply_layer_to_point(point, pivot, layer))
 }
 
 pub fn apply_layer_to_rect(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> Rect {
@@ -165,5 +171,43 @@ mod tests {
 
         assert!((mapped.width - 40.0).abs() < 0.01);
         assert!((mapped.height - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn layer_transform_to_parent_scales_about_transform_origin() {
+        let local_bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 36.0,
+            height: 36.0,
+        };
+        let placement = Point { x: 54.0, y: 416.0 };
+        let small = layer_transform_to_parent(
+            local_bounds,
+            placement,
+            &GraphicsLayer {
+                scale: 0.85,
+                transform_origin: TransformOrigin::CENTER,
+                ..Default::default()
+            },
+        )
+        .bounds_for_rect(local_bounds);
+        let large = layer_transform_to_parent(
+            local_bounds,
+            placement,
+            &GraphicsLayer {
+                scale: 1.15,
+                transform_origin: TransformOrigin::CENTER,
+                ..Default::default()
+            },
+        )
+        .bounds_for_rect(local_bounds);
+
+        let small_center_y = small.y + small.height * 0.5;
+        let large_center_y = large.y + large.height * 0.5;
+        assert!(
+            (small_center_y - large_center_y).abs() < 0.01,
+            "scale must not move the layer center when transform origin is centered"
+        );
     }
 }

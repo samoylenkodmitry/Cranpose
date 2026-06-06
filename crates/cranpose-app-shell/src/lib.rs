@@ -28,13 +28,14 @@ use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEv
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
 use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{
-    format_layout_tree, format_render_scene, format_screen_summary,
-    has_pending_focus_invalidations, has_pending_pointer_repasses, peek_focus_invalidation,
-    peek_layout_invalidation, peek_pointer_invalidation, peek_render_invalidation,
-    process_focus_invalidations, process_pointer_repasses, request_render_invalidation,
-    take_draw_repass_nodes, take_focus_invalidation, take_layout_invalidation,
-    take_pointer_invalidation, take_render_invalidation, HeadlessRenderer, LayoutBox, LayoutNode,
-    LayoutTree, MeasureLayoutOptions, SemanticsTree, SubcomposeLayoutNode,
+    clear_transient_scroll_motion_contexts, format_layout_tree, format_render_scene,
+    format_screen_summary, has_pending_focus_invalidations, has_pending_pointer_repasses,
+    peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,
+    peek_render_invalidation, process_focus_invalidations, process_pointer_repasses,
+    request_render_invalidation, take_draw_repass_nodes, take_focus_invalidation,
+    take_layout_invalidation, take_pointer_invalidation, take_render_invalidation,
+    HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree, MeasureLayoutOptions, SemanticsTree,
+    SubcomposeLayoutNode,
 };
 use cranpose_ui_graphics::{Point, Rect, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
@@ -77,6 +78,7 @@ where
     layout_requested: bool,
     force_layout_pass: bool,
     scene_dirty: bool,
+    scoped_layout_scene_nodes: Vec<NodeId>,
     is_dirty: bool,
     /// Tracks which mouse buttons are currently pressed
     buttons_pressed: PointerButtons,
@@ -101,8 +103,74 @@ where
     /// Dev options for debugging and performance monitoring
     dev_options: DevOptions,
     dev_overlay_controls: Vec<DevOverlayControl>,
+    dev_overlay_text: String,
+    dev_overlay_last_refresh: Option<Instant>,
+    dev_overlay_viewport: Option<Size>,
     fps_monitor: fps_monitor::FpsMonitor,
     frame_scheduler: FrameScheduler,
+}
+
+fn update_stage_telemetry_threshold_ms() -> Option<f64> {
+    static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    *THRESHOLD_MS.get_or_init(|| {
+        std::env::var("CRANPOSE_UPDATE_STAGE_TELEMETRY_MS")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0)
+    })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UpdateStageTelemetry {
+    started_at: Instant,
+    after_frame_callbacks: Instant,
+    after_ui_drain: Instant,
+    after_reconcile: Instant,
+    after_process_frame: Instant,
+    should_render: bool,
+    reconcile_attempted: bool,
+    reconcile_changed: bool,
+}
+
+fn log_update_stage_telemetry(telemetry: UpdateStageTelemetry) {
+    let Some(threshold_ms) = update_stage_telemetry_threshold_ms() else {
+        return;
+    };
+    let total_ms = telemetry
+        .after_process_frame
+        .duration_since(telemetry.started_at)
+        .as_secs_f64()
+        * 1000.0;
+    if total_ms < threshold_ms {
+        return;
+    }
+
+    let frame_callbacks_ms = telemetry
+        .after_frame_callbacks
+        .duration_since(telemetry.started_at)
+        .as_secs_f64()
+        * 1000.0;
+    let ui_drain_ms = telemetry
+        .after_ui_drain
+        .duration_since(telemetry.after_frame_callbacks)
+        .as_secs_f64()
+        * 1000.0;
+    let reconcile_ms = telemetry
+        .after_reconcile
+        .duration_since(telemetry.after_ui_drain)
+        .as_secs_f64()
+        * 1000.0;
+    let process_frame_ms = telemetry
+        .after_process_frame
+        .duration_since(telemetry.after_reconcile)
+        .as_secs_f64()
+        * 1000.0;
+    eprintln!(
+        "[update-stage-telemetry] total_ms={total_ms:.2} frame_callbacks_ms={frame_callbacks_ms:.2} ui_drain_ms={ui_drain_ms:.2} reconcile_ms={reconcile_ms:.2} process_frame_ms={process_frame_ms:.2} should_render={} reconcile_attempted={} reconcile_changed={}",
+        telemetry.should_render,
+        telemetry.reconcile_attempted,
+        telemetry.reconcile_changed
+    );
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -137,8 +205,15 @@ impl FramePacingMode {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameSchedule {
+    pub needs_update: bool,
     pub needs_frame: bool,
     pub next_deadline: Option<web_time::Instant>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FrameUpdateResult {
+    pub visual_changed: bool,
+    pub structure_changed: bool,
 }
 
 pub trait PlatformFrameDriver {
@@ -149,6 +224,7 @@ pub trait PlatformFrameDriver {
 
 #[derive(Debug)]
 pub struct FrameScheduler {
+    update_pending: AtomicBool,
     frame_pending: AtomicBool,
     next_deadline: Mutex<Option<web_time::Instant>>,
 }
@@ -156,6 +232,7 @@ pub struct FrameScheduler {
 impl Default for FrameScheduler {
     fn default() -> Self {
         Self {
+            update_pending: AtomicBool::new(false),
             frame_pending: AtomicBool::new(false),
             next_deadline: Mutex::new(None),
         }
@@ -170,10 +247,12 @@ impl FrameScheduler {
     }
 
     pub fn record(&self, schedule: FrameSchedule) {
+        self.update_pending
+            .store(schedule.needs_update, Ordering::SeqCst);
         self.frame_pending
             .store(schedule.needs_frame, Ordering::SeqCst);
         let mut next_deadline = self.lock_deadline();
-        *next_deadline = if schedule.needs_frame {
+        *next_deadline = if schedule.needs_update {
             None
         } else {
             schedule.next_deadline
@@ -190,6 +269,7 @@ impl FrameScheduler {
 
     pub fn snapshot(&self) -> FrameSchedule {
         FrameSchedule {
+            needs_update: self.update_pending.load(Ordering::SeqCst),
             needs_frame: self.frame_pending.load(Ordering::SeqCst),
             next_deadline: *self.lock_deadline(),
         }
@@ -204,6 +284,8 @@ impl FrameSchedule {
         if self.needs_frame {
             driver.clear_wake();
             driver.request_frame();
+        } else if self.needs_update {
+            driver.request_wake_at(web_time::Instant::now());
         } else if let Some(deadline) = self.next_deadline {
             driver.request_wake_at(deadline);
         } else {
@@ -307,6 +389,7 @@ where
             layout_requested: true,
             force_layout_pass: true,
             scene_dirty: true,
+            scoped_layout_scene_nodes: Vec::new(),
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
             hit_path_tracker: HitPathTracker::new(),
@@ -320,6 +403,9 @@ where
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
             dev_overlay_controls: Vec::new(),
+            dev_overlay_text: String::new(),
+            dev_overlay_last_refresh: None,
+            dev_overlay_viewport: None,
             fps_monitor: fps_monitor::FpsMonitor::new(),
             frame_scheduler: FrameScheduler::default(),
         };
@@ -333,6 +419,9 @@ where
     /// (not via composition) to avoid affecting performance measurements.
     pub fn set_dev_options(&mut self, options: DevOptions) {
         self.dev_options = options;
+        self.invalidate_dev_overlay_text();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(request_render_invalidation);
         self.mark_dirty();
     }
 
@@ -355,6 +444,28 @@ where
 
     pub fn reset_fps_stats(&mut self) {
         self.fps_monitor.reset_stats();
+        self.invalidate_dev_overlay_text();
+    }
+
+    pub fn record_presented_frame(
+        &mut self,
+        frame_started_at: Instant,
+        frame_finished_at: Instant,
+    ) {
+        self.fps_monitor
+            .record_frame_work(frame_started_at, frame_finished_at);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn record_presented_frame_for_test(
+        &mut self,
+        frame_started_nanos: u64,
+        frame_finished_nanos: u64,
+    ) {
+        let started = self.start_time + std::time::Duration::from_nanos(frame_started_nanos);
+        let finished = self.start_time + std::time::Duration::from_nanos(frame_finished_nanos);
+        self.record_presented_frame(started, finished);
     }
 
     pub fn set_frame_pacing_mode(&mut self, mode: FramePacingMode) {
@@ -362,6 +473,7 @@ where
             return;
         }
         self.dev_options.frame_pacing_mode = mode;
+        self.invalidate_dev_overlay_text();
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(request_render_invalidation);
         self.mark_dirty();
@@ -378,6 +490,12 @@ where
             .map(|control| control.mode)?;
         self.set_frame_pacing_mode(mode);
         Some(mode)
+    }
+
+    fn invalidate_dev_overlay_text(&mut self) {
+        self.dev_overlay_text.clear();
+        self.dev_overlay_last_refresh = None;
+        self.dev_overlay_viewport = None;
     }
 
     pub fn set_viewport(&mut self, width: f32, height: f32) {
@@ -437,28 +555,36 @@ where
         })
     }
 
+    fn needs_ui_update_in_context(&self) -> bool {
+        if self.is_dirty
+            || self.layout_requested
+            || self.scene_dirty
+            || peek_render_invalidation()
+            || peek_pointer_invalidation()
+            || peek_focus_invalidation()
+            || peek_layout_invalidation()
+            || cranpose_ui::has_pending_layout_repasses()
+            || cranpose_ui::has_pending_draw_repasses()
+            || has_pending_pointer_repasses()
+            || has_pending_focus_invalidations()
+        {
+            return true;
+        }
+
+        self.composition.should_render()
+    }
+
+    pub fn needs_update(&self) -> bool {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.needs_ui_update_in_context())
+    }
+
     /// Returns true if the shell needs to redraw (dirty flag, layout dirty, active animations).
     /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {
         let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| {
-            if self.is_dirty
-                || self.layout_requested
-                || self.scene_dirty
-                || peek_render_invalidation()
-                || peek_pointer_invalidation()
-                || peek_focus_invalidation()
-                || peek_layout_invalidation()
-                || cranpose_ui::has_pending_layout_repasses()
-                || cranpose_ui::has_pending_draw_repasses()
-                || has_pending_pointer_repasses()
-                || has_pending_focus_invalidations()
-            {
-                return true;
-            }
-
-            self.composition.should_render()
-        })
+        app_context
+            .enter(|| self.needs_ui_update_in_context() || self.renderer.needs_frame_warmup())
     }
 
     /// Marks the shell as dirty, indicating a redraw is needed.
@@ -510,9 +636,29 @@ where
         self.force_layout_pass = true;
     }
 
+    fn composition_tree_needs_layout(&mut self) -> bool {
+        let Some(root) = self.composition.root() else {
+            return true;
+        };
+        let mut applier = self.composition.applier_mut();
+        cranpose_ui::tree_needs_layout(&mut *applier, root).unwrap_or_else(|err| {
+            log::warn!(
+                "Cannot check layout dirty status for root #{}: {}",
+                root,
+                err
+            );
+            true
+        })
+    }
+
     /// Returns true if there are active animations or pending recompositions.
     pub fn has_active_animations(&self) -> bool {
         self.composition.should_render()
+    }
+
+    pub fn has_active_pointer_gesture(&self) -> bool {
+        self.buttons_pressed != PointerButtons::NONE
+            && self.hit_path_tracker.has_path(PointerId::PRIMARY)
     }
 
     /// Returns the next scheduled event time for cursor blink.
@@ -523,8 +669,14 @@ where
     }
 
     fn compute_frame_schedule(&self) -> FrameSchedule {
+        let needs_update = self.needs_update();
+        let needs_frame = needs_update
+            || self.has_active_animations()
+            || self.has_active_pointer_gesture()
+            || self.renderer.needs_frame_warmup();
         FrameSchedule {
-            needs_frame: self.needs_redraw() || self.has_active_animations(),
+            needs_update,
+            needs_frame,
             next_deadline: self.next_event_time(),
         }
     }
@@ -555,24 +707,32 @@ where
             .min(u128::from(u64::MAX)) as u64
     }
 
-    pub fn update_after_frame_interval(&mut self, frame_interval: std::time::Duration) {
+    pub fn update_after_frame_interval(
+        &mut self,
+        frame_interval: std::time::Duration,
+    ) -> FrameUpdateResult {
         let wall_frame_time = self.frame_time_nanos_at(Instant::now());
         let base_frame_time = self.last_frame_time_nanos.max(wall_frame_time);
         let frame_time = base_frame_time
             .saturating_add(frame_interval.as_nanos().min(u128::from(u64::MAX)) as u64);
-        self.update_at_frame_time_nanos(frame_time);
+        self.update_at_frame_time_nanos(frame_time)
     }
 
-    pub fn update_at_frame_time_nanos(&mut self, frame_time: u64) {
+    pub fn update_at_frame_time_nanos(&mut self, frame_time: u64) -> FrameUpdateResult {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(|| {
+            let update_started_at = Instant::now();
             let frame_time = frame_time.max(self.last_frame_time_nanos);
             self.last_frame_time_nanos = frame_time;
             let runtime_handle = self.runtime.runtime_handle();
             runtime_handle.with_deferred_state_releases(|| {
                 self.runtime.drain_frame_callbacks(frame_time);
+                let after_frame_callbacks = Instant::now();
                 runtime_handle.drain_ui();
+                let after_ui_drain = Instant::now();
                 let should_render = self.composition.should_render();
+                let mut reconcile_attempted = false;
+                let mut reconcile_changed = false;
                 if should_render {
                     log::trace!(
                         target: "cranpose::input",
@@ -584,25 +744,38 @@ where
                 }
                 if should_render {
                     let Some(root_key) = self.composition.root_key() else {
-                        self.process_frame_in_context();
+                        let result = self.process_frame_in_context(reconcile_changed);
+                        let after_process_frame = Instant::now();
+                        log_update_stage_telemetry(UpdateStageTelemetry {
+                            started_at: update_started_at,
+                            after_frame_callbacks,
+                            after_ui_drain,
+                            after_reconcile: after_ui_drain,
+                            after_process_frame,
+                            should_render,
+                            reconcile_attempted,
+                            reconcile_changed,
+                        });
                         self.is_dirty = false;
-                        return;
+                        return result;
                     };
+                    reconcile_attempted = true;
                     match self.composition.reconcile(root_key, &mut *self.content) {
                         Ok(changed) => {
+                            reconcile_changed = changed;
                             log::trace!(
                                 target: "cranpose::input",
                                 "reconcile changed={changed}"
                             );
                             if changed {
                                 self.fps_monitor.record_recomposition();
-                                self.request_layout_pass();
+                                if self.composition_tree_needs_layout() {
+                                    self.request_layout_pass();
+                                }
                                 request_render_invalidation();
                             }
                         }
                         Err(NodeError::Missing { id }) => {
-                            // Node was removed (likely due to conditional render or tab switch)
-                            // This is expected when scopes try to recompose after their nodes are gone
                             log::debug!("Recomposition skipped: node {} no longer exists", id);
                             self.request_layout_pass();
                             request_render_invalidation();
@@ -614,16 +787,28 @@ where
                         }
                     }
                 }
-                self.process_frame_in_context();
-                // Clear dirty flag after update (frame has been processed)
+                let after_reconcile = Instant::now();
+                let result = self.process_frame_in_context(reconcile_changed);
+                let after_process_frame = Instant::now();
+                log_update_stage_telemetry(UpdateStageTelemetry {
+                    started_at: update_started_at,
+                    after_frame_callbacks,
+                    after_ui_drain,
+                    after_reconcile,
+                    after_process_frame,
+                    should_render,
+                    reconcile_attempted,
+                    reconcile_changed,
+                });
                 self.is_dirty = false;
-            });
-        });
+                result
+            })
+        })
     }
 
-    pub fn update(&mut self) {
+    pub fn update(&mut self) -> FrameUpdateResult {
         let frame_time = self.frame_time_nanos_at(Instant::now());
-        self.update_at_frame_time_nanos(frame_time);
+        self.update_at_frame_time_nanos(frame_time)
     }
 }
 
@@ -704,6 +889,7 @@ mod frame_pacing_tests {
         let deadline = Instant::now() + Duration::from_millis(25);
 
         FrameSchedule {
+            needs_update: true,
             needs_frame: true,
             next_deadline: Some(deadline),
         }
@@ -721,6 +907,7 @@ mod frame_pacing_tests {
         let deadline = Instant::now() + Duration::from_millis(25);
 
         FrameSchedule {
+            needs_update: false,
             needs_frame: false,
             next_deadline: Some(deadline),
         }
@@ -730,10 +917,33 @@ mod frame_pacing_tests {
     }
 
     #[test]
+    fn frame_schedule_wakes_without_requesting_frame_for_update_only_work() {
+        let driver = RecordingFrameDriver::default();
+        let before = Instant::now();
+
+        FrameSchedule {
+            needs_update: true,
+            needs_frame: false,
+            next_deadline: None,
+        }
+        .apply_to(&driver);
+
+        let calls = driver.calls();
+        assert_eq!(calls.len(), 1);
+        match calls[0] {
+            DriverCall::RequestWakeAt(deadline) => {
+                assert!(deadline >= before);
+            }
+            other => panic!("update-only work must wake without requesting a frame: {other:?}"),
+        }
+    }
+
+    #[test]
     fn frame_schedule_clears_wake_when_fully_idle() {
         let driver = RecordingFrameDriver::default();
 
         FrameSchedule {
+            needs_update: false,
             needs_frame: false,
             next_deadline: None,
         }
@@ -750,6 +960,7 @@ mod frame_pacing_tests {
 
         scheduler.schedule(
             FrameSchedule {
+                needs_update: false,
                 needs_frame: false,
                 next_deadline: Some(deadline),
             },
@@ -759,6 +970,7 @@ mod frame_pacing_tests {
         assert_eq!(
             scheduler.snapshot(),
             FrameSchedule {
+                needs_update: false,
                 needs_frame: false,
                 next_deadline: Some(deadline),
             }
@@ -774,6 +986,7 @@ mod frame_pacing_tests {
 
         scheduler.schedule(
             FrameSchedule {
+                needs_update: true,
                 needs_frame: true,
                 next_deadline: Some(deadline),
             },
@@ -783,6 +996,7 @@ mod frame_pacing_tests {
         assert_eq!(
             scheduler.snapshot(),
             FrameSchedule {
+                needs_update: true,
                 needs_frame: true,
                 next_deadline: None,
             }
@@ -804,6 +1018,7 @@ mod frame_pacing_tests {
         }));
 
         scheduler.record(FrameSchedule {
+            needs_update: false,
             needs_frame: false,
             next_deadline: Some(deadline),
         });
@@ -811,6 +1026,7 @@ mod frame_pacing_tests {
         assert_eq!(
             scheduler.snapshot(),
             FrameSchedule {
+                needs_update: false,
                 needs_frame: false,
                 next_deadline: Some(deadline),
             }

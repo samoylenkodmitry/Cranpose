@@ -185,6 +185,7 @@ mod tests {
                 height: 18.0,
             },
             transform_to_parent,
+            content_offset: cranpose_ui_graphics::Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
             translated_content_offset: cranpose_ui_graphics::Point::default(),

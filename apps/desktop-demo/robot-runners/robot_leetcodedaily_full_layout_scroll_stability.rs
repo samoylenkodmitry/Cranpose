@@ -1,5 +1,10 @@
 //! Robot test: full LeetCode Daily Composer layout scroll stability repro for issue #269.
 
+#![expect(
+    clippy::too_many_arguments,
+    reason = "full-layout robot fixture keeps application call shapes intact"
+)]
+
 mod output_paths;
 mod perf_robot_stats;
 mod scroll_stability_external_helpers;
@@ -1232,59 +1237,29 @@ fn LeetcodeDailyFullLayoutApp() {
         {
             let scroll_state = scroll_state.clone();
             let fields = fields.clone();
-            let status = status.clone();
-            let preview_state = preview_state.clone();
-            let preview_loading = preview_loading.clone();
-            let compose_preview_state = compose_preview_state.clone();
-            let compose_loading = compose_loading.clone();
-            let compose_error = compose_error.clone();
-            let telegram_post_link = telegram_post_link.clone();
             let markdown_preview = markdown_preview.clone();
             let autosave_destination = autosave_destination.clone();
             let saved_draft = saved_draft.clone();
-            let ui_preferences = ui_preferences.clone();
             let layout_preferences = layout_preferences.clone();
             let startup_interactive_queue = startup_interactive_queue.clone();
-            let busy_action = busy_action.clone();
-            let active_queue_target = active_queue_target.clone();
             move || {
                 Column(Modifier::empty().fill_max_size(), ColumnSpec::default(), {
                     let scroll_state = scroll_state.clone();
                     let fields = fields.clone();
-                    let status = status.clone();
-                    let preview_state = preview_state.clone();
-                    let preview_loading = preview_loading.clone();
-                    let compose_preview_state = compose_preview_state.clone();
-                    let compose_loading = compose_loading.clone();
-                    let compose_error = compose_error.clone();
-                    let telegram_post_link = telegram_post_link.clone();
                     let markdown_preview = markdown_preview.clone();
                     let autosave_destination = autosave_destination.clone();
                     let saved_draft = saved_draft.clone();
-                    let ui_preferences = ui_preferences.clone();
                     let layout_preferences = layout_preferences.clone();
                     let startup_interactive_queue = startup_interactive_queue.clone();
-                    let busy_action = busy_action.clone();
-                    let active_queue_target = active_queue_target.clone();
                     move || {
                         BoxWithConstraints(Modifier::empty().fill_max_width().weight(1.0), {
                             let scroll_state = scroll_state.clone();
                             let fields = fields.clone();
-                            let status = status.clone();
-                            let preview_state = preview_state.clone();
-                            let preview_loading = preview_loading.clone();
-                            let compose_preview_state = compose_preview_state.clone();
-                            let compose_loading = compose_loading.clone();
-                            let compose_error = compose_error.clone();
-                            let telegram_post_link = telegram_post_link.clone();
                             let markdown_preview = markdown_preview.clone();
                             let autosave_destination = autosave_destination.clone();
                             let saved_draft = saved_draft.clone();
-                            let ui_preferences = ui_preferences.clone();
                             let layout_preferences = layout_preferences.clone();
                             let startup_interactive_queue = startup_interactive_queue.clone();
-                            let busy_action = busy_action.clone();
-                            let active_queue_target = active_queue_target.clone();
                             move |scope| {
                                 let compact = scope.max_width().0 < 1120.0;
                                 let root_horizontal_padding = if scope.max_width().0 < 700.0 {
@@ -1305,35 +1280,25 @@ fn LeetcodeDailyFullLayoutApp() {
                                         .vertical_arrangement(LinearArrangement::spaced_by(14.0)),
                                     {
                                         let fields = fields.clone();
-                                        let status = status.clone();
-                                        let preview_state = preview_state.clone();
-                                        let preview_loading = preview_loading.clone();
-                                        let compose_preview_state = compose_preview_state.clone();
-                                        let compose_loading = compose_loading.clone();
-                                        let compose_error = compose_error.clone();
-                                        let telegram_post_link = telegram_post_link.clone();
                                         let markdown_preview = markdown_preview.clone();
                                         let autosave_destination = autosave_destination.clone();
                                         let saved_draft = saved_draft.clone();
-                                        let ui_preferences = ui_preferences.clone();
                                         let layout_preferences = layout_preferences.clone();
                                         let startup_interactive_queue =
                                             startup_interactive_queue.clone();
-                                        let busy_action = busy_action.clone();
-                                        let active_queue_target = active_queue_target.clone();
                                         let workspace_scroll_state = scroll_state.clone();
                                         move || {
                                             ActionsCard(
                                                 fields.clone(),
-                                                status.clone(),
-                                                preview_state.clone(),
+                                                status,
+                                                preview_state,
                                                 autosave_destination.clone(),
-                                                telegram_post_link.clone(),
-                                                ui_preferences.clone(),
+                                                telegram_post_link,
+                                                ui_preferences,
                                                 layout_preferences.clone(),
                                                 startup_interactive_queue.clone(),
-                                                busy_action.clone(),
-                                                active_queue_target.clone(),
+                                                busy_action,
+                                                active_queue_target,
                                                 theme,
                                                 compact,
                                             );
@@ -1341,8 +1306,8 @@ fn LeetcodeDailyFullLayoutApp() {
                                                 ButtonQualityReferenceFixture(
                                                     BUTTON_REFERENCE_OUTSIDE_TAG,
                                                     "quality.reference.outside.clear",
-                                                    status.clone(),
-                                                    ui_preferences.clone(),
+                                                    status,
+                                                    ui_preferences,
                                                     theme,
                                                 );
                                             }
@@ -1355,20 +1320,13 @@ fn LeetcodeDailyFullLayoutApp() {
                                                     .padding_each(0.0, 12.0, 0.0, 0.0),
                                                 {
                                                     let fields = fields.clone();
-                                                    let status = status.clone();
-                                                    let preview_state = preview_state.clone();
-                                                    let preview_loading = preview_loading.clone();
                                                     let compose_preview_state =
-                                                        compose_preview_state.clone();
-                                                    let compose_loading = compose_loading.clone();
-                                                    let compose_error = compose_error.clone();
+                                                        compose_preview_state;
                                                     let markdown_preview = markdown_preview.clone();
                                                     let saved_draft = saved_draft.clone();
-                                                    let ui_preferences = ui_preferences.clone();
                                                     let layout_preferences =
                                                         layout_preferences.clone();
-                                                    let active_queue_target =
-                                                        active_queue_target.clone();
+                                                    let active_queue_target = active_queue_target;
                                                     move |viewport_scope| {
                                                         let viewport_width =
                                                             viewport_scope.max_width().0;
@@ -1392,27 +1350,26 @@ fn LeetcodeDailyFullLayoutApp() {
                                                             BoxSpec::default(),
                                                             {
                                                                 let fields = fields.clone();
-                                                                let status = status.clone();
                                                                 let preview_state =
-                                                                    preview_state.clone();
+                                                                    preview_state;
                                                                 let preview_loading =
-                                                                    preview_loading.clone();
+                                                                    preview_loading;
                                                                 let compose_preview_state =
-                                                                    compose_preview_state.clone();
+                                                                    compose_preview_state;
                                                                 let compose_loading =
-                                                                    compose_loading.clone();
+                                                                    compose_loading;
                                                                 let compose_error =
-                                                                    compose_error.clone();
+                                                                    compose_error;
                                                                 let markdown_preview =
                                                                     markdown_preview.clone();
                                                                 let saved_draft =
                                                                     saved_draft.clone();
                                                                 let ui_preferences =
-                                                                    ui_preferences.clone();
+                                                                    ui_preferences;
                                                                 let layout_preferences =
                                                                     layout_preferences.clone();
                                                                 let active_queue_target =
-                                                                    active_queue_target.clone();
+                                                                    active_queue_target;
                                                                 let viewport_scroll_state =
                                                                     viewport_scroll_state.clone();
                                                                 move || {
@@ -1433,30 +1390,23 @@ fn LeetcodeDailyFullLayoutApp() {
                                                                             ),
                                                                         {
                                                                             let fields = fields.clone();
-                                                                            let status = status.clone();
-                                                                            let preview_state = preview_state.clone();
-                                                                            let preview_loading = preview_loading.clone();
-                                                                            let compose_preview_state = compose_preview_state.clone();
-                                                                            let compose_loading = compose_loading.clone();
-                                                                            let compose_error = compose_error.clone();
                                                                             let markdown_preview = markdown_preview.clone();
                                                                             let saved_draft = saved_draft.clone();
-                                                                            let ui_preferences = ui_preferences.clone();
                                                                             let layout_preferences = layout_preferences.clone();
                                                                             move || {
                                                                                 GuidedWorkspace(
                                                                                     fields.clone(),
-                                                                                    preview_state.clone(),
-                                                                                    preview_loading.clone(),
-                                                                                    compose_preview_state.clone(),
-                                                                                    compose_loading.clone(),
-                                                                                    compose_error.clone(),
+                                                                                    preview_state,
+                                                                                    preview_loading,
+                                                                                    compose_preview_state,
+                                                                                    compose_loading,
+                                                                                    compose_error,
                                                                                     markdown_preview.clone(),
-                                                                                    status.clone(),
+                                                                                    status,
                                                                                     saved_draft.clone(),
-                                                                                    ui_preferences.clone(),
+                                                                                    ui_preferences,
                                                                                     layout_preferences.clone(),
-                                                                                    active_queue_target.clone(),
+                                                                                    active_queue_target,
                                                                                     theme,
                                                                                     compact,
                                                                                 );
@@ -1504,11 +1454,10 @@ fn ButtonQualityReferenceFixture(
             }),
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || {
-            let status = status.clone();
             subtle_button(
                 "Clear".to_string(),
                 count_key.to_string(),
-                ui_preferences.clone(),
+                ui_preferences,
                 theme,
                 move || {
                     status.set("Reference clear pressed.".to_string());
@@ -1551,27 +1500,27 @@ fn GuidedWorkspace(
         ButtonQualityReferenceFixture(
             BUTTON_REFERENCE_INSIDE_TAG,
             "quality.reference.inside.clear",
-            status.clone(),
-            ui_preferences.clone(),
+            status,
+            ui_preferences,
             theme,
         );
     }
     ProblemMetaCard(
         fields.clone(),
-        status.clone(),
+        status,
         saved_draft.clone(),
-        ui_preferences.clone(),
-        active_queue_target.clone(),
+        ui_preferences,
+        active_queue_target,
         theme,
         compact,
     );
     WriteupCard(
         fields.clone(),
-        status.clone(),
+        status,
         saved_draft.clone(),
-        ui_preferences.clone(),
+        ui_preferences,
         layout_preferences.clone(),
-        active_queue_target.clone(),
+        active_queue_target,
         theme,
     );
     Spacer(Size::new(0.0, 82.0));
@@ -1610,20 +1559,14 @@ fn ActionsCard(
         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(14.0)),
         {
             let fields = fields.clone();
-            let status = status.clone();
-            let preview_state = preview_state.clone();
-            let telegram_post_link = telegram_post_link.clone();
             let autosave_destination = autosave_destination.clone();
-            let ui_preferences = ui_preferences.clone();
             let layout_preferences = layout_preferences.clone();
             let startup_interactive_queue = startup_interactive_queue.clone();
-            let busy_action = busy_action.clone();
-            let active_queue_target = active_queue_target.clone();
             move || {
                 HeaderBar(
                     autosave_destination.clone(),
-                    ui_preferences.clone(),
-                    status.clone(),
+                    ui_preferences,
+                    status,
                     theme,
                     compact,
                 );
@@ -1655,32 +1598,27 @@ fn ActionsCard(
                             .vertical_arrangement(LinearArrangement::spaced_by(14.0)),
                         {
                             let fields = fields.clone();
-                            let status = status.clone();
-                            let telegram_post_link = telegram_post_link.clone();
-                            let ui_preferences = ui_preferences.clone();
                             let layout_preferences = layout_preferences.clone();
-                            let busy_action = busy_action.clone();
-                            let active_queue_target = active_queue_target.clone();
                             move || {
                                 NextWorkPanel(
                                     next_item,
                                     next_title.clone(),
                                     fields.clone(),
-                                    status.clone(),
-                                    telegram_post_link.clone(),
-                                    ui_preferences.clone(),
-                                    busy_action.clone(),
-                                    active_queue_target.clone(),
+                                    status,
+                                    telegram_post_link,
+                                    ui_preferences,
+                                    busy_action,
+                                    active_queue_target,
                                     theme,
                                     true,
                                 );
                                 QuickActionsPanel(
                                     fields.clone(),
-                                    status.clone(),
-                                    telegram_post_link.clone(),
-                                    ui_preferences.clone(),
+                                    status,
+                                    telegram_post_link,
+                                    ui_preferences,
                                     layout_preferences.clone(),
-                                    busy_action.clone(),
+                                    busy_action,
                                     theme,
                                     true,
                                 );
@@ -1694,32 +1632,27 @@ fn ActionsCard(
                             .horizontal_arrangement(LinearArrangement::spaced_by(18.0)),
                         {
                             let fields = fields.clone();
-                            let status = status.clone();
-                            let telegram_post_link = telegram_post_link.clone();
-                            let ui_preferences = ui_preferences.clone();
                             let layout_preferences = layout_preferences.clone();
-                            let busy_action = busy_action.clone();
-                            let active_queue_target = active_queue_target.clone();
                             move || {
                                 NextWorkPanel(
                                     next_item,
                                     next_title.clone(),
                                     fields.clone(),
-                                    status.clone(),
-                                    telegram_post_link.clone(),
-                                    ui_preferences.clone(),
-                                    busy_action.clone(),
-                                    active_queue_target.clone(),
+                                    status,
+                                    telegram_post_link,
+                                    ui_preferences,
+                                    busy_action,
+                                    active_queue_target,
                                     theme,
                                     false,
                                 );
                                 QuickActionsPanel(
                                     fields.clone(),
-                                    status.clone(),
-                                    telegram_post_link.clone(),
-                                    ui_preferences.clone(),
+                                    status,
+                                    telegram_post_link,
+                                    ui_preferences,
                                     layout_preferences.clone(),
-                                    busy_action.clone(),
+                                    busy_action,
                                     theme,
                                     false,
                                 );
@@ -1731,11 +1664,11 @@ fn ActionsCard(
                 InteractiveQueuePanel(
                     startup_interactive_queue.clone(),
                     fields.clone(),
-                    status.clone(),
-                    telegram_post_link.clone(),
-                    ui_preferences.clone(),
-                    busy_action.clone(),
-                    active_queue_target.clone(),
+                    status,
+                    telegram_post_link,
+                    ui_preferences,
+                    busy_action,
+                    active_queue_target,
                     theme,
                 );
 
@@ -1777,7 +1710,7 @@ fn HeaderBar(
                 HeaderTitle(autosave_destination.clone(), theme, true);
                 let next_theme = theme.toggled();
                 theme_button(format!("Theme: {}", theme.label()), theme, move || {
-                    set_theme_preference(ui_preferences.clone(), next_theme, status.clone());
+                    set_theme_preference(ui_preferences, next_theme, status);
                 });
             },
         );
@@ -1791,7 +1724,7 @@ fn HeaderBar(
                 HeaderTitle(autosave_destination.clone(), theme, false);
                 let next_theme = theme.toggled();
                 theme_button(format!("Theme: {}", theme.label()), theme, move || {
-                    set_theme_preference(ui_preferences.clone(), next_theme, status.clone());
+                    set_theme_preference(ui_preferences, next_theme, status);
                 });
             },
         );
@@ -1854,10 +1787,6 @@ fn QuickActionsPanel(
     };
     glass_panel(modifier, theme, 18.0, 18.0, {
         let fields = fields.clone();
-        let status = status.clone();
-        let telegram_post_link = telegram_post_link.clone();
-        let ui_preferences = ui_preferences.clone();
-        let busy_action = busy_action.clone();
         let layout_preferences = layout_preferences.clone();
         move || {
             let layout_preferences_for_column = layout_preferences.clone();
@@ -1866,19 +1795,15 @@ fn QuickActionsPanel(
                 ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(12.0)),
                 {
                     let fields = fields.clone();
-                    let status = status.clone();
-                    let telegram_post_link = telegram_post_link.clone();
-                    let ui_preferences = ui_preferences.clone();
-                    let busy_action = busy_action.clone();
                     move || {
                         Text("Quick Actions", Modifier::empty(), panel_title_style(theme));
                         ActionButtons(
                             fields.clone(),
-                            status.clone(),
-                            telegram_post_link.clone(),
-                            ui_preferences.clone(),
+                            status,
+                            telegram_post_link,
+                            ui_preferences,
                             layout_preferences_for_column.clone(),
-                            busy_action.clone(),
+                            busy_action,
                             theme,
                         );
                     }
@@ -1940,11 +1865,6 @@ fn NextWorkPanel(
     let title = title_override.unwrap_or_else(|| next_item.title());
     glass_panel(modifier, theme, 18.0, 18.0, {
         let fields = fields.clone();
-        let status = status.clone();
-        let telegram_post_link = telegram_post_link.clone();
-        let ui_preferences = ui_preferences.clone();
-        let busy_action = busy_action.clone();
-        let active_queue_target = active_queue_target.clone();
         let title = title.clone();
         move || {
             Row(
@@ -1952,11 +1872,6 @@ fn NextWorkPanel(
                 RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(18.0)),
                 {
                     let fields = fields.clone();
-                    let status = status.clone();
-                    let telegram_post_link = telegram_post_link.clone();
-                    let ui_preferences = ui_preferences.clone();
-                    let busy_action = busy_action.clone();
-                    let active_queue_target = active_queue_target.clone();
                     let row_title = title.clone();
                     move || {
                         HeroTile(next_item.stage(), theme);
@@ -1966,11 +1881,6 @@ fn NextWorkPanel(
                                 .vertical_arrangement(LinearArrangement::spaced_by(12.0)),
                             {
                                 let fields = fields.clone();
-                                let status = status.clone();
-                                let telegram_post_link = telegram_post_link.clone();
-                                let ui_preferences = ui_preferences.clone();
-                                let busy_action = busy_action.clone();
-                                let active_queue_target = active_queue_target.clone();
                                 let title = row_title.clone();
                                 move || {
                                     Row(
@@ -1996,8 +1906,8 @@ fn NextWorkPanel(
                                         NextWorkItem::Field(field) => {
                                             FieldSuggestion(
                                                 field,
-                                                active_queue_target.clone(),
-                                                status.clone(),
+                                                active_queue_target,
+                                                status,
                                                 theme,
                                             );
                                         }
@@ -2005,10 +1915,10 @@ fn NextWorkPanel(
                                             focus_action_button(
                                                 action,
                                                 fields.clone(),
-                                                status.clone(),
-                                                telegram_post_link.clone(),
-                                                ui_preferences.clone(),
-                                                busy_action.clone(),
+                                                status,
+                                                telegram_post_link,
+                                                ui_preferences,
+                                                busy_action,
                                                 theme,
                                             );
                                         }
@@ -2042,11 +1952,6 @@ fn InteractiveQueuePanel(
     let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| state.clone());
     glass_panel(Modifier::empty().fill_max_width(), theme, 14.0, 10.0, {
         let fields = fields.clone();
-        let status = status.clone();
-        let telegram_post_link = telegram_post_link.clone();
-        let ui_preferences = ui_preferences.clone();
-        let busy_action = busy_action.clone();
-        let active_queue_target = active_queue_target.clone();
         let queue = queue.clone();
         let scroll_state = scroll_state.clone();
         move || {
@@ -2055,11 +1960,6 @@ fn InteractiveQueuePanel(
                 ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(9.0)),
                 {
                     let fields = fields.clone();
-                    let status = status.clone();
-                    let telegram_post_link = telegram_post_link.clone();
-                    let ui_preferences = ui_preferences.clone();
-                    let busy_action = busy_action.clone();
-                    let active_queue_target = active_queue_target.clone();
                     let queue = queue.clone();
                     let current_queue = ui_preferences.value().interactive_queue().to_vec();
                     let scroll_state = scroll_state.clone();
@@ -2067,11 +1967,6 @@ fn InteractiveQueuePanel(
                         Text("Interactive Queue", Modifier::empty(), eyebrow_style(theme));
                         BoxWithConstraints(Modifier::empty().fill_max_width(), {
                             let fields = fields.clone();
-                            let status = status.clone();
-                            let telegram_post_link = telegram_post_link.clone();
-                            let ui_preferences = ui_preferences.clone();
-                            let busy_action = busy_action.clone();
-                            let active_queue_target = active_queue_target.clone();
                             let row_queue = queue.clone();
                             let row_current_queue = current_queue.clone();
                             let scroll_state = scroll_state.clone();
@@ -2088,11 +1983,6 @@ fn InteractiveQueuePanel(
                                     ),
                                     {
                                         let fields = fields.clone();
-                                        let status = status.clone();
-                                        let telegram_post_link = telegram_post_link.clone();
-                                        let ui_preferences = ui_preferences.clone();
-                                        let busy_action = busy_action.clone();
-                                        let active_queue_target = active_queue_target.clone();
                                         let row_queue = row_queue.clone();
                                         let row_current_queue = row_current_queue.clone();
                                         move || {
@@ -2101,11 +1991,11 @@ fn InteractiveQueuePanel(
                                                     item_key.clone(),
                                                     row_current_queue.contains(item_key),
                                                     fields.clone(),
-                                                    status.clone(),
-                                                    telegram_post_link.clone(),
-                                                    ui_preferences.clone(),
-                                                    busy_action.clone(),
-                                                    active_queue_target.clone(),
+                                                    status,
+                                                    telegram_post_link,
+                                                    ui_preferences,
+                                                    busy_action,
+                                                    active_queue_target,
                                                     theme,
                                                 );
                                             }
@@ -2117,8 +2007,8 @@ fn InteractiveQueuePanel(
                         QueueCurrentRow(
                             active_queue_target.value(),
                             fields.clone(),
-                            status.clone(),
-                            ui_preferences.clone(),
+                            status,
+                            ui_preferences,
                             theme,
                         );
                     }
@@ -2153,13 +2043,7 @@ fn QueueCurrentRow(
                 Modifier::empty(),
                 queue_current_label_style(theme),
             );
-            QueueCurrentEditorField(
-                field,
-                fields.clone(),
-                status.clone(),
-                ui_preferences.clone(),
-                theme,
-            );
+            QueueCurrentEditorField(field, fields.clone(), status, ui_preferences, theme);
         },
     );
 }
@@ -2275,11 +2159,11 @@ fn InteractiveQueueChip(
                 handle_interactive_queue_press(
                     &item_key,
                     fields.clone(),
-                    status.clone(),
-                    telegram_post_link.clone(),
-                    ui_preferences.clone(),
-                    busy_action.clone(),
-                    active_queue_target.clone(),
+                    status,
+                    telegram_post_link,
+                    ui_preferences,
+                    busy_action,
+                    active_queue_target,
                     theme,
                 );
             }
@@ -2346,10 +2230,6 @@ fn ActionButtons(
     let ordered_actions = ordered_action_buttons(&layout_preferences);
     BoxWithConstraints(Modifier::empty().fill_max_width(), {
         let fields = fields.clone();
-        let status = status.clone();
-        let telegram_post_link = telegram_post_link.clone();
-        let ui_preferences = ui_preferences.clone();
-        let busy_action = busy_action.clone();
         move |scope| {
             let width = scope.max_width().0;
             let columns = if width >= 820.0 {
@@ -2366,19 +2246,11 @@ fn ActionButtons(
                 ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(12.0)),
                 {
                     let fields = fields.clone();
-                    let status = status.clone();
-                    let telegram_post_link = telegram_post_link.clone();
-                    let ui_preferences = ui_preferences.clone();
-                    let busy_action = busy_action.clone();
                     let ordered_actions = ordered_actions.clone();
                     move || {
                         for row in ordered_actions.chunks(columns) {
                             let row_actions = row.to_vec();
                             let fields = fields.clone();
-                            let status = status.clone();
-                            let telegram_post_link = telegram_post_link.clone();
-                            let ui_preferences = ui_preferences.clone();
-                            let busy_action = busy_action.clone();
                             Row(
                                 Modifier::empty().fill_max_width(),
                                 RowSpec::default()
@@ -2388,10 +2260,10 @@ fn ActionButtons(
                                         ActionButton(
                                             *action,
                                             fields.clone(),
-                                            status.clone(),
-                                            telegram_post_link.clone(),
-                                            ui_preferences.clone(),
-                                            busy_action.clone(),
+                                            status,
+                                            telegram_post_link,
+                                            ui_preferences,
+                                            busy_action,
                                             theme,
                                         );
                                     }
@@ -2424,7 +2296,7 @@ fn ActionButton(
         action.icon(),
         action.label(),
         action.count_key(),
-        ui_preferences.clone(),
+        ui_preferences,
         theme,
         disabled,
         is_busy,
@@ -2432,9 +2304,9 @@ fn ActionButton(
             handle_action_button(
                 action,
                 fields.clone(),
-                status.clone(),
-                telegram_post_link.clone(),
-                busy_action.clone(),
+                status,
+                telegram_post_link,
+                busy_action,
             );
         },
     );
@@ -2486,13 +2358,13 @@ fn focus_action_button(
             if disabled {
                 return;
             }
-            record_button_press(ui_preferences.clone(), &count_key);
+            record_button_press(ui_preferences, &count_key);
             handle_action_button(
                 action,
                 fields.clone(),
-                status.clone(),
-                telegram_post_link.clone(),
-                busy_action.clone(),
+                status,
+                telegram_post_link,
+                busy_action,
             );
         },
         move || {
@@ -2526,7 +2398,7 @@ fn handle_interactive_queue_press(
     }
 
     if item_key == "theme.toggle" {
-        record_button_press(ui_preferences.clone(), item_key);
+        record_button_press(ui_preferences, item_key);
         set_theme_preference(ui_preferences, theme.toggled(), status);
         return;
     }
@@ -2869,8 +2741,6 @@ fn PreviewCard(
     theme: ThemeMode,
 ) {
     section_card(theme, {
-        let preview_state = preview_state.clone();
-        let preview_loading = preview_loading.clone();
         move || {
             Column(
                 Modifier::empty().fill_max_width(),
@@ -2923,9 +2793,6 @@ fn ComposePreviewCard(
     theme: ThemeMode,
 ) {
     section_card(theme, {
-        let compose_preview_state = compose_preview_state.clone();
-        let compose_loading = compose_loading.clone();
-        let compose_error = compose_error.clone();
         move || {
             Column(
                 Modifier::empty().fill_max_width(),
@@ -3033,20 +2900,14 @@ fn ProblemMetaCard(
 ) {
     section_card(theme, {
         let fields = fields.clone();
-        let status = status.clone();
         let saved_draft = saved_draft.clone();
-        let ui_preferences = ui_preferences.clone();
-        let active_queue_target = active_queue_target.clone();
         move || {
             Column(
                 Modifier::empty().fill_max_width(),
                 ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(14.0)),
                 {
                     let fields = fields.clone();
-                    let status = status.clone();
                     let saved_draft = saved_draft.clone();
-                    let ui_preferences = ui_preferences.clone();
-                    let active_queue_target = active_queue_target.clone();
                     move || {
                         SectionHeader("Problem Meta", UiIcon::Document, theme);
                         if compact {
@@ -3064,9 +2925,9 @@ fn ProblemMetaCard(
                                 ],
                                 fields.clone(),
                                 saved_draft.clone(),
-                                status.clone(),
-                                ui_preferences.clone(),
-                                active_queue_target.clone(),
+                                status,
+                                ui_preferences,
+                                active_queue_target,
                                 theme,
                                 false,
                             );
@@ -3078,9 +2939,6 @@ fn ProblemMetaCard(
                                 {
                                     let fields = fields.clone();
                                     let saved_draft = saved_draft.clone();
-                                    let status = status.clone();
-                                    let ui_preferences = ui_preferences.clone();
-                                    let active_queue_target = active_queue_target.clone();
                                     move || {
                                         MetaFieldColumn(
                                             vec![
@@ -3092,9 +2950,9 @@ fn ProblemMetaCard(
                                             ],
                                             fields.clone(),
                                             saved_draft.clone(),
-                                            status.clone(),
-                                            ui_preferences.clone(),
-                                            active_queue_target.clone(),
+                                            status,
+                                            ui_preferences,
+                                            active_queue_target,
                                             theme,
                                             true,
                                         );
@@ -3107,9 +2965,9 @@ fn ProblemMetaCard(
                                             ],
                                             fields.clone(),
                                             saved_draft.clone(),
-                                            status.clone(),
-                                            ui_preferences.clone(),
-                                            active_queue_target.clone(),
+                                            status,
+                                            ui_preferences,
+                                            active_queue_target,
                                             theme,
                                             true,
                                         );
@@ -3150,9 +3008,9 @@ fn MetaFieldColumn(
                     *field,
                     fields.clone(),
                     saved_draft.clone(),
-                    status.clone(),
-                    ui_preferences.clone(),
-                    active_queue_target.clone(),
+                    status,
+                    ui_preferences,
+                    active_queue_target,
                     theme,
                 );
             }
@@ -3173,18 +3031,15 @@ fn WriteupCard(
 ) {
     section_card(theme, {
         let fields = fields.clone();
-        let status = status.clone();
         let saved_draft = saved_draft.clone();
-        let ui_preferences = ui_preferences.clone();
         let layout_preferences = layout_preferences.clone();
-        let active_queue_target = active_queue_target.clone();
         move || {
             let ordered_fields = ordered_fields(&WRITEUP_FIELDS, &layout_preferences);
             let fields_for_column = fields.clone();
             let saved_draft_for_column = saved_draft.clone();
-            let status_for_column = status.clone();
-            let ui_preferences_for_column = ui_preferences.clone();
-            let active_queue_target_for_column = active_queue_target.clone();
+            let status_for_column = status;
+            let ui_preferences_for_column = ui_preferences;
+            let active_queue_target_for_column = active_queue_target;
             Column(
                 Modifier::empty().fill_max_width(),
                 ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(14.0)),
@@ -3195,9 +3050,9 @@ fn WriteupCard(
                             *field,
                             fields_for_column.clone(),
                             saved_draft_for_column.clone(),
-                            status_for_column.clone(),
-                            ui_preferences_for_column.clone(),
-                            active_queue_target_for_column.clone(),
+                            status_for_column,
+                            ui_preferences_for_column,
+                            active_queue_target_for_column,
                             theme,
                         );
                     }
@@ -3220,18 +3075,15 @@ fn CodeCard(
 ) {
     section_card(theme, {
         let fields = fields.clone();
-        let status = status.clone();
         let saved_draft = saved_draft.clone();
-        let ui_preferences = ui_preferences.clone();
         let layout_preferences = layout_preferences.clone();
-        let active_queue_target = active_queue_target.clone();
         move || {
             let ordered_fields = ordered_fields(&CODE_FIELDS, &layout_preferences);
             let fields_for_column = fields.clone();
             let saved_draft_for_column = saved_draft.clone();
-            let status_for_column = status.clone();
-            let ui_preferences_for_column = ui_preferences.clone();
-            let active_queue_target_for_column = active_queue_target.clone();
+            let status_for_column = status;
+            let ui_preferences_for_column = ui_preferences;
+            let active_queue_target_for_column = active_queue_target;
             Column(
                 Modifier::empty().fill_max_width(),
                 ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(14.0)),
@@ -3242,9 +3094,9 @@ fn CodeCard(
                             *field,
                             fields_for_column.clone(),
                             saved_draft_for_column.clone(),
-                            status_for_column.clone(),
-                            ui_preferences_for_column.clone(),
-                            active_queue_target_for_column.clone(),
+                            status_for_column,
+                            ui_preferences_for_column,
+                            active_queue_target_for_column,
                             theme,
                         );
                     }
@@ -3985,7 +3837,7 @@ fn primary_button(
             if disabled {
                 return;
             }
-            record_button_press(ui_preferences.clone(), &count_key);
+            record_button_press(ui_preferences, &count_key);
             on_click();
         },
         move || {
@@ -4025,7 +3877,7 @@ fn subtle_button(
         .padding_symmetric(9.0, 7.0),
         ButtonSpec::default(),
         move || {
-            record_button_press(ui_preferences.clone(), &count_key);
+            record_button_press(ui_preferences, &count_key);
             on_click();
         },
         move || {
@@ -4219,8 +4071,6 @@ fn labeled_field(
                 RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(16.0)),
                 {
                     let state = state.clone();
-                    let status = status.clone();
-                    let ui_preferences = ui_preferences.clone();
                     move || {
                         Spacer(Size::new(44.0, 0.0));
                         let field_state = state.clone();
@@ -4267,9 +4117,9 @@ fn labeled_field(
                             label,
                             field_id,
                             state.clone(),
-                            status.clone(),
+                            status,
                             allow_paste,
-                            ui_preferences.clone(),
+                            ui_preferences,
                             theme,
                         );
                     }
@@ -4313,8 +4163,6 @@ fn labeled_code_field(
                 RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(16.0)),
                 {
                     let state = state.clone();
-                    let status = status.clone();
-                    let ui_preferences = ui_preferences.clone();
                     move || {
                         Spacer(Size::new(44.0, 0.0));
                         let field_state = state.clone();
@@ -4361,9 +4209,9 @@ fn labeled_code_field(
                             label,
                             field_id,
                             state.clone(),
-                            status.clone(),
+                            status,
                             true,
-                            ui_preferences.clone(),
+                            ui_preferences,
                             theme,
                         );
                     }
@@ -4390,11 +4238,11 @@ fn field_action_buttons(
         move || {
             if allow_paste {
                 let paste_state = state.clone();
-                let paste_status = status.clone();
+                let paste_status = status;
                 subtle_button(
                     "Paste".to_string(),
                     format!("field.{field_id}.paste"),
-                    ui_preferences.clone(),
+                    ui_preferences,
                     theme,
                     move || {
                         paste_state.set_text(format!("Pasted {label}"));
@@ -4404,11 +4252,11 @@ fn field_action_buttons(
             }
 
             let clear_state = state.clone();
-            let clear_status = status.clone();
+            let clear_status = status;
             subtle_button(
                 "Clear".to_string(),
                 format!("field.{field_id}.clear"),
-                ui_preferences.clone(),
+                ui_preferences,
                 theme,
                 move || {
                     clear_state.set_text(String::new());
@@ -8035,7 +7883,7 @@ fn red_icon_horizontal_profile(
     let mut total_mass = 0u64;
 
     for y in 0..height {
-        for x in 0..width {
+        for (x, column) in column_mass.iter_mut().enumerate().take(width) {
             let index = (y * width + x) * 4;
             let pixel = [
                 screenshot.pixels[index],
@@ -8056,7 +7904,7 @@ fn red_icon_horizontal_profile(
             sum_y += y as u64;
             weighted_sum_x += x as u64 * strength as u64;
             total_mass += strength as u64;
-            column_mass[x] = column_mass[x].saturating_add(strength);
+            *column = column.saturating_add(strength);
         }
     }
 
@@ -8800,14 +8648,14 @@ fn screenshot_edge_energy(screenshot: &cranpose::RobotScreenshot) -> f32 {
             let current = screenshot_luma(&screenshot.pixels[index..index + 4]);
             if x + 1 < width {
                 let right = (y * width + x + 1) * 4;
-                total +=
-                    (current - screenshot_luma(&screenshot.pixels[right..right + 4])).abs() as u64;
+                total += (current - screenshot_luma(&screenshot.pixels[right..right + 4]))
+                    .unsigned_abs() as u64;
                 samples += 1;
             }
             if y + 1 < height {
                 let down = ((y + 1) * width + x) * 4;
-                total +=
-                    (current - screenshot_luma(&screenshot.pixels[down..down + 4])).abs() as u64;
+                total += (current - screenshot_luma(&screenshot.pixels[down..down + 4]))
+                    .unsigned_abs() as u64;
                 samples += 1;
             }
         }
@@ -9158,7 +9006,7 @@ fn run_leetcodedaily_perf_probe(robot: &cranpose::Robot) {
             Err(err) => fail_with_robot(robot, &format!("failed to read render stats: {err}")),
         }
         iterations = iterations.saturating_add(1);
-        if iterations % 80 == 0 {
+        if iterations.is_multiple_of(80) {
             direction = -direction;
         }
     }

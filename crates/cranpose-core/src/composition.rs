@@ -1,12 +1,13 @@
 use crate::{
-    collections::map::HashMap, runtime, snapshot_state_observer, Applier, ApplierGuard,
-    ApplierHost, CommandQueue, Composer, CompositionPassDebugStats, ConcreteApplierHost,
-    DefaultScheduler, Key, NodeError, NodeId, RecomposeScope, RetentionPolicy, Runtime,
-    RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotsHost,
-    SnapshotStateObserver,
+    collections::map::HashMap, debug_scope_invalidation_sources, debug_scope_label, runtime,
+    snapshot_state_observer, Applier, ApplierGuard, ApplierHost, CommandQueue, Composer,
+    CompositionPassDebugStats, ConcreteApplierHost, DefaultScheduler, Key, NodeError, NodeId,
+    RecomposeScope, RetentionPolicy, Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable,
+    SlotTableDebugStats, SlotsHost, SnapshotStateObserver,
 };
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 pub struct Composition<A: Applier + 'static> {
     pub(crate) composer_state: Rc<crate::composer::ComposerRuntimeState>,
@@ -36,6 +37,13 @@ pub struct Composition<A: Applier + 'static> {
 /// are caught immediately) and falls back to a break + `log::error!` in
 /// release builds so end users do not see the UI thread panic.
 pub const ROOT_RENDER_REPLAY_LIMIT: usize = 100;
+
+fn recompose_scope_telemetry_threshold_ms() -> Option<f64> {
+    std::env::var("CRANPOSE_RECOMPOSE_SCOPE_TELEMETRY_MS")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+}
 
 impl<A: Applier + 'static> Composition<A> {
     pub fn new(applier: A) -> Self {
@@ -416,6 +424,7 @@ impl<A: Applier + 'static> Composition<A> {
             let mut host_group_index = 0usize;
             while host_group_index < scope_groups.len() {
                 let (host, scopes) = &scope_groups[host_group_index];
+                let scope_telemetry_threshold_ms = recompose_scope_telemetry_threshold_ms();
                 let shared_state = host
                     .runtime_state()
                     .or_else(|| scopes.first().and_then(RecomposeScope::slots_runtime_state))
@@ -441,7 +450,21 @@ impl<A: Applier + 'static> Composition<A> {
                                 crate::slot::SlotPassMode::Recompose,
                                 |composer| {
                                     for scope in scopes {
-                                        composer.recranpose_group(scope);
+                                        if let Some(threshold_ms) = scope_telemetry_threshold_ms {
+                                            let start = Instant::now();
+                                            composer.recranpose_group(scope);
+                                            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                                            if elapsed_ms >= threshold_ms {
+                                                eprintln!(
+                                                    "[recompose-scope-telemetry] scope_id={} label={:?} elapsed_ms={elapsed_ms:.3} invalidation_sources={:?}",
+                                                    scope.id(),
+                                                    debug_scope_label(scope.id()),
+                                                    debug_scope_invalidation_sources(scope.id())
+                                                );
+                                            }
+                                        } else {
+                                            composer.recranpose_group(scope);
+                                        }
                                     }
                                 },
                             )?;

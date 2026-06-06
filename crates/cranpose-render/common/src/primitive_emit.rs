@@ -23,6 +23,7 @@ pub struct ShapeDrawParams {
     pub shape: Option<RoundedCornerShape>,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
+    pub motion_context_animated: bool,
 }
 
 pub struct ImageDrawParams {
@@ -166,6 +167,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 shape: None,
                 clip,
                 blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
+                motion_context_animated,
             });
         }
         DrawPrimitive::RoundRect {
@@ -188,6 +190,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 shape: Some(shape),
                 clip,
                 blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
+                motion_context_animated,
             });
         }
         DrawPrimitive::Image {

@@ -17,6 +17,7 @@ pub fn layer_node(
         motion_context_animated: false,
         translated_content_context: false,
         translated_content_offset: Point::default(),
+        content_offset: Point::default(),
         graphics_layer,
         clip_to_bounds: false,
         shadow_clip: None,

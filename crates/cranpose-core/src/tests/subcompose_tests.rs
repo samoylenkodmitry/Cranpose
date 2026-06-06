@@ -168,6 +168,156 @@ fn removing_slots_deactivates_scopes() {
 }
 
 #[test]
+fn exact_activation_rejects_inactive_slot_scopes() {
+    let runtime = TestRuntime::new();
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    let mut state = SubcomposeState::default();
+    let slot = SlotId::new(1);
+    state.register_active(slot, &[10], std::slice::from_ref(&scope));
+    state.dispose_or_reuse_starting_from_index(0);
+
+    assert!(!scope.is_active());
+    assert!(
+        state.take_exact_slot_for_activation(slot).is_none(),
+        "inactive retained slots must run subcomposition when they return"
+    );
+    assert_eq!(state.reusable(), vec![10]);
+}
+
+#[test]
+fn exact_activation_of_active_slot_keeps_scopes_live() {
+    let runtime = TestRuntime::new();
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    let mut state = SubcomposeState::default();
+    let slot = SlotId::new(1);
+    state.register_active(slot, &[10], std::slice::from_ref(&scope));
+
+    let activation = state
+        .take_exact_slot_activation(slot)
+        .expect("active slots should exact-activate without subcomposition");
+
+    assert_eq!(activation.nodes, vec![10]);
+    assert_eq!(activation.scopes.len(), 1);
+    assert!(
+        !activation.reactivate_scopes,
+        "active slots are already live and must not be treated as recycled"
+    );
+    assert!(scope.is_active());
+    assert!(state.reusable().is_empty());
+}
+
+#[test]
+fn sequential_active_slots_activate_through_cursor() {
+    let mut state = SubcomposeState::default();
+    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(2), &[20], &[]);
+    state.register_active(SlotId::new(3), &[30], &[]);
+
+    state.begin_pass();
+
+    assert_eq!(
+        state.activate_current_active_slot(SlotId::new(1)),
+        Some(vec![10])
+    );
+    assert_eq!(state.active_slot_cursor(), 1);
+    assert_eq!(
+        state.activate_current_active_slot(SlotId::new(2)),
+        Some(vec![20])
+    );
+    assert_eq!(state.active_slot_cursor(), 2);
+    assert_eq!(
+        state.activate_current_active_slot(SlotId::new(3)),
+        Some(vec![30])
+    );
+    assert_eq!(state.active_slot_cursor(), 3);
+
+    assert!(state.finish_pass().is_empty());
+    assert!(state.reusable().is_empty());
+}
+
+#[test]
+fn recycling_skipped_slot_restores_cursor_exact_activation() {
+    let mut state = SubcomposeState::default();
+    state.register_active(SlotId::new(0), &[10], &[]);
+    state.register_active(SlotId::new(1), &[20], &[]);
+    state.register_active(SlotId::new(2), &[30], &[]);
+
+    state.begin_pass();
+
+    assert_eq!(state.activate_current_active_slot(SlotId::new(1)), None);
+    assert!(state
+        .recycle_active_slots_where(|slot_id| slot_id.raw() < 1)
+        .is_empty());
+
+    assert_eq!(
+        state.activate_current_active_slot(SlotId::new(1)),
+        Some(vec![20])
+    );
+    assert_eq!(state.active_slot_cursor(), 1);
+}
+
+#[test]
+fn current_active_slot_activation_rejects_invalidated_scopes() {
+    let runtime = TestRuntime::new();
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    let mut state = SubcomposeState::default();
+    let slot = SlotId::new(1);
+    state.register_active(slot, &[10], std::slice::from_ref(&scope));
+
+    state.begin_pass();
+    scope.invalidate();
+
+    assert_eq!(state.activate_current_active_slot(slot), None);
+    assert_eq!(state.active_slot_cursor(), 0);
+}
+
+#[test]
+fn exact_activation_allows_prefetched_recycled_slots() {
+    let runtime = TestRuntime::new();
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    let mut state = SubcomposeState::default();
+    let slot = SlotId::new(1);
+    state.register_active(slot, &[10], std::slice::from_ref(&scope));
+    state.recycle_prefetched_active_slot(slot);
+
+    assert!(!scope.is_active());
+    let activation = state
+        .take_exact_slot_activation(slot)
+        .expect("prefetched slots should be exact-reactivated");
+    assert_eq!(activation.nodes, vec![10]);
+    assert_eq!(activation.scopes.len(), 1);
+    assert!(
+        activation.reactivate_scopes,
+        "prefetched recycled slots must be reactivated when used"
+    );
+    assert!(state.reusable().is_empty());
+}
+
+#[test]
+fn compatible_reuse_does_not_steal_prefetched_exact_slot() {
+    let runtime = TestRuntime::new();
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy::new()));
+    let exact_slot = SlotId::new(1);
+    let requested_slot = SlotId::new(2);
+
+    state.register_active(exact_slot, &[10], std::slice::from_ref(&scope));
+    state.recycle_prefetched_active_slot(exact_slot);
+
+    assert_eq!(
+        state.take_node_from_reusables(requested_slot),
+        None,
+        "generic compatible reuse must not move a prefetched exact-reactivation slot"
+    );
+
+    let (nodes, scopes) = state
+        .take_exact_slot_for_activation(exact_slot)
+        .expect("prefetched exact slot must still be available");
+    assert_eq!(nodes, vec![10]);
+    assert_eq!(scopes.len(), 1);
+}
+
+#[test]
 fn draining_inactive_precomposed_returns_nodes() {
     let mut state = SubcomposeState::default();
     state.register_precomposed(SlotId::new(7), 77);
@@ -219,6 +369,41 @@ fn finish_pass_keeps_active_slots() {
     assert!(state.reusable().is_empty());
 }
 
+#[test]
+fn restoring_active_slot_cursor_recycles_trailing_prefetch_slots() {
+    let mut state = SubcomposeState::default();
+    state.begin_pass();
+    state.register_active(SlotId::new(1), &[10], &[]);
+    let visible_cursor = state.active_slot_cursor();
+
+    state.register_active(SlotId::new(2), &[20], &[]);
+    state.register_active(SlotId::new(3), &[30], &[]);
+    state.restore_active_slot_cursor(visible_cursor);
+
+    let disposed = state.finish_pass();
+    assert!(disposed.is_empty());
+    assert_eq!(state.active_slots_count(), 1);
+    assert_eq!(state.reusable(), &[30, 20]);
+}
+
+#[test]
+fn recycling_active_slot_before_cursor_removes_it_from_rendered_set() {
+    let mut state = SubcomposeState::default();
+    state.begin_pass();
+    state.register_active(SlotId::new(1), &[10], &[]);
+    state.register_active(SlotId::new(2), &[20], &[]);
+    state.register_active(SlotId::new(3), &[30], &[]);
+
+    let disposed = state.recycle_active_slot(SlotId::new(2));
+    assert!(disposed.is_empty());
+    assert_eq!(state.active_slot_cursor(), 2);
+    assert_eq!(state.active_slots_count(), 2);
+    assert_eq!(state.reusable(), &[20]);
+
+    assert!(state.finish_pass().is_empty());
+    assert_eq!(state.reusable(), &[20]);
+}
+
 // ─── ContentTypeReusePolicy tests ────────────────────────────────────────────
 
 #[test]
@@ -255,13 +440,48 @@ fn content_type_policy_exact_match_always_wins() {
 fn content_type_policy_unregistered_slots_not_compatible() {
     let policy = ContentTypeReusePolicy::new();
 
-    // Only register one slot
     policy.set_content_type(SlotId::new(10), 1);
 
-    // Unregistered slot should not be compatible (except exact match)
     assert!(!policy.are_compatible(SlotId::new(10), SlotId::new(99)));
     assert!(!policy.are_compatible(SlotId::new(99), SlotId::new(10)));
-    assert!(!policy.are_compatible(SlotId::new(88), SlotId::new(99)));
+    assert!(policy.are_compatible(SlotId::new(88), SlotId::new(99)));
+}
+
+#[test]
+fn content_type_policy_reuses_untyped_slots_in_subcompose_state() {
+    let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy::new()));
+    state.register_active(SlotId::new(1), &[10], &[]);
+    state.dispose_or_reuse_starting_from_index(0);
+
+    assert_eq!(state.take_node_from_reusables(SlotId::new(2)), Some(10));
+    assert_eq!(state.reusable_count, 0);
+}
+
+#[test]
+fn cross_slot_reuse_moves_slot_host_and_callback_holder() {
+    let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy::new()));
+    let old_slot = SlotId::new(1);
+    let new_slot = SlotId::new(2);
+    let old_host = state.get_or_create_slots(old_slot);
+    let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let old_holder = state.callback_holder(old_slot);
+    let old_calls = std::rc::Rc::clone(&calls);
+    old_holder.update(move || old_calls.borrow_mut().push("old"));
+    let forwarded = old_holder.clone_rc();
+
+    state.register_active(old_slot, &[10], &[]);
+    state.dispose_or_reuse_starting_from_index(0);
+
+    assert_eq!(state.take_node_from_reusables(new_slot), Some(10));
+    let new_host = state.get_or_create_slots(new_slot);
+    assert!(std::rc::Rc::ptr_eq(&old_host, &new_host));
+
+    let new_holder = state.callback_holder(new_slot);
+    let new_calls = std::rc::Rc::clone(&calls);
+    new_holder.update(move || new_calls.borrow_mut().push("new"));
+    forwarded();
+
+    assert_eq!(calls.borrow().as_slice(), ["new"]);
 }
 
 #[test]
@@ -351,14 +571,14 @@ fn content_type_none_clears_policy() {
 }
 
 #[test]
-fn moving_last_reusable_node_prunes_dead_slot_bookkeeping() {
+fn moving_last_reusable_node_transfers_slot_composition() {
     let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy::new()));
     let slot_a = SlotId::new(1);
     let slot_b = SlotId::new(2);
 
     state.register_content_type(slot_a, 7);
     state.register_content_type(slot_b, 7);
-    let _host = state.get_or_create_slots(slot_a);
+    let host = state.get_or_create_slots(slot_a);
     let _callback = state.callback_holder(slot_a);
 
     state.register_active(slot_a, &[10], &[]);
@@ -370,15 +590,18 @@ fn moving_last_reusable_node_prunes_dead_slot_bookkeeping() {
 
     let reused = state.take_node_from_reusables(slot_b);
     assert_eq!(reused, Some(10));
+    let transferred_host = state.get_or_create_slots(slot_b);
+    assert!(std::rc::Rc::ptr_eq(&host, &transferred_host));
     assert!(!state.slot_compositions.contains_key(&slot_a));
     assert!(!state.slot_callbacks.contains_key(&slot_a));
     assert_eq!(state.get_content_type(slot_a), None);
+    assert_eq!(state.get_content_type(slot_b), Some(7));
     assert_eq!(state.reusable_count, 0);
     assert!(!state.reusable_node_counts.contains_key(&slot_a));
 }
 
 #[test]
-fn finish_pass_disposes_overflow_slot_and_prunes_dead_slot_bookkeeping() {
+fn finish_pass_disposes_overflow_node_and_preserves_slot_composition() {
     let mut state = SubcomposeState::default();
     let slot = SlotId::new(1);
 
@@ -396,9 +619,9 @@ fn finish_pass_disposes_overflow_slot_and_prunes_dead_slot_bookkeeping() {
     state.begin_pass();
     let disposed = state.finish_pass();
     assert_eq!(disposed, vec![10]);
-    assert!(!state.slot_compositions.contains_key(&slot));
-    assert!(!state.slot_callbacks.contains_key(&slot));
-    assert_eq!(state.get_content_type(slot), None);
+    assert!(state.slot_compositions.contains_key(&slot));
+    assert!(state.slot_callbacks.contains_key(&slot));
+    assert_eq!(state.get_content_type(slot), Some(9));
     assert_eq!(state.reusable_count, 0);
     assert!(!state.reusable_node_counts.contains_key(&slot));
 }

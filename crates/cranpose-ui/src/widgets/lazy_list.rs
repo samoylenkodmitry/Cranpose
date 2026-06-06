@@ -6,25 +6,42 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)] // Some public widget entry points are exercised by downstream apps.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
+use std::time::Instant;
 
 use crate::composable;
-use crate::modifier::Modifier;
+use crate::layout::MeasuredNode;
+use crate::modifier::{Modifier, Size};
 use crate::subcompose_layout::{
-    MeasurePolicy, Placement, SubcomposeLayoutNode, SubcomposeMeasureScope,
+    MeasurePolicy, Placement, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
     SubcomposeMeasureScopeImpl,
 };
 use cranpose_core::{NodeId, SlotId};
 use cranpose_foundation::lazy::{
-    measure_lazy_list, LazyListIntervalContent, LazyListMeasureConfig, LazyListMeasuredItem,
-    LazyListState, SmallNodeVec, SmallOffsetVec, DEFAULT_ITEM_SIZE_ESTIMATE,
+    measure_lazy_list, measure_lazy_list_with_beyond_bounds_policy, LazyListIntervalContent,
+    LazyListMeasureConfig, LazyListMeasureResult, LazyListMeasuredItem, LazyListState,
+    SmallNodeVec, SmallOffsetVec,
 };
 use cranpose_ui_layout::{Constraints, LinearArrangement, MeasureResult};
 use smallvec::SmallVec;
 
 // Re-export from foundation - single source of truth
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
+
+const EXPENSIVE_RETAINED_REUSABLE_SLOTS: usize = 128;
+const ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER: usize = 4;
+
+#[derive(Clone, Copy)]
+struct LazyItemMeasureContext {
+    index: usize,
+    key_slot_id: u64,
+    content_type: Option<u64>,
+    is_vertical: bool,
+    cross_axis_size: f32,
+    measure_start: Instant,
+}
 
 /// Specification for LazyColumn layout behavior.
 #[derive(Clone, Debug, PartialEq)]
@@ -139,6 +156,243 @@ impl LazyRowSpec {
     }
 }
 
+struct LazyListItemMeasureInputs<'a> {
+    is_vertical: bool,
+    cross_axis_size: f32,
+    content: &'a LazyListIntervalContent,
+    state: &'a LazyListState,
+    measured_item_cache: &'a Rc<RefCell<LazyMeasuredItemCache>>,
+}
+
+fn measure_lazy_list_item(
+    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    index: usize,
+    inputs: &LazyListItemMeasureInputs<'_>,
+    retained_measurement_batch: &mut Vec<Rc<MeasuredNode>>,
+) -> LazyListMeasuredItem {
+    let measure_start = Instant::now();
+    let key = inputs.content.get_key(index);
+    let key_slot_id = key.to_slot_id();
+    let content_type = inputs.content.get_content_type(index);
+    let slot_id = SlotId(key_slot_id);
+    let item_context = LazyItemMeasureContext {
+        index,
+        key_slot_id,
+        content_type,
+        is_vertical: inputs.is_vertical,
+        cross_axis_size: inputs.cross_axis_size,
+        measure_start,
+    };
+
+    scope.update_content_type(slot_id, content_type);
+
+    let cached_candidate = {
+        inputs
+            .measured_item_cache
+            .borrow_mut()
+            .candidate(index, key_slot_id, content_type)
+    };
+    if let Some(cached) = cached_candidate {
+        inputs
+            .measured_item_cache
+            .borrow_mut()
+            .record_candidate_hit();
+        if let Some((root_children, children_match)) =
+            scope.activate_exact_retained_slot_with_known_children(slot_id, &cached.item.node_ids)
+        {
+            let children_are_clean = !scope.children_need_measure(&root_children);
+            if children_match && children_are_clean {
+                retained_measurement_batch.extend(cached.retained_children.iter().cloned());
+                inputs.measured_item_cache.borrow_mut().record_exact_reuse();
+                return cached.item;
+            }
+            inputs.measured_item_cache.borrow_mut().remove(index);
+            if children_match {
+                inputs
+                    .measured_item_cache
+                    .borrow_mut()
+                    .record_dirty_children();
+            } else {
+                inputs.measured_item_cache.borrow_mut().record_exact_miss();
+            }
+            return measure_lazy_list_children(
+                scope,
+                root_children,
+                inputs.measured_item_cache,
+                item_context,
+            );
+        } else {
+            inputs.measured_item_cache.borrow_mut().record_exact_miss();
+            inputs.measured_item_cache.borrow_mut().remove(index);
+        }
+    } else {
+        inputs
+            .measured_item_cache
+            .borrow_mut()
+            .record_candidate_miss();
+    }
+
+    let Some(item_content) = inputs
+        .content
+        .with_interval(index, |local_index, interval| {
+            let content = Rc::clone(&interval.content);
+            move || (content)(local_index)
+        })
+    else {
+        return LazyListMeasuredItem::new(index, key_slot_id, content_type, 1.0, 0.0);
+    };
+    let root_children = scope.subcompose(slot_id, item_content);
+
+    let was_reused = scope.was_last_slot_reused().unwrap_or(false);
+    inputs.state.record_composition(was_reused);
+
+    let root_node_ids: SmallNodeVec = root_children
+        .iter()
+        .map(|child| child.node_id() as u64)
+        .collect();
+
+    if let Some(cached) = inputs.measured_item_cache.borrow_mut().get(
+        index,
+        key_slot_id,
+        content_type,
+        &root_node_ids,
+    ) {
+        if !scope.children_need_measure(&root_children) {
+            scope.register_retained_measurements(&cached.retained_children);
+            return cached.item;
+        }
+        inputs.measured_item_cache.borrow_mut().remove(index);
+    }
+
+    measure_lazy_list_children(
+        scope,
+        root_children,
+        inputs.measured_item_cache,
+        item_context,
+    )
+}
+
+fn lazy_list_child_constraints(is_vertical: bool, cross_axis_size: f32) -> Constraints {
+    if is_vertical {
+        Constraints {
+            min_width: 0.0,
+            max_width: cross_axis_size,
+            min_height: 0.0,
+            max_height: f32::INFINITY,
+        }
+    } else {
+        Constraints {
+            min_width: 0.0,
+            max_width: f32::INFINITY,
+            min_height: 0.0,
+            max_height: cross_axis_size,
+        }
+    }
+}
+fn register_visible_lazy_list_child_measurements(
+    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    visible_items: &[LazyListMeasuredItem],
+    is_vertical: bool,
+    cross_axis_size: f32,
+) {
+    let child_constraints = lazy_list_child_constraints(is_vertical, cross_axis_size);
+    scope.ensure_cached_measurement_node_ids(
+        visible_items
+            .iter()
+            .flat_map(|item| item.node_ids.iter())
+            .filter_map(|&node_id| NodeId::try_from(node_id).ok()),
+        child_constraints,
+    );
+}
+
+fn measure_lazy_list_children(
+    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    root_children: Vec<SubcomposeChild>,
+    measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
+    context: LazyItemMeasureContext,
+) -> LazyListMeasuredItem {
+    let child_constraints =
+        lazy_list_child_constraints(context.is_vertical, context.cross_axis_size);
+
+    let mut total_main_size: f32 = 0.0;
+    let mut max_cross_size: f32 = 0.0;
+    let mut node_ids: SmallNodeVec = SmallVec::with_capacity(root_children.len());
+    let mut child_offsets: SmallOffsetVec = SmallVec::new();
+    let mut retained_children: SmallVec<[Rc<MeasuredNode>; 4]> =
+        SmallVec::with_capacity(root_children.len());
+
+    for child in root_children {
+        let (placeable, retained) = scope.measure_retained(child, child_constraints);
+        let size = retained
+            .as_ref()
+            .map(|measured| measured.size())
+            .unwrap_or_else(|| Size {
+                width: placeable.width(),
+                height: placeable.height(),
+            });
+        let (main, cross) = if context.is_vertical {
+            (size.height, size.width)
+        } else {
+            (size.width, size.height)
+        };
+
+        child_offsets.push(total_main_size);
+        node_ids.push(child.node_id() as u64);
+        if let Some(retained) = retained {
+            retained_children.push(retained);
+        }
+
+        total_main_size += main;
+        max_cross_size = max_cross_size.max(cross);
+    }
+
+    let main_axis_size = total_main_size.max(1.0);
+    let mut item = LazyListMeasuredItem::new(
+        context.index,
+        context.key_slot_id,
+        context.content_type,
+        main_axis_size,
+        max_cross_size,
+    );
+    item.node_ids = node_ids;
+    item.child_offsets = child_offsets;
+
+    measured_item_cache
+        .borrow_mut()
+        .insert(item.clone(), retained_children);
+    let elapsed = context.measure_start.elapsed();
+    if std::env::var_os("CRANPOSE_LAZY_ITEM_TELEMETRY").is_some() {
+        log::warn!(
+            "[lazy-item-telemetry] index={} children={} main={:.2} cross={:.2} elapsed_ms={:.2}",
+            context.index,
+            item.node_ids.len(),
+            item.main_axis_size,
+            item.cross_axis_size,
+            elapsed.as_secs_f64() * 1000.0
+        );
+    }
+    measured_item_cache.borrow_mut().record_uncached_measure();
+    item
+}
+
+fn recycle_forward_skipped_active_slots(
+    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    content: &LazyListIntervalContent,
+    first_measured_index: usize,
+    scroll_delta: f32,
+) -> bool {
+    if scroll_delta >= -0.001 || first_measured_index == 0 {
+        return false;
+    }
+
+    scope.recycle_active_slots_where(|slot_id| {
+        content
+            .get_index_by_slot_id(slot_id.raw())
+            .is_some_and(|index| index < first_measured_index)
+    });
+    true
+}
+
 /// Internal helper to create a lazy list measure policy.
 fn measure_lazy_list_internal(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
@@ -147,6 +401,7 @@ fn measure_lazy_list_internal(
     content: &LazyListIntervalContent,
     state: &LazyListState,
     config: &LazyListMeasureConfig,
+    measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
 ) -> MeasureResult {
     let raw_viewport_size = if is_vertical {
         constraints.max_height
@@ -160,6 +415,11 @@ fn measure_lazy_list_internal(
     };
 
     let items_count = content.item_count();
+    let retained_reusable_slots = EXPENSIVE_RETAINED_REUSABLE_SLOTS;
+    scope.set_reusable_pool_limits(retained_reusable_slots, retained_reusable_slots);
+    measured_item_cache
+        .borrow_mut()
+        .retain_constraint_scope(is_vertical, cross_axis_size);
     // Scroll position stability: if items were added/removed before the first visible,
     // find the item by key and adjust scroll position (JC's updateScrollPositionIfTheFirstItemWasMoved)
     if items_count > 0 {
@@ -174,127 +434,99 @@ fn measure_lazy_list_internal(
         // Note: nearest range is automatically updated by scroll_position when index changes
     }
 
-    // Measure function that subcomposes and measures each item
-    let measure_item = |index: usize| -> LazyListMeasuredItem {
-        let key = content.get_key(index);
-        let key_slot_id = key.to_slot_id();
-        let content_type = content.get_content_type(index);
-
-        // Subcompose the item content with its own slot ID
-        // The Composer handles node reuse internally via slot ID matching
-        let slot_id = SlotId(key_slot_id);
-
-        // Update content type for policy-based reuse matching
-        // Uses update_content_type to handle both Some and None cases,
-        // ensuring stale types don't drive incorrect reuse after transitions
-        scope.update_content_type(slot_id, content_type);
-
-        let Some(item_content) = content.with_interval(index, |local_index, interval| {
-            let content = Rc::clone(&interval.content);
-            move || (content)(local_index)
-        }) else {
-            return LazyListMeasuredItem::new(index, key_slot_id, content_type, 1.0, 0.0);
-        };
-        let children = scope.subcompose(slot_id, item_content);
-
-        // Record composition statistics for diagnostics
-        let was_reused = scope.was_last_slot_reused().unwrap_or(false);
-        state.record_composition(was_reused);
-
-        // NOTE: Composer::subcompose_measurement now returns only root nodes directly,
-        // so we no longer need the O(N) filter here.
-        let root_children = children;
-
-        // Measure the children using constraints
-        // For LazyColumn (vertical): width is constrained (max = cross_axis_size), height is unbounded (INFINITY)
-        // For LazyRow (horizontal): height is constrained, width is unbounded
-        let child_constraints = if is_vertical {
-            Constraints {
-                min_width: 0.0,
-                max_width: cross_axis_size,
-                min_height: 0.0,
-                max_height: f32::INFINITY,
-            }
-        } else {
-            Constraints {
-                min_width: 0.0,
-                max_width: f32::INFINITY,
-                min_height: 0.0,
-                max_height: cross_axis_size,
-            }
-        };
-
-        // Measure only ROOT nodes returned by subcompose.
-        // Each root node handles its children's layout internally - we should NOT
-        // iterate over all descendants or they'll be placed separately in the list.
-        //
-        // subcompose() returns only direct children (root nodes) of the slot composition.
-        // If you compose `Row { Text(...); Text(...); }`, subcompose returns just [Row],
-        // not [Row, Text, Text]. The Row measures its own children during its layout.
-        let mut total_main_size: f32 = 0.0;
-        let mut max_cross_size: f32 = 0.0;
-        let mut node_ids: SmallNodeVec = SmallVec::new();
-        let mut child_offsets: SmallOffsetVec = SmallVec::new();
-
-        // Measure each ROOT node (typically just one per item)
-        for child in root_children {
-            let placeable = scope.measure(child, child_constraints);
-            let (main, cross) = if is_vertical {
-                (placeable.height(), placeable.width())
-            } else {
-                (placeable.width(), placeable.height())
-            };
-
-            // Track offset of this root node within the item
-            child_offsets.push(total_main_size);
-            node_ids.push(child.node_id() as u64);
-
-            total_main_size += main;
-            max_cross_size = max_cross_size.max(cross);
-        }
-
-        // Zero/near-zero measured items can cause extremely expensive measure loops
-        // (thousands of items scanned to fill one viewport). Clamp to 1px minimum.
-        let main_axis_size = total_main_size.max(1.0);
-        let mut item = LazyListMeasuredItem::new(
-            index,
-            key_slot_id,
-            content_type,
-            main_axis_size,
-            max_cross_size,
-        );
-
-        item.node_ids = node_ids;
-        item.child_offsets = child_offsets;
-
-        item
-    };
-
     // Capture scroll delta for direction inference BEFORE measurement consumes it.
     // This is more accurate than comparing first visible index, especially for:
     // - Scrolling within the same item (partial scroll)
     // - Variable height items where scroll offset changes without index change
     let scroll_delta_for_direction = state.peek_scroll_delta();
+    let skipped_slots_recycled = Cell::new(false);
+    let mut retained_measurement_batch = Vec::new();
+    let item_measure_inputs = LazyListItemMeasureInputs {
+        is_vertical,
+        cross_axis_size,
+        content,
+        state,
+        measured_item_cache,
+    };
 
     // Run the lazy list measurement algorithm
-    let result = measure_lazy_list(
-        items_count,
-        state,
-        raw_viewport_size,
+    let measure_item = |index: usize| -> LazyListMeasuredItem {
+        if !skipped_slots_recycled.get()
+            && recycle_forward_skipped_active_slots(
+                scope,
+                content,
+                index,
+                scroll_delta_for_direction,
+            )
+        {
+            skipped_slots_recycled.set(true);
+        }
+        measure_lazy_list_item(
+            scope,
+            index,
+            &item_measure_inputs,
+            &mut retained_measurement_batch,
+        )
+    };
+    let mut measure_item = measure_item;
+    let active_scroll = scroll_delta_for_direction.abs() > 0.001;
+    let result = if active_scroll {
+        let measured_item_cache_for_policy = Rc::clone(measured_item_cache);
+        let uncached_beyond_frontier = Cell::new(ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER);
+        measure_lazy_list_with_beyond_bounds_policy(
+            items_count,
+            state,
+            raw_viewport_size,
+            cross_axis_size,
+            config,
+            &mut measure_item,
+            |index| {
+                let key_slot_id = content.get_key(index).to_slot_id();
+                let content_type = content.get_content_type(index);
+                if measured_item_cache_for_policy.borrow().has_candidate(
+                    index,
+                    key_slot_id,
+                    content_type,
+                ) {
+                    return true;
+                }
+                let remaining = uncached_beyond_frontier.get();
+                if remaining == 0 {
+                    return false;
+                }
+                uncached_beyond_frontier.set(remaining - 1);
+                true
+            },
+        )
+    } else {
+        measure_lazy_list(
+            items_count,
+            state,
+            raw_viewport_size,
+            cross_axis_size,
+            config,
+            &mut measure_item,
+        )
+    };
+    if !retained_measurement_batch.is_empty() {
+        scope.register_retained_measurements(&retained_measurement_batch);
+    }
+    register_visible_lazy_list_child_measurements(
+        scope,
+        &result.visible_items,
+        is_vertical,
         cross_axis_size,
-        config,
-        measure_item,
     );
+    log_lazy_cache_telemetry(&result, measured_item_cache);
     let effective_viewport_size = result.viewport_size;
 
     // Cache measured item sizes for better scroll estimation
-    let average_size = state.cache_item_sizes(
+    state.cache_item_sizes(
         result
             .visible_items
             .iter()
             .map(|item| (item.index, item.main_axis_size)),
     );
-
     // Update stats: count only items WITHIN viewport, not beyond-bounds buffer
     let truly_visible_count = result
         .visible_items
@@ -309,68 +541,8 @@ fn measure_lazy_list_internal(
     let in_pool = scope.reusable_slots_count();
     state.update_stats(truly_visible_count, in_pool);
 
-    // Prefetching: pre-compose items before they become visible
-    // Direction is inferred from actual scroll delta (more accurate than index comparison)
-
-    // Update prefetch queue based on visible items
     if !result.visible_items.is_empty() {
-        let first_visible = result.visible_items.first().map(|i| i.index).unwrap_or(0);
-        let last_visible = result.visible_items.last().map(|i| i.index).unwrap_or(0);
-
-        // Use the raw Cranpose scroll delta for direction.
-        // Negative delta = scrolling forward (content moves up/left),
-        // positive delta = scrolling backward (content moves down/right).
         state.record_scroll_direction(scroll_delta_for_direction);
-
-        state.update_prefetch_queue(first_visible, last_visible, items_count);
-
-        // 3. Pre-compose prefetched items (compose but don't place)
-        // Uses cached item sizes when available for better size estimation
-        let prefetch_indices = state.take_prefetch_indices();
-        for idx in prefetch_indices {
-            if idx < items_count {
-                // Subcompose without placing - just to have it ready
-                // SubcomposeState automatically tracks these as precomposed
-                let key = content.get_key(idx);
-                let key_slot_id = key.to_slot_id();
-                let content_type_prefetch = content.get_content_type(idx);
-                let slot_id = SlotId(key_slot_id);
-
-                // Update content type for prefetched items too
-                scope.update_content_type(slot_id, content_type_prefetch);
-
-                // Use cached size if available, otherwise use average
-                let estimated_size = state
-                    .get_cached_size(idx)
-                    .unwrap_or(average_size.max(DEFAULT_ITEM_SIZE_ESTIMATE));
-
-                let prefetch_idx = idx;
-                let is_vertical = config.is_vertical;
-                if let Some(item_content) =
-                    content.with_interval(prefetch_idx, |local_index, interval| {
-                        let content = Rc::clone(&interval.content);
-                        move || (content)(local_index)
-                    })
-                {
-                    let _ = scope.subcompose_with_size(slot_id, item_content, move |_| {
-                        // Use correct axis based on orientation:
-                        // Vertical list: width = cross_axis, height = main_axis (estimated)
-                        // Horizontal list: width = main_axis (estimated), height = cross_axis
-                        if is_vertical {
-                            crate::modifier::Size {
-                                width: cross_axis_size,
-                                height: estimated_size + config.spacing,
-                            }
-                        } else {
-                            crate::modifier::Size {
-                                width: estimated_size + config.spacing,
-                                height: cross_axis_size,
-                            }
-                        }
-                    });
-                }
-            }
-        }
     }
 
     let resolve_main_axis = |content_size: f32, min: f32, max: f32| {
@@ -471,6 +643,201 @@ impl LazyListContentHandle {
 impl PartialEq for LazyListContentHandle {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+const MEASURED_ITEM_CACHE_CAPACITY: usize = 4096;
+
+#[derive(Default)]
+struct LazyMeasuredItemCache {
+    is_vertical: bool,
+    cross_axis_bits: u32,
+    telemetry: LazyCacheTelemetry,
+    entries: HashMap<usize, CachedLazyMeasuredItem>,
+    order: VecDeque<usize>,
+}
+
+#[derive(Clone)]
+struct CachedLazyMeasuredItem {
+    item: LazyListMeasuredItem,
+    retained_children: SmallVec<[Rc<MeasuredNode>; 4]>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct LazyCacheTelemetry {
+    candidate_hits: usize,
+    candidate_misses: usize,
+    exact_reuses: usize,
+    exact_misses: usize,
+    dirty_children: usize,
+    uncached_measures: usize,
+}
+
+impl LazyCacheTelemetry {
+    fn has_events(self) -> bool {
+        self.candidate_hits > 0
+            || self.candidate_misses > 0
+            || self.exact_reuses > 0
+            || self.exact_misses > 0
+            || self.dirty_children > 0
+            || self.uncached_measures > 0
+    }
+}
+
+impl LazyMeasuredItemCache {
+    fn retain_constraint_scope(&mut self, is_vertical: bool, cross_axis_size: f32) {
+        let cross_axis_bits = normalized_axis_bits(cross_axis_size);
+        if self.entries.is_empty() {
+            self.is_vertical = is_vertical;
+            self.cross_axis_bits = cross_axis_bits;
+            return;
+        }
+        if self.is_vertical != is_vertical || self.cross_axis_bits != cross_axis_bits {
+            self.clear();
+            self.is_vertical = is_vertical;
+            self.cross_axis_bits = cross_axis_bits;
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+    }
+
+    fn get(
+        &mut self,
+        index: usize,
+        key: u64,
+        content_type: Option<u64>,
+        node_ids: &SmallNodeVec,
+    ) -> Option<CachedLazyMeasuredItem> {
+        let cached = self.entries.get(&index)?;
+        if cached.item.key != key
+            || cached.item.content_type != content_type
+            || cached.item.node_ids != *node_ids
+            || cached.retained_children.len() != cached.item.node_ids.len()
+        {
+            self.entries.remove(&index);
+            return None;
+        }
+        Some(cached.clone())
+    }
+
+    fn candidate(
+        &mut self,
+        index: usize,
+        key: u64,
+        content_type: Option<u64>,
+    ) -> Option<CachedLazyMeasuredItem> {
+        let cached = self.entries.get(&index)?;
+        if cached.item.key != key
+            || cached.item.content_type != content_type
+            || cached.retained_children.len() != cached.item.node_ids.len()
+        {
+            self.entries.remove(&index);
+            return None;
+        }
+        Some(cached.clone())
+    }
+
+    fn has_candidate(&self, index: usize, key: u64, content_type: Option<u64>) -> bool {
+        self.entries.get(&index).is_some_and(|cached| {
+            cached.item.key == key
+                && cached.item.content_type == content_type
+                && cached.retained_children.len() == cached.item.node_ids.len()
+        })
+    }
+
+    fn remove(&mut self, index: usize) {
+        self.entries.remove(&index);
+    }
+
+    fn insert(
+        &mut self,
+        item: LazyListMeasuredItem,
+        retained_children: SmallVec<[Rc<MeasuredNode>; 4]>,
+    ) {
+        let index = item.index;
+        let cached = CachedLazyMeasuredItem {
+            item,
+            retained_children,
+        };
+        if self.entries.insert(index, cached).is_none() {
+            self.order.push_back(index);
+        }
+        while self.entries.len() > MEASURED_ITEM_CACHE_CAPACITY {
+            let Some(evicted) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&evicted);
+        }
+    }
+
+    fn record_candidate_hit(&mut self) {
+        self.telemetry.candidate_hits += 1;
+    }
+
+    fn record_candidate_miss(&mut self) {
+        self.telemetry.candidate_misses += 1;
+    }
+
+    fn record_exact_reuse(&mut self) {
+        self.telemetry.exact_reuses += 1;
+    }
+
+    fn record_exact_miss(&mut self) {
+        self.telemetry.exact_misses += 1;
+    }
+
+    fn record_dirty_children(&mut self) {
+        self.telemetry.dirty_children += 1;
+    }
+
+    fn take_telemetry(&mut self) -> LazyCacheTelemetry {
+        std::mem::take(&mut self.telemetry)
+    }
+
+    fn record_uncached_measure(&mut self) {
+        self.telemetry.uncached_measures += 1;
+    }
+}
+
+fn log_lazy_cache_telemetry(
+    result: &LazyListMeasureResult,
+    measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
+) {
+    if std::env::var_os("CRANPOSE_LAZY_CACHE_TELEMETRY").is_none() {
+        return;
+    }
+
+    let telemetry = measured_item_cache.borrow_mut().take_telemetry();
+    if !telemetry.has_events() {
+        return;
+    }
+
+    let message = format!(
+        "[lazy-cache-telemetry] first={} offset={:.2} visible={} candidate_hits={} candidate_misses={} exact_reuses={} exact_misses={} dirty_children={} uncached_measures={} cache_entries={}",
+        result.first_visible_item_index,
+        result.first_visible_item_scroll_offset,
+        result.visible_items.len(),
+        telemetry.candidate_hits,
+        telemetry.candidate_misses,
+        telemetry.exact_reuses,
+        telemetry.exact_misses,
+        telemetry.dirty_children,
+        telemetry.uncached_measures,
+        measured_item_cache.borrow().entries.len(),
+    );
+    log::warn!("{message}");
+    #[cfg(test)]
+    eprintln!("{message}");
+}
+
+fn normalized_axis_bits(size: f32) -> u32 {
+    if size.is_finite() && size >= 0.0 {
+        size.to_bits()
+    } else {
+        f32::INFINITY.to_bits()
     }
 }
 
@@ -592,6 +959,11 @@ fn lazy_list_state_identity(state: &LazyListState) -> usize {
     state_ptr as usize
 }
 
+fn lazy_list_state_only_recomposition(state: &LazyListState) -> bool {
+    cranpose_core::current_recompose_scope_invalidated_only_by(state.reactive_state_ids())
+        .unwrap_or(false)
+}
+
 /// Internal implementation for LazyColumn that takes pre-built content.
 ///
 /// Users should prefer the DSL-based [`LazyColumn`] function instead.
@@ -609,10 +981,11 @@ fn LazyColumnImpl(
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyListContentHandle::empty())))
             .with(|cell| cell.clone());
 
-    // Update the content on each recomposition
-    *content_cell.borrow_mut() = content;
+    let refresh_content = !lazy_list_state_only_recomposition(&state);
+    if refresh_content {
+        *content_cell.borrow_mut() = content;
+    }
 
-    // Configure measurement - wrapped in rememberUpdatedState for stable reference
     let config = LazyListMeasureConfig {
         is_vertical: true,
         reverse_layout: spec.reverse_layout,
@@ -625,14 +998,26 @@ fn LazyColumnImpl(
     };
     let config_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(|cell| cell.clone());
-    *config_cell.borrow_mut() = config;
+    let config_changed = {
+        let mut current = config_cell.borrow_mut();
+        let changed = *current != config;
+        if changed {
+            *current = config.clone();
+        }
+        changed
+    };
+    let measured_item_cache =
+        cranpose_core::remember(|| Rc::new(RefCell::new(LazyMeasuredItemCache::default())))
+            .with(|cache| cache.clone());
 
     // Create measure policy with stable identity using remember.
     // The policy reads latest values via state references, so it can be memoized.
     let content_for_policy = content_cell.clone();
+    let measured_item_cache_for_policy = measured_item_cache.clone();
     let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
         let config_ref = config_cell.clone();
         let content_ref = content_for_policy.clone();
+        let measured_item_cache = measured_item_cache_for_policy.clone();
         let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
@@ -644,6 +1029,7 @@ fn LazyColumnImpl(
                     content.content(),
                     &state,
                     &config,
+                    &measured_item_cache,
                 )
             },
         );
@@ -668,13 +1054,18 @@ fn LazyColumnImpl(
         })
     });
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
-        node.set_modifier(scroll_modifier.clone());
+        let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
+        if refresh_content || config_changed || modifier_changed {
+            node.set_modifier(scroll_modifier.clone());
+        }
         node.set_measure_policy(Rc::clone(&policy));
-        node.mark_needs_measure();
+        if refresh_content || config_changed || modifier_changed {
+            measured_item_cache.borrow_mut().clear();
+            node.request_measure_recompose();
+        }
     }) {
         debug_assert!(false, "failed to update LazyColumn node: {err}");
     }
-    cranpose_core::bubble_measure_dirty_in_composer(node_id);
     bind_layout_invalidation_callback(state, list_state_id, node_id);
 
     node_id
@@ -696,8 +1087,10 @@ fn LazyRowImpl(
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyListContentHandle::empty())))
             .with(|cell| cell.clone());
 
-    // Update the content on each recomposition
-    *content_cell.borrow_mut() = content;
+    let refresh_content = !lazy_list_state_only_recomposition(&state);
+    if refresh_content {
+        *content_cell.borrow_mut() = content;
+    }
 
     let config = LazyListMeasureConfig {
         is_vertical: false,
@@ -711,13 +1104,25 @@ fn LazyRowImpl(
     };
     let config_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(|cell| cell.clone());
-    *config_cell.borrow_mut() = config;
+    let config_changed = {
+        let mut current = config_cell.borrow_mut();
+        let changed = *current != config;
+        if changed {
+            *current = config.clone();
+        }
+        changed
+    };
+    let measured_item_cache =
+        cranpose_core::remember(|| Rc::new(RefCell::new(LazyMeasuredItemCache::default())))
+            .with(|cache| cache.clone());
 
     // Create measure policy with stable identity using remember.
     let content_for_policy = content_cell.clone();
+    let measured_item_cache_for_policy = measured_item_cache.clone();
     let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
         let config_ref = config_cell.clone();
         let content_ref = content_for_policy.clone();
+        let measured_item_cache = measured_item_cache_for_policy.clone();
         let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
@@ -729,6 +1134,7 @@ fn LazyRowImpl(
                     content.content(),
                     &state,
                     &config,
+                    &measured_item_cache,
                 )
             },
         );
@@ -753,13 +1159,18 @@ fn LazyRowImpl(
         })
     });
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
-        node.set_modifier(scroll_modifier.clone());
+        let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
+        if refresh_content || config_changed || modifier_changed {
+            node.set_modifier(scroll_modifier.clone());
+        }
         node.set_measure_policy(Rc::clone(&policy));
-        node.mark_needs_measure();
+        if refresh_content || config_changed || modifier_changed {
+            measured_item_cache.borrow_mut().clear();
+            node.request_measure_recompose();
+        }
     }) {
         debug_assert!(false, "failed to update LazyRow node: {err}");
     }
-    cranpose_core::bubble_measure_dirty_in_composer(node_id);
     bind_layout_invalidation_callback(state, list_state_id, node_id);
 
     node_id
@@ -968,6 +1379,123 @@ mod tests {
         assert_eq!(placements[1].node_id, 102);
         assert_eq!(placements[1].y, 12.0);
         assert_eq!(placements.capacity(), original_capacity);
+    }
+
+    #[test]
+    fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
+        let mut hidden = LazyListMeasuredItem::new(0, 10, None, 20.0, 50.0);
+        hidden.offset = -40.0;
+        hidden.node_ids.push(101);
+        hidden.child_offsets.push(0.0);
+
+        let mut partial = LazyListMeasuredItem::new(1, 11, None, 20.0, 50.0);
+        partial.offset = -5.0;
+        partial.node_ids.push(102);
+        partial.child_offsets.push(0.0);
+
+        let config = LazyListMeasureConfig {
+            is_vertical: true,
+            reverse_layout: false,
+            before_content_padding: 0.0,
+            after_content_padding: 0.0,
+            spacing: 0.0,
+            beyond_bounds_item_count: 2,
+            vertical_arrangement: Some(LinearArrangement::Start),
+            horizontal_arrangement: None,
+        };
+        let mut placements = Vec::new();
+
+        push_lazy_list_placements(
+            &mut placements,
+            &[hidden, partial],
+            100,
+            true,
+            100.0,
+            &config,
+        );
+
+        assert_eq!(placements.len(), 2);
+        assert_eq!(placements[0].node_id, 101);
+        assert_eq!(placements[0].y, -40.0);
+        assert_eq!(placements[1].node_id, 102);
+        assert_eq!(placements[1].y, -5.0);
+    }
+
+    #[test]
+    fn lazy_list_placements_retain_after_viewport_prefetch_items_for_renderer_prewarm() {
+        let mut visible = LazyListMeasuredItem::new(0, 10, None, 40.0, 50.0);
+        visible.offset = 60.0;
+        visible.node_ids.push(101);
+        visible.child_offsets.push(0.0);
+
+        let mut warm = LazyListMeasuredItem::new(1, 11, None, 40.0, 50.0);
+        warm.offset = 110.0;
+        warm.node_ids.push(102);
+        warm.child_offsets.push(0.0);
+
+        let mut far = LazyListMeasuredItem::new(2, 12, None, 40.0, 50.0);
+        far.offset = 158.0;
+        far.node_ids.push(103);
+        far.child_offsets.push(0.0);
+
+        let config = LazyListMeasureConfig {
+            is_vertical: true,
+            reverse_layout: false,
+            before_content_padding: 0.0,
+            after_content_padding: 0.0,
+            spacing: 8.0,
+            beyond_bounds_item_count: 8,
+            vertical_arrangement: Some(LinearArrangement::SpacedBy(8.0)),
+            horizontal_arrangement: None,
+        };
+        let mut placements = Vec::new();
+
+        push_lazy_list_placements(
+            &mut placements,
+            &[visible, warm, far],
+            100,
+            true,
+            100.0,
+            &config,
+        );
+
+        let placed_nodes = placements.iter().map(|p| p.node_id).collect::<Vec<_>>();
+        assert_eq!(
+            placed_nodes,
+            vec![101, 102, 103],
+            "prefetch rows remain in the retained placement list so renderers can prewarm clipped content"
+        );
+    }
+
+    #[test]
+    fn lazy_measure_policy_does_not_schedule_speculative_prefetch_frames() {
+        let source = include_str!("lazy_list.rs");
+        let start = source
+            .find("fn measure_lazy_list_internal")
+            .expect("measure function exists");
+        let end = source[start..]
+            .find("fn get_spacing")
+            .map(|offset| start + offset)
+            .expect("measure function boundary exists");
+        let body = &source[start..end];
+
+        assert!(
+            !body.contains("prefetch_lazy_list_items")
+                && !body.contains("schedule_layout_prewarm_repass"),
+            "lazy layout measurement must not schedule speculative frame work"
+        );
+    }
+
+    #[test]
+    fn active_scroll_cached_reuse_validates_retained_children() {
+        let source = include_str!("lazy_list.rs");
+        let trust_mode = ["TrustClean", "RetainedScrollItem"].concat();
+        let trust_api = ["trusting_", "cached_children"].concat();
+
+        assert!(
+            !source.contains(trust_mode.as_str()) && !source.contains(trust_api.as_str()),
+            "lazy cached reuse must validate retained children during active scroll"
+        );
     }
 
     #[test]
