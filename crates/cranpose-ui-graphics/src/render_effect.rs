@@ -526,11 +526,12 @@ impl RenderEffect {
     /// Maximum logical-pixel input padding required by this effect.
     pub fn input_padding(&self) -> f32 {
         match self {
+            RenderEffect::Blur {
+                radius_x, radius_y, ..
+            } => radius_x.abs().max(radius_y.abs()),
+            RenderEffect::Offset { offset_x, offset_y } => offset_x.abs().max(offset_y.abs()),
             RenderEffect::Shader { shader } => shader.input_padding(),
-            RenderEffect::Chain { first, second } => {
-                first.input_padding().max(second.input_padding())
-            }
-            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => 0.0,
+            RenderEffect::Chain { first, second } => first.input_padding() + second.input_padding(),
         }
     }
 }
@@ -565,6 +566,26 @@ mod tests {
         assert_eq!(padded[0], 42.0);
         assert_eq!(padded[1], 0.0);
         assert_eq!(padded[255], 0.0);
+    }
+
+    #[test]
+    fn blur_and_offset_declare_input_padding() {
+        assert_eq!(
+            RenderEffect::blur_xy(6.0, 12.0, TileMode::Clamp).input_padding(),
+            12.0
+        );
+        assert_eq!(RenderEffect::offset(-8.0, 3.0).input_padding(), 8.0);
+    }
+
+    #[test]
+    fn chained_effect_padding_accumulates_sampling_ranges() {
+        let mut shader = RuntimeShader::new("// test");
+        shader.set_input_padding(9.0);
+        let effect = RenderEffect::blur_xy(4.0, 6.0, TileMode::Clamp)
+            .then(RenderEffect::runtime_shader(shader))
+            .then(RenderEffect::offset(2.0, -5.0));
+
+        assert_eq!(effect.input_padding(), 20.0);
     }
 
     #[test]

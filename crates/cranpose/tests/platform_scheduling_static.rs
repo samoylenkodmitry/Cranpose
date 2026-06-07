@@ -807,6 +807,108 @@ fn render_text_hyphenation_dictionaries_are_measurer_owned() {
 }
 
 #[test]
+fn wasm_framework_sources_use_browser_safe_time() {
+    let cranpose_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_dir = cranpose_dir
+        .parent()
+        .and_then(Path::parent)
+        .expect("cranpose crate should live under workspace crates directory");
+    let source_roots = [
+        "crates/cranpose-core/src",
+        "crates/cranpose-runtime-std/src",
+        "crates/cranpose-app-shell/src",
+        "crates/cranpose-ui/src",
+        "crates/cranpose-foundation/src",
+        "crates/cranpose-render/common/src",
+        "crates/cranpose-render/wgpu/src",
+        "crates/cranpose-platform/web/src",
+    ];
+    let source_files = ["crates/cranpose/src/web.rs"];
+    let mut offenders = Vec::new();
+
+    for root in source_roots {
+        for path in rust_sources(&workspace_dir.join(root)) {
+            collect_forbidden_time_source_offenders(workspace_dir, &path, &mut offenders);
+        }
+    }
+    for file in source_files {
+        collect_forbidden_time_source_offenders(
+            workspace_dir,
+            &workspace_dir.join(file),
+            &mut offenders,
+        );
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "wasm-delivered framework code must use web_time for clocks; found unsupported std time in:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
+fn wasm_time_source_detection_catches_std_time_import_shapes() {
+    let cases = [
+        ("direct", "use std::time::Instant;\n"),
+        ("alias", "use std::time::Instant as StdInstant;\n"),
+        (
+            "grouped_multiline",
+            "use std::time::{\n    Duration,\n    Instant,\n};\n",
+        ),
+        (
+            "nested_group",
+            "use std::{collections::HashMap, time::{Duration, SystemTime}};\n",
+        ),
+        (
+            "qualified_now",
+            "fn tick() { let _now = std::time::Instant::now(); }\n",
+        ),
+        (
+            "qualified_type",
+            "fn tick(now: std::time::SystemTime) { let _ = now; }\n",
+        ),
+    ];
+
+    for (name, source) in cases {
+        let mut offenders = Vec::new();
+        collect_forbidden_time_source_offenders_from_source(
+            Path::new(name),
+            source,
+            &mut offenders,
+        );
+        assert_eq!(
+            offenders.len(),
+            1,
+            "{name} should report exactly one std::time offender, got {offenders:?}"
+        );
+    }
+}
+
+#[test]
+fn wasm_time_source_detection_allows_duration_and_web_time() {
+    let mut offenders = Vec::new();
+
+    collect_forbidden_time_source_offenders_from_source(
+        Path::new("allowed"),
+        "\
+use std::time::Duration;
+use web_time::Instant;
+
+fn tick() {
+    let _delay = Duration::from_millis(16);
+    let _now = Instant::now();
+}
+",
+        &mut offenders,
+    );
+
+    assert!(
+        offenders.is_empty(),
+        "Duration and web_time::Instant should remain valid in wasm framework code: {offenders:?}"
+    );
+}
+
+#[test]
 fn unsafe_code_stays_in_android_boundary_modules() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source_dir = crate_dir.join("src");
@@ -1238,6 +1340,197 @@ fn collect_blocked_language_offenders(
             ));
         }
     }
+}
+
+fn collect_forbidden_time_source_offenders(
+    workspace_dir: &Path,
+    path: &Path,
+    offenders: &mut Vec<String>,
+) {
+    let relative = path
+        .strip_prefix(workspace_dir)
+        .expect("source path should be under workspace");
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", relative.display()));
+
+    collect_forbidden_time_source_offenders_from_source(relative, &source, offenders);
+}
+
+fn collect_forbidden_time_source_offenders_from_source(
+    relative: &Path,
+    source: &str,
+    offenders: &mut Vec<String>,
+) {
+    let mut pending_use = String::new();
+    let mut pending_use_start_line = 0;
+
+    for (index, line) in source.lines().enumerate() {
+        let line_number = index + 1;
+        let Some(code) = rust_code_before_line_comment(line) else {
+            continue;
+        };
+        let trimmed = code.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with("#![") || trimmed.starts_with("#[") {
+            continue;
+        }
+
+        if !pending_use.is_empty() {
+            pending_use.push(' ');
+            pending_use.push_str(trimmed);
+            if trimmed.contains(';') {
+                if let Some(reason) = forbidden_std_time_import_reason(&pending_use) {
+                    offenders.push(format!(
+                        "{}:{}: {reason}",
+                        relative.display(),
+                        pending_use_start_line
+                    ));
+                }
+                pending_use.clear();
+                pending_use_start_line = 0;
+            }
+            continue;
+        }
+
+        if starts_use_statement(trimmed) {
+            pending_use_start_line = line_number;
+            pending_use.push_str(trimmed);
+            if trimmed.contains(';') {
+                if let Some(reason) = forbidden_std_time_import_reason(&pending_use) {
+                    offenders.push(format!(
+                        "{}:{}: {reason}",
+                        relative.display(),
+                        pending_use_start_line
+                    ));
+                }
+                pending_use.clear();
+                pending_use_start_line = 0;
+            }
+            continue;
+        }
+
+        let normalized = rust_path_source(trimmed);
+        if let Some(fragment) = forbidden_std_time_path_fragment(&normalized) {
+            offenders.push(format!(
+                "{}:{}: uses `{fragment}`",
+                relative.display(),
+                line_number
+            ));
+        }
+    }
+
+    if !pending_use.is_empty() {
+        if let Some(reason) = forbidden_std_time_import_reason(&pending_use) {
+            offenders.push(format!(
+                "{}:{}: {reason}",
+                relative.display(),
+                pending_use_start_line
+            ));
+        }
+    }
+}
+
+fn rust_code_before_line_comment(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("//") || trimmed.starts_with("///") || trimmed.starts_with("//!") {
+        return None;
+    }
+
+    line.split_once("//")
+        .map(|(before_comment, _)| before_comment)
+        .or(Some(line))
+}
+
+fn starts_use_statement(trimmed: &str) -> bool {
+    trimmed.starts_with("use ")
+        || trimmed.starts_with("pub use ")
+        || (trimmed.starts_with("pub(") && trimmed.contains(" use "))
+}
+
+fn forbidden_std_time_import_reason(statement: &str) -> Option<&'static str> {
+    let normalized = rust_path_source(statement);
+
+    if forbidden_std_time_path_fragment(&normalized).is_some() {
+        return Some("imports unsupported std::time::Instant/SystemTime");
+    }
+    if std_time_group_contains_forbidden_member(&normalized) {
+        return Some("imports unsupported std::time::Instant/SystemTime");
+    }
+    if std_nested_group_contains_forbidden_time_member(&normalized) {
+        return Some("imports unsupported std::time::Instant/SystemTime");
+    }
+
+    None
+}
+
+fn forbidden_std_time_path_fragment(normalized: &str) -> Option<&'static str> {
+    if normalized.contains("std::time::Instant") {
+        return Some("std::time::Instant");
+    }
+    if normalized.contains("std::time::SystemTime") {
+        return Some("std::time::SystemTime");
+    }
+
+    None
+}
+
+fn std_time_group_contains_forbidden_member(normalized: &str) -> bool {
+    group_contents_after(normalized, "std::time::{").is_some_and(contains_forbidden_time_member)
+}
+
+fn std_nested_group_contains_forbidden_time_member(normalized: &str) -> bool {
+    group_contents_after(normalized, "std::{").is_some_and(|std_group| {
+        std_group.contains("time::Instant")
+            || std_group.contains("time::SystemTime")
+            || group_contents_after(std_group, "time::{")
+                .is_some_and(contains_forbidden_time_member)
+    })
+}
+
+fn contains_forbidden_time_member(group: &str) -> bool {
+    rust_path_segment_exists(group, "Instant") || rust_path_segment_exists(group, "SystemTime")
+}
+
+fn rust_path_segment_exists(source: &str, segment: &str) -> bool {
+    let mut remaining = source;
+    while let Some(offset) = remaining.find(segment) {
+        let before = remaining[..offset].chars().next_back();
+        let after = remaining[offset + segment.len()..].chars().next();
+        if before.is_none_or(|ch| !rust_identifier_char(ch))
+            && after.is_none_or(|ch| !rust_identifier_char(ch))
+        {
+            return true;
+        }
+        remaining = &remaining[offset + segment.len()..];
+    }
+    false
+}
+
+fn rust_identifier_char(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
+}
+
+fn group_contents_after<'a>(source: &'a str, prefix: &str) -> Option<&'a str> {
+    let start = source.find(prefix)? + prefix.len();
+    let mut depth = 1usize;
+
+    for (offset, ch) in source[start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&source[start..start + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Some(&source[start..])
+}
+
+fn rust_path_source(source: &str) -> String {
+    source.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
 
 fn text_sources(root: &Path) -> Vec<PathBuf> {

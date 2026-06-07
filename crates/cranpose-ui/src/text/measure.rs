@@ -6,7 +6,7 @@ use std::collections::{hash_map::Entry, HashMap, VecDeque};
 use std::hash::Hash;
 use std::ops::Range;
 use std::rc::Rc;
-use std::time::Instant;
+use web_time::Instant;
 
 use super::layout_options::{TextLayoutOptions, TextOverflow};
 use super::paragraph::{Hyphens, LineBreak};

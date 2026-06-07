@@ -434,7 +434,7 @@ jobs:
           WINIT_UNIX_BACKEND: x11
         run: |
           chmod +x target/robot/examples/robot_*
-          timeout 600s xvfb-run -a ./run_robot_test.sh --skip-build --sequential --shard "${{ matrix.shard_index }}/16"
+          timeout 600s xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh --skip-build --sequential --shard "${{ matrix.shard_index }}/16"
 
   robot-e2e:
     name: robot e2e

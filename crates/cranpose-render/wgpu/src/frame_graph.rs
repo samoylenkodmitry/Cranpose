@@ -1,7 +1,7 @@
 use crate::offscreen::OffscreenTarget;
 use std::cell::{Cell, OnceCell};
 use std::fmt;
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Default)]
 pub(crate) struct WgpuFrameGraphExecutor {

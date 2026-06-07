@@ -90,7 +90,8 @@ use std::rc::{Rc, Weak};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use crate::gpu_stats;
 use crate::gpu_stats::gpu_stats_enabled;

@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 #[cfg(feature = "internal")]
 use cranpose_core::internal::FrameClock;
@@ -137,7 +138,7 @@ impl RuntimeScheduler for StdScheduler {
     }
 }
 
-/// Clock implementation backed by [`std::time`].
+/// Clock implementation backed by a cross-platform monotonic timer.
 #[derive(Debug, Default, Clone)]
 pub struct StdClock;
 

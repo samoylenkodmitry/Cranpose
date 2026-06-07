@@ -7,7 +7,7 @@ use crate::{
 };
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 
 pub struct Composition<A: Applier + 'static> {
     pub(crate) composer_state: Rc<crate::composer::ComposerRuntimeState>,
