@@ -20,6 +20,7 @@ cranpose-core = { workspace = true }
 bytemuck = { version = "1.25", features = ["derive"] }
 log = "0.4"
 naga = { version = "29.0.3", features = ["glsl-out", "wgsl-in"] }
+web-time = { workspace = true }
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
 wgpu = { version = "29.0", default-features = false, features = [

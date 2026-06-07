@@ -9,7 +9,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::composable;
 use crate::layout::MeasuredNode;

@@ -1,7 +1,7 @@
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Instant;
+use web_time::Instant;
 
 use cranpose_core::{
     Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,

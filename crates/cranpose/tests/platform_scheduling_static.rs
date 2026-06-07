@@ -807,6 +807,60 @@ fn render_text_hyphenation_dictionaries_are_measurer_owned() {
 }
 
 #[test]
+fn wasm_framework_sources_use_browser_safe_time() {
+    let cranpose_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_dir = cranpose_dir
+        .parent()
+        .and_then(Path::parent)
+        .expect("cranpose crate should live under workspace crates directory");
+    let source_roots = [
+        "crates/cranpose-core/src",
+        "crates/cranpose-runtime-std/src",
+        "crates/cranpose-app-shell/src",
+        "crates/cranpose-ui/src",
+        "crates/cranpose-foundation/src",
+        "crates/cranpose-render/common/src",
+        "crates/cranpose-render/wgpu/src",
+        "crates/cranpose-platform/web/src",
+    ];
+    let source_files = ["crates/cranpose/src/web.rs"];
+    let forbidden_fragments = [
+        "use std::time::Instant",
+        "use std::time::{Duration, Instant",
+        "use std::time::{Instant",
+        "std::time::Instant::now",
+        "std::time::SystemTime",
+        "SystemTime::now()",
+    ];
+    let mut offenders = Vec::new();
+
+    for root in source_roots {
+        for path in rust_sources(&workspace_dir.join(root)) {
+            collect_forbidden_time_source_offenders(
+                workspace_dir,
+                &path,
+                &forbidden_fragments,
+                &mut offenders,
+            );
+        }
+    }
+    for file in source_files {
+        collect_forbidden_time_source_offenders(
+            workspace_dir,
+            &workspace_dir.join(file),
+            &forbidden_fragments,
+            &mut offenders,
+        );
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "wasm-delivered framework code must use web_time for clocks; found unsupported std time in:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
 fn unsafe_code_stays_in_android_boundary_modules() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source_dir = crate_dir.join("src");
@@ -1235,6 +1289,36 @@ fn collect_blocked_language_offenders(
                 relative.display(),
                 line_number + 1,
                 term
+            ));
+        }
+    }
+}
+
+fn collect_forbidden_time_source_offenders(
+    workspace_dir: &Path,
+    path: &Path,
+    forbidden_fragments: &[&str],
+    offenders: &mut Vec<String>,
+) {
+    let relative = path
+        .strip_prefix(workspace_dir)
+        .expect("source path should be under workspace");
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", relative.display()));
+
+    for (line_number, line) in source.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") || trimmed.starts_with("///") || trimmed.starts_with("//!") {
+            continue;
+        }
+        if let Some(fragment) = forbidden_fragments
+            .iter()
+            .find(|fragment| trimmed.contains(**fragment))
+        {
+            offenders.push(format!(
+                "{}:{}: contains `{fragment}`",
+                relative.display(),
+                line_number + 1
             ));
         }
     }
