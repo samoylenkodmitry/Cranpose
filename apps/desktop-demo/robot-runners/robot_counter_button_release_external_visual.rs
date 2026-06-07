@@ -109,14 +109,11 @@ fn main() {
                 fail(
                     &robot,
                     &format!(
-                        "{}\n{}",
+                        "{}\nscreenshots: baseline={} pressed={} released={}",
                         failures.join("\n"),
-                        format!(
-                            "screenshots: baseline={} pressed={} released={}",
-                            baseline_path.display(),
-                            pressed_path.display(),
-                            released_path.display(),
-                        )
+                        baseline_path.display(),
+                        pressed_path.display(),
+                        released_path.display(),
                     ),
                 );
             }

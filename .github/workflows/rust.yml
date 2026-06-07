@@ -252,6 +252,7 @@ jobs:
         env:
           CARGO_BUILD_JOBS: "1"
           LIBGL_ALWAYS_SOFTWARE: "1"
+          CRANPOSE_ROBOT_SOFTWARE_RENDERER: "1"
           WGPU_BACKEND: vulkan
           WINIT_UNIX_BACKEND: x11
         run: >
@@ -428,6 +429,7 @@ jobs:
         env:
           CARGO_BUILD_JOBS: "1"
           LIBGL_ALWAYS_SOFTWARE: "1"
+          CRANPOSE_ROBOT_SOFTWARE_RENDERER: "1"
           WGPU_BACKEND: vulkan
           WINIT_UNIX_BACKEND: x11
         run: |

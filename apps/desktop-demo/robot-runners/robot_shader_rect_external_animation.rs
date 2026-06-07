@@ -5,6 +5,7 @@
 
 mod external_x11_frame_telemetry;
 mod output_paths;
+mod robot_perf_contract;
 mod text_showcase_external_helpers;
 
 use cranpose::{AppLauncher, Robot};
@@ -82,29 +83,42 @@ fn run_external_animation_driver(robot: Robot, records: Arc<Mutex<Vec<FrameTelem
             "Shader Rect animation did not visibly change: changed_pixels={changed}"
         ));
     }
-    if summary.frames < MIN_PRESENTED_FRAMES {
+    if robot_perf_contract::hardware_performance_contracts_enabled()
+        && summary.frames < MIN_PRESENTED_FRAMES
+    {
         failures.push(format!(
             "Shader Rect animation produced too few presented frames: frames={}",
             summary.frames
         ));
     }
-    if summary.fps < MIN_PRESENTED_FPS {
+    if robot_perf_contract::hardware_performance_contracts_enabled()
+        && summary.fps < MIN_PRESENTED_FPS
+    {
         failures.push(format!(
             "Shader Rect animation missed 120Hz presented cadence: fps={:.1}",
             summary.fps
         ));
     }
-    if summary.p95_total_ms > MAX_P95_TOTAL_MS {
+    if robot_perf_contract::hardware_performance_contracts_enabled()
+        && summary.p95_total_ms > MAX_P95_TOTAL_MS
+    {
         failures.push(format!(
             "Shader Rect animation p95 frame time exceeded 120Hz budget: p95_total_ms={:.2}",
             summary.p95_total_ms
         ));
     }
-    if summary.stalls_50ms > 0 {
+    if robot_perf_contract::hardware_performance_contracts_enabled() && summary.stalls_50ms > 0 {
         failures.push(format!(
             "Shader Rect animation produced {} frame stalls over 50ms",
             summary.stalls_50ms
         ));
+    }
+    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+        if summary.frames == 0 {
+            failures.push("Shader Rect animation produced no presented frames".to_string());
+        } else {
+            robot_perf_contract::log_software_renderer_budget("Shader Rect animation");
+        }
     }
 
     switch_to_idle_counter_tab(&robot, &window_id, &records);

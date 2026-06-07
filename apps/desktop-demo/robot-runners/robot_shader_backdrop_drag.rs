@@ -3,6 +3,7 @@
 //! Validates that "Blur" and "Glass" overlays produce visible pixel movement after drag.
 
 mod output_paths;
+mod robot_perf_contract;
 
 use cranpose::AppLauncher;
 use cranpose_testing::{
@@ -147,7 +148,6 @@ fn scroll_nested_effect_controls_into_view(
 
 fn nudge_nested_effect_controls_toward_view(robot: &cranpose::Robot) {
     let top = shader_content_top(robot);
-    let bottom = shader_content_bottom(robot);
     let raw_bounds = [
         find_text_in_semantics(robot, "Child backdrop"),
         find_text_by_prefix_in_semantics(robot, "nested_parent_blur")
@@ -163,12 +163,6 @@ fn nudge_nested_effect_controls_toward_view(robot: &cranpose::Robot) {
 
     if target_above {
         scroll_up_small(robot);
-    } else if raw_bounds
-        .iter()
-        .flatten()
-        .any(|(_, y, _, h)| y + h * 0.5 > bottom)
-    {
-        scroll_down_small(robot);
     } else {
         scroll_down_small(robot);
     }
@@ -355,15 +349,19 @@ fn assert_effect_drag_performance(
         stats.frame_count >= MIN_EFFECT_DRAG_FRAMES,
         "{label}: drag did not produce enough measured frames: {stats:?}"
     );
-    assert!(
-        stats.fps >= MIN_EFFECT_DRAG_CADENCE_FPS
-            && stats.p95_ms <= MAX_EFFECT_DRAG_CADENCE_P95_MS
-            && stats.stalled_50ms_frames == 0
-            && stats.work_fps >= MIN_EFFECT_DRAG_WORK_FPS
-            && stats.work_p95_ms <= MAX_EFFECT_DRAG_WORK_P95_MS
-            && stats.work_stalled_50ms_frames == 0,
-        "{label}: shader drag missed the 120Hz presented-frame contract: {stats:?}"
-    );
+    if robot_perf_contract::hardware_performance_contracts_enabled() {
+        assert!(
+            stats.fps >= MIN_EFFECT_DRAG_CADENCE_FPS
+                && stats.p95_ms <= MAX_EFFECT_DRAG_CADENCE_P95_MS
+                && stats.stalled_50ms_frames == 0
+                && stats.work_fps >= MIN_EFFECT_DRAG_WORK_FPS
+                && stats.work_p95_ms <= MAX_EFFECT_DRAG_WORK_P95_MS
+                && stats.work_stalled_50ms_frames == 0,
+            "{label}: shader drag missed the 120Hz presented-frame contract: {stats:?}"
+        );
+    } else {
+        robot_perf_contract::log_software_renderer_budget(label);
+    }
 
     if let Some(render_stats) = render_stats {
         assert_eq!(

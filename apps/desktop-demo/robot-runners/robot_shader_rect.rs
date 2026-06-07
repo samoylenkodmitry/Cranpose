@@ -4,6 +4,8 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_shader_rect --features robot-app`
 
+mod robot_perf_contract;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text_exact, find_text_in_semantics,
@@ -123,12 +125,16 @@ fn assert_shader_rect_performance(robot: &cranpose::Robot, label: &str) {
         );
     }
 
-    assert!(
-        stats.work_fps >= MIN_SHADER_RECT_WORK_FPS
-            && stats.work_p95_ms <= MAX_SHADER_RECT_WORK_P95_MS
-            && stats.work_stalled_50ms_frames == 0,
-        "{label}: Shader Rect missed the 120Hz work contract: {stats:?}"
-    );
+    if robot_perf_contract::hardware_performance_contracts_enabled() {
+        assert!(
+            stats.work_fps >= MIN_SHADER_RECT_WORK_FPS
+                && stats.work_p95_ms <= MAX_SHADER_RECT_WORK_P95_MS
+                && stats.work_stalled_50ms_frames == 0,
+            "{label}: Shader Rect missed the 120Hz work contract: {stats:?}"
+        );
+    } else {
+        robot_perf_contract::log_software_renderer_budget(label);
+    }
 }
 
 fn click_tab(robot: &cranpose::Robot, label: &str) {

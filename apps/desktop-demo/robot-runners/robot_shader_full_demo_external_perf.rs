@@ -6,6 +6,7 @@
 
 mod external_x11_frame_telemetry;
 mod output_paths;
+mod robot_perf_contract;
 mod text_showcase_external_helpers;
 
 use cranpose::{AppLauncher, Robot};
@@ -279,35 +280,55 @@ fn summary_failures(
             "{label} did not visibly change: changed_pixels={changed_pixels}"
         ));
     }
-    if summary.frames < min_frames {
+    if robot_perf_contract::hardware_performance_contracts_enabled() && summary.frames < min_frames
+    {
         failures.push(format!(
             "{label} produced too few presented frames: frames={}",
             summary.frames
         ));
     }
-    if summary.fps < MIN_PRESENTED_FPS {
+    if robot_perf_contract::hardware_performance_contracts_enabled()
+        && summary.fps < MIN_PRESENTED_FPS
+    {
         failures.push(format!(
             "{label} missed {MIN_PRESENTED_FPS:.0}Hz presented cadence: fps={:.1}",
             summary.fps,
         ));
     }
-    if summary.p95_total_ms > MAX_P95_TOTAL_MS {
+    if robot_perf_contract::hardware_performance_contracts_enabled()
+        && summary.p95_total_ms > MAX_P95_TOTAL_MS
+    {
         failures.push(format!(
             "{label} p95 frame time exceeded {MIN_PRESENTED_FPS:.0}Hz budget: p95_total_ms={:.2}",
             summary.p95_total_ms,
         ));
     }
-    if summary.stalls_50ms > 0 {
+    if robot_perf_contract::hardware_performance_contracts_enabled() && summary.stalls_50ms > 0 {
         failures.push(format!(
             "{label} produced {} frame stalls over 50ms",
             summary.stalls_50ms
         ));
+    }
+    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+        if summary.frames == 0 {
+            failures.push(format!("{label} produced no presented frames"));
+        } else {
+            robot_perf_contract::log_software_renderer_budget(label);
+        }
     }
     failures
 }
 
 fn app_fps_failures(label: &str, stats: cranpose::FpsStats) -> Vec<String> {
     let mut failures = Vec::new();
+    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+        if stats.frame_count == 0 {
+            failures.push(format!("{label} app FPS counter reported no frames"));
+        } else {
+            robot_perf_contract::log_software_renderer_budget(label);
+        }
+        return failures;
+    }
     if stats.fps < MIN_APP_REPORTED_FPS {
         failures.push(format!(
             "{label} app FPS counter missed {MIN_APP_REPORTED_FPS:.0}Hz cadence: fps={:.1}, frames={}",

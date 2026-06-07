@@ -2,6 +2,7 @@
 
 mod markdown_fixture_client;
 mod output_paths;
+mod robot_perf_contract;
 mod text_showcase_external_helpers;
 
 use cranpose::AppLauncher;
@@ -46,6 +47,9 @@ struct ViewportInkMetrics {
     blank_row_run: usize,
     sampled_rows: usize,
 }
+
+type Bounds = (f32, f32, f32, f32);
+type VisibleTextNode = (Bounds, String);
 
 fn main() {
     env_logger::init();
@@ -177,6 +181,14 @@ fn main() {
 }
 
 fn assert_scroll_performance(label: &str, stats: cranpose::FpsStats) {
+    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+        assert!(
+            stats.frame_count > 0,
+            "default Markdown {label} produced no measured scroll frames: {stats:?}"
+        );
+        robot_perf_contract::log_software_renderer_budget(&format!("default Markdown {label}"));
+        return;
+    }
     assert!(
         stats.fps >= MIN_SCROLL_FPS
             && stats.p95_ms <= MAX_SCROLL_P95_MS
@@ -199,6 +211,14 @@ fn assert_scroll_performance(label: &str, stats: cranpose::FpsStats) {
 }
 
 fn assert_visual_drag_work_performance(stats: cranpose::FpsStats) {
+    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+        assert!(
+            stats.frame_count > 0,
+            "default Markdown visual drag produced no measured frames: {stats:?}"
+        );
+        robot_perf_contract::log_software_renderer_budget("default Markdown visual drag");
+        return;
+    }
     assert!(
         stats.work_fps >= MIN_SCROLL_FPS
             && stats.work_p95_ms <= MAX_SCROLL_P95_MS
@@ -339,7 +359,7 @@ fn assert_visible_text_nodes_do_not_leave_blank_tails(
     image: &RgbaImage,
     viewport: (f32, f32, f32, f32),
     capture_path: &Path,
-    visible_texts: &[((f32, f32, f32, f32), String)],
+    visible_texts: &[VisibleTextNode],
 ) {
     let content_band = content_band_viewport(viewport, 0.16, 0.94);
 
@@ -370,7 +390,7 @@ fn assert_visible_text_nodes_do_not_leave_blank_tails(
 fn assert_visible_text_flow_has_no_large_gaps(
     viewport: (f32, f32, f32, f32),
     capture_path: &Path,
-    visible_texts: &[((f32, f32, f32, f32), String)],
+    visible_texts: &[VisibleTextNode],
 ) {
     let content_band = content_band_viewport(viewport, 0.16, 0.94);
 
@@ -388,7 +408,7 @@ fn assert_visible_text_flow_has_no_large_gaps(
         .collect::<Vec<_>>();
     flow_texts.sort_by(|(a, _), (b, _)| a.1.total_cmp(&b.1).then_with(|| a.0.total_cmp(&b.0)));
 
-    let mut previous: Option<((f32, f32, f32, f32), String)> = None;
+    let mut previous: Option<VisibleTextNode> = None;
     for (bounds, text) in flow_texts {
         let Some((previous_bounds, previous_text)) = previous.replace((bounds, text.clone()))
         else {
@@ -422,7 +442,7 @@ fn visible_text_nodes(
     viewport: (f32, f32, f32, f32),
     top_fraction: f32,
     bottom_fraction: f32,
-) -> Vec<((f32, f32, f32, f32), String)> {
+) -> Vec<VisibleTextNode> {
     let semantics = robot
         .get_semantics()
         .unwrap_or_else(|err| panic!("failed to get Markdown semantics: {err}"));
@@ -437,7 +457,7 @@ fn visible_text_nodes(
 fn assert_complexity_block_reaches_code_heading(
     viewport: (f32, f32, f32, f32),
     capture_path: &Path,
-    visible_texts: &[((f32, f32, f32, f32), String)],
+    visible_texts: &[VisibleTextNode],
 ) {
     const MAX_COMPLEXITY_TO_CODE_GAP_PX: f32 = 96.0;
     const MIN_COMPLEXITY_FOLLOWUP_ROOM_PX: f32 = 96.0;
@@ -517,7 +537,7 @@ fn assert_complexity_block_reaches_code_heading(
 fn collect_visible_text_nodes(
     elem: &cranpose::SemanticElement,
     viewport: (f32, f32, f32, f32),
-    out: &mut Vec<((f32, f32, f32, f32), String)>,
+    out: &mut Vec<VisibleTextNode>,
 ) {
     if let Some(text) = elem.text.as_deref() {
         let bounds = (

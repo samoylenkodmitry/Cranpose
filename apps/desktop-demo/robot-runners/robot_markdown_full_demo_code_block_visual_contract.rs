@@ -3,6 +3,7 @@
 
 mod markdown_fixture_client;
 mod output_paths;
+mod robot_perf_contract;
 mod text_showcase_external_helpers;
 
 use cranpose::AppLauncher;
@@ -67,6 +68,10 @@ struct InkMetrics {
     blank_row_run: usize,
     sampled_rows: usize,
 }
+
+type Bounds = (f32, f32, f32, f32);
+type VisibleTextNode = (Bounds, String);
+type MergedTextSpan = (f32, f32, Bounds, String);
 
 fn main() {
     env_logger::init();
@@ -649,7 +654,7 @@ fn assert_visible_text_nodes_do_not_have_large_blank_gaps(
             .then_with(|| lhs.1.total_cmp(&rhs.1))
     });
 
-    let mut merged: Vec<(f32, f32, (f32, f32, f32, f32), String)> = Vec::new();
+    let mut merged: Vec<MergedTextSpan> = Vec::new();
     for span in spans {
         if let Some(last) = merged.last_mut() {
             if span.0 <= last.1 + 8.0 {
@@ -741,7 +746,7 @@ fn assert_markdown_section_gaps_are_continuous(
 fn collect_visible_text_debug(
     elem: &cranpose::SemanticElement,
     viewport: (f32, f32, f32, f32),
-    out: &mut Vec<((f32, f32, f32, f32), String)>,
+    out: &mut Vec<VisibleTextNode>,
 ) {
     if let Some(text) = elem.text.as_deref() {
         let bounds = (
@@ -1028,6 +1033,14 @@ fn assert_lower_viewport_band_paints(
 }
 
 fn assert_real_wheel_work_performance(stats: cranpose::FpsStats) {
+    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+        assert!(
+            stats.frame_count > 0,
+            "full-demo Markdown real X11 wheel produced no measured frames: {stats:?}"
+        );
+        robot_perf_contract::log_software_renderer_budget("full-demo Markdown real X11 wheel");
+        return;
+    }
     assert!(
         stats.work_fps >= MIN_SCROLL_WORK_FPS
             && stats.work_p95_ms <= MAX_SCROLL_WORK_P95_MS
