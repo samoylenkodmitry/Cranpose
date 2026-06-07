@@ -3,7 +3,7 @@
 
 mod markdown_fixture_client;
 mod output_paths;
-mod robot_perf_contract;
+mod perf_contract;
 mod text_showcase_external_helpers;
 
 use cranpose::AppLauncher;
@@ -1033,12 +1033,12 @@ fn assert_lower_viewport_band_paints(
 }
 
 fn assert_real_wheel_work_performance(stats: cranpose::FpsStats) {
-    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+    if !perf_contract::hardware_performance_contracts_enabled() {
         assert!(
             stats.frame_count > 0,
             "full-demo Markdown real X11 wheel produced no measured frames: {stats:?}"
         );
-        robot_perf_contract::log_software_renderer_budget("full-demo Markdown real X11 wheel");
+        perf_contract::log_software_renderer_budget("full-demo Markdown real X11 wheel");
         return;
     }
     assert!(

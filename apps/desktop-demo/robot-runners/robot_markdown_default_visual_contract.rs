@@ -2,7 +2,7 @@
 
 mod markdown_fixture_client;
 mod output_paths;
-mod robot_perf_contract;
+mod perf_contract;
 mod text_showcase_external_helpers;
 
 use cranpose::AppLauncher;
@@ -181,12 +181,12 @@ fn main() {
 }
 
 fn assert_scroll_performance(label: &str, stats: cranpose::FpsStats) {
-    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+    if !perf_contract::hardware_performance_contracts_enabled() {
         assert!(
             stats.frame_count > 0,
             "default Markdown {label} produced no measured scroll frames: {stats:?}"
         );
-        robot_perf_contract::log_software_renderer_budget(&format!("default Markdown {label}"));
+        perf_contract::log_software_renderer_budget(&format!("default Markdown {label}"));
         return;
     }
     assert!(
@@ -211,12 +211,12 @@ fn assert_scroll_performance(label: &str, stats: cranpose::FpsStats) {
 }
 
 fn assert_visual_drag_work_performance(stats: cranpose::FpsStats) {
-    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+    if !perf_contract::hardware_performance_contracts_enabled() {
         assert!(
             stats.frame_count > 0,
             "default Markdown visual drag produced no measured frames: {stats:?}"
         );
-        robot_perf_contract::log_software_renderer_budget("default Markdown visual drag");
+        perf_contract::log_software_renderer_budget("default Markdown visual drag");
         return;
     }
     assert!(

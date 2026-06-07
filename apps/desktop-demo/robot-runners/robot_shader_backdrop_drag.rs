@@ -3,7 +3,7 @@
 //! Validates that "Blur" and "Glass" overlays produce visible pixel movement after drag.
 
 mod output_paths;
-mod robot_perf_contract;
+mod perf_contract;
 
 use cranpose::AppLauncher;
 use cranpose_testing::{
@@ -349,7 +349,7 @@ fn assert_effect_drag_performance(
         stats.frame_count >= MIN_EFFECT_DRAG_FRAMES,
         "{label}: drag did not produce enough measured frames: {stats:?}"
     );
-    if robot_perf_contract::hardware_performance_contracts_enabled() {
+    if perf_contract::hardware_performance_contracts_enabled() {
         assert!(
             stats.fps >= MIN_EFFECT_DRAG_CADENCE_FPS
                 && stats.p95_ms <= MAX_EFFECT_DRAG_CADENCE_P95_MS
@@ -360,7 +360,7 @@ fn assert_effect_drag_performance(
             "{label}: shader drag missed the 120Hz presented-frame contract: {stats:?}"
         );
     } else {
-        robot_perf_contract::log_software_renderer_budget(label);
+        perf_contract::log_software_renderer_budget(label);
     }
 
     if let Some(render_stats) = render_stats {

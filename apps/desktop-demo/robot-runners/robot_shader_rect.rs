@@ -4,7 +4,7 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_shader_rect --features robot-app`
 
-mod robot_perf_contract;
+mod perf_contract;
 
 use cranpose::AppLauncher;
 use cranpose_testing::{
@@ -125,7 +125,7 @@ fn assert_shader_rect_performance(robot: &cranpose::Robot, label: &str) {
         );
     }
 
-    if robot_perf_contract::hardware_performance_contracts_enabled() {
+    if perf_contract::hardware_performance_contracts_enabled() {
         assert!(
             stats.work_fps >= MIN_SHADER_RECT_WORK_FPS
                 && stats.work_p95_ms <= MAX_SHADER_RECT_WORK_P95_MS
@@ -133,7 +133,7 @@ fn assert_shader_rect_performance(robot: &cranpose::Robot, label: &str) {
             "{label}: Shader Rect missed the 120Hz work contract: {stats:?}"
         );
     } else {
-        robot_perf_contract::log_software_renderer_budget(label);
+        perf_contract::log_software_renderer_budget(label);
     }
 }
 

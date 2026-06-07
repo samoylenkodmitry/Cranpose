@@ -1,7 +1,7 @@
 //! Robot regression: after visiting animated tabs and settling on static content,
 //! the app must not keep presenting frames or mutating FPS stats.
 
-mod robot_perf_contract;
+mod perf_contract;
 
 use cranpose::AppLauncher;
 use cranpose_testing::find_button_exact_in_semantics;
@@ -49,7 +49,7 @@ fn main() {
             log_runtime_stats(&robot, "after-idle-wait");
             let stats = robot.fps_stats().expect("read idle FPS stats");
 
-            let hardware_perf = robot_perf_contract::hardware_performance_contracts_enabled();
+            let hardware_perf = perf_contract::hardware_performance_contracts_enabled();
             if hardware_perf {
                 assert_eq!(
                     stats.frame_count, 0,
@@ -57,7 +57,7 @@ fn main() {
                 );
             } else {
                 assert_idle_runtime_queues_empty(&robot);
-                robot_perf_contract::log_software_renderer_budget(
+                perf_contract::log_software_renderer_budget(
                     "idle static tab presented-frame quiescence",
                 );
             }

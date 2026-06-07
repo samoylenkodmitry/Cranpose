@@ -6,7 +6,7 @@
 
 mod external_x11_frame_telemetry;
 mod output_paths;
-mod robot_perf_contract;
+mod perf_contract;
 mod text_showcase_external_helpers;
 
 use cranpose::{AppLauncher, Robot};
@@ -280,22 +280,19 @@ fn summary_failures(
             "{label} did not visibly change: changed_pixels={changed_pixels}"
         ));
     }
-    if robot_perf_contract::hardware_performance_contracts_enabled() && summary.frames < min_frames
-    {
+    if perf_contract::hardware_performance_contracts_enabled() && summary.frames < min_frames {
         failures.push(format!(
             "{label} produced too few presented frames: frames={}",
             summary.frames
         ));
     }
-    if robot_perf_contract::hardware_performance_contracts_enabled()
-        && summary.fps < MIN_PRESENTED_FPS
-    {
+    if perf_contract::hardware_performance_contracts_enabled() && summary.fps < MIN_PRESENTED_FPS {
         failures.push(format!(
             "{label} missed {MIN_PRESENTED_FPS:.0}Hz presented cadence: fps={:.1}",
             summary.fps,
         ));
     }
-    if robot_perf_contract::hardware_performance_contracts_enabled()
+    if perf_contract::hardware_performance_contracts_enabled()
         && summary.p95_total_ms > MAX_P95_TOTAL_MS
     {
         failures.push(format!(
@@ -303,17 +300,17 @@ fn summary_failures(
             summary.p95_total_ms,
         ));
     }
-    if robot_perf_contract::hardware_performance_contracts_enabled() && summary.stalls_50ms > 0 {
+    if perf_contract::hardware_performance_contracts_enabled() && summary.stalls_50ms > 0 {
         failures.push(format!(
             "{label} produced {} frame stalls over 50ms",
             summary.stalls_50ms
         ));
     }
-    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+    if !perf_contract::hardware_performance_contracts_enabled() {
         if summary.frames == 0 {
             failures.push(format!("{label} produced no presented frames"));
         } else {
-            robot_perf_contract::log_software_renderer_budget(label);
+            perf_contract::log_software_renderer_budget(label);
         }
     }
     failures
@@ -321,11 +318,11 @@ fn summary_failures(
 
 fn app_fps_failures(label: &str, stats: cranpose::FpsStats) -> Vec<String> {
     let mut failures = Vec::new();
-    if !robot_perf_contract::hardware_performance_contracts_enabled() {
+    if !perf_contract::hardware_performance_contracts_enabled() {
         if stats.frame_count == 0 {
             failures.push(format!("{label} app FPS counter reported no frames"));
         } else {
-            robot_perf_contract::log_software_renderer_budget(label);
+            perf_contract::log_software_renderer_budget(label);
         }
         return failures;
     }
