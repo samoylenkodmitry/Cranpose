@@ -123,7 +123,14 @@ fn run_interactive_overlap() {
             let blur_label_pixels = feature_stats_rgba(&image, glass_crop, is_bright_label_pixel)
                 .map(|stats| stats.count)
                 .unwrap_or(0);
-            let blue_blur_pixels = feature_stats_rgba(
+            let left_blue_blur_pixels = feature_stats_rgba(
+                &image,
+                (glass_crop.0, glass_crop.1, 75, glass_crop.3),
+                is_blue_blur_pixel,
+            )
+            .map(|stats| stats.count)
+            .unwrap_or(0);
+            let right_blue_blur_pixels = feature_stats_rgba(
                 &image,
                 (glass_crop.0 + 75, glass_crop.1, glass_crop.2 - 75, glass_crop.3),
                 is_blue_blur_pixel,
@@ -131,11 +138,12 @@ fn run_interactive_overlap() {
             .map(|stats| stats.count)
             .unwrap_or(0);
             println!(
-                "shader_overlap crop={glass_crop:?} left_edge={left_edge:.3} right_edge={right_edge:.3} bright_label_pixels={blur_label_pixels} blue_blur_pixels={blue_blur_pixels} screenshot={}",
+                "shader_overlap crop={glass_crop:?} left_edge={left_edge:.3} right_edge={right_edge:.3} bright_label_pixels={blur_label_pixels} left_blue_blur_pixels={left_blue_blur_pixels} right_blue_blur_pixels={right_blue_blur_pixels} screenshot={}",
                 path.display()
             );
             if blur_label_pixels < 18
-                || blue_blur_pixels < 6_500
+                || right_blue_blur_pixels < 5_800
+                || right_blue_blur_pixels < left_blue_blur_pixels.saturating_add(1_100)
                 || right_edge < 0.65 * left_edge.max(1.0)
             {
                 fail(
