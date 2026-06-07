@@ -135,10 +135,10 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // Refraction displacement (matches Android AGSL):
     //   bend = slope * (1 - 1/ri)
     //   tilt is a raw vec2 (angle, pitch), NOT trigonometric
-    //   displacement = -tilt * bend * scale
+    //   displacement = tilt * bend * scale
     let bend = slope * (1.0 - 1.0 / max(ri, 1.0001));
     let tilt = vec2<f32>(tilt_angle, tilt_pitch);
-    let disp = -tilt * bend * disp_scale;
+    let disp = tilt * bend * disp_scale;
     let displaced_uv = clamp(uv + disp / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
 
     // Sample refracted background
@@ -258,8 +258,20 @@ pub fn liquid_glass_effect(
         rect.tint_color.b(),
         rect.tint_color.a(),
     );
+    shader.set_input_padding(liquid_glass_input_padding(spec));
 
     RenderEffect::runtime_shader(shader)
+}
+
+fn liquid_glass_input_padding(spec: &LiquidGlassSpec) -> f32 {
+    let bend = 1.0 - 1.0 / spec.refractive_index.max(1.0001);
+    let tilt = spec.tilt_angle.abs().max(spec.tilt_pitch.abs());
+    let displacement = tilt * bend * spec.displacement_scale.max(0.0);
+    if displacement > 0.0 {
+        displacement.ceil() + 2.0
+    } else {
+        0.0
+    }
 }
 
 /// Build a chained `RenderEffect` for multiple liquid glass rects.
@@ -352,9 +364,38 @@ mod tests {
             assert_eq!(u[8], 44.0);
             // refractive index
             assert_eq!(u[9], 1.8);
+            assert_eq!(shader.input_padding(), 0.0);
         } else {
             panic!("expected Shader effect");
         }
+    }
+
+    #[test]
+    fn liquid_glass_declares_backdrop_input_padding_for_tilted_refraction() {
+        let rect = LiquidGlassRect {
+            left: 0.0,
+            top: 0.0,
+            width: 140.0,
+            height: 100.0,
+            tint_color: Color(0.5, 0.5, 1.0, 0.1),
+        };
+        let effect = liquid_glass_effect(
+            &rect,
+            &LiquidGlassSpec {
+                tilt_angle: 0.5,
+                tilt_pitch: 0.3,
+                ..LiquidGlassSpec::default()
+            },
+            140.0,
+            100.0,
+        );
+        let RenderEffect::Shader { shader } = effect else {
+            panic!("expected Shader effect");
+        };
+        assert!(
+            shader.input_padding() >= 11.0,
+            "tilted liquid glass must capture enough backdrop for displaced samples"
+        );
     }
 
     #[test]

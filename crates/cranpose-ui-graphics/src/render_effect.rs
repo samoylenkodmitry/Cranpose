@@ -4,7 +4,9 @@
 //! WGSL shaders (`RuntimeShader`).
 
 use crate::LayerShape;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+const RUNTIME_SHADER_INLINE_UNIFORMS: usize = 16;
 
 /// Edge treatment for blur effects at the boundary of the blurred region.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -87,7 +89,69 @@ impl Default for BlurredEdgeTreatment {
 pub struct RuntimeShader {
     source: Arc<str>,
     source_hash: u64,
-    uniforms: Vec<f32>,
+    uniforms: RuntimeShaderUniforms,
+    input_padding: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RuntimeShaderUniforms {
+    len: usize,
+    inline: [f32; RUNTIME_SHADER_INLINE_UNIFORMS],
+    heap: Option<Vec<f32>>,
+}
+
+impl RuntimeShaderUniforms {
+    fn new() -> Self {
+        Self {
+            len: 0,
+            inline: [0.0; RUNTIME_SHADER_INLINE_UNIFORMS],
+            heap: None,
+        }
+    }
+
+    fn as_slice(&self) -> &[f32] {
+        if let Some(heap) = &self.heap {
+            heap.as_slice()
+        } else {
+            &self.inline[..self.len]
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    fn ensure_len(&mut self, min_len: usize) {
+        if let Some(heap) = &mut self.heap {
+            if heap.len() < min_len {
+                heap.resize(min_len, 0.0);
+            }
+            return;
+        }
+
+        if min_len <= RUNTIME_SHADER_INLINE_UNIFORMS {
+            self.len = self.len.max(min_len);
+            return;
+        }
+
+        let mut heap = Vec::with_capacity(min_len);
+        heap.extend_from_slice(&self.inline[..self.len]);
+        heap.resize(min_len, 0.0);
+        self.heap = Some(heap);
+    }
+
+    fn set(&mut self, index: usize, value: f32) {
+        if let Some(heap) = &mut self.heap {
+            heap[index] = value;
+        } else {
+            self.inline[index] = value;
+        }
+    }
+
+    #[cfg(test)]
+    fn is_inline(&self) -> bool {
+        self.heap.is_none()
+    }
 }
 
 /// Error returned when a shader uniform write targets renderer-owned storage.
@@ -114,15 +178,17 @@ impl RuntimeShader {
     pub const RESERVED_UNIFORM_START: usize = 248;
     /// Maximum user-addressable uniform count.
     pub const MAX_USER_UNIFORMS: usize = Self::RESERVED_UNIFORM_START;
-    const INITIAL_UNIFORM_CAPACITY: usize = 16;
 
     /// Create a new RuntimeShader from WGSL source code.
+    #[track_caller]
     pub fn new(wgsl_source: &str) -> Self {
-        let source_hash = hash_shader_source(wgsl_source);
+        let (source, source_hash) =
+            cached_shader_source(std::panic::Location::caller(), wgsl_source);
         Self {
-            source: Arc::<str>::from(wgsl_source),
+            source,
             source_hash,
-            uniforms: Vec::with_capacity(Self::INITIAL_UNIFORM_CAPACITY),
+            uniforms: RuntimeShaderUniforms::new(),
+            input_padding: 0.0,
         }
     }
 
@@ -131,12 +197,29 @@ impl RuntimeShader {
     /// This avoids repeatedly copying large shader modules for animated effects
     /// that rebuild only their uniform payload every frame.
     pub fn from_shared_source(source: Arc<str>) -> Self {
-        let source_hash = hash_shader_source(&source);
+        let source_hash = cached_shared_shader_source_hash(&source);
         Self {
             source,
             source_hash,
-            uniforms: Vec::with_capacity(Self::INITIAL_UNIFORM_CAPACITY),
+            uniforms: RuntimeShaderUniforms::new(),
+            input_padding: 0.0,
         }
+    }
+
+    /// Declares how far the shader may sample outside its effect rect, in
+    /// logical pixels. Backdrop rendering uses this to capture enough input
+    /// around refractive and displacement shaders.
+    pub fn set_input_padding(&mut self, padding: f32) {
+        self.input_padding = if padding.is_finite() {
+            padding.max(0.0)
+        } else {
+            0.0
+        };
+    }
+
+    /// Returns the declared input padding in logical pixels.
+    pub fn input_padding(&self) -> f32 {
+        self.input_padding
     }
 
     /// Set a single float uniform at the given index.
@@ -154,7 +237,7 @@ impl RuntimeShader {
         value: f32,
     ) -> Result<(), RuntimeShaderUniformError> {
         self.try_ensure_capacity(index, 1)?;
-        self.uniforms[index] = value;
+        self.uniforms.set(index, value);
         Ok(())
     }
 
@@ -174,8 +257,8 @@ impl RuntimeShader {
         y: f32,
     ) -> Result<(), RuntimeShaderUniformError> {
         self.try_ensure_capacity(index, 2)?;
-        self.uniforms[index] = x;
-        self.uniforms[index + 1] = y;
+        self.uniforms.set(index, x);
+        self.uniforms.set(index + 1, y);
         Ok(())
     }
 
@@ -197,10 +280,10 @@ impl RuntimeShader {
         w: f32,
     ) -> Result<(), RuntimeShaderUniformError> {
         self.try_ensure_capacity(index, 4)?;
-        self.uniforms[index] = x;
-        self.uniforms[index + 1] = y;
-        self.uniforms[index + 2] = z;
-        self.uniforms[index + 3] = w;
+        self.uniforms.set(index, x);
+        self.uniforms.set(index + 1, y);
+        self.uniforms.set(index + 2, z);
+        self.uniforms.set(index + 3, w);
         Ok(())
     }
 
@@ -211,14 +294,14 @@ impl RuntimeShader {
 
     /// Get the uniform data as a float slice (for uploading to GPU).
     pub fn uniforms(&self) -> &[f32] {
-        &self.uniforms
+        self.uniforms.as_slice()
     }
 
     /// Get the uniform data padded to full 256-float array (for GPU uniform buffer).
     pub fn uniforms_padded(&self) -> [f32; Self::MAX_UNIFORMS] {
         let mut padded = [0.0f32; Self::MAX_UNIFORMS];
         let len = self.uniforms.len().min(Self::MAX_UNIFORMS);
-        padded[..len].copy_from_slice(&self.uniforms[..len]);
+        padded[..len].copy_from_slice(&self.uniforms.as_slice()[..len]);
         padded
     }
 
@@ -238,9 +321,7 @@ impl RuntimeShader {
         if min_len > Self::MAX_USER_UNIFORMS {
             return Err(Self::uniform_range_error(index, width));
         }
-        if self.uniforms.len() < min_len {
-            self.uniforms.resize(min_len, 0.0);
-        }
+        self.uniforms.ensure_len(min_len);
         Ok(())
     }
 
@@ -261,6 +342,7 @@ impl PartialEq for RuntimeShader {
             && (Arc::ptr_eq(&self.source, &other.source)
                 || self.source.as_ref() == other.source.as_ref())
             && self.uniforms == other.uniforms
+            && self.input_padding.to_bits() == other.input_padding.to_bits()
     }
 }
 
@@ -274,6 +356,92 @@ fn hash_shader_source(source: &str) -> u64 {
         .fold(FNV_OFFSET_BASIS, |hash, byte| {
             (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
         })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ShaderSourceCallsite {
+    file: &'static str,
+    line: u32,
+    column: u32,
+}
+
+struct CachedShaderSource {
+    callsite: ShaderSourceCallsite,
+    source_hash: u64,
+    source: Arc<str>,
+}
+
+struct CachedSharedShaderSourceHash {
+    byte_ptr: usize,
+    len: usize,
+    source_hash: u64,
+    source: Weak<str>,
+}
+
+fn cached_shared_shader_source_hash(source: &Arc<str>) -> u64 {
+    static CACHE: OnceLock<Mutex<Vec<CachedSharedShaderSourceHash>>> = OnceLock::new();
+    let byte_ptr = source.as_ptr() as usize;
+    let len = source.len();
+    let mut cache = CACHE
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    cache.retain(|entry| entry.source.strong_count() > 0);
+    if let Some(entry) = cache.iter().find(|entry| {
+        entry.byte_ptr == byte_ptr
+            && entry.len == len
+            && entry
+                .source
+                .upgrade()
+                .is_some_and(|cached| Arc::ptr_eq(&cached, source))
+    }) {
+        return entry.source_hash;
+    }
+
+    let source_hash = hash_shader_source(source);
+    cache.push(CachedSharedShaderSourceHash {
+        byte_ptr,
+        len,
+        source_hash,
+        source: Arc::downgrade(source),
+    });
+    source_hash
+}
+
+fn cached_shader_source(
+    location: &'static std::panic::Location<'static>,
+    source: &str,
+) -> (Arc<str>, u64) {
+    static CACHE: OnceLock<Mutex<Vec<CachedShaderSource>>> = OnceLock::new();
+    let callsite = ShaderSourceCallsite {
+        file: location.file(),
+        line: location.line(),
+        column: location.column(),
+    };
+    let mut cache = CACHE
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    if let Some(entry) = cache.iter_mut().find(|entry| entry.callsite == callsite) {
+        if entry.source.as_ref() == source {
+            return (entry.source.clone(), entry.source_hash);
+        }
+        let source_hash = hash_shader_source(source);
+        entry.source_hash = source_hash;
+        entry.source = Arc::<str>::from(source);
+        return (entry.source.clone(), entry.source_hash);
+    }
+
+    let source_hash = hash_shader_source(source);
+    let shared = Arc::<str>::from(source);
+    cache.push(CachedShaderSource {
+        callsite,
+        source_hash,
+        source: shared.clone(),
+    });
+    (shared, source_hash)
 }
 
 /// A render effect applied to a graphics layer's rendered content.
@@ -354,6 +522,17 @@ impl RenderEffect {
             _ => false,
         }
     }
+
+    /// Maximum logical-pixel input padding required by this effect.
+    pub fn input_padding(&self) -> f32 {
+        match self {
+            RenderEffect::Shader { shader } => shader.input_padding(),
+            RenderEffect::Chain { first, second } => {
+                first.input_padding().max(second.input_padding())
+            }
+            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => 0.0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -386,6 +565,22 @@ mod tests {
         assert_eq!(padded[0], 42.0);
         assert_eq!(padded[1], 0.0);
         assert_eq!(padded[255], 0.0);
+    }
+
+    #[test]
+    fn runtime_shader_keeps_common_uniform_payload_inline() {
+        let mut shader = RuntimeShader::new("// test");
+        shader.set_float4(0, 1.0, 2.0, 3.0, 4.0);
+        shader.set_float4(4, 5.0, 6.0, 7.0, 8.0);
+        shader.set_float4(8, 9.0, 10.0, 11.0, 12.0);
+        shader.set_float4(12, 13.0, 14.0, 15.0, 16.0);
+
+        assert!(shader.uniforms.is_inline());
+        assert_eq!(shader.uniforms().len(), 16);
+
+        shader.set_float(16, 17.0);
+        assert!(!shader.uniforms.is_inline());
+        assert_eq!(shader.uniforms()[16], 17.0);
     }
 
     #[test]
@@ -496,6 +691,34 @@ mod tests {
 
         assert!(Arc::ptr_eq(&s1.source, &s2.source));
         assert_eq!(s1.source_hash(), s2.source_hash());
+    }
+
+    fn runtime_shader_from_reuse_callsite(source: &str) -> RuntimeShader {
+        RuntimeShader::new(source)
+    }
+
+    fn runtime_shader_from_replacement_callsite(source: &str) -> RuntimeShader {
+        RuntimeShader::new(source)
+    }
+
+    #[test]
+    fn runtime_shader_new_reuses_same_callsite_source() {
+        let source = "fn fragment() -> vec4<f32> { return vec4<f32>(1.0); }";
+        let s1 = runtime_shader_from_reuse_callsite(source);
+        let s2 = runtime_shader_from_reuse_callsite(source);
+
+        assert!(Arc::ptr_eq(&s1.source, &s2.source));
+        assert_eq!(s1.source_hash(), s2.source_hash());
+    }
+
+    #[test]
+    fn runtime_shader_new_replaces_changed_callsite_source() {
+        let s1 = runtime_shader_from_replacement_callsite("fn a() {}");
+        let s2 = runtime_shader_from_replacement_callsite("fn b() {}");
+
+        assert!(!Arc::ptr_eq(&s1.source, &s2.source));
+        assert_ne!(s1.source_hash(), s2.source_hash());
+        assert_eq!(s2.source(), "fn b() {}");
     }
 
     #[test]

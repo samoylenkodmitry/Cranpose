@@ -217,34 +217,56 @@ fn find_button_in_semantics_by(
     match_mode: TextMatchMode,
 ) -> Option<(f32, f32, f32, f32)> {
     let text_owned = text.to_string();
-    let mut bounds = find_button_bounds_for_mode(robot, &text_owned, match_mode);
 
+    button_helper_diag(&text_owned, "resolve root bounds");
     let Some(root) = root_bounds(robot) else {
-        return bounds;
+        button_helper_diag(&text_owned, "root unavailable; using first raw match");
+        let result = find_button_bounds_for_mode(robot, &text_owned, match_mode)
+            .into_iter()
+            .next();
+        button_helper_diag(&text_owned, &format!("raw result={result:?}"));
+        return result;
     };
+    button_helper_diag(&text_owned, &format!("root={root:?}"));
+    let mut candidates = find_button_bounds_for_mode(robot, &text_owned, match_mode);
+    button_helper_diag(&text_owned, &format!("candidates={candidates:?}"));
+    let mut bounds = choose_button_bounds(&candidates, root);
+    button_helper_diag(&text_owned, &format!("chosen={bounds:?}"));
 
-    if let Some(current) = bounds {
-        if is_fully_visible(current, root) {
-            return bounds;
-        }
-    } else {
+    if let Some(current) = visible_bounds(bounds, root) {
+        button_helper_diag(&text_owned, &format!("visible={current:?}"));
+        return Some(current);
+    }
+    if bounds.is_none() {
+        button_helper_diag(&text_owned, "no candidate");
         return None;
     }
 
-    for _ in 0..8 {
+    for attempt in 0..8 {
         let Some(current) = bounds else {
             break;
         };
+        button_helper_diag(
+            &text_owned,
+            &format!("scroll attempt={attempt} current={current:?}"),
+        );
 
         let Some((axis, _dir)) = overflow_axis_direction(current, root) else {
+            button_helper_diag(&text_owned, "no overflow axis");
             break;
         };
 
         let Some((scroll_delta_x, scroll_delta_y)) = scroll_delta_for_overflow(current, root, axis)
         else {
+            button_helper_diag(&text_owned, "no scroll delta");
             break;
         };
+        button_helper_diag(
+            &text_owned,
+            &format!("axis={axis:?} delta=({scroll_delta_x:.1},{scroll_delta_y:.1})"),
+        );
 
+        button_helper_diag(&text_owned, "query semantics for scroll anchor");
         let semantics = match robot.get_semantics() {
             Ok(semantics) => semantics,
             Err(e) => {
@@ -254,25 +276,56 @@ fn find_button_in_semantics_by(
         };
 
         let Some((sx, sy, sw, sh)) = find_scroll_anchor(&semantics, current, root, axis) else {
+            button_helper_diag(&text_owned, "no scroll anchor");
             break;
         };
 
         let start_x = sx + sw / 2.0;
         let start_y = sy + sh / 2.0;
+        button_helper_diag(
+            &text_owned,
+            &format!("mouse_move=({start_x:.1},{start_y:.1})"),
+        );
         let _ = robot.mouse_move(start_x, start_y);
+        button_helper_diag(&text_owned, "mouse_scroll begin");
         let _ = robot.mouse_scroll(scroll_delta_x, scroll_delta_y);
+        button_helper_diag(&text_owned, "mouse_scroll end");
         std::thread::sleep(Duration::from_millis(SCROLL_SETTLE_MS));
-        let _ = robot.wait_for_idle();
+        button_helper_diag(&text_owned, "pump begin");
+        let _ = robot.pump_frames(1);
+        button_helper_diag(&text_owned, "pump end");
 
-        bounds = find_button_bounds_for_mode(robot, &text_owned, match_mode);
-        if let Some(current) = bounds {
-            if is_fully_visible(current, root) {
-                break;
-            }
+        candidates = find_button_bounds_for_mode(robot, &text_owned, match_mode);
+        button_helper_diag(&text_owned, &format!("next candidates={candidates:?}"));
+        bounds = choose_button_bounds(&candidates, root);
+        button_helper_diag(&text_owned, &format!("next chosen={bounds:?}"));
+        if let Some(current) = visible_bounds(bounds, root) {
+            button_helper_diag(&text_owned, &format!("visible after scroll={current:?}"));
+            return Some(current);
+        }
+        if bounds.is_some_and(|next| rect_bounds_close(next, current)) {
+            button_helper_diag(&text_owned, "scroll made no candidate progress");
+            break;
         }
     }
 
-    bounds
+    let result = visible_bounds(bounds, root);
+    button_helper_diag(&text_owned, &format!("final={result:?}"));
+    result
+}
+
+fn button_helper_diag(text: &str, message: &str) {
+    if std::env::var_os("CRANPOSE_ROBOT_BUTTON_HELPER_DIAG").is_some() {
+        eprintln!("button-helper {text:?}: {message}");
+    }
+}
+
+fn rect_bounds_close(left: RectBounds, right: RectBounds) -> bool {
+    const EPSILON: f32 = 0.5;
+    (left.0 - right.0).abs() <= EPSILON
+        && (left.1 - right.1).abs() <= EPSILON
+        && (left.2 - right.2).abs() <= EPSILON
+        && (left.3 - right.3).abs() <= EPSILON
 }
 
 /// Recursively search for text in semantic elements.
@@ -507,7 +560,9 @@ type LabeledRect = (String, RectBounds);
 pub fn collect_tab_bounds(robot: &cranpose::Robot, labels: &[&str]) -> Vec<LabeledRect> {
     let mut tabs = Vec::new();
     for label in labels {
-        if let Some(bounds) = find_in_semantics(robot, |elem| find_button(elem, label)) {
+        if let Some(bounds) =
+            find_in_semantics(robot, |elem| find_button_by(elem, label, text_equals))
+        {
             tabs.push(((*label).to_string(), bounds));
         }
     }
@@ -568,6 +623,8 @@ pub fn root_bounds(robot: &cranpose::Robot) -> Option<RectBounds> {
 }
 
 const VISIBILITY_PADDING: f32 = 4.0;
+const VISIBILITY_EDGE_EPSILON: f32 = 1.0;
+const SCROLL_ANCHOR_EDGE_PADDING: f32 = 72.0;
 const SCROLL_SETTLE_MS: u64 = 140;
 type TextMatcher = fn(&str, &str) -> bool;
 
@@ -581,7 +638,6 @@ fn text_contains(actual: &str, needle: &str) -> bool {
     actual.contains(needle)
 }
 
-#[cfg(test)]
 fn text_equals(actual: &str, needle: &str) -> bool {
     actual == needle
 }
@@ -590,18 +646,21 @@ fn find_button_bounds_for_mode(
     robot: &cranpose::Robot,
     text: &str,
     match_mode: TextMatchMode,
-) -> Option<(f32, f32, f32, f32)> {
-    let result = match match_mode {
-        TextMatchMode::Contains => robot.find_button_bounds(text),
-        TextMatchMode::Exact => robot.find_button_bounds_exact(text),
-    };
-    match result {
-        Ok(bounds) => bounds,
+) -> Vec<RectBounds> {
+    let semantics = match robot.get_semantics() {
+        Ok(semantics) => semantics,
         Err(e) => {
             eprintln!("  ✗ Failed to query button semantics: {}", e);
-            None
+            return Vec::new();
         }
-    }
+    };
+    let matcher = match match_mode {
+        TextMatchMode::Contains => text_contains,
+        TextMatchMode::Exact => text_equals,
+    };
+    let mut matches = Vec::new();
+    collect_button_bounds_by(&semantics, text, matcher, &mut matches);
+    matches
 }
 
 fn has_text_by(elem: &SemanticElement, text: &str, matcher: TextMatcher) -> bool {
@@ -635,14 +694,59 @@ fn find_button_by(
         .find_map(|child| find_button_by(child, text, matcher))
 }
 
+fn collect_button_bounds_by(
+    elements: &[SemanticElement],
+    text: &str,
+    matcher: TextMatcher,
+    matches: &mut Vec<RectBounds>,
+) {
+    for elem in elements {
+        if elem.clickable && has_text_by(elem, text, matcher) {
+            matches.push((
+                elem.bounds.x,
+                elem.bounds.y,
+                elem.bounds.width,
+                elem.bounds.height,
+            ));
+        }
+        collect_button_bounds_by(&elem.children, text, matcher, matches);
+    }
+}
+
+fn choose_button_bounds(candidates: &[RectBounds], root: RectBounds) -> Option<RectBounds> {
+    candidates
+        .iter()
+        .copied()
+        .find(|bounds| is_fully_visible(*bounds, root))
+        .or_else(|| {
+            candidates.iter().copied().min_by(|left, right| {
+                button_visibility_score(*left, root)
+                    .total_cmp(&button_visibility_score(*right, root))
+            })
+        })
+}
+
+fn button_visibility_score(bounds: RectBounds, root: RectBounds) -> f32 {
+    let (x, y, w, h) = bounds;
+    let (rx, ry, rw, rh) = root;
+    let left = rx;
+    let right = rx + rw;
+    let top = ry;
+    let bottom = ry + rh;
+
+    (left - x).max(0.0) + (x + w - right).max(0.0) + (top - y).max(0.0) + (y + h - bottom).max(0.0)
+}
+
 fn is_axis_visible(bounds: RectBounds, root: RectBounds, axis: TabAxis) -> bool {
     let (x, y, w, h) = bounds;
     let (rx, ry, rw, rh) = root;
     match axis {
         TabAxis::Horizontal => {
-            x >= rx + VISIBILITY_PADDING && x + w <= rx + rw - VISIBILITY_PADDING
+            x >= rx - VISIBILITY_EDGE_EPSILON && x + w <= rx + rw + VISIBILITY_EDGE_EPSILON
         }
-        TabAxis::Vertical => y >= ry + VISIBILITY_PADDING && y + h <= ry + rh - VISIBILITY_PADDING,
+        TabAxis::Vertical => {
+            y >= ry - VISIBILITY_EDGE_EPSILON && y + h <= ry + rh + VISIBILITY_EDGE_EPSILON
+        }
     }
 }
 
@@ -651,14 +755,18 @@ fn is_fully_visible(bounds: RectBounds, root: RectBounds) -> bool {
         && is_axis_visible(bounds, root, TabAxis::Vertical)
 }
 
+fn visible_bounds(bounds: Option<RectBounds>, root: RectBounds) -> Option<RectBounds> {
+    bounds.filter(|bounds| is_fully_visible(*bounds, root))
+}
+
 fn overflow_axis_direction(bounds: RectBounds, root: RectBounds) -> Option<(TabAxis, f32)> {
     let (x, y, w, h) = bounds;
     let (rx, ry, rw, rh) = root;
 
-    let overflow_left = (rx + VISIBILITY_PADDING - x).max(0.0);
-    let overflow_right = (x + w - (rx + rw - VISIBILITY_PADDING)).max(0.0);
-    let overflow_top = (ry + VISIBILITY_PADDING - y).max(0.0);
-    let overflow_bottom = (y + h - (ry + rh - VISIBILITY_PADDING)).max(0.0);
+    let overflow_left = (rx - x).max(0.0);
+    let overflow_right = (x + w - (rx + rw)).max(0.0);
+    let overflow_top = (ry - y).max(0.0);
+    let overflow_bottom = (y + h - (ry + rh)).max(0.0);
 
     let horizontal_overflow = overflow_left.max(overflow_right);
     let vertical_overflow = overflow_top.max(overflow_bottom);
@@ -693,10 +801,14 @@ fn scroll_delta_for_overflow(
     let bottom = ry + rh - VISIBILITY_PADDING;
 
     match axis {
-        TabAxis::Horizontal if x < left => Some((left - x, 0.0)),
-        TabAxis::Horizontal if x + w > right => Some((-(x + w - right), 0.0)),
-        TabAxis::Vertical if y < top => Some((0.0, top - y)),
-        TabAxis::Vertical if y + h > bottom => Some((0.0, -(y + h - bottom))),
+        TabAxis::Horizontal if x < left - VISIBILITY_EDGE_EPSILON => Some((left - x, 0.0)),
+        TabAxis::Horizontal if x + w > right + VISIBILITY_EDGE_EPSILON => {
+            Some((-(x + w - right), 0.0))
+        }
+        TabAxis::Vertical if y < top - VISIBILITY_EDGE_EPSILON => Some((0.0, top - y)),
+        TabAxis::Vertical if y + h > bottom + VISIBILITY_EDGE_EPSILON => {
+            Some((0.0, -(y + h - bottom)))
+        }
         _ => None,
     }
 }
@@ -736,13 +848,29 @@ fn primary_axis_distance(bounds: RectBounds, target: RectBounds, axis: TabAxis) 
     (center - target_center).abs()
 }
 
+fn scroll_anchor_is_edge_safe(bounds: RectBounds, root: RectBounds, axis: TabAxis) -> bool {
+    let (rx, ry, rw, rh) = root;
+    match axis {
+        TabAxis::Horizontal => {
+            let center_x = bounds.0 + bounds.2 / 2.0;
+            center_x >= rx + SCROLL_ANCHOR_EDGE_PADDING
+                && center_x <= rx + rw - SCROLL_ANCHOR_EDGE_PADDING
+        }
+        TabAxis::Vertical => {
+            let center_y = bounds.1 + bounds.3 / 2.0;
+            center_y >= ry + SCROLL_ANCHOR_EDGE_PADDING
+                && center_y <= ry + rh - SCROLL_ANCHOR_EDGE_PADDING
+        }
+    }
+}
+
 fn find_scroll_anchor(
     elements: &[SemanticElement],
     target: RectBounds,
     root: RectBounds,
     axis: TabAxis,
 ) -> Option<RectBounds> {
-    let mut best: Option<(RectBounds, f32, f32)> = None;
+    let mut best: Option<(RectBounds, bool, f32, f32)> = None;
 
     for elem in elements {
         if elem.clickable {
@@ -756,14 +884,19 @@ fn find_scroll_anchor(
                 let overlap = cross_axis_overlap(bounds, target, axis);
                 if overlap > 0.0 {
                     let distance = primary_axis_distance(bounds, target, axis);
+                    let edge_safe = scroll_anchor_is_edge_safe(bounds, root, axis);
                     match best {
-                        None => best = Some((bounds, overlap, distance)),
-                        Some((_, best_overlap, best_distance)) => {
+                        None => best = Some((bounds, edge_safe, overlap, distance)),
+                        Some((_, best_edge_safe, best_overlap, best_distance)) => {
+                            let is_better_safety = edge_safe && !best_edge_safe;
                             let is_better_overlap = overlap > best_overlap + f32::EPSILON;
                             let is_better_distance = (overlap - best_overlap).abs() <= f32::EPSILON
                                 && distance < best_distance;
-                            if is_better_overlap || is_better_distance {
-                                best = Some((bounds, overlap, distance));
+                            if is_better_safety
+                                || (edge_safe == best_edge_safe
+                                    && (is_better_overlap || is_better_distance))
+                            {
+                                best = Some((bounds, edge_safe, overlap, distance));
                             }
                         }
                     }
@@ -774,21 +907,26 @@ fn find_scroll_anchor(
         if let Some(found) = find_scroll_anchor(&elem.children, target, root, axis) {
             let overlap = cross_axis_overlap(found, target, axis);
             let distance = primary_axis_distance(found, target, axis);
+            let edge_safe = scroll_anchor_is_edge_safe(found, root, axis);
             match best {
-                None => best = Some((found, overlap, distance)),
-                Some((_, best_overlap, best_distance)) => {
+                None => best = Some((found, edge_safe, overlap, distance)),
+                Some((_, best_edge_safe, best_overlap, best_distance)) => {
+                    let is_better_safety = edge_safe && !best_edge_safe;
                     let is_better_overlap = overlap > best_overlap + f32::EPSILON;
                     let is_better_distance =
                         (overlap - best_overlap).abs() <= f32::EPSILON && distance < best_distance;
-                    if is_better_overlap || is_better_distance {
-                        best = Some((found, overlap, distance));
+                    if is_better_safety
+                        || (edge_safe == best_edge_safe
+                            && (is_better_overlap || is_better_distance))
+                    {
+                        best = Some((found, edge_safe, overlap, distance));
                     }
                 }
             }
         }
     }
 
-    best.map(|(bounds, _, _)| bounds)
+    best.map(|(bounds, _, _, _)| bounds)
 }
 
 /// Capture a full screenshot from the running robot app.
@@ -1391,6 +1529,86 @@ mod tests {
     }
 
     #[test]
+    fn visible_bounds_accepts_subpixel_edge_fit() {
+        let root = (0.0, 0.0, 1024.0, 768.0);
+        let button = (861.17, 28.0, 158.83, 47.6);
+
+        assert_eq!(visible_bounds(Some(button), root), Some(button));
+        assert_eq!(
+            scroll_delta_for_overflow(button, root, TabAxis::Horizontal),
+            None
+        );
+    }
+
+    #[test]
+    fn visible_bounds_accepts_root_origin_button() {
+        let root = (0.0, 0.0, 400.0, 300.0);
+        let button = (0.0, 0.0, 92.33, 19.6);
+
+        assert_eq!(visible_bounds(Some(button), root), Some(button));
+        assert_eq!(overflow_axis_direction(button, root), None);
+    }
+
+    #[test]
+    fn exact_button_matching_does_not_match_text_input_for_text_tab() {
+        let text_input_tab = semantic_element(
+            "Layout",
+            None,
+            true,
+            (10.0, 20.0, 120.0, 40.0),
+            vec![semantic_element(
+                "Text",
+                Some("Text Input"),
+                false,
+                (18.0, 28.0, 96.0, 24.0),
+                Vec::new(),
+            )],
+        );
+
+        assert!(
+            find_button_by(&text_input_tab, "Text", text_contains).is_some(),
+            "substring matching should keep the public contains behavior"
+        );
+        assert!(
+            find_button_by(&text_input_tab, "Text", text_equals).is_none(),
+            "exact tab matching must not treat Text Input as Text"
+        );
+    }
+
+    #[test]
+    fn scroll_anchor_prefers_edge_safe_button_over_clipped_edge_button() {
+        let root = (0.0, 0.0, 1080.0, 820.0);
+        let target = (1084.0, 28.0, 82.0, 47.6);
+        let elements = vec![semantic_element(
+            "Layout",
+            None,
+            false,
+            root,
+            vec![
+                semantic_element(
+                    "Layout",
+                    Some("central"),
+                    true,
+                    (920.0, 28.0, 76.0, 47.6),
+                    Vec::new(),
+                ),
+                semantic_element(
+                    "Layout",
+                    Some("edge"),
+                    true,
+                    (1019.0, 28.0, 56.0, 47.6),
+                    Vec::new(),
+                ),
+            ],
+        )];
+
+        assert_eq!(
+            find_scroll_anchor(&elements, target, root, TabAxis::Horizontal),
+            Some((920.0, 28.0, 76.0, 47.6))
+        );
+    }
+
+    #[test]
     fn missing_target_scroll_searches_down_with_periodic_reverse() {
         let directions: Vec<_> = (0..8).map(missing_target_scroll_direction).collect();
 
@@ -1519,6 +1737,29 @@ mod tests {
             find_button_by(&partial_only_button, "Text", text_equals),
             None
         );
+    }
+
+    #[test]
+    fn choose_button_bounds_prefers_visible_match_over_offscreen_first_match() {
+        let root = (0.0, 0.0, 320.0, 240.0);
+        let candidates = vec![(420.0, 12.0, 80.0, 40.0), (24.0, 12.0, 80.0, 40.0)];
+
+        assert_eq!(
+            choose_button_bounds(&candidates, root),
+            Some((24.0, 12.0, 80.0, 40.0))
+        );
+    }
+
+    #[test]
+    fn visible_bounds_rejects_offscreen_button_candidates() {
+        let root = (0.0, 0.0, 320.0, 240.0);
+
+        assert_eq!(
+            visible_bounds(Some((12.0, 12.0, 80.0, 40.0)), root),
+            Some((12.0, 12.0, 80.0, 40.0))
+        );
+        assert_eq!(visible_bounds(Some((340.0, 12.0, 80.0, 40.0)), root), None);
+        assert_eq!(visible_bounds(Some((-90.0, 12.0, 80.0, 40.0)), root), None);
     }
 
     #[test]

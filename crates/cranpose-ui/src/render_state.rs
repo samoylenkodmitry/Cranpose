@@ -72,15 +72,15 @@ fn new_draw_observer() -> SnapshotStateObserver {
 }
 
 pub(crate) fn observe_draw_reads<R>(scope: DrawObservationScope, block: impl FnOnce() -> R) -> R {
-    with_draw_observer(|observer| {
-        observer.observe_reads(
-            scope,
-            |scope| {
-                schedule_draw_repass(scope.node_id);
-            },
-            block,
-        )
-    })
+    let context = require_current_app_context("draw observer access");
+    let context_id = context.id;
+    context.draw_observer.observe_reads(
+        scope,
+        move |scope| {
+            schedule_draw_repass_for_app_context(context_id, scope.node_id);
+        },
+        block,
+    )
 }
 
 pub(crate) fn clear_draw_observations_for_node(node_id: NodeId) {
@@ -181,11 +181,14 @@ impl AppContext {
     }
 
     pub fn set_text_measurer<M: crate::text::TextMeasurer>(&self, measurer: M) {
-        self.text.set_measurer(Rc::new(measurer));
+        self.set_text_measurer_rc(Rc::new(measurer));
     }
 
     pub fn set_text_measurer_rc(&self, measurer: Rc<dyn crate::text::TextMeasurer>) {
         self.text.set_measurer(measurer);
+        self.layout_cache_epoch.fetch_add(1, Ordering::Relaxed);
+        self.state.layout_invalidated.store(true, Ordering::Relaxed);
+        self.state.render_invalidated.store(true, Ordering::Relaxed);
     }
 
     #[doc(hidden)]
@@ -302,7 +305,7 @@ pub(crate) fn set_current_text_measurer(measurer: Rc<dyn crate::text::TextMeasur
     let Some(context) = current_app_context() else {
         panic!("set_text_measurer requires an active AppContext");
     };
-    context.text.set_measurer(measurer);
+    context.set_text_measurer_rc(measurer);
 }
 
 pub(crate) fn set_modifier_chain_trace(callback: Arc<ModifierChainTraceCallback>) -> AppContextId {
@@ -380,6 +383,14 @@ pub(crate) fn with_scroll_motion_context_store<R>(
 ) -> R {
     let context = require_current_app_context("scroll motion context access");
     f(&context.scroll_motion_contexts)
+}
+
+#[doc(hidden)]
+pub fn clear_transient_scroll_motion_contexts() {
+    let Some(context) = current_app_context() else {
+        return;
+    };
+    context.scroll_motion_contexts.clear_transient_after_frame();
 }
 
 #[cfg(test)]
@@ -495,6 +506,12 @@ impl LayoutRepassManager {
     fn take_dirty_nodes(&mut self) -> Vec<NodeId> {
         self.dirty_nodes.drain().collect()
     }
+
+    fn dirty_nodes_snapshot(&self) -> Vec<NodeId> {
+        let mut nodes = self.dirty_nodes.iter().copied().collect::<Vec<_>>();
+        nodes.sort_unstable();
+        nodes
+    }
 }
 
 /// Tracks draw-only invalidations so render data can be refreshed without layout.
@@ -546,7 +563,18 @@ fn lock_repass_manager<T>(manager: &Mutex<T>) -> MutexGuard<'_, T> {
 /// # For Global Invalidation
 ///
 /// For rare global events (window resize, global scale changes), use `request_layout_invalidation()` instead.
+#[track_caller]
 pub fn schedule_layout_repass(node_id: NodeId) {
+    if layout_repass_schedule_diagnostics_enabled_for(node_id) {
+        let caller = std::panic::Location::caller();
+        log::warn!(
+            "[layout-repass-schedule] node={} caller={}:{}:{}",
+            node_id,
+            caller.file(),
+            caller.line(),
+            caller.column()
+        );
+    }
     with_render_state(|state| {
         lock_repass_manager(&state.layout_repasses).schedule_repass(node_id);
         state.layout_invalidated.store(true, Ordering::Relaxed);
@@ -560,11 +588,39 @@ pub fn schedule_layout_repass(node_id: NodeId) {
     request_render_invalidation();
 }
 
+#[derive(Clone, Copy)]
+enum LayoutRepassScheduleDiag {
+    Disabled,
+    All,
+    Node(NodeId),
+}
+
+fn layout_repass_schedule_diagnostics_enabled_for(node_id: NodeId) -> bool {
+    static MODE: std::sync::OnceLock<LayoutRepassScheduleDiag> = std::sync::OnceLock::new();
+    match *MODE.get_or_init(|| {
+        let Some(value) = std::env::var_os("CRANPOSE_LAYOUT_REPASS_SCHEDULE_DIAG") else {
+            return LayoutRepassScheduleDiag::Disabled;
+        };
+        if value == "all" {
+            return LayoutRepassScheduleDiag::All;
+        }
+        value
+            .to_string_lossy()
+            .parse::<NodeId>()
+            .map(LayoutRepassScheduleDiag::Node)
+            .unwrap_or(LayoutRepassScheduleDiag::Disabled)
+    }) {
+        LayoutRepassScheduleDiag::Disabled => false,
+        LayoutRepassScheduleDiag::All => true,
+        LayoutRepassScheduleDiag::Node(target) => target == node_id,
+    }
+}
+
 pub(crate) fn schedule_modifier_slices_repass(node_id: NodeId) {
     with_render_state(|state| {
         lock_repass_manager(&state.modifier_slice_repasses).schedule_repass(node_id);
     });
-    schedule_layout_repass(node_id);
+    schedule_draw_repass(node_id);
 }
 
 /// Schedules a draw-only repass for a specific node.
@@ -572,10 +628,22 @@ pub(crate) fn schedule_modifier_slices_repass(node_id: NodeId) {
 /// This ensures draw/pointer data stays in sync when modifier updates do not
 /// require a layout pass (e.g., draw-only modifier changes).
 pub fn schedule_draw_repass(node_id: NodeId) {
-    with_render_state(|state| {
-        lock_repass_manager(&state.draw_repasses).schedule_repass(node_id);
+    let context = require_current_app_context("render state access");
+    schedule_draw_repass_in_context(&context, node_id);
+}
+
+fn schedule_draw_repass_for_app_context(context_id: AppContextId, node_id: NodeId) {
+    let _ = with_app_context_by_id(context_id, |context| {
+        schedule_draw_repass_in_context(context, node_id);
     });
-    request_render_invalidation();
+}
+
+fn schedule_draw_repass_in_context(context: &AppContext, node_id: NodeId) {
+    lock_repass_manager(&context.state.draw_repasses).schedule_repass(node_id);
+    context
+        .state
+        .render_invalidated
+        .store(true, Ordering::Relaxed);
 }
 
 /// Returns true if any draw repasses are pending.
@@ -591,6 +659,11 @@ pub fn take_draw_repass_nodes() -> Vec<NodeId> {
 /// Returns true if any layout repasses are pending.
 pub fn has_pending_layout_repasses() -> bool {
     with_render_state(|state| lock_repass_manager(&state.layout_repasses).has_pending_repass())
+}
+
+/// Returns a stable snapshot of pending layout repass node IDs without consuming them.
+pub fn pending_layout_repass_nodes_snapshot() -> Vec<NodeId> {
+    with_render_state(|state| lock_repass_manager(&state.layout_repasses).dirty_nodes_snapshot())
 }
 
 /// Takes all pending layout repass node IDs.

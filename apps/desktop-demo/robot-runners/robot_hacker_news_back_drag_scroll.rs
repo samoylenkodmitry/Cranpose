@@ -8,7 +8,7 @@ use desktop_app::app::{self, DemoTab};
 use hacker_news_robot_support::{
     click_button, click_first_visible_comments_button, create_mock_client, fail, raw_drag,
     semantics_bounds, settle_visible_mock_story_numbers, visible_mock_story_numbers,
-    wait_for_no_text, wait_for_text,
+    wait_for_comments_data, wait_for_no_text, wait_for_text,
 };
 use std::time::Duration;
 
@@ -182,7 +182,7 @@ fn main() {
             }
 
             println!("  • waiting for comments");
-            if !wait_for_text(&robot, "commenter-1") {
+            if !wait_for_comments_data(&robot) {
                 fail(&robot, "comments did not load");
             }
 

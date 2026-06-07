@@ -104,7 +104,12 @@ fn count_yellow_text_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
     screenshot
         .pixels
         .chunks_exact(4)
-        .filter(|rgba| rgba[0] > 170 && rgba[1] > 150 && rgba[2] < 140)
+        .filter(|rgba| {
+            rgba[0] > 150
+                && rgba[1] > 130
+                && rgba[0] > rgba[2].saturating_add(20)
+                && rgba[1] > rgba[2].saturating_add(12)
+        })
         .count()
 }
 

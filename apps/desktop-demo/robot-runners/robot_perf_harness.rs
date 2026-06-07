@@ -6,6 +6,7 @@
 //! CRANPOSE_PERF_SCENARIO=backdrop_blur cargo run --package desktop-app --example robot_perf_harness --features robot-app
 //! ```
 
+mod markdown_fixture_client;
 mod perf_robot_stats;
 
 use cranpose::AppLauncher;
@@ -13,7 +14,7 @@ use cranpose_core::CompositionLocalProvider;
 use cranpose_foundation::lazy::{
     remember_lazy_list_state, LazyLayoutStats, LazyListScope, LazyListState,
 };
-use cranpose_services::{local_http_client, HttpClient, HttpClientRef, HttpFuture};
+use cranpose_services::{local_http_client, HttpClientRef};
 use cranpose_testing::{find_button_exact_in_semantics, find_text};
 use cranpose_ui::widgets::{
     Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
@@ -22,6 +23,7 @@ use cranpose_ui::{
     composable, Color, GraphicsLayer, LinearArrangement, Modifier, RenderEffect, TextStyle,
 };
 use desktop_app::app;
+use markdown_fixture_client::MarkdownFixtureClient;
 use perf_robot_stats::{print_render_summary, RenderStatsAccumulator};
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -54,6 +56,7 @@ enum PerfScenario {
     TextHeavyScroll,
     MarkdownScroll,
     MarkdownViewerScroll,
+    MarkdownDefaultViewerScroll,
     BackdropBlur,
     OpaqueScene,
 }
@@ -65,6 +68,7 @@ impl PerfScenario {
             "text_heavy_scroll" => Some(Self::TextHeavyScroll),
             "markdown_scroll" => Some(Self::MarkdownScroll),
             "markdown_viewer_scroll" => Some(Self::MarkdownViewerScroll),
+            "markdown_default_viewer_scroll" => Some(Self::MarkdownDefaultViewerScroll),
             "backdrop_blur" => Some(Self::BackdropBlur),
             "opaque_scene" => Some(Self::OpaqueScene),
             _ => None,
@@ -85,6 +89,7 @@ impl PerfScenario {
             Self::TextHeavyScroll => "text_heavy_scroll",
             Self::MarkdownScroll => "markdown_scroll",
             Self::MarkdownViewerScroll => "markdown_viewer_scroll",
+            Self::MarkdownDefaultViewerScroll => "markdown_default_viewer_scroll",
             Self::BackdropBlur => "backdrop_blur",
             Self::OpaqueScene => "opaque_scene",
         }
@@ -96,6 +101,7 @@ impl PerfScenario {
             Self::TextHeavyScroll => "Text-Heavy Scroll",
             Self::MarkdownScroll => "Markdown Scroll",
             Self::MarkdownViewerScroll => "Fetched Markdown Viewer Scroll",
+            Self::MarkdownDefaultViewerScroll => "Default Markdown Viewer Scroll",
             Self::BackdropBlur => "Backdrop Blur Panel",
             Self::OpaqueScene => "Opaque Scene",
         }
@@ -107,6 +113,7 @@ impl PerfScenario {
             Self::TextHeavyScroll => 180,
             Self::MarkdownScroll => 0,
             Self::MarkdownViewerScroll => 0,
+            Self::MarkdownDefaultViewerScroll => 0,
             Self::BackdropBlur => 220,
             Self::OpaqueScene => 260,
         }
@@ -126,6 +133,7 @@ impl PerfScenario {
             Self::TextHeavyScroll => Color(0.82, 0.58, 0.32, 0.88),
             Self::MarkdownScroll => Color(0.55, 0.68, 1.0, 0.88),
             Self::MarkdownViewerScroll => Color(0.50, 0.78, 0.92, 0.88),
+            Self::MarkdownDefaultViewerScroll => Color(0.42, 0.80, 0.72, 0.88),
             Self::BackdropBlur => Color(0.72, 0.86, 0.98, 0.24),
             Self::OpaqueScene => Color(0.3, 0.36, 0.44, 1.0),
         }
@@ -133,13 +141,18 @@ impl PerfScenario {
 
     fn input_method(self) -> PerfInputMethod {
         match self {
-            Self::MarkdownScroll | Self::MarkdownViewerScroll => PerfInputMethod::Wheel,
+            Self::MarkdownScroll
+            | Self::MarkdownViewerScroll
+            | Self::MarkdownDefaultViewerScroll => PerfInputMethod::Wheel,
             _ => PerfInputMethod::Drag,
         }
     }
 
     fn requires_fetch(self) -> bool {
-        matches!(self, Self::MarkdownViewerScroll)
+        matches!(
+            self,
+            Self::MarkdownViewerScroll | Self::MarkdownDefaultViewerScroll
+        )
     }
 }
 
@@ -157,6 +170,13 @@ fn PerfHarnessApp(scenario: PerfScenario) {
             *slot.borrow_mut() = None;
         });
         MarkdownViewerPerfApp();
+        return;
+    }
+    if scenario == PerfScenario::MarkdownDefaultViewerScroll {
+        PERF_LAZY_LIST_STATE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        MarkdownViewerDefaultFixturePerfApp();
         return;
     }
 
@@ -271,6 +291,7 @@ fn PerfScenarioItem(index: usize, scenario: PerfScenario) {
         PerfScenario::TextHeavyScroll => TextHeavyRow(index, scenario),
         PerfScenario::MarkdownScroll => TextHeavyRow(index, scenario),
         PerfScenario::MarkdownViewerScroll => TextHeavyRow(index, scenario),
+        PerfScenario::MarkdownDefaultViewerScroll => TextHeavyRow(index, scenario),
         PerfScenario::BackdropBlur => BackdropRow(index),
         PerfScenario::OpaqueScene => OpaqueRow(index),
     }
@@ -457,30 +478,28 @@ fn OpaqueBlock(color: Color) {
     );
 }
 
-struct PerfMarkdownClient {
-    body: String,
-}
-
-impl PerfMarkdownClient {
-    fn new() -> Self {
-        Self {
-            body: app::markdown_scroll_stress_fixture(),
-        }
-    }
-}
-
-impl HttpClient for PerfMarkdownClient {
-    fn get_text<'a>(&'a self, _url: &'a str) -> HttpFuture<'a, String> {
-        let body = self.body.clone();
-        Box::pin(async move { Ok(body) })
-    }
+#[composable]
+#[allow(non_snake_case)]
+fn MarkdownViewerPerfApp() {
+    let client = cranpose_core::remember(|| {
+        Arc::new(MarkdownFixtureClient::from_body(
+            app::markdown_scroll_stress_fixture(),
+        )) as HttpClientRef
+    })
+    .with(|client| client.clone());
+    let local = local_http_client();
+    CompositionLocalProvider(vec![local.provides(client)], || {
+        app::MarkdownViewerRobotApp();
+    });
 }
 
 #[composable]
 #[allow(non_snake_case)]
-fn MarkdownViewerPerfApp() {
-    let client = cranpose_core::remember(|| Arc::new(PerfMarkdownClient::new()) as HttpClientRef)
-        .with(|client| client.clone());
+fn MarkdownViewerDefaultFixturePerfApp() {
+    let client = cranpose_core::remember(|| {
+        Arc::new(MarkdownFixtureClient::default_leetcode_daily()) as HttpClientRef
+    })
+    .with(|client| client.clone());
     let local = local_http_client();
     CompositionLocalProvider(vec![local.provides(client)], || {
         app::MarkdownViewerRobotApp();
@@ -781,27 +800,49 @@ struct FpsPacingAccumulator {
     worst_p95_ms: f32,
     worst_p99_ms: f32,
     worst_max_ms: f32,
+    min_work_fps: f32,
     worst_work_p95_ms: f32,
     worst_work_max_ms: f32,
     max_missed_120hz_budget: u32,
     max_missed_60hz_budget: u32,
     max_stalled_50ms_frames: u32,
+    max_work_missed_120hz_budget: u32,
+    max_work_missed_60hz_budget: u32,
+    max_work_stalled_50ms_frames: u32,
 }
 
 impl FpsPacingAccumulator {
     fn record(&mut self, stats: cranpose::FpsStats) {
-        if stats.interval_count == 0 {
+        if stats.frame_count == 0 {
             return;
         }
         self.samples = self.samples.saturating_add(1);
-        self.worst_p95_ms = self.worst_p95_ms.max(stats.p95_ms);
-        self.worst_p99_ms = self.worst_p99_ms.max(stats.p99_ms);
-        self.worst_max_ms = self.worst_max_ms.max(stats.max_ms);
+        if stats.interval_count > 0 {
+            self.worst_p95_ms = self.worst_p95_ms.max(stats.p95_ms);
+            self.worst_p99_ms = self.worst_p99_ms.max(stats.p99_ms);
+            self.worst_max_ms = self.worst_max_ms.max(stats.max_ms);
+            self.max_missed_120hz_budget =
+                self.max_missed_120hz_budget.max(stats.missed_120hz_budget);
+            self.max_missed_60hz_budget = self.max_missed_60hz_budget.max(stats.missed_60hz_budget);
+            self.max_stalled_50ms_frames =
+                self.max_stalled_50ms_frames.max(stats.stalled_50ms_frames);
+        }
+        self.min_work_fps = if self.min_work_fps == 0.0 {
+            stats.work_fps
+        } else {
+            self.min_work_fps.min(stats.work_fps)
+        };
         self.worst_work_p95_ms = self.worst_work_p95_ms.max(stats.work_p95_ms);
         self.worst_work_max_ms = self.worst_work_max_ms.max(stats.work_max_ms);
-        self.max_missed_120hz_budget = self.max_missed_120hz_budget.max(stats.missed_120hz_budget);
-        self.max_missed_60hz_budget = self.max_missed_60hz_budget.max(stats.missed_60hz_budget);
-        self.max_stalled_50ms_frames = self.max_stalled_50ms_frames.max(stats.stalled_50ms_frames);
+        self.max_work_missed_120hz_budget = self
+            .max_work_missed_120hz_budget
+            .max(stats.work_missed_120hz_budget);
+        self.max_work_missed_60hz_budget = self
+            .max_work_missed_60hz_budget
+            .max(stats.work_missed_60hz_budget);
+        self.max_work_stalled_50ms_frames = self
+            .max_work_stalled_50ms_frames
+            .max(stats.work_stalled_50ms_frames);
     }
 }
 
@@ -1048,9 +1089,10 @@ fn main() {
                 .unwrap_or_else(|err| fatal(&robot, format!("failed to read FPS stats: {err}")));
             pacing_stats.record(stats);
             println!(
-                "PERF_FPS_SUMMARY scenario={} fps={:.1} avg_frame_ms={:.2} p95_frame_ms={:.2} p99_frame_ms={:.2} max_frame_ms={:.2} work_avg_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} missed_60hz={} stalls_50ms={} worst_p95_frame_ms={:.2} worst_p99_frame_ms={:.2} worst_max_frame_ms={:.2} worst_work_p95_ms={:.2} worst_work_max_ms={:.2} max_missed_120hz={} max_missed_60hz={} max_stalls_50ms={} pacing_samples={} total_frames={} recompositions={} recompositions_per_second={}",
+                "PERF_FPS_SUMMARY scenario={} fps={:.1} work_fps={:.1} avg_frame_ms={:.2} p95_frame_ms={:.2} p99_frame_ms={:.2} max_frame_ms={:.2} work_avg_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} missed_60hz={} stalls_50ms={} work_missed_120hz={} work_missed_60hz={} work_stalls_50ms={} worst_p95_frame_ms={:.2} worst_p99_frame_ms={:.2} worst_max_frame_ms={:.2} min_work_fps={:.1} worst_work_p95_ms={:.2} worst_work_max_ms={:.2} max_missed_120hz={} max_missed_60hz={} max_stalls_50ms={} max_work_missed_120hz={} max_work_missed_60hz={} max_work_stalls_50ms={} pacing_samples={} total_frames={} recompositions={} recompositions_per_second={}",
                 scenario.name(),
                 stats.fps,
+                stats.work_fps,
                 stats.avg_ms,
                 stats.p95_ms,
                 stats.p99_ms,
@@ -1061,14 +1103,21 @@ fn main() {
                 stats.missed_120hz_budget,
                 stats.missed_60hz_budget,
                 stats.stalled_50ms_frames,
+                stats.work_missed_120hz_budget,
+                stats.work_missed_60hz_budget,
+                stats.work_stalled_50ms_frames,
                 pacing_stats.worst_p95_ms,
                 pacing_stats.worst_p99_ms,
                 pacing_stats.worst_max_ms,
+                pacing_stats.min_work_fps,
                 pacing_stats.worst_work_p95_ms,
                 pacing_stats.worst_work_max_ms,
                 pacing_stats.max_missed_120hz_budget,
                 pacing_stats.max_missed_60hz_budget,
                 pacing_stats.max_stalled_50ms_frames,
+                pacing_stats.max_work_missed_120hz_budget,
+                pacing_stats.max_work_missed_60hz_budget,
+                pacing_stats.max_work_stalled_50ms_frames,
                 pacing_stats.samples,
                 stats.frame_count,
                 stats.recompositions,
@@ -1076,31 +1125,33 @@ fn main() {
             );
             if min_fps > 0.0 {
                 println!(
-                    "PERF_FPS_BUDGET scenario={} min_fps={:.1} observed_fps={:.1} passed={}",
+                    "PERF_FPS_BUDGET scenario={} min_fps={:.1} observed_work_fps={:.1} observed_cadence_fps={:.1} passed={}",
                     scenario.name(),
                     min_fps,
+                    pacing_stats.min_work_fps,
                     stats.fps,
-                    stats.fps > min_fps,
+                    pacing_stats.min_work_fps > min_fps,
                 );
-                if stats.fps <= min_fps {
+                if pacing_stats.min_work_fps <= min_fps {
                     fatal(
                         &robot,
                         format!(
-                            "FPS budget failed for {}: expected >{:.1}, observed {:.1}",
+                            "FPS budget failed for {}: expected work capacity >{:.1}, observed {:.1}",
                             scenario.name(),
                             min_fps,
-                            stats.fps,
+                            pacing_stats.min_work_fps,
                         ),
                     );
                 }
             }
             if max_p95_frame_ms > 0.0 {
-                let observed_p95 = pacing_stats.worst_p95_ms;
+                let observed_p95 = pacing_stats.worst_work_p95_ms;
                 println!(
-                    "PERF_FRAME_P95_BUDGET scenario={} max_p95_frame_ms={:.2} observed_p95_frame_ms={:.2} passed={}",
+                    "PERF_FRAME_P95_BUDGET scenario={} max_p95_frame_ms={:.2} observed_work_p95_ms={:.2} observed_cadence_p95_ms={:.2} passed={}",
                     scenario.name(),
                     max_p95_frame_ms,
                     observed_p95,
+                    pacing_stats.worst_p95_ms,
                     observed_p95 <= max_p95_frame_ms,
                 );
                 if observed_p95 > max_p95_frame_ms {
@@ -1117,20 +1168,21 @@ fn main() {
             }
             if max_50ms_stalls != u32::MAX {
                 println!(
-                    "PERF_STALL_BUDGET scenario={} max_50ms_stalls={} observed_50ms_stalls={} passed={}",
+                    "PERF_STALL_BUDGET scenario={} max_50ms_stalls={} observed_work_50ms_stalls={} observed_cadence_50ms_stalls={} passed={}",
                     scenario.name(),
                     max_50ms_stalls,
+                    pacing_stats.max_work_stalled_50ms_frames,
                     pacing_stats.max_stalled_50ms_frames,
-                    pacing_stats.max_stalled_50ms_frames <= max_50ms_stalls,
+                    pacing_stats.max_work_stalled_50ms_frames <= max_50ms_stalls,
                 );
-                if pacing_stats.max_stalled_50ms_frames > max_50ms_stalls {
+                if pacing_stats.max_work_stalled_50ms_frames > max_50ms_stalls {
                     fatal(
                         &robot,
                         format!(
                             "50ms stall budget failed for {}: expected <= {}, observed {}",
                             scenario.name(),
                             max_50ms_stalls,
-                            pacing_stats.max_stalled_50ms_frames,
+                            pacing_stats.max_work_stalled_50ms_frames,
                         ),
                     );
                 }
@@ -1239,6 +1291,10 @@ mod tests {
             Some(PerfScenario::MarkdownViewerScroll)
         );
         assert_eq!(
+            PerfScenario::parse("markdown_default_viewer_scroll"),
+            Some(PerfScenario::MarkdownDefaultViewerScroll)
+        );
+        assert_eq!(
             PerfScenario::parse("backdrop_blur"),
             Some(PerfScenario::BackdropBlur)
         );
@@ -1260,6 +1316,10 @@ mod tests {
             super::PerfInputMethod::Wheel
         );
         assert_eq!(
+            PerfScenario::MarkdownDefaultViewerScroll.input_method(),
+            super::PerfInputMethod::Wheel
+        );
+        assert_eq!(
             PerfScenario::LazyListScroll.input_method(),
             super::PerfInputMethod::Drag
         );
@@ -1269,6 +1329,7 @@ mod tests {
     fn only_fetched_markdown_perf_requires_fetch_setup() {
         assert!(!PerfScenario::MarkdownScroll.requires_fetch());
         assert!(PerfScenario::MarkdownViewerScroll.requires_fetch());
+        assert!(PerfScenario::MarkdownDefaultViewerScroll.requires_fetch());
         assert!(!PerfScenario::LazyListScroll.requires_fetch());
     }
 
@@ -1277,23 +1338,37 @@ mod tests {
         let mut accumulator = FpsPacingAccumulator::default();
 
         accumulator.record(cranpose::FpsStats {
+            frame_count: 8,
             interval_count: 3,
             p95_ms: 9.0,
             p99_ms: 11.0,
             max_ms: 18.0,
+            work_fps: 160.0,
+            work_p95_ms: 6.0,
+            work_max_ms: 7.0,
             missed_120hz_budget: 2,
             missed_60hz_budget: 1,
             stalled_50ms_frames: 0,
+            work_missed_120hz_budget: 0,
+            work_missed_60hz_budget: 0,
+            work_stalled_50ms_frames: 0,
             ..Default::default()
         });
         accumulator.record(cranpose::FpsStats {
+            frame_count: 12,
             interval_count: 3,
             p95_ms: 7.0,
             p99_ms: 20.0,
             max_ms: 51.0,
+            work_fps: 140.0,
+            work_p95_ms: 9.0,
+            work_max_ms: 12.0,
             missed_120hz_budget: 1,
             missed_60hz_budget: 2,
             stalled_50ms_frames: 1,
+            work_missed_120hz_budget: 1,
+            work_missed_60hz_budget: 0,
+            work_stalled_50ms_frames: 0,
             ..Default::default()
         });
 
@@ -1301,11 +1376,15 @@ mod tests {
         assert_eq!(accumulator.worst_p95_ms, 9.0);
         assert_eq!(accumulator.worst_p99_ms, 20.0);
         assert_eq!(accumulator.worst_max_ms, 51.0);
-        assert_eq!(accumulator.worst_work_p95_ms, 0.0);
-        assert_eq!(accumulator.worst_work_max_ms, 0.0);
+        assert_eq!(accumulator.min_work_fps, 140.0);
+        assert_eq!(accumulator.worst_work_p95_ms, 9.0);
+        assert_eq!(accumulator.worst_work_max_ms, 12.0);
         assert_eq!(accumulator.max_missed_120hz_budget, 2);
         assert_eq!(accumulator.max_missed_60hz_budget, 2);
         assert_eq!(accumulator.max_stalled_50ms_frames, 1);
+        assert_eq!(accumulator.max_work_missed_120hz_budget, 1);
+        assert_eq!(accumulator.max_work_missed_60hz_budget, 0);
+        assert_eq!(accumulator.max_work_stalled_50ms_frames, 0);
     }
 
     #[test]

@@ -219,6 +219,16 @@ path = "robot-runners/robot_conditional_infinite_transition_busy.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_idle_fps_after_tab_walk"
+path = "robot-runners/robot_idle_fps_after_tab_walk.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_counter_button_release_external_visual"
+path = "robot-runners/robot_counter_button_release_external_visual.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_text_input"
 path = "robot-runners/robot_text_input.rs"
 required-features = ["robot-app"]
@@ -479,6 +489,16 @@ path = "robot-runners/robot_tabbar_drag.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_regression_tabbar_contract"
+path = "robot-runners/robot_regression_tabbar_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_regression_layout_jitter_contract"
+path = "robot-runners/robot_regression_layout_jitter_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_modifier_render"
 path = "robot-runners/robot_modifier_render.rs"
 required-features = ["robot-app"]
@@ -511,6 +531,21 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_markdown_scrollbar"
 path = "robot-runners/robot_markdown_scrollbar.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_markdown_default_visual_contract"
+path = "robot-runners/robot_markdown_default_visual_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_markdown_full_demo_code_block_visual_contract"
+path = "robot-runners/robot_markdown_full_demo_code_block_visual_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_regression_hn_markdown_visual_contract"
+path = "robot-runners/robot_regression_hn_markdown_visual_contract.rs"
 required-features = ["robot-app"]
 
 [[example]]
@@ -564,8 +599,28 @@ path = "robot-runners/robot_shader_backdrop_drag.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_shader_external_x11_drag"
+path = "robot-runners/robot_shader_external_x11_drag.rs"
+required-features = ["desktop", "renderer-wgpu", "robot-app"]
+
+[[example]]
+name = "robot_shader_full_demo_external_perf"
+path = "robot-runners/robot_shader_full_demo_external_perf.rs"
+required-features = ["desktop", "renderer-wgpu", "robot-app"]
+
+[[example]]
+name = "robot_shader_rect_external_animation"
+path = "robot-runners/robot_shader_rect_external_animation.rs"
+required-features = ["desktop", "renderer-wgpu", "robot-app"]
+
+[[example]]
 name = "robot_shadow_fields"
 path = "robot-runners/robot_shadow_fields.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_regression_shader_visual_contract"
+path = "robot-runners/robot_regression_shader_visual_contract.rs"
 required-features = ["robot-app"]
 
 [[example]]
@@ -616,6 +671,11 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_text_scroll_exact_external_contract"
 path = "robot-runners/robot_text_scroll_exact_external_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_text_indent_scroll_stability"
+path = "robot-runners/robot_text_indent_scroll_stability.rs"
 required-features = ["robot-app"]
 
 [[example]]

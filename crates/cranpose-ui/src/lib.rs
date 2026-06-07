@@ -101,14 +101,15 @@ pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 #[doc(hidden)]
 pub use render_state::reset_render_state_for_tests;
 pub use render_state::{
-    current_density, debug_last_fling_velocity, debug_reset_last_fling_velocity,
-    has_current_app_context, has_pending_draw_repasses, has_pending_layout_repasses,
-    peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,
-    peek_render_invalidation, request_focus_invalidation, request_layout_invalidation,
-    request_pointer_invalidation, request_render_invalidation, schedule_draw_repass,
-    schedule_layout_repass, set_density, take_draw_repass_nodes, take_focus_invalidation,
-    take_layout_invalidation, take_layout_repass_nodes, take_pointer_invalidation,
-    take_render_invalidation, AppContext, AppContextScope,
+    clear_transient_scroll_motion_contexts, current_density, debug_last_fling_velocity,
+    debug_reset_last_fling_velocity, has_current_app_context, has_pending_draw_repasses,
+    has_pending_layout_repasses, peek_focus_invalidation, peek_layout_invalidation,
+    peek_pointer_invalidation, peek_render_invalidation, pending_layout_repass_nodes_snapshot,
+    request_focus_invalidation, request_layout_invalidation, request_pointer_invalidation,
+    request_render_invalidation, schedule_draw_repass, schedule_layout_repass, set_density,
+    take_draw_repass_nodes, take_focus_invalidation, take_layout_invalidation,
+    take_layout_repass_nodes, take_pointer_invalidation, take_render_invalidation, AppContext,
+    AppContextScope,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use scroll::{ScrollElement, ScrollNode, ScrollState};
@@ -125,7 +126,8 @@ pub use text::{
     prepare_text_layout, prepare_text_layout_for_node, set_text_measurer, LinkAnnotation,
     ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     PreparedTextLayout, SpanStyle, StringAnnotation, TextDrawStyle, TextLayoutOptions,
-    TextLayoutResult, TextMeasurer, TextMetrics, TextOptions, TextOverflow, TextShaping, TextStyle,
+    TextLayoutResult, TextLinePrefixWidths, TextMeasurer, TextMetrics, TextOptions, TextOverflow,
+    TextShaping, TextStyle,
 };
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};

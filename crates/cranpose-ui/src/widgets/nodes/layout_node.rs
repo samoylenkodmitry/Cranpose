@@ -19,6 +19,54 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+#[derive(Clone, Copy)]
+enum LayoutInvalidationDispatchDiag {
+    Disabled,
+    All,
+    Node(NodeId),
+}
+
+fn layout_invalidation_dispatch_diag() -> LayoutInvalidationDispatchDiag {
+    static MODE: std::sync::OnceLock<LayoutInvalidationDispatchDiag> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        let Some(value) = std::env::var_os("CRANPOSE_LAYOUT_INVALIDATION_DISPATCH_DIAG") else {
+            return LayoutInvalidationDispatchDiag::Disabled;
+        };
+        if value == "all" {
+            return LayoutInvalidationDispatchDiag::All;
+        }
+        value
+            .to_string_lossy()
+            .parse::<NodeId>()
+            .map(LayoutInvalidationDispatchDiag::Node)
+            .unwrap_or(LayoutInvalidationDispatchDiag::Disabled)
+    })
+}
+
+fn log_layout_invalidation_dispatch(
+    id: NodeId,
+    invalidation: &ModifierInvalidation,
+    curr_caps: NodeCapabilities,
+    prev_caps: NodeCapabilities,
+    modifier: &Modifier,
+) {
+    let enabled = match layout_invalidation_dispatch_diag() {
+        LayoutInvalidationDispatchDiag::Disabled => false,
+        LayoutInvalidationDispatchDiag::All => true,
+        LayoutInvalidationDispatchDiag::Node(target) => target == id,
+    };
+    if enabled {
+        log::warn!(
+            "[layout-invalidation-dispatch] node={} invalidation={:?} curr_caps={:?} prev_caps={:?} modifier={}",
+            id,
+            invalidation,
+            curr_caps,
+            prev_caps,
+            modifier
+        );
+    }
+}
+
 /// Retained layout state for a LayoutNode.
 /// This mirrors Jetpack Compose's approach where each node stores its own
 /// measured size and placed position, eliminating the need for per-frame
@@ -370,33 +418,40 @@ impl LayoutNode {
         let curr_caps = self.modifier_capabilities;
         for invalidation in invalidations {
             self.modifier_slices_dirty.set(true);
+            let has_capability =
+                |capability| curr_caps.contains(capability) || prev_caps.contains(capability);
             match invalidation.kind() {
                 InvalidationKind::Layout => {
-                    if curr_caps.contains(NodeCapabilities::LAYOUT)
-                        || prev_caps.contains(NodeCapabilities::LAYOUT)
-                    {
+                    if has_capability(NodeCapabilities::LAYOUT) {
                         self.mark_needs_measure();
                         if let Some(id) = self.id.get() {
+                            log_layout_invalidation_dispatch(
+                                id,
+                                invalidation,
+                                curr_caps,
+                                prev_caps,
+                                &self.modifier,
+                            );
                             let inside_composition =
                                 cranpose_core::composer_context::try_with_composer(|_| ())
                                     .is_some();
-                            if !inside_composition {
+                            if inside_composition {
+                                cranpose_core::bubble_measure_dirty_in_composer(id);
+                            } else {
                                 crate::schedule_layout_repass(id);
                             }
                         }
                     }
                 }
                 InvalidationKind::Draw => {
-                    if curr_caps.contains(NodeCapabilities::DRAW)
-                        || prev_caps.contains(NodeCapabilities::DRAW)
+                    if has_capability(NodeCapabilities::DRAW)
+                        || invalidation.capabilities().contains(NodeCapabilities::DRAW)
                     {
                         self.mark_needs_redraw();
                     }
                 }
                 InvalidationKind::PointerInput => {
-                    if curr_caps.contains(NodeCapabilities::POINTER_INPUT)
-                        || prev_caps.contains(NodeCapabilities::POINTER_INPUT)
-                    {
+                    if has_capability(NodeCapabilities::POINTER_INPUT) {
                         self.mark_needs_pointer_pass();
                         crate::request_pointer_invalidation();
                         // Schedule pointer repass for this node
@@ -409,9 +464,7 @@ impl LayoutNode {
                     self.request_semantics_update();
                 }
                 InvalidationKind::Focus => {
-                    if curr_caps.contains(NodeCapabilities::FOCUS)
-                        || prev_caps.contains(NodeCapabilities::FOCUS)
-                    {
+                    if has_capability(NodeCapabilities::FOCUS) {
                         self.mark_needs_focus_sync();
                         crate::request_focus_invalidation();
                         // Schedule focus invalidation for this node
@@ -555,6 +608,8 @@ impl LayoutNode {
         // Propagate the ID to the modifier chain. This triggers a lifecycle update
         // for nodes that depend on the node ID for invalidation (e.g., ScrollNode).
         self.modifier_chain.set_node_id(Some(id));
+        let invalidations = self.modifier_chain.take_invalidations();
+        self.dispatch_modifier_invalidations_with_prev(&invalidations, NodeCapabilities::empty());
         self.update_modifier_slices_cache();
     }
 
@@ -1399,6 +1454,26 @@ mod tests {
         node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Draw)]);
 
         assert!(node.needs_redraw());
+        assert!(!node.needs_layout());
+    }
+
+    #[test]
+    fn draw_invalidation_capability_marks_redraw_for_layout_modifier_update() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let mut node = fresh_node();
+        node.clear_needs_measure();
+        node.clear_needs_layout();
+        node.clear_needs_redraw();
+        node.modifier_capabilities = NodeCapabilities::LAYOUT;
+        node.modifier_child_capabilities = node.modifier_capabilities;
+
+        node.dispatch_modifier_invalidations(&[ModifierInvalidation::new(
+            InvalidationKind::Draw,
+            NodeCapabilities::DRAW,
+        )]);
+
+        assert!(node.needs_redraw());
+        assert!(!node.needs_measure());
         assert!(!node.needs_layout());
     }
 

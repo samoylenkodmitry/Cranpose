@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use cranpose_core::{MemoryApplier, NodeId};
@@ -8,7 +9,8 @@ use cranpose_ui::{
     ResolvedModifiers, Size, SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
 };
 use cranpose_ui_graphics::{
-    rounded_corner_alpha_mask_effect, CompositingStrategy, GraphicsLayer, RoundedCornerShape,
+    rounded_corner_alpha_mask_effect, CompositingStrategy, GraphicsLayer, LayerShape,
+    RoundedCornerShape,
 };
 
 use crate::graph::{
@@ -50,6 +52,12 @@ struct SnapshotNodeData {
     children: Vec<NodeId>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GraphUpdateReport {
+    pub applied: bool,
+    pub hit_graph_dirty: bool,
+}
+
 pub fn build_graph_from_layout_tree(root: &LayoutBox, scale: f32) -> RenderGraph {
     let root_snapshot = layout_box_to_snapshot(root, None);
     RenderGraph {
@@ -73,92 +81,177 @@ pub fn update_graph_from_applier(
     dirty_nodes: &[NodeId],
     scale: f32,
 ) -> bool {
-    if dirty_nodes.is_empty() {
-        return true;
-    }
-
-    let mut updated = false;
-    for &node_id in dirty_nodes {
-        if graph.root.node_id == Some(node_id) {
-            let Some(root) = build_layer_node_from_applier(applier, node_id, scale, false) else {
-                return false;
-            };
-            graph.root = root;
-            updated = true;
-            continue;
-        }
-
-        let inherited_translated_content_context = graph.root.translated_content_context;
-        match replace_layer_from_applier(
-            applier,
-            &mut graph.root,
-            node_id,
-            inherited_translated_content_context,
-        ) {
-            Some(true) => updated = true,
-            Some(false) => return false,
-            None => return false,
-        }
-    }
-
-    if updated {
-        graph.root.recompute_raster_cache_hashes();
-    }
-    true
+    update_graph_from_applier_report(applier, graph, dirty_nodes, scale).applied
 }
 
-fn replace_layer_from_applier(
+pub fn update_graph_from_applier_report(
+    applier: &mut MemoryApplier,
+    graph: &mut RenderGraph,
+    dirty_nodes: &[NodeId],
+    scale: f32,
+) -> GraphUpdateReport {
+    if dirty_nodes.is_empty() {
+        return GraphUpdateReport {
+            applied: true,
+            hit_graph_dirty: false,
+        };
+    }
+
+    let mut remaining_dirty_nodes = dirty_nodes.iter().copied().collect::<HashSet<_>>();
+    if let Some(root_id) = graph.root.node_id {
+        if remaining_dirty_nodes.contains(&root_id) {
+            let Some(root) = build_layer_node_from_applier(applier, root_id, scale, false) else {
+                return GraphUpdateReport {
+                    applied: false,
+                    hit_graph_dirty: true,
+                };
+            };
+            let hit_graph_dirty = layer_hit_graph_state_dirty(&graph.root, &root);
+            graph.root = root;
+            graph.root.recompute_raster_cache_hashes();
+            return GraphUpdateReport {
+                applied: true,
+                hit_graph_dirty,
+            };
+        }
+    }
+
+    let inherited_translated_content_context = graph.root.translated_content_context;
+    let report = match replace_dirty_layers_from_applier(
+        applier,
+        &mut graph.root,
+        &mut remaining_dirty_nodes,
+        inherited_translated_content_context,
+    ) {
+        Some(report) => report,
+        None => {
+            return GraphUpdateReport {
+                applied: false,
+                hit_graph_dirty: true,
+            };
+        }
+    };
+
+    if !remaining_dirty_nodes.is_empty() {
+        return GraphUpdateReport {
+            applied: false,
+            hit_graph_dirty: true,
+        };
+    }
+
+    if report.updated {
+        graph.root.recompute_raster_cache_hashes();
+    }
+    GraphUpdateReport {
+        applied: true,
+        hit_graph_dirty: report.hit_graph_dirty,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ReplaceDirtyLayersReport {
+    updated: bool,
+    hit_graph_dirty: bool,
+}
+
+fn replace_dirty_layers_from_applier(
     applier: &mut MemoryApplier,
     parent: &mut LayerNode,
-    node_id: NodeId,
+    dirty_nodes: &mut HashSet<NodeId>,
     inherited_translated_content_context: bool,
-) -> Option<bool> {
+) -> Option<ReplaceDirtyLayersReport> {
+    if dirty_nodes.is_empty() {
+        return Some(ReplaceDirtyLayersReport::default());
+    }
+
     let child_inherited_translated_content_context =
         inherited_translated_content_context || parent.translated_content_context;
+    let mut report = ReplaceDirtyLayersReport::default();
 
     for child in &mut parent.children {
         let RenderNode::Layer(child_layer) = child else {
             continue;
         };
 
-        if child_layer.node_id == Some(node_id) {
-            let old_transform = child_layer.transform_to_parent;
-            let Some(mut replacement) = build_layer_node_from_applier_internal(
+        if child_layer
+            .node_id
+            .is_some_and(|node_id| dirty_nodes.remove(&node_id))
+        {
+            let mut replacement = build_layer_node_from_applier_internal(
                 applier,
-                node_id,
+                child_layer
+                    .node_id
+                    .expect("dirty layer must have a node id"),
                 parent.motion_context_animated,
                 child_inherited_translated_content_context,
-            ) else {
-                return Some(false);
-            };
-            replacement.transform_to_parent = old_transform;
+            )?;
+            if parent.content_offset != Point::default() {
+                replacement.transform_to_parent =
+                    replacement
+                        .transform_to_parent
+                        .then(ProjectiveTransform::translation(
+                            parent.content_offset.x,
+                            parent.content_offset.y,
+                        ));
+            }
+            report.hit_graph_dirty |= layer_hit_graph_state_dirty(child_layer, &replacement);
+            remove_dirty_descendants(&replacement, dirty_nodes);
             **child_layer = replacement;
-            parent.has_hit_targets = parent.hit_test.is_some()
-                || parent.children.iter().any(|child| match child {
-                    RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-                    RenderNode::Primitive(_) => false,
-                });
-            return Some(true);
+            report.updated = true;
+            continue;
         }
 
-        if let Some(updated) = replace_layer_from_applier(
+        match replace_dirty_layers_from_applier(
             applier,
             child_layer,
-            node_id,
+            dirty_nodes,
             child_inherited_translated_content_context,
         ) {
-            if updated {
-                parent.has_hit_targets = parent.hit_test.is_some()
-                    || parent.children.iter().any(|child| match child {
-                        RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-                        RenderNode::Primitive(_) => false,
-                    });
+            Some(child_report) => {
+                report.updated |= child_report.updated;
+                report.hit_graph_dirty |= child_report.hit_graph_dirty;
             }
-            return Some(updated);
+            None => return None,
         }
     }
 
-    None
+    if report.updated {
+        parent.has_hit_targets = parent.hit_test.is_some()
+            || parent.children.iter().any(|child| match child {
+                RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
+                RenderNode::Primitive(_) => false,
+            });
+    }
+
+    Some(report)
+}
+
+fn layer_hit_graph_state_dirty(previous: &LayerNode, replacement: &LayerNode) -> bool {
+    if previous.hit_test.is_some() || replacement.hit_test.is_some() {
+        return true;
+    }
+
+    if !(previous.has_hit_targets || replacement.has_hit_targets) {
+        return false;
+    }
+
+    previous.has_hit_targets != replacement.has_hit_targets
+        || previous.local_bounds != replacement.local_bounds
+        || previous.transform_to_parent != replacement.transform_to_parent
+        || previous.clip_rect() != replacement.clip_rect()
+        || previous.graphics_layer.shape != replacement.graphics_layer.shape
+}
+
+fn remove_dirty_descendants(layer: &LayerNode, dirty_nodes: &mut HashSet<NodeId>) {
+    for child in &layer.children {
+        let RenderNode::Layer(child_layer) = child else {
+            continue;
+        };
+        if let Some(node_id) = child_layer.node_id {
+            dirty_nodes.remove(&node_id);
+        }
+        remove_dirty_descendants(child_layer, dirty_nodes);
+    }
 }
 
 fn build_layer_node(
@@ -274,6 +367,7 @@ fn build_layer_node_internal(
         node_id: Some(node_id),
         local_bounds,
         transform_to_parent,
+        content_offset,
         motion_context_animated: node_motion_context_animated,
         translated_content_context,
         translated_content_offset: if translated_content_context {
@@ -476,6 +570,7 @@ fn build_layer_node_from_data(
         node_id: Some(node_id),
         local_bounds,
         transform_to_parent,
+        content_offset: layout_state.content_offset,
         motion_context_animated: node_motion_context_animated,
         translated_content_context: local_translated_content_context,
         translated_content_offset: if local_translated_content_context {
@@ -557,10 +652,11 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         .and_then(|slices| slices.prepare_text_layout(max_width))
         .unwrap_or_else(|| prepare_text_layout(value, &text_style, options, max_width));
     let visual_style = prepared.visual_style.clone();
+    let measured_draw_width = prepared.metrics.width.max(0.0);
     let draw_width = if options.overflow == TextOverflow::Visible {
-        prepared.metrics.width
+        measured_draw_width
     } else {
-        content_width
+        measured_draw_width.min(content_width)
     };
     let alignment_offset = resolve_text_horizontal_offset(
         &text_style,
@@ -672,22 +768,25 @@ fn graphics_layer_with_shaped_clip(
         return graphics_layer;
     }
 
-    let rounded_clip = rounded_corner_alpha_mask_effect(
-        local_bounds.width,
-        local_bounds.height,
-        radii,
-        ROUNDED_CLIP_EDGE_FEATHER,
-    );
-    graphics_layer.render_effect = Some(match graphics_layer.render_effect.take() {
-        Some(existing) => existing.then(rounded_clip),
-        None => rounded_clip,
-    });
+    if let Some(existing) = graphics_layer.render_effect.take() {
+        let rounded_clip = rounded_corner_alpha_mask_effect(
+            local_bounds.width,
+            local_bounds.height,
+            radii,
+            ROUNDED_CLIP_EDGE_FEATHER,
+        );
+        graphics_layer.render_effect = Some(existing.then(rounded_clip));
+    } else {
+        graphics_layer.shape = LayerShape::Rounded(corner_shape);
+        graphics_layer.clip = true;
+    }
     graphics_layer
 }
 
 fn isolation_reasons(layer: &GraphicsLayer) -> IsolationReasons {
     IsolationReasons {
         explicit_offscreen: layer.compositing_strategy == CompositingStrategy::Offscreen,
+        shape_clip: layer.clip && !matches!(layer.shape, LayerShape::Rectangle),
         effect: layer.render_effect.is_some(),
         backdrop: layer.backdrop_effect.is_some(),
         group_opacity: layer.compositing_strategy != CompositingStrategy::ModulateAlpha
@@ -792,8 +891,9 @@ mod tests {
         AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion,
     };
     use cranpose_ui::{
-        Color, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Point, Rect,
-        ResolvedModifiers, RoundedCornerShape, Size, Text, TextStyle,
+        Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec,
+        LinearArrangement, Modifier, Point, Rect, ResolvedModifiers, RoundedCornerShape,
+        ScrollState, Size, Spacer, Text, TextStyle,
     };
     use cranpose_ui_graphics::{Brush, DrawPrimitive, GraphicsLayer, RenderEffect};
 
@@ -835,6 +935,37 @@ mod tests {
         }
     }
 
+    fn find_text_top(layer: &LayerNode, label: &str) -> Option<f32> {
+        fn search(layer: &LayerNode, label: &str, transform: ProjectiveTransform) -> Option<f32> {
+            for child in &layer.children {
+                match child {
+                    RenderNode::Primitive(primitive) => {
+                        let PrimitiveNode::Text(text) = &primitive.node else {
+                            continue;
+                        };
+                        if text.text.text == label {
+                            let quad = transform.map_rect(text.rect);
+                            let top = quad
+                                .iter()
+                                .map(|point| point[1])
+                                .fold(f32::INFINITY, f32::min);
+                            return top.is_finite().then_some(top);
+                        }
+                    }
+                    RenderNode::Layer(child_layer) => {
+                        let child_transform = child_layer.transform_to_parent.then(transform);
+                        if let Some(top) = search(child_layer, label, child_transform) {
+                            return Some(top);
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        search(layer, label, ProjectiveTransform::identity())
+    }
+
     fn find_layer_by_node_id(layer: &LayerNode, node_id: NodeId) -> Option<&LayerNode> {
         if layer.node_id == Some(node_id) {
             return Some(layer);
@@ -843,6 +974,28 @@ mod tests {
             RenderNode::Layer(child_layer) => find_layer_by_node_id(child_layer, node_id),
             RenderNode::Primitive(_) => None,
         })
+    }
+
+    fn find_layer_origin(layer: &LayerNode, node_id: NodeId) -> Option<Point> {
+        fn search(
+            layer: &LayerNode,
+            node_id: NodeId,
+            transform: ProjectiveTransform,
+        ) -> Option<Point> {
+            if layer.node_id == Some(node_id) {
+                return Some(transform.map_point(Point::default()));
+            }
+            layer.children.iter().find_map(|child| match child {
+                RenderNode::Layer(child_layer) => search(
+                    child_layer,
+                    node_id,
+                    child_layer.transform_to_parent.then(transform),
+                ),
+                RenderNode::Primitive(_) => None,
+            })
+        }
+
+        search(layer, node_id, ProjectiveTransform::identity())
     }
 
     fn find_translated_content_offset(layer: &LayerNode) -> Option<Point> {
@@ -1047,7 +1200,114 @@ mod tests {
     }
 
     #[test]
-    fn rounded_clip_to_bounds_injects_per_corner_mask_effect() {
+    fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
+        fn parent_with_offset(offset: Point, motion_context_animated: bool) -> BuildNodeSnapshot {
+            let child_command = DrawCommand::Behind(Rc::new(|_size: Size| {
+                vec![DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 3.0,
+                        y: 4.0,
+                        width: 20.0,
+                        height: 8.0,
+                    },
+                    brush: Brush::solid(Color::WHITE),
+                }]
+            }));
+
+            let child = BuildNodeSnapshot {
+                node_id: 2,
+                placement: Point { x: 11.0, y: 7.0 },
+                size: Size {
+                    width: 40.0,
+                    height: 20.0,
+                },
+                content_offset: Point::default(),
+                motion_context_animated: false,
+                translated_content_context: false,
+                measured_max_width: None,
+                resolved_modifiers: ResolvedModifiers::default(),
+                draw_commands: vec![child_command],
+                click_actions: vec![],
+                pointer_inputs: vec![],
+                clip_to_bounds: false,
+                annotated_text: None,
+                text_style: None,
+                text_layout_options: None,
+                graphics_layer: None,
+                children: vec![],
+            };
+
+            BuildNodeSnapshot {
+                node_id: 1,
+                placement: Point::default(),
+                size: Size {
+                    width: 80.0,
+                    height: 50.0,
+                },
+                content_offset: offset,
+                motion_context_animated,
+                translated_content_context: true,
+                measured_max_width: None,
+                resolved_modifiers: ResolvedModifiers::default(),
+                draw_commands: vec![],
+                click_actions: vec![],
+                pointer_inputs: vec![],
+                clip_to_bounds: false,
+                annotated_text: None,
+                text_style: None,
+                text_layout_options: None,
+                graphics_layer: None,
+                children: vec![child],
+            }
+        }
+
+        let base = build_layer_node_for_test(
+            parent_with_offset(Point { x: 0.0, y: -18.0 }, true),
+            1.0,
+            false,
+        );
+        let moved = build_layer_node_for_test(
+            parent_with_offset(Point { x: 0.0, y: -32.0 }, true),
+            1.0,
+            false,
+        );
+        let rested = build_layer_node_for_test(
+            parent_with_offset(Point { x: 0.0, y: -18.0 }, false),
+            1.0,
+            false,
+        );
+
+        let RenderNode::Layer(base_child) = &base.children[0] else {
+            panic!("expected child layer");
+        };
+        let RenderNode::Layer(moved_child) = &moved.children[0] else {
+            panic!("expected child layer");
+        };
+
+        assert_ne!(
+            base_child.transform_to_parent.map_point(Point::default()),
+            moved_child.transform_to_parent.map_point(Point::default()),
+            "scroll offset still has to move child content visually"
+        );
+        assert_eq!(
+            base_child.target_content_hash(),
+            moved_child.target_content_hash(),
+            "child source content identity stays stable when only the parent scroll offset changes"
+        );
+        assert_ne!(
+            base.target_content_hash(),
+            moved.target_content_hash(),
+            "a full-surface cache of the scroll viewport must include the scroll offset"
+        );
+        assert_ne!(
+            base.target_content_hash(),
+            rested.target_content_hash(),
+            "full-surface cache keys must include active scroll motion policy"
+        );
+    }
+
+    #[test]
+    fn rounded_clip_to_bounds_records_shape_clip_without_runtime_shader() {
         let layer = graphics_layer_with_shaped_clip(
             GraphicsLayer::default(),
             true,
@@ -1060,17 +1320,13 @@ mod tests {
             },
         );
 
-        let Some(RenderEffect::Shader { shader }) = layer.render_effect else {
-            panic!("rounded clip must emit a shader mask");
+        assert!(layer.clip);
+        assert!(layer.render_effect.is_none());
+        let LayerShape::Rounded(shape) = layer.shape else {
+            panic!("rounded clip must be recorded as layer shape");
         };
-        let uniforms = shader.uniforms();
-        assert_eq!(uniforms[0], 100.0);
-        assert_eq!(uniforms[1], 40.0);
-        assert_eq!(uniforms[2], ROUNDED_CLIP_EDGE_FEATHER);
-        assert_eq!(uniforms[3], 4.0);
-        assert_eq!(uniforms[4], 8.0);
-        assert_eq!(uniforms[5], 12.0);
-        assert_eq!(uniforms[6], 16.0);
+        assert_eq!(shape, RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0));
+        assert!(isolation_reasons(&layer).shape_clip);
     }
 
     #[test]
@@ -1102,7 +1358,7 @@ mod tests {
     }
 
     #[test]
-    fn rounded_corners_clip_to_bounds_builds_graph_mask_from_modifier_chain() {
+    fn rounded_corners_clip_to_bounds_builds_graph_shape_clip_from_modifier_chain() {
         let mut composition = cranpose_ui::run_test_composition(|| {
             cranpose_ui::Box(
                 Modifier::empty()
@@ -1133,9 +1389,17 @@ mod tests {
         let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("rounded clip graph");
         applier.clear_runtime_handle();
 
+        let rounded_layer = find_layer_by_node_id(&graph.root, root).expect("rounded layer");
+        assert!(rounded_layer.graphics_layer.clip);
+        assert!(matches!(
+            rounded_layer.graphics_layer.shape,
+            LayerShape::Rounded(_)
+        ));
+        assert!(rounded_layer.graphics_layer.render_effect.is_none());
+        assert!(rounded_layer.isolation.shape_clip);
         assert!(
-            graph_has_runtime_shader_effect(&graph.root),
-            "rounded_corners().clip_to_bounds() must build a shaped mask effect for descendants"
+            !graph_has_runtime_shader_effect(&graph.root),
+            "simple rounded_corners().clip_to_bounds() must not become a runtime shader effect"
         );
     }
 
@@ -1229,6 +1493,499 @@ mod tests {
                 .transform_to_parent,
             initial_transform,
             "draw-only child replacement must preserve the retained parent placement transform"
+        );
+    }
+
+    #[test]
+    fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
+        let mut graph = RenderGraph {
+            root: build_layer_node_for_test(snapshot_with_translation(0.0), 1.0, false),
+        };
+        let mut applier = MemoryApplier::new();
+
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &[2], 1.0);
+
+        assert_eq!(
+            report,
+            GraphUpdateReport {
+                applied: false,
+                hit_graph_dirty: true,
+            },
+            "dirty child graph updates must not report success when the replacement cannot be rebuilt"
+        );
+    }
+
+    #[test]
+    fn update_graph_from_applier_refreshes_scroll_content_offset() {
+        let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+        let scroll_holder_for_comp = scroll_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let scroll_state =
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+            Column(
+                Modifier::empty()
+                    .size_points(240.0, 120.0)
+                    .vertical_scroll(scroll_state, false),
+                ColumnSpec::default(),
+                || {
+                    Text("scroll top", Modifier::empty(), TextStyle::default());
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 160.0,
+                    });
+                    Text("scroll target", Modifier::empty(), TextStyle::default());
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 120.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial scroll layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        let initial_target_top =
+            find_text_top(&graph.root, "scroll target").expect("initial target text");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let scroll_state = scroll_holder
+            .borrow()
+            .as_ref()
+            .cloned()
+            .expect("scroll state should be captured");
+        let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
+        assert!(consumed_scroll > 0.0, "test scroll must be consumed");
+        let dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
+        assert!(
+            !dirty_nodes.is_empty(),
+            "scroll state invalidation must schedule scoped layout graph update"
+        );
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("scrolled layout");
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied, "scroll graph update should apply in place");
+        let updated_target_top =
+            find_text_top(&graph.root, "scroll target").expect("updated target text");
+        assert!(
+            updated_target_top < initial_target_top - consumed_scroll * 0.75,
+            "partial graph update must refresh scroll content offset: initial_y={initial_target_top} updated_y={updated_target_top} dirty_nodes={dirty_nodes:?}"
+        );
+    }
+
+    #[test]
+    fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child() {
+        let label_holder: Rc<RefCell<Option<cranpose_core::MutableState<String>>>> =
+            Rc::new(RefCell::new(None));
+        let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+        let child_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+        let label_holder_for_comp = label_holder.clone();
+        let scroll_holder_for_comp = scroll_holder.clone();
+        let child_id_holder_for_comp = child_id_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let label = cranpose_core::useState(|| "scrolled child before".to_string());
+            let scroll_state =
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+            *label_holder_for_comp.borrow_mut() = Some(label);
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+            let child_id_holder_for_content = child_id_holder_for_comp.clone();
+            Column(
+                Modifier::empty()
+                    .size_points(260.0, 90.0)
+                    .vertical_scroll(scroll_state, false),
+                ColumnSpec::default(),
+                move || {
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 24.0,
+                    });
+                    let child_id = Text(label, Modifier::empty(), TextStyle::default());
+                    *child_id_holder_for_content.borrow_mut() = Some(child_id);
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 220.0,
+                    });
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 260.0,
+            height: 90.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial layout");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let scroll_state = scroll_holder
+            .borrow()
+            .as_ref()
+            .cloned()
+            .expect("scroll state should be captured");
+        assert!(scroll_state.dispatch_raw_delta(36.0) > 0.0);
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("scrolled layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("scrolled graph");
+        let child_id = child_id_holder
+            .borrow()
+            .expect("text child id should be captured");
+        let scrolled_transform = find_layer_by_node_id(&graph.root, child_id)
+            .expect("scrolled child layer")
+            .transform_to_parent;
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let label = label_holder
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("label state should be captured");
+        label.set_value("scrolled child after".to_string());
+        composition
+            .process_invalid_scopes()
+            .expect("text recomposition");
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("updated scrolled layout");
+        let child_id = child_id_holder
+            .borrow()
+            .expect("text child id should remain captured");
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &[child_id], 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied, "dirty child graph update should apply");
+        let updated = find_layer_by_node_id(&graph.root, child_id).expect("updated child layer");
+        assert_eq!(
+            updated.transform_to_parent, scrolled_transform,
+            "dirty child replacement inside a scrolled parent must keep the parent's content-offset transform"
+        );
+        let mut labels = Vec::new();
+        collect_text_labels(&graph.root, &mut labels);
+        assert!(
+            labels.iter().any(|label| label == "scrolled child after"),
+            "updated graph should contain refreshed text, got {labels:?}"
+        );
+    }
+
+    #[test]
+    fn dirty_scrolled_overlay_graphics_layer_stays_aligned_with_underlay() {
+        let alpha_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+            Rc::new(RefCell::new(None));
+        let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+        let underlay_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+        let overlay_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+        let alpha_holder_for_comp = alpha_holder.clone();
+        let scroll_holder_for_comp = scroll_holder.clone();
+        let underlay_id_holder_for_comp = underlay_id_holder.clone();
+        let overlay_id_holder_for_comp = overlay_id_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let alpha = cranpose_core::useState(|| 1.0f32);
+            let scroll_state =
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+            *alpha_holder_for_comp.borrow_mut() = Some(alpha);
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+            let underlay_id_holder_for_content = underlay_id_holder_for_comp.clone();
+            let overlay_id_holder_for_content = overlay_id_holder_for_comp.clone();
+            Column(
+                Modifier::empty()
+                    .size_points(260.0, 120.0)
+                    .vertical_scroll(scroll_state, false),
+                ColumnSpec::default(),
+                move || {
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 180.0,
+                    });
+                    cranpose_ui::Box(
+                        Modifier::empty().size_points(188.0, 88.0),
+                        cranpose_ui::BoxSpec::default(),
+                        {
+                            let underlay_id_holder_for_box = underlay_id_holder_for_content.clone();
+                            let overlay_id_holder_for_box = overlay_id_holder_for_content.clone();
+                            move || {
+                                let underlay_id = cranpose_ui::Box(
+                                    Modifier::empty().size_points(188.0, 88.0),
+                                    cranpose_ui::BoxSpec::default(),
+                                    || {
+                                        Text(
+                                            "UNDERLAY CONTENT",
+                                            Modifier::empty().absolute_offset(12.0, 8.0),
+                                            TextStyle::default(),
+                                        );
+                                    },
+                                );
+                                *underlay_id_holder_for_box.borrow_mut() = Some(underlay_id);
+                                let overlay_id = cranpose_ui::Box(
+                                    Modifier::empty().size_points(188.0, 88.0).graphics_layer(
+                                        move || GraphicsLayer {
+                                            alpha: alpha.get(),
+                                            ..GraphicsLayer::default()
+                                        },
+                                    ),
+                                    cranpose_ui::BoxSpec::default(),
+                                    || {
+                                        Text(
+                                            "TOP LAYER",
+                                            Modifier::empty().absolute_offset(74.0, 39.6),
+                                            TextStyle::default(),
+                                        );
+                                    },
+                                );
+                                *overlay_id_holder_for_box.borrow_mut() = Some(overlay_id);
+                            }
+                        },
+                    );
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 280.0,
+                    });
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 260.0,
+            height: 120.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial layout");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let scroll_state = scroll_holder
+            .borrow()
+            .as_ref()
+            .cloned()
+            .expect("scroll state should be captured");
+        assert!(scroll_state.dispatch_raw_delta(96.0) > 0.0);
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("scrolled layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("scrolled graph");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let underlay_id = underlay_id_holder
+            .borrow()
+            .expect("underlay id should be captured");
+        let overlay_id = overlay_id_holder
+            .borrow()
+            .expect("overlay id should be captured");
+        let scrolled_underlay_origin =
+            find_layer_origin(&graph.root, underlay_id).expect("underlay origin");
+        let scrolled_overlay_origin =
+            find_layer_origin(&graph.root, overlay_id).expect("overlay origin");
+        assert_eq!(scrolled_underlay_origin, scrolled_overlay_origin);
+
+        let alpha = alpha_holder
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("alpha state should be captured");
+        alpha.set_value(0.35);
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &[overlay_id], 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied, "dirty overlay graph update should apply");
+        let updated_underlay_origin =
+            find_layer_origin(&graph.root, underlay_id).expect("updated underlay origin");
+        let updated_overlay_origin =
+            find_layer_origin(&graph.root, overlay_id).expect("updated overlay origin");
+        assert_eq!(
+            updated_underlay_origin, scrolled_underlay_origin,
+            "stable underlay must keep its scrolled origin"
+        );
+        assert_eq!(
+            updated_overlay_origin, updated_underlay_origin,
+            "dirty overlay graphics layer must stay aligned with its stable underlay"
+        );
+    }
+
+    #[test]
+    fn update_graph_from_applier_refreshes_dirty_graphics_layer_transform() {
+        let offset_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+            Rc::new(RefCell::new(None));
+        let node_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+        let offset_holder_for_comp = offset_holder.clone();
+        let node_id_holder_for_comp = node_id_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let offset = cranpose_core::useState(|| 0.0f32);
+            *offset_holder_for_comp.borrow_mut() = Some(offset);
+            let node_id = cranpose_ui::Box(
+                Modifier::empty()
+                    .size_points(40.0, 20.0)
+                    .graphics_layer(move || GraphicsLayer {
+                        translation_x: offset.get(),
+                        ..GraphicsLayer::default()
+                    }),
+                cranpose_ui::BoxSpec::default(),
+                || {},
+            );
+            *node_id_holder_for_comp.borrow_mut() = Some(node_id);
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 120.0,
+            height: 80.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        let node_id = node_id_holder
+            .borrow()
+            .expect("graphics layer node id should be captured");
+        let initial_origin = find_layer_by_node_id(&graph.root, node_id)
+            .expect("initial graphics layer")
+            .transform_to_parent
+            .map_point(Point::default());
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let offset = offset_holder
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("offset state should be captured");
+        offset.set_value(32.0);
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &[node_id], 1.0);
+        assert!(
+            report.applied,
+            "dirty graphics layer should be replaceable from retained applier state"
+        );
+        assert!(
+            !report.hit_graph_dirty,
+            "a moved visual-only layer should not force hit graph refresh"
+        );
+        applier.clear_runtime_handle();
+
+        let updated_origin = find_layer_by_node_id(&graph.root, node_id)
+            .expect("updated graphics layer")
+            .transform_to_parent
+            .map_point(Point::default());
+        assert!(
+            (updated_origin.x - (initial_origin.x + 32.0)).abs() < 0.1,
+            "scoped graph update must refresh graphics-layer translation: initial={initial_origin:?} updated={updated_origin:?}"
+        );
+    }
+
+    #[test]
+    fn update_graph_from_applier_reports_hit_dirty_for_moved_clickable_layer() {
+        let offset_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+            Rc::new(RefCell::new(None));
+        let node_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+        let offset_holder_for_comp = offset_holder.clone();
+        let node_id_holder_for_comp = node_id_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let offset = cranpose_core::useState(|| 0.0f32);
+            *offset_holder_for_comp.borrow_mut() = Some(offset);
+            let node_id = cranpose_ui::Box(
+                Modifier::empty()
+                    .size_points(40.0, 20.0)
+                    .graphics_layer(move || GraphicsLayer {
+                        translation_x: offset.get(),
+                        ..GraphicsLayer::default()
+                    })
+                    .clickable(|_| {}),
+                cranpose_ui::BoxSpec::default(),
+                || {},
+            );
+            *node_id_holder_for_comp.borrow_mut() = Some(node_id);
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 120.0,
+            height: 80.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        let node_id = node_id_holder
+            .borrow()
+            .expect("graphics layer node id should be captured");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let offset = offset_holder
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("offset state should be captured");
+        offset.set_value(32.0);
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &[node_id], 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(
+            report.applied,
+            "dirty clickable graphics layer should be replaceable from retained applier state"
+        );
+        assert!(
+            report.hit_graph_dirty,
+            "moved clickable layers must refresh hit geometry"
         );
     }
 
@@ -1477,6 +2234,53 @@ mod tests {
         assert!(
             clip.intersect(text.rect).is_some(),
             "the clip rect must intersect the shifted text draw rect"
+        );
+    }
+
+    #[test]
+    fn clipped_text_node_raster_bounds_use_measured_text_width_not_full_box() {
+        let snapshot = BuildNodeSnapshot {
+            node_id: 1,
+            placement: Point::default(),
+            size: Size {
+                width: 320.0,
+                height: 48.0,
+            },
+            content_offset: Point::default(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            measured_max_width: Some(320.0),
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: Some(AnnotatedString::from("short")),
+            text_style: Some(TextStyle::default()),
+            text_layout_options: Some(cranpose_ui::TextLayoutOptions {
+                overflow: cranpose_ui::TextOverflow::Clip,
+                ..Default::default()
+            }),
+            graphics_layer: None,
+            children: vec![],
+        };
+
+        let graph = build_layer_node_for_test(snapshot, 1.0, false);
+        let RenderNode::Primitive(text_primitive) = &graph.children[0] else {
+            panic!("expected text primitive");
+        };
+        let PrimitiveNode::Text(text) = &text_primitive.node else {
+            panic!("expected text primitive");
+        };
+        let clip = text.clip.expect("clipped text should keep a clip rect");
+
+        assert!(
+            text.rect.width < 320.0,
+            "text raster bounds should track measured glyph width instead of full content width"
+        );
+        assert_eq!(
+            clip.width, 322.0,
+            "text clip should still preserve the full content box plus clip padding"
         );
     }
 
@@ -1869,6 +2673,77 @@ mod tests {
             labels,
             active_children,
             child_debug
+        );
+    }
+
+    #[test]
+    fn scrolled_lazy_column_render_graph_keeps_beyond_bound_text_rows() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
+        let state_holder_for_comp = state_holder.clone();
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let list_state = remember_lazy_list_state();
+            *state_holder_for_comp.borrow_mut() = Some(list_state);
+            let mut spec =
+                LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0));
+            spec.beyond_bounds_item_count = 0;
+            LazyColumn(Modifier::empty().height(96.0), list_state, spec, |scope| {
+                scope.items(
+                    12,
+                    None::<fn(usize) -> u64>,
+                    None::<fn(usize) -> u64>,
+                    |index| {
+                        Text(
+                            format!("WarmRow {index}"),
+                            Modifier::empty().height(32.0),
+                            TextStyle::default(),
+                        );
+                    },
+                );
+            });
+        });
+
+        let list_state = (*state_holder.borrow()).expect("lazy list state should be captured");
+        list_state.scroll_to_item(4, 0.0);
+
+        let root = composition.root().expect("lazy column root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let _ = applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 240.0,
+                    height: 240.0,
+                },
+            )
+            .expect("lazy column layout");
+        let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("lazy column graph");
+        let active_children = applier
+            .with_node::<SubcomposeLayoutNode, _>(root, |node| node.active_children())
+            .expect("lazy column should be subcompose");
+        applier.clear_runtime_handle();
+
+        let visible_indices: Vec<_> = list_state
+            .layout_info()
+            .visible_items_info
+            .iter()
+            .map(|item| item.index)
+            .collect();
+        let mut labels = Vec::new();
+        collect_text_labels(&graph.root, &mut labels);
+
+        assert_eq!(
+            visible_indices,
+            vec![4, 5, 6],
+            "test setup expects exactly three viewport-visible rows"
+        );
+        assert!(
+            labels.iter().any(|label| label == "WarmRow 7"),
+            "render graph must retain at least one after-bound text row for glyph prewarm; labels={labels:?}, active_children={active_children:?}"
         );
     }
 

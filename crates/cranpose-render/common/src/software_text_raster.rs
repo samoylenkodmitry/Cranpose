@@ -1,11 +1,11 @@
-use ab_glyph::{point, Font, FontArc, Glyph, OutlinedGlyph, PxScale, ScaleFont};
+use ab_glyph::{point, Font, FontArc, Glyph, GlyphId, OutlinedGlyph, PxScale, ScaleFont};
 use cranpose_core::hash::default as default_hash;
 use cranpose_ui::text::{
     AnnotatedString, FontFamily, FontStyle, FontSynthesis, FontWeight, Shadow, TextDrawStyle,
-    TextMotion, TextStyle,
+    TextMotion, TextShaping, TextStyle,
 };
 use cranpose_ui::text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult};
-use cranpose_ui::{TextMeasurer, TextMetrics};
+use cranpose_ui::{TextLinePrefixWidths, TextMeasurer, TextMetrics};
 use cranpose_ui_graphics::{Color, ImageBitmap, Rect};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -14,9 +14,11 @@ use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Tra
 
 use crate::bounded_lru_cache::BoundedLruCache;
 use crate::brush_sampling::{color_to_rgba, sample_brush_rgba};
+#[cfg(test)]
+use crate::font_layout::layout_line_glyphs;
 use crate::font_layout::{
-    align_glyph_to_pixel_grid, layout_line_glyphs, line_advance_width, pixel_bounds_from_outlined,
-    vertical_metrics, GlyphPixelBounds,
+    align_glyph_to_pixel_grid, line_advance_width, pixel_bounds_from_outlined, vertical_metrics,
+    GlyphPixelBounds,
 };
 #[cfg(feature = "text-hyphenation")]
 use crate::text_hyphenation::HyphenationDictionaryError;
@@ -27,6 +29,9 @@ const COMPOSE_STROKE_MITER_LIMIT: f32 = 4.0;
 const SHADOW_SIGMA_SCALE: f32 = 0.57735;
 const SHADOW_SIGMA_BIAS: f32 = 0.5;
 const MAX_GAUSSIAN_KERNEL_HALF: i32 = 128;
+const SOFTWARE_TEXT_GLYPH_METRICS_CACHE_CAPACITY: usize = 8_192;
+const SOFTWARE_TEXT_KERN_METRICS_CACHE_CAPACITY: usize = 16_384;
+const SOFTWARE_TEXT_PREFIX_WIDTH_CACHE_CAPACITY: usize = 512;
 #[doc(hidden)]
 pub const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
 
@@ -41,6 +46,7 @@ pub struct SoftwareTextFont {
     font: FontArc,
     metadata: SoftwareTextFontMetadata,
     score: TextFontScore,
+    content_hash: u64,
 }
 
 #[derive(Clone)]
@@ -54,6 +60,9 @@ struct SoftwareTextFontMetadata {
 impl SoftwareTextFont {
     pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self, SoftwareTextFontError> {
         let bytes = bytes.into();
+        let mut hasher = default_hash::new();
+        bytes.hash(&mut hasher);
+        let content_hash = hasher.finish();
         let metadata = software_text_font_metadata(bytes.as_slice());
         let font = FontArc::try_from_vec(bytes).map_err(|_| SoftwareTextFontError::InvalidFont)?;
         let score =
@@ -62,6 +71,7 @@ impl SoftwareTextFont {
             font,
             metadata,
             score,
+            content_hash,
         })
     }
 
@@ -79,6 +89,10 @@ impl SoftwareTextFont {
 
     fn ab_glyph_px_size(&self, logical_font_size: f32) -> f32 {
         logical_font_size * self.metadata.ab_glyph_scale_factor
+    }
+
+    fn content_hash(&self) -> u64 {
+        self.content_hash
     }
 }
 
@@ -353,12 +367,18 @@ impl Hash for TextMetricsKey {
 
 struct SoftwareTextMetricsCache {
     map: BoundedLruCache<TextMetricsKey, TextMetrics>,
+    line_prefix_widths: BoundedLruCache<LinePrefixWidthsKey, TextLinePrefixWidths>,
+    glyph_metrics: SoftwareTextGlyphMetricsCache,
 }
 
 impl SoftwareTextMetricsCache {
     fn new(capacity: usize) -> Self {
         Self {
             map: BoundedLruCache::with_capacity_at_least_one(capacity),
+            line_prefix_widths: BoundedLruCache::with_capacity_at_least_one(
+                capacity.max(SOFTWARE_TEXT_PREFIX_WIDTH_CACHE_CAPACITY),
+            ),
+            glyph_metrics: SoftwareTextGlyphMetricsCache::new(),
         }
     }
 
@@ -379,9 +399,225 @@ impl SoftwareTextMetricsCache {
             return metrics;
         }
 
-        let metrics = measure_annotated_text_with_font_set(text, style, font_size, fonts);
+        let metrics =
+            measure_annotated_text_with_font_set_cached(text, style, font_size, fonts, self);
         self.map.put(key, metrics);
         metrics
+    }
+
+    fn get_or_measure_line_prefix_widths(
+        &mut self,
+        fonts: &SoftwareTextFontSet,
+        text: &AnnotatedString,
+        line_range: std::ops::Range<usize>,
+        style: &TextStyle,
+    ) -> Option<TextLinePrefixWidths> {
+        let key = line_prefix_widths_key(text, line_range.clone(), style)?;
+        if let Some(widths) = self.line_prefix_widths.get(&key) {
+            return Some(widths.clone());
+        }
+
+        let widths = annotated_line_prefix_widths_with_font_set_cached(
+            text, line_range, style, fonts, self,
+        )?;
+        self.line_prefix_widths.put(key, widths.clone());
+        Some(widths)
+    }
+
+    fn get_or_measure_line_width(
+        &mut self,
+        fonts: &SoftwareTextFontSet,
+        text: &AnnotatedString,
+        line_range: std::ops::Range<usize>,
+        style: &TextStyle,
+    ) -> Option<f32> {
+        let key = line_prefix_widths_key(text, line_range.clone(), style)?;
+        if let Some(widths) = self.line_prefix_widths.get(&key) {
+            return widths.width_for_char_range(0, widths.char_count());
+        }
+
+        let widths = annotated_line_prefix_widths_with_font_set_cached(
+            text, line_range, style, fonts, self,
+        )?;
+        let width = widths.width_for_char_range(0, widths.char_count());
+        self.line_prefix_widths.put(key, widths);
+        width
+    }
+}
+
+#[derive(Clone)]
+struct LinePrefixWidthsKey {
+    text: Rc<str>,
+    start: usize,
+    end: usize,
+    style_hash: u64,
+    span_styles_hash: u64,
+}
+
+impl PartialEq for LinePrefixWidthsKey {
+    fn eq(&self, other: &Self) -> bool {
+        (Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text)
+            && self.start == other.start
+            && self.end == other.end
+            && self.style_hash == other.style_hash
+            && self.span_styles_hash == other.span_styles_hash
+    }
+}
+
+impl Eq for LinePrefixWidthsKey {}
+
+impl Hash for LinePrefixWidthsKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.text.hash(state);
+        self.start.hash(state);
+        self.end.hash(state);
+        self.style_hash.hash(state);
+        self.span_styles_hash.hash(state);
+    }
+}
+
+fn line_prefix_widths_key(
+    text: &AnnotatedString,
+    line_range: std::ops::Range<usize>,
+    style: &TextStyle,
+) -> Option<LinePrefixWidthsKey> {
+    if !style_allows_prefix_widths(style)
+        || line_range.start > line_range.end
+        || line_range.end > text.text.len()
+        || !text.text.is_char_boundary(line_range.start)
+        || !text.text.is_char_boundary(line_range.end)
+        || text.text[line_range.clone()].contains('\n')
+    {
+        return None;
+    }
+
+    Some(LinePrefixWidthsKey {
+        text: Rc::from(text.text.as_str()),
+        start: line_range.start,
+        end: line_range.end,
+        style_hash: style.measurement_hash(),
+        span_styles_hash: text.span_styles_hash(),
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct FontScaleMetricsKey {
+    font_hash: u64,
+    glyph_font_size_bits: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CachedGlyphMetrics {
+    glyph_id: GlyphId,
+    advance: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct GlyphMetricsKey {
+    font: FontScaleMetricsKey,
+    ch: char,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct KernMetricsKey {
+    font: FontScaleMetricsKey,
+    previous_id: u32,
+    glyph_id: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SoftwareTextGlyphMetricsStats {
+    glyph_hits: u64,
+    glyph_misses: u64,
+    kern_hits: u64,
+    kern_misses: u64,
+}
+
+struct SoftwareTextGlyphMetricsCache {
+    glyphs: BoundedLruCache<GlyphMetricsKey, CachedGlyphMetrics>,
+    kerns: BoundedLruCache<KernMetricsKey, f32>,
+    stats: SoftwareTextGlyphMetricsStats,
+}
+
+impl SoftwareTextGlyphMetricsCache {
+    fn new() -> Self {
+        Self {
+            glyphs: BoundedLruCache::with_capacity_at_least_one(
+                SOFTWARE_TEXT_GLYPH_METRICS_CACHE_CAPACITY,
+            ),
+            kerns: BoundedLruCache::with_capacity_at_least_one(
+                SOFTWARE_TEXT_KERN_METRICS_CACHE_CAPACITY,
+            ),
+            stats: SoftwareTextGlyphMetricsStats::default(),
+        }
+    }
+
+    #[cfg(test)]
+    fn stats(&self) -> SoftwareTextGlyphMetricsStats {
+        self.stats
+    }
+
+    fn glyph_metrics<F, S>(
+        &mut self,
+        font: &SoftwareTextFont,
+        glyph_font_size: f32,
+        scaled_font: &S,
+        ch: char,
+    ) -> CachedGlyphMetrics
+    where
+        F: Font,
+        S: ScaleFont<F>,
+    {
+        let font_key = FontScaleMetricsKey {
+            font_hash: font.content_hash(),
+            glyph_font_size_bits: glyph_font_size.to_bits(),
+        };
+        let key = GlyphMetricsKey { font: font_key, ch };
+        if let Some(metrics) = self.glyphs.get(&key).copied() {
+            self.stats.glyph_hits = self.stats.glyph_hits.saturating_add(1);
+            return metrics;
+        }
+
+        let glyph_id = scaled_font.glyph_id(ch);
+        let metrics = CachedGlyphMetrics {
+            glyph_id,
+            advance: scaled_font.h_advance(glyph_id).max(0.0),
+        };
+        self.glyphs.put(key, metrics);
+        self.stats.glyph_misses = self.stats.glyph_misses.saturating_add(1);
+        metrics
+    }
+
+    fn kern<F, S>(
+        &mut self,
+        font: &SoftwareTextFont,
+        glyph_font_size: f32,
+        scaled_font: &S,
+        previous_id: GlyphId,
+        glyph_id: GlyphId,
+    ) -> f32
+    where
+        F: Font,
+        S: ScaleFont<F>,
+    {
+        let font_key = FontScaleMetricsKey {
+            font_hash: font.content_hash(),
+            glyph_font_size_bits: glyph_font_size.to_bits(),
+        };
+        let key = KernMetricsKey {
+            font: font_key,
+            previous_id: previous_id.0.into(),
+            glyph_id: glyph_id.0.into(),
+        };
+        if let Some(kern) = self.kerns.get(&key).copied() {
+            self.stats.kern_hits = self.stats.kern_hits.saturating_add(1);
+            return kern;
+        }
+
+        let kern = scaled_font.kern(previous_id, glyph_id);
+        self.kerns.put(key, kern);
+        self.stats.kern_misses = self.stats.kern_misses.saturating_add(1);
+        kern
     }
 }
 
@@ -449,6 +685,31 @@ impl TextMeasurer for SoftwareTextMeasurer {
     ) -> TextMetrics {
         let text = text.subsequence(range);
         self.lock_cache().get_or_measure(&self.fonts, &text, style)
+    }
+
+    fn measure_line_prefix_widths(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        line_range: std::ops::Range<usize>,
+        style: &TextStyle,
+    ) -> Option<TextLinePrefixWidths> {
+        self.lock_cache()
+            .get_or_measure_line_prefix_widths(&self.fonts, text, line_range, style)
+    }
+
+    fn measure_line_width(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        line_range: std::ops::Range<usize>,
+        style: &TextStyle,
+    ) -> Option<f32> {
+        self.lock_cache()
+            .get_or_measure_line_width(&self.fonts, text, line_range, style)
+    }
+
+    fn line_height(&self, text: &cranpose_ui::text::AnnotatedString, style: &TextStyle) -> f32 {
+        let font_size = resolve_font_size(style);
+        max_line_height_for_annotated_text_with_resolver(text, style, font_size, &self.fonts)
     }
 
     fn get_offset_for_position(
@@ -519,12 +780,268 @@ enum GlyphRasterStyle {
     Stroke { width_px: f32 },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SoftwareGlyphAtlasKey {
+    pub font_hash: u64,
+    pub glyph_id: u32,
+    pub scale_x_bits: u32,
+    pub scale_y_bits: u32,
+    pub embolden_px_bits: u32,
+    pub slant_bits: u32,
+}
+
+#[derive(Clone)]
+pub struct SoftwareGlyphAtlasMask {
+    pub alpha: Arc<[f32]>,
+    pub width: usize,
+    pub height: usize,
+}
+
+#[derive(Clone)]
+pub struct SoftwareGlyphAtlasGlyph {
+    pub key: SoftwareGlyphAtlasKey,
+    pub mask: SoftwareGlyphAtlasMask,
+    pub x: i32,
+    pub y: i32,
+    pub color: Color,
+}
+
+#[derive(Clone, Copy)]
+pub struct SoftwareGlyphAtlasPlacement {
+    pub key: SoftwareGlyphAtlasKey,
+    pub x: i32,
+    pub y: i32,
+    pub width: usize,
+    pub height: usize,
+    pub color: Color,
+}
+
+#[derive(Clone)]
+pub enum SoftwareGlyphAtlasRunGlyph {
+    Cached(SoftwareGlyphAtlasPlacement),
+    New(SoftwareGlyphAtlasGlyph),
+}
+
+impl SoftwareGlyphAtlasRunGlyph {
+    pub fn placement(&self) -> SoftwareGlyphAtlasPlacement {
+        match self {
+            Self::Cached(placement) => *placement,
+            Self::New(glyph) => SoftwareGlyphAtlasPlacement {
+                key: glyph.key,
+                x: glyph.x,
+                y: glyph.y,
+                width: glyph.mask.width,
+                height: glyph.mask.height,
+                color: glyph.color,
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
 struct GlyphMask {
-    alpha: Vec<f32>,
+    alpha: Arc<[f32]>,
     width: usize,
     height: usize,
     origin_x: i32,
     origin_y: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SoftwareGlyphRasterCacheStats {
+    pub entries: usize,
+    pub hits: u64,
+    pub misses: u64,
+}
+
+const RUN_GLYPH_METRICS_CACHE_LIMIT: usize = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum GlyphRasterStyleKey {
+    Fill,
+    Stroke { width_px_bits: u32 },
+}
+
+impl GlyphRasterStyleKey {
+    fn from_style(style: GlyphRasterStyle) -> Self {
+        match style {
+            GlyphRasterStyle::Fill => Self::Fill,
+            GlyphRasterStyle::Stroke { width_px } => Self::Stroke {
+                width_px_bits: width_px.to_bits(),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct GlyphMaskCacheKey {
+    font_hash: u64,
+    glyph_id: u32,
+    scale_x_bits: u32,
+    scale_y_bits: u32,
+    raster_style: GlyphRasterStyleKey,
+    embolden_px_bits: u32,
+    slant_bits: u32,
+}
+
+#[derive(Clone)]
+struct CachedGlyphMask {
+    alpha: Arc<[f32]>,
+    width: usize,
+    height: usize,
+    origin_offset_x: i32,
+    origin_offset_y: i32,
+}
+
+impl CachedGlyphMask {
+    fn from_mask(mask: GlyphMask, glyph: &Glyph) -> Self {
+        let (glyph_x, glyph_y) = static_glyph_pixel_origin(glyph);
+        Self {
+            alpha: mask.alpha,
+            width: mask.width,
+            height: mask.height,
+            origin_offset_x: mask.origin_x - glyph_x,
+            origin_offset_y: mask.origin_y - glyph_y,
+        }
+    }
+
+    fn instantiate(&self, glyph: &Glyph) -> GlyphMask {
+        let (glyph_x, glyph_y) = static_glyph_pixel_origin(glyph);
+        GlyphMask {
+            alpha: Arc::clone(&self.alpha),
+            width: self.width,
+            height: self.height,
+            origin_x: glyph_x + self.origin_offset_x,
+            origin_y: glyph_y + self.origin_offset_y,
+        }
+    }
+
+    fn placement(&self, glyph: &Glyph) -> (i32, i32, usize, usize) {
+        let (glyph_x, glyph_y) = static_glyph_pixel_origin(glyph);
+        (
+            glyph_x + self.origin_offset_x,
+            glyph_y + self.origin_offset_y,
+            self.width,
+            self.height,
+        )
+    }
+
+    fn atlas_metrics(&self, key: SoftwareGlyphAtlasKey) -> CachedAtlasGlyphMetrics {
+        CachedAtlasGlyphMetrics {
+            key,
+            width: self.width,
+            height: self.height,
+            origin_offset_x: self.origin_offset_x,
+            origin_offset_y: self.origin_offset_y,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CachedAtlasGlyphMetrics {
+    key: SoftwareGlyphAtlasKey,
+    width: usize,
+    height: usize,
+    origin_offset_x: i32,
+    origin_offset_y: i32,
+}
+
+impl CachedAtlasGlyphMetrics {
+    fn placement(self, glyph: &Glyph, color: Color) -> SoftwareGlyphAtlasPlacement {
+        let (glyph_x, glyph_y) = static_glyph_pixel_origin(glyph);
+        SoftwareGlyphAtlasPlacement {
+            key: self.key,
+            x: glyph_x + self.origin_offset_x,
+            y: glyph_y + self.origin_offset_y,
+            width: self.width,
+            height: self.height,
+            color,
+        }
+    }
+}
+
+pub struct SoftwareGlyphRasterCache {
+    masks: BoundedLruCache<GlyphMaskCacheKey, CachedGlyphMask>,
+    hits: u64,
+    misses: u64,
+}
+
+impl SoftwareGlyphRasterCache {
+    pub fn with_capacity_at_least_one(capacity: usize) -> Self {
+        Self {
+            masks: BoundedLruCache::with_capacity_at_least_one(capacity),
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    pub fn stats(&self) -> SoftwareGlyphRasterCacheStats {
+        SoftwareGlyphRasterCacheStats {
+            entries: self.masks.len(),
+            hits: self.hits,
+            misses: self.misses,
+        }
+    }
+
+    fn get(&mut self, key: &GlyphMaskCacheKey, glyph: &Glyph) -> Option<GlyphMask> {
+        let mask = self.masks.get(key)?.instantiate(glyph);
+        self.hits = self.hits.saturating_add(1);
+        Some(mask)
+    }
+
+    fn get_atlas_placement(
+        &mut self,
+        key: &GlyphMaskCacheKey,
+        glyph: &Glyph,
+    ) -> Option<(SoftwareGlyphAtlasKey, i32, i32, usize, usize)> {
+        let atlas_key = glyph_atlas_key_from_mask_key(*key)?;
+        let (x, y, width, height) = self.masks.get(key)?.placement(glyph);
+        self.hits = self.hits.saturating_add(1);
+        Some((atlas_key, x, y, width, height))
+    }
+
+    fn get_atlas_metrics(&mut self, key: &GlyphMaskCacheKey) -> Option<CachedAtlasGlyphMetrics> {
+        let atlas_key = glyph_atlas_key_from_mask_key(*key)?;
+        let metrics = self.masks.get(key)?.atlas_metrics(atlas_key);
+        self.hits = self.hits.saturating_add(1);
+        Some(metrics)
+    }
+
+    pub fn atlas_glyph_for_placement(
+        &mut self,
+        placement: &SoftwareGlyphAtlasPlacement,
+    ) -> Option<SoftwareGlyphAtlasGlyph> {
+        let key = GlyphMaskCacheKey {
+            font_hash: placement.key.font_hash,
+            glyph_id: placement.key.glyph_id,
+            scale_x_bits: placement.key.scale_x_bits,
+            scale_y_bits: placement.key.scale_y_bits,
+            raster_style: GlyphRasterStyleKey::Fill,
+            embolden_px_bits: placement.key.embolden_px_bits,
+            slant_bits: placement.key.slant_bits,
+        };
+        let mask = self.masks.get(&key)?;
+        self.hits = self.hits.saturating_add(1);
+        Some(SoftwareGlyphAtlasGlyph {
+            key: placement.key,
+            mask: SoftwareGlyphAtlasMask {
+                alpha: Arc::clone(&mask.alpha),
+                width: mask.width,
+                height: mask.height,
+            },
+            x: placement.x,
+            y: placement.y,
+            color: placement.color,
+        })
+    }
+
+    fn put(&mut self, key: GlyphMaskCacheKey, glyph: &Glyph, mask: GlyphMask) -> GlyphMask {
+        let cached = CachedGlyphMask::from_mask(mask, glyph);
+        let mask = cached.instantiate(glyph);
+        self.masks.put(key, cached);
+        self.misses = self.misses.saturating_add(1);
+        mask
+    }
 }
 
 struct RasterFontRef<'a, F> {
@@ -635,19 +1152,508 @@ pub fn rasterize_text_to_image(
     font: &SoftwareTextFont,
 ) -> Option<ImageBitmap> {
     rasterize_text_to_image_impl(
-        text,
-        rect,
-        style,
-        fallback_color,
-        font_size,
-        scale,
+        TextRasterImageRequest {
+            text,
+            rect,
+            style,
+            fallback_color,
+            font_size,
+            scale,
+        },
         RasterFontRef {
             font: &font.font,
             ab_glyph_scale_factor: font.metadata.ab_glyph_scale_factor,
             weight: font.weight(),
             style: font.style(),
         },
+        font.content_hash(),
+        None,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn rasterize_text_to_image_with_glyph_cache(
+    text: &str,
+    rect: Rect,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    font: &SoftwareTextFont,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+) -> Option<ImageBitmap> {
+    rasterize_text_to_image_impl(
+        TextRasterImageRequest {
+            text,
+            rect,
+            style,
+            fallback_color,
+            font_size,
+            scale,
+        },
+        RasterFontRef {
+            font: &font.font,
+            ab_glyph_scale_factor: font.metadata.ab_glyph_scale_factor,
+            weight: font.weight(),
+            style: font.style(),
+        },
+        font.content_hash(),
+        Some(glyph_cache),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn rasterize_annotated_text_to_image_with_glyph_cache(
+    text: &AnnotatedString,
+    rect: Rect,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    fonts: &SoftwareTextFontSet,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+) -> Option<ImageBitmap> {
+    if text.span_styles.is_empty() {
+        let font = fonts.resolve(style)?;
+        return rasterize_text_to_image_with_glyph_cache(
+            text.text.as_str(),
+            rect,
+            style,
+            fallback_color,
+            font_size,
+            scale,
+            font,
+            glyph_cache,
+        );
+    }
+    if text.is_empty()
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+        || !font_size.is_finite()
+        || font_size <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
+        return None;
+    }
+
+    let width = rect.width.ceil().max(1.0) as u32;
+    let height = rect.height.ceil().max(1.0) as u32;
+    let boundaries = text.span_boundaries();
+    let mut segment_plan = Vec::with_capacity(boundaries.len().saturating_sub(1));
+    for window in boundaries.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start == end {
+            continue;
+        }
+        let segment_style = effective_style_for_range(text, style, start, end);
+        if !style_can_rasterize_direct_solid(&segment_style) {
+            return None;
+        }
+        let static_text_motion = segment_style
+            .paragraph_style
+            .text_motion
+            .unwrap_or(TextMotion::Static)
+            == TextMotion::Static;
+        if !static_text_motion {
+            return None;
+        }
+        segment_plan.push((start, end, segment_style));
+    }
+
+    let mut canvas = vec![0_u8; (width as usize) * (height as usize) * 4];
+    let base_line_height = line_height_for_render_style(style, font_size);
+    let mut current_line_height = base_line_height;
+    let mut cursor_x = rect.x;
+    let mut cursor_y = rect.y;
+
+    for (start, end, segment_style) in segment_plan {
+        let segment = &text.text[start..end];
+        for part in segment.split_inclusive('\n') {
+            let has_newline = part.ends_with('\n');
+            let content = if has_newline {
+                &part[..part.len().saturating_sub(1)]
+            } else {
+                part
+            };
+
+            if !content.is_empty() {
+                let segment_font_size = segment_style.resolve_font_size(font_size);
+                if let Some(font) = fonts.resolve(&segment_style) {
+                    let local_rect = Rect {
+                        x: (cursor_x - rect.x).round(),
+                        y: (cursor_y - rect.y).round(),
+                        width: width as f32,
+                        height: height as f32,
+                    };
+                    let color = segment_style.resolve_text_color(fallback_color);
+                    let advance_px = draw_text_segment_solid_to_rgba(
+                        &mut canvas,
+                        width,
+                        height,
+                        content,
+                        local_rect,
+                        &segment_style,
+                        color,
+                        segment_font_size,
+                        scale,
+                        font,
+                        glyph_cache,
+                    );
+                    cursor_x += advance_px;
+                    current_line_height = current_line_height.max(line_height_for_render_style(
+                        &segment_style,
+                        segment_font_size,
+                    ));
+                }
+            }
+
+            if has_newline {
+                cursor_x = rect.x;
+                cursor_y += current_line_height * scale;
+                current_line_height = base_line_height;
+            }
+        }
+    }
+
+    ImageBitmap::from_rgba8(width, height, canvas).ok()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn collect_solid_text_atlas_glyphs(
+    text: &AnnotatedString,
+    rect: Rect,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    fonts: &SoftwareTextFontSet,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+    out: &mut Vec<SoftwareGlyphAtlasGlyph>,
+) -> Option<()> {
+    if text.is_empty()
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+        || !font_size.is_finite()
+        || font_size <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
+        return Some(());
+    }
+
+    let base_line_height = line_height_for_render_style(style, font_size);
+    let mut current_line_height = base_line_height;
+    let mut cursor_x = rect.x;
+    let mut cursor_y = rect.y;
+    let initial_len = out.len();
+
+    let mut boundaries = text.span_boundaries();
+    for (offset, ch) in text.text.char_indices() {
+        if ch == '\n' {
+            boundaries.push(offset);
+            boundaries.push(offset + ch.len_utf8());
+        }
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    boundaries.retain(|offset| *offset <= text.text.len() && text.text.is_char_boundary(*offset));
+
+    for range in boundaries.windows(2) {
+        let start = range[0];
+        let end = range[1];
+        if start == end {
+            continue;
+        }
+        let segment_style = effective_style_for_range(text, style, start, end);
+        if !style_can_atlas_solid_fill(&segment_style) {
+            out.truncate(initial_len);
+            return None;
+        }
+        let static_text_motion = segment_style
+            .paragraph_style
+            .text_motion
+            .unwrap_or(TextMotion::Static)
+            == TextMotion::Static;
+        if !static_text_motion {
+            out.truncate(initial_len);
+            return None;
+        }
+
+        let segment = &text.text[start..end];
+        for part in segment.split_inclusive('\n') {
+            let has_newline = part.ends_with('\n');
+            let content = if has_newline {
+                &part[..part.len().saturating_sub(1)]
+            } else {
+                part
+            };
+
+            if !content.is_empty() {
+                let segment_font_size = segment_style.resolve_font_size(font_size);
+                let Some(font) = fonts.resolve(&segment_style) else {
+                    out.truncate(initial_len);
+                    return None;
+                };
+                let local_rect = Rect {
+                    x: (cursor_x - rect.x).round(),
+                    y: (cursor_y - rect.y).round(),
+                    width: rect.width,
+                    height: rect.height,
+                };
+                let color = segment_style.resolve_text_color(fallback_color);
+                let advance_px = collect_text_segment_solid_atlas_glyphs(
+                    content,
+                    local_rect,
+                    &segment_style,
+                    color,
+                    segment_font_size,
+                    scale,
+                    font,
+                    glyph_cache,
+                    out,
+                )?;
+                cursor_x += advance_px;
+                current_line_height = current_line_height.max(line_height_for_render_style(
+                    &segment_style,
+                    segment_font_size,
+                ));
+            }
+
+            if has_newline {
+                cursor_x = rect.x;
+                cursor_y += current_line_height * scale;
+                current_line_height = base_line_height;
+            }
+        }
+    }
+
+    Some(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn collect_cached_solid_text_atlas_placements(
+    text: &AnnotatedString,
+    rect: Rect,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    fonts: &SoftwareTextFontSet,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+    out: &mut Vec<SoftwareGlyphAtlasPlacement>,
+) -> Option<()> {
+    if text.is_empty()
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+        || !font_size.is_finite()
+        || font_size <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
+        return Some(());
+    }
+
+    let base_line_height = line_height_for_render_style(style, font_size);
+    let mut current_line_height = base_line_height;
+    let mut cursor_x = rect.x;
+    let mut cursor_y = rect.y;
+    let initial_len = out.len();
+
+    let mut boundaries = text.span_boundaries();
+    for (offset, ch) in text.text.char_indices() {
+        if ch == '\n' {
+            boundaries.push(offset);
+            boundaries.push(offset + ch.len_utf8());
+        }
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    boundaries.retain(|offset| *offset <= text.text.len() && text.text.is_char_boundary(*offset));
+
+    for range in boundaries.windows(2) {
+        let start = range[0];
+        let end = range[1];
+        if start == end {
+            continue;
+        }
+        let segment_style = effective_style_for_range(text, style, start, end);
+        if !style_can_atlas_solid_fill(&segment_style) {
+            out.truncate(initial_len);
+            return None;
+        }
+        let static_text_motion = segment_style
+            .paragraph_style
+            .text_motion
+            .unwrap_or(TextMotion::Static)
+            == TextMotion::Static;
+        if !static_text_motion {
+            out.truncate(initial_len);
+            return None;
+        }
+
+        let segment = &text.text[start..end];
+        for part in segment.split_inclusive('\n') {
+            let has_newline = part.ends_with('\n');
+            let content = if has_newline {
+                &part[..part.len().saturating_sub(1)]
+            } else {
+                part
+            };
+
+            if !content.is_empty() {
+                let segment_font_size = segment_style.resolve_font_size(font_size);
+                let Some(font) = fonts.resolve(&segment_style) else {
+                    out.truncate(initial_len);
+                    return None;
+                };
+                let local_rect = Rect {
+                    x: (cursor_x - rect.x).round(),
+                    y: (cursor_y - rect.y).round(),
+                    width: rect.width,
+                    height: rect.height,
+                };
+                let color = segment_style.resolve_text_color(fallback_color);
+                let advance_px = collect_text_segment_cached_solid_atlas_placements(
+                    content,
+                    local_rect,
+                    &segment_style,
+                    color,
+                    segment_font_size,
+                    scale,
+                    font,
+                    glyph_cache,
+                    out,
+                )?;
+                cursor_x += advance_px;
+                current_line_height = current_line_height.max(line_height_for_render_style(
+                    &segment_style,
+                    segment_font_size,
+                ));
+            }
+
+            if has_newline {
+                cursor_x = rect.x;
+                cursor_y += current_line_height * scale;
+                current_line_height = base_line_height;
+            }
+        }
+    }
+
+    Some(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn collect_solid_text_atlas_run(
+    text: &AnnotatedString,
+    rect: Rect,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    fonts: &SoftwareTextFontSet,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+    out: &mut Vec<SoftwareGlyphAtlasRunGlyph>,
+) -> Option<()> {
+    if text.is_empty()
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+        || !font_size.is_finite()
+        || font_size <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
+        return Some(());
+    }
+
+    let base_line_height = line_height_for_render_style(style, font_size);
+    let mut current_line_height = base_line_height;
+    let mut cursor_x = rect.x;
+    let mut cursor_y = rect.y;
+    let initial_len = out.len();
+
+    let mut boundaries = text.span_boundaries();
+    for (offset, ch) in text.text.char_indices() {
+        if ch == '\n' {
+            boundaries.push(offset);
+            boundaries.push(offset + ch.len_utf8());
+        }
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    boundaries.retain(|offset| *offset <= text.text.len() && text.text.is_char_boundary(*offset));
+
+    for range in boundaries.windows(2) {
+        let start = range[0];
+        let end = range[1];
+        if start == end {
+            continue;
+        }
+        let segment_style = effective_style_for_range(text, style, start, end);
+        if !style_can_atlas_solid_fill(&segment_style) {
+            out.truncate(initial_len);
+            return None;
+        }
+        let static_text_motion = segment_style
+            .paragraph_style
+            .text_motion
+            .unwrap_or(TextMotion::Static)
+            == TextMotion::Static;
+        if !static_text_motion {
+            out.truncate(initial_len);
+            return None;
+        }
+
+        let segment = &text.text[start..end];
+        for part in segment.split_inclusive('\n') {
+            let has_newline = part.ends_with('\n');
+            let content = if has_newline {
+                &part[..part.len().saturating_sub(1)]
+            } else {
+                part
+            };
+
+            if !content.is_empty() {
+                let segment_font_size = segment_style.resolve_font_size(font_size);
+                let Some(font) = fonts.resolve(&segment_style) else {
+                    out.truncate(initial_len);
+                    return None;
+                };
+                let local_rect = Rect {
+                    x: (cursor_x - rect.x).round(),
+                    y: (cursor_y - rect.y).round(),
+                    width: rect.width,
+                    height: rect.height,
+                };
+                let color = segment_style.resolve_text_color(fallback_color);
+                let advance_px = collect_text_segment_solid_atlas_run(
+                    content,
+                    local_rect,
+                    &segment_style,
+                    color,
+                    segment_font_size,
+                    scale,
+                    font,
+                    glyph_cache,
+                    out,
+                )?;
+                cursor_x += advance_px;
+                current_line_height = current_line_height.max(line_height_for_render_style(
+                    &segment_style,
+                    segment_font_size,
+                ));
+            }
+
+            if has_newline {
+                cursor_x = rect.x;
+                cursor_y += current_line_height * scale;
+                current_line_height = base_line_height;
+            }
+        }
+    }
+
+    Some(())
 }
 
 pub fn measure_text_with_font(
@@ -667,6 +1673,16 @@ pub fn measure_text_with_font(
     )
 }
 
+fn measure_text_with_font_cached(
+    text: &str,
+    style: &TextStyle,
+    font_size: f32,
+    font: &SoftwareTextFont,
+    cache: &mut SoftwareTextMetricsCache,
+) -> TextMetrics {
+    measure_text_impl_cached(text, style, font_size, font, cache)
+}
+
 pub fn measure_annotated_text_with_font(
     text: &AnnotatedString,
     style: &TextStyle,
@@ -681,6 +1697,7 @@ pub fn measure_annotated_text_with_font(
         style,
         font_size,
         &SoftwareTextFontSet::from_font(font.clone()),
+        None,
     )
 }
 
@@ -696,7 +1713,29 @@ pub fn measure_annotated_text_with_font_set(
         }
         return fallback_text_metrics(text.text.as_str(), style, font_size);
     }
-    measure_annotated_text_with_resolver(text, style, font_size, fonts)
+    measure_annotated_text_with_resolver(text, style, font_size, fonts, None)
+}
+
+fn measure_annotated_text_with_font_set_cached(
+    text: &AnnotatedString,
+    style: &TextStyle,
+    font_size: f32,
+    fonts: &SoftwareTextFontSet,
+    cache: &mut SoftwareTextMetricsCache,
+) -> TextMetrics {
+    if text.span_styles.is_empty() {
+        if let Some(font) = fonts.resolve(style) {
+            return measure_text_with_font_cached(
+                text.text.as_str(),
+                style,
+                font_size,
+                font,
+                cache,
+            );
+        }
+        return fallback_text_metrics(text.text.as_str(), style, font_size);
+    }
+    measure_annotated_text_with_resolver(text, style, font_size, fonts, Some(cache))
 }
 
 pub fn text_offset_for_position_with_font(
@@ -922,30 +1961,49 @@ pub fn rasterize_text_to_image_with_font(
     font: &impl Font,
 ) -> Option<ImageBitmap> {
     rasterize_text_to_image_impl(
-        text,
-        rect,
-        style,
-        fallback_color,
-        font_size,
-        scale,
+        TextRasterImageRequest {
+            text,
+            rect,
+            style,
+            fallback_color,
+            font_size,
+            scale,
+        },
         RasterFontRef {
             font,
             ab_glyph_scale_factor: 1.0,
             weight: FontWeight::NORMAL,
             style: FontStyle::Normal,
         },
+        0,
+        None,
     )
 }
 
-fn rasterize_text_to_image_impl(
-    text: &str,
+struct TextRasterImageRequest<'a> {
+    text: &'a str,
     rect: Rect,
-    style: &TextStyle,
+    style: &'a TextStyle,
     fallback_color: Color,
     font_size: f32,
     scale: f32,
+}
+
+fn rasterize_text_to_image_impl(
+    request: TextRasterImageRequest<'_>,
     font_ref: RasterFontRef<'_, impl Font>,
+    font_cache_key: u64,
+    mut glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
 ) -> Option<ImageBitmap> {
+    let TextRasterImageRequest {
+        text,
+        rect,
+        style,
+        fallback_color,
+        font_size,
+        scale,
+    } = request;
+
     if text.is_empty()
         || rect.width <= 0.0
         || rect.height <= 0.0
@@ -959,7 +2017,6 @@ fn rasterize_text_to_image_impl(
 
     let width = rect.width.ceil().max(1.0) as u32;
     let height = rect.height.ceil().max(1.0) as u32;
-    let mut canvas = vec![[0.0f32; 4]; (width * height) as usize];
 
     let fallback_brush = Brush::solid(fallback_color);
     let (brush, brush_alpha_multiplier) = match style.span_style.brush.as_ref() {
@@ -1007,27 +2064,62 @@ fn rasterize_text_to_image_impl(
     let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
     let first_baseline_y = baseline_y_for_line_box(metrics, line_height);
 
-    for (line_idx, line) in text.split('\n').enumerate() {
-        let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let offset = point(origin_x, baseline_y);
+    if let Brush::Solid(color) = brush {
+        if shadow.is_none() {
+            let color = color_to_rgba(*color);
+            let mut rgba = vec![0u8; (width * height * 4) as usize];
+            visit_text_glyph_masks(
+                text,
+                font,
+                font_cache_key,
+                font_px_size,
+                line_height,
+                first_baseline_y,
+                origin_x,
+                origin_y,
+                static_text_motion,
+                raster_style,
+                weight_synthesis,
+                style_synthesis,
+                glyph_cache.as_deref_mut(),
+                |mask| {
+                    draw_mask_glyph_solid_u8(
+                        &mut rgba,
+                        width,
+                        height,
+                        mask,
+                        color,
+                        brush_alpha_multiplier,
+                    );
+                },
+            );
 
-        for glyph in layout_line_glyphs(font, line, font_px_size, offset) {
-            let glyph = align_glyph_for_text_motion(glyph, static_text_motion);
-            let Some((outlined, bounds)) = outline_glyph_with_bounds(font, &glyph) else {
-                continue;
-            };
-            let Some(mask) = build_glyph_mask(font, &glyph, &outlined, bounds, raster_style) else {
-                continue;
-            };
-            let mask = synthesize_glyph_weight(mask, weight_synthesis);
-            let mask = synthesize_glyph_style(mask, style_synthesis);
+            return ImageBitmap::from_rgba8(width, height, rgba).ok();
+        }
+    }
 
+    let mut canvas = vec![[0.0f32; 4]; (width * height) as usize];
+    visit_text_glyph_masks(
+        text,
+        font,
+        font_cache_key,
+        font_px_size,
+        line_height,
+        first_baseline_y,
+        origin_x,
+        origin_y,
+        static_text_motion,
+        raster_style,
+        weight_synthesis,
+        style_synthesis,
+        glyph_cache,
+        |mask| {
             if let Some(shadow) = shadow {
                 draw_shadow_mask(
                     &mut canvas,
                     width,
                     height,
-                    &mask,
+                    mask,
                     shadow,
                     scale,
                     static_text_motion,
@@ -1038,13 +2130,13 @@ fn rasterize_text_to_image_impl(
                 &mut canvas,
                 width,
                 height,
-                &mask,
+                mask,
                 brush,
                 brush_alpha_multiplier,
                 rect,
             );
-        }
-    }
+        },
+    );
 
     let mut rgba = vec![0u8; canvas.len() * 4];
     for (index, pixel) in canvas.iter().enumerate() {
@@ -1056,6 +2148,356 @@ fn rasterize_text_to_image_impl(
     }
 
     ImageBitmap::from_rgba8(width, height, rgba).ok()
+}
+
+fn style_can_rasterize_direct_solid(style: &TextStyle) -> bool {
+    if style
+        .span_style
+        .shadow
+        .is_some_and(|shadow| shadow.color.3 > 0.0)
+    {
+        return false;
+    }
+    matches!(
+        style.span_style.brush.as_ref(),
+        None | Some(Brush::Solid(_))
+    )
+}
+
+fn style_can_atlas_solid_fill(style: &TextStyle) -> bool {
+    if style
+        .span_style
+        .shadow
+        .is_some_and(|shadow| shadow.color.3 > 0.0)
+    {
+        return false;
+    }
+    if !matches!(
+        style.span_style.brush.as_ref(),
+        None | Some(Brush::Solid(_))
+    ) {
+        return false;
+    }
+    match style.span_style.draw_style.unwrap_or(TextDrawStyle::Fill) {
+        TextDrawStyle::Fill => true,
+        TextDrawStyle::Stroke { width } => !width.is_finite() || width <= 0.0,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_text_segment_solid_to_rgba(
+    canvas: &mut [u8],
+    canvas_width: u32,
+    canvas_height: u32,
+    text: &str,
+    local_rect: Rect,
+    style: &TextStyle,
+    color: Color,
+    font_size: f32,
+    scale: f32,
+    font: &SoftwareTextFont,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+) -> f32 {
+    if text.is_empty()
+        || local_rect.width <= 0.0
+        || local_rect.height <= 0.0
+        || !font_size.is_finite()
+        || font_size <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
+        return 0.0;
+    }
+
+    let raster_style = match style.span_style.draw_style.unwrap_or(TextDrawStyle::Fill) {
+        TextDrawStyle::Fill => GlyphRasterStyle::Fill,
+        TextDrawStyle::Stroke { width } => {
+            if width.is_finite() && width > 0.0 {
+                GlyphRasterStyle::Stroke {
+                    width_px: width * scale,
+                }
+            } else {
+                GlyphRasterStyle::Fill
+            }
+        }
+    };
+    let text_motion_static = style
+        .paragraph_style
+        .text_motion
+        .unwrap_or(TextMotion::Static)
+        == TextMotion::Static;
+    let font_px_size = font.ab_glyph_px_size(font_size) * scale;
+    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
+    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
+    let metrics = vertical_metrics(&font.font, font_px_size);
+    let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
+    let first_baseline_y = local_rect.y + baseline_y_for_line_box(metrics, line_height);
+    let origin_x = if text_motion_static {
+        local_rect.x.round()
+    } else {
+        local_rect.x + local_rect.x.fract()
+    };
+    let color = color_to_rgba(color);
+
+    visit_text_glyph_masks(
+        text,
+        &font.font,
+        font.content_hash(),
+        font_px_size,
+        line_height,
+        first_baseline_y,
+        origin_x,
+        0.0,
+        text_motion_static,
+        raster_style,
+        weight_synthesis,
+        style_synthesis,
+        Some(glyph_cache),
+        |mask| draw_mask_glyph_solid_u8(canvas, canvas_width, canvas_height, mask, color, 1.0),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_text_segment_solid_atlas_glyphs(
+    text: &str,
+    local_rect: Rect,
+    style: &TextStyle,
+    color: Color,
+    font_size: f32,
+    scale: f32,
+    font: &SoftwareTextFont,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+    out: &mut Vec<SoftwareGlyphAtlasGlyph>,
+) -> Option<f32> {
+    if text.is_empty()
+        || local_rect.width <= 0.0
+        || local_rect.height <= 0.0
+        || !font_size.is_finite()
+        || font_size <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
+        return Some(0.0);
+    }
+    if !style_can_atlas_solid_fill(style) {
+        return None;
+    }
+
+    let text_motion_static = style
+        .paragraph_style
+        .text_motion
+        .unwrap_or(TextMotion::Static)
+        == TextMotion::Static;
+    if !text_motion_static {
+        return None;
+    }
+
+    let font_px_size = font.ab_glyph_px_size(font_size) * scale;
+    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
+    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
+    let metrics = vertical_metrics(&font.font, font_px_size);
+    let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
+    let first_baseline_y = local_rect.y + baseline_y_for_line_box(metrics, line_height);
+    let origin_x = local_rect.x.round();
+    let initial_len = out.len();
+
+    let advance = visit_text_glyph_masks_with_key(
+        text,
+        &font.font,
+        font.content_hash(),
+        font_px_size,
+        line_height,
+        first_baseline_y,
+        origin_x,
+        0.0,
+        true,
+        GlyphRasterStyle::Fill,
+        weight_synthesis,
+        style_synthesis,
+        Some(glyph_cache),
+        |key, mask| {
+            if mask.width == 0 || mask.height == 0 {
+                return;
+            }
+            out.push(SoftwareGlyphAtlasGlyph {
+                key,
+                mask: SoftwareGlyphAtlasMask {
+                    alpha: Arc::clone(&mask.alpha),
+                    width: mask.width,
+                    height: mask.height,
+                },
+                x: mask.origin_x,
+                y: mask.origin_y,
+                color,
+            });
+        },
+    );
+
+    if advance.is_finite() {
+        Some(advance)
+    } else {
+        out.truncate(initial_len);
+        None
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_text_segment_cached_solid_atlas_placements(
+    text: &str,
+    local_rect: Rect,
+    style: &TextStyle,
+    color: Color,
+    font_size: f32,
+    scale: f32,
+    font: &SoftwareTextFont,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+    out: &mut Vec<SoftwareGlyphAtlasPlacement>,
+) -> Option<f32> {
+    if text.is_empty()
+        || local_rect.width <= 0.0
+        || local_rect.height <= 0.0
+        || !font_size.is_finite()
+        || font_size <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
+        return Some(0.0);
+    }
+    if !style_can_atlas_solid_fill(style) {
+        return None;
+    }
+
+    let text_motion_static = style
+        .paragraph_style
+        .text_motion
+        .unwrap_or(TextMotion::Static)
+        == TextMotion::Static;
+    if !text_motion_static {
+        return None;
+    }
+
+    let font_px_size = font.ab_glyph_px_size(font_size) * scale;
+    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
+    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
+    let metrics = vertical_metrics(&font.font, font_px_size);
+    let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
+    let first_baseline_y = local_rect.y + baseline_y_for_line_box(metrics, line_height);
+    let origin_x = local_rect.x.round();
+    let initial_len = out.len();
+
+    let advance = visit_cached_text_glyph_atlas_placements(
+        text,
+        &font.font,
+        font.content_hash(),
+        font_px_size,
+        line_height,
+        first_baseline_y,
+        origin_x,
+        0.0,
+        GlyphRasterStyle::Fill,
+        weight_synthesis,
+        style_synthesis,
+        glyph_cache,
+        |placement| {
+            if placement.width == 0 || placement.height == 0 {
+                return;
+            }
+            out.push(SoftwareGlyphAtlasPlacement { color, ..placement });
+        },
+    );
+
+    if advance.is_finite() {
+        Some(advance)
+    } else {
+        out.truncate(initial_len);
+        None
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_text_segment_solid_atlas_run(
+    text: &str,
+    local_rect: Rect,
+    style: &TextStyle,
+    color: Color,
+    font_size: f32,
+    scale: f32,
+    font: &SoftwareTextFont,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+    out: &mut Vec<SoftwareGlyphAtlasRunGlyph>,
+) -> Option<f32> {
+    if text.is_empty()
+        || local_rect.width <= 0.0
+        || local_rect.height <= 0.0
+        || !font_size.is_finite()
+        || font_size <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
+        return Some(0.0);
+    }
+    if !style_can_atlas_solid_fill(style) {
+        return None;
+    }
+
+    let text_motion_static = style
+        .paragraph_style
+        .text_motion
+        .unwrap_or(TextMotion::Static)
+        == TextMotion::Static;
+    if !text_motion_static {
+        return None;
+    }
+
+    let font_px_size = font.ab_glyph_px_size(font_size) * scale;
+    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
+    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
+    let metrics = vertical_metrics(&font.font, font_px_size);
+    let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
+    let first_baseline_y = local_rect.y + baseline_y_for_line_box(metrics, line_height);
+    let origin_x = local_rect.x.round();
+    let initial_len = out.len();
+
+    let advance = visit_text_glyph_atlas_run(
+        text,
+        &font.font,
+        font.content_hash(),
+        font_px_size,
+        line_height,
+        first_baseline_y,
+        origin_x,
+        0.0,
+        GlyphRasterStyle::Fill,
+        weight_synthesis,
+        style_synthesis,
+        glyph_cache,
+        |run_glyph| {
+            let run_glyph = match run_glyph {
+                SoftwareGlyphAtlasRunGlyph::Cached(mut placement) => {
+                    if placement.width == 0 || placement.height == 0 {
+                        return;
+                    }
+                    placement.color = color;
+                    SoftwareGlyphAtlasRunGlyph::Cached(placement)
+                }
+                SoftwareGlyphAtlasRunGlyph::New(mut glyph) => {
+                    if glyph.mask.width == 0 || glyph.mask.height == 0 {
+                        return;
+                    }
+                    glyph.color = color;
+                    SoftwareGlyphAtlasRunGlyph::New(glyph)
+                }
+            };
+            out.push(run_glyph);
+        },
+    );
+
+    if advance.is_finite() {
+        Some(advance)
+    } else {
+        out.truncate(initial_len);
+        None
+    }
 }
 
 fn resolve_font_size(style: &TextStyle) -> f32 {
@@ -1071,6 +2513,10 @@ fn baseline_y_for_line_box(
 
 fn resolve_line_height(style: &TextStyle, font_size: f32) -> f32 {
     style.resolve_line_height(14.0, font_size)
+}
+
+fn line_height_for_render_style(style: &TextStyle, font_size: f32) -> f32 {
+    resolve_line_height(style, font_size * 1.4).max(1.0)
 }
 
 fn resolve_letter_spacing(style: &TextStyle, font_size: f32) -> f32 {
@@ -1222,6 +2668,179 @@ fn fallback_layout_text(text: &str, style: &TextStyle) -> TextLayoutResult {
     )
 }
 
+fn style_allows_prefix_widths(style: &TextStyle) -> bool {
+    !matches!(
+        style
+            .paragraph_style
+            .platform_style
+            .and_then(|platform| platform.shaping),
+        Some(TextShaping::Advanced)
+    )
+}
+
+fn cached_line_advance_width(
+    font: &SoftwareTextFont,
+    text: &str,
+    glyph_font_size: f32,
+    glyph_metrics: &mut SoftwareTextGlyphMetricsCache,
+) -> f32 {
+    let scaled_font = font.font.as_scaled(PxScale::from(glyph_font_size));
+    let mut width = 0.0f32;
+    let mut previous = None;
+
+    for ch in text.chars() {
+        let metrics = glyph_metrics.glyph_metrics(font, glyph_font_size, &scaled_font, ch);
+        if let Some(previous_id) = previous {
+            width += glyph_metrics.kern(
+                font,
+                glyph_font_size,
+                &scaled_font,
+                previous_id,
+                metrics.glyph_id,
+            );
+        }
+        width += metrics.advance;
+        previous = Some(metrics.glyph_id);
+    }
+
+    width.max(0.0)
+}
+
+fn annotated_line_prefix_widths_with_font_set_cached(
+    text: &AnnotatedString,
+    line_range: std::ops::Range<usize>,
+    style: &TextStyle,
+    fonts: &SoftwareTextFontSet,
+    cache: &mut SoftwareTextMetricsCache,
+) -> Option<TextLinePrefixWidths> {
+    let mut boundaries = text.span_boundaries();
+    boundaries.push(line_range.start);
+    boundaries.push(line_range.end);
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    boundaries.retain(|offset| {
+        *offset >= line_range.start
+            && *offset <= line_range.end
+            && text.text.is_char_boundary(*offset)
+    });
+
+    let char_count = text.text[line_range.clone()].chars().count();
+    let mut prefix_widths = Vec::with_capacity(char_count + 1);
+    let mut separator_before = Vec::with_capacity(char_count);
+    let non_empty_overhang = {
+        let mut sink = PrefixWidthSegmentSink {
+            prefix_widths: &mut prefix_widths,
+            separator_before: &mut separator_before,
+            width: 0.0,
+            non_empty_overhang: 0.0,
+        };
+        sink.prefix_widths.push(sink.width);
+
+        for range in boundaries.windows(2) {
+            let start = range[0];
+            let end = range[1];
+            if start >= end {
+                continue;
+            }
+            let segment = &text.text[start..end];
+            let segment_style = effective_style_for_range(text, style, start, end);
+            append_prefix_width_segment_cached(segment, &segment_style, fonts, cache, &mut sink);
+        }
+
+        sink.non_empty_overhang
+    };
+
+    TextLinePrefixWidths::from_parts(prefix_widths, separator_before, non_empty_overhang)
+}
+
+struct PrefixWidthSegmentSink<'a> {
+    prefix_widths: &'a mut Vec<f32>,
+    separator_before: &'a mut Vec<f32>,
+    width: f32,
+    non_empty_overhang: f32,
+}
+
+fn append_prefix_width_segment_cached(
+    segment: &str,
+    style: &TextStyle,
+    fonts: &SoftwareTextFontSet,
+    cache: &mut SoftwareTextMetricsCache,
+    sink: &mut PrefixWidthSegmentSink<'_>,
+) {
+    if segment.is_empty() {
+        return;
+    }
+
+    let font_size = resolve_font_size(style);
+    if let Some(font) = fonts.resolve(style) {
+        append_font_prefix_width_segment_cached(segment, style, font_size, font, cache, sink);
+    } else {
+        append_fallback_prefix_width_segment(segment, style, font_size, sink);
+    }
+}
+
+fn append_font_prefix_width_segment_cached(
+    segment: &str,
+    style: &TextStyle,
+    font_size: f32,
+    font: &SoftwareTextFont,
+    cache: &mut SoftwareTextMetricsCache,
+    sink: &mut PrefixWidthSegmentSink<'_>,
+) {
+    let glyph_font_size = font.ab_glyph_px_size(font_size);
+    let scaled_font = font.font.as_scaled(PxScale::from(glyph_font_size));
+    let letter_spacing = resolve_letter_spacing(style, font_size);
+    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, 1.0);
+    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, 1.0);
+    sink.non_empty_overhang = sink
+        .non_empty_overhang
+        .max(style_synthesis.visual_overhang_px());
+
+    let mut previous = None;
+
+    for (index, ch) in segment.chars().enumerate() {
+        let metrics = cache
+            .glyph_metrics
+            .glyph_metrics(font, glyph_font_size, &scaled_font, ch);
+        let separator = if index == 0 {
+            0.0
+        } else {
+            previous
+                .map(|previous_id| {
+                    weight_synthesis.apply_width(cache.glyph_metrics.kern(
+                        font,
+                        glyph_font_size,
+                        &scaled_font,
+                        previous_id,
+                        metrics.glyph_id,
+                    ))
+                })
+                .unwrap_or(0.0)
+                + letter_spacing
+        };
+        sink.separator_before.push(separator);
+        sink.width += separator + weight_synthesis.apply_width(metrics.advance);
+        sink.prefix_widths.push(sink.width.max(0.0));
+        previous = Some(metrics.glyph_id);
+    }
+}
+
+fn append_fallback_prefix_width_segment(
+    segment: &str,
+    style: &TextStyle,
+    font_size: f32,
+    sink: &mut PrefixWidthSegmentSink<'_>,
+) {
+    let char_width = fallback_char_width(font_size);
+    let letter_spacing = resolve_letter_spacing(style, font_size);
+    for (index, _) in segment.chars().enumerate() {
+        let separator = if index == 0 { 0.0 } else { letter_spacing };
+        sink.separator_before.push(separator);
+        sink.width += separator + char_width;
+        sink.prefix_widths.push(sink.width.max(0.0));
+    }
+}
+
 fn byte_offset_for_char_index(text: &str, char_index: usize) -> usize {
     text.char_indices()
         .map(|(index, _)| index)
@@ -1267,11 +2886,50 @@ fn measure_text_impl(
     }
 }
 
+fn measure_text_impl_cached(
+    text: &str,
+    style: &TextStyle,
+    font_size: f32,
+    font: &SoftwareTextFont,
+    cache: &mut SoftwareTextMetricsCache,
+) -> TextMetrics {
+    let line_height = resolve_line_height(style, font_size * 1.4);
+    let letter_spacing = resolve_letter_spacing(style, font_size);
+    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, 1.0);
+    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, 1.0);
+    let glyph_font_size = font.ab_glyph_px_size(font_size);
+
+    let lines: Vec<&str> = text.split('\n').collect();
+    let line_count = lines.len().max(1);
+
+    let mut max_width: f32 = 0.0;
+    for line in &lines {
+        let line_width =
+            cached_line_advance_width(font, line, glyph_font_size, &mut cache.glyph_metrics);
+        let char_spacing = (line.chars().count().saturating_sub(1) as f32) * letter_spacing;
+        let line_width = (weight_synthesis.apply_width(line_width) + char_spacing).max(0.0);
+        let line_width = if line.is_empty() {
+            line_width
+        } else {
+            line_width + style_synthesis.visual_overhang_px()
+        };
+        max_width = max_width.max(line_width);
+    }
+
+    TextMetrics {
+        width: max_width,
+        height: line_count as f32 * line_height,
+        line_height,
+        line_count,
+    }
+}
+
 fn measure_annotated_text_with_resolver(
     text: &AnnotatedString,
     style: &TextStyle,
     font_size: f32,
     fonts: &SoftwareTextFontSet,
+    mut cache: Option<&mut SoftwareTextMetricsCache>,
 ) -> TextMetrics {
     let Some(base_font) = fonts.resolve(style) else {
         return fallback_text_metrics(text.text.as_str(), style, font_size);
@@ -1338,15 +2996,22 @@ fn measure_annotated_text_with_resolver(
             if let Some(newline_offset) = remaining.find('\n') {
                 let before_newline = &remaining[..newline_offset];
                 if !before_newline.is_empty() {
-                    let metrics = measure_text_impl(
-                        before_newline,
-                        &segment_style,
-                        segment_font_size,
-                        segment_font.ab_glyph_px_size(segment_font_size),
-                        &segment_font.font,
-                        segment_font.style(),
-                        segment_font.weight(),
-                    );
+                    let metrics = if let Some(cache) = cache.as_deref_mut() {
+                        measure_text_with_font_cached(
+                            before_newline,
+                            &segment_style,
+                            segment_font_size,
+                            segment_font,
+                            cache,
+                        )
+                    } else {
+                        measure_text_with_font(
+                            before_newline,
+                            &segment_style,
+                            segment_font_size,
+                            segment_font,
+                        )
+                    };
                     current_line_width += metrics.width;
                 }
                 max_width = max_width.max(current_line_width);
@@ -1358,15 +3023,22 @@ fn measure_annotated_text_with_resolver(
                 }
             } else {
                 if !remaining.is_empty() {
-                    let metrics = measure_text_impl(
-                        remaining,
-                        &segment_style,
-                        segment_font_size,
-                        segment_font.ab_glyph_px_size(segment_font_size),
-                        &segment_font.font,
-                        segment_font.style(),
-                        segment_font.weight(),
-                    );
+                    let metrics = if let Some(cache) = cache.as_deref_mut() {
+                        measure_text_with_font_cached(
+                            remaining,
+                            &segment_style,
+                            segment_font_size,
+                            segment_font,
+                            cache,
+                        )
+                    } else {
+                        measure_text_with_font(
+                            remaining,
+                            &segment_style,
+                            segment_font_size,
+                            segment_font,
+                        )
+                    };
                     current_line_width += metrics.width;
                 }
                 break;
@@ -1439,6 +3111,38 @@ fn annotated_line_heights_with_resolver(
     line_heights
 }
 
+fn max_line_height_for_annotated_text_with_resolver(
+    text: &AnnotatedString,
+    style: &TextStyle,
+    font_size: f32,
+    fonts: &SoftwareTextFontSet,
+) -> f32 {
+    let base_line_height = fonts
+        .resolve(style)
+        .map(|font| line_height_for_style(style, font_size, &font.font))
+        .unwrap_or_else(|| fallback_line_height(style, font_size));
+    if text.span_styles.is_empty() {
+        return base_line_height;
+    }
+
+    let mut max_line_height = base_line_height;
+    for range in text.span_boundaries().windows(2) {
+        let start = range[0];
+        let end = range[1];
+        if start == end {
+            continue;
+        }
+        let segment_style = effective_style_for_range(text, style, start, end);
+        let segment_font_size = resolve_font_size(&segment_style);
+        let segment_line_height = fonts
+            .resolve(&segment_style)
+            .map(|font| line_height_for_style(&segment_style, segment_font_size, &font.font))
+            .unwrap_or_else(|| fallback_line_height(&segment_style, segment_font_size));
+        max_line_height = max_line_height.max(segment_line_height);
+    }
+    max_line_height
+}
+
 fn effective_style_for_range(
     text: &AnnotatedString,
     style: &TextStyle,
@@ -1469,6 +3173,395 @@ fn clamp_to_char_boundary(text: &str, mut offset: usize) -> usize {
 
 fn align_glyph_for_text_motion(glyph: Glyph, static_text_motion: bool) -> Glyph {
     align_glyph_to_pixel_grid(glyph, static_text_motion)
+}
+
+fn static_glyph_pixel_origin(glyph: &Glyph) -> (i32, i32) {
+    (
+        glyph.position.x.round() as i32,
+        glyph.position.y.round() as i32,
+    )
+}
+
+fn glyph_mask_cache_key(
+    font_hash: u64,
+    glyph: &Glyph,
+    raster_style: GlyphRasterStyle,
+    weight_synthesis: TextWeightSynthesis,
+    style_synthesis: TextStyleSynthesis,
+) -> GlyphMaskCacheKey {
+    GlyphMaskCacheKey {
+        font_hash,
+        glyph_id: u32::from(glyph.id.0),
+        scale_x_bits: glyph.scale.x.to_bits(),
+        scale_y_bits: glyph.scale.y.to_bits(),
+        raster_style: GlyphRasterStyleKey::from_style(raster_style),
+        embolden_px_bits: weight_synthesis.embolden_px.to_bits(),
+        slant_bits: style_synthesis.slant.to_bits(),
+    }
+}
+
+fn glyph_atlas_key_from_mask_key(key: GlyphMaskCacheKey) -> Option<SoftwareGlyphAtlasKey> {
+    if !matches!(key.raster_style, GlyphRasterStyleKey::Fill) {
+        return None;
+    }
+    Some(SoftwareGlyphAtlasKey {
+        font_hash: key.font_hash,
+        glyph_id: key.glyph_id,
+        scale_x_bits: key.scale_x_bits,
+        scale_y_bits: key.scale_y_bits,
+        embolden_px_bits: key.embolden_px_bits,
+        slant_bits: key.slant_bits,
+    })
+}
+
+fn build_complete_glyph_mask(
+    font: &impl Font,
+    glyph: &Glyph,
+    raster_style: GlyphRasterStyle,
+    weight_synthesis: TextWeightSynthesis,
+    style_synthesis: TextStyleSynthesis,
+) -> Option<GlyphMask> {
+    let (outlined, bounds) = outline_glyph_with_bounds(font, glyph)?;
+    let mask = build_glyph_mask(font, glyph, &outlined, bounds, raster_style)?;
+    let mask = synthesize_glyph_weight(mask, weight_synthesis);
+    Some(synthesize_glyph_style(mask, style_synthesis))
+}
+
+fn cached_static_glyph_mask_with_key(
+    cache: &mut SoftwareGlyphRasterCache,
+    font_hash: u64,
+    font: &impl Font,
+    glyph: &Glyph,
+    raster_style: GlyphRasterStyle,
+    weight_synthesis: TextWeightSynthesis,
+    style_synthesis: TextStyleSynthesis,
+) -> Option<(GlyphMaskCacheKey, GlyphMask)> {
+    let key = glyph_mask_cache_key(
+        font_hash,
+        glyph,
+        raster_style,
+        weight_synthesis,
+        style_synthesis,
+    );
+    if let Some(mask) = cache.get(&key, glyph) {
+        return Some((key, mask));
+    }
+    let mask =
+        build_complete_glyph_mask(font, glyph, raster_style, weight_synthesis, style_synthesis)?;
+    Some((key, cache.put(key, glyph, mask)))
+}
+
+fn cached_static_glyph_mask(
+    cache: &mut SoftwareGlyphRasterCache,
+    font_hash: u64,
+    font: &impl Font,
+    glyph: &Glyph,
+    raster_style: GlyphRasterStyle,
+    weight_synthesis: TextWeightSynthesis,
+    style_synthesis: TextStyleSynthesis,
+) -> Option<GlyphMask> {
+    cached_static_glyph_mask_with_key(
+        cache,
+        font_hash,
+        font,
+        glyph,
+        raster_style,
+        weight_synthesis,
+        style_synthesis,
+    )
+    .map(|(_, mask)| mask)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visit_text_glyph_masks(
+    text: &str,
+    font: &impl Font,
+    font_hash: u64,
+    font_px_size: f32,
+    line_height: f32,
+    first_baseline_y: f32,
+    origin_x: f32,
+    origin_y: f32,
+    static_text_motion: bool,
+    raster_style: GlyphRasterStyle,
+    weight_synthesis: TextWeightSynthesis,
+    style_synthesis: TextStyleSynthesis,
+    mut glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
+    mut visit: impl FnMut(&GlyphMask),
+) -> f32 {
+    let scale = PxScale::from(font_px_size);
+    let scaled_font = font.as_scaled(scale);
+    let mut max_advance = 0.0f32;
+    for (line_idx, line) in text.split('\n').enumerate() {
+        let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
+        let mut caret_x = origin_x;
+        let mut previous = None;
+        for ch in line.chars() {
+            let glyph_id = scaled_font.glyph_id(ch);
+            if let Some(previous_id) = previous {
+                caret_x += scaled_font.kern(previous_id, glyph_id);
+            }
+            let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
+            caret_x += scaled_font.h_advance(glyph_id);
+            previous = Some(glyph_id);
+            let glyph = align_glyph_for_text_motion(glyph, static_text_motion);
+            let Some(mask) = (if static_text_motion {
+                glyph_cache.as_deref_mut().and_then(|cache| {
+                    cached_static_glyph_mask(
+                        cache,
+                        font_hash,
+                        font,
+                        &glyph,
+                        raster_style,
+                        weight_synthesis,
+                        style_synthesis,
+                    )
+                })
+            } else {
+                None
+            })
+            .or_else(|| {
+                build_complete_glyph_mask(
+                    font,
+                    &glyph,
+                    raster_style,
+                    weight_synthesis,
+                    style_synthesis,
+                )
+            }) else {
+                continue;
+            };
+            visit(&mask);
+        }
+        max_advance = max_advance.max((caret_x - origin_x).max(0.0));
+    }
+    max_advance
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visit_text_glyph_masks_with_key(
+    text: &str,
+    font: &impl Font,
+    font_hash: u64,
+    font_px_size: f32,
+    line_height: f32,
+    first_baseline_y: f32,
+    origin_x: f32,
+    origin_y: f32,
+    static_text_motion: bool,
+    raster_style: GlyphRasterStyle,
+    weight_synthesis: TextWeightSynthesis,
+    style_synthesis: TextStyleSynthesis,
+    mut glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
+    mut visit: impl FnMut(SoftwareGlyphAtlasKey, &GlyphMask),
+) -> f32 {
+    if !static_text_motion {
+        return 0.0;
+    }
+
+    let scale = PxScale::from(font_px_size);
+    let scaled_font = font.as_scaled(scale);
+    let mut max_advance = 0.0f32;
+    for (line_idx, line) in text.split('\n').enumerate() {
+        let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
+        let mut caret_x = origin_x;
+        let mut previous = None;
+        for ch in line.chars() {
+            let glyph_id = scaled_font.glyph_id(ch);
+            if let Some(previous_id) = previous {
+                caret_x += scaled_font.kern(previous_id, glyph_id);
+            }
+            let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
+            caret_x += scaled_font.h_advance(glyph_id);
+            previous = Some(glyph_id);
+            let glyph = align_glyph_for_text_motion(glyph, true);
+            let Some((cache_key, mask)) = glyph_cache.as_deref_mut().and_then(|cache| {
+                cached_static_glyph_mask_with_key(
+                    cache,
+                    font_hash,
+                    font,
+                    &glyph,
+                    raster_style,
+                    weight_synthesis,
+                    style_synthesis,
+                )
+            }) else {
+                continue;
+            };
+            let Some(atlas_key) = glyph_atlas_key_from_mask_key(cache_key) else {
+                continue;
+            };
+            visit(atlas_key, &mask);
+        }
+        max_advance = max_advance.max((caret_x - origin_x).max(0.0));
+    }
+    max_advance
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visit_cached_text_glyph_atlas_placements(
+    text: &str,
+    font: &impl Font,
+    font_hash: u64,
+    font_px_size: f32,
+    line_height: f32,
+    first_baseline_y: f32,
+    origin_x: f32,
+    origin_y: f32,
+    raster_style: GlyphRasterStyle,
+    weight_synthesis: TextWeightSynthesis,
+    style_synthesis: TextStyleSynthesis,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+    mut visit: impl FnMut(SoftwareGlyphAtlasPlacement),
+) -> f32 {
+    let scale = PxScale::from(font_px_size);
+    let scaled_font = font.as_scaled(scale);
+    let mut max_advance = 0.0f32;
+    for (line_idx, line) in text.split('\n').enumerate() {
+        let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
+        let mut caret_x = origin_x;
+        let mut previous = None;
+        for ch in line.chars() {
+            let glyph_id = scaled_font.glyph_id(ch);
+            if let Some(previous_id) = previous {
+                caret_x += scaled_font.kern(previous_id, glyph_id);
+            }
+            let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
+            caret_x += scaled_font.h_advance(glyph_id);
+            previous = Some(glyph_id);
+            let glyph = align_glyph_for_text_motion(glyph, true);
+            let cache_key = glyph_mask_cache_key(
+                font_hash,
+                &glyph,
+                raster_style,
+                weight_synthesis,
+                style_synthesis,
+            );
+            let Some((key, x, y, width, height)) =
+                glyph_cache.get_atlas_placement(&cache_key, &glyph)
+            else {
+                if font.outline(glyph.id).is_none() {
+                    continue;
+                }
+                return f32::NAN;
+            };
+            visit(SoftwareGlyphAtlasPlacement {
+                key,
+                x,
+                y,
+                width,
+                height,
+                color: Color::WHITE,
+            });
+        }
+        max_advance = max_advance.max((caret_x - origin_x).max(0.0));
+    }
+    max_advance
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visit_text_glyph_atlas_run(
+    text: &str,
+    font: &impl Font,
+    font_hash: u64,
+    font_px_size: f32,
+    line_height: f32,
+    first_baseline_y: f32,
+    origin_x: f32,
+    origin_y: f32,
+    raster_style: GlyphRasterStyle,
+    weight_synthesis: TextWeightSynthesis,
+    style_synthesis: TextStyleSynthesis,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+    mut visit: impl FnMut(SoftwareGlyphAtlasRunGlyph),
+) -> f32 {
+    let scale = PxScale::from(font_px_size);
+    let scaled_font = font.as_scaled(scale);
+    let mut max_advance = 0.0f32;
+    let mut run_metrics_cache: Vec<(GlyphMaskCacheKey, CachedAtlasGlyphMetrics)> = Vec::new();
+    for (line_idx, line) in text.split('\n').enumerate() {
+        let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
+        let mut caret_x = origin_x;
+        let mut previous = None;
+        for ch in line.chars() {
+            let glyph_id = scaled_font.glyph_id(ch);
+            if let Some(previous_id) = previous {
+                caret_x += scaled_font.kern(previous_id, glyph_id);
+            }
+            let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
+            caret_x += scaled_font.h_advance(glyph_id);
+            previous = Some(glyph_id);
+            let glyph = align_glyph_for_text_motion(glyph, true);
+            let cache_key = glyph_mask_cache_key(
+                font_hash,
+                &glyph,
+                raster_style,
+                weight_synthesis,
+                style_synthesis,
+            );
+            if let Some((_, metrics)) = run_metrics_cache
+                .iter()
+                .find(|(cached_key, _)| *cached_key == cache_key)
+            {
+                visit(SoftwareGlyphAtlasRunGlyph::Cached(
+                    metrics.placement(&glyph, Color::WHITE),
+                ));
+                continue;
+            }
+            if let Some(metrics) = glyph_cache.get_atlas_metrics(&cache_key) {
+                if run_metrics_cache.len() < RUN_GLYPH_METRICS_CACHE_LIMIT {
+                    run_metrics_cache.push((cache_key, metrics));
+                }
+                visit(SoftwareGlyphAtlasRunGlyph::Cached(
+                    metrics.placement(&glyph, Color::WHITE),
+                ));
+                continue;
+            }
+
+            if font.outline(glyph.id).is_none() {
+                continue;
+            }
+            let Some(mask) = build_complete_glyph_mask(
+                font,
+                &glyph,
+                raster_style,
+                weight_synthesis,
+                style_synthesis,
+            ) else {
+                continue;
+            };
+            let mask = glyph_cache.put(cache_key, &glyph, mask);
+            let Some(key) = glyph_atlas_key_from_mask_key(cache_key) else {
+                continue;
+            };
+            let (glyph_x, glyph_y) = static_glyph_pixel_origin(&glyph);
+            if run_metrics_cache.len() < RUN_GLYPH_METRICS_CACHE_LIMIT {
+                run_metrics_cache.push((
+                    cache_key,
+                    CachedAtlasGlyphMetrics {
+                        key,
+                        width: mask.width,
+                        height: mask.height,
+                        origin_offset_x: mask.origin_x - glyph_x,
+                        origin_offset_y: mask.origin_y - glyph_y,
+                    },
+                ));
+            }
+            visit(SoftwareGlyphAtlasRunGlyph::New(SoftwareGlyphAtlasGlyph {
+                key,
+                mask: SoftwareGlyphAtlasMask {
+                    alpha: Arc::clone(&mask.alpha),
+                    width: mask.width,
+                    height: mask.height,
+                },
+                x: mask.origin_x,
+                y: mask.origin_y,
+                color: Color::WHITE,
+            }));
+        }
+        max_advance = max_advance.max((caret_x - origin_x).max(0.0));
+    }
+    max_advance
 }
 
 fn blend_src_over(dst: &mut [f32; 4], src: [f32; 4]) {
@@ -1535,6 +3628,88 @@ fn draw_mask_glyph(
                 &mut canvas[idx],
                 [sample[0], sample[1], sample[2], alpha.clamp(0.0, 1.0)],
             );
+        }
+    }
+}
+
+fn blend_src_over_u8(dst: &mut [u8], src: [f32; 4]) {
+    let src_alpha = src[3].clamp(0.0, 1.0);
+    if src_alpha <= 0.0 {
+        return;
+    }
+
+    let dst_alpha = dst[3] as f32 / 255.0;
+    if dst_alpha <= 0.0 {
+        dst[0] = (src[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+        dst[1] = (src[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+        dst[2] = (src[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+        dst[3] = (src_alpha * 255.0).round() as u8;
+        return;
+    }
+
+    let out_alpha = src_alpha + dst_alpha * (1.0 - src_alpha);
+    if out_alpha <= f32::EPSILON {
+        dst.fill(0);
+        return;
+    }
+
+    for channel in 0..3 {
+        let src_premult = src[channel].clamp(0.0, 1.0) * src_alpha;
+        let dst_premult = (dst[channel] as f32 / 255.0) * dst_alpha;
+        dst[channel] =
+            ((src_premult + dst_premult * (1.0 - src_alpha)) / out_alpha * 255.0).round() as u8;
+    }
+    dst[3] = (out_alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+}
+
+fn draw_mask_glyph_solid_u8(
+    canvas: &mut [u8],
+    width: u32,
+    height: u32,
+    mask: &GlyphMask,
+    color: [f32; 4],
+    alpha_multiplier: f32,
+) {
+    let red = (color[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+    let green = (color[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+    let blue = (color[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+    let alpha_scale = color[3].clamp(0.0, 1.0) * alpha_multiplier.clamp(0.0, 1.0);
+    if alpha_scale <= 0.0 {
+        return;
+    }
+
+    for y in 0..mask.height {
+        let py = mask.origin_y + y as i32;
+        if py < 0 || py >= height as i32 {
+            continue;
+        }
+
+        for x in 0..mask.width {
+            let px = mask.origin_x + x as i32;
+            if px < 0 || px >= width as i32 {
+                continue;
+            }
+
+            let coverage = mask.alpha[y * mask.width + x];
+            if coverage <= 0.0 {
+                continue;
+            }
+
+            let alpha = (coverage * alpha_scale).clamp(0.0, 1.0);
+            let alpha_u8 = (alpha * 255.0).round() as u8;
+            if alpha_u8 == 0 {
+                continue;
+            }
+            let idx = ((py as u32 * width + px as u32) * 4) as usize;
+            let dst = &mut canvas[idx..idx + 4];
+            if dst[3] == 0 {
+                dst[0] = red;
+                dst[1] = green;
+                dst[2] = blue;
+                dst[3] = alpha_u8;
+            } else {
+                blend_src_over_u8(dst, [color[0], color[1], color[2], alpha]);
+            }
         }
     }
 }
@@ -1784,7 +3959,7 @@ fn build_fill_mask(outlined: &OutlinedGlyph, bounds: GlyphPixelBounds) -> Option
     });
 
     Some(GlyphMask {
-        alpha,
+        alpha: Arc::from(alpha),
         width: mask_width,
         height: mask_height,
         origin_x: bounds.min_x,
@@ -1834,14 +4009,14 @@ fn build_stroke_mask(
 
     pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
 
-    let alpha = pixmap
+    let alpha: Vec<f32> = pixmap
         .data()
         .chunks_exact(4)
         .map(|pixel| pixel[3] as f32 / 255.0)
         .collect();
 
     Some(GlyphMask {
-        alpha,
+        alpha: Arc::from(alpha),
         width: raster_width as usize,
         height: raster_height as usize,
         origin_x: bounds.min_x - pad,
@@ -1879,7 +4054,7 @@ fn synthesize_glyph_weight(mask: GlyphMask, synthesis: TextWeightSynthesis) -> G
     }
 
     GlyphMask {
-        alpha,
+        alpha: Arc::from(alpha),
         width: output_width,
         height: output_height,
         origin_x: mask.origin_x,
@@ -1927,7 +4102,7 @@ fn synthesize_glyph_style(mask: GlyphMask, synthesis: TextStyleSynthesis) -> Gly
     }
 
     GlyphMask {
-        alpha,
+        alpha: Arc::from(alpha),
         width: output_width,
         height: mask.height,
         origin_x: mask.origin_x,
@@ -2048,7 +4223,7 @@ fn transform_outline_point(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cranpose_ui::text::SpanStyle;
+    use cranpose_ui::text::{RangeStyle, SpanStyle};
     use cranpose_ui_graphics::Point;
 
     fn count_ink_pixels(image: &ImageBitmap) -> usize {
@@ -2057,6 +4232,325 @@ mod tests {
             .chunks_exact(4)
             .filter(|px| px[3] > 0)
             .count()
+    }
+
+    #[test]
+    fn software_glyph_raster_cache_reuses_static_masks_across_positions() {
+        let font = default_software_text_font().expect("bundled default font");
+        let style = TextStyle::default();
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 160.0,
+            height: 32.0,
+        };
+        let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(64);
+
+        let uncached = rasterize_text_to_image(
+            "aaaa",
+            rect,
+            &style,
+            Color(1.0, 1.0, 1.0, 1.0),
+            18.0,
+            1.0,
+            &font,
+        )
+        .expect("uncached image");
+        let cached = rasterize_text_to_image_with_glyph_cache(
+            "aaaa",
+            rect,
+            &style,
+            Color(1.0, 1.0, 1.0, 1.0),
+            18.0,
+            1.0,
+            &font,
+            &mut cache,
+        )
+        .expect("cached image");
+
+        assert_eq!(cached.pixels(), uncached.pixels());
+        let stats = cache.stats();
+        assert_eq!(stats.entries, 1);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits, 3);
+
+        let shifted_rect = Rect {
+            x: 24.0,
+            y: 17.0,
+            ..rect
+        };
+        let _ = rasterize_text_to_image_with_glyph_cache(
+            "aaaa",
+            shifted_rect,
+            &style,
+            Color(1.0, 1.0, 1.0, 1.0),
+            18.0,
+            1.0,
+            &font,
+            &mut cache,
+        )
+        .expect("cached shifted image");
+
+        let shifted_stats = cache.stats();
+        assert_eq!(shifted_stats.entries, 1);
+        assert_eq!(shifted_stats.misses, 1);
+        assert_eq!(shifted_stats.hits, 7);
+    }
+
+    #[test]
+    fn annotated_solid_text_direct_raster_matches_plain_text_pixels() {
+        let font = default_software_text_font().expect("bundled default font");
+        let font_set = SoftwareTextFontSet::from_font(font.clone());
+        let style = TextStyle::default();
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 240.0,
+            height: 40.0,
+        };
+        let color = Color(1.0, 1.0, 1.0, 1.0);
+        let annotated = AnnotatedString {
+            text: "plain link".to_string(),
+            span_styles: vec![RangeStyle {
+                item: SpanStyle {
+                    color: Some(color),
+                    ..Default::default()
+                },
+                range: 0..10,
+            }],
+            ..Default::default()
+        };
+        let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(64);
+
+        let plain = rasterize_text_to_image(
+            annotated.text.as_str(),
+            rect,
+            &style,
+            color,
+            18.0,
+            1.0,
+            &font,
+        )
+        .expect("plain text image");
+        let direct = rasterize_annotated_text_to_image_with_glyph_cache(
+            &annotated, rect, &style, color, 18.0, 1.0, &font_set, &mut cache,
+        )
+        .expect("annotated text image");
+
+        assert_eq!(direct.pixels(), plain.pixels());
+    }
+
+    #[test]
+    fn solid_annotated_text_collects_atlas_glyphs_with_stable_keys() {
+        let font = default_software_text_font().expect("bundled default font");
+        let font_set = SoftwareTextFontSet::from_font(font);
+        let style = TextStyle::default();
+        let rect = Rect {
+            x: 12.0,
+            y: 4.0,
+            width: 260.0,
+            height: 48.0,
+        };
+        let annotated = AnnotatedString {
+            text: "markdown link".to_string(),
+            span_styles: vec![RangeStyle {
+                item: SpanStyle {
+                    color: Some(Color(0.4, 0.7, 1.0, 1.0)),
+                    ..Default::default()
+                },
+                range: 9..13,
+            }],
+            ..Default::default()
+        };
+        let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(64);
+        let mut glyphs = Vec::new();
+
+        collect_solid_text_atlas_glyphs(
+            &annotated,
+            rect,
+            &style,
+            Color::WHITE,
+            18.0,
+            1.0,
+            &font_set,
+            &mut cache,
+            &mut glyphs,
+        )
+        .expect("solid styled text is atlas-eligible");
+
+        assert!(!glyphs.is_empty());
+        assert!(glyphs.iter().all(|glyph| glyph.mask.width > 0));
+        assert!(glyphs.iter().all(|glyph| glyph.mask.height > 0));
+        assert!(glyphs
+            .iter()
+            .any(|glyph| glyph.color == Color(0.4, 0.7, 1.0, 1.0)));
+        assert!(cache.stats().entries > 0);
+    }
+
+    #[test]
+    fn cached_atlas_placements_reuse_existing_glyph_masks_without_payloads() {
+        let font = default_software_text_font().expect("bundled default font");
+        let font_set = SoftwareTextFontSet::from_font(font);
+        let style = TextStyle::default();
+        let rect = Rect {
+            x: 12.0,
+            y: 4.0,
+            width: 260.0,
+            height: 48.0,
+        };
+        let annotated = AnnotatedString {
+            text: "markdown link".to_string(),
+            span_styles: vec![RangeStyle {
+                item: SpanStyle {
+                    color: Some(Color(0.4, 0.7, 1.0, 1.0)),
+                    ..Default::default()
+                },
+                range: 9..13,
+            }],
+            ..Default::default()
+        };
+        let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(64);
+        let mut placements = Vec::new();
+
+        assert!(
+            collect_cached_solid_text_atlas_placements(
+                &annotated,
+                rect,
+                &style,
+                Color::WHITE,
+                18.0,
+                1.0,
+                &font_set,
+                &mut cache,
+                &mut placements,
+            )
+            .is_none(),
+            "placement-only collection requires retained glyph masks"
+        );
+        assert!(placements.is_empty());
+
+        let mut glyphs = Vec::new();
+        collect_solid_text_atlas_glyphs(
+            &annotated,
+            rect,
+            &style,
+            Color::WHITE,
+            18.0,
+            1.0,
+            &font_set,
+            &mut cache,
+            &mut glyphs,
+        )
+        .expect("solid styled text is atlas-eligible");
+
+        collect_cached_solid_text_atlas_placements(
+            &annotated,
+            rect,
+            &style,
+            Color::WHITE,
+            18.0,
+            1.0,
+            &font_set,
+            &mut cache,
+            &mut placements,
+        )
+        .expect("cached masks provide placement-only atlas glyphs");
+
+        assert_eq!(placements.len(), glyphs.len());
+        assert!(placements
+            .iter()
+            .zip(glyphs.iter())
+            .all(|(placement, glyph)| {
+                placement.key == glyph.key
+                    && placement.x == glyph.x
+                    && placement.y == glyph.y
+                    && placement.width == glyph.mask.width
+                    && placement.height == glyph.mask.height
+                    && placement.color == glyph.color
+            }));
+        let recovered = cache
+            .atlas_glyph_for_placement(&placements[0])
+            .expect("placement should recover retained mask payload");
+        assert_eq!(recovered.key, glyphs[0].key);
+        assert_eq!(recovered.x, glyphs[0].x);
+        assert_eq!(recovered.y, glyphs[0].y);
+        assert_eq!(recovered.mask.width, glyphs[0].mask.width);
+        assert_eq!(recovered.mask.height, glyphs[0].mask.height);
+        assert_eq!(recovered.mask.alpha, glyphs[0].mask.alpha);
+        assert_eq!(recovered.color, glyphs[0].color);
+    }
+
+    #[test]
+    fn atlas_glyph_collection_rejects_shadow_and_gradient_without_partial_output() {
+        let font = default_software_text_font().expect("bundled default font");
+        let font_set = SoftwareTextFontSet::from_font(font);
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 240.0,
+            height: 40.0,
+        };
+        let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(64);
+        let mut glyphs = Vec::new();
+        glyphs.push(SoftwareGlyphAtlasGlyph {
+            key: SoftwareGlyphAtlasKey {
+                font_hash: 1,
+                glyph_id: 1,
+                scale_x_bits: 1,
+                scale_y_bits: 1,
+                embolden_px_bits: 0,
+                slant_bits: 0,
+            },
+            mask: SoftwareGlyphAtlasMask {
+                alpha: Arc::from([1.0f32]),
+                width: 1,
+                height: 1,
+            },
+            x: 0,
+            y: 0,
+            color: Color::WHITE,
+        });
+        let initial_len = glyphs.len();
+
+        let shadow_style = TextStyle::from_span_style(SpanStyle {
+            shadow: Some(Shadow {
+                color: Color(0.0, 0.0, 0.0, 0.5),
+                offset: Point::new(1.0, 1.0),
+                blur_radius: 0.0,
+            }),
+            ..Default::default()
+        });
+        assert!(collect_solid_text_atlas_glyphs(
+            &AnnotatedString::new("shadow".to_string()),
+            rect,
+            &shadow_style,
+            Color::WHITE,
+            18.0,
+            1.0,
+            &font_set,
+            &mut cache,
+            &mut glyphs,
+        )
+        .is_none());
+        assert_eq!(glyphs.len(), initial_len);
+
+        let gradient_style = TextStyle::from_span_style(SpanStyle {
+            brush: Some(Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])),
+            ..Default::default()
+        });
+        assert!(collect_solid_text_atlas_glyphs(
+            &AnnotatedString::new("gradient".to_string()),
+            rect,
+            &gradient_style,
+            Color::WHITE,
+            18.0,
+            1.0,
+            &font_set,
+            &mut cache,
+            &mut glyphs,
+        )
+        .is_none());
+        assert_eq!(glyphs.len(), initial_len);
     }
 
     fn average_ink_rgb(
@@ -2240,7 +4734,7 @@ mod tests {
         }
 
         GlyphMask {
-            alpha,
+            alpha: Arc::from(alpha),
             width: out_width as usize,
             height: out_height as usize,
             origin_x: fill.origin_x - radius,
@@ -2759,6 +5253,78 @@ mod tests {
     }
 
     #[test]
+    fn software_text_line_height_matches_full_measurement_without_width_layout() {
+        let measurer = SoftwareTextMeasurer::new(
+            default_software_text_font().expect("bundled default test font"),
+            8,
+        );
+        let text = AnnotatedString::builder()
+            .append("normal ")
+            .push_style(SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(32.0),
+                ..Default::default()
+            })
+            .append("large")
+            .pop()
+            .append("\nsecond line")
+            .to_annotated_string();
+        let style = TextStyle::default();
+
+        let measured = measurer.measure(&text, &style);
+        let line_height = measurer.line_height(&text, &style);
+
+        assert_eq!(line_height, measured.line_height);
+        assert!(
+            line_height > measurer.line_height(&AnnotatedString::from("normal"), &style),
+            "span font size should affect fast line-height lookup"
+        );
+    }
+
+    #[test]
+    fn solid_text_atlas_line_advance_matches_measured_line_height() {
+        let font = default_software_text_font().expect("bundled default test font");
+        let fonts = SoftwareTextFontSet::from_font(font);
+        let style = TextStyle::default();
+        let text = AnnotatedString::from("A\nA\nA\nA");
+        let font_size = style.resolve_font_size(14.0);
+        let metrics = measure_annotated_text_with_font_set(&text, &style, font_size, &fonts);
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: metrics.height,
+        };
+        let mut glyph_cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(16);
+        let mut run = Vec::new();
+
+        collect_solid_text_atlas_run(
+            &text,
+            rect,
+            &style,
+            Color(1.0, 1.0, 1.0, 1.0),
+            font_size,
+            1.0,
+            &fonts,
+            &mut glyph_cache,
+            &mut run,
+        )
+        .expect("atlas-compatible text");
+
+        let mut glyph_y: Vec<i32> = run.iter().map(|glyph| glyph.placement().y).collect();
+        glyph_y.sort_unstable();
+        glyph_y.dedup();
+        assert_eq!(glyph_y.len(), 4);
+        for window in glyph_y.windows(2) {
+            let advance = (window[1] - window[0]) as f32;
+            assert!(
+                (advance - metrics.line_height).abs() <= 1.0,
+                "glyph advance {advance} should match measured line height {}",
+                metrics.line_height
+            );
+        }
+    }
+
+    #[test]
     fn software_text_metrics_cache_keys_include_span_styles() {
         let measurer = SoftwareTextMeasurer::new(
             default_software_text_font().expect("bundled default test font"),
@@ -2810,6 +5376,101 @@ mod tests {
             measurer.measure_subsequence(&text, 0.."Recovered".len(), &TextStyle::default());
         assert!(subset.width > 0.0);
         assert!(subset.width < metrics.width);
+    }
+
+    #[test]
+    fn software_text_prefix_widths_match_subsequence_measurement() {
+        let measurer = SoftwareTextMeasurer::new(
+            default_software_text_font().expect("bundled default test font"),
+            8,
+        );
+        let style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(18.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = AnnotatedString::from("Hello Prefix Widths");
+        let widths = measurer
+            .measure_line_prefix_widths(&text, 0..text.text.len(), &style)
+            .expect("uniform line should expose prefix widths");
+
+        let start = "Hello ".len();
+        let end = "Hello Prefix".len();
+        let expected = measurer
+            .measure_subsequence(&text, start..end, &style)
+            .width;
+        let actual = widths
+            .width_for_char_range(6, 12)
+            .expect("valid char range");
+
+        assert!(
+            (actual - expected).abs() < 0.01,
+            "prefix width should match exact subsequence width: actual={actual}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn software_text_line_width_and_prefix_width_share_cached_plan() {
+        let measurer = SoftwareTextMeasurer::new(
+            default_software_text_font().expect("bundled default test font"),
+            8,
+        );
+        let style = TextStyle::default();
+        let text = AnnotatedString::from("shared prefix plan ".repeat(32).as_str());
+        let line_range = 0..text.text.len();
+
+        let width = measurer
+            .measure_line_width(&text, line_range.clone(), &style)
+            .expect("software text should expose a line width");
+        let stats_after_width = {
+            let cache = measurer.lock_cache();
+            assert_eq!(cache.line_prefix_widths.len(), 1);
+            cache.glyph_metrics.stats()
+        };
+
+        let widths = measurer
+            .measure_line_prefix_widths(&text, line_range, &style)
+            .expect("line width probe should cache the prefix plan");
+        let stats_after_prefix = measurer.lock_cache().glyph_metrics.stats();
+
+        assert_eq!(stats_after_prefix, stats_after_width);
+        assert!(
+            (width - widths.width_for_char_range(0, widths.char_count()).unwrap()).abs() < 0.01,
+            "cached line-width probe and prefix plan must agree"
+        );
+    }
+
+    #[test]
+    fn software_text_glyph_metrics_cache_reuses_common_glyphs_across_unique_lines() {
+        let measurer = SoftwareTextMeasurer::new(
+            default_software_text_font().expect("bundled default test font"),
+            8,
+        );
+        let style = TextStyle::default();
+        let first = AnnotatedString::from("algorithm data structure ".repeat(24).as_str());
+        let second =
+            AnnotatedString::from("algorithmic structures repeat data ".repeat(24).as_str());
+
+        measurer
+            .measure_line_prefix_widths(&first, 0..first.text.len(), &style)
+            .expect("first unique line should measure");
+        let stats_after_first = measurer.lock_cache().glyph_metrics.stats();
+
+        measurer
+            .measure_line_prefix_widths(&second, 0..second.text.len(), &style)
+            .expect("second unique line should measure");
+        let stats_after_second = measurer.lock_cache().glyph_metrics.stats();
+
+        assert!(
+            stats_after_second.glyph_hits > stats_after_first.glyph_hits,
+            "unique markdown rows should reuse retained glyph metrics: first={stats_after_first:?} second={stats_after_second:?}"
+        );
+        assert!(
+            stats_after_second.kern_hits > stats_after_first.kern_hits,
+            "unique markdown rows should reuse retained kerning metrics: first={stats_after_first:?} second={stats_after_second:?}"
+        );
     }
 
     #[test]

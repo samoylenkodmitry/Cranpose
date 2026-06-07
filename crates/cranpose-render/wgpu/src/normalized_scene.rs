@@ -32,8 +32,11 @@ const NORMALIZED_SCENE_AFFINE_TOLERANCE: f32 = 1e-4;
 const MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD: f32 = 64.0;
 const MOTION_STABLE_CAPTURE_MAX_LEADING_GUARD: f32 = 2048.0;
 const MOTION_STABLE_CAPTURE_LEADING_VIEWPORTS: f32 = 3.0;
+const MOTION_STABLE_CAPTURE_CLIPPED_LEADING_VIEWPORTS: f32 = 0.25;
+const MOTION_STABLE_CAPTURE_CLIPPED_MAX_LEADING_GUARD: f32 = 256.0;
 const TRANSLATED_LOCAL_CAPTURE_STABLE_GUARD: f32 = 64.0;
 const MOTION_STABLE_CAPTURE_CROSS_AXIS_LEADING_GUARD: f32 = 96.0;
+const CLIPPED_TEXT_PREWARM_VIEWPORT_MULTIPLIER: f32 = 2.0;
 
 pub(crate) struct ChildLayerComposite<'a> {
     pub(crate) z_index: usize,
@@ -68,6 +71,46 @@ pub(crate) fn visible_draw_rect(rect: Rect, clip: Option<Rect>) -> Option<Rect> 
         Some(clip) => rect.intersect(clip),
         None => Some(rect),
     }
+}
+
+fn expand_rect(rect: Rect, margin_x: f32, margin_y: f32) -> Rect {
+    Rect {
+        x: rect.x - margin_x,
+        y: rect.y - margin_y,
+        width: rect.width + margin_x * 2.0,
+        height: rect.height + margin_y * 2.0,
+    }
+}
+
+fn layer_contains_text_primitive(layer: &LayerNode) -> bool {
+    layer.children.iter().any(|child| match child {
+        RenderNode::Primitive(PrimitiveEntry {
+            node: PrimitiveNode::Text(_),
+            ..
+        }) => true,
+        RenderNode::Layer(child_layer) => layer_contains_text_primitive(child_layer),
+        RenderNode::Primitive(_) => false,
+    })
+}
+
+fn clipped_layer_should_collect_for_text_prewarm(
+    layer: &LayerNode,
+    layer_bounds: Rect,
+    clip: Rect,
+) -> bool {
+    if !layer_contains_text_primitive(layer) {
+        return false;
+    }
+    rect_should_collect_for_text_prewarm(layer_bounds, clip)
+}
+
+fn rect_should_collect_for_text_prewarm(rect: Rect, clip: Rect) -> bool {
+    let prewarm_clip = expand_rect(
+        clip,
+        clip.width * CLIPPED_TEXT_PREWARM_VIEWPORT_MULTIPLIER,
+        clip.height * CLIPPED_TEXT_PREWARM_VIEWPORT_MULTIPLIER,
+    );
+    rect.intersect(prewarm_clip).is_some()
 }
 
 fn scene_bounds_with_clip(scene: &CompositorScene, apply_clip: bool) -> Option<Rect> {
@@ -140,10 +183,6 @@ fn scene_capture_bounds(scene: &CompositorScene) -> Option<Rect> {
     scene_bounds_with_clip(scene, false)
 }
 
-pub(crate) fn scene_has_layer_events(scene: &CompositorScene) -> bool {
-    !scene.effect_layers.is_empty() || !scene.backdrop_layers.is_empty()
-}
-
 fn shadow_draws_bounds_with_clip(shadow_draws: &[ShadowDraw], apply_clip: bool) -> Option<Rect> {
     let mut bounds = None;
     for shadow in shadow_draws {
@@ -212,6 +251,13 @@ fn leading_capture_guard(extent: f32) -> f32 {
     )
 }
 
+fn clipped_leading_capture_guard(extent: f32) -> f32 {
+    (extent * MOTION_STABLE_CAPTURE_CLIPPED_LEADING_VIEWPORTS).clamp(
+        MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD,
+        MOTION_STABLE_CAPTURE_CLIPPED_MAX_LEADING_GUARD,
+    )
+}
+
 fn stable_deep_leading_axis(
     visible_start: f32,
     visible_extent: f32,
@@ -252,13 +298,14 @@ fn leading_capture_bounds(visible_bounds: Rect, full_bounds: Rect) -> Rect {
     }
 }
 
-fn leading_axis_capture_bounds(
+fn leading_axis_capture_bounds_with_guard(
     visible_start: f32,
     visible_extent: f32,
     full_start: f32,
+    guard: f32,
 ) -> (f32, f32) {
     if full_start < visible_start - NORMALIZED_SCENE_AFFINE_TOLERANCE {
-        stable_deep_leading_axis(visible_start, visible_extent, full_start)
+        stable_deep_leading_axis_with_guard(visible_start, visible_extent, full_start, guard)
     } else {
         (visible_start, visible_start + visible_extent)
     }
@@ -305,7 +352,12 @@ fn translated_capture_bounds(
             clip.map(|clip| clip.x),
             clip.map(|clip| clip.width),
         );
-        leading_axis_capture_bounds(start, extent, full_bounds.x)
+        let guard = if clip.is_some() {
+            clipped_leading_capture_guard(extent)
+        } else {
+            leading_capture_guard(extent)
+        };
+        leading_axis_capture_bounds_with_guard(start, extent, full_bounds.x, guard)
     } else if preserve_leading_y {
         fixed_cross_axis_capture_bounds(
             visible_bounds.x,
@@ -323,7 +375,12 @@ fn translated_capture_bounds(
             clip.map(|clip| clip.y),
             clip.map(|clip| clip.height),
         );
-        leading_axis_capture_bounds(start, extent, full_bounds.y)
+        let guard = if clip.is_some() {
+            clipped_leading_capture_guard(extent)
+        } else {
+            leading_capture_guard(extent)
+        };
+        leading_axis_capture_bounds_with_guard(start, extent, full_bounds.y, guard)
     } else if preserve_leading_x {
         fixed_cross_axis_capture_bounds(
             visible_bounds.y,
@@ -676,7 +733,10 @@ fn push_local_primitive(
         }
         PrimitiveNode::Text(text) => {
             let counts_before = scene_counts(local_scene);
-            let text_clip = resolve_primitive_clip(
+            let text_rect = text
+                .rect
+                .translate(context.layer_bounds.x, context.layer_bounds.y);
+            let mut text_clip = resolve_primitive_clip(
                 text.clip,
                 context.layer_bounds,
                 context.local_layer,
@@ -684,11 +744,14 @@ fn push_local_primitive(
                 PrimitiveClipSpace::Local,
             );
             if text.clip.is_some() && text_clip.is_none() {
-                return;
+                let Some(visual_clip) = context.visual_clip else {
+                    return;
+                };
+                if !rect_should_collect_for_text_prewarm(text_rect, visual_clip) {
+                    return;
+                }
+                text_clip = Some(visual_clip);
             }
-            let text_rect = text
-                .rect
-                .translate(context.layer_bounds.x, context.layer_bounds.y);
             push_text_style_draws(
                 local_scene,
                 text_layout,
@@ -737,10 +800,16 @@ fn collect_layer_contents_into<'a>(
     let layer_clip = layer
         .clip_rect()
         .map(|clip| clip.translate(layer_offset.x, layer_offset.y));
-    let visual_clip = resolve_clip(inherited_clip, layer_clip);
+    let mut visual_clip = resolve_clip(inherited_clip, layer_clip);
 
     if layer_clip.is_some() && inherited_clip.is_some() && visual_clip.is_none() {
-        return;
+        let Some(parent_clip) = inherited_clip else {
+            return;
+        };
+        if !clipped_layer_should_collect_for_text_prewarm(layer, layer_bounds, parent_clip) {
+            return;
+        }
+        visual_clip = Some(parent_clip);
     }
 
     let effective_translated_content_context =

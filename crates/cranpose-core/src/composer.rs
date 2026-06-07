@@ -811,6 +811,15 @@ impl Composer {
         }
     }
 
+    pub fn nodes_need_measure(&self, node_ids: &[NodeId]) -> bool {
+        let mut applier = self.borrow_applier();
+        node_ids.iter().any(|node_id| {
+            applier
+                .get_mut(*node_id)
+                .is_ok_and(|node| node.needs_measure())
+        })
+    }
+
     /// Records a child node in the current parent frame's expected children list.
     ///
     /// Used by SubcomposeLayout's `perform_subcompose` to register virtual nodes
@@ -1336,6 +1345,16 @@ impl Composer {
 
     pub fn current_recranpose_scope(&self) -> Option<RecomposeScope> {
         self.core.scope_stack.borrow().last().cloned()
+    }
+
+    pub(crate) fn current_state_invalidation_scope(&self) -> Option<RecomposeScope> {
+        let stack = self.core.scope_stack.borrow();
+        stack
+            .iter()
+            .rev()
+            .find(|scope| scope.has_recompose_callback())
+            .cloned()
+            .or_else(|| stack.last().cloned())
     }
 
     pub fn phase(&self) -> crate::Phase {

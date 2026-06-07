@@ -116,7 +116,7 @@ struct DispatchNode {
     children: Vec<NodeId>,
 }
 
-fn dispatch_order_for_paths(paths: &[Vec<NodeId>]) -> Vec<NodeId> {
+pub(crate) fn dispatch_order_for_paths(paths: &[Vec<NodeId>]) -> Vec<NodeId> {
     fn push_unique(nodes: &mut Vec<NodeId>, node_id: NodeId) {
         if !nodes.contains(&node_id) {
             nodes.push(node_id);

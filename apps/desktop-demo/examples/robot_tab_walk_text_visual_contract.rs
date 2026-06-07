@@ -289,7 +289,7 @@ fn ink_metrics(
 
 fn is_serif_yellow_pixel(pixel: [u8; 4]) -> bool {
     let [red, green, blue, alpha] = pixel;
-    alpha >= 180 && red >= 150 && green >= 120 && blue >= 70 && blue <= 225 && red >= green
+    alpha >= 180 && red >= 150 && green >= 120 && (70..=225).contains(&blue) && red >= green
 }
 
 fn is_light_text_pixel(pixel: [u8; 4]) -> bool {

@@ -34,5 +34,6 @@ docs/screenshots/text_scroll_exact_external_old_*/
 *.swo
 
 # Local tooling scratch files
+.cranpose-tmp/
 .codex
 review.md

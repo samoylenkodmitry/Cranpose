@@ -190,7 +190,7 @@ impl HitRegion {
         local_event: &PointerEvent,
     ) {
         for handler in pointer_inputs {
-            if local_event.is_consumed() {
+            if local_event.is_consumed() && !is_terminal_pointer_event(local_event.kind) {
                 break;
             }
             handler(local_event.clone());
@@ -204,7 +204,7 @@ impl HitRegion {
     }
 
     fn dispatch_modifier_slices(&self, modifier_slices: &ModifierNodeSlices, event: PointerEvent) {
-        if event.is_consumed() {
+        if should_skip_consumed_event(&event) {
             return;
         }
 
@@ -219,7 +219,7 @@ impl HitRegion {
     }
 
     fn dispatch_cached_handlers(&self, event: PointerEvent) {
-        if event.is_consumed() {
+        if should_skip_consumed_event(&event) {
             return;
         }
 
@@ -244,6 +244,14 @@ impl HitRegion {
             })
             .ok()
     }
+}
+
+fn is_terminal_pointer_event(kind: PointerEventKind) -> bool {
+    matches!(kind, PointerEventKind::Up | PointerEventKind::Cancel)
+}
+
+fn should_skip_consumed_event(event: &PointerEvent) -> bool {
+    event.is_consumed() && !is_terminal_pointer_event(event.kind)
 }
 
 impl HitTestTarget for HitRegion {
@@ -613,6 +621,88 @@ mod tests {
 
         assert_eq!(count_first.get(), 1);
         assert_eq!(count_second.get(), 0);
+    }
+
+    #[test]
+    fn dispatch_delivers_terminal_events_after_consumption_for_cleanup() {
+        let count_first = Rc::new(Cell::new(0));
+        let count_second = Rc::new(Cell::new(0));
+
+        let hit = HitRegion::with_diagnostics(HitRegionInit {
+            node_id: 1,
+            capture_path: vec![1],
+            geometry: hit_geometry_for_rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            }),
+            shape: None,
+            click_actions: Vec::new(),
+            pointer_inputs: vec![
+                make_handler(count_first.clone(), true),
+                make_handler(count_second.clone(), false),
+            ],
+            z_index: 0,
+            diagnostics: test_diagnostics(),
+        });
+
+        for kind in [PointerEventKind::Up, PointerEventKind::Cancel] {
+            let event =
+                PointerEvent::new(kind, Point { x: 10.0, y: 10.0 }, Point { x: 10.0, y: 10.0 });
+            hit.dispatch(event);
+        }
+
+        assert_eq!(count_first.get(), 2);
+        assert_eq!(count_second.get(), 2);
+    }
+
+    #[test]
+    fn dispatch_delivers_terminal_events_to_later_captured_targets_after_consumption() {
+        let child_count = Rc::new(Cell::new(0));
+        let parent_count = Rc::new(Cell::new(0));
+
+        let child_hit = HitRegion::with_diagnostics(HitRegionInit {
+            node_id: 2,
+            capture_path: vec![2, 1],
+            geometry: hit_geometry_for_rect(Rect {
+                x: 8.0,
+                y: 8.0,
+                width: 20.0,
+                height: 20.0,
+            }),
+            shape: None,
+            click_actions: Vec::new(),
+            pointer_inputs: vec![make_handler(child_count.clone(), true)],
+            z_index: 1,
+            diagnostics: test_diagnostics(),
+        });
+        let parent_hit = HitRegion::with_diagnostics(HitRegionInit {
+            node_id: 1,
+            capture_path: vec![1],
+            geometry: hit_geometry_for_rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            }),
+            shape: None,
+            click_actions: Vec::new(),
+            pointer_inputs: vec![make_handler(parent_count.clone(), false)],
+            z_index: 0,
+            diagnostics: test_diagnostics(),
+        });
+
+        let event = PointerEvent::new(
+            PointerEventKind::Up,
+            Point { x: 12.0, y: 12.0 },
+            Point { x: 12.0, y: 12.0 },
+        );
+        child_hit.dispatch(event.clone());
+        parent_hit.dispatch(event);
+
+        assert_eq!(child_count.get(), 1);
+        assert_eq!(parent_count.get(), 1);
     }
 
     #[test]

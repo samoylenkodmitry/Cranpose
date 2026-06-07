@@ -465,6 +465,7 @@ fn graph_layer(
         node_id: None,
         local_bounds,
         transform_to_parent,
+        content_offset: Point::default(),
         motion_context_animated: false,
         translated_content_context: false,
         translated_content_offset: Point::default(),

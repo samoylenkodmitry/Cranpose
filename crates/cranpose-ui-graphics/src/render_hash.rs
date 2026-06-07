@@ -220,6 +220,7 @@ fn hash_runtime_shader<H: Hasher>(shader: &RuntimeShader, state: &mut H) {
     // stale entries. The pipeline cache already deduplicates by source hash,
     // and stable_id in the cache key distinguishes different nodes.
     shader.source_hash().hash(state);
+    hash_f32_bits(shader.input_padding(), state);
 }
 
 fn hash_render_effect<H: Hasher>(effect: &RenderEffect, state: &mut H) {

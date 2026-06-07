@@ -5,6 +5,7 @@ readonly DEFAULT_PERF_SCENARIOS=(
     text_heavy_scroll
     markdown_scroll
     markdown_viewer_scroll
+    markdown_default_viewer_scroll
     backdrop_blur
     opaque_scene
 )
@@ -12,7 +13,7 @@ readonly DEFAULT_PERF_SCENARIOS=(
 is_valid_perf_scenario() {
     local scenario="$1"
     case "$scenario" in
-        lazy_list_scroll|text_heavy_scroll|markdown_scroll|markdown_viewer_scroll|backdrop_blur|opaque_scene)
+        lazy_list_scroll|text_heavy_scroll|markdown_scroll|markdown_viewer_scroll|markdown_default_viewer_scroll|backdrop_blur|opaque_scene)
             return 0
             ;;
         *)

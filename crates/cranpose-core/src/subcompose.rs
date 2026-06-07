@@ -172,16 +172,14 @@ impl SlotReusePolicy for ContentTypeReusePolicy {
     }
 
     fn are_compatible(&self, existing: SlotId, requested: SlotId) -> bool {
-        // Exact match always wins
         if existing == requested {
             return true;
         }
 
-        // Check content type compatibility
         let types = self.slot_types.borrow();
         match (types.get(&existing), types.get(&requested)) {
             (Some(existing_type), Some(requested_type)) => existing_type == requested_type,
-            // If either slot has no type, fall back to exact match only
+            (None, None) => true,
             _ => false,
         }
     }
@@ -193,6 +191,13 @@ impl SlotReusePolicy for ContentTypeReusePolicy {
     fn remove_content_type(&self, slot_id: SlotId) {
         ContentTypeReusePolicy::remove_content_type(self, slot_id);
     }
+}
+
+#[doc(hidden)]
+pub struct ExactSlotActivation {
+    pub nodes: Vec<NodeId>,
+    pub scopes: Vec<RecomposeScope>,
+    pub reactivate_scopes: bool,
 }
 
 #[derive(Default, Clone)]
@@ -251,6 +256,18 @@ impl NodeSlotMapping {
         self.slot_to_nodes.get(slot).map(|nodes| nodes.as_slice())
     }
 
+    fn get_scopes(&self, slot: &SlotId) -> Option<&[RecomposeScope]> {
+        self.slot_to_scopes
+            .get(slot)
+            .map(|scopes| scopes.as_slice())
+    }
+
+    fn slot_has_invalid_scopes(&self, slot: SlotId) -> bool {
+        self.slot_to_scopes
+            .get(&slot)
+            .is_some_and(|scopes| scopes.iter().any(RecomposeScope::is_invalid))
+    }
+
     fn deactivate_slot(&self, slot: SlotId) {
         if let Some(scopes) = self.slot_to_scopes.get(&slot) {
             for scope in scopes {
@@ -282,6 +299,7 @@ pub struct SubcomposeState {
     /// Reusable nodes without a content type (fallback pool).
     reusable_nodes_untyped: VecDeque<(SlotId, NodeId)>,
     reusable_node_counts: HashMap<SlotId, usize>,
+    exact_reactivation_slots: HashSet<SlotId>,
     /// Maps slot to its content type for efficient lookup during reuse.
     slot_content_types: HashMap<SlotId, u64>,
     precomposed_nodes: HashMap<SlotId, Vec<NodeId>>,
@@ -346,6 +364,7 @@ impl SubcomposeState {
             reusable_by_type: HashMap::default(),
             reusable_nodes_untyped: VecDeque::new(),
             reusable_node_counts: HashMap::default(),
+            exact_reactivation_slots: HashSet::default(),
             slot_content_types: HashMap::default(),
             precomposed_nodes: HashMap::default(),
             policy,
@@ -363,6 +382,11 @@ impl SubcomposeState {
     /// Sets the policy used for future reuse decisions.
     pub fn set_policy(&mut self, policy: Box<dyn SlotReusePolicy>) {
         self.policy = policy;
+    }
+
+    pub fn set_reusable_pool_limits(&mut self, per_type: usize, untyped: usize) {
+        self.max_reusable_per_type = per_type;
+        self.max_reusable_untyped = untyped;
     }
 
     /// Registers a content type for a slot.
@@ -405,6 +429,64 @@ impl SubcomposeState {
         self.current_pass_active_slots.clear();
     }
 
+    /// Returns the current active slot cursor for the in-progress pass.
+    pub fn active_slot_cursor(&self) -> usize {
+        self.current_index
+    }
+
+    /// Restores the active slot cursor for work that should not become part of
+    /// the rendered active set, such as lazy-list prefetch measurement.
+    pub fn restore_active_slot_cursor(&mut self, cursor: usize) {
+        self.current_index = cursor.min(self.active_order.len());
+    }
+
+    /// Moves an active slot out of the rendered set and into the reusable pool.
+    pub fn recycle_active_slot(&mut self, slot_id: SlotId) -> Vec<NodeId> {
+        self.recycle_active_slot_internal(slot_id, false)
+    }
+
+    pub fn recycle_prefetched_active_slot(&mut self, slot_id: SlotId) -> Vec<NodeId> {
+        self.recycle_active_slot_internal(slot_id, true)
+    }
+
+    pub fn recycle_active_slots_where(
+        &mut self,
+        mut predicate: impl FnMut(SlotId) -> bool,
+    ) -> Vec<NodeId> {
+        let slots: Vec<_> = self
+            .active_order
+            .iter()
+            .copied()
+            .filter(|slot| !self.current_pass_active_slots.contains(slot))
+            .filter(|slot| predicate(*slot))
+            .collect();
+        let mut disposed = Vec::new();
+        for slot in slots {
+            disposed.extend(self.recycle_active_slot(slot));
+        }
+        disposed
+    }
+
+    fn recycle_active_slot_internal(
+        &mut self,
+        slot_id: SlotId,
+        allow_exact_reactivation: bool,
+    ) -> Vec<NodeId> {
+        let Some(position) = self
+            .active_order
+            .iter()
+            .position(|candidate| *candidate == slot_id)
+        else {
+            return Vec::new();
+        };
+        self.active_order.remove(position);
+        if position < self.current_index {
+            self.current_index = self.current_index.saturating_sub(1);
+        }
+        self.move_slot_to_reusable(slot_id, allow_exact_reactivation);
+        self.enforce_reusable_pool_limits()
+    }
+
     /// Finishes a subcompose pass, disposing slots that were not used.
     pub fn finish_pass(&mut self) -> Vec<NodeId> {
         self.dispose_or_reuse_starting_from_index(self.current_index)
@@ -426,6 +508,69 @@ impl SubcomposeState {
         self.slot_callbacks.entry(slot_id).or_default().clone()
     }
 
+    #[doc(hidden)]
+    pub fn activate_current_active_slot(&mut self, slot_id: SlotId) -> Option<Vec<NodeId>> {
+        if self.current_pass_active_slots.contains(&slot_id)
+            || self.exact_reactivation_slots.contains(&slot_id)
+            || self
+                .active_order
+                .get(self.current_index)
+                .copied()
+                .is_none_or(|active_slot| active_slot != slot_id)
+            || self.mapping.slot_has_invalid_scopes(slot_id)
+        {
+            return None;
+        }
+
+        let nodes = self.mapping.get_nodes(&slot_id)?.to_vec();
+        self.last_slot_reused = Some(true);
+        self.live_slots.insert(slot_id);
+        self.current_pass_active_slots.insert(slot_id);
+        self.current_index += 1;
+        Some(nodes)
+    }
+
+    #[doc(hidden)]
+    pub fn take_exact_slot_activation(&mut self, slot_id: SlotId) -> Option<ExactSlotActivation> {
+        let active_position = self
+            .active_order
+            .iter()
+            .position(|candidate| *candidate == slot_id);
+        let is_exact_reactivation = self.exact_reactivation_slots.contains(&slot_id);
+        if active_position.is_none() && !is_exact_reactivation
+            || self.mapping.slot_has_invalid_scopes(slot_id)
+        {
+            return None;
+        }
+
+        let nodes = self.mapping.get_nodes(&slot_id)?.to_vec();
+        let scopes = self
+            .mapping
+            .get_scopes(&slot_id)
+            .unwrap_or_default()
+            .to_vec();
+        if active_position.is_none() {
+            for node in &nodes {
+                let _ = self.remove_from_reusable_pools(*node);
+            }
+        }
+        self.exact_reactivation_slots.remove(&slot_id);
+        Some(ExactSlotActivation {
+            nodes,
+            scopes,
+            reactivate_scopes: active_position.is_none(),
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn take_exact_slot_for_activation(
+        &mut self,
+        slot_id: SlotId,
+    ) -> Option<(Vec<NodeId>, Vec<RecomposeScope>)> {
+        self.take_exact_slot_activation(slot_id)
+            .map(|activation| (activation.nodes, activation.scopes))
+    }
+
     /// Records that the nodes in `node_ids` are currently rendering the provided
     /// `slot_id`.
     pub fn register_active(
@@ -434,34 +579,52 @@ impl SubcomposeState {
         node_ids: &[NodeId],
         scopes: &[RecomposeScope],
     ) {
+        self.register_active_with_scope_reactivation(slot_id, node_ids, scopes, true);
+    }
+
+    #[doc(hidden)]
+    pub fn register_active_with_scope_reactivation(
+        &mut self,
+        slot_id: SlotId,
+        node_ids: &[NodeId],
+        scopes: &[RecomposeScope],
+        reactivate_scopes: bool,
+    ) {
         let was_reused = self.mapping.get_nodes(&slot_id).is_some();
         self.last_slot_reused = Some(was_reused);
         self.live_slots.insert(slot_id);
         self.current_pass_active_slots.insert(slot_id);
+        self.exact_reactivation_slots.remove(&slot_id);
 
         if let Some(position) = self.active_order.iter().position(|slot| *slot == slot_id) {
             if position < self.current_index {
-                for scope in scopes {
-                    scope.reactivate();
-                }
-                self.mapping.set_nodes(slot_id, node_ids);
-                self.mapping.set_scopes(slot_id, scopes);
-                if let Some(nodes) = self.precomposed_nodes.get_mut(&slot_id) {
-                    let before_len = nodes.len();
-                    nodes.retain(|node| !node_ids.contains(node));
-                    let removed = before_len - nodes.len();
-                    self.precomposed_count = self.precomposed_count.saturating_sub(removed);
-                    if nodes.is_empty() {
-                        self.precomposed_nodes.remove(&slot_id);
+                if reactivate_scopes {
+                    for scope in scopes {
+                        scope.reactivate();
                     }
                 }
+                self.update_active_slot_mapping(slot_id, node_ids, scopes);
                 return;
             }
             self.active_order.remove(position);
         }
-        for scope in scopes {
-            scope.reactivate();
+        if reactivate_scopes {
+            for scope in scopes {
+                scope.reactivate();
+            }
         }
+        self.update_active_slot_mapping(slot_id, node_ids, scopes);
+        let insert_at = self.current_index.min(self.active_order.len());
+        self.active_order.insert(insert_at, slot_id);
+        self.current_index += 1;
+    }
+
+    fn update_active_slot_mapping(
+        &mut self,
+        slot_id: SlotId,
+        node_ids: &[NodeId],
+        scopes: &[RecomposeScope],
+    ) {
         self.mapping.set_nodes(slot_id, node_ids);
         self.mapping.set_scopes(slot_id, scopes);
         if let Some(nodes) = self.precomposed_nodes.get_mut(&slot_id) {
@@ -473,9 +636,6 @@ impl SubcomposeState {
                 self.precomposed_nodes.remove(&slot_id);
             }
         }
-        let insert_at = self.current_index.min(self.active_order.len());
-        self.active_order.insert(insert_at, slot_id);
-        self.current_index += 1;
     }
 
     /// Stores a precomposed node for the provided slot. Precomposed nodes stay
@@ -537,6 +697,7 @@ impl SubcomposeState {
             let first_node = nodes.first().copied();
             if let Some(node_id) = first_node {
                 let _ = self.remove_from_reusable_pools(node_id);
+                self.exact_reactivation_slots.remove(&slot_id);
                 return Some(node_id);
             }
         }
@@ -551,10 +712,15 @@ impl SubcomposeState {
             }
         }
 
+        let exact_reactivation_slots = &self.exact_reactivation_slots;
+        let policy = &self.policy;
         let position = self
             .reusable_nodes_untyped
             .iter()
-            .position(|(existing_slot, _)| self.policy.are_compatible(*existing_slot, slot_id));
+            .position(|(existing_slot, _)| {
+                !exact_reactivation_slots.contains(existing_slot)
+                    && policy.are_compatible(*existing_slot, slot_id)
+            });
 
         if let Some(index) = position {
             if let Some((old_slot, node_id)) = self.reusable_nodes_untyped.remove(index) {
@@ -574,9 +740,11 @@ impl SubcomposeState {
     ) -> Option<(SlotId, NodeId)> {
         let reused = {
             let policy = &self.policy;
+            let exact_reactivation_slots = &self.exact_reactivation_slots;
             let pool = self.reusable_by_type.get_mut(&content_type)?;
             let index = pool.iter().position(|(existing_slot, _)| {
-                policy.are_compatible(*existing_slot, requested_slot)
+                !exact_reactivation_slots.contains(existing_slot)
+                    && policy.are_compatible(*existing_slot, requested_slot)
             })?;
             pool.remove(index)
         };
@@ -631,8 +799,21 @@ impl SubcomposeState {
 
     /// Moves a node from one slot to another, updating mappings.
     fn move_node_to_slot(&mut self, node_id: NodeId, old_slot: SlotId, new_slot: SlotId) {
+        if old_slot == new_slot {
+            return;
+        }
+
         self.mapping.remove_by_node(&node_id);
+        self.exact_reactivation_slots.remove(&old_slot);
         self.mapping.add_node(new_slot, node_id);
+        self.slot_content_types.remove(&old_slot);
+        self.policy.remove_content_type(old_slot);
+        if let Some(slots) = self.slot_compositions.remove(&old_slot) {
+            self.slot_compositions.insert(new_slot, slots);
+        }
+        if let Some(callback) = self.slot_callbacks.remove(&old_slot) {
+            self.slot_callbacks.insert(new_slot, callback);
+        }
         if let Some(nodes) = self.precomposed_nodes.get_mut(&old_slot) {
             let before_len = nodes.len();
             nodes.retain(|candidate| *candidate != node_id);
@@ -642,7 +823,6 @@ impl SubcomposeState {
                 self.precomposed_nodes.remove(&old_slot);
             }
         }
-        self.prune_slot_if_unused(old_slot);
     }
 
     /// Moves active slots starting from `start_index` to the reusable bucket.
@@ -665,37 +845,47 @@ impl SubcomposeState {
                 retained.push(slot);
                 continue;
             }
-            self.live_slots.remove(&slot);
-            self.mapping.deactivate_slot(slot);
-
-            // Add nodes to appropriate content-type pool
-            let content_type = self.slot_content_types.get(&slot).copied();
-            let nodes: SmallVec<[NodeId; 4]> = self
-                .mapping
-                .get_nodes(&slot)
-                .into_iter()
-                .flatten()
-                .copied()
-                .collect();
-            for node in nodes {
-                if let Some(ct) = content_type {
-                    self.reusable_by_type
-                        .entry(ct)
-                        .or_default()
-                        .push_back((slot, node));
-                } else {
-                    self.reusable_nodes_untyped.push_back((slot, node));
-                }
-                self.increment_reusable_slot(slot);
-            }
+            self.move_slot_to_reusable(slot, false);
         }
         retained.reverse();
         self.active_order.extend(retained);
 
-        // Enforce max_reusable_per_type limit per pool - dispose oldest nodes first (FIFO)
-        let mut disposed = Vec::new();
+        self.enforce_reusable_pool_limits()
+    }
 
-        // Enforce limit on typed pools
+    fn move_slot_to_reusable(&mut self, slot: SlotId, allow_exact_reactivation: bool) {
+        self.live_slots.remove(&slot);
+        self.current_pass_active_slots.remove(&slot);
+        self.mapping.deactivate_slot(slot);
+        if allow_exact_reactivation {
+            self.exact_reactivation_slots.insert(slot);
+        } else {
+            self.exact_reactivation_slots.remove(&slot);
+        }
+
+        let content_type = self.slot_content_types.get(&slot).copied();
+        let nodes: SmallVec<[NodeId; 4]> = self
+            .mapping
+            .get_nodes(&slot)
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect();
+        for node in nodes {
+            if let Some(ct) = content_type {
+                self.reusable_by_type
+                    .entry(ct)
+                    .or_default()
+                    .push_back((slot, node));
+            } else {
+                self.reusable_nodes_untyped.push_back((slot, node));
+            }
+            self.increment_reusable_slot(slot);
+        }
+    }
+
+    fn enforce_reusable_pool_limits(&mut self) -> Vec<NodeId> {
+        let mut disposed = Vec::new();
         let mut typed_disposals = Vec::new();
         for pool in self.reusable_by_type.values_mut() {
             while pool.len() > self.max_reusable_per_type {
@@ -707,7 +897,7 @@ impl SubcomposeState {
         for (slot, node_id) in typed_disposals {
             self.decrement_reusable_slot(slot);
             self.mapping.remove_by_node(&node_id);
-            self.prune_slot_if_unused(slot);
+            self.exact_reactivation_slots.remove(&slot);
             disposed.push(node_id);
         }
 
@@ -716,7 +906,7 @@ impl SubcomposeState {
             if let Some((slot, node_id)) = self.reusable_nodes_untyped.pop_front() {
                 self.decrement_reusable_slot(slot);
                 self.mapping.remove_by_node(&node_id);
-                self.prune_slot_if_unused(slot);
+                self.exact_reactivation_slots.remove(&slot);
                 disposed.push(node_id);
             }
         }

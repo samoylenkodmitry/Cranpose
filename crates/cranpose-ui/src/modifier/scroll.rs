@@ -135,6 +135,11 @@ trait ScrollTarget: Clone {
     /// Apply a gesture delta. Returns the consumed amount in gesture coordinates.
     fn apply_delta(&self, delta: f32) -> f32;
 
+    /// Apply a wheel/trackpad event delta. Returns the consumed amount.
+    fn apply_wheel_delta(&self, delta: f32) -> f32 {
+        self.apply_delta(delta)
+    }
+
     /// Apply a scroll delta during fling. Returns consumed delta in scroll coordinates.
     fn apply_fling_delta(&self, delta: f32) -> f32;
 
@@ -170,6 +175,14 @@ impl ScrollTarget for LazyListState {
         // dispatch_scroll_delta already calls self.invalidate() which triggers the
         // layout invalidation callback registered in lazy_scroll_impl
         self.dispatch_scroll_delta(delta)
+    }
+
+    fn apply_wheel_delta(&self, delta: f32) -> f32 {
+        if delta.abs() <= 0.001 {
+            0.0
+        } else {
+            self.dispatch_scroll_delta(delta)
+        }
     }
 
     fn apply_fling_delta(&self, delta: f32) -> f32 {
@@ -481,14 +494,14 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.velocity_tracker.reset();
         }
 
-        self.motion_context.activate_for_next_frame();
+        self.motion_context.activate_for_current_frame();
 
         let delta = if self.reverse_scrolling {
             -axis_delta
         } else {
             axis_delta
         };
-        let consumed = self.scroll_target.apply_delta(delta);
+        let consumed = self.scroll_target.apply_wheel_delta(delta);
         if consumed.abs() > 0.001 {
             self.scroll_target.invalidate();
             true
@@ -876,6 +889,19 @@ fn scroll_impl(
                     loop {
                         let event = await_scope.await_pointer_event().await;
 
+                        if event.is_consumed() {
+                            if matches!(
+                                event.kind,
+                                PointerEventKind::Down
+                                    | PointerEventKind::Move
+                                    | PointerEventKind::Up
+                                    | PointerEventKind::Cancel
+                            ) {
+                                detector.on_cancel();
+                            }
+                            continue;
+                        }
+
                         if let Some(ref guard) = guard {
                             if !guard() {
                                 if matches!(
@@ -1006,6 +1032,19 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
                     .await_pointer_event_scope(|await_scope| async move {
                         loop {
                             let event = await_scope.await_pointer_event().await;
+
+                            if event.is_consumed() {
+                                if matches!(
+                                    event.kind,
+                                    PointerEventKind::Down
+                                        | PointerEventKind::Move
+                                        | PointerEventKind::Up
+                                        | PointerEventKind::Cancel
+                                ) {
+                                    detector.on_cancel();
+                                }
+                                continue;
+                            }
 
                             // Delegate to detector's lifecycle methods
                             let should_consume = match event.kind {

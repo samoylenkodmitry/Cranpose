@@ -133,7 +133,8 @@ impl MeasurePolicy for BoxMeasurePolicy {
 /// Like Jetpack Compose, this policy **allows children to overflow** their container bounds:
 /// - Children can be positioned outside the parent's measured size
 /// - Overflowing content is rendered (unless clipped by a modifier)
-/// - When content overflows, arrangement switches to `Start` to avoid negative spacing
+/// - When content overflows, distribution arrangements switch to `Start` to avoid negative spacing
+/// - `SpacedBy` keeps its fixed inter-child spacing even when content overflows
 ///
 /// Example: A Row with 300px of content in a 200px container will:
 /// 1. Measure children at their natural sizes
@@ -456,8 +457,11 @@ impl MeasurePolicy for FlexMeasurePolicy {
             SmallVec::with_capacity(child_main_sizes.len());
         main_positions.resize(child_main_sizes.len(), 0.0);
 
-        // If we overflow, use Start arrangement to avoid negative spacing
-        let arrangement = if total_main > container_main {
+        // If distribution arrangements overflow, use Start arrangement to avoid negative spacing.
+        // Fixed SpacedBy gaps stay valid under overflow and must remain part of layout.
+        let arrangement = if total_main > container_main
+            && !matches!(self.main_axis_arrangement, LinearArrangement::SpacedBy(_))
+        {
             LinearArrangement::Start
         } else {
             self.main_axis_arrangement

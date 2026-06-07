@@ -37,7 +37,7 @@ Usage: $0 [--dev|--release|--profile NAME] [--example NAME] [--duration SECS] [-
 
 Runs the robot performance harness and fails when any selected scenario is not above the FPS budget.
 Default budget: >120 FPS.
-Scenarios: lazy_list_scroll, text_heavy_scroll, markdown_scroll, markdown_viewer_scroll, backdrop_blur, opaque_scene
+Scenarios: lazy_list_scroll, text_heavy_scroll, markdown_scroll, markdown_viewer_scroll, markdown_default_viewer_scroll, backdrop_blur, opaque_scene
 EOF
 }
 

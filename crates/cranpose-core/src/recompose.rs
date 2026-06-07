@@ -1,6 +1,6 @@
 use crate::{
-    debug_scope_invalidation_sources, debug_scope_label, Composer, ComposerCore, NodeId,
-    RecomposeScope,
+    debug_scope_invalidation_sources, debug_scope_label, Command, Composer, ComposerCore,
+    DirtyBubble, NodeId, RecomposeScope,
 };
 use std::rc::Rc;
 
@@ -103,6 +103,17 @@ impl Composer {
             }
             drop(guard);
         } else {
+            if let Some(ancestor_scope) = scope.callback_promotion_target() {
+                ancestor_scope.invalidate();
+            } else {
+                self.request_root_render();
+            }
+            if let Some(parent_hint) = scope.parent_hint().or_else(|| self.root()) {
+                self.commands_mut().push(Command::BubbleDirty {
+                    node_id: parent_hint,
+                    bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+                });
+            }
             scope.mark_recomposed();
         }
     }

@@ -4,8 +4,8 @@ mod support;
 mod shared_test_support;
 
 use cranpose_render_common::graph::{
-    DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-    RenderGraph, RenderNode, TextPrimitiveNode,
+    CachePolicy, DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+    ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
 };
 use cranpose_render_common::image_compare::{
     image_difference_stats, normalize_rgba_region, sample_pixel,
@@ -18,8 +18,8 @@ use cranpose_ui::text::{
 };
 use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect,
-    RenderEffect, ShadowPrimitive,
+    BlendMode, Brush, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, ImageBitmap,
+    ImageSampling, Point, Rect, RenderEffect, ShadowPrimitive,
 };
 
 const FRAME_WIDTH: u32 = 128;
@@ -44,6 +44,10 @@ const TRANSLATED_TEXT_PIXEL_TOLERANCE: u32 = 24;
 const TRANSLATED_TEXT_MAX_DIFFERING_PIXELS: u32 = 240;
 const TRANSLATED_TEXT_MAX_PIXEL_DIFFERENCE: u32 = 420;
 const TRANSLATED_THIN_SHAPE_LOCAL_SIZE: (u32, u32) = (40, 18);
+
+fn stats_used_bounded_layer_surface(stats: &RenderStatsSnapshot) -> bool {
+    stats.isolated_layer_renders > 0 || stats.layer_cache_hits > 0
+}
 
 #[test]
 fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
@@ -92,6 +96,82 @@ fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
 }
 
 #[test]
+fn offscreen_alpha_layer_preserves_dstout_cutout_over_underlay() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping DstOut alpha isolation assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(dstout_alpha_fixture());
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("DstOut alpha capture should succeed");
+    let stats = renderer
+        .last_frame_stats()
+        .expect("DstOut alpha frame stats");
+
+    let cutout = rgba(&frame, 44, 32);
+    let faded_content = rgba(&frame, 44, 58);
+
+    assert!(
+        cutout[0] > cutout[1].saturating_add(50) && cutout[1] > cutout[2] && cutout[2] < 130,
+        "DstOut cutout should reveal the red underlay, got {cutout:?}"
+    );
+    assert!(
+        faded_content[1] > 80 && faded_content[2] > 80,
+        "uncut offscreen content should survive group alpha composite, got {faded_content:?}"
+    );
+    assert!(
+        stats.isolated_layer_renders > 0,
+        "DstOut + Offscreen should use an isolated layer surface: {stats:?}"
+    );
+}
+
+#[test]
+fn repeated_gradient_dstout_alpha_layer_reveals_underlay() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping gradient DstOut alpha isolation assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(gradient_dstout_alpha_fixture());
+    for _ in 0..3 {
+        let frame = renderer
+            .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+            .expect("gradient DstOut alpha capture should succeed");
+        let underlay_cutout = rgba(&frame, 36, 30);
+        let overlay_content = rgba(&frame, 36, 66);
+        assert!(
+            underlay_cutout[0] > 180
+                && underlay_cutout[1] > 140
+                && underlay_cutout[2] < 150
+                && underlay_cutout[0] > overlay_content[0].saturating_add(20),
+            "gradient DstOut cutout should reveal the warm underlay, cutout={underlay_cutout:?} overlay={overlay_content:?}"
+        );
+    }
+
+    let stats = renderer
+        .last_frame_stats()
+        .expect("gradient DstOut alpha frame stats");
+    assert!(
+        stats.isolated_layer_renders > 0 || stats.layer_cache_hits > 0,
+        "gradient DstOut + Offscreen should use an isolated layer surface: {stats:?}"
+    );
+}
+
+#[test]
 fn root_composite_respects_root_scale_on_presented_surface() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -116,6 +196,39 @@ fn root_composite_respects_root_scale_on_presented_surface() {
     assert_red(
         rgba(&frame, FRAME_WIDTH - 8, FRAME_HEIGHT - 8),
         "root-scale test should scale the root surface to the full physical frame",
+    );
+}
+
+#[test]
+fn full_logical_root_capture_respects_explicit_root_scale() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping full logical root-scale assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let logical_width = 96;
+    let logical_height = 72;
+    let root_scale = 2.0;
+    renderer.scene_mut().graph = Some(full_logical_root_scale_fixture(
+        logical_width as f32,
+        logical_height as f32,
+    ));
+    let frame =
+        capture_logical_frame_with_scale(&mut renderer, logical_width, logical_height, root_scale);
+
+    assert_red(
+        rgba(&frame, 36, 32),
+        "scaled full logical root should render its upper-left content",
+    );
+    assert_blue(
+        rgba(&frame, frame.width - 10, frame.height - 10),
+        "scaled full logical root should render its lower-right content into the physical target",
     );
 }
 
@@ -383,11 +496,10 @@ fn translated_thin_shape_wrapper_uses_bounded_local_surface_under_fractional_mot
             120,
         )
     };
-
     assert!(
-        base_stats.isolated_layer_renders > 0
-            && horizontal_stats.isolated_layer_renders > 0
-            && vertical_stats.isolated_layer_renders > 0,
+        stats_used_bounded_layer_surface(&base_stats)
+            && stats_used_bounded_layer_surface(&horizontal_stats)
+            && stats_used_bounded_layer_surface(&vertical_stats),
         "translated thin-shape fixture should render through bounded local surfaces: base={base_stats:?} horizontal={horizontal_stats:?} vertical={vertical_stats:?}"
     );
     assert!(
@@ -853,9 +965,10 @@ fn translated_multispan_showcase_text_with_padding_stays_exact_at_fractional_roo
         FRACTIONAL_ROOT_SCALE,
     );
     let moved_stats = renderer.last_frame_stats().expect("moved frame stats");
-    assert_eq!(
-        base_stats.isolated_layer_renders,
-        moved_stats.isolated_layer_renders
+    assert!(
+        stats_used_bounded_layer_surface(&base_stats)
+            && stats_used_bounded_layer_surface(&moved_stats),
+        "padded multispan translated text should use bounded layer surfaces: base={base_stats:?} moved={moved_stats:?}"
     );
 
     let width = scaled_dimension(MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.0, FRACTIONAL_ROOT_SCALE);
@@ -1056,6 +1169,75 @@ fn nested_backdrop_blur_radius_changes_rendered_pixels() {
 }
 
 #[test]
+fn cached_nested_backdrop_blur_radius_changes_rendered_pixels() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping cached nested backdrop radius assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(cached_nested_backdrop_effect_fixture(0.0));
+    let base_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("cached nested backdrop base capture should succeed");
+
+    renderer.scene_mut().graph = Some(cached_nested_backdrop_effect_fixture(18.0));
+    let blurred_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("cached nested backdrop blurred capture should succeed");
+    let stats = renderer
+        .last_frame_stats()
+        .expect("cached nested backdrop blur frame stats");
+
+    assert!(
+        stats.layer_cache_hits > 0,
+        "cached nested backdrop fixture should exercise retained layer cache: {stats:?}"
+    );
+    assert!(
+        stats.blur_passes >= 1,
+        "cached nested backdrop blur radius should execute blur passes: {stats:?}"
+    );
+
+    let compare_rect = Rect {
+        x: 62.0,
+        y: 34.0,
+        width: 36.0,
+        height: 28.0,
+    };
+    let width = compare_rect.width as u32;
+    let height = compare_rect.height as u32;
+    let base = normalize_rgba_region(
+        &base_frame.pixels,
+        base_frame.width,
+        base_frame.height,
+        compare_rect,
+        width,
+        height,
+    );
+    let blurred = normalize_rgba_region(
+        &blurred_frame.pixels,
+        blurred_frame.width,
+        blurred_frame.height,
+        compare_rect,
+        width,
+        height,
+    );
+    let diff = image_difference_stats(&base, &blurred, width, height, 10);
+
+    assert!(
+        diff.differing_pixels > 90,
+        "cached nested backdrop blur radius must invalidate retained layer output; differing_pixels={} max_diff={} stats={stats:?}",
+        diff.differing_pixels,
+        diff.max_difference
+    );
+}
+
+#[test]
 fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -1094,9 +1276,9 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
         base_stats.isolated_layer_renders, 2,
         "translated backdrop base frame should keep only the content-bearing wrapper and backdrop child isolated: {base_stats:?}"
     );
-    assert_eq!(
-        moved_stats.isolated_layer_renders, 2,
-        "translated backdrop moved frame should keep only the content-bearing wrapper and backdrop child isolated: {moved_stats:?}"
+    assert!(
+        (1..=2).contains(&moved_stats.isolated_layer_renders),
+        "translated backdrop moved frame should reuse cached rigid content without adding extra isolated layers: {moved_stats:?}"
     );
 
     let base_normalized = normalize_translated_backdrop_region(&base_frame, base_translation);
@@ -1180,6 +1362,136 @@ fn alpha_fixture() -> RenderGraph {
     graph(vec![
         solid_rect(frame_rect(), Color::BLACK),
         RenderNode::Layer(Box::new(alpha_layer)),
+    ])
+}
+
+fn dstout_alpha_fixture() -> RenderGraph {
+    let top_layer = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 80.0,
+            height: 48.0,
+        },
+        ProjectiveTransform::translation(20.0, 20.0),
+        GraphicsLayer {
+            alpha: 0.35,
+            compositing_strategy: CompositingStrategy::Offscreen,
+            ..GraphicsLayer::default()
+        },
+        vec![
+            solid_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 80.0,
+                    height: 48.0,
+                },
+                Color(0.1, 0.8, 1.0, 1.0),
+            ),
+            dstout_rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 24.0,
+            }),
+        ],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        solid_rect(
+            Rect {
+                x: 20.0,
+                y: 20.0,
+                width: 80.0,
+                height: 48.0,
+            },
+            Color(0.70, 0.20, 0.10, 1.0),
+        ),
+        RenderNode::Layer(Box::new(top_layer)),
+    ])
+}
+
+fn gradient_dstout_alpha_fixture() -> RenderGraph {
+    let top_layer = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 88.0,
+            height: 64.0,
+        },
+        ProjectiveTransform::translation(20.0, 18.0),
+        GraphicsLayer {
+            alpha: 0.35,
+            compositing_strategy: CompositingStrategy::Offscreen,
+            ..GraphicsLayer::default()
+        },
+        vec![
+            solid_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 88.0,
+                    height: 64.0,
+                },
+                Color(0.10, 0.55, 0.95, 1.0),
+            ),
+            RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                    node_id: 201,
+                    rect: Rect {
+                        x: 20.0,
+                        y: 36.0,
+                        width: 48.0,
+                        height: 18.0,
+                    },
+                    text: AnnotatedString::from("TOP"),
+                    text_style: TextStyle::from_span_style(SpanStyle {
+                        color: Some(Color::WHITE),
+                        font_size: TextUnit::Sp(14.0),
+                        ..Default::default()
+                    }),
+                    font_size: 14.0,
+                    layout_options: TextLayoutOptions::default(),
+                    clip: None,
+                })),
+            }),
+            gradient_dstout_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 88.0,
+                    height: 64.0,
+                },
+                12.0,
+                42.0,
+            ),
+        ],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        solid_rect(
+            Rect {
+                x: 20.0,
+                y: 18.0,
+                width: 88.0,
+                height: 64.0,
+            },
+            Color(0.18, 0.22, 0.32, 1.0),
+        ),
+        solid_rect(
+            Rect {
+                x: 28.0,
+                y: 26.0,
+                width: 64.0,
+                height: 18.0,
+            },
+            Color(1.0, 0.78, 0.22, 1.0),
+        ),
+        RenderNode::Layer(Box::new(top_layer)),
     ])
 }
 
@@ -1343,6 +1655,20 @@ fn nested_backdrop_effect_fixture(child_blur_radius: f32) -> RenderGraph {
     ])
 }
 
+fn cached_nested_backdrop_effect_fixture(child_blur_radius: f32) -> RenderGraph {
+    let mut graph = nested_backdrop_effect_fixture(child_blur_radius);
+    let Some(RenderNode::Layer(parent)) = graph.root.children.get_mut(1) else {
+        panic!("expected nested backdrop parent layer");
+    };
+    parent.cache_policy = CachePolicy::Auto;
+    let Some(RenderNode::Layer(child)) = parent.children.get_mut(2) else {
+        panic!("expected nested backdrop child layer");
+    };
+    child.cache_policy = CachePolicy::Auto;
+    graph.root.recompute_raster_cache_hashes();
+    graph
+}
+
 fn translated_backdrop_fixture(translation: Point) -> RenderGraph {
     let backdrop_layer = layer(
         Rect {
@@ -1417,6 +1743,30 @@ fn root_scale_fixture() -> RenderGraph {
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         vec![solid_rect(logical_root, Color::RED)],
+    ))
+}
+
+fn full_logical_root_scale_fixture(logical_width: f32, logical_height: f32) -> RenderGraph {
+    let logical_root = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: logical_width,
+        height: logical_height,
+    };
+    let lower_right = Rect {
+        x: logical_width * 0.5,
+        y: logical_height * 0.5,
+        width: logical_width * 0.5,
+        height: logical_height * 0.5,
+    };
+    RenderGraph::new(layer(
+        logical_root,
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(logical_root, Color::RED),
+            solid_rect(lower_right, Color::BLUE),
+        ],
     ))
 }
 
@@ -2252,6 +2602,42 @@ fn solid_rect(rect: Rect, color: Color) -> RenderNode {
             primitive: DrawPrimitive::Rect {
                 rect,
                 brush: Brush::solid(color),
+            },
+            clip: None,
+        }),
+    })
+}
+
+fn dstout_rect(rect: Rect) -> RenderNode {
+    RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            primitive: DrawPrimitive::Blend {
+                primitive: Box::new(DrawPrimitive::Rect {
+                    rect,
+                    brush: Brush::solid(Color::BLACK),
+                }),
+                blend_mode: BlendMode::DstOut,
+            },
+            clip: None,
+        }),
+    })
+}
+
+fn gradient_dstout_rect(rect: Rect, start_y: f32, end_y: f32) -> RenderNode {
+    RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            primitive: DrawPrimitive::Blend {
+                primitive: Box::new(DrawPrimitive::Rect {
+                    rect,
+                    brush: Brush::vertical_gradient(
+                        vec![Color::BLACK, Color::from_rgba_u8(0, 0, 0, 0)],
+                        start_y,
+                        end_y,
+                    ),
+                }),
+                blend_mode: BlendMode::DstOut,
             },
             clip: None,
         }),

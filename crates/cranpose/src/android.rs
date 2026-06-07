@@ -1168,12 +1168,10 @@ pub fn run(
 
         // Render outside event callback if needed
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
-            if shell.needs_redraw() {
-                android_host_window::with_android_host_window_registry(
+            if shell.needs_update() {
+                let update_result = android_host_window::with_android_host_window_registry(
                     &host_window_registry,
-                    || {
-                        shell.update();
-                    },
+                    || shell.update(),
                 );
                 dispatch_registered_android_surface_size_request(
                     &app,
@@ -1183,7 +1181,7 @@ pub fn run(
                     &mut last_dispatched_host_window_request,
                     &mut pending_host_window_confirmation,
                 );
-                if render_once(resources, shell) {
+                if update_result.visual_changed && render_once(resources, shell) {
                     break; // Out of memory, exit
                 }
             }

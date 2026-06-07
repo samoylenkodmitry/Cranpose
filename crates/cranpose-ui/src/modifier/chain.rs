@@ -94,13 +94,9 @@ impl ModifierChainHandle {
             .borrow_mut()
             .sync(&self.chain, resolver);
 
-        // Only recompute resolved modifiers if layout-affecting nodes changed.
-        // Check if any LAYOUT invalidation was produced during update.
         let needs_resolved_update = {
             let ctx = self.context.borrow();
-            ctx.invalidations()
-                .iter()
-                .any(|inv| inv.kind() == InvalidationKind::Layout)
+            !ctx.invalidations().is_empty()
         };
         if needs_resolved_update {
             self.resolved = self.compute_resolved();
@@ -490,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn offset_update_invalidates_layout() {
+    fn offset_update_invalidates_layout_for_retained_placement() {
         let mut handle = ModifierChainHandle::new();
         let _ = handle.update(&Modifier::empty().offset(0.0, 0.0));
         handle.take_invalidations();
@@ -502,8 +498,15 @@ mod tests {
             invalidations
                 .iter()
                 .any(|invalidation| invalidation.kind() == InvalidationKind::Layout),
-            "expected offset changes to invalidate layout"
+            "expected offset value changes to refresh retained placement"
         );
+        assert!(
+            invalidations
+                .iter()
+                .all(|invalidation| invalidation.kind() != InvalidationKind::Draw),
+            "offset value changes must not leave retained geometry stale through a draw-only invalidation"
+        );
+        assert_eq!(handle.resolved_modifiers().offset(), Point::new(12.0, 0.0));
     }
 
     fn node_ptr<N: ModifierNode + 'static>(handle: &ModifierChainHandle) -> *const N {

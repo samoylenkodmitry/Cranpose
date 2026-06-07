@@ -2,13 +2,18 @@
 //!
 //! Validates that "Blur" and "Glass" overlays produce visible pixel movement after drag.
 
+mod output_paths;
+mod perf_contract;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
-    find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
-    parse_slider_value, root_bounds, screenshot_logical_size, y_is_visible,
+    find_button_in_semantics, find_text, find_text_by_prefix, find_text_by_prefix_in_semantics,
+    find_text_in_semantics, parse_slider_value, root_bounds, screenshot_logical_size, y_is_visible,
 };
 use desktop_app::app;
+use image::{ImageBuffer, RgbaImage};
+use std::path::Path;
 use std::time::Duration;
 
 const EFFECT_SLIDER_WIDTH: f32 = 220.0;
@@ -18,6 +23,12 @@ const NESTED_SECTION_RESET_DRAGS: usize = 8;
 const NESTED_BACKDROP_MIN_CHANGED_PIXELS: usize = 90;
 const NESTED_BACKDROP_VISUAL_WAIT_ATTEMPTS: usize = 8;
 const NESTED_BACKDROP_VISUAL_WAIT_MS: u64 = 80;
+const MIN_EFFECT_DRAG_FRAMES: u64 = 6;
+const EFFECT_DRAG_PRESENTED_STEPS: u32 = 36;
+const MIN_EFFECT_DRAG_CADENCE_FPS: f32 = 120.0;
+const MIN_EFFECT_DRAG_WORK_FPS: f32 = 120.0;
+const MAX_EFFECT_DRAG_CADENCE_P95_MS: f32 = 8.33;
+const MAX_EFFECT_DRAG_WORK_P95_MS: f32 = 8.33;
 
 fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
     (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5)
@@ -48,43 +59,76 @@ struct NestedEffectControls {
     child_slider: (f32, f32, f32, f32),
 }
 
-fn visible_text(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
-    let bounds = find_text_in_semantics(robot, text)?;
-    let center_y = bounds.1 + bounds.3 * 0.5;
-    y_is_visible(robot, center_y).then_some(bounds)
-}
-
 fn visible_prefix(robot: &cranpose::Robot, prefix: &str) -> Option<(f32, f32, f32, f32, String)> {
     let bounds = find_text_by_prefix_in_semantics(robot, prefix)?;
-    let center_y = bounds.1 + bounds.3 * 0.5;
-    y_is_visible(robot, center_y).then_some(bounds)
+    bounds_visible_in_shader_content(robot, (bounds.0, bounds.1, bounds.2, bounds.3))
+        .then_some(bounds)
 }
 
 fn slider_touch_y(bounds: (f32, f32, f32, f32)) -> f32 {
     bounds.1 + bounds.3 + EFFECT_SLIDER_TOUCH_OFFSET_Y
 }
 
-fn visible_slider_prefix(
-    robot: &cranpose::Robot,
-    prefix: &str,
-) -> Option<(f32, f32, f32, f32, String)> {
-    let bounds = find_text_by_prefix_in_semantics(robot, prefix)?;
-    let label_center_y = bounds.1 + bounds.3 * 0.5;
-    let touch_y = slider_touch_y((bounds.0, bounds.1, bounds.2, bounds.3));
-    (y_is_visible(robot, label_center_y) && y_is_visible(robot, touch_y)).then_some(bounds)
+fn shader_content_top(robot: &cranpose::Robot) -> f32 {
+    find_button_in_semantics(robot, "Shaders")
+        .map(|(_, y, _, h)| y + h + 16.0)
+        .or_else(|| root_bounds(robot).map(|(_, y, _, _)| y + 96.0))
+        .unwrap_or(96.0)
+}
+
+fn shader_content_bottom(robot: &cranpose::Robot) -> f32 {
+    root_bounds(robot)
+        .map(|(_, y, _, h)| y + h - 28.0)
+        .unwrap_or(f32::MAX)
+}
+
+fn y_in_shader_content(robot: &cranpose::Robot, y: f32) -> bool {
+    y_is_visible(robot, y) && y >= shader_content_top(robot) && y <= shader_content_bottom(robot)
+}
+
+fn bounds_visible_in_shader_content(robot: &cranpose::Robot, bounds: (f32, f32, f32, f32)) -> bool {
+    y_in_shader_content(robot, bounds.1)
+        && y_in_shader_content(robot, bounds.1 + bounds.3 * 0.5)
+        && y_in_shader_content(robot, bounds.1 + bounds.3)
 }
 
 fn visible_nested_effect_controls(robot: &cranpose::Robot) -> Option<NestedEffectControls> {
-    let child_label = visible_text(robot, "Child backdrop")?;
+    let semantics = robot.get_semantics().ok()?;
+    let child_label = visible_text_in_snapshot(robot, &semantics, "Child backdrop")?;
     let (parent_x, parent_y, parent_w, parent_h, _) =
-        visible_slider_prefix(robot, "nested_parent_blur")?;
+        visible_slider_prefix_in_snapshot(robot, &semantics, "nested_parent_blur")?;
     let (child_x, child_y, child_w, child_h, _) =
-        visible_slider_prefix(robot, "nested_child_backdrop_blur")?;
+        visible_slider_prefix_in_snapshot(robot, &semantics, "nested_child_backdrop_blur")?;
     Some(NestedEffectControls {
         child_label,
         parent_slider: (parent_x, parent_y, parent_w, parent_h),
         child_slider: (child_x, child_y, child_w, child_h),
     })
+}
+
+fn visible_text_in_snapshot(
+    robot: &cranpose::Robot,
+    semantics: &[cranpose::SemanticElement],
+    text: &str,
+) -> Option<(f32, f32, f32, f32)> {
+    semantics
+        .iter()
+        .find_map(|root| find_text(root, text))
+        .filter(|bounds| bounds_visible_in_shader_content(robot, *bounds))
+}
+
+fn visible_slider_prefix_in_snapshot(
+    robot: &cranpose::Robot,
+    semantics: &[cranpose::SemanticElement],
+    prefix: &str,
+) -> Option<(f32, f32, f32, f32, String)> {
+    let bounds = semantics
+        .iter()
+        .find_map(|root| find_text_by_prefix(root, prefix))?;
+    let touch_y = slider_touch_y((bounds.0, bounds.1, bounds.2, bounds.3));
+    (bounds_visible_in_shader_content(robot, (bounds.0, bounds.1, bounds.2, bounds.3))
+        && y_in_shader_content(robot, touch_y))
+    .then_some(bounds)
 }
 
 fn scroll_nested_effect_controls_into_view(
@@ -103,12 +147,7 @@ fn scroll_nested_effect_controls_into_view(
 }
 
 fn nudge_nested_effect_controls_toward_view(robot: &cranpose::Robot) {
-    let Some((_, root_y, _, root_h)) = root_bounds(robot) else {
-        scroll_down_small(robot);
-        return;
-    };
-    let top = root_y + 96.0;
-    let bottom = root_y + root_h - 96.0;
+    let top = shader_content_top(robot);
     let raw_bounds = [
         find_text_in_semantics(robot, "Child backdrop"),
         find_text_by_prefix_in_semantics(robot, "nested_parent_blur")
@@ -121,19 +160,9 @@ fn nudge_nested_effect_controls_toward_view(robot: &cranpose::Robot) {
         .iter()
         .flatten()
         .any(|(_, y, _, h)| y + h * 0.5 < top);
-    let target_below = raw_bounds
-        .iter()
-        .flatten()
-        .any(|(_, y, _, h)| y + h * 0.5 > bottom)
-        || [raw_bounds[1], raw_bounds[2]]
-            .into_iter()
-            .flatten()
-            .any(|bounds| slider_touch_y(bounds) > bottom);
 
     if target_above {
         scroll_up_small(robot);
-    } else if target_below {
-        scroll_down_small(robot);
     } else {
         scroll_down_small(robot);
     }
@@ -146,6 +175,77 @@ fn log_nested_effect_probe(robot: &cranpose::Robot) {
     println!(
         "Nested probe: child_label={:?} parent_slider={:?} child_slider={:?}",
         child_label, parent_slider, child_slider
+    );
+}
+
+fn save_png(path: &Path, screenshot: &cranpose::RobotScreenshot) -> Result<(), String> {
+    let image: RgbaImage = ImageBuffer::from_raw(
+        screenshot.width,
+        screenshot.height,
+        screenshot.pixels.clone(),
+    )
+    .ok_or_else(|| "invalid screenshot dimensions".to_string())?;
+    image
+        .save(path)
+        .map_err(|err| format!("failed to save {}: {err}", path.display()))
+}
+
+fn save_crop_png(
+    path: &Path,
+    screenshot: &cranpose::RobotScreenshot,
+    region: (f32, f32, f32, f32),
+) -> Result<(), String> {
+    let x0 = region.0.max(0.0).floor() as u32;
+    let y0 = region.1.max(0.0).floor() as u32;
+    let x1 = (region.0 + region.2)
+        .min(screenshot.width as f32)
+        .ceil()
+        .max(x0 as f32) as u32;
+    let y1 = (region.1 + region.3)
+        .min(screenshot.height as f32)
+        .ceil()
+        .max(y0 as f32) as u32;
+    let width = x1.saturating_sub(x0);
+    let height = y1.saturating_sub(y0);
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+    let stride = screenshot.width as usize * 4;
+    for y in y0..y1 {
+        let start = y as usize * stride + x0 as usize * 4;
+        let end = start + width as usize * 4;
+        pixels.extend_from_slice(&screenshot.pixels[start..end]);
+    }
+    let image: RgbaImage =
+        ImageBuffer::from_raw(width, height, pixels).ok_or_else(|| "invalid crop".to_string())?;
+    image
+        .save(path)
+        .map_err(|err| format!("failed to save {}: {err}", path.display()))
+}
+
+fn save_nested_backdrop_diagnostic(
+    label: &str,
+    screenshot: &cranpose::RobotScreenshot,
+    region: (f32, f32, f32, f32),
+) {
+    let full_path =
+        output_paths::diagnostic_path(&format!("shader_nested_backdrop_{label}_full.png"));
+    let crop_path =
+        output_paths::diagnostic_path(&format!("shader_nested_backdrop_{label}_crop.png"));
+    if let Err(err) = save_png(&full_path, screenshot) {
+        println!("Nested diagnostic save failed: {err}");
+    }
+    if let Err(err) = save_crop_png(&crop_path, screenshot, region) {
+        println!("Nested diagnostic crop save failed: {err}");
+    }
+    println!(
+        "Nested diagnostic {label}: full={} crop={} region=({:.1},{:.1},{:.1},{:.1}) screenshot={}x{}",
+        full_path.display(),
+        crop_path.display(),
+        region.0,
+        region.1,
+        region.2,
+        region.3,
+        screenshot.width,
+        screenshot.height
     );
 }
 
@@ -177,6 +277,9 @@ fn wait_for_nested_backdrop_region_change(
             let _ = robot.wait_for_idle();
         }
         let screenshot = capture_screenshot(robot)?;
+        if attempt == 1 {
+            save_nested_backdrop_diagnostic("after", &screenshot, region);
+        }
         let raw = changed_pixel_count_in_region(baseline, &screenshot, region, 10);
         let net = raw.saturating_sub(baseline_noise);
         if let Ok(Some(stats)) = robot.get_render_stats() {
@@ -203,6 +306,75 @@ fn wait_for_nested_backdrop_region_change(
     last
 }
 
+fn assert_effect_drag_performance(
+    robot: &cranpose::Robot,
+    label: &str,
+    render_stats: Option<cranpose_render_wgpu::RenderStatsSnapshot>,
+) {
+    let stats = robot
+        .fps_stats()
+        .unwrap_or_else(|err| panic!("{label}: failed to read FPS stats: {err}"));
+    println!(
+        "{label} fps_summary: cadence_fps={:.1} work_fps={:.1} p95_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} work_missed_120hz={} stalls_50ms={} work_stalls_50ms={} frames={}",
+        stats.fps,
+        stats.work_fps,
+        stats.p95_ms,
+        stats.work_p95_ms,
+        stats.work_max_ms,
+        stats.missed_120hz_budget,
+        stats.work_missed_120hz_budget,
+        stats.stalled_50ms_frames,
+        stats.work_stalled_50ms_frames,
+        stats.frame_count
+    );
+    if let Some(render_stats) = render_stats {
+        println!(
+            "{label} render_stats: submit={} encoder={} pass={} blur={} composite={} effect={} isolated={} layer_hit={} layer_miss={} transient_bytes={} retained_bytes={} upload_bytes={}",
+            render_stats.submit_count,
+            render_stats.encoder_count,
+            render_stats.pass_count,
+            render_stats.blur_passes,
+            render_stats.composite_passes,
+            render_stats.effect_applies,
+            render_stats.isolated_layer_renders,
+            render_stats.layer_cache_hits,
+            render_stats.layer_cache_misses,
+            render_stats.transient_texture_bytes,
+            render_stats.retained_texture_bytes,
+            render_stats.upload_bytes
+        );
+    }
+
+    assert!(
+        stats.frame_count >= MIN_EFFECT_DRAG_FRAMES,
+        "{label}: drag did not produce enough measured frames: {stats:?}"
+    );
+    if perf_contract::hardware_performance_contracts_enabled() {
+        assert!(
+            stats.fps >= MIN_EFFECT_DRAG_CADENCE_FPS
+                && stats.p95_ms <= MAX_EFFECT_DRAG_CADENCE_P95_MS
+                && stats.stalled_50ms_frames == 0
+                && stats.work_fps >= MIN_EFFECT_DRAG_WORK_FPS
+                && stats.work_p95_ms <= MAX_EFFECT_DRAG_WORK_P95_MS
+                && stats.work_stalled_50ms_frames == 0,
+            "{label}: shader drag missed the 120Hz presented-frame contract: {stats:?}"
+        );
+    } else {
+        perf_contract::log_software_renderer_budget(label);
+    }
+
+    if let Some(render_stats) = render_stats {
+        assert_eq!(
+            render_stats.submit_count, 1,
+            "{label}: presented shader drag frame must submit once before screenshot readback: {render_stats:?}"
+        );
+        assert_eq!(
+            render_stats.encoder_count, 1,
+            "{label}: presented shader drag frame must use one command encoder before screenshot readback: {render_stats:?}"
+        );
+    }
+}
+
 fn main() {
     env_logger::init();
     println!("=== Robot Shader Backdrop Drag Test ===");
@@ -210,7 +382,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Shader Backdrop Drag Test")
         .with_size(1200, 1000)
-        .with_headless(true)
+        .with_headless(false)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
@@ -259,7 +431,7 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let Some(mut nested_controls) = scroll_nested_effect_controls_into_view(&robot) else {
+            let Some(nested_controls) = scroll_nested_effect_controls_into_view(&robot) else {
                 log_nested_effect_probe(&robot);
                 println!(
                     "✗ Could not bring nested backdrop preview and sliders into view together"
@@ -274,7 +446,6 @@ fn main() {
                 "nested_parent_blur",
                 0.0,
             );
-            nested_controls = visible_nested_effect_controls(&robot).unwrap_or(nested_controls);
             let nested_child_off = set_visible_slider_fraction(
                 &robot,
                 nested_controls.child_slider,
@@ -320,6 +491,7 @@ fn main() {
                 nested_region,
                 10,
             );
+            save_nested_backdrop_diagnostic("baseline", &nested_base_b, nested_region);
 
             let nested_child_on = set_visible_slider_fraction(
                 &robot,
@@ -390,12 +562,15 @@ fn main() {
                 std::process::exit(1);
             };
 
-            let _ = robot.drag(
+            robot.reset_fps_stats().expect("reset blur drag FPS stats");
+            let _ = robot.drag_and_wait_for_frames(
                 blur_start_x,
                 blur_start_y,
                 blur_start_x + 90.0,
                 blur_start_y + 70.0,
+                EFFECT_DRAG_PRESENTED_STEPS,
             );
+            let blur_render_stats = robot.get_render_stats().ok().flatten();
             std::thread::sleep(Duration::from_millis(200));
             let _ = robot.wait_for_idle();
 
@@ -420,6 +595,7 @@ fn main() {
                 );
                 std::process::exit(1);
             }
+            assert_effect_drag_performance(&robot, "Blur drag", blur_render_stats);
 
             // Glass starts at (244,164) in local area coordinates.
             let glass_start_x = glass_cx + 244.0;
@@ -430,12 +606,15 @@ fn main() {
                 std::process::exit(1);
             };
 
-            let _ = robot.drag(
+            robot.reset_fps_stats().expect("reset glass drag FPS stats");
+            let _ = robot.drag_and_wait_for_frames(
                 glass_start_x,
                 glass_start_y,
                 glass_start_x - 100.0,
                 glass_start_y - 60.0,
+                EFFECT_DRAG_PRESENTED_STEPS,
             );
+            let glass_render_stats = robot.get_render_stats().ok().flatten();
             std::thread::sleep(Duration::from_millis(200));
             let _ = robot.wait_for_idle();
 
@@ -460,6 +639,7 @@ fn main() {
                 );
                 std::process::exit(1);
             }
+            assert_effect_drag_performance(&robot, "Glass drag", glass_render_stats);
 
             // Regression check for clipping against the tab row:
             // 1) Scroll the shader content

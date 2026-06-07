@@ -4,6 +4,8 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_shader_rect --features robot-app`
 
+mod perf_contract;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text_exact, find_text_in_semantics,
@@ -11,6 +13,12 @@ use cranpose_testing::{
 };
 use desktop_app::app;
 use std::time::Duration;
+
+const SHADER_RECT_SAMPLE_FRAMES: u32 = 24;
+const MIN_SHADER_RECT_WORK_FPS: f32 = 120.0;
+const MAX_SHADER_RECT_WORK_P95_MS: f32 = 8.33;
+const MAX_SHADER_RECT_PASSES: u32 = 4;
+const MAX_SHADER_RECT_COMPOSITE_PASSES: u32 = 2;
 
 fn wait_for_button(
     robot: &cranpose::Robot,
@@ -57,6 +65,91 @@ fn wait_for_exact_text(
     None
 }
 
+fn assert_shader_rect_performance(robot: &cranpose::Robot, label: &str) {
+    robot
+        .reset_fps_stats()
+        .unwrap_or_else(|err| panic!("{label}: failed to reset FPS stats: {err}"));
+    for _ in 0..SHADER_RECT_SAMPLE_FRAMES {
+        robot
+            .wait_for_present_frame()
+            .unwrap_or_else(|err| panic!("{label}: failed to wait for present frame: {err}"));
+    }
+
+    let stats = robot
+        .fps_stats()
+        .unwrap_or_else(|err| panic!("{label}: failed to read FPS stats: {err}"));
+    println!(
+        "{label} fps_summary: cadence_fps={:.1} work_fps={:.1} p95_ms={:.2} work_p95_ms={:.2} work_max_ms={:.2} missed_120hz={} work_missed_120hz={} stalls_50ms={} work_stalls_50ms={} frames={}",
+        stats.fps,
+        stats.work_fps,
+        stats.p95_ms,
+        stats.work_p95_ms,
+        stats.work_max_ms,
+        stats.missed_120hz_budget,
+        stats.work_missed_120hz_budget,
+        stats.stalled_50ms_frames,
+        stats.work_stalled_50ms_frames,
+        stats.frame_count
+    );
+    if let Ok(Some(render_stats)) = robot.get_render_stats() {
+        println!(
+            "{label} render_stats: submit={} encoder={} pass={} blur={} composite={} effect={} isolated={} layer_hit={} layer_miss={} upload_bytes={}",
+            render_stats.submit_count,
+            render_stats.encoder_count,
+            render_stats.pass_count,
+            render_stats.blur_passes,
+            render_stats.composite_passes,
+            render_stats.effect_applies,
+            render_stats.isolated_layer_renders,
+            render_stats.layer_cache_hits,
+            render_stats.layer_cache_misses,
+            render_stats.upload_bytes
+        );
+        assert_eq!(
+            render_stats.submit_count, 1,
+            "{label}: Shader Rect must submit once per presented frame: {render_stats:?}"
+        );
+        assert_eq!(
+            render_stats.encoder_count, 1,
+            "{label}: Shader Rect must encode through one frame command encoder: {render_stats:?}"
+        );
+        assert!(
+            render_stats.pass_count <= MAX_SHADER_RECT_PASSES,
+            "{label}: Shader Rect runtime shaders must be batched; pass_count={} max={MAX_SHADER_RECT_PASSES}: {render_stats:?}",
+            render_stats.pass_count
+        );
+        assert!(
+            render_stats.composite_passes <= MAX_SHADER_RECT_COMPOSITE_PASSES,
+            "{label}: Shader Rect runtime shader composites must be batched; composite_passes={} max={MAX_SHADER_RECT_COMPOSITE_PASSES}: {render_stats:?}",
+            render_stats.composite_passes
+        );
+    }
+
+    if perf_contract::hardware_performance_contracts_enabled() {
+        assert!(
+            stats.work_fps >= MIN_SHADER_RECT_WORK_FPS
+                && stats.work_p95_ms <= MAX_SHADER_RECT_WORK_P95_MS
+                && stats.work_stalled_50ms_frames == 0,
+            "{label}: Shader Rect missed the 120Hz work contract: {stats:?}"
+        );
+    } else {
+        perf_contract::log_software_renderer_budget(label);
+    }
+}
+
+fn click_tab(robot: &cranpose::Robot, label: &str) {
+    let Some((tab_x, tab_y, tab_w, tab_h)) =
+        wait_for_button(robot, label, 30, Duration::from_millis(100))
+    else {
+        panic!("tab button {label:?} not found");
+    };
+    robot
+        .click(tab_x + tab_w / 2.0, tab_y + tab_h / 2.0)
+        .unwrap_or_else(|err| panic!("failed to click tab {label:?}: {err}"));
+    std::thread::sleep(Duration::from_millis(180));
+    let _ = robot.wait_for_idle();
+}
+
 fn main() {
     env_logger::init();
     println!("=== Robot Shader Rect Test ===");
@@ -64,20 +157,14 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Shader Rect")
         .with_size(1024, 900)
-        .with_headless(true)
+        .with_headless(false)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(600));
 
-            // Navigate to Shader Rect tab
-            let Some((tab_x, tab_y, tab_w, tab_h)) =
-                wait_for_button(&robot, "Shader Rect", 30, Duration::from_millis(100))
-            else {
-                println!("FATAL: Shader Rect tab button not found");
-                robot.exit().ok();
-                std::process::exit(1);
-            };
-            robot.click(tab_x + tab_w / 2.0, tab_y + tab_h / 2.0).ok();
-            std::thread::sleep(Duration::from_millis(500));
+            for label in ["Images", "Text", "Winamp", "XKCD", "Shaders", "Shader Rect"] {
+                click_tab(&robot, label);
+            }
+            std::thread::sleep(Duration::from_millis(300));
 
             // Verify tab content loaded
             if wait_for_text(&robot, "SDF Halo Border", 30, Duration::from_millis(100)).is_none() {
@@ -86,6 +173,7 @@ fn main() {
                 std::process::exit(1);
             }
             println!("OK: Tab loaded, header text found");
+            assert_shader_rect_performance(&robot, "Shader Rect animation");
 
             // ========== Halo border test ==========
             let Some((box1_x, box1_y, box1_w, box1_h)) = find_text_in_semantics(&robot, "Box 1")

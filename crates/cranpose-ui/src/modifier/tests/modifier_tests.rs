@@ -14,6 +14,7 @@ use cranpose_ui_graphics::{
 };
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 #[test]
 fn modifier_debug_env_flag_is_not_process_cached() {
@@ -140,6 +141,24 @@ fn regular_scroll_modifier_keeps_translated_content_context_active_at_rest() {
     let slices = collect_slices_from_modifier(&modifier);
 
     assert!(slices.translated_content_context());
+}
+
+#[test]
+fn regular_scroll_modifier_does_not_draw_implicit_scrollbar() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut state = None;
+    let _composition = crate::run_test_composition(|| {
+        state = Some(crate::ScrollState::new(0.0));
+    });
+    let state = state.expect("scroll state should be created in a runtime");
+    state.set_max_value(600.0);
+    state.scroll_to(300.0);
+    let modifier = Modifier::empty().vertical_scroll(state, false);
+    let slices = collect_slices_from_modifier(&modifier);
+    assert!(
+        slices.draw_commands().is_empty(),
+        "plain scroll modifiers should not draw visual chrome; scrollbars belong to explicit scrollbar components"
+    );
 }
 
 #[test]
@@ -429,6 +448,74 @@ fn graphics_layer_reads_latest_value_without_recomposition() {
     read_alpha(0.25);
     alpha.set(0.85);
     read_alpha(0.85);
+}
+
+#[test]
+fn lazy_graphics_layer_state_writes_schedule_attached_node_draw_repass() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let runtime =
+        cranpose_core::runtime::Runtime::new(Arc::new(cranpose_core::runtime::DefaultScheduler));
+    let x_state = cranpose_core::MutableState::with_runtime(10.0f32, runtime.handle());
+    let modifier = Modifier::empty().graphics_layer({
+        move || GraphicsLayer {
+            translation_x: x_state.get(),
+            ..Default::default()
+        }
+    });
+
+    let mut handle = ModifierChainHandle::new();
+    handle.set_node_id(Some(41));
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                assert!((layer_node.layer().translation_x - 10.0).abs() < 1e-6);
+            }
+        },
+    );
+
+    let _ = crate::take_render_invalidation();
+    let _ = crate::take_draw_repass_nodes();
+    x_state.set(42.0);
+    runtime.handle().drain_ui();
+
+    assert!(crate::take_render_invalidation());
+    assert_eq!(crate::take_draw_repass_nodes(), vec![41]);
+}
+
+#[test]
+fn lazy_graphics_layer_resolver_update_self_invalidates_without_auto_draw_invalidation() {
+    let _app_context = crate::render_state::app_context_test_scope();
+
+    let first = Modifier::empty().graphics_layer(|| GraphicsLayer {
+        alpha: 0.25,
+        ..Default::default()
+    });
+    let second = Modifier::empty().graphics_layer(|| GraphicsLayer {
+        alpha: 0.75,
+        ..Default::default()
+    });
+
+    let mut handle = ModifierChainHandle::new();
+    handle.set_node_id(Some(42));
+    let _ = handle.update(&first);
+    let _ = handle.take_invalidations();
+    let _ = crate::take_render_invalidation();
+    let _ = crate::take_draw_repass_nodes();
+
+    let _ = handle.update(&second);
+
+    assert!(
+        handle.take_invalidations().is_empty(),
+        "lazy graphics layer resolver replacement schedules an exact draw repass itself"
+    );
+    assert!(crate::take_render_invalidation());
+    assert_eq!(crate::take_draw_repass_nodes(), vec![42]);
 }
 
 #[test]

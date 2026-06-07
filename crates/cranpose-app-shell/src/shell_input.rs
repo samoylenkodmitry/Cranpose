@@ -43,9 +43,10 @@ where
     where
         I: IntoIterator<Item = <<R as Renderer>::Scene as RenderScene>::HitTarget>,
     {
+        let mut applier = self.composition.applier_mut();
         for target in targets {
             let node_id = target.node_id();
-            target.dispatch(event.clone());
+            target.dispatch_with_applier(&mut applier, event.clone());
             log::trace!(
                 target: "cranpose::input",
                 "dispatch {:?} node={} consumed={} stop_on_consume={}",
@@ -181,10 +182,11 @@ where
             .with_buttons(self.buttons_pressed);
 
             let mut delivered_capture_paths = Vec::new();
+            let mut applier = self.composition.applier_mut();
             for hit in hits {
                 let node_id = hit.node_id();
                 delivered_capture_paths.push(hit.capture_path());
-                hit.dispatch(event.clone());
+                hit.dispatch_with_applier(&mut applier, event.clone());
                 log::trace!(
                     target: "cranpose::input",
                     "dispatch {:?} node={} consumed={} stop_on_consume=true",
@@ -299,7 +301,16 @@ where
             y: delta_y,
         });
 
-        self.dispatch_targets(hits, event.clone(), true);
+        let capture_paths = hits
+            .iter()
+            .map(|hit| hit.capture_path())
+            .collect::<Vec<_>>();
+        let targets = crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
+            .into_iter()
+            .filter_map(|node_id| self.renderer.scene().find_target(node_id))
+            .collect::<Vec<_>>();
+
+        self.dispatch_targets(targets, event.clone(), true);
 
         event.is_consumed()
     }

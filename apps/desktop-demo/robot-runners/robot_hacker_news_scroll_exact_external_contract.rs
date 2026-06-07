@@ -1,6 +1,7 @@
 //! Robot test: capture real window screenshots of the Hacker News list while scrolling by
 //! exactly one logical pixel per step and require stable overlap inside the list viewport.
 
+mod output_paths;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
 

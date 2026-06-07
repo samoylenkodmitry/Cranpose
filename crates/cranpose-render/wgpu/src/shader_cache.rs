@@ -8,10 +8,25 @@ use naga::back::glsl;
 use naga::ShaderStage;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum RuntimeShaderPipelineMode {
+    Replace,
+    PremultipliedSrcOver,
+}
+
+impl RuntimeShaderPipelineMode {
+    fn blend_state(self) -> wgpu::BlendState {
+        match self {
+            Self::Replace => wgpu::BlendState::REPLACE,
+            Self::PremultipliedSrcOver => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+        }
+    }
+}
+
 /// Caches compiled render pipelines for custom WGSL shader effects.
 pub(crate) struct ShaderPipelineCache {
     backend: wgpu::Backend,
-    cache: HashMap<u64, wgpu::RenderPipeline>,
+    cache: HashMap<(u64, RuntimeShaderPipelineMode), wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
 }
 
@@ -36,14 +51,16 @@ impl ShaderPipelineCache {
         format: wgpu::TextureFormat,
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         uniform_bind_group_layout: &wgpu::BindGroupLayout,
+        mode: RuntimeShaderPipelineMode,
     ) -> Option<&wgpu::RenderPipeline> {
         let source_hash = shader.source_hash();
+        let cache_key = (source_hash, mode);
         if self.disabled.contains(&source_hash) {
             return None;
         }
 
-        if self.cache.contains_key(&source_hash) {
-            return self.cache.get(&source_hash);
+        if self.cache.contains_key(&cache_key) {
+            return self.cache.get(&cache_key);
         }
 
         if let Err(err) = validate_runtime_shader_source(shader.source(), self.backend) {
@@ -85,7 +102,7 @@ impl ShaderPipelineCache {
                     entry_point: Some("effect_fs"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(wgpu::BlendState::REPLACE),
+                        blend: Some(mode.blend_state()),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -104,8 +121,8 @@ impl ShaderPipelineCache {
             })
         };
 
-        self.cache.insert(source_hash, pipeline);
-        self.cache.get(&source_hash)
+        self.cache.insert(cache_key, pipeline);
+        self.cache.get(&cache_key)
     }
 }
 

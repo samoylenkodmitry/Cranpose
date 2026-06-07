@@ -88,6 +88,36 @@ fn column_measure_policy_sums_heights() {
 }
 
 #[test]
+fn column_spaced_by_preserves_spacing_when_content_overflows() {
+    let policy = FlexMeasurePolicy::column(
+        LinearArrangement::SpacedBy(12.0),
+        HorizontalAlignment::Start,
+    );
+    let measurables: Vec<Box<dyn Measurable>> = vec![
+        Box::new(MockMeasurable::new(80.0, 48.0, 1)),
+        Box::new(MockMeasurable::new(80.0, 200.0, 2)),
+    ];
+
+    let result = policy.measure(
+        &measurables,
+        Constraints {
+            min_width: 0.0,
+            max_width: 100.0,
+            min_height: 0.0,
+            max_height: 120.0,
+        },
+    );
+
+    assert_eq!(result.size.height, 120.0);
+    assert_eq!(result.placements.len(), 2);
+    assert_eq!(result.placements[0].y, 0.0);
+    assert_eq!(
+        result.placements[1].y, 60.0,
+        "fixed SpacedBy gaps must not disappear just because the column overflows"
+    );
+}
+
+#[test]
 fn row_measure_policy_sums_widths() {
     let policy = FlexMeasurePolicy::row(
         LinearArrangement::Start,

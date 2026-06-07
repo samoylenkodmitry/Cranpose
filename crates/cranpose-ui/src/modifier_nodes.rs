@@ -62,9 +62,9 @@
 
 use cranpose_core::NodeId;
 use cranpose_foundation::{
-    Constraints, DelegatableNode, DrawModifierNode, DrawScope, LayoutModifierNode, Measurable,
-    ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
-    PointerEvent, PointerEventKind, PointerInputNode, Size,
+    Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
+    LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
+    NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode, Size,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 
@@ -215,8 +215,6 @@ fn hash_alignment<H: Hasher>(state: &mut H, alignment: Alignment) {
     hash_horizontal_alignment(state, alignment.horizontal);
     hash_vertical_alignment(state, alignment.vertical);
 }
-
-const LAZY_GRAPHICS_LAYER_SCOPE_ID: usize = 1;
 
 // ============================================================================
 // Padding Modifier Node
@@ -558,8 +556,7 @@ impl ModifierNodeElement for CornerShapeElement {
 pub struct GraphicsLayerNode {
     layer: GraphicsLayer,
     layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
-    lazy_scope_id: Option<usize>,
-    lazy_observer: Option<cranpose_core::SnapshotStateObserver>,
+    node_id: Rc<Cell<Option<NodeId>>>,
     state: NodeState,
 }
 
@@ -568,25 +565,21 @@ impl GraphicsLayerNode {
         Self {
             layer,
             layer_resolver: None,
-            lazy_scope_id: None,
-            lazy_observer: None,
+            node_id: Rc::new(Cell::new(None)),
             state: NodeState::new(),
         }
     }
 
     pub fn new_lazy(layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) -> Self {
-        let mut node = Self {
+        Self {
             layer: GraphicsLayer::default(),
             layer_resolver: Some(layer_resolver),
-            lazy_scope_id: None,
-            lazy_observer: None,
+            node_id: Rc::new(Cell::new(None)),
             state: NodeState::new(),
-        };
-        node.ensure_lazy_observation();
-        node.layer = node.layer();
-        node
+        }
     }
 
+    #[cfg(test)]
     pub fn layer(&self) -> GraphicsLayer {
         if let Some(resolve) = self.layer_resolver() {
             resolve()
@@ -602,53 +595,40 @@ impl GraphicsLayerNode {
     pub fn layer_resolver(&self) -> Option<Rc<dyn Fn() -> GraphicsLayer>> {
         self.layer_resolver.as_ref().map(|resolve| {
             let resolve = resolve.clone();
-            match (&self.lazy_observer, self.lazy_scope_id) {
-                (Some(observer), Some(scope_id)) => {
-                    let observer = observer.clone();
-                    Rc::new(move || {
-                        observer.observe_reads(
-                            scope_id,
-                            |_| crate::request_render_invalidation(),
-                            || resolve(),
-                        )
-                    }) as Rc<dyn Fn() -> GraphicsLayer>
+            let node_id = Rc::clone(&self.node_id);
+            Rc::new(move || {
+                if let Some(node_id) = node_id.get() {
+                    let scope = crate::render_state::DrawObservationScope::new(node_id, usize::MAX);
+                    crate::render_state::observe_draw_reads(scope, || resolve())
+                } else {
+                    resolve()
                 }
-                _ => resolve,
-            }
+            }) as Rc<dyn Fn() -> GraphicsLayer>
         })
     }
 
     fn set_static(&mut self, layer: GraphicsLayer) {
+        let changed = self.layer != layer || self.layer_resolver.is_some();
         self.layer = layer;
         self.layer_resolver = None;
-        self.clear_lazy_observation();
+        if changed {
+            if let Some(node_id) = self.node_id.get() {
+                crate::render_state::schedule_draw_repass(node_id);
+            }
+        }
     }
 
     fn set_lazy(&mut self, layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) {
+        let changed = self
+            .layer_resolver
+            .as_ref()
+            .is_none_or(|current| !Rc::ptr_eq(current, &layer_resolver));
         self.layer_resolver = Some(layer_resolver);
-        self.ensure_lazy_observation();
-        self.layer = self.layer();
-    }
-
-    fn ensure_lazy_observation(&mut self) {
-        if self.layer_resolver.is_none() {
-            self.clear_lazy_observation();
-            return;
+        if changed {
+            if let Some(node_id) = self.node_id.get() {
+                crate::render_state::schedule_draw_repass(node_id);
+            }
         }
-        if self.lazy_observer.is_some() {
-            return;
-        }
-        let observer = cranpose_core::SnapshotStateObserver::new(|callback| callback());
-        observer.start();
-        self.lazy_scope_id = Some(LAZY_GRAPHICS_LAYER_SCOPE_ID);
-        self.lazy_observer = Some(observer);
-    }
-
-    fn clear_lazy_observation(&mut self) {
-        if let Some(observer) = self.lazy_observer.take() {
-            observer.stop();
-        }
-        self.lazy_scope_id = None;
     }
 }
 
@@ -660,11 +640,14 @@ impl DelegatableNode for GraphicsLayerNode {
 
 impl ModifierNode for GraphicsLayerNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        self.node_id.set(context.node_id());
         context.invalidate(cranpose_foundation::InvalidationKind::Draw);
     }
 
     fn on_detach(&mut self) {
-        self.clear_lazy_observation();
+        if let Some(node_id) = self.node_id.replace(None) {
+            crate::render_state::clear_draw_observations_for_node(node_id);
+        }
     }
 }
 
@@ -763,6 +746,10 @@ impl ModifierNodeElement for LazyGraphicsLayerElement {
 
     fn always_update(&self) -> bool {
         true
+    }
+
+    fn auto_invalidate_on_update(&self) -> bool {
+        false
     }
 }
 
@@ -1120,6 +1107,10 @@ impl ModifierNodeElement for SizeElement {
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::LAYOUT
+    }
+
+    fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
+        Some(InvalidationKind::Layout)
     }
 }
 
@@ -1811,6 +1802,10 @@ impl ModifierNodeElement for OffsetElement {
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::LAYOUT
+    }
+
+    fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
+        Some(InvalidationKind::Layout)
     }
 }
 

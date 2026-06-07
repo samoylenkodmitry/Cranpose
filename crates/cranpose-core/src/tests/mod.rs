@@ -606,6 +606,51 @@ fn disposable_effect_host() -> NodeId {
     cranpose_test_node(TestTextNode::default)
 }
 
+#[test]
+fn exact_subcompose_activation_does_not_take_compatible_cross_slot_nodes() {
+    let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy::new()));
+    let exact_slot = SlotId::new(1);
+    let compatible_slot = SlotId::new(2);
+    state.register_content_type(exact_slot, 7);
+    state.register_content_type(compatible_slot, 7);
+    state.register_active(exact_slot, &[10], &[]);
+    state.recycle_prefetched_active_slot(exact_slot);
+
+    assert!(
+        state
+            .take_exact_slot_for_activation(compatible_slot)
+            .is_none(),
+        "exact activation must not consume a compatible cross-slot reusable node"
+    );
+    assert_eq!(state.reusable(), &[10]);
+
+    let (nodes, scopes) = state
+        .take_exact_slot_for_activation(exact_slot)
+        .expect("exact retained slot should activate");
+    assert_eq!(nodes, vec![10]);
+    assert!(scopes.is_empty());
+    assert!(state.reusable().is_empty());
+    assert_eq!(state.reusable_count, 0);
+}
+
+#[test]
+fn exact_subcompose_activation_rejects_invalidated_slot_scopes() {
+    let runtime = runtime::TestRuntime::new();
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    let mut state = SubcomposeState::default();
+    let slot = SlotId::new(1);
+    state.register_active(slot, &[10], std::slice::from_ref(&scope));
+    state.dispose_or_reuse_starting_from_index(0);
+
+    scope.invalidate();
+
+    assert!(
+        state.take_exact_slot_for_activation(slot).is_none(),
+        "invalidated item scopes must force subcomposition instead of exact activation"
+    );
+    assert_eq!(state.reusable(), &[10]);
+}
+
 mod composer_applier_tests;
 mod composition_and_recompose_scope_tests;
 mod recompose_and_diff_tests;

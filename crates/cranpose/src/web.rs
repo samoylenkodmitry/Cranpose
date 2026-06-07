@@ -698,38 +698,43 @@ pub async fn run(
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         frame_pending_for_loop.set(false);
-        app.borrow_mut().update();
+        let update_result = app.borrow_mut().update();
 
-        let config = surface_config.borrow();
-        match current_surface_texture(&surface, "web") {
-            SurfaceFrame::Ready(output) => {
-                let view = output
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
-                let render_width = output.texture.width();
-                let render_height = output.texture.height();
+        if update_result.visual_changed {
+            let config = surface_config.borrow();
+            match current_surface_texture(&surface, "web") {
+                SurfaceFrame::Ready(output) => {
+                    let view = output
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    let render_width = output.texture.width();
+                    let render_height = output.texture.height();
 
-                {
-                    let mut app_mut = app.borrow_mut();
-                    if let Err(err) = app_mut
-                        .renderer()
-                        .render(&view, render_width, render_height)
                     {
-                        log::error!("render failed: {:?}", err);
+                        let mut app_mut = app.borrow_mut();
+                        if let Err(err) =
+                            app_mut
+                                .renderer()
+                                .render(&view, render_width, render_height)
+                        {
+                            log::error!("render failed: {:?}", err);
+                        }
+                    }
+
+                    output.present();
+                }
+                SurfaceFrame::Reconfigure => {
+                    let mut app_mut = app.borrow_mut();
+                    if let Some(device) = app_mut.renderer().try_device() {
+                        surface.configure(device, &*config);
+                    } else {
+                        log::error!(
+                            "web surface reconfigure skipped: GPU renderer is not initialized"
+                        );
                     }
                 }
-
-                output.present();
+                SurfaceFrame::Skip => {}
             }
-            SurfaceFrame::Reconfigure => {
-                let mut app_mut = app.borrow_mut();
-                if let Some(device) = app_mut.renderer().try_device() {
-                    surface.configure(device, &*config);
-                } else {
-                    log::error!("web surface reconfigure skipped: GPU renderer is not initialized");
-                }
-            }
-            SurfaceFrame::Skip => {}
         }
 
         let frame_driver = WebPlatformFrameDriver {

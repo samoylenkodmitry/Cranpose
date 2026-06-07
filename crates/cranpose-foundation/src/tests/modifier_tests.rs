@@ -582,6 +582,14 @@ impl AnyModifierElement for DirectElement {
         true
     }
 
+    fn auto_invalidates_on_update(&self) -> bool {
+        true
+    }
+
+    fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
+        None
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

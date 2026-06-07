@@ -57,6 +57,82 @@ pub(crate) fn capture_x11_window(window_id: &str, path: &Path) -> RgbaImage {
 }
 
 #[allow(dead_code)]
+pub(crate) fn focus_x11_window(window_id: &str) {
+    let _ = Command::new("xdotool")
+        .args(["windowactivate", "--sync", window_id])
+        .status();
+    let _ = Command::new("xdotool")
+        .args(["windowraise", window_id])
+        .status();
+    std::thread::sleep(Duration::from_millis(80));
+}
+
+#[allow(dead_code)]
+pub(crate) fn move_x11_mouse(x: f32, y: f32) {
+    let x = x.round().to_string();
+    let y = y.round().to_string();
+    let status = Command::new("xdotool")
+        .args(["mousemove", "--sync", "--", &x, &y])
+        .status()
+        .expect("xdotool mousemove");
+    assert!(status.success(), "xdotool mousemove failed");
+}
+
+#[allow(dead_code)]
+pub(crate) fn move_x11_mouse_in_window(window_id: &str, x: f32, y: f32) {
+    let x = x.round().to_string();
+    let y = y.round().to_string();
+    let status = Command::new("xdotool")
+        .args(["mousemove", "--sync", "--window", window_id, "--", &x, &y])
+        .status()
+        .expect("xdotool window-relative mousemove");
+    assert!(
+        status.success(),
+        "xdotool window-relative mousemove failed for {window_id}"
+    );
+}
+
+#[allow(dead_code)]
+pub(crate) fn click_x11_button(button: &str) {
+    let status = Command::new("xdotool")
+        .args(["click", button])
+        .status()
+        .expect("xdotool click");
+    assert!(status.success(), "xdotool click {button} failed");
+}
+
+#[allow(dead_code)]
+pub(crate) fn mouse_down_x11_button(button: &str) {
+    let status = Command::new("xdotool")
+        .args(["mousedown", button])
+        .status()
+        .expect("xdotool mousedown");
+    assert!(status.success(), "xdotool mousedown {button} failed");
+}
+
+#[allow(dead_code)]
+pub(crate) fn mouse_up_x11_button(button: &str) {
+    let status = Command::new("xdotool")
+        .args(["mouseup", button])
+        .status()
+        .expect("xdotool mouseup");
+    assert!(status.success(), "xdotool mouseup {button} failed");
+}
+
+#[allow(dead_code)]
+pub(crate) fn click_x11_button_repeated(button: &str, count: usize) {
+    let count = count.to_string();
+    let status = Command::new("xdotool")
+        .args(["click", "--repeat", &count, "--delay", "0", button])
+        .status()
+        .expect("xdotool repeated click");
+    assert!(
+        status.success(),
+        "xdotool repeated click {button} x{count} failed"
+    );
+}
+
+#[allow(dead_code)]
 pub(crate) fn capture_x11_window_screenshot(
     window_id: &str,
     path: &Path,
@@ -93,9 +169,6 @@ fn take_x11_screenshot_with_xwd(window_id: &str, path: &str) -> bool {
 fn prepare_x11_window_for_capture(window_id: &str) {
     let _ = Command::new("xdotool")
         .args(["windowraise", window_id])
-        .status();
-    let _ = Command::new("xdotool")
-        .args(["windowfocus", window_id])
         .status();
     std::thread::sleep(Duration::from_millis(80));
 }
@@ -317,7 +390,10 @@ pub(crate) fn scroll_text_into_view_between(
                 scroll_delta_y = 80.0;
             }
         } else if diagnostic {
-            println!("scroll helper attempt={attempt} target missing");
+            let visible_story_titles = collect_texts_containing(robot, "Robot HN Story");
+            println!(
+                "scroll helper attempt={attempt} target missing visible_story_titles={visible_story_titles:?}"
+            );
         }
         if diagnostic {
             println!(
@@ -352,6 +428,34 @@ fn collect_exact_text_bounds(robot: &cranpose::Robot, text: &str) -> Vec<(f32, f
         collect_exact_text_bounds_from(root, text, &mut bounds);
     }
     bounds
+}
+
+fn collect_texts_containing(robot: &cranpose::Robot, needle: &str) -> Vec<String> {
+    let Ok(semantics) = robot.get_semantics() else {
+        return Vec::new();
+    };
+    let mut texts = Vec::new();
+    for root in &semantics {
+        collect_texts_containing_from(root, needle, &mut texts);
+    }
+    texts.sort();
+    texts.dedup();
+    texts
+}
+
+fn collect_texts_containing_from(
+    elem: &cranpose::SemanticElement,
+    needle: &str,
+    texts: &mut Vec<String>,
+) {
+    if let Some(text) = elem.text.as_deref() {
+        if text.contains(needle) {
+            texts.push(text.to_string());
+        }
+    }
+    for child in &elem.children {
+        collect_texts_containing_from(child, needle, texts);
+    }
 }
 
 fn collect_exact_text_bounds_from(

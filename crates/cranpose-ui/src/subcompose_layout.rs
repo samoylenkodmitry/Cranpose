@@ -1,6 +1,7 @@
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 use cranpose_core::{
     Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,
@@ -12,12 +13,17 @@ use crate::modifier::{
     ResolvedModifiers, Size,
 };
 use crate::widgets::nodes::{
-    allocate_virtual_node_id, is_virtual_node, register_layout_node, LayoutNode, LayoutState,
+    allocate_virtual_node_id, is_virtual_node, register_layout_node, LayoutNode,
+    LayoutNodeCacheHandles, LayoutState,
 };
 
 use cranpose_foundation::{InvalidationKind, ModifierInvalidation, NodeCapabilities};
 
 pub use cranpose_ui_layout::{Constraints, MeasureResult, Placement};
+
+fn subcompose_telemetry_enabled() -> bool {
+    std::env::var_os("CRANPOSE_SUBCOMPOSE_TELEMETRY").is_some()
+}
 
 /// Representation of a subcomposed child that can later be measured by the policy.
 ///
@@ -91,6 +97,19 @@ impl PartialEq for SubcomposeChild {
 /// so the `place()` callback is not used.
 pub type SubcomposePlaceable = cranpose_ui_layout::Placeable;
 
+type CachedMeasureBatchRegistrar<'a> =
+    Box<dyn FnMut(&[NodeId], Constraints, &mut Vec<Option<Size>>) + 'a>;
+type RetainedMeasureLookup<'a> = Box<dyn FnMut(NodeId) -> Option<Rc<MeasuredNode>> + 'a>;
+type RetainedMeasureRegistrar<'a> = Box<dyn FnMut(&[Rc<MeasuredNode>]) + 'a>;
+
+pub(crate) struct CachedBatchMeasureInputs<'a> {
+    pub(crate) measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
+    pub(crate) cached_measure_batch_registrar: CachedMeasureBatchRegistrar<'a>,
+    pub(crate) retained_measure_lookup: RetainedMeasureLookup<'a>,
+    pub(crate) retained_measure_registrar: RetainedMeasureRegistrar<'a>,
+    pub(crate) error: &'a RefCell<Option<NodeError>>,
+}
+
 /// Base trait for measurement scopes.
 pub trait SubcomposeLayoutScope {
     fn constraints(&self) -> Constraints;
@@ -123,10 +142,18 @@ pub struct SubcomposeMeasureScopeImpl<'a> {
     state: &'a mut SubcomposeState,
     constraints: Constraints,
     measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
+    cached_measure_batch_registrar: CachedMeasureBatchRegistrar<'a>,
+    retained_measure_lookup: RetainedMeasureLookup<'a>,
+    retained_measure_registrar: RetainedMeasureRegistrar<'a>,
     error: &'a RefCell<Option<NodeError>>,
     parent_handle: SubcomposeLayoutNodeHandle,
     root_id: NodeId,
     placement_scratch: Vec<Placement>,
+    cached_measure_node_scratch: Vec<NodeId>,
+    cached_measure_size_scratch: Vec<Option<Size>>,
+    cached_measure_missing_scratch: Vec<NodeId>,
+    registered_measurement_node_ids: Vec<NodeId>,
+    pending_commands_applied: bool,
 }
 
 struct SubcomposeMeasureScopeInit<'a> {
@@ -134,6 +161,9 @@ struct SubcomposeMeasureScopeInit<'a> {
     state: &'a mut SubcomposeState,
     constraints: Constraints,
     measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
+    cached_measure_batch_registrar: CachedMeasureBatchRegistrar<'a>,
+    retained_measure_lookup: RetainedMeasureLookup<'a>,
+    retained_measure_registrar: RetainedMeasureRegistrar<'a>,
     error: &'a RefCell<Option<NodeError>>,
     parent_handle: SubcomposeLayoutNodeHandle,
     root_id: NodeId,
@@ -147,10 +177,24 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             state: init.state,
             constraints: init.constraints,
             measurer: init.measurer,
+            cached_measure_batch_registrar: init.cached_measure_batch_registrar,
+            retained_measure_lookup: init.retained_measure_lookup,
+            retained_measure_registrar: init.retained_measure_registrar,
             error: init.error,
             parent_handle: init.parent_handle,
             root_id: init.root_id,
             placement_scratch: init.placement_scratch,
+            cached_measure_node_scratch: Vec::new(),
+            cached_measure_size_scratch: Vec::new(),
+            cached_measure_missing_scratch: Vec::new(),
+            registered_measurement_node_ids: Vec::new(),
+            pending_commands_applied: false,
+        }
+    }
+
+    fn register_measurement_node_id(&mut self, node_id: NodeId) {
+        if !self.registered_measurement_node_ids.contains(&node_id) {
+            self.registered_measurement_node_ids.push(node_id);
         }
     }
 
@@ -180,12 +224,32 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         }
     }
 
+    fn ensure_pending_commands_applied(&mut self) -> bool {
+        if self.pending_commands_applied {
+            return true;
+        }
+
+        let telemetry_start = subcompose_telemetry_enabled().then(Instant::now);
+        if let Err(err) = self.composer.apply_pending_commands() {
+            self.record_error(err);
+            return false;
+        }
+        if let Some(start) = telemetry_start {
+            log::warn!(
+                "[subcompose-telemetry] apply_pending_commands_ms={:.2}",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+
+        self.pending_commands_applied = true;
+        true
+    }
+
     fn perform_subcompose<Content>(&mut self, slot_id: SlotId, content: Content) -> Vec<NodeId>
     where
         Content: FnMut() + 'static,
     {
-        let content_holder = self.state.callback_holder(slot_id);
-        content_holder.update(content);
+        let telemetry_start = subcompose_telemetry_enabled().then(Instant::now);
         let mut inner = self.parent_handle.inner.borrow_mut();
 
         // Reuse or create virtual node
@@ -226,18 +290,14 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
 
         drop(inner);
 
+        let content_holder = self.state.callback_holder(slot_id);
+        content_holder.update(content);
+
         let _ = self
             .composer
             .with_node_mut::<LayoutNode, _>(virtual_node_id, |node| {
                 node.set_parent(self.root_id);
             });
-
-        // CRITICAL FIX: Clear children of reused virtual nodes BEFORE subcomposing new content.
-        // Without this, old children remain attached when the node is reused for different items,
-        // causing items from different scroll positions to interleave (e.g., [1,16,31,2,17,32...]).
-        if is_reused {
-            self.composer.clear_node_children(virtual_node_id);
-        }
 
         let slot_host = self.state.get_or_create_slots(slot_id);
         let holder_for_slot = content_holder.clone();
@@ -248,6 +308,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             })
             .map(|(_, scopes)| scopes)
             .unwrap_or_default();
+        self.pending_commands_applied = false;
 
         self.state
             .register_active(slot_id, &[virtual_node_id], &scopes);
@@ -255,7 +316,103 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         // CRITICAL FIX: Read children from the Applier's copy of the virtual node,
         // NOT from inner.virtual_nodes. The Applier's copy received insert_child calls
         // during subcomposition, while inner.virtual_nodes is an out-of-sync clone.
-        self.composer.get_node_children(virtual_node_id).to_vec()
+        let children = self.composer.get_node_children(virtual_node_id).to_vec();
+        if let Some(start) = telemetry_start {
+            log::warn!(
+                "[subcompose-telemetry] slot={} reused={} children={} subcompose_ms={:.2}",
+                slot_id.raw(),
+                is_reused,
+                children.len(),
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        children
+    }
+
+    pub(crate) fn activate_exact_retained_slot_with_known_children(
+        &mut self,
+        slot_id: SlotId,
+        known_children: &[u64],
+    ) -> Option<(Vec<SubcomposeChild>, bool)> {
+        let mut expected_children = Vec::with_capacity(known_children.len());
+        for &node_id in known_children {
+            expected_children.push(NodeId::try_from(node_id).ok()?);
+        }
+
+        if let Some(virtual_node_ids) = self.activate_current_active_slot_roots(slot_id) {
+            for virtual_node_id in &virtual_node_ids {
+                self.composer.record_subcompose_child(*virtual_node_id);
+            }
+            return Some((
+                expected_children
+                    .into_iter()
+                    .map(SubcomposeChild::new)
+                    .collect(),
+                true,
+            ));
+        }
+
+        let virtual_node_ids = self.activate_recycled_exact_retained_slot_roots(slot_id)?;
+        let mut activated_children = Vec::with_capacity(expected_children.len());
+        for virtual_node_id in virtual_node_ids {
+            activated_children.extend(
+                self.composer
+                    .get_node_children(virtual_node_id)
+                    .iter()
+                    .copied(),
+            );
+        }
+        let children_match = activated_children == expected_children;
+        Some((
+            activated_children
+                .into_iter()
+                .map(SubcomposeChild::new)
+                .collect(),
+            children_match,
+        ))
+    }
+
+    fn activate_current_active_slot_roots(&mut self, slot_id: SlotId) -> Option<Vec<NodeId>> {
+        self.state.activate_current_active_slot(slot_id)
+    }
+
+    fn activate_recycled_exact_retained_slot_roots(
+        &mut self,
+        slot_id: SlotId,
+    ) -> Option<Vec<NodeId>> {
+        let activation = self.state.take_exact_slot_activation(slot_id)?;
+        let virtual_node_ids = activation.nodes;
+        let scopes = activation.scopes;
+        let reactivate_scopes = activation.reactivate_scopes;
+
+        if reactivate_scopes {
+            let inner = self.parent_handle.inner.borrow();
+            for virtual_node_id in &virtual_node_ids {
+                self.composer.record_subcompose_child(*virtual_node_id);
+                if let Some(v_node) = inner.virtual_nodes.get(virtual_node_id) {
+                    v_node.set_parent(self.root_id);
+                }
+            }
+            for virtual_node_id in &virtual_node_ids {
+                let _ = self
+                    .composer
+                    .with_node_mut::<LayoutNode, _>(*virtual_node_id, |node| {
+                        node.set_parent(self.root_id);
+                    });
+            }
+        } else {
+            for virtual_node_id in &virtual_node_ids {
+                self.composer.record_subcompose_child(*virtual_node_id);
+            }
+        }
+
+        self.state.register_active_with_scope_reactivation(
+            slot_id,
+            &virtual_node_ids,
+            &scopes,
+            reactivate_scopes,
+        );
+        Some(virtual_node_ids)
     }
 }
 
@@ -289,12 +446,22 @@ impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
             return SubcomposePlaceable::value(0.0, 0.0, child.node_id);
         }
 
-        if let Err(err) = self.composer.apply_pending_commands() {
-            self.record_error(err);
+        let telemetry_start = subcompose_telemetry_enabled().then(Instant::now);
+        if !self.ensure_pending_commands_applied() {
             return SubcomposePlaceable::value(0.0, 0.0, child.node_id);
         }
 
         let size = (self.measurer)(child.node_id, constraints);
+        self.register_measurement_node_id(child.node_id);
+        if let Some(start) = telemetry_start {
+            log::warn!(
+                "[subcompose-telemetry] child={} measure_ms={:.2} size=({:.2},{:.2})",
+                child.node_id,
+                start.elapsed().as_secs_f64() * 1000.0,
+                size.width,
+                size.height
+            );
+        }
         SubcomposePlaceable::value(size.width, size.height, child.node_id)
     }
 
@@ -358,6 +525,18 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         self.state.update_content_type(slot_id, content_type);
     }
 
+    pub(crate) fn set_reusable_pool_limits(&mut self, per_type: usize, untyped: usize) {
+        self.state.set_reusable_pool_limits(per_type, untyped);
+    }
+
+    pub(crate) fn recycle_active_slots_where(&mut self, predicate: impl FnMut(SlotId) -> bool) {
+        let disposed = self.state.recycle_active_slots_where(predicate);
+        debug_assert!(
+            disposed.is_empty(),
+            "lazy subcompose reusable pool limits must retain recycled active slots"
+        );
+    }
+
     /// Returns whether the last subcomposed slot was reused.
     ///
     /// Returns `Some(true)` if the slot already existed (was reused from pool or
@@ -367,6 +546,89 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
     /// This is useful for tracking composition statistics in lazy layouts.
     pub fn was_last_slot_reused(&self) -> Option<bool> {
         self.state.was_last_slot_reused()
+    }
+
+    pub(crate) fn measure_retained(
+        &mut self,
+        child: SubcomposeChild,
+        constraints: Constraints,
+    ) -> (SubcomposePlaceable, Option<Rc<MeasuredNode>>) {
+        let placeable = self.measure(child, constraints);
+        let retained = (self.retained_measure_lookup)(child.node_id);
+        (placeable, retained)
+    }
+
+    pub(crate) fn register_retained_measurements(&mut self, measurements: &[Rc<MeasuredNode>]) {
+        if measurements.is_empty() {
+            return;
+        }
+
+        for measured in measurements {
+            self.register_measurement_node_id(measured.node_id());
+        }
+        (self.retained_measure_registrar)(measurements);
+    }
+
+    pub(crate) fn children_need_measure(&mut self, children: &[SubcomposeChild]) -> bool {
+        if !self.ensure_pending_commands_applied() {
+            return true;
+        }
+
+        let mut root_ids = smallvec::SmallVec::<[NodeId; 8]>::new();
+        root_ids.extend(children.iter().map(SubcomposeChild::node_id));
+        self.composer.nodes_need_measure(&root_ids)
+    }
+
+    pub(crate) fn ensure_cached_measurement_node_ids<I>(
+        &mut self,
+        node_ids: I,
+        constraints: Constraints,
+    ) -> usize
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        if self.error.borrow().is_some() || !self.ensure_pending_commands_applied() {
+            return 0;
+        }
+
+        self.cached_measure_node_scratch.clear();
+        self.cached_measure_node_scratch.extend(
+            node_ids
+                .into_iter()
+                .filter(|node_id| !self.registered_measurement_node_ids.contains(node_id)),
+        );
+        if self.cached_measure_node_scratch.is_empty() {
+            return 0;
+        }
+
+        self.cached_measure_size_scratch.clear();
+        (self.cached_measure_batch_registrar)(
+            &self.cached_measure_node_scratch,
+            constraints,
+            &mut self.cached_measure_size_scratch,
+        );
+        self.cached_measure_size_scratch
+            .resize(self.cached_measure_node_scratch.len(), None);
+
+        let mut cached_count = 0;
+        self.cached_measure_missing_scratch.clear();
+        for index in 0..self.cached_measure_node_scratch.len() {
+            let node_id = self.cached_measure_node_scratch[index];
+            if self.cached_measure_size_scratch[index].is_some() {
+                cached_count += 1;
+                self.register_measurement_node_id(node_id);
+            } else {
+                self.cached_measure_missing_scratch.push(node_id);
+            }
+        }
+
+        let mut missing = std::mem::take(&mut self.cached_measure_missing_scratch);
+        for node_id in missing.drain(..) {
+            let _ = self.measure(SubcomposeChild::new(node_id), constraints);
+        }
+        self.cached_measure_missing_scratch = missing;
+
+        cached_count
     }
 }
 
@@ -403,6 +665,7 @@ pub struct SubcomposeLayoutNode {
     virtual_children_count: Cell<usize>,
     /// Retained layout state (size, position) for rendering.
     layout_state: RefCell<LayoutState>,
+    cache_handles: LayoutNodeCacheHandles,
     modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
     modifier_slices_dirty: Cell<bool>,
 }
@@ -422,6 +685,7 @@ impl SubcomposeLayoutNode {
             needs_focus_sync: Cell::new(false),
             virtual_children_count: Cell::new(0),
             layout_state: RefCell::new(LayoutState::default()),
+            cache_handles: LayoutNodeCacheHandles::default(),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
         };
@@ -456,6 +720,7 @@ impl SubcomposeLayoutNode {
             needs_focus_sync: Cell::new(false),
             virtual_children_count: Cell::new(0),
             layout_state: RefCell::new(LayoutState::default()),
+            cache_handles: LayoutNodeCacheHandles::default(),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
         };
@@ -551,6 +816,10 @@ impl SubcomposeLayoutNode {
     /// Returns a clone of the current layout state.
     pub fn layout_state(&self) -> LayoutState {
         self.layout_state.borrow().clone()
+    }
+
+    pub(crate) fn cache_handles(&self) -> LayoutNodeCacheHandles {
+        self.cache_handles.clone()
     }
 
     /// Updates the position of this node. Called during placement.
@@ -752,25 +1021,25 @@ impl SubcomposeLayoutNode {
         let curr_caps = self.modifier_capabilities();
         for invalidation in invalidations {
             self.modifier_slices_dirty.set(true);
+            let invalidation_caps = invalidation.capabilities();
+            let has_capability = |capability| {
+                curr_caps.contains(capability)
+                    || prev_caps.contains(capability)
+                    || invalidation_caps.contains(capability)
+            };
             match invalidation.kind() {
                 InvalidationKind::Layout => {
-                    if curr_caps.contains(NodeCapabilities::LAYOUT)
-                        || prev_caps.contains(NodeCapabilities::LAYOUT)
-                    {
+                    if has_capability(NodeCapabilities::LAYOUT) {
                         self.mark_needs_measure();
                     }
                 }
                 InvalidationKind::Draw => {
-                    if curr_caps.contains(NodeCapabilities::DRAW)
-                        || prev_caps.contains(NodeCapabilities::DRAW)
-                    {
+                    if has_capability(NodeCapabilities::DRAW) {
                         self.mark_needs_redraw();
                     }
                 }
                 InvalidationKind::PointerInput => {
-                    if curr_caps.contains(NodeCapabilities::POINTER_INPUT)
-                        || prev_caps.contains(NodeCapabilities::POINTER_INPUT)
-                    {
+                    if has_capability(NodeCapabilities::POINTER_INPUT) {
                         self.mark_needs_pointer_pass();
                         crate::request_pointer_invalidation();
                         // Schedule pointer repass for this node
@@ -783,9 +1052,7 @@ impl SubcomposeLayoutNode {
                     self.request_semantics_update();
                 }
                 InvalidationKind::Focus => {
-                    if curr_caps.contains(NodeCapabilities::FOCUS)
-                        || prev_caps.contains(NodeCapabilities::FOCUS)
-                    {
+                    if has_capability(NodeCapabilities::FOCUS) {
                         self.mark_needs_focus_sync();
                         crate::request_focus_invalidation();
                         // Schedule focus invalidation for this node
@@ -980,8 +1247,45 @@ impl SubcomposeLayoutNodeHandle {
         node_id: NodeId,
         constraints: Constraints,
         measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
+        mut cached_measure_registrar: Box<dyn FnMut(NodeId, Constraints) -> Option<Size> + 'a>,
         error: &'a RefCell<Option<NodeError>>,
     ) -> Result<MeasureResult, NodeError> {
+        self.measure_with_cached_batch(
+            composer,
+            node_id,
+            constraints,
+            CachedBatchMeasureInputs {
+                measurer,
+                cached_measure_batch_registrar: Box::new(
+                    move |node_ids, child_constraints, out| {
+                        out.clear();
+                        out.reserve(node_ids.len());
+                        for &child_id in node_ids {
+                            out.push(cached_measure_registrar(child_id, child_constraints));
+                        }
+                    },
+                ),
+                retained_measure_lookup: Box::new(|_| None),
+                retained_measure_registrar: Box::new(|_| {}),
+                error,
+            },
+        )
+    }
+
+    pub(crate) fn measure_with_cached_batch<'a>(
+        &self,
+        composer: &Composer,
+        node_id: NodeId,
+        constraints: Constraints,
+        callbacks: CachedBatchMeasureInputs<'a>,
+    ) -> Result<MeasureResult, NodeError> {
+        let CachedBatchMeasureInputs {
+            measurer,
+            cached_measure_batch_registrar,
+            retained_measure_lookup,
+            retained_measure_registrar,
+            error,
+        } = callbacks;
         let (policy, mut state, slots_host, placement_scratch) = {
             let mut inner = self.inner.borrow_mut();
             let policy = Rc::clone(&inner.measure_policy);
@@ -1013,6 +1317,9 @@ impl SubcomposeLayoutNodeHandle {
                     state: &mut state,
                     constraints: constraints_copy,
                     measurer,
+                    cached_measure_batch_registrar,
+                    retained_measure_lookup,
+                    retained_measure_registrar,
                     error,
                     parent_handle: self.clone(),
                     root_id: node_id,

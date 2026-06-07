@@ -293,7 +293,7 @@ fn retained_layer_surfaces_have_dedicated_cache_owner() {
     for required in [
         "struct LayerSurfaceCache",
         "entries: BoundedLruCache<LayerRasterCacheKey, CachedLayerSurface>",
-        "identity: HashMap<usize, LayerRasterCacheKey>",
+        "identity: HashMap<LayerRasterCacheIdentity, LayerRasterCacheKey>",
         "seen_this_frame: HashSet<usize>",
         "fn finish_frame(",
     ] {
@@ -509,6 +509,20 @@ fn first_child_composite_consumes_pending_clear_load_op() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = std::fs::read_to_string(crate_dir.join("src/surface_executor/render_paths.rs"))
         .expect("failed to read WGPU surface executor source");
+    fn block_after<'a>(source: &'a str, marker: &str) -> &'a str {
+        let start = source
+            .find(marker)
+            .unwrap_or_else(|| panic!("missing source marker: {marker}"));
+        let body_start = source[start..]
+            .find('{')
+            .map(|offset| start + offset + 1)
+            .unwrap_or_else(|| panic!("missing block body for marker: {marker}"));
+        let body_end = source[body_start..]
+            .find('}')
+            .map(|offset| body_start + offset)
+            .unwrap_or_else(|| panic!("missing block end for marker: {marker}"));
+        &source[body_start..body_end]
+    }
 
     assert!(
         source.contains("fn flush_pending_clear<"),
@@ -516,16 +530,26 @@ fn first_child_composite_consumes_pending_clear_load_op() {
     );
     assert!(
         source.contains("let composite_load_op = next_load_op;")
-            && source.contains("dest_quad,\n                composite_load_op,"),
+            && source.contains("dest_quad,")
+            && source.contains("composite_load_op,"),
         "first child surface composites should consume the pending clear load-op instead of forcing a standalone clear submit"
     );
+    let nested_underlay_start = source
+        .find(
+            "if child.needs_nested_underlay {\n            flush_pending_shader_layer_composites(\n                backend,\n                &mut pending_shader_composites,\n                &target.view,",
+        )
+        .expect("nested underlay branch must initialize target before child capture");
+    let nested_underlay_end = source[nested_underlay_start..]
+        .find("let child_underlay = child.needs_nested_underlay.then")
+        .map(|offset| nested_underlay_start + offset)
+        .expect("nested underlay capture should follow target initialization");
+    let nested_underlay_body = &source[nested_underlay_start..nested_underlay_end];
+    let backdrop_body = block_after(&source, "if let Some(backdrop) = &child_surface.backdrop");
+    let shadow_body = block_after(&source, "if !resolved_child.shadow_draws.is_empty()");
     assert!(
-        source.contains("if child.needs_nested_underlay {\n            flush_pending_clear")
-            && source
-                .contains("if let Some(backdrop) = &child_surface.backdrop {\n            flush_pending_clear")
-            && source.contains(
-                "if !resolved_child.shadow_draws.is_empty() {\n            flush_pending_clear"
-            ),
+        nested_underlay_body.contains("flush_pending_clear")
+            && backdrop_body.contains("flush_pending_clear")
+            && shadow_body.contains("flush_pending_clear"),
         "target readers such as underlays, backdrop snapshots, and shadow draws must still initialize the target before reading/compositing"
     );
 }
@@ -628,12 +652,129 @@ fn effect_layer_axis_aligned_composite_records_effect_and_composite_together() {
     );
     assert!(
         render_source.contains("fn record_shader_composite(")
+            && render_source.contains("direct_shader_composite_viewport(")
+            && render_source.contains("encode_shader_src_over_to_view(")
+            && render_source.contains("fn record_effect_with_direct_shader_tail_composite(")
+            && render_source.contains("direct_shader_tail_composite(")
             && render_source.contains("\"Shader Effect Composite Scratch\""),
-        "combined shader composite scratch must be owned by the frame recorder"
+        "axis-aligned alpha-1 shader composites and shader-tail effect chains must record direct blended shader passes and keep scratch only as fallback"
     );
     assert!(
         !surface_backend_source.contains("intermediate: &OffscreenTarget"),
         "axis-aligned combined effect/shader composite APIs must not require caller-owned intermediate targets"
+    );
+}
+
+#[test]
+fn cached_text_glyph_runs_recover_missing_gpu_atlas_entries() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let render_source = std::fs::read_to_string(crate_dir.join("src/render.rs"))
+        .expect("failed to read WGPU renderer source");
+    let common_source = std::fs::read_to_string(
+        crate_dir
+            .join("../common/src/software_text_raster.rs")
+            .canonicalize()
+            .expect("failed to resolve common text raster source"),
+    )
+    .expect("failed to read common text raster source");
+
+    assert!(
+        common_source.contains("pub fn atlas_glyph_for_placement("),
+        "software glyph cache must expose retained mask recovery for placement-only cached runs"
+    );
+    assert!(
+        render_source.contains("fn glyph_atlas_entry_for_placement(")
+            && render_source.contains("self.text_glyph_mask_cache.atlas_glyph_for_placement(glyph)")
+            && render_source.contains("self.glyph_atlas_entry_for(&upload_glyph)"),
+        "WGPU text glyph cache hits with missing atlas entries must upload from retained masks instead of falling back to text images"
+    );
+    assert!(
+        !render_source.contains("let Some(entry) = self.glyph_atlas_entry_for_cached(glyph) else"),
+        "cached text glyph runs must not bail out when the GPU atlas entry is absent"
+    );
+}
+
+#[test]
+fn cached_visible_text_glyph_runs_promote_large_runs_to_retained_buffers() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let render_source = std::fs::read_to_string(crate_dir.join("src/render.rs"))
+        .expect("failed to read WGPU renderer source");
+
+    assert!(
+        render_source.contains("fn emit_retained_text_glyph_run_if_ready("),
+        "cached visible text rendering should promote large paragraph/code runs through a single retained-buffer helper"
+    );
+    assert!(
+        render_source.contains("!self.retained_text_glyph_run_ready(cache_key)")
+            && render_source.contains("!self.ensure_retained_text_glyph_run(cache_key, quads)"),
+        "retained text promotion must reuse ready GPU runs and create missing runs through the retained helper"
+    );
+    assert!(
+        render_source.contains("if draw_action == TextGlyphDrawAction::PrewarmOffscreen {")
+            && render_source
+                .contains("self.ensure_retained_text_glyph_run(run_key, prewarm_quads.as_ref());"),
+        "offscreen prewarm remains the retained-buffer creation path"
+    );
+
+    assert!(
+        render_source
+            .matches("emit_retained_text_glyph_run_if_ready(")
+            .count()
+            >= 2,
+        "the visible cached glyph path should use retained-buffer promotion"
+    );
+    let cached_branch_start = render_source
+        .find("if let Some(quad_run) = cached_quad_run.as_ref()")
+        .expect("cached visible glyph branch exists");
+    let cached_branch_end = render_source[cached_branch_start..]
+        .find("let index_start = image_indices.len() as u32;")
+        .map(|offset| cached_branch_start + offset)
+        .expect("cached visible glyph branch boundary exists");
+    assert!(
+        render_source[cached_branch_start..cached_branch_end]
+            .contains("self.emit_retained_text_glyph_run_if_ready("),
+        "cached visible glyph runs should use retained-buffer promotion"
+    );
+    let miss_branch_start = render_source
+        .find("let Ok(quad_run) = self.prepare_text_glyph_quads(")
+        .expect("visible miss glyph preparation branch exists");
+    let miss_branch_end = render_source[miss_branch_start..]
+        .find("let index_count = image_indices.len() as u32 - index_start;")
+        .map(|offset| miss_branch_start + offset)
+        .expect("visible miss glyph preparation branch boundary exists");
+    assert!(
+        !render_source[miss_branch_start..miss_branch_end]
+            .contains("emit_retained_text_glyph_run_if_ready"),
+        "newly prepared visible misses must not synchronously create retained buffers in the slow frame"
+    );
+}
+
+#[test]
+fn native_fused_segments_prewarm_offscreen_text_runs_explicitly() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let render_source = std::fs::read_to_string(crate_dir.join("src/render.rs"))
+        .expect("failed to read WGPU renderer source");
+
+    assert!(
+        render_source.contains("fn prewarm_offscreen_text_glyph_draws_in_chunk("),
+        "native fused segment rendering needs an explicit offscreen text prewarm boundary"
+    );
+    assert!(
+        render_source.contains("self.prewarm_offscreen_text_glyph_draws_in_chunk("),
+        "fused segments should prewarm near-viewport text before visible draw batching"
+    );
+    assert!(
+        render_source.contains("enum TextGlyphPrewarmDecision")
+            && render_source.contains("fn text_glyph_prewarm_decision(")
+            && render_source.contains("text_draw_should_prewarm_in_viewport(")
+            && render_source.contains("!text_draw_is_visible_in_viewport("),
+        "prewarm candidates must be near the viewport but not visible draw work"
+    );
+    assert!(
+        render_source.contains("self.append_text_glyph_draws(")
+            && render_source.contains("std::iter::once(text_draw),")
+            && render_source.contains("staged_uploads.truncate("),
+        "offscreen prewarm should reuse the glyph path without leaking draw commands or staged visible uploads"
     );
 }
 
@@ -757,9 +898,9 @@ fn projective_backdrop_copies_record_as_ordered_surface_graph() {
     assert!(
         surface_executor_source.contains("copy_projective_backdrop_inputs_to_view")
             && surface_executor_source.contains(
-                "backend.composite_projective_surfaces_to_view(dest_view, dest_size, &composites)",
+                "backend.composite_surface_batch_to_view(\n            dest_view,",
             ),
-        "backdrop snapshot copies must be recorded through one backend projective graph operation"
+        "axis-aligned backdrop snapshot copies must be recorded through one backend surface-batch graph operation"
     );
     assert!(
         surface_executor_source.contains("let composites = [ancestor_composite, parent_composite];")
@@ -799,6 +940,11 @@ fn backdrop_effect_records_effect_and_composite_together() {
     assert!(
         body.contains("backend.apply_effect_and_composite_to_view("),
         "supported backdrop effects must record effect and final composite together"
+    );
+    assert!(
+        body.contains("if let RenderEffect::Shader { shader } = &layer.effect")
+            && body.contains("backend.apply_shader_and_composite_to_view("),
+        "supported backdrop shader effects must use direct shader composite instead of effect scratch plus final composite"
     );
     assert!(
         !body.contains("let dest = backend.acquire_offscreen(backdrop_width, backdrop_height);"),
@@ -979,7 +1125,9 @@ fn frame_graph_executor_runs_recorded_pass_nodes() {
     );
     assert!(
         frame_graph_source.contains("let mut pass_count = 0u32;")
-            && frame_graph_source.contains("match pass.encode(pass_index, &mut context)")
+            && frame_graph_source.contains("fn encode_pass_node(")
+            && frame_graph_source
+                .contains("let recorded_pass_count = pass.encode(pass_index, &mut context)?;")
             && frame_graph_source
                 .contains("pass_count = pass_count.saturating_add(recorded_pass_count);"),
         "graph execution must expose pass counts at the executor boundary"
@@ -1085,7 +1233,8 @@ fn frame_graph_pass_errors_abort_before_submit() {
         "frame graph command nodes must carry fallible encode results through the executor"
     );
     assert!(
-        frame_graph_source.contains("match pass.encode(pass_index, &mut context)")
+        frame_graph_source.contains("let recorded_pass_count = pass.encode(pass_index, &mut context)?;")
+            && frame_graph_source.contains("Err(error) =>")
             && frame_graph_source.contains("return Err(error);")
             && frame_graph_source.contains(
                 "release_pending_transients(&mut self.transient_textures, pending_transient_releases);"
@@ -1189,7 +1338,7 @@ fn native_segment_uploads_allocate_unique_command_buffer_ranges() {
         !segment_body.contains("unreachable!(")
             && segment_body.contains("shape batch contains non-shape draw item")
             && segment_body.contains("image batch contains non-image draw item")
-            && segment_body.contains("text batch contains non-text draw item"),
+            && render_source.contains("text batch contains non-text draw item"),
         "segment draw chunks must report batch planner/type mismatches instead of aborting"
     );
     let plan_start = render_source
@@ -1354,9 +1503,8 @@ fn wgpu_text_system_uses_one_shared_state_for_measure_and_render() {
         source.contains("cranpose_ui::has_current_app_context()")
             && source.contains("cranpose_ui::text::layout_text(text, style)")
             && source.contains("app_context.enter(|| {")
-            && source.contains(
-                "gpu_renderer.render(text_state, view, graph, width, height, root_scale)"
-            ),
+            && source.contains("gpu_renderer.render(")
+            && source.contains("self.dev_overlay_graph.as_ref()"),
         "WGPU render text layout should route through the attached AppContext text service"
     );
 }

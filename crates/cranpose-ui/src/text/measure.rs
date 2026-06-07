@@ -1,11 +1,12 @@
 use crate::text_layout_result::TextLayoutResult;
 use cranpose_core::NodeId;
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{hash_map::Entry, HashMap, VecDeque};
 use std::hash::Hash;
 use std::ops::Range;
 use std::rc::Rc;
+use std::time::Instant;
 
 use super::layout_options::{TextLayoutOptions, TextOverflow};
 use super::paragraph::{Hyphens, LineBreak};
@@ -18,7 +19,12 @@ const SCALE_DOWN_SEARCH_STEPS: usize = 14;
 const AUTO_HYPHEN_MIN_SEGMENT_CHARS: usize = 2;
 const AUTO_HYPHEN_MIN_TRAILING_CHARS: usize = 3;
 const AUTO_HYPHEN_PREFERRED_TRAILING_CHARS: usize = 4;
-const TEXT_SERVICE_CACHE_CAPACITY: usize = 256;
+const TEXT_SERVICE_CACHE_CAPACITY: usize = 8192;
+const TEXT_LAYOUT_TELEMETRY_ENV: &str = "CRANPOSE_TEXT_LAYOUT_TELEMETRY";
+
+fn text_layout_telemetry_enabled() -> bool {
+    std::env::var_os(TEXT_LAYOUT_TELEMETRY_ENV).is_some()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextMetrics {
@@ -36,6 +42,78 @@ pub struct PreparedTextLayout {
     pub visual_style: TextStyle,
     pub metrics: TextMetrics,
     pub did_overflow: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextLinePrefixWidths {
+    prefix_widths: Vec<f32>,
+    separator_before: Vec<f32>,
+    non_empty_overhang: f32,
+}
+
+impl TextLinePrefixWidths {
+    pub fn from_parts(
+        prefix_widths: Vec<f32>,
+        separator_before: Vec<f32>,
+        non_empty_overhang: f32,
+    ) -> Option<Self> {
+        if prefix_widths.is_empty() || prefix_widths.len() != separator_before.len() + 1 {
+            return None;
+        }
+        if prefix_widths
+            .iter()
+            .chain(separator_before.iter())
+            .any(|value| !value.is_finite())
+        {
+            return None;
+        }
+        let non_empty_overhang = non_empty_overhang.max(0.0);
+        if !non_empty_overhang.is_finite() {
+            return None;
+        }
+        Some(Self {
+            prefix_widths,
+            separator_before,
+            non_empty_overhang,
+        })
+    }
+
+    pub fn monospaced(char_count: usize, char_width: f32, letter_spacing: f32) -> Option<Self> {
+        if !char_width.is_finite() || !letter_spacing.is_finite() {
+            return None;
+        }
+        let char_width = char_width.max(0.0);
+        let letter_spacing = letter_spacing.max(0.0);
+        let mut prefix_widths = Vec::with_capacity(char_count + 1);
+        let mut separator_before = Vec::with_capacity(char_count);
+        let mut width = 0.0f32;
+        prefix_widths.push(width);
+        for index in 0..char_count {
+            let separator = if index == 0 { 0.0 } else { letter_spacing };
+            separator_before.push(separator);
+            width += separator + char_width;
+            prefix_widths.push(width);
+        }
+        Self::from_parts(prefix_widths, separator_before, 0.0)
+    }
+
+    pub fn char_count(&self) -> usize {
+        self.separator_before.len()
+    }
+
+    pub fn width_for_char_range(&self, start: usize, end: usize) -> Option<f32> {
+        if start > end || end > self.char_count() {
+            return None;
+        }
+        if start == end {
+            return Some(0.0);
+        }
+        let separator = self.separator_before.get(start).copied().unwrap_or(0.0);
+        Some(
+            (self.prefix_widths[end] - self.prefix_widths[start] - separator).max(0.0)
+                + self.non_empty_overhang,
+        )
+    }
 }
 
 pub trait TextMeasurer: 'static {
@@ -69,6 +147,44 @@ pub trait TextMeasurer: 'static {
     ) -> TextMetrics {
         let _ = node_id;
         self.measure_subsequence(text, range, style)
+    }
+
+    fn measure_line_prefix_widths(
+        &self,
+        text: &crate::text::AnnotatedString,
+        line_range: Range<usize>,
+        style: &TextStyle,
+    ) -> Option<TextLinePrefixWidths> {
+        let _ = text;
+        let _ = line_range;
+        let _ = style;
+        None
+    }
+
+    fn measure_line_width(
+        &self,
+        text: &crate::text::AnnotatedString,
+        line_range: Range<usize>,
+        style: &TextStyle,
+    ) -> Option<f32> {
+        let _ = text;
+        let _ = line_range;
+        let _ = style;
+        None
+    }
+
+    fn line_height(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> f32 {
+        self.measure(text, style).line_height
+    }
+
+    fn line_height_for_node(
+        &self,
+        node_id: Option<NodeId>,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> f32 {
+        let _ = node_id;
+        self.line_height(text, style)
     }
 
     fn get_offset_for_position(
@@ -218,6 +334,35 @@ impl TextMeasurer for MonospacedTextMeasurer {
         }
     }
 
+    fn measure_line_prefix_widths(
+        &self,
+        text: &crate::text::AnnotatedString,
+        line_range: Range<usize>,
+        style: &TextStyle,
+    ) -> Option<TextLinePrefixWidths> {
+        let (char_width, _) = Self::get_metrics(style);
+        let letter_spacing = style.resolve_letter_spacing(Self::DEFAULT_SIZE);
+        TextLinePrefixWidths::monospaced(
+            text.text[line_range].chars().count(),
+            char_width,
+            letter_spacing,
+        )
+    }
+
+    fn measure_line_width(
+        &self,
+        text: &crate::text::AnnotatedString,
+        line_range: Range<usize>,
+        style: &TextStyle,
+    ) -> Option<f32> {
+        Some(self.measure_subsequence(text, line_range, style).width)
+    }
+
+    fn line_height(&self, _text: &crate::text::AnnotatedString, style: &TextStyle) -> f32 {
+        let (_, line_height) = Self::get_metrics(style);
+        line_height
+    }
+
     fn get_offset_for_position(
         &self,
         text: &crate::text::AnnotatedString,
@@ -275,7 +420,6 @@ impl TextMeasurer for MonospacedTextMeasurer {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct TextBaseCacheKey {
-    node_id: Option<NodeId>,
     text_hash: u64,
     style_hash: u64,
 }
@@ -336,6 +480,7 @@ where
 }
 
 pub(crate) struct TextService {
+    generation: Cell<u64>,
     measurer: RefCell<Rc<dyn TextMeasurer>>,
     metrics_cache: RefCell<BoundedTextCache<TextBaseCacheKey, TextMetrics>>,
     options_metrics_cache: RefCell<BoundedTextCache<TextOptionsCacheKey, TextMetrics>>,
@@ -350,6 +495,7 @@ impl TextService {
 
     pub(crate) fn from_measurer(measurer: Rc<dyn TextMeasurer>) -> Self {
         Self {
+            generation: Cell::new(1),
             measurer: RefCell::new(measurer),
             metrics_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
             options_metrics_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
@@ -361,6 +507,10 @@ impl TextService {
     pub(crate) fn set_measurer(&self, measurer: Rc<dyn TextMeasurer>) {
         *self.measurer.borrow_mut() = measurer;
         self.clear_caches();
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.get()
     }
 
     pub(crate) fn current_measurer(&self) -> Rc<dyn TextMeasurer> {
@@ -378,7 +528,7 @@ impl TextService {
         text: &crate::text::AnnotatedString,
         style: &TextStyle,
     ) -> TextMetrics {
-        let key = text_base_cache_key(node_id, text, style);
+        let key = text_base_cache_key(text, style);
         if let Some(metrics) = self.metrics_cache.borrow().get(&key) {
             return metrics;
         }
@@ -395,7 +545,7 @@ impl TextService {
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> TextMetrics {
-        let key = text_options_cache_key(node_id, text, style, options.normalized(), max_width);
+        let key = text_options_cache_key(text, style, options.normalized(), max_width);
         if let Some(metrics) = self.options_metrics_cache.borrow().get(&key) {
             return metrics;
         }
@@ -414,7 +564,7 @@ impl TextService {
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> PreparedTextLayout {
-        let key = text_options_cache_key(node_id, text, style, options.normalized(), max_width);
+        let key = text_options_cache_key(text, style, options.normalized(), max_width);
         if let Some(prepared) = self.prepared_cache.borrow().get(&key) {
             return prepared;
         }
@@ -435,7 +585,7 @@ impl TextService {
         text: &crate::text::AnnotatedString,
         style: &TextStyle,
     ) -> TextLayoutResult {
-        let key = text_base_cache_key(None, text, style);
+        let key = text_base_cache_key(text, style);
         if let Some(layout) = self.layout_cache.borrow().get(&key) {
             return layout;
         }
@@ -445,6 +595,8 @@ impl TextService {
     }
 
     fn clear_caches(&self) {
+        self.generation
+            .set(self.generation.get().wrapping_add(1).max(1));
         self.metrics_cache.borrow_mut().clear();
         self.options_metrics_cache.borrow_mut().clear();
         self.prepared_cache.borrow_mut().clear();
@@ -452,27 +604,21 @@ impl TextService {
     }
 }
 
-fn text_base_cache_key(
-    node_id: Option<NodeId>,
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
-) -> TextBaseCacheKey {
+fn text_base_cache_key(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextBaseCacheKey {
     TextBaseCacheKey {
-        node_id,
         text_hash: text.render_hash(),
         style_hash: style.measurement_hash(),
     }
 }
 
 fn text_options_cache_key(
-    node_id: Option<NodeId>,
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> TextOptionsCacheKey {
     TextOptionsCacheKey {
-        base: text_base_cache_key(node_id, text, style),
+        base: text_base_cache_key(text, style),
         options: options.normalized(),
         max_width_bits: normalize_max_width(max_width).map(f32::to_bits),
     }
@@ -480,6 +626,10 @@ fn text_options_cache_key(
 
 pub fn set_text_measurer<M: TextMeasurer>(measurer: M) {
     crate::render_state::set_current_text_measurer(Rc::new(measurer));
+}
+
+pub(crate) fn current_text_generation() -> u64 {
+    crate::render_state::with_text_service(TextService::generation)
 }
 
 pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
@@ -579,6 +729,8 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> PreparedTextLayout {
+    let telemetry = text_layout_telemetry_enabled();
+    let total_start = telemetry.then(Instant::now);
     let opts = options.normalized();
     let max_width = normalize_max_width(max_width);
     if let Some(min_font_size_sp) = opts.overflow.scale_down_min_font_size_sp() {
@@ -602,11 +754,14 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
         .take_or_else(|| LineBreak::Simple);
     let hyphens_mode = style.paragraph_style.hyphens.take_or_else(|| Hyphens::None);
 
-    let mut line_ranges = split_line_ranges(text.text.as_str());
+    let wrap_start = telemetry.then(Instant::now);
+    let line_ranges = split_line_ranges(text.text.as_str());
+    let source_line_count = line_ranges.len();
+    let mut visible_lines: Vec<DisplayLine>;
     if let Some(width_limit) = wrap_width {
-        let mut wrapped_ranges = Vec::with_capacity(line_ranges.len());
-        for line_range in line_ranges.drain(..) {
-            let wrapped_line_ranges = wrap_line_to_width(
+        visible_lines = Vec::with_capacity(line_ranges.len());
+        for line_range in line_ranges {
+            let wrapped_lines = wrap_line_to_width(
                 measurer,
                 text,
                 line_range,
@@ -615,17 +770,18 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
                 line_break_mode,
                 hyphens_mode,
             );
-            wrapped_ranges.extend(wrapped_line_ranges);
+            visible_lines.extend(wrapped_lines);
         }
-        line_ranges = wrapped_ranges;
+    } else {
+        visible_lines = line_ranges
+            .into_iter()
+            .map(DisplayLine::from_source_range)
+            .collect();
     }
+    let wrap_ms = wrap_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
 
+    let overflow_start = telemetry.then(Instant::now);
     let mut did_overflow = false;
-    let mut visible_lines: Vec<DisplayLine> = line_ranges
-        .into_iter()
-        .map(DisplayLine::from_source_range)
-        .collect();
-
     if opts.overflow != TextOverflow::Visible && visible_lines.len() > opts.max_lines {
         did_overflow = true;
         visible_lines.truncate(opts.max_lines);
@@ -666,16 +822,18 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
             }
         }
     }
+    let overflow_ms = overflow_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
 
+    let build_start = telemetry.then(Instant::now);
     let display_annotated = build_display_annotated(text, &visible_lines);
     debug_assert_eq!(
         display_annotated.text,
         join_display_line_text(text, &visible_lines)
     );
-    let line_height = measurer
-        .measure_for_node(node_id, text, style)
-        .line_height
-        .max(0.0);
+    let build_ms = build_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
+
+    let metrics_start = telemetry.then(Instant::now);
+    let line_height = measurer.line_height_for_node(node_id, text, style).max(0.0);
     let display_line_count = visible_lines.len().max(1);
     let layout_line_count = display_line_count.max(opts.min_lines);
 
@@ -687,6 +845,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
             .map(|line| line.measure_width(measurer, node_id, text, style))
             .fold(0.0_f32, f32::max)
     };
+    let metrics_ms = metrics_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
     let width = if opts.overflow == TextOverflow::Visible {
         measured_width
     } else if let Some(width_limit) = max_width {
@@ -695,7 +854,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
         measured_width
     };
 
-    PreparedTextLayout {
+    let prepared = PreparedTextLayout {
         text: display_annotated,
         visual_style: style.clone(),
         metrics: TextMetrics {
@@ -705,7 +864,26 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
             line_count: layout_line_count,
         },
         did_overflow,
+    };
+
+    if let Some(start) = total_start {
+        eprintln!(
+            "[text-layout-telemetry] bytes={} spans={} source_lines={} display_lines={} wrap={} max_width={:?} wrap_ms={:.2} overflow_ms={:.2} build_ms={:.2} metrics_ms={:.2} total_ms={:.2}",
+            text.text.len(),
+            text.span_styles.len(),
+            source_line_count,
+            display_line_count,
+            wrap_width.is_some(),
+            max_width,
+            wrap_ms.unwrap_or(0.0),
+            overflow_ms.unwrap_or(0.0),
+            build_ms.unwrap_or(0.0),
+            metrics_ms.unwrap_or(0.0),
+            start.elapsed().as_secs_f64() * 1000.0,
+        );
     }
+
+    prepared
 }
 
 fn prepare_scale_down_text_layout<M: TextMeasurer + ?Sized>(
@@ -927,6 +1105,7 @@ enum DisplayLineText {
 struct DisplayLine {
     source_range: Range<usize>,
     text: DisplayLineText,
+    measured_width: Option<f32>,
 }
 
 impl DisplayLine {
@@ -934,6 +1113,17 @@ impl DisplayLine {
         Self {
             source_range,
             text: DisplayLineText::Source,
+            measured_width: None,
+        }
+    }
+
+    fn from_measured_source_range(source_range: Range<usize>, measured_width: f32) -> Self {
+        Self {
+            source_range,
+            text: DisplayLineText::Source,
+            measured_width: measured_width
+                .is_finite()
+                .then_some(measured_width.max(0.0)),
         }
     }
 
@@ -952,11 +1142,11 @@ impl DisplayLine {
         style: &TextStyle,
     ) -> f32 {
         match &self.text {
-            DisplayLineText::Source => {
+            DisplayLineText::Source => self.measured_width.unwrap_or_else(|| {
                 measurer
                     .measure_subsequence_for_node(node_id, source, self.source_range.clone(), style)
                     .width
-            }
+            }),
             DisplayLineText::Remapped(annotated) => {
                 measurer.measure_for_node(node_id, annotated, style).width
             }
@@ -965,6 +1155,7 @@ impl DisplayLine {
 
     fn apply_display_text(&mut self, source: &crate::text::AnnotatedString, display_text: String) {
         let source_text = &source.text[self.source_range.clone()];
+        self.measured_width = None;
         self.text = if source_text == display_text {
             DisplayLineText::Source
         } else {
@@ -1172,12 +1363,80 @@ fn normalize_max_width(max_width: Option<f32>) -> Option<f32> {
     }
 }
 
-fn absolute_range(base: &Range<usize>, relative: Range<usize>) -> Range<usize> {
-    (base.start + relative.start)..(base.start + relative.end)
+fn absolute_range_from_start(base_start: usize, relative: Range<usize>) -> Range<usize> {
+    (base_start + relative.start)..(base_start + relative.end)
+}
+
+fn boundary_index_for_byte(boundaries: &[usize], byte_offset: usize) -> usize {
+    boundaries
+        .binary_search(&byte_offset)
+        .unwrap_or_else(|index| index.min(boundaries.len().saturating_sub(1)))
 }
 
 fn single_line_range(range: Range<usize>) -> Vec<Range<usize>> {
     std::iter::once(range).collect()
+}
+
+struct LineMeasureContext<'a, M: TextMeasurer + ?Sized> {
+    measurer: &'a M,
+    text: &'a crate::text::AnnotatedString,
+    style: &'a TextStyle,
+    line_start: usize,
+    prefix_widths: Option<TextLinePrefixWidths>,
+}
+
+impl<'a, M: TextMeasurer + ?Sized> LineMeasureContext<'a, M> {
+    fn new(
+        measurer: &'a M,
+        text: &'a crate::text::AnnotatedString,
+        line_range: &Range<usize>,
+        style: &'a TextStyle,
+        boundary_count: usize,
+    ) -> Self {
+        let expected_chars = boundary_count.saturating_sub(1);
+        let prefix_widths = measurer
+            .measure_line_prefix_widths(text, line_range.clone(), style)
+            .filter(|widths| widths.char_count() == expected_chars);
+        Self {
+            measurer,
+            text,
+            style,
+            line_start: line_range.start,
+            prefix_widths,
+        }
+    }
+
+    fn measure_char_range(&self, boundaries: &[usize], start_idx: usize, end_idx: usize) -> f32 {
+        if let Some(width) = self.prefix_width_for_char_range(start_idx, end_idx) {
+            return width;
+        }
+        let segment_range =
+            absolute_range_from_start(self.line_start, boundaries[start_idx]..boundaries[end_idx]);
+        self.measurer
+            .measure_subsequence(self.text, segment_range, self.style)
+            .width
+    }
+
+    fn prefix_width_for_char_range(&self, start_idx: usize, end_idx: usize) -> Option<f32> {
+        if let Some(prefix_widths) = &self.prefix_widths {
+            if let Some(width) = prefix_widths.width_for_char_range(start_idx, end_idx) {
+                return Some(width);
+            }
+        }
+        None
+    }
+
+    fn display_line_for_char_range(
+        &self,
+        boundaries: &[usize],
+        start_idx: usize,
+        end_idx: usize,
+    ) -> DisplayLine {
+        let source_range =
+            absolute_range_from_start(self.line_start, boundaries[start_idx]..boundaries[end_idx]);
+        let measured_width = self.measure_char_range(boundaries, start_idx, end_idx);
+        DisplayLine::from_measured_source_range(source_range, measured_width)
+    }
 }
 
 fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
@@ -1188,10 +1447,21 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     max_width: f32,
     line_break: LineBreak,
     hyphens: Hyphens,
-) -> Vec<Range<usize>> {
+) -> Vec<DisplayLine> {
     let line_text = &text.text[line_range.clone()];
     if line_text.is_empty() {
-        return single_line_range(line_range.start..line_range.start);
+        return vec![DisplayLine::from_source_range(
+            line_range.start..line_range.start,
+        )];
+    }
+
+    if let Some(measured_width) = measurer.measure_line_width(text, line_range.clone(), style) {
+        if measured_width <= max_width + WRAP_EPSILON {
+            return vec![DisplayLine::from_measured_source_range(
+                line_range,
+                measured_width,
+            )];
+        }
     }
 
     if matches!(line_break, LineBreak::Heading | LineBreak::Paragraph)
@@ -1222,9 +1492,21 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     max_width: f32,
     line_break: LineBreak,
     hyphens: Hyphens,
-) -> Vec<Range<usize>> {
+) -> Vec<DisplayLine> {
     let line_text = &text.text[line_range.clone()];
     let boundaries = char_boundaries(line_text);
+    let measure_context =
+        LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
+    if let Some(measured_width) =
+        measure_context.prefix_width_for_char_range(0, boundaries.len() - 1)
+    {
+        if measured_width <= max_width + WRAP_EPSILON {
+            return vec![DisplayLine::from_measured_source_range(
+                line_range,
+                measured_width,
+            )];
+        }
+    }
     let mut wrapped = Vec::new();
     let mut start_idx = 0usize;
 
@@ -1235,10 +1517,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
 
         while low <= high {
             let mid = (low + high) / 2;
-            let segment_range = absolute_range(&line_range, boundaries[start_idx]..boundaries[mid]);
-            let width = measurer
-                .measure_subsequence(text, segment_range, style)
-                .width;
+            let width = measure_context.measure_char_range(&boundaries, start_idx, mid);
             if width <= max_width + WRAP_EPSILON || mid == start_idx + 1 {
                 best = mid;
                 low = mid + 1;
@@ -1272,7 +1551,12 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
         if wrap_idx != best {
             segment_end = trim_segment_end_whitespace(line_text, segment_start, segment_end);
         }
-        wrapped.push(absolute_range(&line_range, segment_start..segment_end));
+        let segment_end_idx = boundary_index_for_byte(&boundaries, segment_end);
+        wrapped.push(measure_context.display_line_for_char_range(
+            &boundaries,
+            start_idx,
+            segment_end_idx,
+        ));
 
         start_idx = if wrap_idx != best {
             skip_leading_whitespace(line_text, &boundaries, wrap_idx)
@@ -1282,7 +1566,9 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     }
 
     if wrapped.is_empty() {
-        wrapped.push(line_range.start..line_range.start);
+        wrapped.push(DisplayLine::from_source_range(
+            line_range.start..line_range.start,
+        ));
     }
 
     wrapped
@@ -1295,9 +1581,21 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     max_width: f32,
     line_break: LineBreak,
-) -> Option<Vec<Range<usize>>> {
+) -> Option<Vec<DisplayLine>> {
     let line_text = &text.text[line_range.clone()];
     let boundaries = char_boundaries(line_text);
+    let measure_context =
+        LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
+    if let Some(measured_width) =
+        measure_context.prefix_width_for_char_range(0, boundaries.len() - 1)
+    {
+        if measured_width <= max_width + WRAP_EPSILON {
+            return Some(vec![DisplayLine::from_measured_source_range(
+                line_range,
+                measured_width,
+            )]);
+        }
+    }
     let breakpoints = collect_word_breakpoints(line_text, &boundaries);
     if breakpoints.len() <= 2 {
         return None;
@@ -1316,10 +1614,10 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
             if trimmed_end <= start_byte {
                 continue;
             }
-            let segment_range = absolute_range(&line_range, start_byte..trimmed_end);
-            let segment_width = measurer
-                .measure_subsequence(text, segment_range, style)
-                .width;
+            let segment_start_idx = breakpoints[start];
+            let segment_end_idx = boundary_index_for_byte(&boundaries, trimmed_end);
+            let segment_width =
+                measure_context.measure_char_range(&boundaries, segment_start_idx, segment_end_idx);
             if segment_width > max_width + WRAP_EPSILON {
                 continue;
             }
@@ -1357,7 +1655,13 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
         if trimmed_end <= start_byte {
             return None;
         }
-        wrapped.push(absolute_range(&line_range, start_byte..trimmed_end));
+        let segment_start_idx = breakpoints[current];
+        let segment_end_idx = boundary_index_for_byte(&boundaries, trimmed_end);
+        wrapped.push(measure_context.display_line_for_char_range(
+            &boundaries,
+            segment_start_idx,
+            segment_end_idx,
+        ));
         current = next;
     }
 
@@ -1710,6 +2014,51 @@ mod tests {
     use crate::text_layout_result::TextLayoutResult;
     use std::cell::Cell;
 
+    #[test]
+    fn text_layout_telemetry_env_flag_is_not_process_cached() {
+        let source = include_str!("measure.rs");
+        let once_lock = ["Once", "Lock"].concat();
+        let cached_init_call = ["get", "_or", "_init"].concat();
+
+        assert!(
+            !source.contains(&once_lock) && !source.contains(&cached_init_call),
+            "text layout telemetry env flag must be read at the diagnostic boundary"
+        );
+    }
+
+    #[test]
+    fn text_service_cache_retains_large_lazy_text_working_set() {
+        let mut cache = BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY);
+        let metrics = TextMetrics {
+            width: 1.0,
+            height: 1.0,
+            line_height: 1.0,
+            line_count: 1,
+        };
+
+        for index in 0..4096u64 {
+            cache.insert(
+                TextBaseCacheKey {
+                    text_hash: index,
+                    style_hash: 7,
+                },
+                metrics,
+            );
+        }
+
+        for index in 0..4096u64 {
+            assert!(
+                cache
+                    .get(&TextBaseCacheKey {
+                        text_hash: index,
+                        style_hash: 7,
+                    })
+                    .is_some(),
+                "large lazy text working-set entry {index} was evicted too early"
+            );
+        }
+    }
+
     struct ContractBreakMeasurer {
         retreat: usize,
     }
@@ -1821,6 +2170,257 @@ mod tests {
         }
     }
 
+    struct CountingPreparedTextMeasurer {
+        prepare_calls: Rc<Cell<usize>>,
+    }
+
+    impl CountingPreparedTextMeasurer {
+        fn new(prepare_calls: Rc<Cell<usize>>) -> Self {
+            Self { prepare_calls }
+        }
+    }
+
+    struct PrefixWidthCountingMeasurer {
+        prefix_calls: Rc<Cell<usize>>,
+        subsequence_calls: Rc<Cell<usize>>,
+    }
+
+    impl PrefixWidthCountingMeasurer {
+        fn new(prefix_calls: Rc<Cell<usize>>, subsequence_calls: Rc<Cell<usize>>) -> Self {
+            Self {
+                prefix_calls,
+                subsequence_calls,
+            }
+        }
+    }
+
+    impl TextMeasurer for PrefixWidthCountingMeasurer {
+        fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+            MonospacedTextMeasurer.measure(text, style)
+        }
+
+        fn measure_subsequence(
+            &self,
+            text: &crate::text::AnnotatedString,
+            range: Range<usize>,
+            style: &TextStyle,
+        ) -> TextMetrics {
+            self.subsequence_calls.set(self.subsequence_calls.get() + 1);
+            MonospacedTextMeasurer.measure_subsequence(text, range, style)
+        }
+
+        fn measure_line_prefix_widths(
+            &self,
+            text: &crate::text::AnnotatedString,
+            line_range: Range<usize>,
+            style: &TextStyle,
+        ) -> Option<TextLinePrefixWidths> {
+            self.prefix_calls.set(self.prefix_calls.get() + 1);
+            MonospacedTextMeasurer.measure_line_prefix_widths(text, line_range, style)
+        }
+
+        fn get_offset_for_position(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            x: f32,
+            y: f32,
+        ) -> usize {
+            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+        }
+
+        fn get_cursor_x_for_offset(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            offset: usize,
+        ) -> f32 {
+            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+        }
+
+        fn layout(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+        ) -> TextLayoutResult {
+            MonospacedTextMeasurer.layout(text, style)
+        }
+    }
+
+    struct LineHeightCountingMeasurer {
+        measure_calls: Rc<Cell<usize>>,
+        line_height_calls: Rc<Cell<usize>>,
+    }
+
+    struct FitProbeCountingMeasurer {
+        line_width_calls: Rc<Cell<usize>>,
+        prefix_calls: Rc<Cell<usize>>,
+    }
+
+    impl FitProbeCountingMeasurer {
+        fn new(line_width_calls: Rc<Cell<usize>>, prefix_calls: Rc<Cell<usize>>) -> Self {
+            Self {
+                line_width_calls,
+                prefix_calls,
+            }
+        }
+    }
+
+    impl LineHeightCountingMeasurer {
+        fn new(measure_calls: Rc<Cell<usize>>, line_height_calls: Rc<Cell<usize>>) -> Self {
+            Self {
+                measure_calls,
+                line_height_calls,
+            }
+        }
+    }
+
+    impl TextMeasurer for LineHeightCountingMeasurer {
+        fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+            self.measure_calls.set(self.measure_calls.get() + 1);
+            MonospacedTextMeasurer.measure(text, style)
+        }
+
+        fn measure_line_prefix_widths(
+            &self,
+            text: &crate::text::AnnotatedString,
+            line_range: Range<usize>,
+            style: &TextStyle,
+        ) -> Option<TextLinePrefixWidths> {
+            MonospacedTextMeasurer.measure_line_prefix_widths(text, line_range, style)
+        }
+
+        fn line_height(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> f32 {
+            self.line_height_calls.set(self.line_height_calls.get() + 1);
+            MonospacedTextMeasurer.line_height(text, style)
+        }
+
+        fn get_offset_for_position(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            x: f32,
+            y: f32,
+        ) -> usize {
+            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+        }
+
+        fn get_cursor_x_for_offset(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            offset: usize,
+        ) -> f32 {
+            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+        }
+
+        fn layout(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+        ) -> TextLayoutResult {
+            MonospacedTextMeasurer.layout(text, style)
+        }
+    }
+
+    impl TextMeasurer for FitProbeCountingMeasurer {
+        fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+            MonospacedTextMeasurer.measure(text, style)
+        }
+
+        fn measure_line_width(
+            &self,
+            text: &crate::text::AnnotatedString,
+            line_range: Range<usize>,
+            style: &TextStyle,
+        ) -> Option<f32> {
+            self.line_width_calls.set(self.line_width_calls.get() + 1);
+            MonospacedTextMeasurer.measure_line_width(text, line_range, style)
+        }
+
+        fn measure_line_prefix_widths(
+            &self,
+            text: &crate::text::AnnotatedString,
+            line_range: Range<usize>,
+            style: &TextStyle,
+        ) -> Option<TextLinePrefixWidths> {
+            self.prefix_calls.set(self.prefix_calls.get() + 1);
+            MonospacedTextMeasurer.measure_line_prefix_widths(text, line_range, style)
+        }
+
+        fn get_offset_for_position(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            x: f32,
+            y: f32,
+        ) -> usize {
+            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+        }
+
+        fn get_cursor_x_for_offset(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            offset: usize,
+        ) -> f32 {
+            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+        }
+
+        fn layout(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+        ) -> TextLayoutResult {
+            MonospacedTextMeasurer.layout(text, style)
+        }
+    }
+
+    impl TextMeasurer for CountingPreparedTextMeasurer {
+        fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+            MonospacedTextMeasurer.measure(text, style)
+        }
+
+        fn prepare_with_options_for_node(
+            &self,
+            _node_id: Option<NodeId>,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            options: TextLayoutOptions,
+            max_width: Option<f32>,
+        ) -> PreparedTextLayout {
+            self.prepare_calls.set(self.prepare_calls.get() + 1);
+            MonospacedTextMeasurer.prepare_with_options(text, style, options, max_width)
+        }
+
+        fn get_offset_for_position(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            x: f32,
+            y: f32,
+        ) -> usize {
+            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+        }
+
+        fn get_cursor_x_for_offset(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            offset: usize,
+        ) -> f32 {
+            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+        }
+
+        fn layout(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+        ) -> TextLayoutResult {
+            MonospacedTextMeasurer.layout(text, style)
+        }
+    }
+
     #[test]
     fn text_service_routes_measurement_through_current_measurer() {
         let _app_context = crate::render_state::app_context_test_scope();
@@ -1858,6 +2458,43 @@ mod tests {
     }
 
     #[test]
+    fn text_service_reuses_metrics_cache_across_node_ids() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let measure_calls = Rc::new(Cell::new(0));
+        let layout_calls = Rc::new(Cell::new(0));
+        let service = TextService::from_measurer(Rc::new(CountingTextMeasurer::new(
+            Rc::clone(&measure_calls),
+            Rc::clone(&layout_calls),
+        )));
+        let text = crate::text::AnnotatedString::from("same lazy item text");
+        let style = TextStyle::default();
+
+        let first_metrics = service.measure(Some(7), &text, &style);
+        let second_metrics = service.measure(Some(8), &text, &style);
+
+        assert_eq!(first_metrics, second_metrics);
+        assert_eq!(measure_calls.get(), 1);
+    }
+
+    #[test]
+    fn text_service_reuses_prepared_layout_cache_across_node_ids() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let prepare_calls = Rc::new(Cell::new(0));
+        let service = TextService::from_measurer(Rc::new(CountingPreparedTextMeasurer::new(
+            Rc::clone(&prepare_calls),
+        )));
+        let text = crate::text::AnnotatedString::from("same prepared lazy item text");
+        let style = TextStyle::default();
+        let options = TextLayoutOptions::default();
+
+        let first = service.prepare_with_options(Some(9), &text, &style, options, Some(120.0));
+        let second = service.prepare_with_options(Some(10), &text, &style, options, Some(120.0));
+
+        assert_eq!(first.metrics, second.metrics);
+        assert_eq!(prepare_calls.get(), 1);
+    }
+
+    #[test]
     fn text_service_clears_caches_when_measurer_changes() {
         let _app_context = crate::render_state::app_context_test_scope();
         let first_measure_calls = Rc::new(Cell::new(0));
@@ -1880,6 +2517,105 @@ mod tests {
 
         assert_eq!(first_measure_calls.get(), 1);
         assert_eq!(second_measure_calls.get(), 1);
+    }
+
+    #[test]
+    fn text_wrapping_uses_prefix_widths_without_subsequence_measurement() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let prefix_calls = Rc::new(Cell::new(0));
+        let subsequence_calls = Rc::new(Cell::new(0));
+        set_text_measurer(PrefixWidthCountingMeasurer::new(
+            Rc::clone(&prefix_calls),
+            Rc::clone(&subsequence_calls),
+        ));
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: usize::MAX,
+            min_lines: 1,
+        };
+        let text = crate::text::AnnotatedString::from("word ".repeat(80).as_str());
+
+        let prepared = prepare_text_layout(&text, &style, options, Some(80.0));
+
+        assert!(prepared.metrics.line_count > 1);
+        assert!(
+            prefix_calls.get() > 0,
+            "wrapping should request a line prefix width plan"
+        );
+        assert_eq!(
+            subsequence_calls.get(),
+            0,
+            "prefix-capable wrapping should not probe candidate substrings"
+        );
+    }
+
+    #[test]
+    fn text_wrapping_skips_prefix_widths_when_fit_probe_says_line_fits() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let line_width_calls = Rc::new(Cell::new(0));
+        let prefix_calls = Rc::new(Cell::new(0));
+        set_text_measurer(FitProbeCountingMeasurer::new(
+            Rc::clone(&line_width_calls),
+            Rc::clone(&prefix_calls),
+        ));
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = crate::text::AnnotatedString::from("fits without per-glyph prefix widths");
+
+        let prepared =
+            prepare_text_layout(&text, &style, TextLayoutOptions::default(), Some(800.0));
+
+        assert_eq!(prepared.metrics.line_count, 1);
+        assert_eq!(line_width_calls.get(), 1);
+        assert_eq!(
+            prefix_calls.get(),
+            0,
+            "fitting lines should not allocate prefix-width plans"
+        );
+    }
+
+    #[test]
+    fn prepare_text_layout_uses_line_height_without_full_text_measurement() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let measure_calls = Rc::new(Cell::new(0));
+        let line_height_calls = Rc::new(Cell::new(0));
+        let measurer = LineHeightCountingMeasurer::new(
+            Rc::clone(&measure_calls),
+            Rc::clone(&line_height_calls),
+        );
+        let text = crate::text::AnnotatedString::from(
+            "one two three four five six seven eight nine ten eleven twelve",
+        );
+
+        let prepared = prepare_text_layout_with_measurer_for_node(
+            &measurer,
+            Some(7),
+            &text,
+            &TextStyle::default(),
+            TextLayoutOptions::default(),
+            Some(96.0),
+        );
+
+        assert!(prepared.metrics.height > 0.0);
+        assert_eq!(line_height_calls.get(), 1);
+        assert_eq!(
+            measure_calls.get(),
+            0,
+            "line-height lookup must not re-measure the whole paragraph"
+        );
     }
 
     fn style_with_line_break(line_break: LineBreak) -> TextStyle {

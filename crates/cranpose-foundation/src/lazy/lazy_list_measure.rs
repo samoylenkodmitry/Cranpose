@@ -6,7 +6,7 @@
 
 use super::bounds_adjuster::BoundsAdjuster;
 use super::diagnostics;
-use super::item_measurer::ItemMeasurer;
+use super::item_measurer::{AlwaysMeasureBeyond, BeyondBoundsMeasurePolicy, ItemMeasurer};
 use super::lazy_list_measured_item::{LazyListMeasureResult, LazyListMeasuredItem};
 use super::lazy_list_state::{LazyListLayoutInfo, LazyListState};
 use super::scroll_position_resolver::ScrollPositionResolver;
@@ -17,9 +17,14 @@ use std::collections::VecDeque;
 /// Used when no measured sizes are cached.
 /// 48.0 is a common list item height (Material Design list tile).
 pub const DEFAULT_ITEM_SIZE_ESTIMATE: f32 = 48.0;
+const MAX_ADAPTIVE_SCROLL_BEYOND_BOUNDS_ITEMS: usize = 8;
+const MIN_ADAPTIVE_SCROLL_DELTA_ITEMS: f32 = 1.5;
+const MIN_ACTIVE_SCROLL_WHEEL_BEYOND_BOUNDS_ITEMS: usize = 2;
+const MIN_ACTIVE_SCROLL_FAST_BEYOND_BOUNDS_ITEMS: usize = MAX_ADAPTIVE_SCROLL_BEYOND_BOUNDS_ITEMS;
+const MIN_IDLE_WARM_BEYOND_BOUNDS_ITEMS: usize = 4;
 
 /// Configuration for lazy list measurement.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LazyListMeasureConfig {
     /// Whether the list is vertical (true) or horizontal (false).
     pub is_vertical: bool,
@@ -92,10 +97,34 @@ pub fn measure_lazy_list<F>(
     viewport_size: f32,
     _cross_axis_size: f32,
     config: &LazyListMeasureConfig,
-    mut measure_item: F,
+    measure_item: F,
 ) -> LazyListMeasureResult
 where
     F: FnMut(usize) -> LazyListMeasuredItem,
+{
+    measure_lazy_list_with_beyond_bounds_policy(
+        items_count,
+        state,
+        viewport_size,
+        _cross_axis_size,
+        config,
+        measure_item,
+        AlwaysMeasureBeyond,
+    )
+}
+
+pub fn measure_lazy_list_with_beyond_bounds_policy<F, B>(
+    items_count: usize,
+    state: &LazyListState,
+    viewport_size: f32,
+    _cross_axis_size: f32,
+    config: &LazyListMeasureConfig,
+    mut measure_item: F,
+    beyond_bounds_policy: B,
+) -> LazyListMeasureResult
+where
+    F: FnMut(usize) -> LazyListMeasuredItem,
+    B: BeyondBoundsMeasurePolicy,
 {
     let raw_viewport_size = viewport_size;
     let is_infinite_viewport = raw_viewport_size.is_infinite();
@@ -213,6 +242,12 @@ where
     // 3. Measure items (visible + beyond-bounds buffer)
     let pre_measured_queue = VecDeque::from(pre_measured);
     let telemetry_enabled = diagnostics::telemetry_enabled();
+    let adaptive_beyond_bounds = adaptive_scroll_beyond_bounds_item_count(
+        config,
+        pending_scroll_delta,
+        measure_state.average_item_size,
+    );
+    let guaranteed_beyond_bounds = adaptive_beyond_bounds;
     let mut measurer = ItemMeasurer::new(
         &mut measure_item,
         config,
@@ -221,6 +256,10 @@ where
         measure_state.average_item_size,
         pre_measured_queue,
     )
+    .with_beyond_bounds_item_count(adaptive_beyond_bounds)
+    .with_guaranteed_after_beyond_bounds_item_count(guaranteed_beyond_bounds)
+    .with_include_before_beyond_bounds(pending_scroll_delta >= -0.001)
+    .with_beyond_bounds_measure_policy(beyond_bounds_policy)
     .with_telemetry_pass_id(telemetry_enabled.then(|| state.next_item_measure_pass_id()));
     let measurement_pass = measurer.measure_all(first_index, first_offset);
     let measurement_start_index = measurement_pass.start_index;
@@ -302,8 +341,12 @@ where
     if telemetry_enabled {
         let cycle_id = state.next_measure_cycle_id();
         log::warn!(
-            "[lazy-measure-telemetry] cycle={} input_first_index={} input_first_offset={:.2} normalized_first_index={} normalized_first_offset={:.2} final_first_index={} final_first_offset={:.2} measured_visible={} total_measured={} unresolved_pass={} actual_first_visible={} timed_out={} viewport_filled={}",
+            "[lazy-measure-telemetry] cycle={} items_count={} average_item_size={:.2} viewport_size={:.2} total_content_size={:.2} input_first_index={} input_first_offset={:.2} normalized_first_index={} normalized_first_offset={:.2} final_first_index={} final_first_offset={:.2} measured_visible={} total_measured={} unresolved_pass={} actual_first_visible={} timed_out={} viewport_filled={}",
             cycle_id,
+            items_count,
+            measure_state.average_item_size,
+            effective_viewport_size,
+            total_content_size,
             first_index,
             first_offset,
             measurement_start_index,
@@ -388,6 +431,36 @@ fn estimate_total_content_size(
         + config.after_content_padding
 }
 
+fn adaptive_scroll_beyond_bounds_item_count(
+    config: &LazyListMeasureConfig,
+    pending_scroll_delta: f32,
+    average_item_size: f32,
+) -> usize {
+    let base_count = config.beyond_bounds_item_count;
+    if pending_scroll_delta.abs() <= 0.001 {
+        return if base_count == 0 {
+            MIN_IDLE_WARM_BEYOND_BOUNDS_ITEMS
+        } else {
+            base_count
+        };
+    }
+    let item_extent = if average_item_size.is_finite() && average_item_size > 0.0 {
+        average_item_size
+    } else {
+        DEFAULT_ITEM_SIZE_ESTIMATE
+    } + config.spacing.max(0.0);
+    let item_extent = item_extent.max(1.0);
+    let delta_items = pending_scroll_delta.abs() / item_extent;
+    if delta_items < MIN_ADAPTIVE_SCROLL_DELTA_ITEMS {
+        return base_count.max(MIN_ACTIVE_SCROLL_WHEEL_BEYOND_BOUNDS_ITEMS);
+    }
+
+    let adaptive_count = delta_items.ceil() as usize;
+    base_count
+        .max(MIN_ACTIVE_SCROLL_FAST_BEYOND_BOUNDS_ITEMS)
+        .max(adaptive_count.min(MAX_ADAPTIVE_SCROLL_BEYOND_BOUNDS_ITEMS))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::lazy_list_state::test_helpers::{
@@ -404,6 +477,90 @@ mod tests {
         let config = LazyListMeasureConfig::default();
 
         assert_eq!(config.beyond_bounds_item_count, 2);
+    }
+
+    #[test]
+    fn active_scroll_guarantees_forward_warm_rows_for_single_wheel_ticks() {
+        let config = LazyListMeasureConfig {
+            beyond_bounds_item_count: 0,
+            spacing: 4.0,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            adaptive_scroll_beyond_bounds_item_count(&config, -40.0, 48.0),
+            2,
+            "single wheel ticks should not force the full fast-scroll warm window"
+        );
+    }
+
+    #[test]
+    fn default_single_wheel_scroll_uses_configured_markdown_warm_window() {
+        let config = LazyListMeasureConfig {
+            beyond_bounds_item_count: 2,
+            spacing: 8.0,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            adaptive_scroll_beyond_bounds_item_count(&config, -40.0, 120.0),
+            2,
+            "small Markdown wheel ticks must not measure eight cached text rows every frame"
+        );
+    }
+
+    #[test]
+    fn idle_measurement_warms_a_small_forward_window() {
+        let config = LazyListMeasureConfig {
+            beyond_bounds_item_count: 0,
+            spacing: 4.0,
+            ..Default::default()
+        };
+
+        let adaptive = adaptive_scroll_beyond_bounds_item_count(&config, 0.0, 48.0);
+
+        assert_eq!(adaptive, MIN_IDLE_WARM_BEYOND_BOUNDS_ITEMS);
+    }
+
+    #[test]
+    fn active_scroll_guarantees_forward_warm_rows_when_configured_buffer_is_zero() {
+        let config = LazyListMeasureConfig {
+            beyond_bounds_item_count: 0,
+            spacing: 4.0,
+            ..Default::default()
+        };
+
+        let adaptive = adaptive_scroll_beyond_bounds_item_count(&config, -620.0, 48.0);
+
+        assert_eq!(adaptive, MAX_ADAPTIVE_SCROLL_BEYOND_BOUNDS_ITEMS);
+    }
+
+    #[test]
+    fn adaptive_scroll_beyond_bounds_warms_fast_wheel_scroll_window() {
+        let config = LazyListMeasureConfig {
+            beyond_bounds_item_count: 0,
+            spacing: 4.0,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            adaptive_scroll_beyond_bounds_item_count(&config, -620.0, 48.0),
+            MAX_ADAPTIVE_SCROLL_BEYOND_BOUNDS_ITEMS
+        );
+    }
+
+    #[test]
+    fn adaptive_scroll_beyond_bounds_never_shrinks_configured_buffer() {
+        let config = LazyListMeasureConfig {
+            beyond_bounds_item_count: 12,
+            spacing: 4.0,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            adaptive_scroll_beyond_bounds_item_count(&config, -620.0, 48.0),
+            12
+        );
     }
 
     fn exact_scroll_position(
@@ -572,23 +729,40 @@ mod tests {
     }
 
     #[test]
-    fn test_time_budget_progresses_when_visible_item_not_reached() {
+    fn test_time_budget_fills_visible_viewport_and_keeps_configured_beyond_bounds() {
         with_test_runtime(|| {
             let state = new_lazy_list_state_with_position(100, 5_000.0);
             let config = LazyListMeasureConfig::default();
 
             let result = measure_lazy_list(10_000, &state, 100.0, 300.0, &config, |i| {
-                std::thread::sleep(std::time::Duration::from_millis(55));
+                std::thread::sleep(std::time::Duration::from_millis(8));
                 create_test_item(i, 10.0)
             });
 
             assert_eq!(
-                result.first_visible_item_index, 203,
-                "time-budgeted pass should advance to the next unresolved index"
+                result.first_visible_item_index, 212,
+                "time-budgeted pass should report the first item that actually reaches the viewport"
             );
             assert!(
-                (result.first_visible_item_scroll_offset - 94.0).abs() < 1.0,
-                "expected unresolved offset progress to be preserved"
+                (result.first_visible_item_scroll_offset - 4.0).abs() < 1.0,
+                "expected actual visible offset to be preserved"
+            );
+            assert_eq!(
+                result.visible_items.first().map(|item| item.index),
+                Some(200),
+                "measurement should keep the configured leading retained items"
+            );
+            assert_eq!(
+                result.visible_items.last().map(|item| item.index),
+                Some(224),
+                "measurement should keep the configured trailing retained items"
+            );
+            assert!(
+                result
+                    .visible_items
+                    .last()
+                    .is_some_and(|item| item.offset + item.main_axis_size >= 100.0),
+                "visible measurement must fill the viewport before honoring the time budget"
             );
         });
     }
@@ -790,14 +964,20 @@ mod tests {
                 deltas.iter().zip(expected.iter()).enumerate()
             {
                 state.dispatch_scroll_delta(*delta);
-                let result = measure_lazy_list(
-                    item_sizes.len(),
-                    &state,
-                    viewport_size,
-                    320.0,
-                    &config,
-                    |index| create_test_item(index, item_sizes[index]),
-                );
+                let mut result;
+                loop {
+                    result = measure_lazy_list(
+                        item_sizes.len(),
+                        &state,
+                        viewport_size,
+                        320.0,
+                        &config,
+                        |index| create_test_item(index, item_sizes[index]),
+                    );
+                    if state.peek_scroll_delta().abs() <= 0.001 {
+                        break;
+                    }
+                }
 
                 assert_eq!(
                     result.first_visible_item_index, *expected_index,

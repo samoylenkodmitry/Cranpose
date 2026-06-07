@@ -10,7 +10,7 @@ use image::RgbaImage;
 use std::path::Path;
 use std::time::Duration;
 use text_showcase_external_helpers::{
-    capture_x11_window_screenshot, find_exact_text_in_semantics, find_window_id,
+    capture_x11_window_screenshot, find_exact_text_in_semantics, find_window_id, open_text_tab,
     wait_for_text_showcase_heading,
 };
 
@@ -52,6 +52,10 @@ fn main() {
             std::thread::sleep(Duration::from_millis(800));
             let _ = robot.wait_for_idle();
 
+            open_text_tab(&robot);
+            robot
+                .wait_for_present_frame()
+                .expect("present Text tab before strikeout capture");
             wait_for_text_showcase_heading(&robot);
             let bounds = find_exact_text_in_semantics(&robot, TARGET_TEXT)
                 .unwrap_or_else(|| fail(&robot, "strikeout text semantics bounds not found"));
