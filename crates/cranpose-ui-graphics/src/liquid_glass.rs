@@ -266,12 +266,18 @@ pub fn liquid_glass_effect(
 fn liquid_glass_input_padding(spec: &LiquidGlassSpec) -> f32 {
     let bend = 1.0 - 1.0 / spec.refractive_index.max(1.0001);
     let tilt = spec.tilt_angle.abs().max(spec.tilt_pitch.abs());
-    let displacement = tilt * bend * spec.displacement_scale.max(0.0);
+    let slope = liquid_glass_max_height_slope(spec.profile);
+    let displacement = tilt * bend * spec.displacement_scale.max(0.0) * slope;
     if displacement > 0.0 {
         displacement.ceil() + 2.0
     } else {
         0.0
     }
+}
+
+fn liquid_glass_max_height_slope(profile: f32) -> f32 {
+    let p = profile.clamp(0.0, 1.0);
+    2.0 + 2.0 * p
 }
 
 /// Build a chained `RenderEffect` for multiple liquid glass rects.
@@ -395,6 +401,37 @@ mod tests {
         assert!(
             shader.input_padding() >= 11.0,
             "tilted liquid glass must capture enough backdrop for displaced samples"
+        );
+    }
+
+    #[test]
+    fn liquid_glass_padding_covers_max_shader_displacement() {
+        let spec = LiquidGlassSpec {
+            tilt_angle: 0.5,
+            tilt_pitch: 0.3,
+            ..LiquidGlassSpec::default()
+        };
+        let effect = liquid_glass_effect(
+            &LiquidGlassRect {
+                left: 0.0,
+                top: 0.0,
+                width: 140.0,
+                height: 100.0,
+                tint_color: Color(0.5, 0.5, 1.0, 0.1),
+            },
+            &spec,
+            140.0,
+            100.0,
+        );
+        let RenderEffect::Shader { shader } = effect else {
+            panic!("expected Shader effect");
+        };
+        let bend = 1.0 - 1.0 / spec.refractive_index.max(1.0001);
+        let max_shader_displacement = spec.tilt_angle.abs() * bend * spec.displacement_scale * 4.0;
+
+        assert!(
+            shader.input_padding() >= max_shader_displacement.ceil() + 2.0,
+            "backdrop capture must cover the shader's largest refracted sample"
         );
     }
 

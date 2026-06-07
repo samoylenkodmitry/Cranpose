@@ -600,6 +600,24 @@ fn backdrop_capture_rect(
         .unwrap_or(clipped)
 }
 
+fn visible_backdrop_capture_rect(
+    effect_rect: Rect,
+    clip: Option<Rect>,
+    effect: &RenderEffect,
+    root_scale: f32,
+    target_size: (u32, u32),
+) -> Option<Rect> {
+    let visible_rect =
+        visible_layer_rect(effect_rect, clip, root_scale, target_size.0, target_size.1)?;
+    Some(backdrop_capture_rect(
+        visible_rect,
+        clip,
+        effect,
+        root_scale,
+        target_size,
+    ))
+}
+
 #[cfg(test)]
 fn axis_aligned_backdrop_copy_region(
     visible_rect: Rect,
@@ -3517,14 +3535,17 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             },
         )?;
 
-        let child_backdrop_rect = child_surface.backdrop.as_ref().map(|_| {
-            child
-                .visual_clip
-                .and_then(|clip| resolved_child.backdrop_rect.intersect(clip))
-                .unwrap_or(resolved_child.backdrop_rect)
+        let child_backdrop_capture_rect = child_surface.backdrop.as_ref().and_then(|backdrop| {
+            visible_backdrop_capture_rect(
+                resolved_child.backdrop_rect,
+                child.visual_clip,
+                backdrop,
+                target_scale,
+                (width, height),
+            )
         });
 
-        if child_backdrop_rect
+        if child_backdrop_capture_rect
             .is_some_and(|rect| pending_layer_composites_intersect_rect(&pending_composites, rect))
             || !resolved_child.shadow_draws.is_empty()
         {
@@ -4873,7 +4894,8 @@ mod tests {
         direct_scene_range_cache_enabled_for_policy, direct_scene_range_cache_key,
         layer_source_cache_key, layer_source_uses_external_backdrop_underlay,
         layer_surface_dest_quad, layer_surface_translation_context,
-        minimum_surface_scale_for_composite, quad_bounds_rect, retained_render_effect_hash,
+        minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
+        retained_render_effect_hash, visible_backdrop_capture_rect,
         BackdropPrefixChildContribution, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES,
         MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
         MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
@@ -6454,6 +6476,46 @@ mod tests {
         assert_eq!(plan.size, (328, 248));
         assert_eq!(plan.effect_pixel_rect, [24.0, 24.0, 280.0, 200.0]);
         assert_eq!(plan.dest_viewport, (4.0, 28.0, 328.0, 248.0));
+    }
+
+    #[test]
+    fn backdrop_pending_flush_region_includes_effect_input_padding() {
+        let visible = Rect {
+            x: 100.0,
+            y: 80.0,
+            width: 50.0,
+            height: 40.0,
+        };
+        let pending_outside_visible_inside_capture = Rect {
+            x: 82.0,
+            y: 88.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let mut shader = RuntimeShader::new("// test");
+        shader.set_input_padding(24.0);
+        let effect = RenderEffect::runtime_shader(shader);
+
+        let capture = visible_backdrop_capture_rect(visible, None, &effect, 1.0, (220, 180))
+            .expect("visible backdrop capture");
+
+        assert_eq!(
+            capture,
+            Rect {
+                x: 76.0,
+                y: 56.0,
+                width: 98.0,
+                height: 88.0,
+            }
+        );
+        assert!(!rects_intersect(
+            visible,
+            pending_outside_visible_inside_capture
+        ));
+        assert!(rects_intersect(
+            capture,
+            pending_outside_visible_inside_capture
+        ));
     }
 
     #[test]
