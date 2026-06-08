@@ -8,7 +8,7 @@ use crate::native_window::{
     NativeWindowRequest, WindowGraphMove, WindowGraphNodeSnapshot, WindowGraphPeerSnapshot,
     WindowGraphState, WindowGroupId, WindowResizeDirection, WindowState,
 };
-use crate::wgpu_surface::{current_surface_texture, SurfaceFrame};
+use crate::wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame};
 #[cfg(feature = "robot")]
 use cranpose_app_shell::RuntimeLeakDebugStats;
 use cranpose_app_shell::{default_root_key, AppShell, FramePacingMode, FrameUpdateResult};
@@ -4266,14 +4266,6 @@ fn surface_reconfigure_requires_redraw(width: u32, height: u32) -> bool {
     width > 0 && height > 0
 }
 
-fn surface_present_required(
-    surface_dirty: bool,
-    update_visual_changed: bool,
-    app_needs_redraw: bool,
-) -> bool {
-    surface_dirty || update_visual_changed || app_needs_redraw
-}
-
 fn primary_declaration_host_needs_direct_update(
     primary_window_visible: bool,
     headless: bool,
@@ -6583,10 +6575,10 @@ mod tests {
         primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
         primary_pointer_move_should_recover_press, primary_surface_redraw_drives_app,
         primary_viewport_for_surface_size, recovered_native_window_drag_start_pointer,
-        scroll_frame_request, should_chain_no_vsync_redraw, surface_present_required,
-        surface_reconfigure_requires_redraw, App, DesktopRect, FramePacingMode,
-        NativeWindowDragSession, NativeWindowGraphPositionSource, NativeWindowOptions,
-        NativeWindowPointerState, NativeWindowPollingDragSession, NativeWindowPositionObservation,
+        scroll_frame_request, should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
+        App, DesktopRect, FramePacingMode, NativeWindowDragSession,
+        NativeWindowGraphPositionSource, NativeWindowOptions, NativeWindowPointerState,
+        NativeWindowPollingDragSession, NativeWindowPositionObservation,
         NativeWindowPositionOrigin, PendingNativeWindowPositions,
     };
     use crate::launcher::AppSettings;
@@ -6876,14 +6868,6 @@ mod tests {
         assert!(surface_reconfigure_requires_redraw(1920, 1080));
         assert!(!surface_reconfigure_requires_redraw(0, 1080));
         assert!(!surface_reconfigure_requires_redraw(1920, 0));
-    }
-
-    #[test]
-    fn host_surface_present_is_required_until_surface_is_clean() {
-        assert!(surface_present_required(true, false, false));
-        assert!(surface_present_required(false, true, false));
-        assert!(surface_present_required(false, false, true));
-        assert!(!surface_present_required(false, false, false));
     }
 
     #[test]

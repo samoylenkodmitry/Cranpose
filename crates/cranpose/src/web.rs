@@ -4,7 +4,7 @@
 
 use crate::{
     launcher::AppSettings,
-    wgpu_surface::{current_surface_texture, SurfaceFrame},
+    wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
 };
 use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver};
 use cranpose_platform_web::WebPlatform;
@@ -250,6 +250,10 @@ pub async fn run(
     let render_loop: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
     let frame_pending = Rc::new(Cell::new(false));
     let frame_timer = Rc::new(WebFrameTimer::default());
+    // Starts true so the scene built during `AppShell` construction is presented
+    // on the first frame even though `update()` reports no visual work; cleared
+    // only after a successful present (mirrors the desktop `surface_dirty` flag).
+    let surface_dirty = Rc::new(Cell::new(true));
     let request_frame: Rc<dyn Fn()> = {
         let frame_pending = frame_pending.clone();
         let render_loop = render_loop.clone();
@@ -695,12 +699,24 @@ pub async fn run(
     let frame_pending_for_loop = frame_pending.clone();
     let frame_timer_for_loop = frame_timer.clone();
     let render_loop_for_deadline = render_loop.clone();
+    let surface_dirty_for_loop = surface_dirty.clone();
+    let request_frame_for_loop = request_frame.clone();
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         frame_pending_for_loop.set(false);
         let update_result = app.borrow_mut().update();
 
-        if update_result.visual_changed {
+        // Present when the surface still owes its first (or post-reconfigure)
+        // frame, when `update()` produced visual work, or when the app otherwise
+        // wants a redraw. Gating solely on `visual_changed` would skip the scene
+        // built during construction and leave the canvas blank until an event
+        // dirtied the tree (the "white until scroll" bug).
+        let present_required = surface_present_required(
+            surface_dirty_for_loop.get(),
+            update_result.visual_changed,
+            app.borrow().needs_redraw(),
+        );
+        if present_required {
             let config = surface_config.borrow();
             match current_surface_texture(&surface, "web") {
                 SurfaceFrame::Ready(output) => {
@@ -722,18 +738,27 @@ pub async fn run(
                     }
 
                     output.present();
+                    surface_dirty_for_loop.set(false);
                 }
                 SurfaceFrame::Reconfigure => {
-                    let mut app_mut = app.borrow_mut();
-                    if let Some(device) = app_mut.renderer().try_device() {
-                        surface.configure(device, &*config);
-                    } else {
-                        log::error!(
-                            "web surface reconfigure skipped: GPU renderer is not initialized"
-                        );
+                    {
+                        let mut app_mut = app.borrow_mut();
+                        if let Some(device) = app_mut.renderer().try_device() {
+                            surface.configure(device, &*config);
+                        } else {
+                            log::error!(
+                                "web surface reconfigure skipped: GPU renderer is not initialized"
+                            );
+                        }
                     }
+                    // The reconfigured surface has not presented yet: keep it
+                    // dirty and request another frame so it flushes.
+                    surface_dirty_for_loop.set(true);
+                    request_frame_for_loop();
                 }
-                SurfaceFrame::Skip => {}
+                // Surface unavailable this tick; keep it dirty so the next
+                // scheduled frame retries the present.
+                SurfaceFrame::Skip => surface_dirty_for_loop.set(true),
             }
         }
 
