@@ -9,7 +9,7 @@ use crate::{
     android_overlay_window,
     android_surface::{create_android_wgpu_surface, AndroidSurfaceError},
     launcher::{AndroidOverlayWindowOptions, AppSettings},
-    wgpu_surface::{current_surface_texture, SurfaceFrame},
+    wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
 };
 use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver};
 use cranpose_platform_android::AndroidPlatform;
@@ -39,6 +39,10 @@ struct GpuResources {
     backend: wgpu::Backend,
     config: wgpu::SurfaceConfiguration,
     _native_window: Option<NativeWindow>,
+    /// Set when the surface is (re)created and cleared after a successful
+    /// present, forcing the first frame to reach the screen even when `update()`
+    /// reports no visual work (mirrors the desktop/web `surface_dirty` flag).
+    surface_dirty: bool,
 }
 
 /// Pending input event to be processed outside poll_events callback.
@@ -252,6 +256,7 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
             }
 
             frame.present();
+            resources.surface_dirty = false;
             false
         }
         SurfaceFrame::Reconfigure => {
@@ -261,9 +266,19 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
             resources
                 .surface
                 .configure(&resources.device, &resources.config);
+            // The reconfigured surface has not presented yet. Unlike web/desktop,
+            // the android render block is gated behind `shell.needs_update()`, so
+            // marking the shell dirty is what both wakes the looper and re-enters
+            // the present path on the next iteration to flush the new swapchain.
+            resources.surface_dirty = true;
+            shell.mark_dirty();
             false
         }
-        SurfaceFrame::Skip => false,
+        // Surface unavailable this tick; retry the present on the next frame.
+        SurfaceFrame::Skip => {
+            resources.surface_dirty = true;
+            false
+        }
     }
 }
 
@@ -424,6 +439,7 @@ fn create_android_gpu_resources(
             backend: adapter_info.backend,
             config,
             _native_window: native_window_owner,
+            surface_dirty: true,
         },
         renderer_needs_init: true,
     })
@@ -453,6 +469,7 @@ fn create_android_gpu_resources_for_existing_device(
             backend: existing.backend,
             config,
             _native_window: native_window_owner,
+            surface_dirty: true,
         },
         renderer_needs_init,
     })
@@ -1181,7 +1198,12 @@ pub fn run(
                     &mut last_dispatched_host_window_request,
                     &mut pending_host_window_confirmation,
                 );
-                if update_result.visual_changed && render_once(resources, shell) {
+                if surface_present_required(
+                    resources.surface_dirty,
+                    update_result.visual_changed,
+                    shell.needs_redraw(),
+                ) && render_once(resources, shell)
+                {
                     break; // Out of memory, exit
                 }
             }

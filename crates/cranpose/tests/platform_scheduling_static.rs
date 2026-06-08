@@ -181,15 +181,26 @@ fn desktop_no_vsync_chains_dirty_presented_frames_only() {
 }
 
 #[test]
+fn surface_present_decision_is_shared_across_platform_loops() {
+    // The first-present / warmup decision lives once in the shared wgpu_surface
+    // module so the desktop, web, and android render loops cannot drift apart
+    // (the web loop "white until scroll" bug was a desktop/web divergence).
+    let shared = crate_source("src/wgpu_surface.rs");
+    assert!(
+        shared.contains("pub(crate) fn surface_present_required(")
+            && shared.contains("surface_dirty || update_visual_changed || app_needs_redraw"),
+        "the shared wgpu_surface module must own the single surface present decision"
+    );
+}
+
+#[test]
 fn desktop_renderer_warmup_reaches_primary_and_native_surfaces() {
     let source = crate_source("src/desktop.rs");
 
     assert!(
-        source.contains("fn surface_present_required(")
-            && source.contains("surface_dirty || update_visual_changed || app_needs_redraw")
-            && source.contains(
-                "surface_present_required(\n            native.surface_dirty,\n            update_result.visual_changed,\n            native.app.needs_redraw(),"
-            ),
+        source.contains(
+            "surface_present_required(\n            native.surface_dirty,\n            update_result.visual_changed,\n            native.app.needs_redraw(),"
+        ),
         "native windows must still render when renderer-side warmup is the only pending frame work"
     );
     assert!(
@@ -197,6 +208,52 @@ fn desktop_renderer_warmup_reaches_primary_and_native_surfaces() {
             "surface_present_required(\n                    primary_surface_dirty_before_update || robot_surface_dirty_before_update,\n                    update_result.visual_changed,\n                    app.needs_redraw(),"
         ),
         "primary windows must not skip a redraw requested only by renderer-side warmup"
+    );
+}
+
+#[test]
+fn web_first_frame_is_forced_through_surface_dirty() {
+    // Regression guard for the "white until scroll" bug: the web render loop must
+    // present the scene built during construction on the first frame even though
+    // `update()` reports no visual work, by starting `surface_dirty` true and
+    // only clearing it after a successful present.
+    let source = crate_source("src/web.rs");
+
+    assert!(
+        source.contains("let surface_dirty = Rc::new(Cell::new(true));"),
+        "web surface_dirty must start true so the first frame is always presented"
+    );
+    assert!(
+        source.contains(
+            "let present_required = surface_present_required(\n            surface_dirty_for_loop.get(),\n            update_result.visual_changed,\n            app.borrow().needs_redraw(),\n        );"
+        ),
+        "web render loop must gate the present through the shared surface_present_required helper"
+    );
+    assert!(
+        source.contains("surface_dirty_for_loop.set(false);"),
+        "web surface_dirty must be cleared only after a successful present"
+    );
+}
+
+#[test]
+fn android_first_frame_is_forced_through_surface_dirty() {
+    // The android render loop shares the desktop/web first-present contract: the
+    // surface starts dirty and is cleared only after a successful present.
+    let source = crate_source("src/android.rs");
+
+    assert!(
+        source.contains("surface_dirty: true,"),
+        "android GpuResources must start with a dirty surface so the first frame presents"
+    );
+    assert!(
+        source.contains(
+            "if surface_present_required(\n                    resources.surface_dirty,\n                    update_result.visual_changed,\n                    shell.needs_redraw(),\n                )"
+        ),
+        "android render loop must gate the present through the shared surface_present_required helper"
+    );
+    assert!(
+        source.contains("resources.surface_dirty = false;"),
+        "android surface_dirty must be cleared only after a successful present"
     );
 }
 

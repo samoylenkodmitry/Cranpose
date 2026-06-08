@@ -4279,6 +4279,44 @@ fn render_invalidation_without_scene_changes_rebuilds_scene() {
 }
 
 #[test]
+fn first_update_after_construction_reports_no_visual_work() {
+    // Regression guard for the web "white until scroll" bug.
+    //
+    // `AppShell::new*` eagerly builds the scene during construction
+    // (`process_frame`), so the *first* platform `update()` finds a clean tree
+    // and reports `visual_changed: false`. A platform render loop that gates the
+    // surface present solely on `visual_changed` would therefore never present
+    // the freshly built scene until some later event marks the tree dirty -
+    // leaving the canvas blank. Platforms must instead force the initial present
+    // via a `surface_dirty` flag (see `wgpu_surface::surface_present_required`).
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        CountingRenderer::new(Rc::clone(&rebuilds)),
+        root_key,
+        box_content,
+    );
+
+    assert_eq!(
+        rebuilds.get(),
+        1,
+        "construction must build the scene exactly once"
+    );
+
+    let first = shell.update();
+    assert!(
+        !first.visual_changed,
+        "the first post-construction update finds a clean tree and reports no visual work"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        1,
+        "the first update must not rebuild the already-built scene"
+    );
+}
+
+#[test]
 fn clean_frame_reports_no_visual_work_with_dev_overlay_enabled() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
