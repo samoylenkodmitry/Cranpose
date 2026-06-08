@@ -266,8 +266,12 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
             resources
                 .surface
                 .configure(&resources.device, &resources.config);
-            // Reconfigured surface has not presented yet; flush it next frame.
+            // The reconfigured surface has not presented yet. Unlike web/desktop,
+            // the android render block is gated behind `shell.needs_update()`, so
+            // marking the shell dirty is what both wakes the looper and re-enters
+            // the present path on the next iteration to flush the new swapchain.
             resources.surface_dirty = true;
+            shell.mark_dirty();
             false
         }
         // Surface unavailable this tick; retry the present on the next frame.
