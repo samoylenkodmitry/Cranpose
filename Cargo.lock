@@ -540,7 +540,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cranpose"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -570,14 +570,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-animation"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose-core",
 ]
 
 [[package]]
 name = "cranpose-app-shell"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "arboard",
  "cranpose-core",
@@ -593,11 +593,11 @@ dependencies = [
 
 [[package]]
 name = "cranpose-assets"
-version = "0.1.11"
+version = "0.1.12"
 
 [[package]]
 name = "cranpose-core"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "ahash",
  "cranpose-macros",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-foundation"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-macros"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -634,14 +634,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-platform-android"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose-ui-graphics",
 ]
 
 [[package]]
 name = "cranpose-platform-desktop-winit"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-platform-web"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-common"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "ab_glyph",
  "cranpose-core",
@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-pixels"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose-core",
  "cranpose-foundation",
@@ -686,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-wgpu"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "bytemuck",
  "cranpose-app-shell",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-runtime-std"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose-core",
  "web-time",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-services"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-testing"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose",
  "cranpose-app-shell",
@@ -746,7 +746,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -765,14 +765,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui-graphics"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "cranpose-ui-layout"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
