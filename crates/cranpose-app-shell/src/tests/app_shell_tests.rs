@@ -6562,6 +6562,133 @@ fn parent_pointer_listener_releases_after_child_button_click_recomposes() {
     );
 }
 
+const PRESSABLE_CANVAS_NORMAL_COLOR: Color = Color(0.1, 0.2, 0.8, 1.0);
+const PRESSABLE_CANVAS_PRESSED_COLOR: Color = Color(0.8, 0.2, 0.1, 1.0);
+
+#[composable]
+fn app_shell_pressable_canvas_content() {
+    let is_pressed = useState(|| false);
+    let color = if is_pressed.get() {
+        PRESSABLE_CANVAS_PRESSED_COLOR
+    } else {
+        PRESSABLE_CANVAS_NORMAL_COLOR
+    };
+    cranpose_ui::Canvas(
+        Modifier::empty().size_points(60.0, 30.0).pointer_input(
+            (),
+            move |scope: PointerInputScope| async move {
+                scope
+                    .await_pointer_event_scope(|await_scope| async move {
+                        loop {
+                            let event = await_scope.await_pointer_event().await;
+                            match event.kind {
+                                PointerEventKind::Down => {
+                                    is_pressed.set(true);
+                                    event.consume();
+                                }
+                                PointerEventKind::Up | PointerEventKind::Cancel => {
+                                    is_pressed.set(false);
+                                    event.consume();
+                                }
+                                _ => {}
+                            }
+                        }
+                    })
+                    .await;
+            },
+        ),
+        move |scope| {
+            scope.draw_rect(Brush::solid(color));
+        },
+    );
+}
+
+fn graph_rect_colors(graph: &cranpose_render_common::graph::RenderGraph) -> Vec<Color> {
+    fn collect_node(node: &cranpose_render_common::graph::RenderNode, out: &mut Vec<Color>) {
+        match node {
+            cranpose_render_common::graph::RenderNode::Primitive(entry) => {
+                if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node {
+                    if let DrawPrimitive::Rect {
+                        brush: cranpose_ui_graphics::Brush::Solid(color),
+                        ..
+                    } = &draw.primitive
+                    {
+                        out.push(*color);
+                    }
+                }
+            }
+            cranpose_render_common::graph::RenderNode::Layer(layer) => {
+                collect_layer(layer, out);
+            }
+        }
+    }
+
+    fn collect_layer(layer: &cranpose_render_common::graph::LayerNode, out: &mut Vec<Color>) {
+        for child in &layer.children {
+            collect_node(child, out);
+        }
+    }
+
+    let mut colors = Vec::new();
+    collect_layer(&graph.root, &mut colors);
+    colors
+}
+
+#[test]
+fn canvas_pressed_state_draws_on_pointer_down_before_release() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_pressable_canvas_content,
+    );
+
+    shell.update();
+    let colors = graph_rect_colors(shell.renderer.scene.graph.as_ref().expect("initial graph"));
+    assert!(
+        colors.contains(&PRESSABLE_CANVAS_NORMAL_COLOR),
+        "canvas should draw the normal color before any press: {colors:?}"
+    );
+    assert!(
+        !colors.contains(&PRESSABLE_CANVAS_PRESSED_COLOR),
+        "canvas must not draw the pressed color before any press: {colors:?}"
+    );
+
+    assert!(
+        shell.set_cursor(30.0, 15.0),
+        "cursor should hover the pressable canvas"
+    );
+    shell.update();
+    assert!(
+        shell.pointer_pressed(),
+        "pointer down should hit the pressable canvas"
+    );
+    shell.update();
+
+    let colors = graph_rect_colors(shell.renderer.scene.graph.as_ref().expect("pressed graph"));
+    assert!(
+        colors.contains(&PRESSABLE_CANVAS_PRESSED_COLOR),
+        "canvas must draw the pressed color after pointer down, before release: {colors:?}"
+    );
+
+    assert!(
+        shell.pointer_released(),
+        "pointer up should dispatch to the pressable canvas"
+    );
+    shell.update();
+
+    let colors = graph_rect_colors(shell.renderer.scene.graph.as_ref().expect("released graph"));
+    assert!(
+        colors.contains(&PRESSABLE_CANVAS_NORMAL_COLOR),
+        "canvas should draw the normal color again after release: {colors:?}"
+    );
+    assert!(
+        !colors.contains(&PRESSABLE_CANVAS_PRESSED_COLOR),
+        "canvas must not keep the pressed color after release: {colors:?}"
+    );
+}
+
 #[test]
 fn headless_shell_render_graph_survives_restored_draw_state() {
     let _guard = test_guard();

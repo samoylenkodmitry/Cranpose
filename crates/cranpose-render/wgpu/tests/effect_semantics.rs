@@ -1096,6 +1096,117 @@ fn bounded_backdrop_capture_only_filters_local_snapshot() {
 }
 
 #[test]
+fn scaled_sibling_backdrop_sees_prior_backdrop_output() {
+    // Regression: two sibling backdrop layers over a sharp red/blue boundary at
+    // root_scale = 2. The lower-z backdrop (strong blur) sits to the right of the
+    // higher-z backdrop's center, exactly like dragging the Blur rect right of the
+    // Glass rect in the Shaders demo. The higher-z backdrop must snapshot the
+    // already-composited output of the lower-z one. A logical-vs-physical unit
+    // mismatch in the pending-composite flush check made the snapshot skip it.
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping scaled sibling backdrop assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let root_scale = 2.0;
+    let logical_width = FRAME_WIDTH as f32 / root_scale;
+    let logical_height = FRAME_HEIGHT as f32 / root_scale;
+    let logical_root = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: logical_width,
+        height: logical_height,
+    };
+    let boundary_x = 36.0;
+
+    // Lower-z backdrop: strong blur over the red/blue boundary.
+    let strong_blur = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 24.0,
+            height: 20.0,
+        },
+        ProjectiveTransform::translation(32.0, 10.0),
+        GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::blur(8.0)),
+            ..GraphicsLayer::default()
+        },
+        vec![],
+    );
+    // Higher-z backdrop: barely-blurring layer whose logical capture rect overlaps
+    // the strong blur layer, but does not reach the strong blur layer's
+    // physical-pixel rect (capture starts at logical 24, physical 48; this layer's
+    // capture ends at logical 41).
+    let weak_blur = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 24.0,
+            height: 20.0,
+        },
+        ProjectiveTransform::translation(16.0, 12.0),
+        GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::blur(1.0)),
+            ..GraphicsLayer::default()
+        },
+        vec![],
+    );
+
+    renderer.scene_mut().graph = Some(RenderGraph::new(layer(
+        logical_root,
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: boundary_x,
+                    height: logical_height,
+                },
+                Color::RED,
+            ),
+            solid_rect(
+                Rect {
+                    x: boundary_x,
+                    y: 0.0,
+                    width: logical_width - boundary_x,
+                    height: logical_height,
+                },
+                Color::BLUE,
+            ),
+            RenderNode::Layer(Box::new(strong_blur)),
+            RenderNode::Layer(Box::new(weak_blur)),
+        ],
+    )));
+
+    let frame = renderer
+        .capture_frame_with_scale(FRAME_WIDTH, FRAME_HEIGHT, root_scale)
+        .expect("scaled sibling backdrop capture should succeed");
+
+    assert_red(
+        rgba(&frame, 20, 40),
+        "background outside both backdrops should stay red",
+    );
+
+    // Logical (34, 20): inside both backdrop rects, 2px left of the boundary.
+    // The strong blur mixes blue well past this point; the weak blur cannot.
+    // The pixel is only mixed if the weak backdrop sampled the strong one's output.
+    let overlap = rgba(&frame, 68, 40);
+    assert!(
+        overlap[2] >= 60,
+        "higher-z backdrop must sample the lower-z backdrop's blurred output in the overlap: {overlap:?}"
+    );
+}
+
+#[test]
 fn nested_backdrop_blur_radius_changes_rendered_pixels() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,

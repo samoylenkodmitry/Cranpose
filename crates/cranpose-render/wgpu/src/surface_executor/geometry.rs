@@ -185,7 +185,12 @@ pub(crate) fn device_pixel_bounds_for_rect(
     })
 }
 
-pub(crate) fn unclamped_device_pixel_bounds_for_rect(
+/// Device-pixel bounds whose size depends only on the rect's size, never on its
+/// subpixel phase. Floor/ceil bounds grow or shrink by one pixel as content
+/// translates across the device-pixel grid, which would change raster cache
+/// keys on every scroll step; the +1 slack column/row covers the worst-case
+/// phase instead so one cached raster size serves every translation.
+pub(crate) fn translation_stable_device_pixel_bounds(
     rect: Rect,
     root_scale: f32,
     max_texture_dim: u32,
@@ -196,10 +201,8 @@ pub(crate) fn unclamped_device_pixel_bounds_for_rect(
 
     let min_x = (rect.x * root_scale).floor();
     let min_y = (rect.y * root_scale).floor();
-    let max_x = ((rect.x + rect.width) * root_scale).ceil();
-    let max_y = ((rect.y + rect.height) * root_scale).ceil();
-    let width = (max_x - min_x).max(0.0) as u32;
-    let height = (max_y - min_y).max(0.0) as u32;
+    let width = ((rect.width * root_scale).ceil() + 1.0).max(0.0) as u32;
+    let height = ((rect.height * root_scale).ceil() + 1.0).max(0.0) as u32;
     if width == 0 || height == 0 || width > max_texture_dim || height > max_texture_dim {
         return None;
     }
@@ -319,7 +322,7 @@ mod tests {
     use super::{
         axis_aligned_quad_rect, fit_capture_rect_to_scale_budget_for_axes,
         quantize_motion_stable_target_scale, snap_motion_stable_dest_quad, surface_target_size,
-        unclamped_device_pixel_bounds_for_rect,
+        translation_stable_device_pixel_bounds,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::rect_to_quad;
@@ -347,8 +350,8 @@ mod tests {
     }
 
     #[test]
-    fn unclamped_device_bounds_preserve_offscreen_source_origin() {
-        let bounds = unclamped_device_pixel_bounds_for_rect(
+    fn translation_stable_device_bounds_preserve_offscreen_source_origin() {
+        let bounds = translation_stable_device_pixel_bounds(
             Rect {
                 x: -12.25,
                 y: 8.25,
@@ -363,7 +366,26 @@ mod tests {
         assert_eq!(bounds.x, -25.0);
         assert_eq!(bounds.y, 16.0);
         assert_eq!(bounds.width, 70);
-        assert_eq!(bounds.height, 21);
+        assert_eq!(bounds.height, 22);
+    }
+
+    #[test]
+    fn translation_stable_device_bounds_keep_size_across_subpixel_phases() {
+        let rect_at = |x: f32| Rect {
+            x,
+            y: 8.25,
+            width: 34.5,
+            height: 10.25,
+        };
+        let scale = 130.0 / 96.0;
+        let base = translation_stable_device_pixel_bounds(rect_at(-12.25), scale, 4096)
+            .expect("base bounds");
+        for step in 1..=12 {
+            let moved =
+                translation_stable_device_pixel_bounds(rect_at(-12.25 + step as f32), scale, 4096)
+                    .expect("moved bounds");
+            assert_eq!((base.width, base.height), (moved.width, moved.height));
+        }
     }
 
     #[test]
