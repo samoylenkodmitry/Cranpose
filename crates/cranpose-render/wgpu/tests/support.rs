@@ -13,6 +13,10 @@ pub static TEST_FONT: &[u8] = DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
 
 static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+pub fn gpu_test_lock() -> MutexGuard<'static, ()> {
+    lock_gpu_test()
+}
+
 fn lock_gpu_test() -> MutexGuard<'static, ()> {
     GPU_TEST_LOCK
         .lock()
