@@ -175,10 +175,14 @@ fn log_update_stage_telemetry(telemetry: UpdateStageTelemetry) {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum FramePacingMode {
+    /// Pace frames to the display refresh interval. The production default:
+    /// animations advance once per vsync instead of re-rendering uncapped.
+    #[default]
     Vsync,
     Hard60,
     Hard120,
-    #[default]
+    /// Render as fast as possible. For perf harnesses and robot drivers that
+    /// measure work throughput; saturates the GPU if used in a real app.
     NoVsync,
 }
 

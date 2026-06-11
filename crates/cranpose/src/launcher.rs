@@ -43,6 +43,10 @@ pub struct AppSettings {
     /// Initial desktop frame pacing mode.
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
     pub frame_pacing_mode: FramePacingMode,
+    /// Whether the app chose a frame pacing mode explicitly. Installing a
+    /// robot test driver lifts the vsync cap only when this is false.
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    pub frame_pacing_explicit: bool,
     /// Optional test driver to control the application (robot testing)
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
     pub test_driver: Option<Box<dyn FnOnce(crate::desktop::Robot) + Send + 'static>>,
@@ -69,7 +73,9 @@ impl Default for AppSettings {
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
             dev_options: cranpose_app_shell::DevOptions::default(),
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
-            frame_pacing_mode: FramePacingMode::NoVsync,
+            frame_pacing_mode: FramePacingMode::Vsync,
+            #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+            frame_pacing_explicit: false,
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
             test_driver: None,
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
@@ -385,6 +391,7 @@ impl AppLauncher {
     pub fn with_frame_pacing_mode(mut self, mode: FramePacingMode) -> Self {
         self.settings.frame_pacing_mode = mode;
         self.settings.dev_options.frame_pacing_mode = mode;
+        self.settings.frame_pacing_explicit = true;
         self
     }
 
@@ -495,6 +502,12 @@ impl AppLauncher {
         driver: impl FnOnce(crate::desktop::Robot) + Send + 'static,
     ) -> Self {
         self.settings.test_driver = Some(Box::new(driver));
+        // Robot harnesses measure work throughput and high-refresh cadence
+        // contracts; lift the vsync cap unless the harness pinned a mode.
+        if !self.settings.frame_pacing_explicit {
+            self.settings.frame_pacing_mode = FramePacingMode::NoVsync;
+            self.settings.dev_options.frame_pacing_mode = FramePacingMode::NoVsync;
+        }
         self
     }
 
@@ -651,5 +664,44 @@ mod tests {
     fn android_overlay_options_reject_zero_size() {
         assert!(!AndroidOverlayWindowOptions::new(0, 180).is_valid());
         assert!(!AndroidOverlayWindowOptions::new(320, 0).is_valid());
+    }
+
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    #[test]
+    fn production_apps_default_to_vsync_frame_pacing() {
+        // A desktop UI app must not render animations uncapped (hundreds of fps
+        // on a 60Hz panel saturates the GPU and ruins scroll latency). Vsync is
+        // the production default; harnesses opt out explicitly.
+        assert_eq!(
+            AppSettings::default().frame_pacing_mode,
+            FramePacingMode::Vsync
+        );
+        assert_eq!(FramePacingMode::default(), FramePacingMode::Vsync);
+    }
+
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+    #[test]
+    fn robot_test_driver_defaults_to_uncapped_frame_pacing() {
+        // Robot/perf harnesses measure work throughput and 120Hz cadence
+        // contracts; installing a test driver lifts the vsync cap unless the
+        // harness chose a pacing mode explicitly.
+        let launcher = AppLauncher::new().with_test_driver(|_| {});
+        assert_eq!(
+            launcher.settings.frame_pacing_mode,
+            FramePacingMode::NoVsync
+        );
+
+        let pinned = AppLauncher::new()
+            .with_frame_pacing_mode(FramePacingMode::Hard60)
+            .with_test_driver(|_| {});
+        assert_eq!(pinned.settings.frame_pacing_mode, FramePacingMode::Hard60);
+
+        let pinned_after = AppLauncher::new()
+            .with_test_driver(|_| {})
+            .with_frame_pacing_mode(FramePacingMode::Vsync);
+        assert_eq!(
+            pinned_after.settings.frame_pacing_mode,
+            FramePacingMode::Vsync
+        );
     }
 }
