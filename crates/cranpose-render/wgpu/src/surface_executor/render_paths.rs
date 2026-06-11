@@ -3545,9 +3545,14 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             )
         });
 
-        if child_backdrop_capture_rect
-            .is_some_and(|rect| pending_layer_composites_intersect_rect(&pending_composites, rect))
-            || !resolved_child.shadow_draws.is_empty()
+        // Pending composite dest quads are in physical pixels; the capture rect is
+        // logical, so scale it before the overlap test.
+        if child_backdrop_capture_rect.is_some_and(|rect| {
+            pending_layer_composites_intersect_rect(
+                &pending_composites,
+                surface_pixel_rect(rect, target_scale),
+            )
+        }) || !resolved_child.shadow_draws.is_empty()
         {
             flush_pending_shader_layer_composites(
                 backend,

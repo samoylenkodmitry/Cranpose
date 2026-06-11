@@ -7,7 +7,7 @@ pub(crate) use backend::{CachedLayerSurface, LayerSurfaceTexture, SurfaceExecuti
 pub(crate) use geometry::{
     axis_aligned_quad_rect, device_pixel_bounds_for_rect, offscreen_byte_size, scaled_quad,
     snap_delta_for_anchor, snap_motion_stable_dest_quad, surface_target_size,
-    unclamped_device_pixel_bounds_for_rect,
+    translation_stable_device_pixel_bounds,
 };
 #[cfg(test)]
 pub(crate) use geometry::{clamp_effect_surface_scale, visible_layer_rect};

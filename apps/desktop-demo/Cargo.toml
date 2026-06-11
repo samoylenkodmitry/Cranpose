@@ -589,6 +589,11 @@ path = "robot-runners/robot_fling_interrupt.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_pressed_state"
+path = "robot-runners/robot_pressed_state.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_scroll_bug"
 path = "robot-runners/robot_scroll_bug.rs"
 required-features = ["robot-app"]

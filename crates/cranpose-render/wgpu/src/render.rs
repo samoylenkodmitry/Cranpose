@@ -38,7 +38,7 @@ use crate::surface_executor::{
     render_layer_surface as execute_render_layer_surface,
     render_root_direct as execute_render_root_direct, root_direct_scene_events_are_supported,
     scaled_quad, snap_delta_for_anchor, snap_motion_stable_dest_quad, surface_target_size,
-    unclamped_device_pixel_bounds_for_rect, DevicePixelBounds, LayerSurfaceTexture,
+    translation_stable_device_pixel_bounds, DevicePixelBounds, LayerSurfaceTexture,
     SurfaceExecutionBackend,
 };
 #[cfg(test)]
@@ -107,7 +107,10 @@ const MAX_GRADIENT_STOPS: usize = 256;
 const MAX_GRADIENT_STOPS: usize = 1024;
 const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer (vertex/index only)
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
-const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+// Sized for HiDPI: a 4K fractional-scale screen full of shadowed panels needs
+// ~10-15 rasters of 4-12MB each; a 64MB budget made the large entries evict
+// each other every frame during scroll, re-blurring tens of megapixels.
+const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 192 * 1024 * 1024;
 const MAX_TEXT_IMAGE_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;
@@ -549,13 +552,6 @@ fn hash_f32_for_cache<H: Hasher>(value: f32, state: &mut H) {
     value.to_bits().hash(state);
 }
 
-fn hash_rect_for_cache<H: Hasher>(rect: Rect, state: &mut H) {
-    hash_f32_for_cache(rect.x, state);
-    hash_f32_for_cache(rect.y, state);
-    hash_f32_for_cache(rect.width, state);
-    hash_f32_for_cache(rect.height, state);
-}
-
 fn hash_text_raster_geometry_for_cache<H: Hasher>(
     rect: Rect,
     static_text_motion: bool,
@@ -878,13 +874,29 @@ fn text_draws_for_ordered_range<'a>(
     }))
 }
 
-fn translated_rect_for_cache(rect: Rect, origin_x: f32, origin_y: f32) -> Rect {
-    Rect {
-        x: rect.x - origin_x,
-        y: rect.y - origin_y,
-        width: rect.width,
-        height: rect.height,
-    }
+/// Shadow geometry is hashed in device pixels quantized to 1/16 px so that
+/// rigid translations (scrolling) reuse the cached blurred raster. Reusing a
+/// raster across device subpixel phases shifts the blurred shadow by less than
+/// one device pixel, which is imperceptible, while re-rendering the blur every
+/// scroll frame on fractional-scale displays is a frame-budget killer.
+const SHADOW_CACHE_DEVICE_QUANT: f32 = 16.0;
+
+fn hash_shadow_device_offset<H: Hasher>(value: f32, origin: f32, root_scale: f32, state: &mut H) {
+    let quantized = ((value - origin) * root_scale * SHADOW_CACHE_DEVICE_QUANT).round();
+    (quantized as i64).hash(state);
+}
+
+fn hash_shadow_device_rect<H: Hasher>(
+    rect: Rect,
+    origin_x: f32,
+    origin_y: f32,
+    root_scale: f32,
+    state: &mut H,
+) {
+    hash_shadow_device_offset(rect.x, origin_x, root_scale, state);
+    hash_shadow_device_offset(rect.y, origin_y, root_scale, state);
+    hash_shadow_device_offset(rect.width, 0.0, root_scale, state);
+    hash_shadow_device_offset(rect.height, 0.0, root_scale, state);
 }
 
 fn hash_shape_shadow_item<H: Hasher>(
@@ -892,25 +904,20 @@ fn hash_shape_shadow_item<H: Hasher>(
     blend_mode: BlendMode,
     origin_x: f32,
     origin_y: f32,
+    root_scale: f32,
     state: &mut H,
 ) {
-    hash_rect_for_cache(
-        translated_rect_for_cache(shape.rect, origin_x, origin_y),
-        state,
-    );
-    hash_rect_for_cache(
-        translated_rect_for_cache(shape.local_rect, origin_x, origin_y),
-        state,
-    );
+    hash_shadow_device_rect(shape.rect, origin_x, origin_y, root_scale, state);
+    hash_shadow_device_rect(shape.local_rect, origin_x, origin_y, root_scale, state);
     for point in shape.quad {
-        hash_f32_for_cache(point[0] - origin_x, state);
-        hash_f32_for_cache(point[1] - origin_y, state);
+        hash_shadow_device_offset(point[0], origin_x, root_scale, state);
+        hash_shadow_device_offset(point[1], origin_y, root_scale, state);
     }
     match shape.snap_anchor {
         Some(anchor) => {
             1u8.hash(state);
-            hash_f32_for_cache(anchor.origin.x - origin_x, state);
-            hash_f32_for_cache(anchor.origin.y - origin_y, state);
+            hash_shadow_device_offset(anchor.origin.x, origin_x, root_scale, state);
+            hash_shadow_device_offset(anchor.origin.y, origin_y, root_scale, state);
             hash_f32_for_cache(anchor.device_pixel_step, state);
         }
         None => 0u8.hash(state),
@@ -926,7 +933,7 @@ fn hash_shape_shadow_item<H: Hasher>(
     match shape.clip {
         Some(clip) => {
             1u8.hash(state);
-            hash_rect_for_cache(translated_rect_for_cache(clip, origin_x, origin_y), state);
+            hash_shadow_device_rect(clip, origin_x, origin_y, root_scale, state);
         }
         None => 0u8.hash(state),
     }
@@ -934,18 +941,29 @@ fn hash_shape_shadow_item<H: Hasher>(
     shape.blend_mode.hash(state);
 }
 
-fn shape_shadow_content_hash(
-    shapes: &[(DrawShape, BlendMode)],
-    viewport_offset: [f32; 2],
-    root_scale: f32,
-) -> u64 {
+fn shape_shadow_content_hash(shapes: &[(DrawShape, BlendMode)], root_scale: f32) -> u64 {
     let mut hasher = DefaultHasher::new();
-    let origin_x = viewport_offset[0] / root_scale;
-    let origin_y = viewport_offset[1] / root_scale;
+    // Anchor the hash to the shapes' own (unfloored) bounds so rigid translation
+    // cancels out exactly. Anchoring to floored device-pixel bounds would leak
+    // the device subpixel phase into the hash and defeat the cache at
+    // fractional display scales.
+    let origin = shape_shadow_bounds(shapes).unwrap_or(Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: 0.0,
+    });
 
     shapes.len().hash(&mut hasher);
     for (shape, blend_mode) in shapes {
-        hash_shape_shadow_item(shape, *blend_mode, origin_x, origin_y, &mut hasher);
+        hash_shape_shadow_item(
+            shape,
+            *blend_mode,
+            origin.x,
+            origin.y,
+            root_scale,
+            &mut hasher,
+        );
     }
     hasher.finish()
 }
@@ -957,11 +975,7 @@ fn shape_shadow_surface_cache_key(
     root_scale: f32,
 ) -> Option<ShadowSurfaceCacheKey> {
     (root_scale.is_finite() && root_scale > 0.0).then(|| ShadowSurfaceCacheKey {
-        content_hash: shape_shadow_content_hash(
-            shapes,
-            [device_bounds.x, device_bounds.y],
-            root_scale,
-        ),
+        content_hash: shape_shadow_content_hash(shapes, root_scale),
         pixel_size: [device_bounds.width, device_bounds.height],
         root_scale_bits: root_scale.to_bits(),
         blur_radius_bits: pixel_radius.to_bits(),
@@ -1074,7 +1088,7 @@ fn shape_shadow_surface_plan(
     let visible_device_bounds =
         device_pixel_bounds_for_rect(visible_blur_bounds, width, height, root_scale)?;
     let source_device_bounds =
-        unclamped_device_pixel_bounds_for_rect(source_blur_bounds, root_scale, max_texture_dim)
+        translation_stable_device_pixel_bounds(source_blur_bounds, root_scale, max_texture_dim)
             .unwrap_or(visible_device_bounds);
 
     Some(ShapeShadowSurfacePlan {
@@ -10857,13 +10871,6 @@ mod tests {
         let translated_cutout = translate_shape(&cutout, dx, dy);
 
         let root_scale = 1.25;
-        let first_origin = [6.0, 12.0];
-        let translated_origin = [first_origin[0] + dx, first_origin[1] + dy];
-        let first_viewport_offset = [first_origin[0] * root_scale, first_origin[1] * root_scale];
-        let translated_viewport_offset = [
-            translated_origin[0] * root_scale,
-            translated_origin[1] * root_scale,
-        ];
         let first_shapes = vec![
             (first.clone(), BlendMode::SrcOver),
             (cutout, BlendMode::DstOut),
@@ -10873,19 +10880,69 @@ mod tests {
             (translated_cutout, BlendMode::DstOut),
         ];
 
-        let first_hash =
-            shape_shadow_content_hash(&first_shapes, first_viewport_offset, root_scale);
-        let translated_hash =
-            shape_shadow_content_hash(&translated_shapes, translated_viewport_offset, root_scale);
+        let first_hash = shape_shadow_content_hash(&first_shapes, root_scale);
+        let translated_hash = shape_shadow_content_hash(&translated_shapes, root_scale);
 
         assert_eq!(first_hash, translated_hash);
 
         let mut changed_shapes = translated_shapes;
         changed_shapes[0].0.rect.width += 1.0;
-        let changed_hash =
-            shape_shadow_content_hash(&changed_shapes, translated_viewport_offset, root_scale);
+        let changed_hash = shape_shadow_content_hash(&changed_shapes, root_scale);
 
         assert_ne!(first_hash, changed_hash);
+    }
+
+    #[test]
+    fn shape_shadow_content_hash_is_stable_under_fractional_scale_scroll() {
+        // Regression: scrolling a shadowed panel on a fractional-scale display
+        // (e.g. Xft.dpi 130 → scale ≈ 1.354) must not re-render the shadow blur
+        // every frame. The production cache key derives its viewport offset from
+        // FLOORED device-pixel bounds, so the residual subpixel phase used to leak
+        // into the content hash and miss the cache on every scroll step.
+        fn shadow_shapes_at(y: f32) -> Vec<(DrawShape, BlendMode)> {
+            let mut shape = test_shape(1, BlendMode::SrcOver);
+            shape.rect = Rect {
+                x: 24.0,
+                y,
+                width: 180.0,
+                height: 90.0,
+            };
+            shape.local_rect = shape.rect;
+            shape.quad = crate::rect_to_quad(shape.rect);
+            shape.shape = Some(RoundedCornerShape::uniform(14.0));
+            vec![(shape, BlendMode::SrcOver)]
+        }
+
+        let root_scale = 130.0f32 / 96.0;
+        let blur_radius = 18.0f32;
+        let pixel_radius = blur_radius * root_scale;
+
+        let key_at = |y: f32| {
+            let shapes = shadow_shapes_at(y);
+            let plan =
+                shape_shadow_surface_plan(&shapes, None, blur_radius, 1600, 1600, root_scale, 8192)
+                    .expect("surface plan");
+            shape_shadow_surface_cache_key(
+                &shapes,
+                plan.source_device_bounds,
+                pixel_radius,
+                root_scale,
+            )
+            .expect("cache key")
+        };
+
+        // Wheel scroll translates the panel by whole logical pixels; the device
+        // subpixel phase changes on every step at fractional scale. The whole
+        // cache key (content hash AND surface pixel size) must stay stable, or
+        // every scroll frame re-renders the shadow blur.
+        let base = key_at(640.0);
+        for step in 1..=12 {
+            let scrolled = key_at(640.0 - step as f32 * 4.0);
+            assert_eq!(
+                base, scrolled,
+                "scrolled shadow cache key must stay stable at fractional scale (step {step})"
+            );
+        }
     }
 
     #[test]
@@ -10905,48 +10962,37 @@ mod tests {
         }
 
         let root_scale = 1.0;
-        let pixel_radius = 18.0;
-        let first_shapes = translated_card_shadow(740.0);
-        let second_shapes = translated_card_shadow(756.0);
-        let first_source_bounds = unclamped_device_pixel_bounds_for_rect(
-            Rect {
-                x: 6.0,
-                y: 686.0,
-                width: 316.0,
-                height: 228.0,
-            },
-            root_scale,
-            4096,
-        )
-        .expect("first source bounds");
-        let second_source_bounds = unclamped_device_pixel_bounds_for_rect(
-            Rect {
-                x: 6.0,
-                y: 702.0,
-                width: 316.0,
-                height: 228.0,
-            },
-            root_scale,
-            4096,
-        )
-        .expect("second source bounds");
+        let blur_radius = 18.0;
+        let viewport_clip = Rect {
+            x: 0.0,
+            y: 96.0,
+            width: 360.0,
+            height: 720.0,
+        };
+        let key_for = |y: f32| {
+            let shapes = translated_card_shadow(y);
+            let plan = shape_shadow_surface_plan(
+                &shapes,
+                Some(viewport_clip),
+                blur_radius,
+                360,
+                900,
+                root_scale,
+                4096,
+            )
+            .expect("surface plan");
+            shape_shadow_surface_cache_key(
+                &shapes,
+                plan.source_device_bounds,
+                plan.pixel_radius,
+                root_scale,
+            )
+            .expect("cache key")
+        };
 
-        let first_key = shape_shadow_surface_cache_key(
-            &first_shapes,
-            first_source_bounds,
-            pixel_radius,
-            root_scale,
-        )
-        .expect("first key");
-        let second_key = shape_shadow_surface_cache_key(
-            &second_shapes,
-            second_source_bounds,
-            pixel_radius,
-            root_scale,
-        )
-        .expect("second key");
-
-        assert_eq!(first_key, second_key);
+        // The card scrolls under a fixed viewport clip; the visible portion
+        // changes but the cache key must stay anchored to the unclipped source.
+        assert_eq!(key_for(740.0), key_for(756.0));
     }
 
     #[test]
