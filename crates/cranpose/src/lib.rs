@@ -88,6 +88,9 @@ pub mod prelude {
 // Platform-specific runtime modules
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub mod android;
+#[cfg(feature = "renderer-wgpu")]
+#[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
+pub(crate) mod android_gpu_limits;
 
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 pub mod desktop;

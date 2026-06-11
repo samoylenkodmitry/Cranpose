@@ -105,6 +105,40 @@ const MAX_SHAPES_PER_BATCH: usize = 768;
 const MAX_GRADIENT_STOPS: usize = 256;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_GRADIENT_STOPS: usize = 1024;
+
+/// Uniform batch capacities derived from the actual device limits.
+///
+/// The compile-time `MAX_*` constants assume desktop-class 64 KiB uniform
+/// bindings. Android downlevel and GLES-class devices may only offer the
+/// 16 KiB spec minimum; sizing the shape/gradient uniform buffers (and the
+/// matching WGSL array lengths) past `max_uniform_buffer_binding_size` makes
+/// the very first "Shape Bind Group" fail validation and aborts the app.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ShapeBatchLimits {
+    max_shapes_per_batch: usize,
+    max_gradient_stops: usize,
+}
+
+impl ShapeBatchLimits {
+    fn for_device(device: &wgpu::Device) -> Self {
+        Self::for_uniform_binding_size(device.limits().max_uniform_buffer_binding_size)
+    }
+
+    fn for_uniform_binding_size(max_uniform_buffer_binding_size: u64) -> Self {
+        let binding = max_uniform_buffer_binding_size as usize;
+        Self {
+            max_shapes_per_batch: (binding / std::mem::size_of::<ShapeData>())
+                .clamp(1, MAX_SHAPES_PER_BATCH),
+            max_gradient_stops: (binding / std::mem::size_of::<GradientStop>())
+                .clamp(1, MAX_GRADIENT_STOPS),
+        }
+    }
+
+    #[cfg(test)]
+    fn desktop() -> Self {
+        Self::for_uniform_binding_size(wgpu::Limits::default().max_uniform_buffer_binding_size)
+    }
+}
 const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer (vertex/index only)
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 // Sized for HiDPI: a 4K fractional-scale screen full of shadowed panels needs
@@ -1129,22 +1163,22 @@ fn gradient_tile_mode_value(tile_mode: TileMode) -> u32 {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn shape_shader_source() -> Cow<'static, str> {
+fn shape_shader_source(batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
     Cow::Owned(
         shaders::SHADER
             .replace(
                 "array<ShapeData, 200>",
-                &format!("array<ShapeData, {MAX_SHAPES_PER_BATCH}>"),
+                &format!("array<ShapeData, {}>", batch_limits.max_shapes_per_batch),
             )
             .replace(
                 "array<GradientStop, 256>",
-                &format!("array<GradientStop, {MAX_GRADIENT_STOPS}>"),
+                &format!("array<GradientStop, {}>", batch_limits.max_gradient_stops),
             ),
     )
 }
 
 #[cfg(target_arch = "wasm32")]
-fn shape_shader_source() -> Cow<'static, str> {
+fn shape_shader_source(_batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
     Cow::Borrowed(shaders::SHADER)
 }
 
@@ -1154,10 +1188,11 @@ fn create_shape_pipeline(
     uniform_layout: &wgpu::BindGroupLayout,
     shape_layout: &wgpu::BindGroupLayout,
     blend_mode: BlendMode,
+    batch_limits: ShapeBatchLimits,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
-        source: wgpu::ShaderSource::Wgsl(shape_shader_source()),
+        source: wgpu::ShaderSource::Wgsl(shape_shader_source(batch_limits)),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1639,6 +1674,7 @@ struct ShapeBatchBuffers {
     index_capacity: usize,
     shape_capacity: usize,
     gradient_capacity: usize,
+    batch_limits: ShapeBatchLimits,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1760,11 +1796,15 @@ impl StagedBufferUploads {
 }
 
 impl ShapeBatchBuffers {
-    fn new(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout) -> Self {
-        let initial_vertex_cap = MAX_SHAPES_PER_BATCH * 4; // 4 vertices per shape
-        let initial_index_cap = MAX_SHAPES_PER_BATCH * 6; // 6 indices per shape
-        let initial_shape_cap = MAX_SHAPES_PER_BATCH;
-        let initial_gradient_cap = MAX_GRADIENT_STOPS;
+    fn new(
+        device: &wgpu::Device,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        batch_limits: ShapeBatchLimits,
+    ) -> Self {
+        let initial_vertex_cap = batch_limits.max_shapes_per_batch * 4; // 4 vertices per shape
+        let initial_index_cap = batch_limits.max_shapes_per_batch * 6; // 6 indices per shape
+        let initial_shape_cap = batch_limits.max_shapes_per_batch;
+        let initial_gradient_cap = batch_limits.max_gradient_stops;
 
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shape Vertex Buffer"),
@@ -1820,6 +1860,7 @@ impl ShapeBatchBuffers {
             index_capacity: initial_index_cap,
             shape_capacity: initial_shape_cap,
             gradient_capacity: initial_gradient_cap,
+            batch_limits,
         }
     }
 
@@ -1865,8 +1906,12 @@ impl ShapeBatchBuffers {
 
         // Shape and gradient buffers are uniform buffers whose size must match
         // the shader's fixed-size array declarations. Never grow beyond those.
-        if shapes_needed > self.shape_capacity && self.shape_capacity < MAX_SHAPES_PER_BATCH {
-            let new_cap = shapes_needed.next_power_of_two().min(MAX_SHAPES_PER_BATCH);
+        if shapes_needed > self.shape_capacity
+            && self.shape_capacity < self.batch_limits.max_shapes_per_batch
+        {
+            let new_cap = shapes_needed
+                .next_power_of_two()
+                .min(self.batch_limits.max_shapes_per_batch);
             self.shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Shape Data Buffer"),
                 size: (std::mem::size_of::<ShapeData>() * new_cap) as u64,
@@ -1877,12 +1922,13 @@ impl ShapeBatchBuffers {
             need_bind_group_update = true;
         }
 
-        if gradients_needed > self.gradient_capacity && self.gradient_capacity < MAX_GRADIENT_STOPS
+        if gradients_needed > self.gradient_capacity
+            && self.gradient_capacity < self.batch_limits.max_gradient_stops
         {
             let new_cap = gradients_needed
                 .max(1)
                 .next_power_of_two()
-                .min(MAX_GRADIENT_STOPS);
+                .min(self.batch_limits.max_gradient_stops);
             self.gradient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Gradient Buffer"),
                 size: (std::mem::size_of::<GradientStop>() * new_cap) as u64,
@@ -1998,6 +2044,7 @@ pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
     surface_format: wgpu::TextureFormat,
+    shape_batch_limits: ShapeBatchLimits,
     pipeline: wgpu::RenderPipeline,
     pipeline_dst_out: wgpu::RenderPipeline,
     #[cfg(target_arch = "wasm32")]
@@ -2165,6 +2212,7 @@ impl GpuRenderer {
         adapter_backend: wgpu::Backend,
         text_fonts: SoftwareTextFontSet,
     ) -> Self {
+        let shape_batch_limits = ShapeBatchLimits::for_device(&device);
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Uniform Bind Group Layout"),
@@ -2232,6 +2280,7 @@ impl GpuRenderer {
             &uniform_bind_group_layout,
             &shape_bind_group_layout,
             BlendMode::SrcOver,
+            shape_batch_limits,
         );
         let pipeline_dst_out = create_shape_pipeline(
             &device,
@@ -2239,6 +2288,7 @@ impl GpuRenderer {
             &uniform_bind_group_layout,
             &shape_bind_group_layout,
             BlendMode::DstOut,
+            shape_batch_limits,
         );
 
         let image_bind_group_layout =
@@ -2319,7 +2369,8 @@ impl GpuRenderer {
         });
 
         #[cfg(not(target_arch = "wasm32"))]
-        let shape_buffers = ShapeBatchBuffers::new(&device, &shape_bind_group_layout);
+        let shape_buffers =
+            ShapeBatchBuffers::new(&device, &shape_bind_group_layout, shape_batch_limits);
 
         let image_nearest_sampler =
             device.create_sampler(&image_sampler_descriptor(ImageSampling::Nearest));
@@ -2379,6 +2430,7 @@ impl GpuRenderer {
             device,
             queue,
             surface_format,
+            shape_batch_limits,
             pipeline,
             pipeline_dst_out,
             #[cfg(target_arch = "wasm32")]
@@ -3738,6 +3790,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 composite_items: merged_composites.len(),
                 shader_composite_items: shader_composites.len(),
             },
+            self.renderer.shape_batch_limits,
         );
         let result = if ordered_items.is_empty() {
             Ok(SegmentCommandEncodeOutcome { first_batch: true })
@@ -4889,7 +4942,9 @@ impl GpuRenderer {
         root_scale: f32,
     ) -> Result<SegmentCommandEncodeOutcome, String> {
         let mut first_batch = true;
-        for command in SegmentCommandIter::new(ordered_items, shapes, images) {
+        for command in
+            SegmentCommandIter::new(ordered_items, shapes, images, self.shape_batch_limits)
+        {
             match command {
                 SegmentRenderCommand::DrawChunk(chunk) => {
                     let load_op = if first_batch {
@@ -4980,7 +5035,12 @@ impl GpuRenderer {
         root_scale: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<Option<SegmentRenderOutcome>, String> {
-        let Some(partitions) = native_segment_fusion_partitions(ordered_items, shapes, chunk)?
+        let Some(partitions) = native_segment_fusion_partitions(
+            ordered_items,
+            shapes,
+            chunk,
+            self.shape_batch_limits,
+        )?
         else {
             return Ok(None);
         };
@@ -5482,11 +5542,11 @@ impl GpuRenderer {
                         blend_mode,
                     } => {
                         let slice = &ordered_items[start..end];
-                        if slice.len() > MAX_SHAPES_PER_BATCH {
+                        if slice.len() > self.shape_batch_limits.max_shapes_per_batch {
                             return Err(format!(
                                 "shape batch contains {} shapes, exceeding the renderer limit of {}",
                                 slice.len(),
-                                MAX_SHAPES_PER_BATCH
+                                self.shape_batch_limits.max_shapes_per_batch
                             ));
                         }
                         let viewport = ViewportUniformParams {
@@ -5927,6 +5987,7 @@ impl GpuRenderer {
             self.wasm_shape_batches.push(ShapeBatchBuffers::new(
                 &self.device,
                 &self.shape_bind_group_layout,
+                self.shape_batch_limits,
             ));
         }
         slot
@@ -6431,7 +6492,7 @@ impl GpuRenderer {
             let blend_mode = supported_blend_mode(shapes[start].1);
             let mut end = start + 1;
             while end < shapes.len()
-                && end - start < MAX_SHAPES_PER_BATCH
+                && end - start < self.shape_batch_limits.max_shapes_per_batch
                 && supported_blend_mode(shapes[end].1) == blend_mode
             {
                 end += 1;
@@ -6686,7 +6747,7 @@ impl GpuRenderer {
 
         for (idx, shape) in layer_shapes
             .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale))
-            .take(MAX_SHAPES_PER_BATCH)
+            .take(self.shape_batch_limits.max_shapes_per_batch)
             .enumerate()
         {
             let snap_delta = shape
@@ -9148,6 +9209,7 @@ struct SegmentCommandIter<'a> {
     shapes: &'a [DrawShape],
     images: &'a [ImageDraw],
     cursor: usize,
+    batch_limits: ShapeBatchLimits,
 }
 
 impl<'a> SegmentCommandIter<'a> {
@@ -9155,12 +9217,14 @@ impl<'a> SegmentCommandIter<'a> {
         ordered_items: &'a [(usize, SegmentDrawItem)],
         shapes: &'a [DrawShape],
         images: &'a [ImageDraw],
+        batch_limits: ShapeBatchLimits,
     ) -> Self {
         Self {
             ordered_items,
             shapes,
             images,
             cursor: 0,
+            batch_limits,
         }
     }
 }
@@ -9193,6 +9257,7 @@ impl Iterator for SegmentCommandIter<'_> {
                 self.shapes,
                 self.images,
                 self.cursor,
+                self.batch_limits,
             ) else {
                 break;
             };
@@ -9265,6 +9330,7 @@ fn native_segment_fusion_budget(
     ordered_items: &[(usize, SegmentDrawItem)],
     shapes: &[DrawShape],
     chunk: &SegmentDrawChunkPlan,
+    batch_limits: ShapeBatchLimits,
 ) -> Result<Option<NativeSegmentFusionBudget>, String> {
     let mut shape_count = 0usize;
     let mut gradient_stop_count = 0usize;
@@ -9286,7 +9352,9 @@ fn native_segment_fusion_budget(
         }
     }
 
-    if shape_count > MAX_SHAPES_PER_BATCH || gradient_stop_count > MAX_GRADIENT_STOPS {
+    if shape_count > batch_limits.max_shapes_per_batch
+        || gradient_stop_count > batch_limits.max_gradient_stops
+    {
         return Ok(None);
     }
 
@@ -9321,8 +9389,10 @@ fn native_segment_fusion_partitions(
     ordered_items: &[(usize, SegmentDrawItem)],
     shapes: &[DrawShape],
     chunk: &SegmentDrawChunkPlan,
+    batch_limits: ShapeBatchLimits,
 ) -> Result<Option<Vec<NativeSegmentFusionPartition>>, String> {
-    if let Some(budget) = native_segment_fusion_budget(ordered_items, shapes, chunk)? {
+    if let Some(budget) = native_segment_fusion_budget(ordered_items, shapes, chunk, batch_limits)?
+    {
         return Ok(Some(vec![NativeSegmentFusionPartition {
             chunk: chunk.clone(),
             budget,
@@ -9356,16 +9426,16 @@ fn native_segment_fusion_partitions(
                 ));
             };
             let gradient_stop_count = gradient_stop_count_for_shape(&shapes[shape_index]);
-            if gradient_stop_count > MAX_GRADIENT_STOPS {
+            if gradient_stop_count > batch_limits.max_gradient_stops {
                 return Ok(None);
             }
 
             let fits_shape_count =
-                current_budget.shape_count.saturating_add(1) <= MAX_SHAPES_PER_BATCH;
+                current_budget.shape_count.saturating_add(1) <= batch_limits.max_shapes_per_batch;
             let fits_gradient_count = current_budget
                 .gradient_stop_count
                 .saturating_add(gradient_stop_count)
-                <= MAX_GRADIENT_STOPS;
+                <= batch_limits.max_gradient_stops;
             if !fits_shape_count || !fits_gradient_count {
                 if run_start < item_cursor {
                     current.push(SegmentBatchPlan::Shape {
@@ -9406,12 +9476,13 @@ fn segment_batch_plan_at_cursor(
     shapes: &[DrawShape],
     images: &[ImageDraw],
     start: usize,
+    batch_limits: ShapeBatchLimits,
 ) -> Option<(SegmentBatchPlan, usize)> {
     match ordered_items[start].1 {
         SegmentDrawItem::Shape(index) => {
             let blend_mode = supported_blend_mode(shapes[index].blend_mode);
             let mut end = start + 1;
-            let shape_limit = (start + MAX_SHAPES_PER_BATCH).min(ordered_items.len());
+            let shape_limit = (start + batch_limits.max_shapes_per_batch).min(ordered_items.len());
             while end < shape_limit {
                 match ordered_items[end].1 {
                     SegmentDrawItem::Shape(next_index)
@@ -9570,6 +9641,7 @@ fn maybe_print_segment_diag(
     shapes: &[DrawShape],
     images: &[ImageDraw],
     counts: SegmentDiagCounts,
+    batch_limits: ShapeBatchLimits,
 ) {
     if std::env::var_os("CRANPOSE_SEGMENT_DIAG").is_none() {
         return;
@@ -9583,7 +9655,8 @@ fn maybe_print_segment_diag(
         .iter()
         .filter(|(_, item)| matches!(item, SegmentDrawItem::Shadow(_)))
         .count();
-    let commands: Vec<_> = SegmentCommandIter::new(ordered_items, shapes, images).collect();
+    let commands: Vec<_> =
+        SegmentCommandIter::new(ordered_items, shapes, images, batch_limits).collect();
     let draw_chunks = commands
         .iter()
         .filter(|command| matches!(command, SegmentRenderCommand::DrawChunk(_)))
@@ -9598,7 +9671,7 @@ fn maybe_print_segment_diag(
         let SegmentRenderCommand::DrawChunk(chunk) = command else {
             continue;
         };
-        match native_segment_fusion_partitions(ordered_items, shapes, chunk) {
+        match native_segment_fusion_partitions(ordered_items, shapes, chunk, batch_limits) {
             Ok(Some(partitions)) => native_partitions += partitions.len(),
             Ok(None) | Err(_) => native_unfused_chunks += 1,
         }
@@ -14310,7 +14383,13 @@ mod tests {
         let shapes = vec![test_shape(0, BlendMode::SrcOver)];
         let images = vec![test_image(1, BlendMode::DstOut)];
 
-        let commands: Vec<_> = SegmentCommandIter::new(&ordered_items, &shapes, &images).collect();
+        let commands: Vec<_> = SegmentCommandIter::new(
+            &ordered_items,
+            &shapes,
+            &images,
+            ShapeBatchLimits::desktop(),
+        )
+        .collect();
 
         assert_eq!(
             commands,
@@ -14342,7 +14421,13 @@ mod tests {
         let shapes = vec![test_shape(0, BlendMode::SrcOver)];
         let images = vec![test_image(2, BlendMode::SrcOver)];
 
-        let commands: Vec<_> = SegmentCommandIter::new(&ordered_items, &shapes, &images).collect();
+        let commands: Vec<_> = SegmentCommandIter::new(
+            &ordered_items,
+            &shapes,
+            &images,
+            ShapeBatchLimits::desktop(),
+        )
+        .collect();
 
         assert_eq!(
             commands,
@@ -14390,7 +14475,13 @@ mod tests {
 
         let culled =
             retain_renderable_shadow_items(&mut ordered_items, &shadow_draws, 100, 100, 1.0, 4096);
-        let commands: Vec<_> = SegmentCommandIter::new(&ordered_items, &shapes, &images).collect();
+        let commands: Vec<_> = SegmentCommandIter::new(
+            &ordered_items,
+            &shapes,
+            &images,
+            ShapeBatchLimits::desktop(),
+        )
+        .collect();
 
         assert_eq!(culled, 1);
         assert_eq!(
@@ -14437,8 +14528,33 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn shape_batch_limits_follow_uniform_binding_size() {
+        // Desktop-class 64 KiB bindings keep the full compile-time capacities.
+        assert_eq!(
+            ShapeBatchLimits::desktop(),
+            ShapeBatchLimits {
+                max_shapes_per_batch: MAX_SHAPES_PER_BATCH,
+                max_gradient_stops: MAX_GRADIENT_STOPS,
+            }
+        );
+
+        // The 16 KiB downlevel/GLES minimum must shrink batches to fit:
+        // 16384 / 80-byte ShapeData = 204 shapes, 16384 / 32-byte stop = 512.
+        let downlevel = ShapeBatchLimits::for_uniform_binding_size(16384);
+        assert_eq!(downlevel.max_shapes_per_batch, 16384 / 80);
+        assert_eq!(downlevel.max_gradient_stops, 512.min(MAX_GRADIENT_STOPS));
+        assert!(downlevel.max_shapes_per_batch * std::mem::size_of::<ShapeData>() <= 16384);
+        assert!(downlevel.max_gradient_stops * std::mem::size_of::<GradientStop>() <= 16384);
+
+        // Degenerate limits must not produce zero-sized buffers.
+        let tiny = ShapeBatchLimits::for_uniform_binding_size(1);
+        assert_eq!(tiny.max_shapes_per_batch, 1);
+        assert_eq!(tiny.max_gradient_stops, 1);
+    }
+
+    #[test]
     fn native_shape_shader_source_uses_native_batch_limits() {
-        let source = shape_shader_source();
+        let source = shape_shader_source(ShapeBatchLimits::desktop());
 
         assert!(source.contains(&format!("array<ShapeData, {MAX_SHAPES_PER_BATCH}>")));
         assert!(source.contains(&format!("array<GradientStop, {MAX_GRADIENT_STOPS}>")));
@@ -14476,9 +14592,14 @@ mod tests {
             },
         ]);
 
-        let budget = native_segment_fusion_budget(&ordered_items, &shapes, &segment)
-            .expect("budget should be valid")
-            .expect("chunk should fit native fusion budget");
+        let budget = native_segment_fusion_budget(
+            &ordered_items,
+            &shapes,
+            &segment,
+            ShapeBatchLimits::desktop(),
+        )
+        .expect("budget should be valid")
+        .expect("chunk should fit native fusion budget");
 
         assert_eq!(
             budget,
@@ -14511,8 +14632,13 @@ mod tests {
             },
         ]);
 
-        let budget =
-            native_segment_fusion_budget(&ordered_items, &shapes, &segment).expect("valid plan");
+        let budget = native_segment_fusion_budget(
+            &ordered_items,
+            &shapes,
+            &segment,
+            ShapeBatchLimits::desktop(),
+        )
+        .expect("valid plan");
 
         assert_eq!(budget, None);
     }
@@ -14530,8 +14656,13 @@ mod tests {
             blend_mode: BlendMode::SrcOver,
         }]);
 
-        let budget =
-            native_segment_fusion_budget(&ordered_items, &shapes, &segment).expect("valid plan");
+        let budget = native_segment_fusion_budget(
+            &ordered_items,
+            &shapes,
+            &segment,
+            ShapeBatchLimits::desktop(),
+        )
+        .expect("valid plan");
 
         assert_eq!(budget, None);
     }
@@ -14558,9 +14689,14 @@ mod tests {
             },
         ]);
 
-        let partitions = native_segment_fusion_partitions(&ordered_items, &shapes, &segment)
-            .expect("valid plan")
-            .expect("overflowing segment should be partitionable");
+        let partitions = native_segment_fusion_partitions(
+            &ordered_items,
+            &shapes,
+            &segment,
+            ShapeBatchLimits::desktop(),
+        )
+        .expect("valid plan")
+        .expect("overflowing segment should be partitionable");
 
         assert_eq!(partitions.len(), 2);
         assert_eq!(
@@ -14614,9 +14750,14 @@ mod tests {
             blend_mode: BlendMode::SrcOver,
         }]);
 
-        let partitions = native_segment_fusion_partitions(&ordered_items, &shapes, &segment)
-            .expect("valid plan")
-            .expect("overflowing gradient segment should be partitionable");
+        let partitions = native_segment_fusion_partitions(
+            &ordered_items,
+            &shapes,
+            &segment,
+            ShapeBatchLimits::desktop(),
+        )
+        .expect("valid plan")
+        .expect("overflowing gradient segment should be partitionable");
 
         assert_eq!(partitions.len(), 2);
         assert_eq!(
@@ -14677,9 +14818,14 @@ mod tests {
             },
         ]);
 
-        let partitions = native_segment_fusion_partitions(&ordered_items, &shapes, &segment)
-            .expect("valid plan")
-            .expect("composites are drawable inside the native fused pass");
+        let partitions = native_segment_fusion_partitions(
+            &ordered_items,
+            &shapes,
+            &segment,
+            ShapeBatchLimits::desktop(),
+        )
+        .expect("valid plan")
+        .expect("composites are drawable inside the native fused pass");
 
         assert_eq!(
             partitions,
@@ -14728,9 +14874,14 @@ mod tests {
             },
         ]);
 
-        let partitions = native_segment_fusion_partitions(&ordered_items, &shapes, &segment)
-            .expect("valid plan")
-            .expect("overflowing segment should be partitionable");
+        let partitions = native_segment_fusion_partitions(
+            &ordered_items,
+            &shapes,
+            &segment,
+            ShapeBatchLimits::desktop(),
+        )
+        .expect("valid plan")
+        .expect("overflowing segment should be partitionable");
 
         assert_eq!(partitions.len(), 2);
         assert_eq!(
@@ -14771,7 +14922,13 @@ mod tests {
         ];
         let images = vec![test_image(1, BlendMode::SrcOver)];
 
-        let commands: Vec<_> = SegmentCommandIter::new(&ordered_items, &shapes, &images).collect();
+        let commands: Vec<_> = SegmentCommandIter::new(
+            &ordered_items,
+            &shapes,
+            &images,
+            ShapeBatchLimits::desktop(),
+        )
+        .collect();
 
         assert_eq!(
             commands,
@@ -14805,7 +14962,13 @@ mod tests {
             .collect();
         let images = Vec::new();
 
-        let commands: Vec<_> = SegmentCommandIter::new(&ordered_items, &shapes, &images).collect();
+        let commands: Vec<_> = SegmentCommandIter::new(
+            &ordered_items,
+            &shapes,
+            &images,
+            ShapeBatchLimits::desktop(),
+        )
+        .collect();
 
         assert_eq!(
             commands,
@@ -14835,7 +14998,13 @@ mod tests {
         let shapes = vec![test_shape(0, BlendMode::SrcOver)];
         let images = vec![test_image(2, BlendMode::SrcOver)];
 
-        let commands: Vec<_> = SegmentCommandIter::new(&ordered_items, &shapes, &images).collect();
+        let commands: Vec<_> = SegmentCommandIter::new(
+            &ordered_items,
+            &shapes,
+            &images,
+            ShapeBatchLimits::desktop(),
+        )
+        .collect();
 
         assert_eq!(
             commands,
