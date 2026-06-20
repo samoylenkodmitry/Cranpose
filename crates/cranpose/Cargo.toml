@@ -22,7 +22,10 @@ desktop = [
     "dep:x11rb",
     "dep:winit",
 ]
-ios = []
+ios = [
+    "cranpose-platform-desktop-winit",
+    "dep:winit",
+]
 android = ["cranpose-platform-android"]
 web = ["cranpose-platform-web", "dep:wasm-bindgen", "dep:web-sys"]
 renderer-pixels = ["cranpose-render-pixels"]
@@ -118,7 +121,15 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
     "wgsl",
 ] }
 
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos")))'.dependencies]
+[target.'cfg(target_os = "ios")'.dependencies]
+wgpu = { version = "29.0", optional = true, default-features = false, features = [
+    "std",
+    "parking_lot",
+    "metal",
+    "wgsl",
+] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos"), not(target_os = "ios")))'.dependencies]
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",

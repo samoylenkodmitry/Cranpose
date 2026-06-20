@@ -59,37 +59,22 @@ jobs:
 
       - name: Package macOS .app bundle
         if: runner.os == 'macOS'
+        # Assemble and ad-hoc sign the bundle through xtask so the `.app` carries
+        # a valid code-signature seal (`_CodeSignature/CodeResources`). An
+        # unsealed bundle is reported as "damaged" by Gatekeeper once downloaded
+        # (quarantined). This reuses the single bundling path in `cargo xtask
+        # bundle-macos` instead of duplicating the Info.plist here.
         run: |
-          mkdir -p CranposeDemo.app/Contents/MacOS
-          mkdir -p CranposeDemo.app/Contents/Resources
-          cp target/${{ matrix.target }}/release/desktop-app \
-             CranposeDemo.app/Contents/MacOS/CranposeDemo
-          cat > CranposeDemo.app/Contents/Info.plist <<'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleIdentifier</key>
-            <string>com.cranpose.desktop-demo</string>
-            <key>CFBundleName</key>
-            <string>Cranpose Demo</string>
-            <key>CFBundleExecutable</key>
-            <string>CranposeDemo</string>
-            <key>CFBundleVersion</key>
-            <string>1</string>
-            <key>CFBundleShortVersionString</key>
-            <string>1.0</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>LSMinimumSystemVersion</key>
-            <string>12.0</string>
-            <key>NSHighResolutionCapable</key>
-            <true/>
-          </dict>
-          </plist>
-          PLIST
-          tar czf ${{ matrix.artifact_name }}.tar.gz CranposeDemo.app
+          cargo run -p xtask -- bundle-macos \
+            --no-build \
+            --target ${{ matrix.target }} \
+            --app-name CranposeDemo \
+            --bundle-id io.cranpose.demo \
+            --out-dir target/macos-bundles
+          codesign --verify --strict --verbose=2 \
+            target/macos-bundles/CranposeDemo.app
+          tar czf ${{ matrix.artifact_name }}.tar.gz \
+            -C target/macos-bundles CranposeDemo.app
 
       - name: Package Linux binary
         if: runner.os == 'Linux'

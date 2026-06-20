@@ -5,13 +5,15 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
+    <string>CranposeDemo</string>
     <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <string>io.cranpose.demo</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>$(PRODUCT_NAME)</string>
+    <string>Cranpose Demo</string>
+    <key>CFBundleDisplayName</key>
+    <string>Cranpose</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -20,17 +22,25 @@
     <string>1</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
-    <key>UIRequiresFullScreen</key>
-    <true/>
-    <key>UIStatusBarHidden</key>
-    <true/>
+    <key>MinimumOSVersion</key>
+    <string>13.0</string>
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>1</integer>
+        <integer>2</integer>
+    </array>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+        <string>metal</string>
+    </array>
+    <key>UILaunchScreen</key>
+    <dict/>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
-    <key>UILaunchStoryboardName</key>
-    <string></string>
 </dict>
 </plist>

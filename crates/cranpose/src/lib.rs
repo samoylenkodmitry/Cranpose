@@ -3,11 +3,6 @@
 
 //! High level utilities for running Cranpose applications with minimal boilerplate.
 
-#[cfg(all(feature = "ios", target_os = "ios"))]
-compile_error!(
-    "cranpose iOS support requires a real UIKit/CAMetalLayer backend and is unavailable."
-);
-
 #[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
 mod android_host_window;
 #[cfg(all(feature = "android", target_os = "android"))]
@@ -23,7 +18,10 @@ pub use android_host_window::{
     rememberAndroidHostWindowState, AndroidHostWindowPositionError, AndroidHostWindowSizeError,
     AndroidHostWindowSizeStatus, AndroidHostWindowState,
 };
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+#[cfg(all(
+    feature = "renderer-wgpu",
+    any(feature = "desktop", all(feature = "ios", target_os = "ios"))
+))]
 pub use launcher::LaunchError;
 pub use launcher::{AndroidOverlayWindowOptions, AppLauncher, AppSettings};
 pub use native_window::{
@@ -36,6 +34,7 @@ pub use native_window::{
     any(
         feature = "desktop",
         all(feature = "android", target_os = "android"),
+        all(feature = "ios", target_os = "ios"),
         all(feature = "web", target_arch = "wasm32")
     )
 ))]
@@ -45,6 +44,7 @@ mod present_mode;
     any(
         feature = "desktop",
         all(feature = "android", target_os = "android"),
+        all(feature = "ios", target_os = "ios"),
         all(feature = "web", target_arch = "wasm32")
     )
 ))]
@@ -89,11 +89,20 @@ pub mod prelude {
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub mod android;
 #[cfg(feature = "renderer-wgpu")]
-#[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
-pub(crate) mod android_gpu_limits;
+#[cfg_attr(
+    not(any(
+        all(feature = "android", target_os = "android"),
+        all(feature = "ios", target_os = "ios")
+    )),
+    allow(dead_code)
+)]
+pub(crate) mod gpu_limits;
 
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 pub mod desktop;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+pub mod ios;
 
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 pub mod recorder;
