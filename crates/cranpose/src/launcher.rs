@@ -7,7 +7,7 @@
 use cranpose_app_shell::FramePacingMode;
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 use std::path::PathBuf;
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+#[cfg(all(feature = "renderer-wgpu", any(feature = "desktop", feature = "ios")))]
 use thiserror::Error;
 
 /// Configuration for application settings.
@@ -132,8 +132,8 @@ impl AndroidOverlayWindowOptions {
     }
 }
 
-/// Errors that can occur while launching a desktop application.
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+/// Errors that can occur while launching a windowed (desktop or iOS) application.
+#[cfg(all(feature = "renderer-wgpu", any(feature = "desktop", feature = "ios")))]
 #[derive(Debug, Error)]
 pub enum LaunchError {
     /// Creating the desktop event loop failed.
@@ -172,7 +172,7 @@ pub enum LaunchError {
     TestDriverPanic(String),
 }
 
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+#[cfg(all(feature = "renderer-wgpu", any(feature = "desktop", feature = "ios")))]
 pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
     eprintln!("{context}: {error}");
     std::process::exit(1)
@@ -580,6 +580,35 @@ impl AppLauncher {
     pub fn run_windows(self, content: impl FnMut() + 'static) -> ! {
         self.try_run_windows(content)
             .unwrap_or_else(|error| exit_after_launch_error("desktop launch failed", error));
+        std::process::exit(0)
+    }
+
+    /// Run the application (iOS platform).
+    ///
+    /// Drives winit's UIKit event loop and blocks for the lifetime of the app.
+    /// `UIApplicationMain` is started by winit, so the iOS app binary needs no
+    /// Objective-C entry point.
+    ///
+    /// # Arguments
+    ///
+    /// * `content` - The root composable function of your application.
+    #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+    pub fn try_run(self, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
+        let mut content = content;
+        crate::ios::try_run(self.settings, move || {
+            crate::ProvideUriHandler(|| {
+                content();
+            });
+        })
+    }
+
+    /// Run the application (iOS platform).
+    ///
+    /// Use [`AppLauncher::try_run`] when the caller needs a typed launch failure.
+    #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+    pub fn run(self, content: impl FnMut() + 'static) -> ! {
+        self.try_run(content)
+            .unwrap_or_else(|error| exit_after_launch_error("iOS launch failed", error));
         std::process::exit(0)
     }
 

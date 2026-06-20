@@ -19,6 +19,11 @@ name = "desktop-app"
 path = "src/main.rs"
 required-features = ["desktop"]
 
+[[bin]]
+name = "cranpose-ios"
+path = "src/ios_main.rs"
+required-features = ["ios"]
+
 [features]
 default = ["renderer-wgpu", "desktop-http"]
 renderer-pixels = ["cranpose/renderer-pixels"]
@@ -28,6 +33,12 @@ desktop = [
     "cranpose-services/uri-native",
 ]
 desktop-http = ["desktop", "cranpose-services/http-native"]
+ios = [
+    "renderer-wgpu",
+    "cranpose/ios",
+    "cranpose-services/uri-native",
+    "cranpose-services/http-native",
+]
 system-theme = ["cranpose-services/system-theme"]
 android = [
     "cranpose/android",

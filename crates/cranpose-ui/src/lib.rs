@@ -22,6 +22,7 @@ mod pointer_dispatch;
 mod primitives;
 mod render_state;
 mod renderer;
+pub mod safe_area;
 pub mod scroll;
 mod subcompose_layout;
 pub mod text;
@@ -53,6 +54,7 @@ pub use interaction::{
     rememberMutableInteractionSource, Interaction, MutableInteractionSource, PressInteraction,
     PressInteractionCancel, PressInteractionPress, PressInteractionRelease,
 };
+pub use safe_area::local_safe_area_insets;
 // Re-export FocusManager from cranpose-foundation to avoid duplication
 pub use cranpose_foundation::nodes::input::focus::FocusManager;
 pub use cranpose_foundation::{

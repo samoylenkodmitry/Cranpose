@@ -417,7 +417,7 @@ fn create_android_gpu_resources(
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Android Device"),
         required_features: wgpu::Features::empty(),
-        required_limits: crate::android_gpu_limits::android_device_limits(adapter.limits()),
+        required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::default(),
         trace: wgpu::Trace::Off,

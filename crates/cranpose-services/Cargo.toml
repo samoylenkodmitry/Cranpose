@@ -51,7 +51,15 @@ web-sys = { version = "0.3", features = [
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.4.0"
+
+# Desktop and Android use rustls. iOS uses native-tls (Security.framework): the
+# rustls default crypto provider (aws-lc-sys) does not link for the device
+# `aarch64-apple-ios` target, and native-tls uses the system trust store.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "rustls"], optional = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "native-tls"], optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 webbrowser = { version = "1.2.1", optional = true }

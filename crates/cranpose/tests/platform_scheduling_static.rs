@@ -533,22 +533,36 @@ fn desktop_x11_client_is_app_owned() {
 }
 
 #[test]
-fn ios_feature_is_reserved_without_demo_native_entries() {
+fn ios_backend_is_wired_without_aliasing_desktop() {
+    // The cranpose iOS feature is wired to a real winit-based backend: it is no
+    // longer reserved, and it does not alias the desktop feature.
     let cranpose_manifest = crate_source("Cargo.toml");
     assert!(
-        cranpose_manifest.contains("ios = []"),
-        "cranpose ios feature should stay reserved until the real backend exists"
+        !cranpose_manifest.contains("ios = []"),
+        "cranpose ios feature must be wired to the real backend, not reserved"
     );
     assert!(
         !cranpose_manifest.contains("ios = [\"desktop\"]"),
-        "ios must not alias desktop"
+        "ios must not alias the desktop feature"
     );
+
+    // The facade exposes the backend module instead of an unavailable stub.
     let facade = crate_source("src/lib.rs");
     assert!(
-        facade.contains("#[cfg(all(feature = \"ios\", target_os = \"ios\"))]")
-            && facade.contains("UIKit/CAMetalLayer backend")
-            && facade.contains("unavailable"),
-        "ios feature should fail explicitly on iOS targets until a real UIKit/CAMetalLayer backend exists"
+        facade.contains("pub mod ios;"),
+        "cranpose must expose the iOS backend module"
+    );
+    assert!(
+        !facade.contains("backend and is unavailable"),
+        "the iOS-unavailable compile_error must be gone"
+    );
+
+    // The backend drives its own winit UIKit event loop (a real surface, not a
+    // reuse of the desktop multi-window runtime).
+    let ios = crate_source("src/ios.rs");
+    assert!(
+        ios.contains("ApplicationHandler") && ios.contains("winit"),
+        "ios backend should drive its own winit event loop"
     );
 
     let cranpose_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -556,53 +570,28 @@ fn ios_feature_is_reserved_without_demo_native_entries() {
         .parent()
         .and_then(Path::parent)
         .expect("cranpose crate should live under workspace crates directory");
-    for manifest in [
-        "apps/desktop-demo/Cargo.toml",
-        "apps/isolated-demo/Cargo.toml",
-    ] {
-        let source = std::fs::read_to_string(workspace_dir.join(manifest))
-            .unwrap_or_else(|err| panic!("failed to read {manifest}: {err}"));
-        assert!(
-            !source
-                .lines()
-                .any(|line| line.trim_start().starts_with("ios =")),
-            "{manifest} must not advertise an iOS app feature while iOS has no backend"
-        );
-    }
-    for source_path in [
-        "apps/desktop-demo-platform/src/android_entry.rs",
-        "apps/isolated-demo/src/native_entry.rs",
-        "apps/ios-demo/ios/CranposeDemo/main.m",
-        "apps/isolated-demo/ios/CranposeIsolatedDemo/main.m",
-    ] {
-        let source = std::fs::read_to_string(workspace_dir.join(source_path))
-            .unwrap_or_else(|err| panic!("failed to read {source_path}: {err}"));
-        assert!(
-            !source.contains("ios_main"),
-            "{source_path} must not expose an iOS native entry before the iOS backend exists"
-        );
-    }
-    for script_path in [
-        "apps/ios-demo/ios/build-rust.sh",
-        "apps/isolated-demo/ios/build-rust.sh",
-    ] {
-        let ios_build_script = std::fs::read_to_string(workspace_dir.join(script_path))
-            .unwrap_or_else(|err| panic!("failed to read {script_path}: {err}"));
-        assert!(
-            !ios_build_script.contains("--features ios")
-                && ios_build_script.contains("does not currently ship an iOS backend"),
-            "{script_path} must fail clearly instead of building the reserved ios feature"
-        );
-    }
 
-    let release_workflow =
-        std::fs::read_to_string(workspace_dir.join(".github/workflows/release.yml"))
-            .expect("failed to read release workflow");
+    // The demo advertises an iOS app feature and ships the iOS entry binary.
+    let demo_manifest = std::fs::read_to_string(workspace_dir.join("apps/desktop-demo/Cargo.toml"))
+        .expect("failed to read desktop-demo manifest");
     assert!(
-        !release_workflow.contains("ios-sim")
-            && !release_workflow.contains("aarch64-apple-ios")
-            && !release_workflow.contains("--features ios"),
-        "release artifacts must not ship an iOS target until the real iOS backend exists"
+        demo_manifest
+            .lines()
+            .any(|line| line.trim_start().starts_with("ios =")),
+        "desktop-demo should advertise an iOS app feature"
+    );
+    assert!(
+        demo_manifest.contains("name = \"cranpose-ios\""),
+        "desktop-demo should declare the cranpose-ios binary"
+    );
+
+    // The iOS build script builds the ios feature instead of failing.
+    let build_script =
+        std::fs::read_to_string(workspace_dir.join("apps/ios-demo/ios/build-app.sh"))
+            .expect("failed to read ios build script");
+    assert!(
+        build_script.contains("--features ios"),
+        "ios build script should build the ios feature"
     );
 }
 
