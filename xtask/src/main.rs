@@ -68,7 +68,7 @@ fn print_usage() {
            --resources <path>     Directory copied into Contents/Resources\n\
            --target <triple>      Cargo target triple\n\
            --no-build             Bundle an already built binary\n\
-           --sign-identity <id>   Run codesign with this identity"
+           --sign-identity <id>   codesign identity to seal the bundle [ad-hoc \"-\"]"
     );
 }
 
@@ -425,9 +425,17 @@ fn bundle_macos(options: BundleMacosOptions) -> Result<(), String> {
     }
 
     let bundle = create_bundle(&workspace, &options, &binary)?;
-    if let Some(identity) = options.sign_identity.as_deref() {
-        sign_bundle(&bundle, identity)?;
-    }
+    // Always seal the bundle. The Rust linker ad-hoc signs the inner Mach-O with
+    // a bundle-style signature that expects `_CodeSignature/CodeResources`, but
+    // assembling the `.app` afterwards leaves that seal missing. A downloaded
+    // (quarantined) bundle in that state fails Gatekeeper with "is damaged and
+    // should be moved to the Trash". Re-signing the assembled bundle binds the
+    // Info.plist and writes a valid seal; ad-hoc (`-`) is the default when no
+    // developer identity is supplied.
+    sign_bundle(
+        &bundle,
+        bundle_sign_identity(options.sign_identity.as_deref()),
+    )?;
 
     println!("macOS app bundle: {}", bundle.display());
     Ok(())
@@ -782,6 +790,14 @@ fn escape_xml(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+/// Selects the codesign identity used to seal a macOS bundle.
+///
+/// Falls back to ad-hoc (`-`) when no developer identity is supplied so the
+/// `.app` always carries a valid signature seal.
+fn bundle_sign_identity(requested: Option<&str>) -> &str {
+    requested.unwrap_or("-")
 }
 
 fn sign_bundle(bundle: &Path, identity: &str) -> Result<(), String> {
@@ -1868,6 +1884,21 @@ cranpose v0.1.0
         assert!(bundle.join("Contents/Info.plist").exists());
         assert!(bundle.join("Contents/MacOS/Cranpose-Demo").exists());
         assert!(bundle.join("Contents/Resources/nested/data.txt").exists());
+    }
+
+    #[test]
+    fn bundle_defaults_to_adhoc_signing() {
+        // Without a developer identity the bundle must still be sealed ad-hoc.
+        // An unsealed `.app` is reported "damaged" by Gatekeeper once downloaded.
+        assert_eq!(bundle_sign_identity(None), "-");
+    }
+
+    #[test]
+    fn bundle_uses_supplied_signing_identity() {
+        assert_eq!(
+            bundle_sign_identity(Some("Developer ID Application: Example")),
+            "Developer ID Application: Example"
+        );
     }
 
     fn unique_temp_dir() -> PathBuf {

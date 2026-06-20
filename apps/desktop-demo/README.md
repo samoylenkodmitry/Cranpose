@@ -29,6 +29,25 @@ Or from the repository root:
 cargo run --bin desktop-app
 ```
 
+#### macOS packaging
+
+Distribute the macOS demo as a `.app` bundle, never as a bare executable: macOS
+Finder runs bare Unix executables inside a Terminal window, so double-clicking a
+loose binary spawns a terminal alongside (or instead of) the GUI.
+
+Build a signed bundle with xtask:
+
+```bash
+cargo xtask bundle-macos --target aarch64-apple-darwin
+```
+
+The bundle is sealed with an ad-hoc signature by default (`_CodeSignature/CodeResources`
+binding `Info.plist`). This is required: an unsealed bundle is reported as
+"is damaged and should be moved to the Trash" by Gatekeeper once it has been
+downloaded (quarantined). Without a paid Apple Developer ID the app is still
+unidentified, so the first launch needs right-click → **Open** (or pass
+`--sign-identity "Developer ID Application: …"` to sign for distribution).
+
 ### Android
 
 This app is used by the Android demo. See [`apps/android-demo/README.md`](../android-demo/README.md) for build instructions.
