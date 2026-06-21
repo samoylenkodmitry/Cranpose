@@ -20,10 +20,12 @@ pub(crate) fn mobile_device_limits(adapter_limits: wgpu::Limits) -> wgpu::Limits
     limits.max_uniform_buffer_binding_size = adapter_limits
         .max_uniform_buffer_binding_size
         .min(wgpu::Limits::default().max_uniform_buffer_binding_size);
-    // The renderer uses no compute pipelines, but `downlevel_defaults` still
-    // requests compute limits. Some adapters (notably the Android emulator's
-    // GLES driver) report zero for these, which fails device creation. Request
-    // only what the adapter grants so the device is always created.
+    // The renderer uses neither compute pipelines nor storage buffers (the
+    // latter aren't available to WebGL fragment shaders, so the renderer avoids
+    // them everywhere), but `downlevel_defaults` still requests both. Some
+    // adapters — notably the Android emulator's GLES driver — report zero for
+    // these limits, which fails device creation. Request only what the adapter
+    // grants for the unused capabilities so the device is always created.
     limits.max_compute_workgroup_storage_size = adapter_limits.max_compute_workgroup_storage_size;
     limits.max_compute_invocations_per_workgroup =
         adapter_limits.max_compute_invocations_per_workgroup;
@@ -32,6 +34,13 @@ pub(crate) fn mobile_device_limits(adapter_limits: wgpu::Limits) -> wgpu::Limits
     limits.max_compute_workgroup_size_z = adapter_limits.max_compute_workgroup_size_z;
     limits.max_compute_workgroups_per_dimension =
         adapter_limits.max_compute_workgroups_per_dimension;
+    limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+    limits.max_storage_buffers_per_shader_stage =
+        adapter_limits.max_storage_buffers_per_shader_stage;
+    limits.max_storage_textures_per_shader_stage =
+        adapter_limits.max_storage_textures_per_shader_stage;
+    limits.max_dynamic_storage_buffers_per_pipeline_layout =
+        adapter_limits.max_dynamic_storage_buffers_per_pipeline_layout;
     limits
 }
 
@@ -81,5 +90,24 @@ mod tests {
         assert_eq!(limits.max_compute_workgroups_per_dimension, 0);
         assert_eq!(limits.max_compute_invocations_per_workgroup, 0);
         assert_eq!(limits.max_compute_workgroup_storage_size, 0);
+    }
+
+    #[test]
+    fn storage_limits_never_exceed_adapter() {
+        // The Android emulator's GLES driver reports zero storage-buffer limits;
+        // the renderer uses no storage buffers, so request only what the adapter
+        // grants (`downlevel_defaults` otherwise asks for 128 MiB and fails).
+        let no_storage = wgpu::Limits {
+            max_storage_buffer_binding_size: 0,
+            max_storage_buffers_per_shader_stage: 0,
+            max_storage_textures_per_shader_stage: 0,
+            max_dynamic_storage_buffers_per_pipeline_layout: 0,
+            ..wgpu::Limits::downlevel_defaults()
+        };
+        let limits = mobile_device_limits(no_storage);
+        assert_eq!(limits.max_storage_buffer_binding_size, 0);
+        assert_eq!(limits.max_storage_buffers_per_shader_stage, 0);
+        assert_eq!(limits.max_storage_textures_per_shader_stage, 0);
+        assert_eq!(limits.max_dynamic_storage_buffers_per_pipeline_layout, 0);
     }
 }
