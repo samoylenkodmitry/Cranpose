@@ -4,10 +4,12 @@
 //! [`CranposeFilePickerActivity`](https://github.com/samoylenkodmitry/cranpose)
 //! launch `ACTION_OPEN_DOCUMENT` / `ACTION_OPEN_DOCUMENT_TREE`, so the user can
 //! choose a file or a folder from any document provider the device exposes
-//! (local storage, cloud, or a mounted WebDAV share). The Java side copies the
-//! selection into the app cache and reports the path back through
-//! [`Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFilePicked`],
-//! which lets the picked entry be read with ordinary filesystem calls.
+//! (local storage, cloud, or a mounted WebDAV share). The Java side reports the
+//! chosen `content://` document URIs back through
+//! [`Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFilePicked`];
+//! nothing is copied. A picked file is read on demand by opening a descriptor
+//! from the provider through [`open_content_uri`], so even a multi-gigabyte
+//! folder is selected instantly and each track is streamed only when played.
 //!
 //! The Java callback runs on the Android UI thread while `android_main` runs on
 //! its own thread, so results travel through `Send` globals; the picked-entry
@@ -18,12 +20,14 @@ use cranpose_services::{
     set_platform_file_picker, FilePicker, FilePickerError, FilePickerOptions, PickedEntry,
     PickedEntryRef, PickedKind, PickerFuture,
 };
-use jni::objects::{JClass, JString, JValue};
+use jni::objects::{JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jlong};
 use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
 use std::collections::HashMap;
+use std::fs::File;
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::io::{self, Read};
+use std::os::fd::FromRawFd;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -32,9 +36,17 @@ use std::task::{Context, Poll, Waker};
 
 type PickResult = Result<Option<PickedEntryRef>, FilePickerError>;
 
+/// A picked document: its `content://` URI and display name.
+struct PickedDocument {
+    uri: String,
+    name: String,
+}
+
 /// The raw, `Send` data delivered from the Java UI-thread callback.
 struct RawResult {
-    path: Option<String>,
+    folder: bool,
+    documents: Vec<PickedDocument>,
+    cancelled: bool,
     error: Option<String>,
 }
 
@@ -131,87 +143,146 @@ impl Future for PickFuture {
 }
 
 fn build_result(raw: RawResult) -> PickResult {
+    if raw.cancelled {
+        return Ok(None);
+    }
     if let Some(error) = raw.error {
         return Err(FilePickerError::Failed(error));
     }
-    let Some(path) = raw.path else {
-        return Ok(None);
-    };
-    let path = PathBuf::from(path);
-    let kind = if path.is_dir() {
-        PickedKind::Folder
+    if raw.folder {
+        let children: Vec<PickedEntryRef> = raw
+            .documents
+            .into_iter()
+            .map(|document| Rc::new(UriEntry::from(document)) as PickedEntryRef)
+            .collect();
+        Ok(Some(Rc::new(FolderEntry { children })))
     } else {
-        PickedKind::File
-    };
-    Ok(Some(Rc::new(CacheEntry { path, kind })))
+        match raw.documents.into_iter().next() {
+            Some(document) => Ok(Some(Rc::new(UriEntry::from(document)))),
+            None => Ok(None),
+        }
+    }
 }
 
-/// A picked entry materialized into the app cache; read through `std::fs`.
-struct CacheEntry {
-    path: PathBuf,
-    kind: PickedKind,
+/// A picked file addressed by a `content://` URI. It is opened on demand
+/// through the provider's descriptor and never copied to the cache.
+struct UriEntry {
+    uri: String,
+    name: String,
 }
 
-impl PickedEntry for CacheEntry {
+impl From<PickedDocument> for UriEntry {
+    fn from(document: PickedDocument) -> Self {
+        UriEntry {
+            uri: document.uri,
+            name: document.name,
+        }
+    }
+}
+
+impl PickedEntry for UriEntry {
     fn name(&self) -> String {
-        self.path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.path.display().to_string())
+        self.name.clone()
     }
 
     fn kind(&self) -> PickedKind {
-        self.kind
+        PickedKind::File
     }
 
     fn display_path(&self) -> String {
-        self.path.display().to_string()
+        self.uri.clone()
     }
 
     fn read_bytes(&self) -> PickerFuture<Result<Vec<u8>, FilePickerError>> {
-        if self.kind != PickedKind::File {
-            return Box::pin(async {
-                Err(FilePickerError::WrongKind {
-                    actual: "folder",
-                    expected: "file",
-                })
-            });
-        }
-        let path = self.path.clone();
+        let uri = self.uri.clone();
         Box::pin(async move {
-            std::fs::read(&path).map_err(|error| FilePickerError::ReadFailed(error.to_string()))
+            let mut file = open_content_uri(&uri)
+                .map_err(|error| FilePickerError::ReadFailed(error.to_string()))?;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .map_err(|error| FilePickerError::ReadFailed(error.to_string()))?;
+            Ok(bytes)
         })
     }
 
     fn list(&self) -> PickerFuture<Result<Vec<PickedEntryRef>, FilePickerError>> {
-        if self.kind != PickedKind::Folder {
-            return Box::pin(async {
-                Err(FilePickerError::WrongKind {
-                    actual: "file",
-                    expected: "folder",
-                })
-            });
-        }
-        let path = self.path.clone();
-        Box::pin(async move { list_dir(&path) })
+        Box::pin(async {
+            Err(FilePickerError::WrongKind {
+                actual: "file",
+                expected: "folder",
+            })
+        })
     }
 }
 
-fn list_dir(path: &Path) -> Result<Vec<PickedEntryRef>, FilePickerError> {
-    let read =
-        std::fs::read_dir(path).map_err(|error| FilePickerError::ReadFailed(error.to_string()))?;
-    let mut entries: Vec<PickedEntryRef> = Vec::new();
-    for entry in read {
-        let entry = entry.map_err(|error| FilePickerError::ReadFailed(error.to_string()))?;
-        let path = entry.path();
-        let kind = if path.is_dir() {
-            PickedKind::Folder
-        } else {
-            PickedKind::File
-        };
-        entries.push(Rc::new(CacheEntry { path, kind }));
+/// A picked folder: its audio descendants enumerated as [`UriEntry`] children
+/// without copying anything.
+struct FolderEntry {
+    children: Vec<PickedEntryRef>,
+}
+
+impl PickedEntry for FolderEntry {
+    fn name(&self) -> String {
+        "folder".to_string()
     }
-    Ok(entries)
+
+    fn kind(&self) -> PickedKind {
+        PickedKind::Folder
+    }
+
+    fn display_path(&self) -> String {
+        String::new()
+    }
+
+    fn read_bytes(&self) -> PickerFuture<Result<Vec<u8>, FilePickerError>> {
+        Box::pin(async {
+            Err(FilePickerError::WrongKind {
+                actual: "folder",
+                expected: "file",
+            })
+        })
+    }
+
+    fn list(&self) -> PickerFuture<Result<Vec<PickedEntryRef>, FilePickerError>> {
+        let children = self.children.clone();
+        Box::pin(async move { Ok(children) })
+    }
+}
+
+/// Opens a picked `content://` document for reading, returning a [`File`] backed
+/// by the provider's descriptor. Nothing is copied; the descriptor is detached
+/// from its `ParcelFileDescriptor` so the returned `File` owns and closes it.
+/// Callable from any thread (it attaches to the JVM as needed), so the audio
+/// engine can stream a track straight from the provider.
+pub fn open_content_uri(uri: &str) -> io::Result<File> {
+    let app = APP.get().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotConnected,
+            "Android file picker is not registered",
+        )
+    })?;
+    let fd = crate::android_jni::with_android_activity_env(app, |env, activity| {
+        let argument = env.new_string(uri).map_err(|error| error.to_string())?;
+        let argument: &JObject = argument.as_ref();
+        env.call_method(
+            &activity,
+            jni_str!("cranposeOpenUri"),
+            jni_sig!("(Ljava/lang/String;)I"),
+            &[JValue::Object(argument)],
+        )
+        .and_then(|value| value.i())
+        .map_err(|error| error.to_string())
+    })
+    .map_err(|error| io::Error::other(error))?;
+    if fd < 0 {
+        return Err(io::Error::other(format!(
+            "ContentResolver returned no descriptor for {uri}"
+        )));
+    }
+    // SAFETY: `cranposeOpenUri` detaches the descriptor from its
+    // `ParcelFileDescriptor`, transferring ownership to this process; the
+    // returned `File` closes it on drop.
+    Ok(unsafe { File::from_raw_fd(fd) })
 }
 
 fn deliver(token: i64, result: RawResult) {
@@ -224,7 +295,9 @@ fn deliver(token: i64, result: RawResult) {
     }
 }
 
-/// Java callback delivering a picker result. Runs on the Android UI thread.
+/// Java callback delivering a picker result. Runs on a worker thread spawned by
+/// the activity. `entries` is newline-separated `uri\tname` rows (one for a
+/// file, every audio descendant for a folder).
 #[doc(hidden)]
 #[no_mangle]
 pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFilePicked<
@@ -233,14 +306,41 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nati
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,
-    path: JString<'local>,
+    folder: jboolean,
+    entries: JString<'local>,
     cancelled: jboolean,
     error: JString<'local>,
 ) {
-    let path = read_optional_jstring(&mut env, path);
+    let documents = read_optional_jstring(&mut env, entries)
+        .map(parse_documents)
+        .unwrap_or_default();
     let error = read_optional_jstring(&mut env, error);
-    let path = if cancelled { None } else { path };
-    deliver(token, RawResult { path, error });
+    deliver(
+        token,
+        RawResult {
+            folder,
+            documents,
+            cancelled,
+            error,
+        },
+    );
+}
+
+fn parse_documents(text: String) -> Vec<PickedDocument> {
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(2, '\t');
+            let uri = parts.next()?;
+            if uri.is_empty() {
+                return None;
+            }
+            let name = parts.next().unwrap_or("");
+            Some(PickedDocument {
+                uri: uri.to_string(),
+                name: name.to_string(),
+            })
+        })
+        .collect()
 }
 
 fn read_optional_jstring(env: &mut EnvUnowned<'_>, value: JString<'_>) -> Option<String> {

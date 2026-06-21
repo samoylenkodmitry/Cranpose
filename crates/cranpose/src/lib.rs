@@ -5,6 +5,8 @@
 
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_file_picker;
+#[cfg(all(feature = "android", target_os = "android"))]
+pub use android_file_picker::open_content_uri;
 #[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
 mod android_host_window;
 #[cfg(all(feature = "android", target_os = "android"))]
