@@ -1546,6 +1546,11 @@ struct App {
     last_frame_start_time: Option<Instant>,
     primary_redraw_pending: bool,
     primary_surface_dirty: bool,
+    /// True while the very first frame still owes the surface a present. macOS
+    /// can drop the `request_redraw` issued during `resumed`, leaving a static
+    /// initial UI blank until an input event; `about_to_wait` re-requests the
+    /// redraw while this is set so the first frame always reaches the screen.
+    primary_initial_present_pending: bool,
     vsync_interval: Duration,
     #[cfg(feature = "robot")]
     presented_frame_generation: u64,
@@ -1602,6 +1607,7 @@ impl App {
             last_frame_start_time: None,
             primary_redraw_pending: false,
             primary_surface_dirty: false,
+            primary_initial_present_pending: false,
             vsync_interval: default_vsync_interval(),
             #[cfg(feature = "robot")]
             presented_frame_generation: 0,
@@ -4266,6 +4272,15 @@ fn surface_reconfigure_requires_redraw(width: u32, height: u32) -> bool {
     width > 0 && height > 0
 }
 
+/// Whether `about_to_wait` must re-request the initial frame's redraw. The
+/// first present is owed while `initial_present_pending` is set; we only issue
+/// a fresh request when none is already in flight, so a redraw dropped by the
+/// platform (notably macOS issuing it from `resumed`) still reaches the screen
+/// without spinning once a request is pending or the frame has presented.
+fn initial_present_redraw_needed(initial_present_pending: bool, redraw_pending: bool) -> bool {
+    initial_present_pending && !redraw_pending
+}
+
 fn primary_declaration_host_needs_direct_update(
     primary_window_visible: bool,
     headless: bool,
@@ -4872,6 +4887,7 @@ impl ApplicationHandler for App {
             text_system,
         });
         self.primary_surface_dirty = request_initial_redraw;
+        self.primary_initial_present_pending = request_initial_redraw;
         self.refresh_native_window_requests();
         self.sync_native_windows(event_loop);
         if request_initial_redraw {
@@ -5239,6 +5255,7 @@ impl ApplicationHandler for App {
                     output.present();
                     let after_present = Instant::now();
                     self.primary_surface_dirty = false;
+                    self.primary_initial_present_pending = false;
                     app.record_presented_frame(frame_started_at, after_render);
                     log_desktop_frame_telemetry(
                         frame_started_at,
@@ -5299,6 +5316,16 @@ impl ApplicationHandler for App {
         let Some(window) = self.window.clone() else {
             return;
         };
+
+        // The first frame still owes the surface a present, but the redraw
+        // requested during `resumed` can be dropped on macOS, so re-request it
+        // here until that frame actually reaches the screen. Cleared on present.
+        if initial_present_redraw_needed(
+            self.primary_initial_present_pending,
+            self.primary_redraw_pending,
+        ) {
+            request_redraw_once(&window, &mut self.primary_redraw_pending);
+        }
 
         // Handle pending robot commands
         #[cfg(feature = "robot")]
@@ -6568,18 +6595,18 @@ fn char_to_key_code(ch: char) -> cranpose_app_shell::KeyCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_rect_to_monitor_delta, frame_interval_for_mode, native_window_graph_position,
-        native_window_options_change_is_position_only, native_window_position_poll_needed,
-        nearest_monitor_to_rect, physical_surface_rect_contains_pointer,
-        pointer_button_frame_request, primary_declaration_host_needs_direct_update,
-        primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
-        primary_pointer_move_should_recover_press, primary_surface_redraw_drives_app,
-        primary_viewport_for_surface_size, recovered_native_window_drag_start_pointer,
-        scroll_frame_request, should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
-        App, DesktopRect, FramePacingMode, NativeWindowDragSession,
-        NativeWindowGraphPositionSource, NativeWindowOptions, NativeWindowPointerState,
-        NativeWindowPollingDragSession, NativeWindowPositionObservation,
-        NativeWindowPositionOrigin, PendingNativeWindowPositions,
+        clamp_rect_to_monitor_delta, frame_interval_for_mode, initial_present_redraw_needed,
+        native_window_graph_position, native_window_options_change_is_position_only,
+        native_window_position_poll_needed, nearest_monitor_to_rect,
+        physical_surface_rect_contains_pointer, pointer_button_frame_request,
+        primary_declaration_host_needs_direct_update, primary_frame_waker_uses_event_proxy,
+        primary_launch_requires_initial_redraw, primary_pointer_move_should_recover_press,
+        primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
+        recovered_native_window_drag_start_pointer, scroll_frame_request,
+        should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw, App, DesktopRect,
+        FramePacingMode, NativeWindowDragSession, NativeWindowGraphPositionSource,
+        NativeWindowOptions, NativeWindowPointerState, NativeWindowPollingDragSession,
+        NativeWindowPositionObservation, NativeWindowPositionOrigin, PendingNativeWindowPositions,
     };
     use crate::launcher::AppSettings;
     use std::time::Instant;
@@ -6868,6 +6895,18 @@ mod tests {
         assert!(surface_reconfigure_requires_redraw(1920, 1080));
         assert!(!surface_reconfigure_requires_redraw(0, 1080));
         assert!(!surface_reconfigure_requires_redraw(1920, 0));
+    }
+
+    #[test]
+    fn initial_present_self_heals_when_redraw_request_is_dropped() {
+        // A static initial UI owes the first present but has no redraw in
+        // flight (the one from `resumed` was dropped): re-request it.
+        assert!(initial_present_redraw_needed(true, false));
+        // A request is already pending, so do not pile on another.
+        assert!(!initial_present_redraw_needed(true, true));
+        // Once the first frame has presented the flag clears: never re-request.
+        assert!(!initial_present_redraw_needed(false, false));
+        assert!(!initial_present_redraw_needed(false, true));
     }
 
     #[test]
