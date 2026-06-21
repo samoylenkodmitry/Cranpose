@@ -25,6 +25,10 @@ desktop = [
 ios = [
     "cranpose-platform-desktop-winit",
     "dep:winit",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-ui-kit",
+    "dep:objc2-uniform-type-identifiers",
 ]
 android = ["cranpose-platform-android"]
 web = ["cranpose-platform-web", "dep:wasm-bindgen", "dep:web-sys"]
@@ -127,6 +131,38 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
     "parking_lot",
     "metal",
     "wgsl",
+] }
+# iOS file picker (UIDocumentPickerViewController). Only pulled in with the
+# `ios` feature.
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "NSArray",
+    "NSEnumerator",
+    "NSError",
+    "NSObject",
+    "NSSet",
+    "NSString",
+    "NSURL",
+] }
+objc2-ui-kit = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "objc2-uniform-type-identifiers",
+    "UIApplication",
+    "UIDocumentPickerViewController",
+    "UIResponder",
+    "UIScene",
+    "UISceneSession",
+    "UIView",
+    "UIViewController",
+    "UIWindow",
+    "UIWindowScene",
+] }
+objc2-uniform-type-identifiers = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "UTCoreTypes",
+    "UTType",
 ] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos"), not(target_os = "ios")))'.dependencies]

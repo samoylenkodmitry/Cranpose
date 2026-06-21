@@ -7,11 +7,12 @@
         android:label="Compose Demo"
         android:supportsRtl="true">
         <!--
-            NativeActivity: The main activity using android_activity with native-activity feature.
+            CranposeFilePickerActivity extends NativeActivity and adds the
+            Storage Access Framework bridge used by cranpose's file picker.
             The lib_name must match the cdylib name in Cargo.toml exactly.
         -->
         <activity
-            android:name="android.app.NativeActivity"
+            android:name="dev.cranpose.android.CranposeFilePickerActivity"
             android:exported="true"
             android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode|layoutDirection|fontScale|density"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
