@@ -396,6 +396,10 @@ fn ios_surface_config(
 ///
 /// Called by [`crate::AppLauncher::try_run`] on iOS.
 pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
+    // Register the iOS document picker as the platform file picker. Runs on the
+    // UIKit main thread, before any pick request can be issued.
+    crate::ios_file_picker::register();
+
     let event_loop = EventLoop::builder()
         .build()
         .map_err(LaunchError::EventLoopCreate)?;

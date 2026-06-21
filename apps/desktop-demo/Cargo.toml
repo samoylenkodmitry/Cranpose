@@ -31,6 +31,7 @@ renderer-wgpu = ["cranpose/renderer-wgpu"]
 desktop = [
     "cranpose/desktop",
     "cranpose-services/uri-native",
+    "cranpose-services/file-picker-native",
 ]
 desktop-http = ["desktop", "cranpose-services/http-native"]
 ios = [
@@ -49,6 +50,7 @@ web = [
     "cranpose/web",
     "cranpose-services/system-theme-web",
     "cranpose-services/uri-web",
+    "cranpose-services/file-picker-web",
     "cranpose-services/web-http",
     "dep:wasm-bindgen",
     "dep:wasm-logger",

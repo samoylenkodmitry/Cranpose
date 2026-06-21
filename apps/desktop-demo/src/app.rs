@@ -86,6 +86,7 @@ pub enum DemoTab {
     Shaders,
     ShaderRect,
     MarkdownViewer,
+    FilePicker,
 }
 
 impl DemoTab {
@@ -110,6 +111,7 @@ impl DemoTab {
             DemoTab::Shaders => "Shaders",
             DemoTab::ShaderRect => "Shader Rect",
             DemoTab::MarkdownViewer => "Markdown",
+            DemoTab::FilePicker => "File Picker",
         }
     }
 
@@ -147,7 +149,7 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 19] = [
+pub const DEMO_TABS: [DemoTab; 20] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -167,6 +169,7 @@ pub const DEMO_TABS: [DemoTab; 19] = [
     DemoTab::ShaderRect,
     DemoTab::MarkdownViewer,
     DemoTab::InteractiveAnim,
+    DemoTab::FilePicker,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -518,7 +521,114 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::Shaders => ShadersTab(startup.initial_shader_section),
         DemoTab::ShaderRect => ShaderRectTab(),
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
+        DemoTab::FilePicker => file_picker_tab(),
     }
+}
+
+/// Demonstrates the native cross-platform file/folder picker.
+#[composable]
+fn file_picker_tab() {
+    let picker = cranpose::local_file_picker().current();
+    let status = cranpose_core::useState(|| "Pick a file or folder to begin.".to_string());
+    let file_request = cranpose_core::useState(|| 0u32);
+    let folder_request = cranpose_core::useState(|| 0u32);
+
+    let file_key = file_request.get();
+    {
+        let picker = picker.clone();
+        cranpose_core::LaunchedEffectAsync!(file_key, move |_scope| Box::pin(async move {
+            if file_key == 0 {
+                return;
+            }
+            status.set("Choosing a file…".to_string());
+            match picker
+                .pick_file(cranpose::FilePickerOptions::default().with_title("Pick a file"))
+                .await
+            {
+                Ok(Some(entry)) => {
+                    let bytes = entry.read_bytes().await.map(|data| data.len()).unwrap_or(0);
+                    status.set(format!(
+                        "File: {} — {bytes} bytes\n{}",
+                        entry.name(),
+                        entry.display_path()
+                    ));
+                }
+                Ok(None) => status.set("File selection cancelled.".to_string()),
+                Err(error) => status.set(format!("File picker error: {error}")),
+            }
+        }));
+    }
+
+    let folder_key = folder_request.get();
+    cranpose_core::LaunchedEffectAsync!(folder_key, move |_scope| Box::pin(async move {
+        if folder_key == 0 {
+            return;
+        }
+        status.set("Choosing a folder…".to_string());
+        match picker
+            .pick_folder(cranpose::FilePickerOptions::default().with_title("Pick a folder"))
+            .await
+        {
+            Ok(Some(entry)) => {
+                let count = entry.list().await.map(|items| items.len()).unwrap_or(0);
+                status.set(format!(
+                    "Folder: {} — {count} entries\n{}",
+                    entry.name(),
+                    entry.display_path()
+                ));
+            }
+            Ok(None) => status.set("Folder selection cancelled.".to_string()),
+            Err(error) => status.set(format!("Folder picker error: {error}")),
+        }
+    }));
+
+    Column(
+        Modifier::empty().fill_max_size().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                "Native File Picker",
+                Modifier::empty().padding(8.0),
+                TextStyle::default(),
+            );
+            Text(
+                "Opens the platform's native picker. On Android, iOS and the web it surfaces the system document providers (cloud, mounted WebDAV shares, …), returning an opaque handle rather than a local path.",
+                Modifier::empty().padding(8.0),
+                TextStyle::default(),
+            );
+            picker_button("Pick a file", move || {
+                file_request.set(file_request.get() + 1)
+            });
+            picker_button("Pick a folder", move || {
+                folder_request.set(folder_request.get() + 1)
+            });
+            Text(
+                status.get(),
+                Modifier::empty().padding(8.0),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+
+#[composable]
+fn picker_button(label: &'static str, on_click: impl FnMut() + 'static) {
+    Button(
+        Modifier::empty()
+            .rounded_corners(12.0)
+            .draw_behind(|scope| {
+                scope.draw_round_rect(
+                    Brush::solid(Color(0.2, 0.45, 0.9, 1.0)),
+                    CornerRadii::uniform(12.0),
+                );
+            })
+            .padding(12.0),
+        ButtonSpec::default(),
+        on_click,
+        move || {
+            Text(label, Modifier::empty().padding(4.0), TextStyle::default());
+        },
+    );
 }
 
 /// Text Input Demo Tab - showcases BasicTextField functionality

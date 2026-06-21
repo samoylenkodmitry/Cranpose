@@ -3,6 +3,8 @@
 
 //! High level utilities for running Cranpose applications with minimal boilerplate.
 
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android_file_picker;
 #[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
 mod android_host_window;
 #[cfg(all(feature = "android", target_os = "android"))]
@@ -103,6 +105,9 @@ pub mod desktop;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 pub mod ios;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_file_picker;
 
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 pub mod recorder;

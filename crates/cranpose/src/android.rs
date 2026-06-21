@@ -679,6 +679,10 @@ pub fn run(
 ) {
     use android_activity::{MainEvent, PollEvent};
 
+    // Register the SAF document picker as the platform file picker. Requires the
+    // app's activity to be `dev.cranpose.android.CranposeFilePickerActivity`.
+    crate::android_file_picker::register(app.clone());
+
     // Install panic hook for better crash logging in Logcat
     std::panic::set_hook(Box::new(|panic_info| {
         let location = panic_info

@@ -958,7 +958,12 @@ fn tick() {
 fn unsafe_code_stays_in_android_boundary_modules() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source_dir = crate_dir.join("src");
-    let allowed = ["android_jni.rs", "android_surface.rs"];
+    let allowed = [
+        "android_jni.rs",
+        "android_surface.rs",
+        "android_file_picker.rs",
+        "ios_file_picker.rs",
+    ];
     let mut offenders = Vec::new();
 
     for path in rust_sources(&source_dir) {
@@ -1119,6 +1124,8 @@ fn workspace_ffi_boundaries_are_explicit() {
     let allowed = [
         "crates/cranpose/src/android_jni.rs",
         "crates/cranpose/src/android_surface.rs",
+        "crates/cranpose/src/android_file_picker.rs",
+        "crates/cranpose/src/ios_file_picker.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];
