@@ -439,20 +439,19 @@ fn android_overlay_events_are_runtime_owned() {
 }
 
 #[test]
-fn android_activity_jni_uses_existing_android_main_attachment() {
+fn android_activity_jni_attaches_the_caller_without_recreating_the_vm() {
     let jni_source = crate_source("src/android_jni.rs");
 
     assert!(
         jni_source.contains("JavaVM::singleton()")
-            && jni_source.contains("vm.with_local_frame")
+            && jni_source.contains("vm.attach_current_thread")
             && jni_source.contains("env.as_cast_raw::<JObject>")
             && jni_source.contains("env.new_local_ref"),
-        "Android activity JNI access must use android-activity's existing android_main attachment and create a scoped local Activity reference from the global Activity handle"
+        "Android activity JNI access must reach the activity through the process JavaVM singleton and attach the calling thread (cheap when android_main is already attached, required when called from a worker thread such as audio playback opening a content:// document), creating a scoped local Activity reference from the global Activity handle"
     );
     assert!(
-        !jni_source.contains("attach_current_thread(|env|")
-            && !jni_source.contains("JavaVM::from_raw(app.vm_as_ptr"),
-        "Android activity JNI access must not reattach android_main or recreate JavaVM from AndroidApp"
+        !jni_source.contains("JavaVM::from_raw(app.vm_as_ptr"),
+        "Android activity JNI access must not recreate the JavaVM from AndroidApp; it must reuse the JavaVM singleton"
     );
 }
 
