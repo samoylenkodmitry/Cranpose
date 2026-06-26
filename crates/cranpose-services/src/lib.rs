@@ -12,8 +12,8 @@ pub mod uri_handler;
 
 pub use file_picker::{
     clear_platform_file_picker, default_file_picker, local_file_picker, set_platform_file_picker,
-    FileFilter, FilePicker, FilePickerError, FilePickerOptions, FilePickerRef, PickedEntry,
-    PickedEntryRef, PickedKind, PickerFuture, ProvideFilePicker,
+    FileFilter, FilePicker, FilePickerError, FilePickerOptions, FilePickerRef, FolderStream,
+    FolderStreamRef, PickedEntry, PickedEntryRef, PickedKind, PickerFuture, ProvideFilePicker,
 };
 pub use http::{
     default_http_client, local_http_client, map_ordered_concurrent, HttpClient, HttpClientRef,

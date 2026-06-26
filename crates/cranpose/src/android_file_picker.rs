@@ -17,8 +17,8 @@
 #![allow(unsafe_code)]
 
 use cranpose_services::{
-    set_platform_file_picker, FilePicker, FilePickerError, FilePickerOptions, PickedEntry,
-    PickedEntryRef, PickedKind, PickerFuture,
+    set_platform_file_picker, FilePicker, FilePickerError, FilePickerOptions, FolderStream,
+    FolderStreamRef, PickedEntry, PickedEntryRef, PickedKind, PickerFuture,
 };
 use jni::objects::{JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jlong};
@@ -80,6 +80,25 @@ impl FilePicker for AndroidFilePicker {
     fn pick_folder(&self, _options: FilePickerOptions) -> PickerFuture<PickResult> {
         present(true)
     }
+
+    fn pick_folder_streaming(
+        &self,
+        _options: FilePickerOptions,
+    ) -> PickerFuture<Result<Option<FolderStreamRef>, FilePickerError>> {
+        present_folder_stream()
+    }
+}
+
+/// Which Android picker entry point to launch for a request.
+#[derive(Clone, Copy)]
+enum PickKind {
+    /// `cranposePickFile` — a single document.
+    File,
+    /// `cranposePickFolder` — a tree, enumerated fully before delivery.
+    Folder,
+    /// `cranposePickFolderStreaming` — a tree whose files stream in as the
+    /// provider discovers them.
+    FolderStreaming,
 }
 
 fn present(folder: bool) -> PickerFuture<PickResult> {
@@ -89,7 +108,12 @@ fn present(folder: bool) -> PickerFuture<PickResult> {
         .expect("file picker registry poisoned")
         .insert(token, Pending::default());
 
-    if let Err(error) = call_activity(folder, token) {
+    let kind = if folder {
+        PickKind::Folder
+    } else {
+        PickKind::File
+    };
+    if let Err(error) = call_activity(kind, token) {
         pending()
             .lock()
             .expect("file picker registry poisoned")
@@ -100,15 +124,15 @@ fn present(folder: bool) -> PickerFuture<PickResult> {
     Box::pin(PickFuture { token })
 }
 
-fn call_activity(folder: bool, token: i64) -> Result<(), String> {
+fn call_activity(kind: PickKind, token: i64) -> Result<(), String> {
     let app = APP
         .get()
         .ok_or_else(|| "Android file picker was not registered".to_string())?;
     crate::android_jni::with_android_activity_env(app, |env, activity| {
-        let method = if folder {
-            jni_str!("cranposePickFolder")
-        } else {
-            jni_str!("cranposePickFile")
+        let method = match kind {
+            PickKind::File => jni_str!("cranposePickFile"),
+            PickKind::Folder => jni_str!("cranposePickFolder"),
+            PickKind::FolderStreaming => jni_str!("cranposePickFolderStreaming"),
         };
         env.call_method(&activity, method, jni_sig!("(J)V"), &[JValue::Long(token)])
             .map(|_| ())
@@ -246,6 +270,214 @@ impl PickedEntry for FolderEntry {
     fn list(&self) -> PickerFuture<Result<Vec<PickedEntryRef>, FilePickerError>> {
         let children = self.children.clone();
         Box::pin(async move { Ok(children) })
+    }
+}
+
+// ---- Streaming folder discovery ------------------------------------------
+//
+// `enumerateTree` on the Java side walks the picked tree on a worker thread and
+// reports audio files in batches as it finds them. That matters for a slow
+// provider (a mounted WebDAV share): instead of blocking until the whole tree
+// is walked, the folder selection resolves immediately and files arrive
+// incrementally, so the app can show progress and play the first track at once.
+
+/// Per-token state for a streaming folder pick, written by the Java callbacks
+/// and drained by the [`AndroidFolderStream`] on the UI thread.
+#[derive(Default)]
+struct FolderStreaming {
+    documents: Vec<PickedDocument>,
+    picked: bool,
+    cancelled: bool,
+    pick_error: Option<String>,
+    finished: bool,
+    stream_error: Option<String>,
+    waker: Option<Waker>,
+}
+
+fn folder_streaming() -> &'static Mutex<HashMap<i64, FolderStreaming>> {
+    static FOLDER_STREAMING: OnceLock<Mutex<HashMap<i64, FolderStreaming>>> = OnceLock::new();
+    FOLDER_STREAMING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn present_folder_stream() -> PickerFuture<Result<Option<FolderStreamRef>, FilePickerError>> {
+    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+    folder_streaming()
+        .lock()
+        .expect("folder picker registry poisoned")
+        .insert(token, FolderStreaming::default());
+
+    if let Err(error) = call_activity(PickKind::FolderStreaming, token) {
+        folder_streaming()
+            .lock()
+            .expect("folder picker registry poisoned")
+            .remove(&token);
+        return Box::pin(async move { Err(FilePickerError::Failed(error)) });
+    }
+
+    Box::pin(FolderPickFuture { token })
+}
+
+/// Resolves once the user has selected (or cancelled) the folder; the returned
+/// [`AndroidFolderStream`] then yields files as enumeration continues.
+struct FolderPickFuture {
+    token: i64,
+}
+
+impl Future for FolderPickFuture {
+    type Output = Result<Option<FolderStreamRef>, FilePickerError>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut registry = folder_streaming()
+            .lock()
+            .expect("folder picker registry poisoned");
+        let Some(slot) = registry.get_mut(&self.token) else {
+            return Poll::Ready(Ok(None));
+        };
+        if slot.cancelled {
+            registry.remove(&self.token);
+            return Poll::Ready(Ok(None));
+        }
+        if let Some(error) = slot.pick_error.take() {
+            registry.remove(&self.token);
+            return Poll::Ready(Err(FilePickerError::Failed(error)));
+        }
+        if slot.picked {
+            return Poll::Ready(Ok(Some(
+                Rc::new(AndroidFolderStream { token: self.token }) as FolderStreamRef
+            )));
+        }
+        slot.waker = Some(context.waker().clone());
+        Poll::Pending
+    }
+}
+
+/// Streams files discovered under a picked folder. Dropping it discards the
+/// registry slot (the Java enumeration thread checks the slot and stops).
+struct AndroidFolderStream {
+    token: i64,
+}
+
+impl FolderStream for AndroidFolderStream {
+    fn take_ready(&self) -> Vec<PickedEntryRef> {
+        let mut registry = folder_streaming()
+            .lock()
+            .expect("folder picker registry poisoned");
+        let Some(slot) = registry.get_mut(&self.token) else {
+            return Vec::new();
+        };
+        std::mem::take(&mut slot.documents)
+            .into_iter()
+            .map(|document| Rc::new(UriEntry::from(document)) as PickedEntryRef)
+            .collect()
+    }
+
+    fn is_finished(&self) -> bool {
+        let registry = folder_streaming()
+            .lock()
+            .expect("folder picker registry poisoned");
+        registry
+            .get(&self.token)
+            .map(|slot| slot.finished && slot.documents.is_empty())
+            .unwrap_or(true)
+    }
+
+    fn take_error(&self) -> Option<FilePickerError> {
+        let mut registry = folder_streaming()
+            .lock()
+            .expect("folder picker registry poisoned");
+        registry
+            .get_mut(&self.token)
+            .and_then(|slot| slot.stream_error.take())
+            .map(FilePickerError::Failed)
+    }
+}
+
+impl Drop for AndroidFolderStream {
+    fn drop(&mut self) {
+        folder_streaming()
+            .lock()
+            .expect("folder picker registry poisoned")
+            .remove(&self.token);
+    }
+}
+
+/// Java callback: the user picked a folder (or cancelled/failed). Resolves the
+/// [`FolderPickFuture`] so streaming can begin.
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFolderPicked<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    token: jlong,
+    cancelled: jboolean,
+    error: JString<'local>,
+) {
+    let error = read_optional_jstring(&mut env, error);
+    let mut registry = folder_streaming()
+        .lock()
+        .expect("folder picker registry poisoned");
+    if let Some(slot) = registry.get_mut(&token) {
+        if cancelled {
+            slot.cancelled = true;
+        } else if let Some(error) = error {
+            slot.pick_error = Some(error);
+        } else {
+            slot.picked = true;
+        }
+        if let Some(waker) = slot.waker.take() {
+            waker.wake();
+        }
+    }
+}
+
+/// Java callback: a batch of newly-discovered files (`uri\tname` rows). Returns
+/// `false` (0) once the consumer has dropped the stream, so the Java
+/// enumeration thread can stop walking a huge tree it no longer needs.
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFolderEntries<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    token: jlong,
+    entries: JString<'local>,
+) -> jboolean {
+    let documents = read_optional_jstring(&mut env, entries)
+        .map(parse_documents)
+        .unwrap_or_default();
+    let mut registry = folder_streaming()
+        .lock()
+        .expect("folder picker registry poisoned");
+    match registry.get_mut(&token) {
+        Some(slot) => {
+            slot.documents.extend(documents);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Java callback: enumeration finished (with an optional error).
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFolderFinished<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    token: jlong,
+    error: JString<'local>,
+) {
+    let error = read_optional_jstring(&mut env, error);
+    let mut registry = folder_streaming()
+        .lock()
+        .expect("folder picker registry poisoned");
+    if let Some(slot) = registry.get_mut(&token) {
+        slot.finished = true;
+        slot.stream_error = error;
     }
 }
 

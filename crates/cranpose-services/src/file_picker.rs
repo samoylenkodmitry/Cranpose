@@ -135,6 +135,89 @@ pub trait PickedEntry {
 /// Shared handle to a [`PickedEntry`].
 pub type PickedEntryRef = Rc<dyn PickedEntry>;
 
+/// A folder being enumerated, yielding its files as the provider discovers
+/// them.
+///
+/// Walking a deep tree from a slow provider (cloud storage, a mounted WebDAV
+/// share) can take a long time, so the files are delivered incrementally rather
+/// than all at once: poll [`take_ready`] each frame to drain newly-found files,
+/// and [`is_finished`] to know when the walk is done. Callers can show the
+/// running count and start playing the first file without waiting for the rest.
+///
+/// [`take_ready`]: FolderStream::take_ready
+/// [`is_finished`]: FolderStream::is_finished
+pub trait FolderStream {
+    /// Files discovered since the previous call (drains the ready queue).
+    fn take_ready(&self) -> Vec<PickedEntryRef>;
+
+    /// Whether enumeration has finished (no more files will be discovered).
+    fn is_finished(&self) -> bool;
+
+    /// Takes the error that ended enumeration early, if any.
+    fn take_error(&self) -> Option<FilePickerError>;
+}
+
+/// Shared handle to a [`FolderStream`].
+pub type FolderStreamRef = Rc<dyn FolderStream>;
+
+/// Recursively collects every [`PickedKind::File`] under `entry`.
+fn collect_files(entry: PickedEntryRef) -> PickerFuture<Vec<PickedEntryRef>> {
+    Box::pin(async move {
+        match entry.kind() {
+            PickedKind::File => vec![entry],
+            PickedKind::Folder => {
+                let mut files = Vec::new();
+                if let Ok(children) = entry.list().await {
+                    for child in children {
+                        files.extend(collect_files(child).await);
+                    }
+                }
+                files
+            }
+        }
+    })
+}
+
+/// A [`FolderStream`] whose files were all gathered up front (the default for
+/// providers that enumerate eagerly, e.g. the local filesystem). It yields
+/// everything on the first poll and is immediately finished.
+struct ReadyFolderStream {
+    ready: RefCell<Vec<PickedEntryRef>>,
+}
+
+impl FolderStream for ReadyFolderStream {
+    fn take_ready(&self) -> Vec<PickedEntryRef> {
+        std::mem::take(&mut self.ready.borrow_mut())
+    }
+
+    fn is_finished(&self) -> bool {
+        true
+    }
+
+    fn take_error(&self) -> Option<FilePickerError> {
+        None
+    }
+}
+
+/// Wraps an eager [`FilePicker::pick_folder`] as a [`FolderStream`] by walking
+/// the whole tree up front. Used as the default for every backend that does not
+/// stream natively.
+fn eager_folder_stream(
+    folder: PickerFuture<Result<Option<PickedEntryRef>, FilePickerError>>,
+) -> PickerFuture<Result<Option<FolderStreamRef>, FilePickerError>> {
+    Box::pin(async move {
+        match folder.await? {
+            None => Ok(None),
+            Some(entry) => {
+                let files = collect_files(entry).await;
+                Ok(Some(Rc::new(ReadyFolderStream {
+                    ready: RefCell::new(files),
+                }) as FolderStreamRef))
+            }
+        }
+    })
+}
+
 /// Presents native file and folder pickers.
 pub trait FilePicker {
     /// Presents a single-file picker. Resolves to `None` if cancelled.
@@ -148,6 +231,22 @@ pub trait FilePicker {
         &self,
         options: FilePickerOptions,
     ) -> PickerFuture<Result<Option<PickedEntryRef>, FilePickerError>>;
+
+    /// Presents a folder picker and streams the tree's files as they are
+    /// discovered (see [`FolderStream`]).
+    ///
+    /// The default walks the picked folder eagerly via [`pick_folder`] and
+    /// yields every file at once; backends served by a slow provider (Android's
+    /// Storage Access Framework) override this to stream during the walk.
+    /// Resolves to `None` if cancelled.
+    ///
+    /// [`pick_folder`]: FilePicker::pick_folder
+    fn pick_folder_streaming(
+        &self,
+        options: FilePickerOptions,
+    ) -> PickerFuture<Result<Option<FolderStreamRef>, FilePickerError>> {
+        eager_folder_stream(self.pick_folder(options))
+    }
 }
 
 /// Shared handle to a [`FilePicker`].
@@ -198,6 +297,16 @@ impl FilePicker for PlatformFilePicker {
             return picker.pick_folder(options);
         }
         builtin_pick(options, PickedKind::Folder)
+    }
+
+    fn pick_folder_streaming(
+        &self,
+        options: FilePickerOptions,
+    ) -> PickerFuture<Result<Option<FolderStreamRef>, FilePickerError>> {
+        if let Some(picker) = registered_platform_file_picker() {
+            return picker.pick_folder_streaming(options);
+        }
+        eager_folder_stream(builtin_pick(options, PickedKind::Folder))
     }
 }
 
