@@ -22,7 +22,12 @@ where
 {
     let vm = JavaVM::singleton()
         .map_err(|error| format!("Android JavaVM is not available on android_main: {error}"))?;
-    vm.with_local_frame(16, |env| -> jni::errors::Result<Result<T, String>> {
+    // Attach the current thread to the JVM rather than assuming it already is:
+    // callers such as the audio engine reach this from worker threads they
+    // spawned, where `with_local_frame` would fail with `ThreadDetached`.
+    // `attach_current_thread` is cheap when the thread is already attached and
+    // pushes a local frame for us, so scoped local references are still released.
+    vm.attach_current_thread(|env| -> jni::errors::Result<Result<T, String>> {
         let raw_activity_global = app.activity_as_ptr() as jni::sys::jobject;
         // SAFETY: android-activity owns this unowned global Activity reference for the
         // AndroidApp lifetime. The cast borrows it without taking deletion ownership;
