@@ -1,0 +1,57 @@
+name: heavy (self-hosted)
+
+# Fast, warm-cache build of the heavy Android job on the self-hosted samarch-1
+# runner. PUSH-ONLY (+ manual dispatch) on purpose: fork pull requests only fire
+# `pull_request` events, so they can never run on the self-hosted box — the
+# safety requirement for a public repo. The cloud `rust.yml` still gates every
+# PR (forks included).
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: heavy-selfhosted-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-release:
+    name: Android release build (self-hosted)
+    runs-on: [self-hosted, samarch1]
+    timeout-minutes: 90
+    env:
+      # Scope the toolchain to this job only — does NOT change the machine's
+      # global rustup default (it stays nightly for other work on the box).
+      RUSTUP_TOOLCHAIN: stable
+      RUSTC_WRAPPER: sccache
+      SCCACHE_DIR: /home/s/ci-cache/cranpose/sccache
+      SCCACHE_CACHE_SIZE: 40G
+      # Persistent target dir = warm incremental builds across runs.
+      CARGO_TARGET_DIR: /home/s/ci-cache/cranpose/target
+      CARGO_INCREMENTAL: "0"
+      ANDROID_HOME: /home/s/develop/sdk
+      ANDROID_SDK_ROOT: /home/s/develop/sdk
+      ANDROID_NDK_HOME: /home/s/develop/sdk/ndk/27.0.12077973
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Put cargo/sccache on PATH
+        run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Android targets + start sccache
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+          sccache --start-server || true
+          sccache --zero-stats || true
+
+      - name: Install Android NDK (idempotent)
+        run: bash scripts/ci/install_android_ndk.sh 27.0.12077973
+
+      - name: Build Android release APK
+        working-directory: apps/android-demo/android
+        run: ./gradlew :app:assembleRelease
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
