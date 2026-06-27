@@ -203,6 +203,31 @@ fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
     density_dpi.map(|dpi| dpi as f32 / 160.0).unwrap_or(2.0) // Fallback to xhdpi (2.0) if density unavailable
 }
 
+/// The freeform/DeX shadow-margin inset (in physical px) between the render
+/// buffer and the on-screen frame. The native window buffer is enlarged by this
+/// margin on every side; the renderer fills the buffer from (0,0) while pointer
+/// events are frame-relative, so this is exactly the offset to add to pointers.
+/// Returns `(0, 0)` when there is no margin (fullscreen: buffer == frame).
+fn surface_inset_px(app: &android_activity::AndroidApp) -> (f64, f64) {
+    let Some(window) = app.native_window() else {
+        return (0.0, 0.0);
+    };
+    let buffer_w = window.width() as f64;
+    let buffer_h = window.height() as f64;
+    // `content_rect`'s right/bottom edges are the frame's size (the caption only
+    // insets the top, so the content still reaches the frame's right and bottom).
+    let content = app.content_rect();
+    let frame_w = content.right as f64;
+    let frame_h = content.bottom as f64;
+    if frame_w <= 0.0 || frame_h <= 0.0 || frame_w > buffer_w || frame_h > buffer_h {
+        return (0.0, 0.0);
+    }
+    (
+        ((buffer_w - frame_w) / 2.0).max(0.0),
+        ((buffer_h - frame_h) / 2.0).max(0.0),
+    )
+}
+
 fn update_android_platform_geometry(
     app: &android_activity::AndroidApp,
     android_platform: &mut AndroidPlatform,
@@ -210,13 +235,18 @@ fn update_android_platform_geometry(
     let density = get_display_density(app);
     android_platform.set_scale_factor(density as f64);
 
-    let content_rect = app.content_rect();
-    if content_rect.right > content_rect.left && content_rect.bottom > content_rect.top {
-        android_platform
-            .set_input_surface_offset_px(content_rect.left as f64, content_rect.top as f64);
-    } else {
-        android_platform.set_input_surface_offset_px(0.0, 0.0);
-    }
+    // A freeform/DeX window's render surface is LARGER than its on-screen frame:
+    // the system adds a shadow/resize margin (the window `surfaceInsets`), so the
+    // native buffer we draw into is e.g. 525x879 px while the visible frame is
+    // only 447x801. The renderer fills the whole buffer starting at (0,0), which
+    // lands at `frame_origin - inset` on screen — but pointer coordinates arrive
+    // relative to the *frame*. Without correction every touch is off by that inset
+    // (~39 px / 24 dp), so controls near the edges become unreachable. We recover
+    // the inset as half the difference between the buffer and the frame, and add
+    // it to incoming pointers so they map into the same surface space the renderer
+    // draws in. Fullscreen (phone) has buffer == frame, so this is a no-op there.
+    let (offset_x, offset_y) = surface_inset_px(app);
+    android_platform.set_input_surface_offset_px(offset_x, offset_y);
 
     density
 }
