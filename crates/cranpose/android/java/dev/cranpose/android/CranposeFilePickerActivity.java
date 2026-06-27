@@ -4,6 +4,7 @@ import android.app.NativeActivity;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
@@ -50,6 +51,17 @@ public class CranposeFilePickerActivity extends NativeActivity {
 
     /** Base backoff between folder-listing retries, in ms (grows per attempt). */
     private static final int FOLDER_QUERY_RETRY_MS = 250;
+
+    /** How many times to re-query a folder whose cursor reports
+     * {@link DocumentsContract#EXTRA_LOADING} before giving up and using
+     * whatever it returns (a network provider keeps the listing "loading" while
+     * it fetches over the wire). */
+    private static final int FOLDER_LOADING_ATTEMPTS = 24;
+
+    /** Delay between {@link DocumentsContract#EXTRA_LOADING} re-queries, in ms
+     * ({@link #FOLDER_LOADING_ATTEMPTS} × this ≈ the time budget for one folder
+     * to finish loading). */
+    private static final int FOLDER_LOADING_POLL_MS = 250;
 
     /** Implemented in the Rust cdylib. {@code entries} is newline-separated
      * {@code uri\tname} rows (one for a file, every descendant for a folder). */
@@ -277,24 +289,62 @@ public class CranposeFilePickerActivity extends NativeActivity {
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME,
                 DocumentsContract.Document.COLUMN_MIME_TYPE,
         };
-        for (int attempt = 1; ; attempt++) {
+        int errorAttempt = 0;
+        int loadingAttempt = 0;
+        while (true) {
+            Cursor cursor;
             try {
-                return getContentResolver().query(childrenUri, columns, null, null, null);
+                cursor = getContentResolver().query(childrenUri, columns, null, null, null);
             } catch (Exception error) {
-                if (attempt >= FOLDER_QUERY_ATTEMPTS) {
+                errorAttempt++;
+                if (errorAttempt >= FOLDER_QUERY_ATTEMPTS) {
                     android.util.Log.w(
                             "Cranpose",
-                            "skipping unreadable folder after " + attempt + " tries: "
+                            "skipping unreadable folder after " + errorAttempt + " tries: "
                                     + childrenUri + " (" + error + ")");
                     return null;
                 }
-                try {
-                    Thread.sleep((long) FOLDER_QUERY_RETRY_MS * attempt);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
+                if (!sleepQuietly((long) FOLDER_QUERY_RETRY_MS * errorAttempt)) {
                     return null;
                 }
+                continue;
             }
+            if (cursor == null) {
+                return null;
+            }
+            // A slow network document provider (RoundSync/rclone, a mounted WebDAV
+            // share) returns an EMPTY cursor immediately with EXTRA_LOADING=true
+            // while it fetches the real listing over the wire, then notifies and
+            // serves the cached result on the next query. Reading the cursor right
+            // now yields zero children, so the folder — even the picked root — looks
+            // empty ("adds nothing"). Re-query until it stops loading (or we run out
+            // of patience) instead of trusting the placeholder.
+            if (isLoading(cursor) && loadingAttempt < FOLDER_LOADING_ATTEMPTS) {
+                loadingAttempt++;
+                cursor.close();
+                if (!sleepQuietly(FOLDER_LOADING_POLL_MS)) {
+                    return null;
+                }
+                continue;
+            }
+            return cursor;
+        }
+    }
+
+    /** True if the provider flagged this cursor as still fetching its results. */
+    private static boolean isLoading(Cursor cursor) {
+        Bundle extras = cursor.getExtras();
+        return extras != null && extras.getBoolean(DocumentsContract.EXTRA_LOADING, false);
+    }
+
+    /** Sleeps, returning {@code false} (so callers can bail) if interrupted. */
+    private static boolean sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+            return true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 
