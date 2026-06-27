@@ -44,6 +44,13 @@ public class CranposeFilePickerActivity extends NativeActivity {
     /** Number of files to accumulate before flushing a streaming batch. */
     private static final int FOLDER_BATCH_SIZE = 32;
 
+    /** How many times to try listing a folder before skipping it (slow cloud /
+     * WebDAV shares fail transiently). */
+    private static final int FOLDER_QUERY_ATTEMPTS = 4;
+
+    /** Base backoff between folder-listing retries, in ms (grows per attempt). */
+    private static final int FOLDER_QUERY_RETRY_MS = 250;
+
     /** Implemented in the Rust cdylib. {@code entries} is newline-separated
      * {@code uri\tname} rows (one for a file, every descendant for a folder). */
     private static native void nativeOnFilePicked(
@@ -180,12 +187,10 @@ public class CranposeFilePickerActivity extends NativeActivity {
 
     private void collectTree(Uri treeUri, String documentId, StringBuilder out) {
         Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
-        String[] columns = {
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE,
-        };
-        try (Cursor cursor = getContentResolver().query(childrenUri, columns, null, null, null)) {
+        // Same resilience as the streaming walk: retry a slow provider and skip a
+        // folder that stays unreadable rather than aborting the whole enumeration.
+        Cursor cursor = queryChildrenWithRetry(childrenUri);
+        try {
             if (cursor == null) {
                 return;
             }
@@ -202,6 +207,10 @@ public class CranposeFilePickerActivity extends NativeActivity {
                     }
                     out.append(childUri.toString()).append('\t').append(sanitize(name));
                 }
+            }
+        } finally {
+            if (cursor != null) {
+                cursor.close();
             }
         }
     }
@@ -222,16 +231,20 @@ public class CranposeFilePickerActivity extends NativeActivity {
     /** Returns {@code false} once the consumer has gone away, so recursion can
      * unwind without finishing the walk. */
     private boolean collectTreeStreaming(Uri treeUri, String documentId, Batch batch) {
+        if (batch.stopped()) {
+            return false;
+        }
         Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
-        String[] columns = {
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE,
-        };
-        try (Cursor cursor = getContentResolver().query(childrenUri, columns, null, null, null)) {
-            if (cursor == null) {
-                return !batch.stopped();
-            }
+        // Query this folder with retries. A slow document provider (a mounted
+        // WebDAV / cloud share) transiently fails requests; without this, one
+        // failed query would throw and abort the ENTIRE walk, so a big library
+        // over a flaky link could end up adding nothing. On persistent failure we
+        // skip just this folder and let the rest of the tree keep streaming in.
+        Cursor cursor = queryChildrenWithRetry(childrenUri);
+        if (cursor == null) {
+            return !batch.stopped();
+        }
+        try {
             while (cursor.moveToNext()) {
                 if (batch.stopped()) {
                     return false;
@@ -248,8 +261,41 @@ public class CranposeFilePickerActivity extends NativeActivity {
                     batch.add(childUri, name);
                 }
             }
+        } finally {
+            cursor.close();
         }
         return !batch.stopped();
+    }
+
+    /** Lists a folder's children, retrying transient provider failures (a slow
+     * cloud/WebDAV share throws intermittently). Returns {@code null} if the
+     * folder cannot be read after {@link #FOLDER_QUERY_ATTEMPTS} tries, so the
+     * caller skips just that folder instead of aborting the whole walk. */
+    private Cursor queryChildrenWithRetry(Uri childrenUri) {
+        String[] columns = {
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+        };
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return getContentResolver().query(childrenUri, columns, null, null, null);
+            } catch (Exception error) {
+                if (attempt >= FOLDER_QUERY_ATTEMPTS) {
+                    android.util.Log.w(
+                            "Cranpose",
+                            "skipping unreadable folder after " + attempt + " tries: "
+                                    + childrenUri + " (" + error + ")");
+                    return null;
+                }
+                try {
+                    Thread.sleep((long) FOLDER_QUERY_RETRY_MS * attempt);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                }
+            }
+        }
     }
 
     /** Accumulates {@code uri\tname} rows and flushes them to Rust every
