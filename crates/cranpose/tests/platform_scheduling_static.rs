@@ -961,6 +961,7 @@ fn unsafe_code_stays_in_android_boundary_modules() {
         "android_jni.rs",
         "android_surface.rs",
         "android_file_picker.rs",
+        "android_writable_folder.rs",
         "ios_file_picker.rs",
     ];
     let mut offenders = Vec::new();
@@ -1124,6 +1125,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/android_jni.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/android_file_picker.rs",
+        "crates/cranpose/src/android_writable_folder.rs",
         "crates/cranpose/src/ios_file_picker.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",

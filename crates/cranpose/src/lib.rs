@@ -15,6 +15,8 @@ mod android_jni;
 mod android_overlay_window;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_surface;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android_writable_folder;
 mod launcher;
 mod native_window;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]

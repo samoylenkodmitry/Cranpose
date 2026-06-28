@@ -712,6 +712,9 @@ pub fn run(
     // Register the SAF document picker as the platform file picker. Requires the
     // app's activity to be `dev.cranpose.android.CranposeFilePickerActivity`.
     crate::android_file_picker::register(app.clone());
+    // Register the SAF writable-folder backend (write-side complement, used for
+    // cross-device sync into a user-granted folder).
+    crate::android_writable_folder::register(app.clone());
 
     // Install panic hook for better crash logging in Logcat
     std::panic::set_hook(Box::new(|panic_info| {

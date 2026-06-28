@@ -9,6 +9,7 @@ pub mod file_picker;
 pub mod http;
 pub mod theme;
 pub mod uri_handler;
+pub mod writable_folder;
 
 pub use file_picker::{
     clear_platform_file_picker, default_file_picker, local_file_picker, set_platform_file_picker,
@@ -25,6 +26,11 @@ pub use theme::{
 pub use uri_handler::{
     default_uri_handler, local_uri_handler, ProvideUriHandler, UriHandler, UriHandlerError,
     UriHandlerRef,
+};
+pub use writable_folder::{
+    clear_platform_writable_folder_picker, open_writable_folder, pick_writable_folder,
+    set_platform_writable_folder_picker, set_writable_folder_store_factory, FolderError,
+    WritableFolderPicker, WritableFolderPickerRef, WritableFolderStore, WritableFolderStoreRef,
 };
 
 /// Convenience alias used in unit tests.

@@ -2,6 +2,7 @@ package dev.cranpose.android;
 
 import android.app.NativeActivity;
 import android.content.Intent;
+import android.content.UriPermission;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
@@ -9,7 +10,10 @@ import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 /**
  * A {@link NativeActivity} that exposes the Storage Access Framework to
@@ -39,6 +43,11 @@ public class CranposeFilePickerActivity extends NativeActivity {
     private static final int REQUEST_BASE = 0x0C9A0000;
     private static final int FLAG_FOLDER = 1;
     private static final int FLAG_STREAMING = 2;
+    private static final int FLAG_WRITABLE = 4;
+
+    /** A fixed-name probe used by {@link #cranposeFolderWritable}; created and
+     * deleted immediately, and ignored by listings. */
+    private static final String WRITABLE_PROBE_NAME = ".cranpose-write-probe";
 
     private long pendingToken;
 
@@ -78,6 +87,11 @@ public class CranposeFilePickerActivity extends NativeActivity {
     /** Folder enumeration finished, with an optional error. */
     private static native void nativeOnFolderFinished(long token, String error);
 
+    /** A writable folder was picked (or cancelled/failed). {@code uri} is the
+     * persisted SAF tree URI on success. */
+    private static native void nativeOnWritableFolderPicked(
+            long token, String uri, boolean cancelled, String error);
+
     /** Opens the document picker for a single file. Called from Rust over JNI. */
     public void cranposePickFile(long token) {
         pendingToken = token;
@@ -103,6 +117,22 @@ public class CranposeFilePickerActivity extends NativeActivity {
         launch(intent, token, FLAG_FOLDER | FLAG_STREAMING);
     }
 
+    /** Opens the document tree picker for a <em>writable</em> folder, taking a
+     * persistent read/write grant. The chosen tree URI is reported back through
+     * {@link #nativeOnWritableFolderPicked}. Called from Rust over JNI. */
+    public void cranposePickWritableFolder(long token) {
+        pendingToken = token;
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try {
+            startActivityForResult(intent, REQUEST_BASE | FLAG_WRITABLE);
+        } catch (Exception error) {
+            nativeOnWritableFolderPicked(token, null, false, error.toString());
+        }
+    }
+
     /**
      * Opens a picked {@code content://} document for reading and returns a
      * detached file descriptor. The Rust caller owns and closes it. Called over
@@ -115,6 +145,170 @@ public class CranposeFilePickerActivity extends NativeActivity {
             throw new IOException("no descriptor for " + uriString);
         }
         return descriptor.detachFd();
+    }
+
+    /** Writes (overwriting) {@code contents} to a file named {@code name} in the
+     * writable tree. Returns 0 on success, 1 on permission failure (read-only),
+     * 2 on any other error. Called from the Rust sync worker thread over JNI. */
+    public int cranposeFolderWrite(String treeUriString, String name, byte[] contents) {
+        try {
+            Uri tree = Uri.parse(treeUriString);
+            String treeDocId = DocumentsContract.getTreeDocumentId(tree);
+            Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, treeDocId);
+            String docId = findWritableChildId(tree, treeDocId, name);
+            Uri docUri;
+            if (docId != null) {
+                docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId);
+            } else {
+                docUri = DocumentsContract.createDocument(
+                        getContentResolver(), parent, "application/octet-stream", name);
+                if (docUri == null) {
+                    return 2;
+                }
+            }
+            try (OutputStream output = getContentResolver().openOutputStream(docUri, "wt")) {
+                if (output == null) {
+                    return 2;
+                }
+                output.write(contents);
+            }
+            return 0;
+        } catch (SecurityException error) {
+            return 1;
+        } catch (Exception error) {
+            return 2;
+        }
+    }
+
+    /** Lists immediate child file names (directories excluded), newline-joined.
+     * Returns {@code null} only on a hard read failure (an empty folder is ""). */
+    public String cranposeFolderList(String treeUriString) {
+        try {
+            Uri tree = Uri.parse(treeUriString);
+            String treeDocId = DocumentsContract.getTreeDocumentId(tree);
+            Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, treeDocId);
+            Cursor cursor = queryChildrenWithRetry(childrenUri);
+            if (cursor == null) {
+                return null;
+            }
+            StringBuilder out = new StringBuilder();
+            try {
+                while (cursor.moveToNext()) {
+                    String name = cursor.getString(1);
+                    String mime = cursor.getString(2);
+                    if (name == null || DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                        continue;
+                    }
+                    if (out.length() > 0) {
+                        out.append('\n');
+                    }
+                    out.append(sanitize(name));
+                }
+            } finally {
+                cursor.close();
+            }
+            return out.toString();
+        } catch (Exception error) {
+            return null;
+        }
+    }
+
+    /** Reads the file {@code name} as bytes, or {@code null} if absent/unreadable. */
+    public byte[] cranposeFolderRead(String treeUriString, String name) {
+        try {
+            Uri tree = Uri.parse(treeUriString);
+            String treeDocId = DocumentsContract.getTreeDocumentId(tree);
+            String docId = findWritableChildId(tree, treeDocId, name);
+            if (docId == null) {
+                return null;
+            }
+            Uri docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId);
+            try (InputStream input = getContentResolver().openInputStream(docUri)) {
+                if (input == null) {
+                    return null;
+                }
+                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                byte[] chunk = new byte[8192];
+                int read;
+                while ((read = input.read(chunk)) >= 0) {
+                    buffer.write(chunk, 0, read);
+                }
+                return buffer.toByteArray();
+            }
+        } catch (Exception error) {
+            return null;
+        }
+    }
+
+    /** Deletes the file {@code name}. Returns 0 on success (or already gone), 2 otherwise. */
+    public int cranposeFolderRemove(String treeUriString, String name) {
+        try {
+            Uri tree = Uri.parse(treeUriString);
+            String treeDocId = DocumentsContract.getTreeDocumentId(tree);
+            String docId = findWritableChildId(tree, treeDocId, name);
+            if (docId == null) {
+                return 0;
+            }
+            Uri docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId);
+            return DocumentsContract.deleteDocument(getContentResolver(), docUri) ? 0 : 2;
+        } catch (Exception error) {
+            return 2;
+        }
+    }
+
+    /** Whether the tree is writable now: a persisted write grant exists AND a
+     * probe document can be created and deleted (catching a read-only backing
+     * store such as a read-only WebDAV mount). */
+    public boolean cranposeFolderWritable(String treeUriString) {
+        try {
+            Uri tree = Uri.parse(treeUriString);
+            boolean granted = false;
+            for (UriPermission permission : getContentResolver().getPersistedUriPermissions()) {
+                if (permission.getUri().equals(tree) && permission.isWritePermission()) {
+                    granted = true;
+                    break;
+                }
+            }
+            if (!granted) {
+                return false;
+            }
+            String treeDocId = DocumentsContract.getTreeDocumentId(tree);
+            Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, treeDocId);
+            String existing = findWritableChildId(tree, treeDocId, WRITABLE_PROBE_NAME);
+            if (existing != null) {
+                DocumentsContract.deleteDocument(
+                        getContentResolver(),
+                        DocumentsContract.buildDocumentUriUsingTree(tree, existing));
+            }
+            Uri probe = DocumentsContract.createDocument(
+                    getContentResolver(), parent, "application/octet-stream", WRITABLE_PROBE_NAME);
+            if (probe == null) {
+                return false;
+            }
+            DocumentsContract.deleteDocument(getContentResolver(), probe);
+            return true;
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
+    /** Finds the document id of a direct child by display name, or {@code null}. */
+    private String findWritableChildId(Uri treeUri, String treeDocId, String name) {
+        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocId);
+        Cursor cursor = queryChildrenWithRetry(childrenUri);
+        if (cursor == null) {
+            return null;
+        }
+        try {
+            while (cursor.moveToNext()) {
+                if (name.equals(cursor.getString(1))) {
+                    return cursor.getString(0);
+                }
+            }
+        } finally {
+            cursor.close();
+        }
+        return null;
     }
 
     private void launch(Intent intent, long token, int flags) {
@@ -140,6 +334,23 @@ public class CranposeFilePickerActivity extends NativeActivity {
         final boolean folder = (flags & FLAG_FOLDER) != 0;
         final boolean streaming = (flags & FLAG_STREAMING) != 0;
         final boolean ok = resultCode == RESULT_OK && data != null && data.getData() != null;
+
+        if ((flags & FLAG_WRITABLE) != 0) {
+            if (!ok) {
+                nativeOnWritableFolderPicked(token, null, true, null);
+                return;
+            }
+            final Uri tree = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(tree,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                nativeOnWritableFolderPicked(token, tree.toString(), false, null);
+            } catch (Exception error) {
+                nativeOnWritableFolderPicked(token, null, false, error.toString());
+            }
+            return;
+        }
 
         if (streaming) {
             if (!ok) {
