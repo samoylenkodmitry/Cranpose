@@ -18,10 +18,10 @@
 
 use cranpose_services::{
     set_platform_file_picker, FilePicker, FilePickerError, FilePickerOptions, FolderStream,
-    FolderStreamRef, PickedEntry, PickedEntryRef, PickedKind, PickerFuture,
+    FolderStreamRef, PickedEntry, PickedEntryRef, PickedKind, PickerFuture, ResumedPick,
 };
 use jni::objects::{JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jlong};
+use jni::sys::{jboolean, jint, jlong};
 use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
 use std::collections::HashMap;
 use std::fs::File;
@@ -87,6 +87,163 @@ impl FilePicker for AndroidFilePicker {
     ) -> PickerFuture<Result<Option<FolderStreamRef>, FilePickerError>> {
         present_folder_stream()
     }
+
+    fn take_resumed_picks(&self) -> Vec<ResumedPick> {
+        take_resumed_file_picks()
+    }
+}
+
+// ---- Resume inbox --------------------------------------------------------
+//
+// Some Android devices destroy and recreate the activity (and with it the
+// native app and its composition) when the SAF picker covers it. A pick in
+// flight at that moment loses both its Java request token (a fresh activity
+// instance starts at token 0) and the composition that was awaiting the
+// result. The Java `onActivityResult` still runs on the recreated activity and
+// records the granted selection here; the app drains it on its next start via
+// [`FilePicker::take_resumed_picks`]. A normal (live) pick clears the inbox on
+// resolution, so a selection is never replayed.
+
+/// Mirrors the `FLAG_*` request flags in `CranposeFilePickerActivity`.
+const FLAG_FOLDER: i32 = 1;
+const FLAG_STREAMING: i32 = 2;
+const FLAG_WRITABLE: i32 = 4;
+
+/// A granted selection recorded for resume after an activity recreation.
+struct ResumableEntry {
+    flags: i32,
+    uri: String,
+    name: String,
+}
+
+fn resumable() -> &'static Mutex<Vec<ResumableEntry>> {
+    static RESUMABLE: OnceLock<Mutex<Vec<ResumableEntry>>> = OnceLock::new();
+    RESUMABLE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Discards any recorded selection. Called when a fresh pick is launched and
+/// when a live pick resolves, so the inbox only ever holds an *orphaned* result
+/// (one whose requesting composition was destroyed before it could consume it).
+/// `pub(crate)` so the writable-folder picker, which shares this inbox, can clear
+/// it on its own fresh pick / live resolution.
+pub(crate) fn clear_resumable() {
+    resumable().lock().expect("resume inbox poisoned").clear();
+}
+
+/// Drains a writable-folder grant orphaned by an activity recreation, returning
+/// its tree URI. The write side of [`take_resumed_file_picks`]: it removes only
+/// the `FLAG_WRITABLE` entries (leaving any file/folder grants for the file
+/// picker to reclaim) and yields the most recent recovered handle.
+pub(crate) fn take_resumed_writable_uri() -> Option<String> {
+    let mut inbox = resumable().lock().expect("resume inbox poisoned");
+    let mut recovered = None;
+    let mut kept = Vec::new();
+    for entry in inbox.drain(..) {
+        if entry.flags & FLAG_WRITABLE != 0 {
+            recovered = Some(entry.uri);
+        } else {
+            kept.push(entry);
+        }
+    }
+    *inbox = kept;
+    recovered
+}
+
+/// Drains the file/folder selections orphaned by an activity recreation,
+/// turning each into a resumable handle. Writable-folder grants are left in the
+/// inbox for the writable-folder picker to reclaim.
+fn take_resumed_file_picks() -> Vec<ResumedPick> {
+    let orphaned = {
+        let mut inbox = resumable().lock().expect("resume inbox poisoned");
+        let mut taken = Vec::new();
+        let mut kept = Vec::new();
+        for entry in inbox.drain(..) {
+            if entry.flags & FLAG_WRITABLE != 0 {
+                kept.push(entry);
+            } else {
+                taken.push(entry);
+            }
+        }
+        *inbox = kept;
+        taken
+    };
+    orphaned.into_iter().filter_map(resume_entry).collect()
+}
+
+fn resume_entry(entry: ResumableEntry) -> Option<ResumedPick> {
+    if entry.flags & (FLAG_FOLDER | FLAG_STREAMING) != 0 {
+        resume_folder_stream(entry.uri).map(ResumedPick::Folder)
+    } else {
+        Some(ResumedPick::File(Rc::new(UriEntry {
+            uri: entry.uri,
+            name: entry.name,
+        })))
+    }
+}
+
+/// Re-walks an already-granted tree URI as a stream (no picker UI), reusing the
+/// streaming registry so the returned handle behaves like a freshly-picked one.
+fn resume_folder_stream(uri: String) -> Option<FolderStreamRef> {
+    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+    folder_streaming()
+        .lock()
+        .expect("folder picker registry poisoned")
+        .insert(
+            token,
+            FolderStreaming {
+                picked: true,
+                ..FolderStreaming::default()
+            },
+        );
+    if let Err(error) = call_stream_granted_folder(uri, token) {
+        folder_streaming()
+            .lock()
+            .expect("folder picker registry poisoned")
+            .remove(&token);
+        log::warn!("cranpose: failed to resume folder stream: {error}");
+        return None;
+    }
+    Some(Rc::new(AndroidFolderStream { token }) as FolderStreamRef)
+}
+
+fn call_stream_granted_folder(uri: String, token: i64) -> Result<(), String> {
+    let app = APP
+        .get()
+        .ok_or_else(|| "Android file picker was not registered".to_string())?;
+    crate::android_jni::with_android_activity_env(app, |env, activity| {
+        let uri_arg = env.new_string(&uri).map_err(|error| error.to_string())?;
+        let uri_obj: &JObject = uri_arg.as_ref();
+        env.call_method(
+            &activity,
+            jni_str!("cranposeStreamGrantedFolder"),
+            jni_sig!("(JLjava/lang/String;)V"),
+            &[JValue::Long(token), JValue::Object(uri_obj)],
+        )
+        .map(|_| ())
+        .map_err(|error| format!("failed to start granted folder walk: {error}"))
+    })
+}
+
+/// Java callback: records a granted selection in the resume inbox (see above).
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeRecordResumablePick<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    flags: jint,
+    uri: JString<'local>,
+    name: JString<'local>,
+) {
+    let Some(uri) = read_optional_jstring(&mut env, uri) else {
+        return;
+    };
+    let name = read_optional_jstring(&mut env, name).unwrap_or_default();
+    resumable()
+        .lock()
+        .expect("resume inbox poisoned")
+        .push(ResumableEntry { flags, uri, name });
 }
 
 /// Which Android picker entry point to launch for a request.
@@ -102,6 +259,9 @@ enum PickKind {
 }
 
 fn present(folder: bool) -> PickerFuture<PickResult> {
+    // Discard any orphaned selection from an earlier abandoned pick; this fresh
+    // request becomes the only thing the resume inbox can hold.
+    clear_resumable();
     let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
     pending()
         .lock()
@@ -156,6 +316,9 @@ impl Future for PickFuture {
         match slot.result.take() {
             Some(raw) => {
                 registry.remove(&self.token);
+                // This pick was delivered live; drop the resume copy recorded in
+                // `onActivityResult` so it is not replayed on the next start.
+                clear_resumable();
                 Poll::Ready(build_result(raw))
             }
             None => {
@@ -300,6 +463,7 @@ fn folder_streaming() -> &'static Mutex<HashMap<i64, FolderStreaming>> {
 }
 
 fn present_folder_stream() -> PickerFuture<Result<Option<FolderStreamRef>, FilePickerError>> {
+    clear_resumable();
     let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
     folder_streaming()
         .lock()
@@ -335,13 +499,17 @@ impl Future for FolderPickFuture {
         };
         if slot.cancelled {
             registry.remove(&self.token);
+            clear_resumable();
             return Poll::Ready(Ok(None));
         }
         if let Some(error) = slot.pick_error.take() {
             registry.remove(&self.token);
+            clear_resumable();
             return Poll::Ready(Err(FilePickerError::Failed(error)));
         }
         if slot.picked {
+            // Delivered live; drop the resume copy recorded in `onActivityResult`.
+            clear_resumable();
             return Poll::Ready(Ok(Some(
                 Rc::new(AndroidFolderStream { token: self.token }) as FolderStreamRef
             )));

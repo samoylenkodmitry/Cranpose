@@ -160,6 +160,17 @@ pub trait FolderStream {
 /// Shared handle to a [`FolderStream`].
 pub type FolderStreamRef = Rc<dyn FolderStream>;
 
+/// A selection recovered by [`FilePicker::take_resumed_picks`] after the
+/// composition that requested it was destroyed mid-pick (Android recreates the
+/// activity when the SAF picker covers it on some devices). It is consumed
+/// exactly like a freshly-returned pick.
+pub enum ResumedPick {
+    /// A single picked file.
+    File(PickedEntryRef),
+    /// A picked folder, streamed like [`FilePicker::pick_folder_streaming`].
+    Folder(FolderStreamRef),
+}
+
 /// Recursively collects every [`PickedKind::File`] under `entry`.
 fn collect_files(entry: PickedEntryRef) -> PickerFuture<Vec<PickedEntryRef>> {
     Box::pin(async move {
@@ -247,6 +258,17 @@ pub trait FilePicker {
     ) -> PickerFuture<Result<Option<FolderStreamRef>, FilePickerError>> {
         eager_folder_stream(self.pick_folder(options))
     }
+
+    /// Reclaims selections whose results arrived after the requesting
+    /// composition was torn down. On Android the activity (and the native app)
+    /// can be destroyed and recreated while the SAF picker is in front, so a
+    /// pick in flight at that moment would otherwise be lost; the app drains
+    /// this on startup to recover it. Returns the orphaned selections, usually
+    /// none. Backends that never lose a result (desktop, web, iOS, the
+    /// fallbacks) keep the default empty implementation.
+    fn take_resumed_picks(&self) -> Vec<ResumedPick> {
+        Vec::new()
+    }
 }
 
 /// Shared handle to a [`FilePicker`].
@@ -307,6 +329,13 @@ impl FilePicker for PlatformFilePicker {
             return picker.pick_folder_streaming(options);
         }
         eager_folder_stream(builtin_pick(options, PickedKind::Folder))
+    }
+
+    fn take_resumed_picks(&self) -> Vec<ResumedPick> {
+        if let Some(picker) = registered_platform_file_picker() {
+            return picker.take_resumed_picks();
+        }
+        Vec::new()
     }
 }
 

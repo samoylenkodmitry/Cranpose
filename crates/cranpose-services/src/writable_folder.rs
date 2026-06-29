@@ -78,6 +78,16 @@ pub type WritableFolderStoreRef = Arc<dyn WritableFolderStore>;
 pub trait WritableFolderPicker {
     /// Resolves to the durable handle string, or `None` if the user cancelled.
     fn pick(&self) -> PickerFuture<Result<Option<String>, FilePickerError>>;
+
+    /// Reclaims a grant whose result arrived after the composition that
+    /// requested it was torn down. On Android the activity (and the native app)
+    /// can be destroyed and recreated while the SAF picker is in front, so a
+    /// folder picked at that moment would otherwise be lost; the app drains this
+    /// on startup to recover it. Returns the recovered durable handle, usually
+    /// `None`. Backends that never lose a result keep the default.
+    fn take_resumed_pick(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Shared handle to a [`WritableFolderPicker`].
@@ -121,6 +131,14 @@ pub fn pick_writable_folder() -> PickerFuture<Result<Option<String>, FilePickerE
         return picker.pick();
     }
     builtin_pick()
+}
+
+/// Reclaims a writable-folder grant orphaned by an activity recreation while the
+/// SAF picker was in front (see [`WritableFolderPicker::take_resumed_pick`]).
+/// Returns the recovered durable handle, or `None`. The app drains this on
+/// startup; backends that never lose a result return `None`.
+pub fn take_resumed_writable_folder() -> Option<String> {
+    registered_picker().and_then(|picker| picker.take_resumed_pick())
 }
 
 /// Reopens a writable folder from a stored handle. Synchronous and callable from

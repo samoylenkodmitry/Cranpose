@@ -17,6 +17,7 @@ pub use file_picker::{
     clear_platform_file_picker, default_file_picker, local_file_picker, set_platform_file_picker,
     FileFilter, FilePicker, FilePickerError, FilePickerOptions, FilePickerRef, FolderStream,
     FolderStreamRef, PickedEntry, PickedEntryRef, PickedKind, PickerFuture, ProvideFilePicker,
+    ResumedPick,
 };
 pub use http::{
     default_http_client, local_http_client, map_ordered_concurrent, HttpClient, HttpClientRef,
@@ -36,8 +37,9 @@ pub use uri_handler::{
 };
 pub use writable_folder::{
     clear_platform_writable_folder_picker, open_writable_folder, pick_writable_folder,
-    set_platform_writable_folder_picker, set_writable_folder_store_factory, FolderError,
-    WritableFolderPicker, WritableFolderPickerRef, WritableFolderStore, WritableFolderStoreRef,
+    set_platform_writable_folder_picker, set_writable_folder_store_factory,
+    take_resumed_writable_folder, FolderError, WritableFolderPicker, WritableFolderPickerRef,
+    WritableFolderStore, WritableFolderStoreRef,
 };
 
 /// Convenience alias used in unit tests.

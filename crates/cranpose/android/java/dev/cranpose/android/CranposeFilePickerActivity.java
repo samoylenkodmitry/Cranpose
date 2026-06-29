@@ -72,6 +72,15 @@ public class CranposeFilePickerActivity extends NativeActivity {
      * to finish loading). */
     private static final int FOLDER_LOADING_POLL_MS = 250;
 
+    /** Records a granted selection in the native, process-static "resume inbox"
+     * so a pick whose result arrives after the requesting activity (and the
+     * native app) was destroyed is not lost. Android destroys and recreates the
+     * activity when the SAF picker covers it on some devices, tearing down the
+     * composition that was awaiting the result; the app drains this inbox on its
+     * next start to recover the selection. {@code flags} are the request flags
+     * ({@link #FLAG_FOLDER}/{@link #FLAG_STREAMING}). Implemented in the cdylib. */
+    private static native void nativeRecordResumablePick(int flags, String uri, String name);
+
     /** Implemented in the Rust cdylib. {@code entries} is newline-separated
      * {@code uri\tname} rows (one for a file, every descendant for a folder). */
     private static native void nativeOnFilePicked(
@@ -115,6 +124,23 @@ public class CranposeFilePickerActivity extends NativeActivity {
         pendingToken = token;
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         launch(intent, token, FLAG_FOLDER | FLAG_STREAMING);
+    }
+
+    /** Streams files under an <em>already granted</em> tree URI, without showing
+     * any picker. Used by the resume path: a folder picked in a prior activity
+     * instance that was destroyed before its walk ran is re-walked here once the
+     * app restarts and reclaims the grant. Called from Rust over JNI. */
+    public void cranposeStreamGrantedFolder(long token, String uriString) {
+        final Uri uri = Uri.parse(uriString);
+        new Thread(() -> {
+            String error = null;
+            try {
+                streamTree(uri, token);
+            } catch (Exception failure) {
+                error = failure.toString();
+            }
+            nativeOnFolderFinished(token, error);
+        }, "cranpose-folder-stream-resume").start();
     }
 
     /** Opens the document tree picker for a <em>writable</em> folder, taking a
@@ -345,6 +371,11 @@ public class CranposeFilePickerActivity extends NativeActivity {
                 getContentResolver().takePersistableUriPermission(tree,
                         Intent.FLAG_GRANT_READ_URI_PERMISSION
                                 | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                // Record the grant in the resume inbox before delivering it, so a
+                // pick whose activity was recreated mid-prompt (tearing down the
+                // awaiting composition) can still be reclaimed on the next start.
+                // Live delivery below clears the inbox on the happy path.
+                nativeRecordResumablePick(flags, tree.toString(), sanitize(displayName(tree, "folder")));
                 nativeOnWritableFolderPicked(token, tree.toString(), false, null);
             } catch (Exception error) {
                 nativeOnWritableFolderPicked(token, null, false, error.toString());
@@ -358,6 +389,17 @@ public class CranposeFilePickerActivity extends NativeActivity {
                 return;
             }
             final Uri uri = data.getData();
+            // Take a persistable grant and record the selection in the resume
+            // inbox *before* delivering it, so that if this activity was recreated
+            // (the SAF picker covered and destroyed it, tearing down the awaiting
+            // composition) the next app start can still reclaim it. The live
+            // delivery below clears the inbox on the happy path.
+            try {
+                getContentResolver().takePersistableUriPermission(
+                        uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException ignored) {
+            }
+            nativeRecordResumablePick(flags, uri.toString(), sanitize(displayName(uri, "folder")));
             // Resolve the selection immediately so the UI stays responsive, then
             // walk the (possibly slow) tree off the main thread, streaming files
             // back in batches. This is what keeps a huge WebDAV folder from
@@ -380,6 +422,13 @@ public class CranposeFilePickerActivity extends NativeActivity {
             return;
         }
         final Uri uri = data.getData();
+        if (!folder) {
+            // A single-file pick can also be lost to an activity recreation, so
+            // record it for resume. (A persistable grant needs the request intent
+            // to carry FLAG_GRANT_PERSISTABLE_URI_PERMISSION; the in-process grant
+            // is enough for the common case where the process outlives the pick.)
+            nativeRecordResumablePick(flags, uri.toString(), sanitize(displayName(uri, "file")));
+        }
         // Enumerating a tree only reads metadata (no byte copy), but a deep tree
         // can still take a moment, so resolve it off the main thread and never
         // block the UI — that previously froze the app on large folders.

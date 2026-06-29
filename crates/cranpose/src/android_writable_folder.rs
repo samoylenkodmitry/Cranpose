@@ -231,6 +231,9 @@ struct AndroidWritableFolderPicker;
 
 impl WritableFolderPicker for AndroidWritableFolderPicker {
     fn pick(&self) -> PickerFuture<Result<Option<String>, FilePickerError>> {
+        // Discard any orphaned grant from an earlier abandoned pick; this fresh
+        // request becomes the only thing the shared resume inbox can hold.
+        crate::android_file_picker::clear_resumable();
         let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
         pick_pending()
             .lock()
@@ -245,6 +248,10 @@ impl WritableFolderPicker for AndroidWritableFolderPicker {
             return Box::pin(async move { Err(FilePickerError::Failed(error)) });
         }
         Box::pin(PickFuture { token })
+    }
+
+    fn take_resumed_pick(&self) -> Option<String> {
+        crate::android_file_picker::take_resumed_writable_uri()
     }
 }
 
@@ -278,10 +285,14 @@ impl Future for PickFuture {
         match slot.result.take() {
             Some(Ok(handle)) => {
                 registry.remove(&self.token);
+                // Delivered live; drop the resume copy recorded in
+                // `onActivityResult` so it is not replayed on the next start.
+                crate::android_file_picker::clear_resumable();
                 Poll::Ready(Ok(handle))
             }
             Some(Err(message)) => {
                 registry.remove(&self.token);
+                crate::android_file_picker::clear_resumable();
                 Poll::Ready(Err(FilePickerError::Failed(message)))
             }
             None => {
