@@ -7,6 +7,8 @@ use cranpose_core::{location_key, Composition, MemoryApplier};
 
 pub mod file_picker;
 pub mod http;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod peer;
 pub mod theme;
 pub mod uri_handler;
 pub mod writable_folder;
@@ -19,6 +21,11 @@ pub use file_picker::{
 pub use http::{
     default_http_client, local_http_client, map_ordered_concurrent, HttpClient, HttpClientRef,
     HttpError, HttpFuture,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use peer::{
+    content_length, fetch_range, fetch_to_writer, ByteSource, BytesSource, FetchResult, PeerError,
+    PeerServer, SourceResolver,
 };
 pub use theme::{
     default_system_theme, isSystemInDarkTheme, local_system_theme, ProvideSystemTheme, SystemTheme,
