@@ -186,8 +186,7 @@ public class CranposeFilePickerActivity extends NativeActivity {
             if (docId != null) {
                 docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId);
             } else {
-                docUri = DocumentsContract.createDocument(
-                        getContentResolver(), parent, "application/octet-stream", name);
+                docUri = createDocumentWithRetry(parent, name);
                 if (docUri == null) {
                     return 2;
                 }
@@ -288,26 +287,23 @@ public class CranposeFilePickerActivity extends NativeActivity {
     public boolean cranposeFolderWritable(String treeUriString) {
         try {
             Uri tree = Uri.parse(treeUriString);
-            boolean granted = false;
-            for (UriPermission permission : getContentResolver().getPersistedUriPermissions()) {
-                if (permission.getUri().equals(tree) && permission.isWritePermission()) {
-                    granted = true;
-                    break;
-                }
-            }
-            if (!granted) {
-                return false;
-            }
             String treeDocId = DocumentsContract.getTreeDocumentId(tree);
             Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, treeDocId);
+            // Ground truth: actually create (then delete) a probe document. We do
+            // NOT pre-gate on UriPermission.isWritePermission(): some third-party
+            // document providers (rclone / WebDAV via RoundSync) grant working
+            // write access while the persisted permission reads back WITHOUT the
+            // write flag, which produced false "read-only" results on folders the
+            // user can demonstrably write to. createDocumentWithRetry rides out a
+            // cold/slow network provider; a genuinely read-only folder throws
+            // SecurityException and returns null promptly.
             String existing = findWritableChildId(tree, treeDocId, WRITABLE_PROBE_NAME);
             if (existing != null) {
                 DocumentsContract.deleteDocument(
                         getContentResolver(),
                         DocumentsContract.buildDocumentUriUsingTree(tree, existing));
             }
-            Uri probe = DocumentsContract.createDocument(
-                    getContentResolver(), parent, "application/octet-stream", WRITABLE_PROBE_NAME);
+            Uri probe = createDocumentWithRetry(parent, WRITABLE_PROBE_NAME);
             if (probe == null) {
                 return false;
             }
@@ -315,6 +311,32 @@ public class CranposeFilePickerActivity extends NativeActivity {
             return true;
         } catch (Exception error) {
             return false;
+        }
+    }
+
+    /** Creates a document, retrying a slow/flaky network provider (a WebDAV /
+     * cloud share mounted through RoundSync can transiently return {@code null}
+     * or throw before it settles, just like a folder listing). Returns the new
+     * document URI, or {@code null} if it never succeeded. A
+     * {@link SecurityException} means the tree is genuinely read-only, so we stop
+     * immediately rather than retry. */
+    private Uri createDocumentWithRetry(Uri parent, String name) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                Uri doc = DocumentsContract.createDocument(
+                        getContentResolver(), parent, "application/octet-stream", name);
+                if (doc != null) {
+                    return doc;
+                }
+            } catch (SecurityException readOnly) {
+                return null;
+            } catch (Exception transientError) {
+                // Slow/flaky provider — fall through and retry.
+            }
+            if (attempt >= FOLDER_QUERY_ATTEMPTS
+                    || !sleepQuietly((long) FOLDER_QUERY_RETRY_MS * attempt)) {
+                return null;
+            }
         }
     }
 
