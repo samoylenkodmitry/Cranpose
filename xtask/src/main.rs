@@ -570,7 +570,7 @@ impl DistMinOptions {
 /// without a message and log `{:?}` payloads as empty — acceptable for
 /// shipped builds, not for debugging. Requires `lld` on PATH.
 const DIST_MIN_RUSTFLAGS: &str = "-Cpanic=immediate-abort -Zunstable-options \
-     -Zlocation-detail=none -Zfmt-debug=none -Cforce-unwind-tables=no";
+     -Zlocation-detail=none -Zfmt-debug=none";
 
 /// Linker extras that only apply to ELF/lld targets (Linux, Android):
 /// `--icf=all` folds identical functions; macOS ld64 and MSVC link.exe have
@@ -579,6 +579,11 @@ const DIST_MIN_LLD_RUSTFLAGS: &str = " -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,--
 
 fn dist_min_rustflags_for_target(target: &str) -> String {
     let mut flags = DIST_MIN_RUSTFLAGS.to_owned();
+    // MSVC targets use SEH exceptions and REQUIRE unwind tables; rustc
+    // hard-errors on force-unwind-tables=no there.
+    if !target.contains("msvc") {
+        flags.push_str(" -Cforce-unwind-tables=no");
+    }
     if target.contains("linux") || target.contains("android") {
         flags.push_str(DIST_MIN_LLD_RUSTFLAGS);
     }
@@ -1572,6 +1577,11 @@ mod tests {
         assert!(!mac.contains("lld"), "ld64 targets skip lld flags: {mac}");
         let win = dist_min_rustflags_for_target("x86_64-pc-windows-msvc");
         assert!(!win.contains("icf"), "msvc has /OPT:ICF already: {win}");
+        assert!(
+            !win.contains("force-unwind-tables"),
+            "msvc requires unwind tables: {win}"
+        );
+        assert!(linux.contains("-Cforce-unwind-tables=no"));
     }
 
     #[test]
