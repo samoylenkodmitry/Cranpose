@@ -35,3 +35,73 @@
 - Idle frame-rate trap: when a Cranpose desktop app feels laggy, check idle fps FIRST (`CRANPOSE_GPU_STATS=1`, count `[GPU f#N]` lines per second × 60). leetcodedaily rendered 477fps at idle on a 60Hz panel because (a) an always-mounted `rememberInfiniteTransition` (workaround for long-fixed issue #262) kept animations alive forever, and (b) pre-0.1.14 desktop pacing defaulted to NoVsync so animations rendered uncapped. Both were invisible in robot runs: drivers measure throughput and the fixture idles between injected events. Production-mode verification needs the real binary on a real display: idle must be 0fps, animating content exactly the refresh rate.
 - xdotool wheel-scroll trap: `xdotool click 4/5` (XTEST legacy wheel) does not scroll Cranpose/winit windows on this X11 setup even when `getmouselocation` confirms the pointer is over the app window — clicks and drags work, wheel does not. Don't burn time on it: for scroll measurements use the in-process Robot (`robot.mouse_scroll`) via a test driver, pinning `with_frame_pacing_mode(Vsync)` if production pacing must be preserved.
 - Publish-tag trap: `publish.yml` does NOT bump versions — it *verifies* that `main` already carries the release metadata for the tag, then publishes. Tagging `vX.Y.Z` at a commit whose `Cargo.toml`/`Cargo.lock`/`apps/isolated-demo/Cargo.toml` still hold the previous version fails fast with "main must already contain the release metadata for vX.Y.Z". Correct order: commit a `Release vX.Y.Z` bump to `main` first (workspace.package version + every `cranpose*` workspace.dependency + the matching `cranpose*` `version = ` lines in `Cargo.lock` + isolated-demo — a plain `0.1.N`→`0.1.N+1` replace is safe because no third-party dep shares those version strings), THEN create the tag at that `main` HEAD (the workflow also rejects a tag not pointing at `main` HEAD).
+
+## Vulkan GPU tests hang when run as harness background tasks (2026-07-02)
+- Symptom: `cargo test -p cranpose-render-vulkan` launched as a Claude-Code
+  background task spins at 100% CPU forever (NVIDIA RTX 2070, proprietary
+  driver); killing the task kills only the wrapper shell — the test binary
+  orphans and keeps burning a core. Eight orphans accumulated over hours.
+- CONFIRMED root cause (/proc thread states of a live hang): concurrent
+  test threads each create their OWN VkInstance+VkDevice; with two+ devices
+  live in one process the NVIDIA driver intermittently deadlocks — one
+  thread spins in the driver's userspace fence-wait (wchan 0, 100% CPU),
+  another sleeps on a kernel rt_mutex, two sets of [vkcf]/[vkrt]/[vkps]
+  driver threads present. Intermittent: the same binary can pass in 1.3s.
+- Fixes applied: (1) every submit in cranpose-render-vulkan waits on a
+  FENCE with a 10s timeout instead of queue_wait_idle — a future stall is
+  a clean GpuTimeout error, never an infinite burn; (2) tests share ONE
+  process-wide VulkanContext behind a Mutex (real apps have one device).
+- Protocol: run GPU suites as `timeout -s KILL 120 <test-binary>` with
+  timeout parenting the binary DIRECTLY (build first via
+  `cargo test --no-run`); after any GPU-test session check
+  `ps -eo pid,etime,pcpu,args | grep cranpose_render`.
+
+## Stuck-detection for background work (2026-07-03)
+- A single `ps` snapshot is NOT liveness. A background agent's host process
+  died (harness restart) minutes after a "99% CPU compiling" report — the
+  user saw 0% CPU while the assistant reported active work.
+- Protocol: liveness = TWO cpu samples spaced apart AND newest artifact
+  mtime advancing AND output file growing. Any waiting loop gets a
+  staleness deadline (~10 min without new artifacts → investigate/kill,
+  never keep waiting). After any background session: check for orphaned
+  Xvfb/app/cargo processes.
+
+## Cross-actor binary-path collisions + pkill self-kill (2026-07-03)
+- Two actors (main loop + agent) building the same cargo target race on
+  target/<profile>/<bin>: a "verified" capture can be the OTHER renderer.
+  Copy binaries to distinct names (cp target/... $SCRATCH/demo-slim-X)
+  before running when any concurrent builds are possible.
+- `pkill -f <pattern>` kills the CALLING SHELL too when the pattern appears
+  in the shell's own command line (batch dies mid-way, later commands
+  silently never run). Kill by stored PID, or pkill -f a string that cannot
+  match your own invocation.
+- Walker clip-space bugs found by counting silent returns: per-primitive
+  graph clips are LAYER-LOCAL (see primitive_emit::resolve_primitive_clip);
+  intersecting them as world-space silently dropped all clipped text in
+  translated layers, and reassigning rect to world-visible then re-mapping
+  double-applied the transform (shifted images). Silent `return`s in draw
+  paths must either count as unsupported or be provably legitimate.
+
+## Handed the user a broken build (2026-07-03, slim renderer)
+- Validated ONLY under Xvfb at scale 1.0, then handed to the user whose
+  desktop runs 1.354 (which project memory explicitly recorded). Scene
+  rendered 800x600 in a 1083x812 window (root_scale not reaching scene
+  build) and the app froze with silent per-frame errors.
+- The release build lacked the `logging` feature: every log::error! in the
+  render/present path was compiled out. Errors were structurally invisible.
+- GATES BEFORE ANY USER HANDOFF: (1) run at WINIT_X11_SCALE_FACTOR=1.354;
+  (2) interact: switch tabs, resize the window, minimize/restore; (3) build
+  with logging enabled and read the log; (4) compare against the wgpu build
+  side by side on the same display.
+- pgrep/pkill self-match, THIRD bite: a wait-loop `until ! pgrep -f "cargo
+  build"` matches its own shell command line and spins forever (reported
+  "stale, zero cpu" by the user while everything was long done). Antidote:
+  bracket the pattern (`pgrep -f "[c]argo build"`) or match the exact
+  binary (`pgrep -x cargo`).
+- GUI apps launched from the assistant's sandboxed shell inherit nice 5 →
+  vsync GPU apps stutter ("super low fps", sluggish native windows) while
+  the binary is fine. renice to 0 is Permission denied; systemd-run --scope
+  ALSO inherits the caller's nice. Correct launch for user-facing apps:
+  `systemd-run --user --unit=<name> --setenv=DISPLAY=:0 <binary>` (spawns
+  from the user manager at nice 0). Diagnose via `ps -o ni` — the 'N' in
+  STAT is the tell.

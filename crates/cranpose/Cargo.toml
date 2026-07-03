@@ -15,11 +15,42 @@ description = "Cranpose runtime and UI facade"
 ignored = ["cranpose-render-pixels"]
 
 [features]
-default = []
-desktop = [
+default = ["embedded-default-font"]
+# Embed the framework fallback font (~1.3 MiB) used when the app provides no
+# fonts via AppLauncher::with_fonts. Apps that bundle their own fonts should
+# build with `default-features = false` to drop it from the binary.
+embedded-default-font = [
+    "cranpose-render-wgpu?/embedded-default-font",
+    "cranpose-render-pixels?/embedded-default-font",
+]
+# GL/GLES fallback backend for the wgpu renderer on native targets. Desktop
+# defaults to Vulkan/DX12/Metal only; enable this for machines without a
+# working Vulkan driver. Android enables it automatically.
+renderer-wgpu-gles = [
+    "renderer-wgpu",
+    "cranpose-render-wgpu/backend-gles",
+]
+# Desktop with both display-server backends. Size-sensitive apps can pick
+# just one via desktop-x11 / desktop-wayland.
+desktop = ["desktop-x11", "desktop-wayland"]
+desktop-x11 = [
+    "desktop-shell",
+    "cranpose-platform-desktop-winit/x11",
+    "winit/x11",
+    "dep:x11rb",
+]
+desktop-wayland = [
+    "desktop-shell",
+    "cranpose-platform-desktop-winit/wayland",
+    "winit/wayland",
+    "winit/wayland-dlopen",
+    "winit/wayland-csd-adwaita",
+]
+# Internal: the winit desktop shell shared by the per-backend features. Use
+# desktop / desktop-x11 / desktop-wayland instead of enabling this directly.
+desktop-shell = [
     "cranpose-app-shell/clipboard-native",
     "cranpose-platform-desktop-winit",
-    "dep:x11rb",
     "dep:winit",
 ]
 ios = [
@@ -30,10 +61,16 @@ ios = [
     "dep:objc2-ui-kit",
     "dep:objc2-uniform-type-identifiers",
 ]
-android = ["cranpose-platform-android"]
+android = [
+    "cranpose-platform-android",
+    "cranpose-render-wgpu?/backend-gles",
+]
 web = ["cranpose-platform-web", "dep:wasm-bindgen", "dep:web-sys"]
 renderer-pixels = ["cranpose-render-pixels"]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
+# App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
+# ~0.7 MiB). On by default; drop via `default-features = false` if the app
+# uses only framework effects.
 robot = ["cranpose-app-shell/test-support"] # Enable robot testing support (cranpose-ui now always included)
 
 [dependencies]
@@ -46,7 +83,7 @@ cranpose-platform-web = { workspace = true, optional = true }
 cranpose-render-pixels = { workspace = true, optional = true }
 cranpose-render-wgpu = { workspace = true, optional = true }
 pollster = { version = "0.4", optional = true }
-winit = { version = "0.31.0-beta.2", optional = true }
+winit = { version = "0.31.0-beta.2", optional = true, default-features = false }
 wasm-bindgen = { version = "0.2", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
     "Window",
@@ -75,6 +112,8 @@ log = "0.4"
 cranpose-services = { workspace = true, default-features = false }
 thiserror = "2.0.18"
 web-time = { workspace = true }
+cranpose-render-common.workspace = true
+raw-window-handle = "0.6"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
@@ -94,9 +133,7 @@ raw-window-handle = "0.6"
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
-    "gles",
     "vulkan",
-    "wgsl",
 ] }
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
@@ -104,9 +141,7 @@ x11rb = { version = "0.13.2", optional = true }
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
-    "gles",
     "vulkan",
-    "wgsl",
 ] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -114,7 +149,6 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
     "std",
     "parking_lot",
     "dx12",
-    "wgsl",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -122,7 +156,6 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
     "std",
     "parking_lot",
     "metal",
-    "wgsl",
 ] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
@@ -130,7 +163,6 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
     "std",
     "parking_lot",
     "metal",
-    "wgsl",
 ] }
 # iOS file picker (UIDocumentPickerViewController). Only pulled in with the
 # `ios` feature.
@@ -169,7 +201,5 @@ objc2-uniform-type-identifiers = { version = "0.3", default-features = false, op
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
-    "gles",
     "vulkan",
-    "wgsl",
 ] }

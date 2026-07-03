@@ -96,7 +96,7 @@ jobs:
           --bin isolated-demo
           --profile release-small
           --patch-workspace-cranpose
-          --max-bytes 29360128
+          --max-bytes 13107200
 
   feature-smoke:
     name: linux / stable / ${{ matrix.feature }} feature

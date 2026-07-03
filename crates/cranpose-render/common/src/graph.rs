@@ -29,6 +29,14 @@ impl ProjectiveTransform {
         }
     }
 
+    /// Uniform scale about the origin (device-scale root transform: render
+    /// graphs stay in logical dp; density applies at execution).
+    pub fn uniform_scale(scale: f32) -> Self {
+        Self {
+            matrix: [[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, 1.0]],
+        }
+    }
+
     pub fn from_rect_to_quad(rect: Rect, quad: [[f32; 2]; 4]) -> Self {
         if rect.width.abs() <= f32::EPSILON || rect.height.abs() <= f32::EPSILON {
             return Self::translation(quad[0][0], quad[0][1]);

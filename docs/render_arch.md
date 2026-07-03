@@ -157,7 +157,7 @@ The renderer branch is not considered done unless this bar is green:
 - `cargo test > 1.tmp 2>&1`
 - `cargo clippy > 2.tmp 2>&1`
 - `cargo xtask dependency-budget`
-- `cargo xtask binary-size --package isolated-demo --bin isolated-demo --profile release-small --max-bytes 29360128`
+- `cargo xtask binary-size --package isolated-demo --bin isolated-demo --profile release-small --max-bytes 13107200`
 - `apps/desktop-demo/build-web.sh`
 - `apps/android-demo/android/./gradlew :app:assembleRelease`
 - `./run_robot_test.sh --sequential`

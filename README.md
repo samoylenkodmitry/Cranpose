@@ -165,6 +165,61 @@ cd apps/isolated-demo
 python3 -m http.server 8080
 ```
 
+## Binary Size
+
+Cranpose apps stay small when two things are set up right: the cargo profile
+and the feature set.
+
+**1. Add a tuned release profile to your app's `Cargo.toml`.** Cargo profiles
+are taken from the top-level package, so the framework cannot set them for
+you. Without this, a plain `cargo build --release` produces a binary several
+times larger than necessary (no LTO, no stripping, unwinding kept):
+
+```toml
+[profile.release]
+opt-level = 3         # or "z" to trade some runtime speed for size
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+```
+
+**2. Pick features deliberately.** The `cranpose` default feature set favors
+out-of-the-box behavior over size:
+
+- `embedded-default-font` (default): embeds the ~1.3 MiB NotoSansMerged
+  fallback font so text renders even when the app provides no fonts. Apps
+  that bundle fonts via `AppLauncher::with_fonts` should build with
+  `default-features = false` to drop it.
+- `renderer-wgpu-gles` (off by default): the GL/GLES fallback backend for
+  desktop machines without a working Vulkan driver. Leaving it off removes
+  the GLES half of wgpu and naga's GLSL writer from the binary. Android
+  always compiles the GLES fallback; web always compiles WebGL.
+- `desktop-x11` / `desktop-wayland`: `desktop` compiles both display-server
+  backends; picking one drops the other's window/input stack.
+
+```toml
+[dependencies]
+cranpose = { version = "0.1.28", default-features = false, features = [
+    "desktop",        # or just "desktop-wayland" / "desktop-x11"
+    "renderer-wgpu",
+] }
+```
+
+**3. For the smallest binary**, build with the nightly-only pipeline
+(build-std with a size-tuned std and immediate-abort panics):
+
+```bash
+cargo xtask dist-min --package my-app --bin my-app
+```
+
+Reference ladder for a minimal hello-world app on Linux x86_64 with
+`default-features = false`: ~15 MB with cargo's untuned default release
+profile → 8.7 MB with the profile above → 6.0 MB with the `release-small`
+profile (`opt-level = "z"`, `lto = "fat"`) → **3.4 MB** with a single display
+backend + `dist-min`. The full breakdown and the roadmap toward smaller
+binaries live in [`docs/binary_size.md`](docs/binary_size.md).
+
 ## Verification Gates
 
 The core workspace gates are:
@@ -175,7 +230,7 @@ cargo test
 cargo clippy
 cargo build --workspace --no-default-features
 cargo xtask dependency-budget
-cargo xtask binary-size --package isolated-demo --bin isolated-demo --profile release-small --max-bytes 29360128
+cargo xtask binary-size --package isolated-demo --bin isolated-demo --profile release-small --max-bytes 13107200
 ```
 
 See [`apps/isolated-demo/README.md`](apps/isolated-demo/README.md) for full details.

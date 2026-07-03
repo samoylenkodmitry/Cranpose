@@ -5,6 +5,7 @@ mod pipeline;
 pub mod scene;
 pub mod style;
 
+use cranpose_render_common::text_measure::{CachedFontTextMeasurer, SoftwareTextResources};
 use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;
@@ -19,7 +20,7 @@ pub enum PixelsRendererError {
 
 pub struct PixelsRenderer {
     scene: Scene,
-    text_resources: draw::PixelsTextResources,
+    text_resources: SoftwareTextResources,
 }
 
 impl Default for PixelsRenderer {
@@ -32,7 +33,7 @@ impl PixelsRenderer {
     pub fn new() -> Self {
         Self {
             scene: Scene::new(),
-            text_resources: draw::PixelsTextResources::default(),
+            text_resources: SoftwareTextResources::default(),
         }
     }
 
@@ -52,7 +53,7 @@ impl Renderer for PixelsRenderer {
     type Error = PixelsRendererError;
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
-        app_context.set_text_measurer(draw::CachedFontTextMeasurer::with_text_resources(
+        app_context.set_text_measurer(CachedFontTextMeasurer::with_text_resources(
             self.text_resources.clone(),
             64,
         ));

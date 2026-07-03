@@ -58,12 +58,28 @@ android {
         versionName = "1.0"
     }
 
+    // CI release APKs ship one ABI each (arm64 phones don't pay for x86_64
+    // emulator bytes); outputs are app-<abi>-release.apk. Local builds keep
+    // the single fast-ABI flow via ndk.abiFilters (splits and abiFilters
+    // are mutually exclusive in AGP).
+    splits {
+        abi {
+            isEnable = isCiBuild
+            reset()
+            include(*releaseRustAbis.toTypedArray())
+            isUniversalApk = false
+        }
+    }
+
     buildTypes {
         debug {
             // Debug builds: x86_64 only for emulator (faster builds, smaller APK)
-            // Add "arm64-v8a" if testing on physical devices
-            ndk {
-                abiFilters.add("x86_64")
+            // Add "arm64-v8a" if testing on physical devices. CI uses ABI
+            // splits, which exclude per-buildtype abiFilters.
+            if (!isCiBuild) {
+                ndk {
+                    abiFilters.add("x86_64")
+                }
             }
         }
         release {
@@ -74,9 +90,12 @@ android {
             )
             signingConfig = signingConfigs.getByName("debug")
 
-            // Local release checks default to one fast ABI. CI/full release keeps all ABIs.
-            ndk {
-                abiFilters += releaseRustAbis
+            // Local release checks default to one fast ABI; CI uses ABI
+            // splits instead (see splits above).
+            if (!isCiBuild) {
+                ndk {
+                    abiFilters += releaseRustAbis
+                }
             }
         }
     }

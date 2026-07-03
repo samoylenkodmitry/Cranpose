@@ -23,6 +23,9 @@ thiserror = "2.0.18"
 ttf-parser = "0.25.1"
 
 [features]
-default = []
+default = ["embedded-default-font"]
+# Embed NotoSansMerged (~1.3 MiB) as the fallback font used when an app
+# provides no fonts. Disable to keep app-provided fonts as the only source.
+embedded-default-font = []
 text-hyphenation = ["dep:hyphenation"]
 text-hyphenation-embedded = ["text-hyphenation", "hyphenation/embed_all"]

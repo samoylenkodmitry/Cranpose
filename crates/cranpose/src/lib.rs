@@ -26,7 +26,7 @@ pub use android_host_window::{
 };
 #[cfg(all(
     feature = "renderer-wgpu",
-    any(feature = "desktop", all(feature = "ios", target_os = "ios"))
+    any(feature = "desktop-shell", all(feature = "ios", target_os = "ios"))
 ))]
 pub use launcher::LaunchError;
 pub use launcher::{AndroidOverlayWindowOptions, AppLauncher, AppSettings};
@@ -38,7 +38,7 @@ pub use native_window::{
 #[cfg(all(
     feature = "renderer-wgpu",
     any(
-        feature = "desktop",
+        feature = "desktop-shell",
         all(feature = "android", target_os = "android"),
         all(feature = "ios", target_os = "ios"),
         all(feature = "web", target_arch = "wasm32")
@@ -48,7 +48,7 @@ mod present_mode;
 #[cfg(all(
     feature = "renderer-wgpu",
     any(
-        feature = "desktop",
+        feature = "desktop-shell",
         all(feature = "android", target_os = "android"),
         all(feature = "ios", target_os = "ios"),
         all(feature = "web", target_arch = "wasm32")
@@ -70,7 +70,11 @@ pub use cranpose_core::{
     ParamState, ReturnSlot,
 };
 
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "robot",
+    feature = "renderer-wgpu"
+))]
 #[doc(hidden)]
 pub type RobotAppHook = dyn FnMut(String, String) -> Result<Option<String>, String>;
 
@@ -104,8 +108,18 @@ pub mod android;
 )]
 pub(crate) mod gpu_limits;
 
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub mod desktop;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+mod desktop_input;
+
+/// Renderer-agnostic robot testing harness shared by the desktop shells.
+#[cfg(all(
+    feature = "robot",
+    feature = "desktop-shell",
+    feature = "renderer-wgpu"
+))]
+mod robot;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 pub mod ios;
@@ -113,16 +127,21 @@ pub mod ios;
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_file_picker;
 
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub mod recorder;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 pub mod web;
 
-// Re-export Robot type from desktop module when robot feature is enabled
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
-pub use desktop::{Robot, RobotScreenshot, SemanticElement, SemanticRect};
+// Re-export the renderer-agnostic robot harness so applications and the
+// testing crate can drive either desktop shell through a single path.
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "robot",
+    feature = "renderer-wgpu"
+))]
+pub use robot::{Robot, RobotScreenshot, SemanticElement, SemanticRect};
 
 /// Development frame pacing and FPS statistics types.
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub use cranpose_app_shell::{DevOptions, FpsStats, FramePacingMode};

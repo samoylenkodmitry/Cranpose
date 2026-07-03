@@ -1,4 +1,6 @@
-use super::super::{GroupKeySeed, PayloadAnchor, PayloadKind, SlotWriteSession, ValueSlotId};
+use super::super::{
+    GroupKeySeed, PayloadAnchor, PayloadInit, PayloadKind, SlotWriteSession, ValueSlotId,
+};
 use crate::{Key, Owned};
 
 const RECOVERY_VALUE_SLOT_STATIC_KEY: Key = Key::MAX;
@@ -11,10 +13,29 @@ impl SlotWriteSession<'_> {
             .debug_assert_no_pending_payload_location_refreshes("payload location flush");
     }
 
+    /// Thin monomorphic shim: the payload machinery below works on a
+    /// [`PayloadInit`] so it is compiled once instead of once per remembered
+    /// value type.
     pub(crate) fn value_slot_with_kind<T: 'static>(
         &mut self,
         kind: PayloadKind,
         init: impl FnOnce() -> T,
+    ) -> ValueSlotId {
+        let mut init = Some(init);
+        let mut make = move || -> Box<dyn std::any::Any> {
+            Box::new(init.take().expect("payload init must run at most once")())
+        };
+        let mut init = PayloadInit::new::<T>(&mut make);
+        self.value_slot_with_kind_dyn(kind, &mut init)
+    }
+
+    /// `inline(never)`: keep one compiled copy of the payload machinery
+    /// instead of re-inlining it into every monomorphic shim under fat LTO.
+    #[inline(never)]
+    fn value_slot_with_kind_dyn(
+        &mut self,
+        kind: PayloadKind,
+        init: &mut PayloadInit<'_>,
     ) -> ValueSlotId {
         self.discard_stale_value_slot_frames();
         let Some(frame) = self.state.group_stack.last() else {
@@ -44,12 +65,12 @@ impl SlotWriteSession<'_> {
         }
     }
 
-    fn value_slot_in_active_group<T: 'static>(
+    fn value_slot_in_active_group(
         &mut self,
         group_anchor: crate::AnchorId,
         payload_cursor: usize,
         kind: PayloadKind,
-        init: impl FnOnce() -> T,
+        init: &mut PayloadInit<'_>,
     ) -> ValueSlotId {
         let Some(group_index) = self.table.active_group_index(group_anchor) else {
             log::error!(
@@ -86,10 +107,10 @@ impl SlotWriteSession<'_> {
         slot
     }
 
-    fn recover_value_slot_with_kind<T: 'static>(
+    fn recover_value_slot_with_kind(
         &mut self,
         kind: PayloadKind,
-        init: impl FnOnce() -> T,
+        init: &mut PayloadInit<'_>,
     ) -> ValueSlotId {
         log::error!(
             "slot writer value slot requested with an empty group stack; recording recovery group"

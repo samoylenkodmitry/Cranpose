@@ -32,6 +32,7 @@ const MAX_GAUSSIAN_KERNEL_HALF: i32 = 128;
 const SOFTWARE_TEXT_GLYPH_METRICS_CACHE_CAPACITY: usize = 8_192;
 const SOFTWARE_TEXT_KERN_METRICS_CACHE_CAPACITY: usize = 16_384;
 const SOFTWARE_TEXT_PREFIX_WIDTH_CACHE_CAPACITY: usize = 512;
+#[cfg(feature = "embedded-default-font")]
 #[doc(hidden)]
 pub const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
 
@@ -39,6 +40,8 @@ pub const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] = include_bytes!("../assets/No
 pub enum SoftwareTextFontError {
     #[error("invalid software text font bytes")]
     InvalidFont,
+    #[error("embedded default font disabled (feature `embedded-default-font` is off)")]
+    EmbeddedFontDisabled,
 }
 
 #[derive(Clone)]
@@ -91,13 +94,22 @@ impl SoftwareTextFont {
         logical_font_size * self.metadata.ab_glyph_scale_factor
     }
 
-    fn content_hash(&self) -> u64 {
+    /// Stable hash of the font binary — cache-key component wherever
+    /// rasterized output depends on which font served the run.
+    pub fn content_hash(&self) -> u64 {
         self.content_hash
     }
 }
 
 pub fn try_default_software_text_font() -> Result<SoftwareTextFont, SoftwareTextFontError> {
-    SoftwareTextFont::from_bytes(DEFAULT_SOFTWARE_TEXT_FONT_BYTES.to_vec())
+    #[cfg(feature = "embedded-default-font")]
+    {
+        SoftwareTextFont::from_bytes(DEFAULT_SOFTWARE_TEXT_FONT_BYTES.to_vec())
+    }
+    #[cfg(not(feature = "embedded-default-font"))]
+    {
+        Err(SoftwareTextFontError::EmbeddedFontDisabled)
+    }
 }
 
 pub fn default_software_text_font() -> Option<SoftwareTextFont> {

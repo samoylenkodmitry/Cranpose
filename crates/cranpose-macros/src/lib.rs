@@ -140,6 +140,66 @@ fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
     }
 }
 
+/// The bare ident of a plain single-segment type path (e.g. the `F` in
+/// `content: F`), if that is what the type is.
+fn type_bare_generic_ident(ty: &Type) -> Option<&Ident> {
+    match ty {
+        Type::Path(type_path)
+            if type_path.qself.is_none()
+                && type_path.path.segments.len() == 1
+                && type_path.path.segments[0].arguments.is_none() =>
+        {
+            Some(&type_path.path.segments[0].ident)
+        }
+        _ => None,
+    }
+}
+
+/// Whether the token stream mentions an ident with this exact name anywhere.
+fn stream_mentions_ident(tokens: &TokenStream2, name: &str) -> bool {
+    tokens.clone().into_iter().any(|tt| match tt {
+        proc_macro2::TokenTree::Ident(ident) => ident == name,
+        proc_macro2::TokenTree::Group(group) => stream_mentions_ident(&group.stream(), name),
+        _ => false,
+    })
+}
+
+/// Clone `generics` without the stripped type parameters and without the
+/// where-clause predicates that constrain them.
+fn filter_generics(
+    generics: &syn::Generics,
+    strip: &std::collections::HashSet<String>,
+) -> syn::Generics {
+    let mut filtered = generics.clone();
+    filtered.params = filtered
+        .params
+        .into_iter()
+        .filter(|param| match param {
+            syn::GenericParam::Type(type_param) => !strip.contains(&type_param.ident.to_string()),
+            _ => true,
+        })
+        .collect();
+    if let Some(where_clause) = &mut filtered.where_clause {
+        where_clause.predicates = where_clause
+            .predicates
+            .clone()
+            .into_iter()
+            .filter(|predicate| {
+                if let syn::WherePredicate::Type(pred) = predicate {
+                    if let Some(ident) = type_bare_generic_ident(&pred.bounded_ty) {
+                        return !strip.contains(&ident.to_string());
+                    }
+                }
+                true
+            })
+            .collect();
+        if where_clause.predicates.is_empty() {
+            filtered.where_clause = None;
+        }
+    }
+    filtered
+}
+
 fn is_node_id_return(ty: &Type) -> bool {
     matches!(
         ty,
@@ -299,16 +359,98 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             Span::call_site(),
         );
         let generics = func.sig.generics.clone();
-        let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+        // Callback params are type-erased to `Box<dyn FnMut()>` at the public
+        // fn boundary so the generated helper/recompose bodies compile once
+        // per composable instead of once per caller closure type. The holder
+        // boxes callbacks anyway, so this moves an existing allocation, it
+        // does not add one.
+        let param_erased: Vec<bool> = param_info
+            .iter()
+            .map(|info| {
+                (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
+                    || (!info.is_impl_trait
+                        && type_bare_generic_ident(&info.ty).is_some()
+                        && is_generic_fn_like(&info.ty, &generics))
+            })
+            .collect();
+
+        // Generic params that only ever appear as the type of an erased
+        // callback param can be dropped from the helper/recompose fns.
+        let mut strippable: std::collections::HashSet<String> = param_info
+            .iter()
+            .zip(&param_erased)
+            .filter(|(info, erased)| **erased && !info.is_impl_trait)
+            .filter_map(|(info, _)| type_bare_generic_ident(&info.ty))
+            .map(Ident::to_string)
+            .collect();
+        // Fixpoint: a candidate kept because it is used elsewhere re-exposes
+        // its own bounds/predicates, which may in turn mention another
+        // candidate.
+        loop {
+            use quote::ToTokens;
+            let mut used_elsewhere: Vec<TokenStream2> = Vec::new();
+            for (info, erased) in param_info.iter().zip(&param_erased) {
+                if !*erased {
+                    used_elsewhere.push(info.ty.to_token_stream());
+                }
+            }
+            used_elsewhere.push(return_ty.to_token_stream());
+            for param in &generics.params {
+                match param {
+                    syn::GenericParam::Type(type_param) => {
+                        if !strippable.contains(&type_param.ident.to_string()) {
+                            used_elsewhere.push(type_param.bounds.to_token_stream());
+                            if let Some(default) = &type_param.default {
+                                used_elsewhere.push(default.to_token_stream());
+                            }
+                        }
+                    }
+                    syn::GenericParam::Const(const_param) => {
+                        used_elsewhere.push(const_param.ty.to_token_stream());
+                    }
+                    syn::GenericParam::Lifetime(_) => {}
+                }
+            }
+            if let Some(where_clause) = &generics.where_clause {
+                for predicate in &where_clause.predicates {
+                    if let syn::WherePredicate::Type(pred) = predicate {
+                        if let Some(ident) = type_bare_generic_ident(&pred.bounded_ty) {
+                            if strippable.contains(&ident.to_string()) {
+                                continue;
+                            }
+                        }
+                    }
+                    used_elsewhere.push(predicate.to_token_stream());
+                }
+            }
+            let before = strippable.len();
+            strippable.retain(|name| {
+                !used_elsewhere
+                    .iter()
+                    .any(|tokens| stream_mentions_ident(tokens, name))
+            });
+            if strippable.len() == before {
+                break;
+            }
+        }
+
+        let helper_generics = filter_generics(&generics, &strippable);
+        let (impl_generics, ty_generics, where_clause) = helper_generics.split_for_impl();
         let ty_generics_turbofish = ty_generics.as_turbofish();
 
         // Helper function signature: all params except unhandled impl Trait.
-        // Zero-arg Fn impl traits are included (they become anonymous generics).
+        // Erased callback params arrive pre-boxed; other zero-arg Fn impl
+        // traits are included as anonymous generics.
         let helper_inputs: Vec<TokenStream2> = param_info
             .iter()
-            .filter_map(|info| {
+            .zip(&param_erased)
+            .filter_map(|(info, erased)| {
                 if info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty) {
                     None
+                } else if *erased {
+                    let ident = &info.ident;
+                    Some(quote! { #ident: ::std::boxed::Box<dyn ::core::ops::FnMut() + 'static> })
                 } else {
                     let ident = &info.ident;
                     let ty = &info.ty;
@@ -325,19 +467,25 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let param_setup: Vec<TokenStream2> = param_info
             .iter()
             .zip(param_state_slots.iter())
-            .map(|(info, slot_ident)| {
+            .zip(&param_erased)
+            .map(|((info, slot_ident), erased)| {
                 // Zero-arg Fn impl traits and generic Fn params → CallbackHolder
                 if (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
                     || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
                 {
                     let ident = &info.ident;
+                    let update = if *erased {
+                        quote! { holder.update_boxed(#ident); }
+                    } else {
+                        quote! { holder.update(#ident); }
+                    };
                     quote! {
                         let #slot_ident = __composer
                             .__use_param_slot(|| #core_path::CallbackHolder::new());
                         __composer.with_slot_value::<#core_path::CallbackHolder, _>(
                             #slot_ident,
                             |holder| {
-                                holder.update(#ident);
+                                #update
                             },
                         );
                         __changed = true;
@@ -596,12 +744,18 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         };
 
-        // Wrapper args: pass all params except unhandled impl Trait on initial call
+        // Wrapper args: pass all params except unhandled impl Trait on initial
+        // call; erased callback params are boxed here, at the only generic
+        // boundary that remains.
         let wrapper_args: Vec<TokenStream2> = param_info
             .iter()
-            .filter_map(|info| {
+            .zip(&param_erased)
+            .filter_map(|(info, erased)| {
                 if info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty) {
                     None
+                } else if *erased {
+                    let ident = &info.ident;
+                    Some(quote! { ::std::boxed::Box::new(#ident) })
                 } else {
                     let ident = &info.ident;
                     Some(quote! { #ident })

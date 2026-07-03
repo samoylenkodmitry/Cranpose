@@ -11,6 +11,11 @@ categories.workspace = true
 readme = "README.md"
 description = "Pixels renderer backend for Cranpose"
 
+[features]
+default = []
+# Embed the framework fallback font (~1.3 MiB) used when the app provides no fonts.
+embedded-default-font = ["cranpose-render-common/embedded-default-font"]
+
 [dependencies]
 cranpose-render-common = { workspace = true }
 cranpose-ui = { workspace = true }

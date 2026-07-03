@@ -3,6 +3,12 @@
 #![deny(unsafe_code)]
 
 pub mod bounded_lru_cache;
+pub mod dev_overlay;
+
+/// The frame background every renderer clears to (linear values; sRGB
+/// surfaces display this as rgb(75, 75, 86)). One definition so backends
+/// cannot drift.
+pub const FRAME_CLEAR_COLOR: [f32; 4] = [18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0];
 pub mod brush_sampling;
 pub mod font_layout;
 pub mod geometry;
@@ -21,6 +27,7 @@ pub mod scene_builder;
 pub mod software_text_raster;
 pub mod style_shared;
 pub mod text_hyphenation;
+pub mod text_measure;
 
 use cranpose_core::MemoryApplier;
 use cranpose_foundation::nodes::input::PointerEvent;

@@ -37,6 +37,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # dist-min needs nightly cargo with build-std (rust-src).
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.target }}
+          components: rust-src
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
@@ -47,12 +53,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwayland-dev libxkbcommon-dev \
-            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev
+            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev lld
 
-      - name: Build desktop
+      # Size-minimized distribution build (nightly build-std + abort panics;
+      # see docs/binary_size.md). xtask picks per-OS linker flags.
+      - name: Build desktop (dist-min)
         run: >
-          cargo build --release
-          -p desktop-app
+          cargo run -p xtask -- dist-min
+          --package desktop-app
+          --bin desktop-app
           --target ${{ matrix.target }}
           --features desktop,renderer-wgpu
           --no-default-features
@@ -67,6 +76,7 @@ jobs:
         run: |
           cargo run -p xtask -- bundle-macos \
             --no-build \
+            --profile release-small \
             --target ${{ matrix.target }} \
             --app-name CranposeDemo \
             --bundle-id io.cranpose.demo \
@@ -80,14 +90,14 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           tar czf ${{ matrix.artifact_name }}.tar.gz \
-            -C target/${{ matrix.target }}/release desktop-app
+            -C target/${{ matrix.target }}/release-small desktop-app
 
       - name: Package Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           Compress-Archive `
-            -Path target\${{ matrix.target }}\release\desktop-app.exe `
+            -Path target\${{ matrix.target }}\release-small\desktop-app.exe `
             -DestinationPath ${{ matrix.artifact_name }}.zip
 
       - name: Upload artifact
@@ -132,7 +142,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: cranpose-demo-android
-          path: apps/android-demo/android/app/build/outputs/apk/release/app-release.apk
+          path: apps/android-demo/android/app/build/outputs/apk/release/app-*-release.apk
           if-no-files-found: error
 
   release:

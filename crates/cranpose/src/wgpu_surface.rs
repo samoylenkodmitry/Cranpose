@@ -14,14 +14,6 @@ pub(crate) enum SurfaceFrame {
 /// swapchain yet. Without it a render loop that only checks `update_visual_changed`
 /// leaves the canvas blank until an unrelated event marks the tree dirty (the
 /// web "white until scroll" bug).
-pub(crate) fn surface_present_required(
-    surface_dirty: bool,
-    update_visual_changed: bool,
-    app_needs_redraw: bool,
-) -> bool {
-    surface_dirty || update_visual_changed || app_needs_redraw
-}
-
 pub(crate) fn current_surface_texture(surface: &wgpu::Surface<'_>, context: &str) -> SurfaceFrame {
     match surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(frame) => SurfaceFrame::Ready(frame),
@@ -45,6 +37,17 @@ pub(crate) fn current_surface_texture(surface: &wgpu::Surface<'_>, context: &str
             SurfaceFrame::Skip
         }
     }
+}
+
+/// True when a frame must actually be presented. Skipping idle frames
+/// keeps vsync-off runs from spinning; presenting on visual changes
+/// prevents the blank-until-event bug.
+pub(crate) fn surface_present_required(
+    surface_dirty: bool,
+    update_visual_changed: bool,
+    app_needs_redraw: bool,
+) -> bool {
+    surface_dirty || update_visual_changed || app_needs_redraw
 }
 
 #[cfg(test)]

@@ -56,7 +56,7 @@ fn ci_architecture_budget_runs_required_gates() {
             && workflow.contains("--package isolated-demo")
             && workflow.contains("--bin isolated-demo")
             && workflow.contains("--profile release-small")
-            && workflow.contains("--max-bytes 29360128"),
+            && workflow.contains("--max-bytes 13107200"),
         "architecture budget job should enforce the minimal release-small binary size ceiling"
     );
     assert!(
@@ -182,14 +182,15 @@ fn desktop_no_vsync_chains_dirty_presented_frames_only() {
 
 #[test]
 fn surface_present_decision_is_shared_across_platform_loops() {
-    // The first-present / warmup decision lives once in the shared wgpu_surface
-    // module so the desktop, web, and android render loops cannot drift apart
-    // (the web loop "white until scroll" bug was a desktop/web divergence).
+    // The first-present / warmup decision lives once in wgpu_surface
+    // (compiled for every wgpu shell: desktop, web, iOS, Android) so the
+    // render loops cannot drift apart (the web loop "white until scroll"
+    // bug was a desktop/web divergence).
     let shared = crate_source("src/wgpu_surface.rs");
     assert!(
         shared.contains("pub(crate) fn surface_present_required(")
             && shared.contains("surface_dirty || update_visual_changed || app_needs_redraw"),
-        "the shared wgpu_surface module must own the single surface present decision"
+        "the shared desktop_input module must own the single surface present decision"
     );
 }
 
@@ -613,11 +614,23 @@ fn wgpu_backend_features_are_target_specific() {
             "[target.'cfg(all(target_os = \"linux\", not(target_arch = \"wasm32\")))'.dependencies]",
         );
         assert!(
-            linux.contains("\"gles\"")
-                && linux.contains("\"vulkan\"")
+            linux.contains("\"vulkan\"")
+                && !linux.contains("\"gles\"")
                 && !linux.contains("\"dx12\"")
                 && !linux.contains("\"metal\""),
-            "{manifest} Linux WGPU backend set should be GLES/Vulkan only"
+            "{manifest} Linux WGPU backend set should hardcode Vulkan only; GLES is opt-in via backend-gles"
+        );
+
+        let android = manifest_section(
+            &source,
+            "[target.'cfg(target_os = \"android\")'.dependencies]",
+        );
+        assert!(
+            android.contains("\"vulkan\"")
+                && !android.contains("\"gles\"")
+                && !android.contains("\"dx12\"")
+                && !android.contains("\"metal\""),
+            "{manifest} Android WGPU backend set should hardcode Vulkan only; GLES comes from the android feature enabling backend-gles"
         );
 
         let windows = manifest_section(
@@ -644,6 +657,29 @@ fn wgpu_backend_features_are_target_specific() {
             "{manifest} macOS WGPU backend set should be Metal only"
         );
     }
+
+    let render_wgpu = workspace_source("crates/cranpose-render/wgpu/Cargo.toml");
+    assert!(
+        render_wgpu.contains("backend-gles = [\"wgpu/gles\", \"naga/glsl-out\"]"),
+        "cranpose-render-wgpu must expose the GLES fallback as backend-gles (wgpu/gles + naga/glsl-out)"
+    );
+
+    let facade = workspace_source("crates/cranpose/Cargo.toml");
+    assert!(
+        facade.contains("renderer-wgpu-gles = ["),
+        "cranpose must expose renderer-wgpu-gles for the desktop GLES fallback"
+    );
+    let android_feature_start = facade
+        .find("android = [")
+        .expect("cranpose android feature is missing");
+    let android_feature = &facade[android_feature_start..];
+    let android_feature = &android_feature[..android_feature
+        .find(']')
+        .expect("cranpose android feature array is unterminated")];
+    assert!(
+        android_feature.contains("cranpose-render-wgpu?/backend-gles"),
+        "the cranpose android feature must keep the GLES fallback enabled on Android"
+    );
 }
 
 #[test]

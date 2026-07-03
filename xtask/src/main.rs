@@ -36,6 +36,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
         "binary-size" => report_binary_size(BinarySizeOptions::parse(&args[1..])?),
+        "dist-min" if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") => {
+            print_dist_min_usage();
+            Ok(())
+        }
+        "dist-min" => build_dist_min(DistMinOptions::parse(&args[1..])?),
         "dependency-budget" if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") => {
             print_dependency_budget_usage();
             Ok(())
@@ -56,6 +61,7 @@ fn print_usage() {
          commands:\n\
            bundle-macos        Build a macOS .app bundle\n\
            binary-size         Build or inspect a binary and print its file size\n\
+           dist-min            Build the smallest binary (nightly build-std + immediate-abort)\n\
            dependency-budget   Fail if new duplicate dependency families appear\n\
          \n\
          bundle-macos options:\n\
@@ -367,6 +373,16 @@ fn print_binary_size_usage() {
     );
 }
 
+fn print_dist_min_usage() {
+    eprintln!(
+        "usage: cargo xtask dist-min [--manifest-path path] [--package desktop-app] [--bin desktop-app] [--profile release-small] [--target triple] [--max-bytes N] [--patch-workspace-cranpose] [--features list] [--no-default-features]\n\
+         \n\
+         Builds the smallest possible binary: nightly cargo with -Zbuild-std,\n\
+         size-tuned std, and immediate-abort panics. Requires the nightly\n\
+         toolchain with the rust-src component."
+    );
+}
+
 fn print_dependency_budget_usage() {
     eprintln!(
         "usage: cargo xtask dependency-budget [--workspace-only | --all-features-only] [--explain] [--strict] [--slice wgpu-stack|desktop-platform|optional-features]"
@@ -446,32 +462,210 @@ fn report_binary_size(options: BinarySizeOptions) -> Result<(), String> {
     if options.build {
         build_binary(&workspace, &options.binary)?;
     }
+    report_built_binary(&workspace, &options.binary, options.max_bytes)
+}
 
-    let binary = built_binary_path(&workspace, &options.binary);
+fn report_built_binary(
+    workspace: &Path,
+    binary_options: &CargoBinaryOptions,
+    max_bytes: Option<u64>,
+) -> Result<(), String> {
+    let binary = built_binary_path(workspace, binary_options);
     let metadata = fs::metadata(&binary)
         .map_err(|error| format!("failed to inspect `{}`: {error}", binary.display()))?;
     let bytes = metadata.len();
     println!(
         "{} {}:{} {} bytes ({:.2} MiB)",
-        options.binary.profile,
-        options.binary.package,
-        options.binary.bin,
+        binary_options.profile,
+        binary_options.package,
+        binary_options.bin,
         bytes,
         bytes as f64 / (1024.0 * 1024.0)
     );
-    if let Some(max_bytes) = options.max_bytes {
+    if let Some(max_bytes) = max_bytes {
         if bytes > max_bytes {
             return Err(format!(
                 "{} {}:{} size {} bytes exceeds max {} bytes",
-                options.binary.profile,
-                options.binary.package,
-                options.binary.bin,
+                binary_options.profile,
+                binary_options.package,
+                binary_options.bin,
                 bytes,
                 max_bytes
             ));
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DistMinOptions {
+    binary: CargoBinaryOptions,
+    max_bytes: Option<u64>,
+    features: Option<String>,
+    no_default_features: bool,
+}
+
+impl DistMinOptions {
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let mut options = Self {
+            binary: CargoBinaryOptions {
+                profile: "release-small".to_owned(),
+                ..CargoBinaryOptions::default()
+            },
+            max_bytes: None,
+            features: None,
+            no_default_features: false,
+        };
+
+        let mut index = 0;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--package" => {
+                    options.binary.package = required_value(args, &mut index, "--package")?
+                }
+                "--bin" => options.binary.bin = required_value(args, &mut index, "--bin")?,
+                "--profile" => {
+                    options.binary.profile = required_value(args, &mut index, "--profile")?
+                }
+                "--target" => {
+                    options.binary.target = Some(required_value(args, &mut index, "--target")?)
+                }
+                "--manifest-path" => {
+                    options.binary.manifest_path = Some(PathBuf::from(required_value(
+                        args,
+                        &mut index,
+                        "--manifest-path",
+                    )?))
+                }
+                "--max-bytes" => {
+                    let value = required_value(args, &mut index, "--max-bytes")?;
+                    options.max_bytes = Some(parse_u64_option("--max-bytes", &value)?);
+                }
+                "--patch-workspace-cranpose" => {
+                    options.binary.patch_workspace_cranpose = true;
+                }
+                "--features" => {
+                    options.features = Some(required_value(args, &mut index, "--features")?)
+                }
+                "--no-default-features" => options.no_default_features = true,
+                other => return Err(format!("unknown dist-min option `{other}`")),
+            }
+            index += 1;
+        }
+
+        validate_non_empty("package", &options.binary.package)?;
+        validate_non_empty("bin", &options.binary.bin)?;
+        validate_non_empty("profile", &options.binary.profile)?;
+
+        Ok(options)
+    }
+}
+
+/// Extra rustc flags for the smallest distribution build: immediate-abort
+/// panics remove the unwind/panic-message machinery from every crate
+/// (including the rebuilt std), `location-detail=none` drops panic-site
+/// file/line path strings, `fmt-debug=none` compiles `Debug` formatting to
+/// no-ops, and lld's `--icf=all` folds identical functions (e.g. the
+/// per-call-site composable shims). The trade: dist-min binaries abort
+/// without a message and log `{:?}` payloads as empty — acceptable for
+/// shipped builds, not for debugging. Requires `lld` on PATH.
+const DIST_MIN_RUSTFLAGS: &str = "-Cpanic=immediate-abort -Zunstable-options \
+     -Zlocation-detail=none -Zfmt-debug=none -Cforce-unwind-tables=no";
+
+/// Linker extras that only apply to ELF/lld targets (Linux, Android):
+/// `--icf=all` folds identical functions; macOS ld64 and MSVC link.exe have
+/// no such flags (MSVC's /OPT:ICF is already on in release).
+const DIST_MIN_LLD_RUSTFLAGS: &str = " -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,--icf=all";
+
+fn dist_min_rustflags_for_target(target: &str) -> String {
+    let mut flags = DIST_MIN_RUSTFLAGS.to_owned();
+    if target.contains("linux") || target.contains("android") {
+        flags.push_str(DIST_MIN_LLD_RUSTFLAGS);
+    }
+    flags
+}
+
+fn build_dist_min(mut options: DistMinOptions) -> Result<(), String> {
+    let workspace = workspace_root()?;
+    // -Zbuild-std requires an explicit --target.
+    if options.binary.target.is_none() {
+        options.binary.target = Some(host_triple()?);
+    }
+
+    // `cargo +nightly` only works through the rustup shim; inside `cargo
+    // xtask` the PATH cargo is the toolchain binary itself, so go through
+    // rustup explicitly. The outer cargo also exports its own toolchain via
+    // CARGO/RUSTC/RUSTDOC, which must not leak into the nightly child.
+    let mut command = Command::new("rustup");
+    command.args(["run", "nightly", "cargo", "build"]);
+    command.env_remove("CARGO");
+    command.env_remove("RUSTC");
+    command.env_remove("RUSTDOC");
+    if let Some(manifest_path) = options.binary.manifest_path.as_deref() {
+        command.arg("--manifest-path").arg(manifest_path);
+    }
+    if options.binary.patch_workspace_cranpose {
+        add_workspace_cranpose_patches(&mut command, &workspace);
+    }
+    command.args([
+        "-p",
+        options.binary.package.as_str(),
+        "--bin",
+        options.binary.bin.as_str(),
+        "--profile",
+        options.binary.profile.as_str(),
+        "--target",
+        options.binary.target.as_deref().expect("target set above"),
+        "-Zunstable-options",
+        "-Zbuild-std=std,panic_abort",
+        "-Zbuild-std-features=optimize_for_size",
+    ]);
+    if options.no_default_features {
+        command.arg("--no-default-features");
+    }
+    if let Some(features) = options.features.as_deref() {
+        command.args(["--features", features]);
+    }
+
+    let mut rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
+    if !rustflags.is_empty() {
+        rustflags.push(' ');
+    }
+    rustflags.push_str(&dist_min_rustflags_for_target(
+        options.binary.target.as_deref().expect("target set above"),
+    ));
+    command.env("RUSTFLAGS", rustflags);
+
+    let status = command
+        .status()
+        .map_err(|error| format!("failed to run nightly cargo build: {error}"))?;
+    if !status.success() {
+        return Err(format!(
+            "dist-min build failed with status {status}; it requires the \
+             nightly toolchain with the rust-src component \
+             (rustup component add rust-src --toolchain nightly) and the \
+             lld linker on PATH"
+        ));
+    }
+
+    report_built_binary(&workspace, &options.binary, options.max_bytes)
+}
+
+fn host_triple() -> Result<String, String> {
+    let output = Command::new("rustc")
+        .args(["-vV"])
+        .output()
+        .map_err(|error| format!("failed to run rustc -vV: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| format!("rustc -vV returned invalid UTF-8: {error}"))?;
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .map(str::to_owned)
+        .ok_or_else(|| "rustc -vV did not report a host triple".to_owned())
 }
 
 fn bundle_binary_options(options: &BundleMacosOptions) -> CargoBinaryOptions {
@@ -1357,6 +1551,66 @@ mod tests {
         assert_eq!(options.max_bytes, Some(29_360_128));
         assert!(options.binary.patch_workspace_cranpose);
         assert!(!options.build);
+    }
+
+    #[test]
+    fn parse_dist_min_feature_flags_and_target_rustflags() {
+        let options = DistMinOptions::parse(&[
+            "--features".into(),
+            "desktop,renderer-wgpu".into(),
+            "--no-default-features".into(),
+        ])
+        .expect("dist-min feature options parse");
+        assert_eq!(options.features.as_deref(), Some("desktop,renderer-wgpu"));
+        assert!(options.no_default_features);
+
+        let linux = dist_min_rustflags_for_target("x86_64-unknown-linux-gnu");
+        assert!(linux.contains("--icf=all"), "linux gets lld icf: {linux}");
+        let android = dist_min_rustflags_for_target("aarch64-linux-android");
+        assert!(android.contains("--icf=all"), "android gets lld icf");
+        let mac = dist_min_rustflags_for_target("aarch64-apple-darwin");
+        assert!(!mac.contains("lld"), "ld64 targets skip lld flags: {mac}");
+        let win = dist_min_rustflags_for_target("x86_64-pc-windows-msvc");
+        assert!(!win.contains("icf"), "msvc has /OPT:ICF already: {win}");
+    }
+
+    #[test]
+    fn parse_dist_min_options() {
+        let options = DistMinOptions::parse(&[
+            "--package".into(),
+            "isolated-demo".into(),
+            "--bin".into(),
+            "isolated-demo".into(),
+            "--target".into(),
+            "x86_64-unknown-linux-gnu".into(),
+            "--manifest-path".into(),
+            "apps/isolated-demo/Cargo.toml".into(),
+            "--max-bytes".into(),
+            "6291456".into(),
+            "--patch-workspace-cranpose".into(),
+        ])
+        .expect("dist-min options parse");
+
+        assert_eq!(options.binary.package, "isolated-demo");
+        assert_eq!(options.binary.bin, "isolated-demo");
+        assert_eq!(options.binary.profile, "release-small");
+        assert_eq!(
+            options.binary.target.as_deref(),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            options.binary.manifest_path.as_deref(),
+            Some(Path::new("apps/isolated-demo/Cargo.toml"))
+        );
+        assert_eq!(options.max_bytes, Some(6_291_456));
+        assert!(options.binary.patch_workspace_cranpose);
+    }
+
+    #[test]
+    fn parse_dist_min_rejects_unknown_option() {
+        let error = DistMinOptions::parse(&["--no-build".into()])
+            .expect_err("dist-min should reject binary-size-only flags");
+        assert!(error.contains("--no-build"));
     }
 
     #[test]

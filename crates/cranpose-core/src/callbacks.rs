@@ -113,7 +113,14 @@ impl CallbackHolder {
     where
         F: FnMut() + 'static,
     {
-        *self.rc.borrow_mut() = Some(Box::new(f));
+        self.update_boxed(Box::new(f));
+    }
+
+    /// Boxed form of [`Self::update`]: lets generated composable helpers take
+    /// callbacks type-erased at the public-fn boundary, so helper bodies are
+    /// compiled once instead of once per caller closure type.
+    pub fn update_boxed(&self, f: Box<dyn FnMut() + 'static>) {
+        *self.rc.borrow_mut() = Some(f);
         *self.creator_scope.borrow_mut() =
             composer_context::try_with_composer(callback_owner_scope).flatten();
     }

@@ -9,6 +9,7 @@
 pub mod alpha_mask;
 mod brush;
 mod color;
+pub mod framework_shaders;
 mod geometry;
 mod image;
 pub mod liquid_glass;

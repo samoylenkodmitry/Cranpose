@@ -13,11 +13,10 @@ description = "Testing utilities and harness for Cranpose"
 
 [features]
 default = []
-desktop-robot = [
-    "cranpose/desktop",
-    "cranpose/renderer-wgpu",
-    "cranpose/robot",
-]
+# Renderer-agnostic robot harness. The consuming application selects the
+# desktop shell and renderer (renderer-wgpu); this
+# only pulls in the shared robot API + assertions.
+desktop-robot = ["cranpose/robot"]
 
 [dependencies]
 cranpose-core = { workspace = true }

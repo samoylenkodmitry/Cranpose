@@ -110,6 +110,11 @@ path = "examples/robot_tab_walk_text_visual_contract.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_tab_screenshot_dump"
+path = "examples/robot_tab_screenshot_dump.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
 name = "robot_memory_leak"
 path = "robot-runners/robot_memory_leak.rs"
 required-features = ["robot-app"]

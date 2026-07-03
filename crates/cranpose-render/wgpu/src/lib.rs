@@ -28,20 +28,14 @@ pub use scene::{ClickAction, HitRegion, Scene};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
-    graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
-    },
-    raster_cache::LayerRasterCacheHashes,
+    graph::RenderGraph,
     software_text_raster::{
         software_text_font_set_from_fonts_or_default, SoftwareTextFontSet, SoftwareTextMeasurer,
     },
     RenderScene, Renderer,
 };
 use cranpose_ui::{LayoutTree, TextMeasurer};
-use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, Size,
-};
+use cranpose_ui_graphics::{Rect, Size};
 use render::GpuRenderer;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -476,111 +470,27 @@ impl Renderer for WgpuRenderer {
 
     fn draw_dev_overlay(&mut self, text: &str, viewport: Size) {
         const DEV_OVERLAY_NODE_ID: NodeId = NodeId::MAX;
-        let padding = 8.0;
-        let font_size = 14.0;
-        let char_width = 7.0;
-        let viewport_width_bits = viewport.width.to_bits();
-        let viewport_height_bits = viewport.height.to_bits();
+        let key = cranpose_render_common::dev_overlay::DevOverlayKey::new(text, viewport);
         if self.dev_overlay_graph.is_some()
             && self.dev_overlay_cache.as_ref().is_some_and(|cache| {
-                cache.text == text
-                    && cache.viewport_width_bits == viewport_width_bits
-                    && cache.viewport_height_bits == viewport_height_bits
+                cache.text == key.text
+                    && cache.viewport_width_bits == key.viewport_width_bits
+                    && cache.viewport_height_bits == key.viewport_height_bits
             })
         {
             return;
         }
-
-        let text_width = text.len() as f32 * char_width;
-        let text_height = font_size * 1.4;
-        let x = (viewport.width - text_width - padding * 2.0).max(padding);
-        let y = padding;
-
-        let mut overlay_layer = LayerNode {
-            node_id: Some(DEV_OVERLAY_NODE_ID),
-            local_bounds: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: text_width + padding,
-                height: text_height + padding / 2.0,
-            },
-            transform_to_parent: ProjectiveTransform::translation(x, y),
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            translated_content_offset: Point::default(),
-            graphics_layer: GraphicsLayer::default(),
-            clip_to_bounds: false,
-            shadow_clip: None,
-            hit_test: None,
-            has_hit_targets: false,
-            isolation: IsolationReasons::default(),
-            cache_policy: CachePolicy::None,
-            cache_hashes: LayerRasterCacheHashes::default(),
-            cache_hashes_valid: false,
-            children: vec![
-                RenderNode::Primitive(PrimitiveEntry {
-                    phase: PrimitivePhase::BeforeChildren,
-                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
-                        primitive: DrawPrimitive::RoundRect {
-                            rect: Rect {
-                                x: 0.0,
-                                y: 0.0,
-                                width: text_width + padding,
-                                height: text_height + padding / 2.0,
-                            },
-                            brush: Brush::Solid(Color(0.0, 0.0, 0.0, 0.7)),
-                            radii: CornerRadii::uniform(4.0),
-                        },
-                        clip: None,
-                    }),
-                }),
-                RenderNode::Primitive(PrimitiveEntry {
-                    phase: PrimitivePhase::AfterChildren,
-                    node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-                        node_id: DEV_OVERLAY_NODE_ID,
-                        rect: Rect {
-                            x: padding / 2.0,
-                            y: padding / 4.0,
-                            width: text_width,
-                            height: text_height,
-                        },
-                        text: cranpose_ui::text::AnnotatedString::from(text),
-                        text_style: cranpose_ui::TextStyle::default(),
-                        font_size,
-                        layout_options: cranpose_ui::TextLayoutOptions::default(),
-                        clip: None,
-                    })),
-                }),
-            ],
-        };
-        overlay_layer.recompute_raster_cache_hashes();
-
-        let mut graph = RenderGraph::new(LayerNode {
-            node_id: None,
-            local_bounds: Rect::from_size(viewport),
-            transform_to_parent: ProjectiveTransform::identity(),
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            translated_content_offset: Point::default(),
-            graphics_layer: GraphicsLayer::default(),
-            clip_to_bounds: false,
-            shadow_clip: None,
-            hit_test: None,
-            has_hit_targets: false,
-            isolation: IsolationReasons::default(),
-            cache_policy: CachePolicy::None,
-            cache_hashes: LayerRasterCacheHashes::default(),
-            cache_hashes_valid: false,
-            children: vec![RenderNode::Layer(Box::new(overlay_layer))],
-        });
-        graph.root.recompute_raster_cache_hashes();
-        self.dev_overlay_graph = Some(graph);
+        self.dev_overlay_graph = Some(
+            cranpose_render_common::dev_overlay::build_dev_overlay_graph(
+                text,
+                viewport,
+                DEV_OVERLAY_NODE_ID,
+            ),
+        );
         self.dev_overlay_cache = Some(DevOverlayCache {
-            text: text.to_string(),
-            viewport_width_bits,
-            viewport_height_bits,
+            text: key.text,
+            viewport_width_bits: key.viewport_width_bits,
+            viewport_height_bits: key.viewport_height_bits,
         });
     }
 
@@ -595,6 +505,8 @@ impl Renderer for WgpuRenderer {
 mod tests {
     use super::*;
     use crate::pipeline::TextLayoutResolver;
+    use cranpose_render_common::graph::RenderNode;
+    use cranpose_ui_graphics::GraphicsLayer;
     use std::cell::Cell;
 
     static TEST_FONT: &[u8] =

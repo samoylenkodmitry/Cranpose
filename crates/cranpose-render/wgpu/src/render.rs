@@ -169,10 +169,10 @@ const MIN_MULTILINE_TEXT_LINES_FOR_CLIPPED_RASTER: usize = 2;
 const MAX_OBSERVED_SCENE_RANGE_CACHE_MISSES: usize = 128;
 const CACHE_MISS_WARMUP_FRAMES: u8 = 1;
 pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
-    r: 18.0 / 255.0,
-    g: 18.0 / 255.0,
-    b: 24.0 / 255.0,
-    a: 1.0,
+    r: cranpose_render_common::FRAME_CLEAR_COLOR[0] as f64,
+    g: cranpose_render_common::FRAME_CLEAR_COLOR[1] as f64,
+    b: cranpose_render_common::FRAME_CLEAR_COLOR[2] as f64,
+    a: cranpose_render_common::FRAME_CLEAR_COLOR[3] as f64,
 };
 #[cfg(not(target_arch = "wasm32"))]
 const INITIAL_UPLOAD_BUFFER_BYTES: u64 = 4 * 1024;

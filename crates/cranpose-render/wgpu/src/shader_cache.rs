@@ -4,7 +4,6 @@
 //! so the same shader with different uniform values reuses its pipeline.
 
 use cranpose_ui_graphics::RuntimeShader;
-use naga::back::glsl;
 use naga::ShaderStage;
 use std::collections::{HashMap, HashSet};
 
@@ -63,22 +62,12 @@ impl ShaderPipelineCache {
             return self.cache.get(&cache_key);
         }
 
-        if let Err(err) = validate_runtime_shader_source(shader.source(), self.backend) {
-            log::warn!(
-                "Disabling RuntimeShader (hash={}): {}. Falling back to pass-through.",
-                source_hash,
-                err
-            );
+        let Some(shader_module) = create_runtime_shader_module(device, shader, self.backend) else {
             self.disabled.insert(source_hash);
             return None;
-        }
+        };
 
         let pipeline = {
-            let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("RuntimeShader Effect"),
-                source: wgpu::ShaderSource::Wgsl(shader.source().into()),
-            });
-
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Effect Pipeline Layout"),
                 bind_group_layouts: &[
@@ -124,6 +113,26 @@ impl ShaderPipelineCache {
         self.cache.insert(cache_key, pipeline);
         self.cache.get(&cache_key)
     }
+}
+
+/// Validate the user-provided source, then hand the WGSL to wgpu.
+fn create_runtime_shader_module(
+    device: &wgpu::Device,
+    shader: &RuntimeShader,
+    backend: wgpu::Backend,
+) -> Option<wgpu::ShaderModule> {
+    if let Err(err) = validate_runtime_shader_source(shader.source(), backend) {
+        log::warn!(
+            "Disabling RuntimeShader (hash={}): {}. Falling back to pass-through.",
+            shader.source_hash(),
+            err
+        );
+        return None;
+    }
+    Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("RuntimeShader Effect"),
+        source: wgpu::ShaderSource::Wgsl(shader.source().into()),
+    }))
 }
 
 fn validate_runtime_shader_source(source: &str, backend: wgpu::Backend) -> Result<(), String> {
@@ -172,12 +181,18 @@ fn validate_runtime_shader_backend_support(
     validate_glsl_portability(module, module_info, "effect_fs", ShaderStage::Fragment)
 }
 
+/// GLSL portability validation exists only when a GL-class backend can be
+/// selected at runtime: native builds with the `backend-gles` feature, web
+/// builds (WebGL fallback), and unit tests.
+#[cfg(any(test, feature = "backend-gles", target_arch = "wasm32"))]
 fn validate_glsl_portability(
     module: &naga::Module,
     module_info: &naga::valid::ModuleInfo,
     entry_point: &str,
     shader_stage: ShaderStage,
 ) -> Result<(), String> {
+    use naga::back::glsl;
+
     let mut glsl_source = String::new();
     let options = glsl::Options {
         version: glsl::Version::new_gles(300),
@@ -204,6 +219,22 @@ fn validate_glsl_portability(
         .write()
         .map(|_| ())
         .map_err(|err| format!("GL/WebGL portability emission failed for `{entry_point}`: {err}"))
+}
+
+/// Without `backend-gles`, wgpu cannot select the GL backend on native
+/// targets, so this path is unreachable; reject defensively instead of
+/// claiming portability that was never checked.
+#[cfg(not(any(test, feature = "backend-gles", target_arch = "wasm32")))]
+fn validate_glsl_portability(
+    _module: &naga::Module,
+    _module_info: &naga::valid::ModuleInfo,
+    entry_point: &str,
+    _shader_stage: ShaderStage,
+) -> Result<(), String> {
+    Err(format!(
+        "GL backend active for `{entry_point}` but GL support is not compiled in \
+         (enable `backend-gles`, or `renderer-wgpu-gles` on the `cranpose` crate)"
+    ))
 }
 
 #[cfg(test)]

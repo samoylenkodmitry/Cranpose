@@ -11,7 +11,12 @@ categories.workspace = true
 readme = "README.md"
 description = "Desktop winit platform adapter for Cranpose"
 
+[features]
+default = ["x11", "wayland"]
+x11 = ["winit/x11"]
+wayland = ["winit/wayland", "winit/wayland-dlopen", "winit/wayland-csd-adwaita"]
+
 [dependencies]
-winit = "0.31.0-beta.2"
+winit = { version = "0.31.0-beta.2", default-features = false }
 cranpose-foundation = { workspace = true }
 cranpose-ui-graphics = { workspace = true }

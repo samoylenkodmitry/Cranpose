@@ -3,14 +3,14 @@
 use cranpose_core::MutableState;
 use cranpose_ui::{composable, Modifier, Point, PointerEventKind, PointerInputScope, Size};
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 use std::cell::Cell;
 use std::cell::RefCell;
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -36,14 +36,14 @@ impl WindowId {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 pub(crate) type NativeWindowKey = WindowId;
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -51,7 +51,7 @@ pub(crate) type NativeWindowKey = WindowId;
 pub(crate) struct WindowGroupId(u64);
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -116,10 +116,11 @@ pub enum WindowMoveMode {
 
 impl WindowMoveMode {
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
+    // Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
     fn moves_attached_component(&self, window_id: WindowId) -> bool {
         match self {
             Self::AllAttached => true,
@@ -161,7 +162,7 @@ impl Default for WindowAttachPolicy {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -621,14 +622,14 @@ impl WindowModifierExt for Modifier {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 pub(crate) type NativeWindowContent = Rc<RefCell<Box<dyn FnMut()>>>;
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -645,7 +646,7 @@ struct NativeWindowDispatchContext {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -654,7 +655,9 @@ pub(crate) struct NativeWindowRequest {
     pub(crate) key: NativeWindowKey,
     pub(crate) options: NativeWindowOptions,
     pub(crate) events: NativeWindowEvents,
+    // Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
     pub(crate) state: Option<WindowState>,
+    // Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
     pub(crate) group: Option<NativeWindowGroupMembership>,
     pub(crate) content: NativeWindowContent,
     pub(crate) revision: u64,
@@ -662,7 +665,7 @@ pub(crate) struct NativeWindowRequest {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -677,7 +680,7 @@ struct NativeWindowRegistration {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -688,7 +691,7 @@ pub(crate) struct NativeWindowRegistry {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -742,7 +745,7 @@ impl NativeWindowRegistry {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -754,7 +757,7 @@ thread_local! {
 thread_local! {
     static CURRENT_NATIVE_WINDOW_DISPATCH: RefCell<Vec<NativeWindowDispatchContext>> = const { RefCell::new(Vec::new()) };
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -789,7 +792,7 @@ pub fn WindowNode(id: WindowId, config: WindowConfig, content: impl FnMut() + 's
 #[composable(no_skip)]
 pub fn WindowGroup(id: &'static str, policy: WindowAttachPolicy, content: impl FnMut() + 'static) {
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -804,7 +807,7 @@ pub fn WindowGroup(id: &'static str, policy: WindowAttachPolicy, content: impl F
     }
 
     #[cfg(not(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     )))]
@@ -825,7 +828,7 @@ fn NativeWindowWithEvents(
     content: impl FnMut() + 'static,
 ) {
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -857,7 +860,7 @@ fn NativeWindowWithEvents(
     }
 
     #[cfg(not(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     )))]
@@ -896,7 +899,7 @@ pub fn current_native_window_surface_origin() -> Option<Point> {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -922,7 +925,7 @@ pub(crate) fn with_native_window_registry<R>(
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -942,7 +945,7 @@ fn current_native_window_registry() -> Option<Rc<NativeWindowRegistry>> {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -951,7 +954,7 @@ pub(crate) fn native_window_requests(registry: &NativeWindowRegistry) -> Vec<Nat
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -961,7 +964,7 @@ pub(crate) fn has_native_window_requests(registry: &NativeWindowRegistry) -> boo
 
 #[cfg(all(
     test,
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -974,10 +977,11 @@ fn current_native_window_dispatch_context() -> Option<NativeWindowDispatchContex
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn with_native_window_dispatch_context<R>(
     context: NativeWindowDispatchContext,
     f: impl FnOnce() -> R,
@@ -1000,10 +1004,11 @@ fn with_native_window_dispatch_context<R>(
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) fn with_native_window_drag_handler<R>(
     handler: NativeWindowDragHandler,
     resize_handler: NativeWindowResizeHandler,
@@ -1016,10 +1021,11 @@ pub(crate) fn with_native_window_drag_handler<R>(
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) fn with_native_window_surface_origin<R>(
     origin: Option<Point>,
     f: impl FnOnce() -> R,
@@ -1030,7 +1036,7 @@ pub(crate) fn with_native_window_surface_origin<R>(
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1039,7 +1045,7 @@ fn current_window_group() -> Option<NativeWindowGroupMembership> {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1062,7 +1068,7 @@ fn with_window_group<R>(group: NativeWindowGroupMembership, f: impl FnOnce() -> 
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1093,7 +1099,7 @@ fn register_native_window(
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1114,11 +1120,12 @@ fn hash_id(id: &'static str) -> u64 {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Copy, Debug, PartialEq)]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) struct WindowGraphNodeSnapshot {
     pub(crate) id: WindowId,
     pub(crate) position: Point,
@@ -1126,33 +1133,36 @@ pub(crate) struct WindowGraphNodeSnapshot {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Debug, PartialEq)]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) struct WindowGraphPeerSnapshot {
     pub(crate) node: WindowGraphNodeSnapshot,
     pub(crate) group: Option<NativeWindowGroupMembership>,
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Copy, Debug, PartialEq)]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) struct WindowGraphMove {
     pub(crate) id: WindowId,
     pub(crate) position: Point,
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Debug)]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 struct WindowGraphDragSession {
     group: Option<NativeWindowGroupMembership>,
     dragged: WindowId,
@@ -1162,21 +1172,24 @@ struct WindowGraphDragSession {
 
 /// Framework-owned topology and drag state for peer operating-system windows.
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 #[derive(Default)]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) struct WindowGraphState {
     active_drag: Option<WindowGraphDragSession>,
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 impl WindowGraphState {
+    // Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
     pub(crate) fn start_drag(&mut self, windows: &[WindowGraphPeerSnapshot], dragged: WindowId) {
         let Some(dragged_window) = windows.iter().find(|window| window.node.id == dragged) else {
             self.active_drag = None;
@@ -1327,10 +1340,11 @@ impl WindowGraphState {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn group_windows(
     windows: &[WindowGraphPeerSnapshot],
     group: &NativeWindowGroupMembership,
@@ -1348,10 +1362,11 @@ fn group_windows(
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn attached_component(
     windows: &[WindowGraphNodeSnapshot],
     dragged: WindowId,
@@ -1381,10 +1396,11 @@ fn attached_component(
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn rects_attached(
     child: &WindowGraphNodeSnapshot,
     main: &WindowGraphNodeSnapshot,
@@ -1418,11 +1434,12 @@ fn rects_attached(
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Copy, Debug, PartialEq)]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 struct GraphSnap {
     target: WindowId,
     delta: Point,
@@ -1431,21 +1448,23 @@ struct GraphSnap {
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Copy, Debug, PartialEq)]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 struct GraphSnapCandidate {
     delta: Point,
     contact: f32,
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn closest_snap(
     windows: &[WindowGraphNodeSnapshot],
     component: &[WindowId],
@@ -1482,10 +1501,11 @@ fn closest_snap(
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn snap_candidates(
     moving: &WindowGraphNodeSnapshot,
     stationary: &WindowGraphNodeSnapshot,
@@ -1538,10 +1558,11 @@ fn snap_candidates(
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn translate_nodes(windows: &mut [WindowGraphNodeSnapshot], component: &[WindowId], delta: Point) {
     if delta.x.abs() <= f32::EPSILON && delta.y.abs() <= f32::EPSILON {
         return;
@@ -1555,16 +1576,17 @@ fn translate_nodes(windows: &mut [WindowGraphNodeSnapshot], component: &[WindowI
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
+// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn near(a: f32, b: f32, distance: f32) -> bool {
     (a - b).abs() <= distance
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1573,7 +1595,7 @@ fn ranges_overlap(a_start: f32, a_end: f32, b_start: f32, b_end: f32, attach_eps
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1582,7 +1604,7 @@ fn ranges_overlap_strict(a_start: f32, a_end: f32, b_start: f32, b_end: f32) -> 
 }
 
 #[cfg(all(
-    feature = "desktop",
+    feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1617,7 +1639,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1627,7 +1649,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1636,7 +1658,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1647,7 +1669,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1695,7 +1717,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1708,7 +1730,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1723,7 +1745,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1734,7 +1756,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1755,7 +1777,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1770,7 +1792,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1786,7 +1808,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1803,7 +1825,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1829,7 +1851,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1862,7 +1884,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -1895,7 +1917,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2071,7 +2093,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2090,7 +2112,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2132,7 +2154,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2190,7 +2212,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2219,7 +2241,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2236,7 +2258,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2248,7 +2270,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2269,7 +2291,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2281,7 +2303,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2322,7 +2344,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2355,7 +2377,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2388,7 +2410,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2443,7 +2465,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2504,7 +2526,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2535,7 +2557,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2585,7 +2607,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2594,7 +2616,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2645,7 +2667,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2698,7 +2720,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2749,7 +2771,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -2800,7 +2822,7 @@ mod tests {
     }
 
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]

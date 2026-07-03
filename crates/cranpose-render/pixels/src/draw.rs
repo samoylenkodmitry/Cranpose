@@ -1,187 +1,27 @@
-use std::borrow::Borrow;
-use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-use std::sync::{Mutex, MutexGuard};
 
-use cranpose_render_common::bounded_lru_cache::BoundedLruCache;
 use cranpose_render_common::brush_sampling::sample_brush_rgba;
 use cranpose_render_common::graph_scene::RenderDiagnostics;
-use cranpose_render_common::software_text_raster::{
-    cursor_x_for_offset_with_font, default_software_text_font, layout_text_with_font,
-    measure_text_with_font, rasterize_text_to_image, text_offset_for_position_with_font,
-    SoftwareTextFont,
+use cranpose_render_common::software_text_raster::rasterize_text_to_image;
+use cranpose_render_common::text_measure::SoftwareTextResources;
+#[cfg(test)]
+use cranpose_render_common::text_measure::{
+    fallback_char_width, fallback_cursor_x_for_byte_offset, fallback_line_height,
+    fallback_text_metrics,
 };
-use cranpose_render_common::text_hyphenation::HyphenationDictionaryStore;
 use cranpose_ui::text::TextMotion;
-use cranpose_ui::text_layout_result::TextLayoutResult;
-use cranpose_ui::{TextMeasurer, TextMetrics};
 use cranpose_ui_graphics::{BlendMode, ColorFilter, Point, Rect};
 
 use crate::pipeline;
 use crate::scene::{ImageDraw, RasterScene, Scene, TextDraw};
 use crate::style::point_in_resolved_rounded_rect;
 
-#[derive(Clone)]
-pub struct PixelsTextResources {
-    font: Option<SoftwareTextFont>,
-}
-
-impl PixelsTextResources {
-    pub fn default_font() -> Self {
-        Self {
-            font: default_software_text_font(),
-        }
-    }
-
-    fn font(&self) -> Option<&SoftwareTextFont> {
-        self.font.as_ref()
-    }
-}
-
-impl Default for PixelsTextResources {
-    fn default() -> Self {
-        Self::default_font()
-    }
-}
-
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
 }
 
-fn fallback_char_width(font_size: f32) -> f32 {
-    font_size.max(1.0) * 0.55
-}
-
-fn fallback_line_height(font_size: f32) -> f32 {
-    font_size.max(1.0) * 1.2
-}
-
-fn fallback_text_metrics(text: &str, font_size: f32) -> TextMetrics {
-    let line_height = fallback_line_height(font_size);
-    let mut line_count = 0usize;
-    let mut max_chars = 0usize;
-    for line in text.split('\n') {
-        line_count += 1;
-        max_chars = max_chars.max(line.chars().count());
-    }
-    let line_count = line_count.max(1);
-    TextMetrics {
-        width: max_chars as f32 * fallback_char_width(font_size),
-        height: line_count as f32 * line_height,
-        line_height,
-        line_count,
-    }
-}
-
-fn fallback_cursor_x_for_byte_offset(text: &str, byte_offset: usize, font_size: f32) -> f32 {
-    let clamped = byte_offset.min(text.len());
-    let char_count = if clamped == text.len() {
-        text.chars().count()
-    } else {
-        text.char_indices()
-            .take_while(|(index, _)| *index < clamped)
-            .count()
-    };
-    char_count as f32 * fallback_char_width(font_size)
-}
-
 fn snap_delta_for_anchor(anchor: Point) -> Point {
     Point::new(anchor.x.round() - anchor.x, anchor.y.round() - anchor.y)
-}
-
-pub struct CachedFontTextMeasurer {
-    text_resources: PixelsTextResources,
-    cache: Mutex<TextMetricsCache>,
-    hyphenation: HyphenationDictionaryStore,
-}
-
-#[derive(Clone)]
-struct TextKey {
-    text: Rc<str>,
-    font_size_bits: u32,
-    style_hash: u64,
-}
-
-impl PartialEq for TextKey {
-    fn eq(&self, other: &Self) -> bool {
-        (Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text)
-            && self.font_size_bits == other.font_size_bits
-            && self.style_hash == other.style_hash
-    }
-}
-
-impl Eq for TextKey {}
-
-impl Hash for TextKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.text.hash(state);
-        self.font_size_bits.hash(state);
-        self.style_hash.hash(state);
-    }
-}
-
-impl Borrow<str> for TextKey {
-    fn borrow(&self) -> &str {
-        &self.text
-    }
-}
-
-struct TextMetricsCache {
-    map: BoundedLruCache<TextKey, TextMetrics>,
-}
-
-impl TextMetricsCache {
-    fn new(capacity: usize) -> Self {
-        Self {
-            map: BoundedLruCache::with_capacity_at_least_one(capacity),
-        }
-    }
-
-    fn get_or_measure<F>(
-        &mut self,
-        text: &str,
-        font_size: f32,
-        style_hash: u64,
-        measure: F,
-    ) -> TextMetrics
-    where
-        F: FnOnce(&str, f32) -> TextMetrics,
-    {
-        // Note: Borrow<str> lookup doesn't work well with composite key.
-        // We construct key for lookup.
-        let key = TextKey {
-            text: Rc::from(text),
-            font_size_bits: font_size.to_bits(),
-            style_hash,
-        };
-
-        if let Some(metrics) = self.map.get(&key).copied() {
-            return metrics;
-        }
-
-        let metrics = measure(text, font_size);
-        self.map.put(key, metrics);
-        metrics
-    }
-}
-
-impl CachedFontTextMeasurer {
-    pub(crate) fn with_text_resources(
-        text_resources: PixelsTextResources,
-        capacity: usize,
-    ) -> Self {
-        Self {
-            text_resources,
-            cache: Mutex::new(TextMetricsCache::new(capacity)),
-            hyphenation: HyphenationDictionaryStore::new(),
-        }
-    }
-
-    fn lock_cache(&self) -> MutexGuard<'_, TextMetricsCache> {
-        self.cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -241,122 +81,8 @@ fn clip_rect_to_bounds(
     })
 }
 
-// Helper to resolve font size from style
-fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
-    style.resolve_font_size(14.0)
-}
-
-impl TextMeasurer for CachedFontTextMeasurer {
-    fn measure(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::text::TextStyle,
-    ) -> TextMetrics {
-        let text_str = text.text.as_str();
-        let font_size = resolve_font_size(style);
-        let style_hash = style.measurement_hash();
-        self.lock_cache()
-            .get_or_measure(text_str, font_size, style_hash, |value, size| {
-                measure_text_impl(value, style, size, self.text_resources.font())
-            })
-    }
-
-    fn get_offset_for_position(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::text::TextStyle,
-        x: f32,
-        _y: f32,
-    ) -> usize {
-        let text = text.text.as_str();
-        if text.is_empty() {
-            return 0;
-        }
-
-        let Some(font) = self.text_resources.font() else {
-            let font_size = resolve_font_size(style);
-            return TextLayoutResult::monospaced(
-                text,
-                fallback_char_width(font_size),
-                fallback_line_height(font_size),
-            )
-            .get_offset_for_x(x);
-        };
-
-        text_offset_for_position_with_font(text, style, x, _y, font)
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::text::TextStyle,
-        offset: usize,
-    ) -> f32 {
-        let text = text.text.as_str();
-        let clamped_offset = offset.min(text.len());
-        if clamped_offset == 0 {
-            return 0.0;
-        }
-
-        let Some(font) = self.text_resources.font() else {
-            return fallback_cursor_x_for_byte_offset(
-                text,
-                clamped_offset,
-                resolve_font_size(style),
-            );
-        };
-
-        cursor_x_for_offset_with_font(text, style, clamped_offset, font)
-    }
-
-    fn layout(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::text::TextStyle,
-    ) -> cranpose_ui::text_layout_result::TextLayoutResult {
-        let font_size = resolve_font_size(style);
-        let Some(font) = self.text_resources.font() else {
-            return TextLayoutResult::monospaced(
-                text.text.as_str(),
-                fallback_char_width(font_size),
-                fallback_line_height(font_size),
-            );
-        };
-
-        layout_text_with_font(text.text.as_str(), style, font)
-    }
-
-    fn choose_auto_hyphen_break(
-        &self,
-        line: &str,
-        style: &cranpose_ui::text::TextStyle,
-        segment_start_char: usize,
-        measured_break_char: usize,
-    ) -> Option<usize> {
-        self.hyphenation.choose_auto_hyphen_break(
-            line,
-            style,
-            segment_start_char,
-            measured_break_char,
-        )
-    }
-}
-
-fn measure_text_impl(
-    text: &str,
-    style: &cranpose_ui::text::TextStyle,
-    font_size: f32,
-    font: Option<&SoftwareTextFont>,
-) -> TextMetrics {
-    let Some(font) = font else {
-        return fallback_text_metrics(text, font_size);
-    };
-
-    measure_text_with_font(text, style, font_size, font)
-}
-
 pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
-    let text_resources = PixelsTextResources::default();
+    let text_resources = SoftwareTextResources::default();
     draw_scene_with_text_resources(frame, width, height, scene, &text_resources);
 }
 
@@ -365,7 +91,7 @@ pub fn draw_scene_with_text_resources(
     width: u32,
     height: u32,
     scene: &Scene,
-    text_resources: &PixelsTextResources,
+    text_resources: &SoftwareTextResources,
 ) {
     if let Some(graph) = scene.graph.as_ref() {
         let raster_scene = pipeline::build_raster_scene(graph, scene.diagnostics());
@@ -394,7 +120,7 @@ fn draw_raster_scene(
     height: u32,
     scene: &RasterScene,
     diagnostics: &RenderDiagnostics,
-    text_resources: &PixelsTextResources,
+    text_resources: &SoftwareTextResources,
 ) {
     clear_frame(frame);
     let mut ordered_items =
@@ -643,7 +369,7 @@ fn draw_text(
     height: u32,
     draw: &TextDraw,
     diagnostics: &RenderDiagnostics,
-    text_resources: &PixelsTextResources,
+    text_resources: &SoftwareTextResources,
 ) {
     if draw.text.span_styles.is_empty() {
         draw_text_plain(frame, width, height, draw, diagnostics, text_resources);
@@ -659,7 +385,7 @@ fn draw_text_with_span_styles(
     height: u32,
     draw: &TextDraw,
     diagnostics: &RenderDiagnostics,
-    text_resources: &PixelsTextResources,
+    text_resources: &SoftwareTextResources,
 ) {
     let boundaries = draw.text.span_boundaries();
     let mut cursor_x = draw.rect.x;
@@ -744,7 +470,7 @@ fn draw_text_plain(
     height: u32,
     draw: &TextDraw,
     diagnostics: &RenderDiagnostics,
-    text_resources: &PixelsTextResources,
+    text_resources: &SoftwareTextResources,
 ) {
     let text_scale = draw.scale.max(0.0);
     if text_scale == 0.0 {
@@ -788,7 +514,7 @@ fn draw_text_plain(
         rect
     };
 
-    let Some(font) = text_resources.font() else {
+    let Some(font) = text_resources.fonts().resolve(&draw.text_style) else {
         return;
     };
 
@@ -941,7 +667,7 @@ mod tests {
 
     fn draw_raster_scene_for_test(frame: &mut [u8], width: u32, height: u32, scene: &RasterScene) {
         let diagnostics = RenderDiagnostics::new();
-        let text_resources = PixelsTextResources::default();
+        let text_resources = SoftwareTextResources::default();
         draw_raster_scene(frame, width, height, scene, &diagnostics, &text_resources);
     }
 
@@ -1096,27 +822,6 @@ mod tests {
         blend_pixel(&mut src_over, src, BlendMode::SrcOver, &diagnostics);
 
         assert_eq!(unsupported, src_over);
-    }
-
-    #[test]
-    fn cached_font_text_metrics_cache_recovers_after_poison() {
-        let measurer =
-            CachedFontTextMeasurer::with_text_resources(PixelsTextResources::default(), 8);
-        let text = cranpose_ui::text::AnnotatedString::from("Recovered pixels text");
-
-        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = measurer
-                .cache
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            panic!("poison pixels text metrics cache for recovery test");
-        }));
-
-        assert!(poison_result.is_err());
-
-        let metrics = measurer.measure(&text, &cranpose_ui::text::TextStyle::default());
-        assert!(metrics.width > 0.0);
-        assert!(metrics.height > 0.0);
     }
 
     #[test]

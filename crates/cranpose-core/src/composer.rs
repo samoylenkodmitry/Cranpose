@@ -887,11 +887,32 @@ impl Composer {
         self.apply_pending_commands()
     }
 
+    /// Thin monomorphic shim: the group machinery lives in
+    /// [`Self::with_group_in_active_pass_dyn`] so it is compiled once instead
+    /// of once per composable call site (real apps have thousands).
     fn with_group_in_active_pass<R>(
         &self,
         key: crate::slot::GroupKeySeed,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
+        let mut f = Some(f);
+        let mut result = None;
+        self.with_group_in_active_pass_dyn(key, &mut |composer| {
+            let f = f.take().expect("group body must run at most once");
+            result = Some(f(composer));
+        });
+        result.expect("group body must run exactly once")
+    }
+
+    /// `inline(never)`: with fat LTO this single-caller body would otherwise
+    /// be inlined back into every monomorphic shim, recreating the per-call-site
+    /// code explosion this split exists to prevent.
+    #[inline(never)]
+    fn with_group_in_active_pass_dyn(
+        &self,
+        key: crate::slot::GroupKeySeed,
+        f: &mut dyn FnMut(&Composer),
+    ) {
         struct GroupGuard {
             composer: Composer,
             scope: RecomposeScope,
@@ -983,10 +1004,9 @@ impl Composer {
             composer: self.clone(),
             scope: scope_ref.clone(),
         };
-        let result = self.observe_scope(&scope_ref, || f(self));
+        self.observe_scope(&scope_ref, || f(self));
         scope_ref.mark_composed_once();
         drop(guard);
-        result
     }
 
     pub(crate) fn with_group_seed<R>(
@@ -1588,10 +1608,17 @@ impl Composer {
     where
         F: FnMut(&Composer) + 'static,
     {
+        self.set_recranpose_callback_boxed(Box::new(callback));
+    }
+
+    /// Monomorphic core (`inline(never)` so fat LTO keeps one copy): the
+    /// observer wiring here used to be re-instantiated for every composable
+    /// call site through the generic entry point above.
+    #[inline(never)]
+    fn set_recranpose_callback_boxed(&self, mut callback: Box<dyn FnMut(&Composer)>) {
         if let Some(scope) = self.current_recranpose_scope() {
             let observer = self.observer();
             let scope_weak = scope.downgrade();
-            let mut callback = callback;
             scope.set_recompose(Box::new(move |composer: &Composer| {
                 if let Some(inner) = scope_weak.upgrade() {
                     let scope_instance = RecomposeScope { inner };

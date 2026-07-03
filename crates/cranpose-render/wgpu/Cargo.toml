@@ -11,6 +11,15 @@ categories.workspace = true
 readme = "README.md"
 description = "WGPU renderer backend for Cranpose"
 
+[features]
+default = []
+# GL-class fallback backend (GLES/OpenGL) for native targets. Pulls naga's
+# GLSL writer for runtime-shader portability validation. Web always compiles
+# the WebGL fallback and does not need this feature.
+backend-gles = ["wgpu/gles", "naga/glsl-out"]
+# Embed the framework fallback font (~1.3 MiB) used when the app provides no fonts.
+embedded-default-font = ["cranpose-render-common/embedded-default-font"]
+
 [dependencies]
 cranpose-render-common = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
@@ -19,14 +28,13 @@ cranpose-ui = { workspace = true }
 cranpose-core = { workspace = true }
 bytemuck = { version = "1.25", features = ["derive"] }
 log = "0.4"
-naga = { version = "29.0.3", features = ["glsl-out", "wgsl-in"] }
+naga = { version = "29.0.3", features = ["wgsl-in"] }
 web-time = { workspace = true }
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
 wgpu = { version = "29.0", default-features = false, features = [
     "std",
     "parking_lot",
-    "gles",
     "vulkan",
     "wgsl",
 ] }
@@ -51,7 +59,6 @@ wgpu = { version = "29.0", default-features = false, features = [
 wgpu = { version = "29.0", default-features = false, features = [
     "std",
     "parking_lot",
-    "gles",
     "vulkan",
     "wgsl",
 ] }
@@ -60,7 +67,6 @@ wgpu = { version = "29.0", default-features = false, features = [
 wgpu = { version = "29.0", default-features = false, features = [
     "std",
     "parking_lot",
-    "gles",
     "vulkan",
     "wgsl",
 ] }
@@ -72,7 +78,14 @@ wgpu = { version = "29.0", default-features = false, features = [
     "webgl",
     "wgsl",
 ] }
+# The WebGL fallback is always compiled on web, so runtime-shader GL
+# portability validation needs naga's GLSL writer there unconditionally.
+naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
 
 [dev-dependencies]
 cranpose-app-shell = { workspace = true }
+# Unit tests exercise the embedded fallback font and GL portability validation
+# on every platform, independent of the production feature set.
+cranpose-render-common = { workspace = true, features = ["embedded-default-font"] }
+naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
 pollster = "0.4.0"

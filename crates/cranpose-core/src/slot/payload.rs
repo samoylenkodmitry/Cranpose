@@ -18,14 +18,39 @@ pub(in crate::slot) struct PayloadLocationRefresh {
     pub(in crate::slot) start: usize,
 }
 
-fn replace_payload_record<T: 'static>(
+/// Monomorphic payload initializer: carries the value type's identity plus a
+/// one-shot factory, so the slot-table payload machinery is compiled once
+/// instead of once per remembered value type.
+pub(in crate::slot) struct PayloadInit<'a> {
+    type_id: TypeId,
+    type_name: &'static str,
+    make: &'a mut dyn FnMut() -> Box<dyn std::any::Any>,
+}
+
+impl<'a> PayloadInit<'a> {
+    pub(in crate::slot) fn new<T: 'static>(
+        make: &'a mut dyn FnMut() -> Box<dyn std::any::Any>,
+    ) -> Self {
+        Self {
+            type_id: TypeId::of::<T>(),
+            type_name: std::any::type_name::<T>(),
+            make,
+        }
+    }
+
+    fn make_value(&mut self) -> Box<dyn std::any::Any> {
+        (self.make)()
+    }
+}
+
+fn replace_payload_record(
     record: &mut PayloadRecord,
     kind: PayloadKind,
-    value: T,
+    init: &mut PayloadInit<'_>,
 ) -> Box<dyn std::any::Any> {
-    let old_value = mem::replace(&mut record.value, Box::new(value));
-    record.type_id = TypeId::of::<T>();
-    record.type_name = std::any::type_name::<T>();
+    let old_value = mem::replace(&mut record.value, init.make_value());
+    record.type_id = init.type_id;
+    record.type_name = init.type_name;
     record.kind = kind;
     old_value
 }
@@ -180,10 +205,15 @@ impl SlotTable {
             .anchor
     }
 
-    fn payload_value_is<T: 'static>(&self, group_index: usize, payload_index: usize) -> bool {
+    fn payload_value_type_matches(
+        &self,
+        group_index: usize,
+        payload_index: usize,
+        type_id: TypeId,
+    ) -> bool {
         self.group_payload_record_at(group_index, payload_index)
             .type_id
-            == TypeId::of::<T>()
+            == type_id
     }
 
     pub(in crate::slot) fn group_payload_record_at(
@@ -223,13 +253,13 @@ impl SlotTable {
         self.payloads.capacity()
     }
 
-    fn insert_value_payload_internal<T: 'static>(
+    fn insert_value_payload_internal(
         &mut self,
         owner: AnchorId,
         owner_index: usize,
         insert_index: usize,
         kind: PayloadKind,
-        init: impl FnOnce() -> T,
+        init: &mut PayloadInit<'_>,
         refresh_index: bool,
     ) -> Option<PayloadAnchor> {
         let Some(anchor) = self.allocate_payload_anchor() else {
@@ -244,10 +274,10 @@ impl SlotTable {
             PayloadRecord {
                 owner,
                 anchor,
-                type_id: TypeId::of::<T>(),
-                type_name: std::any::type_name::<T>(),
+                type_id: init.type_id,
+                type_name: init.type_name,
                 kind,
-                value: Box::new(init()),
+                value: init.make_value(),
             },
         );
         if refresh_index {
@@ -269,7 +299,11 @@ impl SlotTable {
         let owner_index = self
             .active_group_index(owner)
             .expect("test payload owner should resolve");
-        self.insert_value_payload_internal(owner, owner_index, insert_index, kind, || value, true)
+        let mut value = Some(value);
+        let mut make =
+            move || -> Box<dyn std::any::Any> { Box::new(value.take().expect("value once")) };
+        let mut init = PayloadInit::new::<T>(&mut make);
+        self.insert_value_payload_internal(owner, owner_index, insert_index, kind, &mut init, true)
             .unwrap_or(PayloadAnchor::INVALID)
     }
 
@@ -281,8 +315,12 @@ impl SlotTable {
         kind: PayloadKind,
         value: T,
     ) -> Box<dyn std::any::Any> {
+        let mut value = Some(value);
+        let mut make =
+            move || -> Box<dyn std::any::Any> { Box::new(value.take().expect("value once")) };
+        let mut init = PayloadInit::new::<T>(&mut make);
         let record = self.group_payload_record_at_mut(group_index, payload_index);
-        replace_payload_record(record, kind, value)
+        replace_payload_record(record, kind, &mut init)
     }
 
     fn update_payload_kind(&mut self, group_index: usize, payload_index: usize, kind: PayloadKind) {
@@ -290,12 +328,12 @@ impl SlotTable {
             .kind = kind;
     }
 
-    fn replace_payload_identity<T: 'static>(
+    fn replace_payload_identity(
         &mut self,
         group_index: usize,
         payload_index: usize,
         kind: PayloadKind,
-        init: impl FnOnce() -> T,
+        init: &mut PayloadInit<'_>,
     ) -> Option<(PayloadAnchor, Box<dyn std::any::Any>)> {
         let old_anchor = self.payload_anchor_at(group_index, payload_index);
         let anchor = match self.payload_anchors.bump_generation(old_anchor) {
@@ -323,19 +361,19 @@ impl SlotTable {
         let owner = self.payload_owner_at(group_index, payload_index);
         let record = self.group_payload_record_at_mut(group_index, payload_index);
         record.anchor = anchor;
-        let old_value = replace_payload_record(record, kind, init());
+        let old_value = replace_payload_record(record, kind, init);
         self.payload_anchors
             .set_active(anchor, owner, payload_index);
         Some((anchor, old_value))
     }
 
-    pub(super) fn use_value_payload_at_cursor<T: 'static>(
+    pub(super) fn use_value_payload_at_cursor(
         &mut self,
         owner: AnchorId,
         group_index: usize,
         payload_index: usize,
         kind: PayloadKind,
-        init: impl FnOnce() -> T,
+        init: &mut PayloadInit<'_>,
     ) -> (
         ValueSlotId,
         Option<DeferredDrop>,
@@ -355,7 +393,7 @@ impl SlotTable {
 
         let (anchor, deferred_drop) = if payload_index < payload_len {
             let anchor = self.payload_slot_identity_at(group_index, payload_index);
-            if self.payload_value_is::<T>(group_index, payload_index) {
+            if self.payload_value_type_matches(group_index, payload_index, init.type_id) {
                 self.update_payload_kind(group_index, payload_index, kind);
                 (anchor, None)
             } else {

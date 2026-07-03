@@ -9,7 +9,8 @@ use crate::{
     android_overlay_window,
     android_surface::{create_android_wgpu_surface, AndroidSurfaceError},
     launcher::{AndroidOverlayWindowOptions, AppSettings},
-    wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
+    wgpu_surface::surface_present_required,
+    wgpu_surface::{current_surface_texture, SurfaceFrame},
 };
 use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver};
 use cranpose_platform_android::AndroidPlatform;

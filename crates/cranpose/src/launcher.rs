@@ -3,11 +3,14 @@
 //! This module provides the `AppLauncher` API that allows apps to configure
 //! and launch on multiple platforms without knowing platform-specific details.
 
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 use cranpose_app_shell::FramePacingMode;
-#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 use std::path::PathBuf;
-#[cfg(all(feature = "renderer-wgpu", any(feature = "desktop", feature = "ios")))]
+#[cfg(all(
+    feature = "renderer-wgpu",
+    any(feature = "desktop-shell", feature = "ios")
+))]
 use thiserror::Error;
 
 /// Configuration for application settings.
@@ -38,23 +41,31 @@ pub struct AppSettings {
     /// visible operating-system windows through `run_windows`.
     pub primary_window_visible: bool,
     /// Development options for debugging and performance monitoring
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub dev_options: cranpose_app_shell::DevOptions,
     /// Initial desktop frame pacing mode.
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub frame_pacing_mode: FramePacingMode,
     /// Whether the app chose a frame pacing mode explicitly. Installing a
     /// robot test driver lifts the vsync cap only when this is false.
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub frame_pacing_explicit: bool,
     /// Optional test driver to control the application (robot testing)
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
-    pub test_driver: Option<Box<dyn FnOnce(crate::desktop::Robot) + Send + 'static>>,
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "robot",
+        feature = "renderer-wgpu"
+    ))]
+    pub test_driver: Option<Box<dyn FnOnce(crate::Robot) + Send + 'static>>,
     /// Optional app-thread hook invoked by robot tests for deterministic state control.
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "robot",
+        feature = "renderer-wgpu"
+    ))]
     pub robot_app_hook: Option<Box<crate::RobotAppHook>>,
     /// Optional path to record input events to (for generating robot tests)
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub record_to: Option<PathBuf>,
 }
 
@@ -70,17 +81,25 @@ impl Default for AppSettings {
             android_overlay_window: None,
             headless: false,
             primary_window_visible: true,
-            #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+            #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             dev_options: cranpose_app_shell::DevOptions::default(),
-            #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+            #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             frame_pacing_mode: FramePacingMode::Vsync,
-            #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+            #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             frame_pacing_explicit: false,
-            #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+            #[cfg(all(
+                feature = "desktop-shell",
+                feature = "robot",
+                feature = "renderer-wgpu"
+            ))]
             test_driver: None,
-            #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+            #[cfg(all(
+                feature = "desktop-shell",
+                feature = "robot",
+                feature = "renderer-wgpu"
+            ))]
             robot_app_hook: None,
-            #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+            #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             record_to: None,
         }
     }
@@ -133,7 +152,10 @@ impl AndroidOverlayWindowOptions {
 }
 
 /// Errors that can occur while launching a windowed (desktop or iOS) application.
-#[cfg(all(feature = "renderer-wgpu", any(feature = "desktop", feature = "ios")))]
+#[cfg(all(
+    feature = "renderer-wgpu",
+    any(feature = "desktop-shell", feature = "ios")
+))]
 #[derive(Debug, Error)]
 pub enum LaunchError {
     /// Creating the desktop event loop failed.
@@ -143,6 +165,7 @@ pub enum LaunchError {
     #[error("failed to create desktop window: {0}")]
     WindowCreate(#[source] winit::error::RequestError),
     /// Creating the rendering surface failed.
+    #[cfg(feature = "renderer-wgpu")]
     #[error("failed to create desktop rendering surface: {0}")]
     SurfaceCreate(#[source] wgpu::CreateSurfaceError),
     /// The rendering surface did not report any supported formats.
@@ -152,9 +175,11 @@ pub enum LaunchError {
     #[error("desktop rendering surface reports no supported alpha modes")]
     NoSurfaceAlphaMode,
     /// No compatible GPU adapter was available for the surface.
+    #[cfg(feature = "renderer-wgpu")]
     #[error("no compatible GPU adapter was available: {0}")]
     NoAdapter(#[source] wgpu::RequestAdapterError),
     /// Creating the GPU device failed.
+    #[cfg(feature = "renderer-wgpu")]
     #[error("failed to create GPU device: {0}")]
     DeviceCreate(#[source] wgpu::RequestDeviceError),
     /// The desktop renderer context was not initialized before a surface needed it.
@@ -172,7 +197,10 @@ pub enum LaunchError {
     TestDriverPanic(String),
 }
 
-#[cfg(all(feature = "renderer-wgpu", any(feature = "desktop", feature = "ios")))]
+#[cfg(all(
+    feature = "renderer-wgpu",
+    any(feature = "desktop-shell", feature = "ios")
+))]
 pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
     eprintln!("{context}: {error}");
     std::process::exit(1)
@@ -202,7 +230,7 @@ pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
 /// use cranpose::AppLauncher;
 ///
 /// // Desktop
-/// #[cfg(all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")))]
+/// #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
 /// fn main() {
 ///     AppLauncher::new()
 ///         .with_title("My App")
@@ -224,7 +252,7 @@ pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
 /// }
 ///
 /// #[cfg(not(any(
-///     all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")),
+///     all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")),
 ///     all(feature = "android", target_os = "android")
 /// )))]
 /// fn main() {}
@@ -332,7 +360,7 @@ impl AppLauncher {
     /// ```no_run
     /// use cranpose::AppLauncher;
     ///
-    /// #[cfg(all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")))]
+    /// #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
     /// {
     /// let launcher = AppLauncher::new()
     ///     .with_title("Robot Test")
@@ -367,7 +395,7 @@ impl AppLauncher {
     /// ```no_run
     /// use cranpose::AppLauncher;
     ///
-    /// #[cfg(all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")))]
+    /// #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
     /// {
     /// AppLauncher::new()
     ///     .with_title("My App")
@@ -377,7 +405,7 @@ impl AppLauncher {
     ///     });
     /// }
     /// ```
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub fn with_fps_counter(mut self, enabled: bool) -> Self {
         self.settings.dev_options.fps_counter = enabled;
         self
@@ -387,7 +415,7 @@ impl AppLauncher {
     ///
     /// This controls whether the desktop surface uses vsync or no-vsync presentation and,
     /// for hard caps, limits redraw scheduling to the requested frame rate.
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub fn with_frame_pacing_mode(mut self, mode: FramePacingMode) -> Self {
         self.settings.frame_pacing_mode = mode;
         self.settings.dev_options.frame_pacing_mode = mode;
@@ -396,7 +424,7 @@ impl AppLauncher {
     }
 
     /// Set the initial desktop frame pacing mode.
-    #[cfg(not(all(feature = "desktop", feature = "renderer-wgpu")))]
+    #[cfg(not(all(feature = "desktop-shell", feature = "renderer-wgpu")))]
     pub fn with_frame_pacing_mode(self, mode: cranpose_app_shell::FramePacingMode) -> Self {
         let _ = mode;
         self
@@ -406,7 +434,7 @@ impl AppLauncher {
     ///
     /// Enabling the controls also enables the FPS overlay because the controls are rendered
     /// as part of that overlay.
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub fn with_frame_pacing_controls(mut self, enabled: bool) -> Self {
         self.settings.dev_options.frame_pacing_controls = enabled;
         if enabled {
@@ -416,7 +444,7 @@ impl AppLauncher {
     }
 
     /// Enable clickable frame pacing controls in the desktop development overlay.
-    #[cfg(not(all(feature = "desktop", feature = "renderer-wgpu")))]
+    #[cfg(not(all(feature = "desktop-shell", feature = "renderer-wgpu")))]
     pub fn with_frame_pacing_controls(self, enabled: bool) -> Self {
         let _ = enabled;
         self
@@ -433,7 +461,7 @@ impl AppLauncher {
     /// ```no_run
     /// use cranpose::AppLauncher;
     ///
-    /// #[cfg(all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")))]
+    /// #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
     /// {
     /// AppLauncher::new()
     ///     .with_title("My App")
@@ -443,7 +471,7 @@ impl AppLauncher {
     ///     });
     /// }
     /// ```
-    #[cfg(not(all(feature = "desktop", feature = "renderer-wgpu")))]
+    #[cfg(not(all(feature = "desktop-shell", feature = "renderer-wgpu")))]
     pub fn with_fps_counter(self, enabled: bool) -> Self {
         let _ = enabled;
         self
@@ -468,7 +496,7 @@ impl AppLauncher {
     ///         // Recording is saved automatically
     ///     });
     /// ```
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub fn with_recording(mut self, path: impl Into<PathBuf>) -> Self {
         self.settings.record_to = Some(path.into());
         self
@@ -496,14 +524,18 @@ impl AppLauncher {
     ///         // Your composable UI here
     ///     });
     /// ```
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
-    pub fn with_test_driver(
-        mut self,
-        driver: impl FnOnce(crate::desktop::Robot) + Send + 'static,
-    ) -> Self {
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "robot",
+        feature = "renderer-wgpu"
+    ))]
+    pub fn with_test_driver(mut self, driver: impl FnOnce(crate::Robot) + Send + 'static) -> Self {
         self.settings.test_driver = Some(Box::new(driver));
         // Robot harnesses measure work throughput and high-refresh cadence
-        // contracts; lift the vsync cap unless the harness pinned a mode.
+        // contracts; lift the vsync cap unless the harness pinned a mode. The
+        // slim Vulkan shell presents on demand and carries no frame-pacing
+        // controls, so this only applies to the wgpu desktop shell.
+        #[cfg(feature = "renderer-wgpu")]
         if !self.settings.frame_pacing_explicit {
             self.settings.frame_pacing_mode = FramePacingMode::NoVsync;
             self.settings.dev_options.frame_pacing_mode = FramePacingMode::NoVsync;
@@ -511,7 +543,11 @@ impl AppLauncher {
         self
     }
 
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "robot",
+        feature = "renderer-wgpu"
+    ))]
     #[doc(hidden)]
     pub fn with_robot_app_hook(
         mut self,
@@ -530,7 +566,7 @@ impl AppLauncher {
     ///
     /// * `content` - The root composable function of your application.
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_os = "android")
     ))]
@@ -547,7 +583,7 @@ impl AppLauncher {
     ///
     /// Use [`AppLauncher::try_run`] when the caller needs a typed launch failure.
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_os = "android")
     ))]
@@ -562,7 +598,7 @@ impl AppLauncher {
     /// The primary launcher surface is kept hidden; content should declare peer
     /// windows with `WindowNode` or `Window`.
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_os = "android")
     ))]
@@ -573,7 +609,7 @@ impl AppLauncher {
 
     /// Run a desktop app that declares its visible operating-system windows directly.
     #[cfg(all(
-        feature = "desktop",
+        feature = "desktop-shell",
         feature = "renderer-wgpu",
         not(target_os = "android")
     ))]
@@ -695,7 +731,7 @@ mod tests {
         assert!(!AndroidOverlayWindowOptions::new(320, 0).is_valid());
     }
 
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     #[test]
     fn production_apps_default_to_vsync_frame_pacing() {
         // A desktop UI app must not render animations uncapped (hundreds of fps
@@ -708,7 +744,11 @@ mod tests {
         assert_eq!(FramePacingMode::default(), FramePacingMode::Vsync);
     }
 
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        feature = "robot"
+    ))]
     #[test]
     fn robot_test_driver_defaults_to_uncapped_frame_pacing() {
         // Robot/perf harnesses measure work throughput and 120Hz cadence
