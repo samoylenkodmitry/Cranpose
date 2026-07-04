@@ -83,8 +83,9 @@ impl AndroidKeyTranslator {
     /// Converts an Android key event into a framework key event.
     ///
     /// Returns `None` for events the text pipeline cannot use (unknown keys
-    /// producing no character, and the legacy `Multiple` action); the caller
-    /// should report those as unhandled so the system can process them.
+    /// producing no character, and the `Multiple` batch action of Android 2.x
+    /// IMEs); the caller should report those as unhandled so the system can
+    /// process them.
     pub(crate) fn translate(
         &mut self,
         event: &android_activity::input::KeyEvent<'_>,

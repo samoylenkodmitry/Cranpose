@@ -66,8 +66,15 @@ jobs:
             libwayland-dev libxkbcommon-dev \
             libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev
 
+      # The winit adapter cannot build featureless on Linux (winit itself
+      # requires a backend), so it is checked per-backend instead.
       - name: Build workspace without default features
-        run: cargo build --workspace --no-default-features
+        run: cargo build --workspace --no-default-features --exclude cranpose-platform-desktop-winit
+
+      - name: Check winit platform adapter per backend
+        run: |
+          cargo check -p cranpose-platform-desktop-winit --no-default-features --features x11
+          cargo check -p cranpose-platform-desktop-winit --no-default-features --features wayland
 
       - name: Check cranpose facade without default features
         run: cargo check -p cranpose --no-default-features
