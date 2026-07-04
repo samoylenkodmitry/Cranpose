@@ -236,6 +236,50 @@ where
         self.pointer_released_at_time(None)
     }
 
+    /// Releases the pointer at the position carried by the platform's release
+    /// sample (Android `ACTION_UP`, web `pointerup`/`touchend`).
+    ///
+    /// The cursor is moved to `(x, y)` WITHOUT dispatching a Move event, then
+    /// the Up event is dispatched at that position. Platforms whose release
+    /// events carry their own coordinates must use this instead of
+    /// `set_cursor* + pointer_released*`: lift-off samples routinely roll back
+    /// a few dp against the travel direction as the finger peels off, and
+    /// feeding that jitter into gesture velocity trackers as a final Move
+    /// sample can flip the sign of the computed fling velocity (flings that
+    /// suddenly go the opposite way). Jetpack Compose likewise never feeds the
+    /// up sample into velocity tracking.
+    pub fn pointer_released_at_position(&mut self, x: f32, y: f32) -> bool {
+        self.pointer_released_at_position_time(x, y, None)
+    }
+
+    /// Like [`pointer_released_at_position`](Self::pointer_released_at_position),
+    /// but carries the platform input timestamp (milliseconds) of the release
+    /// sample.
+    pub fn pointer_released_at_position_time(
+        &mut self,
+        x: f32,
+        y: f32,
+        time_ms: Option<i64>,
+    ) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        let result = app_context.enter(|| {
+            run_in_mutable_snapshot(|| {
+                self.cursor = (x, y);
+                self.pointer_released_inner(time_ms)
+            })
+            .unwrap_or(false)
+        });
+        if result {
+            self.mark_dirty();
+        }
+        log::trace!(
+            target: "cranpose::input",
+            "pointer_released_at_position ({x:.2},{y:.2}) time_ms={time_ms:?} -> {result}"
+        );
+        result
+    }
+
     /// Like [`pointer_released`](Self::pointer_released), but carries the
     /// platform input timestamp (milliseconds) of the release sample.
     pub fn pointer_released_at_time(&mut self, time_ms: Option<i64>) -> bool {

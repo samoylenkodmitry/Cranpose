@@ -766,6 +766,86 @@ fn lazy_list_fling_velocity_uses_event_timestamps() {
 }
 
 #[test]
+fn three_consecutive_flings_compute_the_same_velocity_sign() {
+    // Device report: "several flings in one direction — one of them wrongly
+    // goes to the opposite direction". This locks the detector-level
+    // invariants for consecutive gestures:
+    // - velocity samples of the previous gesture never leak into the next one
+    //   (the tracker is reset on pointer down), and
+    // - the fling animation still running from the previous gesture never
+    //   mixes its decaying velocity into the newly computed one.
+    //
+    // Realistic Android timing: 8ms input samples, ~104ms gesture, ~300ms
+    // between gestures with the previous fling still animating (spline decay
+    // of a ~1000 dp/s fling lasts >500ms) when the next finger lands.
+    let _app_context = crate::render_state::app_context_test_scope();
+    let runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let handle = runtime.handle();
+    crate::render_state::debug_reset_last_fling_velocity();
+
+    let scroll_state = ScrollState::new(5_000.0);
+    scroll_state.set_max_value(100_000.0);
+    let (handler, _chain) =
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+
+    let mut event_ms = 7_777_000i64; // arbitrary uptime base
+    let mut frame_ns = 0u64;
+    let mut velocities = Vec::new();
+
+    for gesture in 0..3 {
+        handler(timed_pointer_event(
+            PointerEventKind::Down,
+            0.0,
+            600.0,
+            event_ms,
+        ));
+        // Finger flicks UP 8dp every 8ms (~ -1000 dp/s).
+        let mut y = 600.0;
+        for _ in 0..12 {
+            event_ms += 8;
+            y -= 8.0;
+            handler(timed_pointer_event(
+                PointerEventKind::Move,
+                0.0,
+                y,
+                event_ms,
+            ));
+        }
+        event_ms += 8;
+        handler(timed_pointer_event(PointerEventKind::Up, 0.0, y, event_ms));
+
+        let velocity = crate::render_state::debug_last_fling_velocity();
+        velocities.push(velocity);
+
+        // Drive ~300ms of fling frames; the fling from this gesture is still
+        // animating when the next Down lands and cancels it.
+        let offset_before_frames = scroll_state.value_non_reactive();
+        for _ in 0..19 {
+            frame_ns += 16_000_000;
+            handle.drain_frame_callbacks(frame_ns);
+        }
+        assert!(
+            scroll_state.value_non_reactive() > offset_before_frames,
+            "gesture {gesture}: the fling animation must scroll further after release"
+        );
+        event_ms += 304 - 104;
+    }
+
+    assert!(
+        velocities.iter().all(|v| *v < 0.0),
+        "three identical upward flicks must all compute negative velocities, got {velocities:?}"
+    );
+    let reference = velocities[0];
+    for (gesture, velocity) in velocities.iter().enumerate() {
+        assert!(
+            (velocity - reference).abs() <= reference.abs() * 0.05,
+            "gesture {gesture}: identical gestures must compute identical velocities \
+             (previous gesture/fling state leaked in), got {velocities:?}"
+        );
+    }
+}
+
+#[test]
 fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
     // Phone-like geometry: 2280 physical px viewport at density 2.75 and item
     // heights that are whole physical pixels (177px) but fractional in dp.

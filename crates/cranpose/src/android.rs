@@ -1293,8 +1293,11 @@ pub fn run(
                             shell.pointer_pressed_at_time(time_ms);
                         }
                         PendingInput::PointerUp(x, y, time_ms) => {
-                            shell.set_cursor_at_time(x, y, time_ms);
-                            shell.pointer_released_at_time(time_ms);
+                            // ACTION_UP coordinates carry lift-off roll-back
+                            // jitter; they must NOT become a velocity sample
+                            // (a synthesized Move here can flip the fling
+                            // direction), so release without a Move dispatch.
+                            shell.pointer_released_at_position_time(x, y, time_ms);
                         }
                         PendingInput::PointerMove(x, y, time_ms) => {
                             shell.set_cursor_at_time(x, y, time_ms);

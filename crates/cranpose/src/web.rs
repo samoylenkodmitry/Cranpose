@@ -311,8 +311,9 @@ pub async fn run(
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.set_cursor(logical.x, logical.y);
-                app_mut.pointer_released();
+                // Release positions must not become velocity samples (see
+                // AppShell::pointer_released_at_position).
+                app_mut.pointer_released_at_position(logical.x, logical.y);
                 request_frame();
             }
         }) as Box<dyn FnMut(_)>);
@@ -414,8 +415,9 @@ pub async fn run(
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.set_cursor(logical.x, logical.y);
-                app_mut.pointer_released();
+                // Touch lift-off positions must not become velocity samples
+                // (see AppShell::pointer_released_at_position).
+                app_mut.pointer_released_at_position(logical.x, logical.y);
                 request_frame();
             }
         }) as Box<dyn FnMut(_)>);
