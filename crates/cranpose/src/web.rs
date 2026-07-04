@@ -348,6 +348,22 @@ pub async fn run(
                 _ => {}
             }
 
+            // Ctrl+wheel is the browser zoom gesture; trackpad pinches also
+            // arrive as ctrl+wheel events. Translate the vertical delta into
+            // a multiplicative zoom step about the cursor.
+            if event.ctrl_key() {
+                // Browsers report wheel-down/pinch-in as positive delta_y.
+                let zoom_factor = 1.2f32.powf(-delta_y / 40.0);
+                if let Ok(mut app_mut) = app.try_borrow_mut() {
+                    app_mut.set_cursor(logical.x, logical.y);
+                    if app_mut.pointer_zoomed(zoom_factor) {
+                        event.prevent_default();
+                    }
+                    request_frame();
+                }
+                return;
+            }
+
             if event.alt_key() {
                 if delta_x.abs() <= f32::EPSILON {
                     delta_x = delta_y;

@@ -954,6 +954,13 @@ fn scroll_impl(
                     loop {
                         let event = await_scope.await_pointer_event().await;
 
+                        // Scroll drags track the primary pointer only;
+                        // secondary pointers belong to multi-touch gestures
+                        // (pinch/zoom) handled by other modifiers.
+                        if event.id != 0 {
+                            continue;
+                        }
+
                         if event.is_consumed() {
                             if matches!(
                                 event.kind,
@@ -994,7 +1001,9 @@ fn scroll_impl(
                             } else {
                                 event.scroll_delta.x
                             }),
-                            PointerEventKind::Enter | PointerEventKind::Exit => false,
+                            PointerEventKind::Zoom
+                            | PointerEventKind::Enter
+                            | PointerEventKind::Exit => false,
                         };
 
                         if should_consume {
@@ -1100,6 +1109,13 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
                         loop {
                             let event = await_scope.await_pointer_event().await;
 
+                            // Scroll drags track the primary pointer only;
+                            // secondary pointers belong to multi-touch
+                            // gestures handled by other modifiers.
+                            if event.id != 0 {
+                                continue;
+                            }
+
                             if event.is_consumed() {
                                 if matches!(
                                     event.kind,
@@ -1128,7 +1144,9 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
                                 } else {
                                     event.scroll_delta.x
                                 }),
-                                PointerEventKind::Enter | PointerEventKind::Exit => false,
+                                PointerEventKind::Zoom
+                                | PointerEventKind::Enter
+                                | PointerEventKind::Exit => false,
                             };
 
                             if should_consume {

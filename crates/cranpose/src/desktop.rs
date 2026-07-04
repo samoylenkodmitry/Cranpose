@@ -3494,6 +3494,20 @@ fn dispatch_mouse_wheel(
     };
 
     let mut logical_delta = platform.scroll_delta(delta);
+
+    // Ctrl+wheel is the desktop zoom gesture (mirroring browser pinch
+    // semantics): translate the vertical wheel delta into a multiplicative
+    // zoom step about the cursor instead of scrolling.
+    if current_modifiers.contains(winit::keyboard::ModifiersState::CONTROL) {
+        let zoom_factor = wheel_zoom_factor(logical_delta.y);
+        log::trace!(
+            target: "cranpose::input",
+            "desktop ctrl+wheel zoom factor={zoom_factor:.4}"
+        );
+        let zoom_dirty = app.pointer_zoomed(zoom_factor);
+        return cursor_dirty || zoom_dirty;
+    }
+
     let alt_pressed = current_modifiers.contains(winit::keyboard::ModifiersState::ALT);
     if alt_pressed {
         if logical_delta.x.abs() <= f32::EPSILON {
@@ -3512,6 +3526,15 @@ fn dispatch_mouse_wheel(
 
     let scroll_dirty = app.pointer_scrolled(logical_delta.x, logical_delta.y);
     cursor_dirty || scroll_dirty
+}
+
+/// Converts a vertical wheel delta (logical px, positive = scroll up) into
+/// a multiplicative zoom factor: one standard wheel notch (~40 logical px)
+/// zooms by ~1.2x, and opposite deltas invert exactly (`f(-d) == 1/f(d)`).
+fn wheel_zoom_factor(delta_y: f32) -> f32 {
+    const NOTCH_LOGICAL_PX: f32 = 40.0;
+    const ZOOM_PER_NOTCH: f32 = 1.2;
+    ZOOM_PER_NOTCH.powf(delta_y / NOTCH_LOGICAL_PX)
 }
 
 fn dispatch_middle_click_paste(

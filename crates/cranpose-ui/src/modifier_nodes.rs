@@ -1164,6 +1164,12 @@ impl ClickableNode {
         press_position: Rc<RefCell<Option<Point>>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
+            // Clicks track the primary pointer only; secondary pointers of a
+            // multi-touch gesture (e.g. a pinch) must never fire clicks.
+            if event.id != 0 {
+                return;
+            }
+
             // Check if event was consumed by scroll or other gesture handlers
             if event.is_consumed() {
                 // Clear press state if event was consumed
@@ -1213,7 +1219,10 @@ impl ClickableNode {
                     // Clear press state on cancel
                     *press_position.borrow_mut() = None;
                 }
-                PointerEventKind::Scroll | PointerEventKind::Enter | PointerEventKind::Exit => {
+                PointerEventKind::Scroll
+                | PointerEventKind::Zoom
+                | PointerEventKind::Enter
+                | PointerEventKind::Exit => {
                     // These events don't affect click press state.
                 }
             }

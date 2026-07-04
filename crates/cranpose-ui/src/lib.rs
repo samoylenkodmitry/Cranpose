@@ -34,6 +34,7 @@ pub mod text_layout_result;
 mod text_modifier_node;
 pub mod widgets;
 mod word_boundaries;
+pub mod zoom;
 
 // Export for cursor blink animation - AppShell checks this to continuously redraw
 pub use text_field_focus::has_focused_field;
@@ -115,6 +116,7 @@ pub use render_state::{
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use scroll::{ScrollElement, ScrollNode, ScrollState};
+pub use zoom::ZoomState;
 // Test utilities for fling velocity verification (only with test-helpers feature)
 #[cfg(feature = "test-helpers")]
 pub use modifier::{last_fling_velocity, reset_last_fling_velocity};

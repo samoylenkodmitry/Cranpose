@@ -2319,6 +2319,7 @@ fn pointer_driven_graphics_layer_point_app(position_state: cranpose_core::Mutabl
                                             PointerEventKind::Up
                                             | PointerEventKind::Cancel
                                             | PointerEventKind::Scroll
+                                            | PointerEventKind::Zoom
                                             | PointerEventKind::Enter
                                             | PointerEventKind::Exit => {}
                                         }
@@ -3190,6 +3191,93 @@ fn android_style_consecutive_flings_keep_direction() {
         velocities.iter().all(|v| *v < 0.0),
         "all three identical upward flicks must compute the same (negative) velocity sign, \
          got {velocities:?}"
+    );
+}
+
+/// End-to-end pinch: two Android fingers routed through the shell's primary
+/// and secondary pointer paths must drive `ZoomState` on a zoomable element.
+#[test]
+fn two_finger_pinch_reaches_zoomable_state_through_shell() {
+    let _guard = test_guard();
+    APP_SHELL_ZOOM_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_zoomable_probe,
+    );
+    shell.set_buffer_size(320, 640);
+    shell.set_viewport(320.0, 640.0);
+    shell.update();
+
+    let zoom_state = APP_SHELL_ZOOM_STATE
+        .with(|slot| slot.borrow().as_ref().cloned())
+        .expect("zoomable probe should expose its zoom state");
+    assert_eq!(zoom_state.scale_non_reactive(), 1.0);
+
+    let mut event_ms = 9_000_000i64;
+
+    // First finger lands (primary pointer, id 0).
+    shell.set_cursor_at_time(140.0, 300.0, Some(event_ms));
+    shell.pointer_pressed_at_time(Some(event_ms));
+
+    // Second finger lands 80dp to the right (secondary pointer).
+    event_ms += 16;
+    assert!(
+        shell.secondary_pointer_pressed(2, 220.0, 300.0, Some(event_ms)),
+        "secondary pointer must reach the primary gesture's hit path"
+    );
+
+    // Pinch out: the second finger doubles the spread over a few samples.
+    for step in 1..=5i64 {
+        event_ms += 8;
+        shell.secondary_pointer_moved(2, 220.0 + step as f32 * 16.0, 300.0, Some(event_ms));
+    }
+
+    event_ms += 8;
+    shell.secondary_pointer_released(2, 300.0, 300.0, Some(event_ms));
+    shell.pointer_released_at_position_time(140.0, 300.0, Some(event_ms));
+    shell.update();
+
+    let scale = zoom_state.scale_non_reactive();
+    assert!(
+        (scale - 2.0).abs() < 0.05,
+        "doubling the finger spread must double the zoom scale, got {scale}"
+    );
+}
+
+/// Ctrl+wheel zoom steps must reach a zoomable element under the cursor.
+#[test]
+fn pointer_zoomed_reaches_zoomable_state() {
+    let _guard = test_guard();
+    APP_SHELL_ZOOM_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_zoomable_probe,
+    );
+    shell.set_buffer_size(320, 640);
+    shell.set_viewport(320.0, 640.0);
+    shell.update();
+
+    let zoom_state = APP_SHELL_ZOOM_STATE
+        .with(|slot| slot.borrow().as_ref().cloned())
+        .expect("zoomable probe should expose its zoom state");
+
+    assert!(shell.set_cursor(160.0, 320.0), "probe should be hoverable");
+    assert!(
+        shell.pointer_zoomed(1.5),
+        "zoom step must be consumed by the zoomable modifier"
+    );
+    shell.update();
+
+    let scale = zoom_state.scale_non_reactive();
+    assert!(
+        (scale - 1.5).abs() < 1e-4,
+        "ctrl+wheel zoom step must multiply the scale, got {scale}"
     );
 }
 
@@ -5079,6 +5167,28 @@ fn app_shell_wheel_scroll_probe() {
     );
 }
 
+thread_local! {
+    static APP_SHELL_ZOOM_STATE: RefCell<Option<cranpose_ui::ZoomState>> =
+        const { RefCell::new(None) };
+}
+
+#[composable]
+fn app_shell_zoomable_probe() {
+    let zoom_state =
+        cranpose_core::remember(cranpose_ui::ZoomState::new).with(|state| state.clone());
+    APP_SHELL_ZOOM_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(zoom_state.clone());
+    });
+
+    Box(
+        Modifier::empty().fill_max_size().zoomable(zoom_state),
+        BoxSpec::default(),
+        || {
+            Text("Zoomable probe", Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+
 #[composable]
 fn app_shell_tall_fling_scroll_probe() {
     let scroll_state =
@@ -5139,6 +5249,7 @@ fn app_shell_consumed_child_drag_scroll_probe() {
                                         PointerEventKind::Up
                                         | PointerEventKind::Cancel
                                         | PointerEventKind::Scroll
+                                        | PointerEventKind::Zoom
                                         | PointerEventKind::Enter
                                         | PointerEventKind::Exit => {}
                                     }
@@ -5267,6 +5378,7 @@ fn app_shell_interactive_counter_test_tab(counter: MutableState<i32>) {
                                                 pointer_position.set(event.position);
                                             }
                                             PointerEventKind::Scroll
+                                            | PointerEventKind::Zoom
                                             | PointerEventKind::Enter
                                             | PointerEventKind::Exit => {}
                                         }
@@ -5626,6 +5738,7 @@ fn app_shell_demo_like_counter_tab() {
                                                             pointer_position.set(event.position);
                                                         }
                                                         PointerEventKind::Scroll
+                                                        | PointerEventKind::Zoom
                                                         | PointerEventKind::Enter
                                                         | PointerEventKind::Exit => {}
                                                     }
@@ -5875,6 +5988,7 @@ fn app_shell_actual_like_counter_tab() {
                                                 });
                                             }
                                             PointerEventKind::Scroll
+                                            | PointerEventKind::Zoom
                                             | PointerEventKind::Enter
                                             | PointerEventKind::Exit => {}
                                         }

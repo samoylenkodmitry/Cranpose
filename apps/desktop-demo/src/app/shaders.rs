@@ -2363,6 +2363,7 @@ fn DraggableOverlay(
                                         drag_offset = None;
                                     }
                                     PointerEventKind::Scroll
+                                    | PointerEventKind::Zoom
                                     | PointerEventKind::Enter
                                     | PointerEventKind::Exit => {}
                                 }
