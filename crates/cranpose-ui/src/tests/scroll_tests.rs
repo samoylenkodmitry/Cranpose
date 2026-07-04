@@ -855,3 +855,87 @@ fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
         );
     });
 }
+
+#[test]
+fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
+    // Device repro: LazyColumn (with one item taller than the screen) nested
+    // in a vertical_scroll Box. The unbounded inner list is realized in full
+    // and cannot scroll itself, so its gesture detector must NOT capture
+    // drags — the outer scrollable has to receive them and reach the true
+    // bottom of the content.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let mut list_state = None;
+        let _composition = crate::run_test_composition(|| {
+            list_state = Some(remember_lazy_list_state());
+        });
+        let list_state = list_state.expect("lazy list state should be created");
+
+        // Simulate the unbounded measure result: all 15 items realized
+        // (10x50 + 800 + 4x50 = 1500 content), no internal scrollability.
+        cranpose_foundation::lazy::measure_lazy_list(
+            15,
+            &list_state,
+            f32::INFINITY,
+            320.0,
+            &cranpose_foundation::lazy::LazyListMeasureConfig::default(),
+            |index| {
+                cranpose_foundation::lazy::LazyListMeasuredItem::new(
+                    index,
+                    index as u64,
+                    None,
+                    if index == 10 { 800.0 } else { 50.0 },
+                    320.0,
+                )
+            },
+        );
+        assert!(!list_state.can_scroll_forward_non_reactive());
+
+        // Outer vertical_scroll Box: viewport 500, content 1500 => max 1000.
+        let outer_state = ScrollState::new(0.0);
+        outer_state.set_max_value(1000.0);
+
+        let (inner_handler, _inner_chain) =
+            pointer_handler_for(Modifier::empty().lazy_vertical_scroll(list_state, false));
+        let (outer_handler, _outer_chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(outer_state.clone(), false));
+
+        // The shell dispatches gesture events along the hit path innermost
+        // first without stopping on consumption for moves; replicate that.
+        let dispatch = |event: PointerEvent| {
+            inner_handler(event.clone());
+            outer_handler(event);
+        };
+
+        let mut time = 50_000i64;
+        let mut gestures = 0;
+        let mut last_value = -1.0f32;
+        while (outer_state.value_non_reactive() - last_value).abs() > 0.001 && gestures < 50 {
+            last_value = outer_state.value_non_reactive();
+            dispatch(timed_pointer_event(
+                PointerEventKind::Down,
+                10.0,
+                450.0,
+                time,
+            ));
+            let mut y = 450.0;
+            for _ in 0..35 {
+                time += 8;
+                y -= 8.0;
+                dispatch(timed_pointer_event(PointerEventKind::Move, 10.0, y, time));
+            }
+            time += 200; // rest so release does not fling
+            dispatch(timed_pointer_event(PointerEventKind::Up, 10.0, y, time));
+            time += 100;
+            gestures += 1;
+        }
+
+        assert!(
+            (outer_state.value_non_reactive() - 1000.0).abs() < 0.001,
+            "outer scroll must reach the true bottom (1000); stopped at {} after {} gestures — \
+             the non-scrollable inner lazy list must not swallow drag gestures",
+            outer_state.value_non_reactive(),
+            gestures
+        );
+    });
+}

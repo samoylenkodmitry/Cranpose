@@ -154,6 +154,17 @@ trait ScrollTarget: Clone {
 
     /// Get the current scroll offset.
     fn current_offset(&self) -> f32;
+
+    /// Whether the target can currently scroll in either direction.
+    ///
+    /// When this is `false` the gesture detector must not capture drags:
+    /// a non-scrollable target (e.g. a lazy list realized in full inside an
+    /// unbounded parent, or a scroll container whose content fits its
+    /// viewport) would otherwise consume the move events that an enclosing
+    /// scrollable needs to receive.
+    fn can_scroll(&self) -> bool {
+        true
+    }
 }
 
 impl ScrollTarget for ScrollState {
@@ -172,6 +183,10 @@ impl ScrollTarget for ScrollState {
 
     fn current_offset(&self) -> f32 {
         self.value()
+    }
+
+    fn can_scroll(&self) -> bool {
+        self.max_value() > 0.0
     }
 }
 
@@ -203,6 +218,14 @@ impl ScrollTarget for LazyListState {
     fn current_offset(&self) -> f32 {
         // LazyListState doesn't have a simple offset - use first visible item offset
         self.first_visible_item_scroll_offset()
+    }
+
+    fn can_scroll(&self) -> bool {
+        // Before the first measure pass no bounds are known; stay permissive
+        // so gestures that race the first layout are not dropped.
+        self.layout_info().total_items_count == 0
+            || self.can_scroll_forward_non_reactive()
+            || self.can_scroll_backward_non_reactive()
     }
 }
 
@@ -321,8 +344,11 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         let total_delta = calculate_total_delta(down_pos, position, self.is_vertical);
         let incremental_delta = calculate_incremental_delta(last_pos, position, self.is_vertical);
 
-        // Threshold check: start dragging only after moving 8px from down position.
-        if !gs.is_dragging && total_delta.abs() > DRAG_THRESHOLD {
+        // Threshold check: start dragging only after moving 8px from down
+        // position. Targets that cannot scroll in either direction never
+        // capture the gesture, so enclosing scrollables receive it instead.
+        if !gs.is_dragging && total_delta.abs() > DRAG_THRESHOLD && self.scroll_target.can_scroll()
+        {
             gs.is_dragging = true;
             self.motion_context.set_active(true);
         }

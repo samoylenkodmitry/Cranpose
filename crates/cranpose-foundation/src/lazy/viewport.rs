@@ -34,14 +34,14 @@ impl ViewportHandler {
         let is_infinite = viewport_size.is_infinite() || viewport_size > MAX_REASONABLE_VIEWPORT;
 
         let effective_size = if is_infinite {
-            // Use estimated viewport based on average item size
+            // Estimated size retained for diagnostics; measurement realizes
+            // all items when the viewport is infinite (no virtualization).
             let avg_size = average_item_size.max(DEFAULT_ITEM_SIZE_ESTIMATE);
             let estimated_size = (avg_size + spacing) * INFINITE_VIEWPORT_ITEM_COUNT;
             log::warn!(
-                "LazyList: Detected infinite viewport ({}), using fallback size {}. \
-                 Consider wrapping LazyList in a constrained container.",
-                viewport_size,
-                estimated_size
+                "LazyList: Detected infinite viewport ({}); realizing all items without \
+                 virtualization. Consider wrapping LazyList in a constrained container.",
+                viewport_size
             );
             estimated_size
         } else {
