@@ -1,7 +1,7 @@
 use crate::scroll::{scroll_motion_context_for_key, ScrollMotionContextKey};
 use crate::{
-    collect_modifier_slices, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, ScrollState, Size,
-    Spacer,
+    collect_modifier_slices, measure_layout, Column, ColumnSpec, LayoutEngine, LazyColumn,
+    LazyColumnSpec, Modifier, ScrollState, Size, Spacer,
 };
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
@@ -555,6 +555,303 @@ fn lazy_wheel_scroll_preserves_input_delta_after_viewport_measurement() {
         assert!(
             (bounded_large_viewport_delta + 620.0).abs() < 0.001,
             "large lazy wheel delta must not be downscaled on tall viewports"
+        );
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Android batched input delivery regression tests.
+//
+// Android delivers MotionEvents batched/frame-aligned: several touch samples
+// (with their own timestamps) are processed back-to-back in one main-loop
+// iteration. Velocity must be computed from the events' timestamps, NOT the
+// delivery time, otherwise dt collapses to ~1ms per sample and every release
+// produces a near-MAX_FLING_VELOCITY fling whose direction is dominated by
+// release jitter ("fling gestures act almost randomly").
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn timed_pointer_event(kind: PointerEventKind, x: f32, y: f32, time_ms: i64) -> PointerEvent {
+    PointerEvent::new(kind, Point { x, y }, Point { x, y })
+        .with_buttons(primary_buttons())
+        .with_time_ms(Some(time_ms))
+}
+
+#[test]
+fn batched_touch_delivery_computes_real_finger_velocity() {
+    // Finger moves down 8dp every 8ms => real velocity is exactly 1000 dp/s.
+    // All events are handed over back-to-back (delivery dt ~ 0), mimicking
+    // Android's batched frame-aligned input delivery.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        crate::render_state::debug_reset_last_fling_velocity();
+        let scroll_state = ScrollState::new(200.0);
+        scroll_state.set_max_value(4000.0);
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+
+        let t0 = 1_234_567i64; // arbitrary uptime base
+        handler(timed_pointer_event(PointerEventKind::Down, 0.0, 100.0, t0));
+        for i in 1..=12i64 {
+            handler(timed_pointer_event(
+                PointerEventKind::Move,
+                0.0,
+                100.0 + i as f32 * 8.0,
+                t0 + i * 8,
+            ));
+        }
+        handler(timed_pointer_event(
+            PointerEventKind::Up,
+            0.0,
+            196.0,
+            t0 + 104,
+        ));
+
+        let velocity = crate::render_state::debug_last_fling_velocity();
+        assert!(
+            velocity > 0.0,
+            "finger moving down must produce a downward (positive) velocity, got {velocity}"
+        );
+        assert!(
+            (800.0..=1200.0).contains(&velocity),
+            "batched delivery must not distort the real ~1000 dp/s finger velocity, got {velocity}"
+        );
+    });
+}
+
+#[test]
+fn release_jitter_does_not_reverse_or_inflate_fling() {
+    // Steady 1000 dp/s downward drag, but the finger rolls back 2dp right at
+    // release (very common on lift-off). The computed fling must stay in the
+    // finger's travel direction with a sane magnitude.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        crate::render_state::debug_reset_last_fling_velocity();
+        let scroll_state = ScrollState::new(200.0);
+        scroll_state.set_max_value(4000.0);
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+
+        let t0 = 987_654i64;
+        handler(timed_pointer_event(PointerEventKind::Down, 0.0, 100.0, t0));
+        let mut y = 100.0;
+        for i in 1..=12i64 {
+            y += 8.0;
+            handler(timed_pointer_event(
+                PointerEventKind::Move,
+                0.0,
+                y,
+                t0 + i * 8,
+            ));
+        }
+        // Lift-off jitter: 2dp back, one input period later.
+        handler(timed_pointer_event(
+            PointerEventKind::Move,
+            0.0,
+            y - 2.0,
+            t0 + 13 * 8,
+        ));
+        handler(timed_pointer_event(
+            PointerEventKind::Up,
+            0.0,
+            y - 2.0,
+            t0 + 13 * 8,
+        ));
+
+        let velocity = crate::render_state::debug_last_fling_velocity();
+        assert!(
+            velocity > 0.0,
+            "small release jitter must not reverse the fling direction, got {velocity}"
+        );
+        assert!(
+            velocity <= 1200.0,
+            "release jitter must not inflate the fling velocity, got {velocity}"
+        );
+    });
+}
+
+#[test]
+fn batched_same_millisecond_samples_do_not_explode_velocity() {
+    // Two historical samples of one batched MotionEvent can land in the same
+    // millisecond once truncated to ms. The tracker must tolerate equal
+    // timestamps without producing huge/NaN velocities.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        crate::render_state::debug_reset_last_fling_velocity();
+        let scroll_state = ScrollState::new(200.0);
+        scroll_state.set_max_value(4000.0);
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+
+        let t0 = 500_000i64;
+        handler(timed_pointer_event(PointerEventKind::Down, 0.0, 100.0, t0));
+        let mut y = 100.0;
+        for i in 1..=6i64 {
+            y += 8.0;
+            handler(timed_pointer_event(
+                PointerEventKind::Move,
+                0.0,
+                y,
+                t0 + i * 8,
+            ));
+            // duplicate-timestamp sample (ms truncation of a 120Hz pair)
+            y += 0.5;
+            handler(timed_pointer_event(
+                PointerEventKind::Move,
+                0.0,
+                y,
+                t0 + i * 8,
+            ));
+        }
+        handler(timed_pointer_event(
+            PointerEventKind::Up,
+            0.0,
+            y,
+            t0 + 7 * 8,
+        ));
+
+        let velocity = crate::render_state::debug_last_fling_velocity();
+        assert!(
+            velocity.is_finite(),
+            "velocity must be finite, got {velocity}"
+        );
+        assert!(
+            velocity > 0.0 && velocity < 2500.0,
+            "same-ms batched samples must not explode the velocity, got {velocity}"
+        );
+    });
+}
+
+#[test]
+fn lazy_list_fling_velocity_uses_event_timestamps() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        crate::render_state::debug_reset_last_fling_velocity();
+        let mut list_state = None;
+        let _composition = crate::run_test_composition(|| {
+            list_state = Some(remember_lazy_list_state());
+        });
+        let list_state = list_state.expect("lazy list state should be created");
+
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().lazy_vertical_scroll(list_state, false));
+
+        let t0 = 42_000i64;
+        handler(timed_pointer_event(PointerEventKind::Down, 0.0, 400.0, t0));
+        // Finger up (towards later items) 8dp every 8ms => -1000 dp/s.
+        for i in 1..=12i64 {
+            handler(timed_pointer_event(
+                PointerEventKind::Move,
+                0.0,
+                400.0 - i as f32 * 8.0,
+                t0 + i * 8,
+            ));
+        }
+        handler(timed_pointer_event(
+            PointerEventKind::Up,
+            0.0,
+            304.0,
+            t0 + 104,
+        ));
+
+        let velocity = crate::render_state::debug_last_fling_velocity();
+        assert!(
+            velocity < 0.0,
+            "finger moving up must produce a negative gesture velocity, got {velocity}"
+        );
+        assert!(
+            (800.0..=1200.0).contains(&velocity.abs()),
+            "lazy fling velocity must match the ~1000 dp/s finger speed, got {velocity}"
+        );
+    });
+}
+
+#[test]
+fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
+    // Phone-like geometry: 2280 physical px viewport at density 2.75 and item
+    // heights that are whole physical pixels (177px) but fractional in dp.
+    // The bottom of the content must remain exactly reachable.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let density = 2.75f32;
+        let viewport_dp = 2280.0 / density; // 829.0909...
+        let item_dp = 177.0 / density; // 64.3636...
+        let item_count = 30usize;
+
+        let scroll_state = ScrollState::new(0.0);
+        let scroll_state_for_content = scroll_state.clone();
+        let mut composition = crate::run_test_composition(move || {
+            Column(
+                Modifier::empty().vertical_scroll(scroll_state_for_content.clone(), false),
+                ColumnSpec::default(),
+                move || {
+                    for _ in 0..item_count {
+                        Spacer(Size {
+                            width: 100.0,
+                            height: item_dp,
+                        });
+                    }
+                },
+            );
+        });
+
+        let root = composition.root().expect("scroll column root");
+        let handle = composition.runtime_handle();
+        {
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle);
+            measure_layout(
+                &mut applier,
+                root,
+                cranpose_ui_graphics::Size {
+                    width: 320.0,
+                    height: viewport_dp,
+                },
+            )
+            .expect("layout measurement");
+            applier.clear_runtime_handle();
+        }
+
+        let content_dp = item_dp * item_count as f32;
+        let expected_max = content_dp - viewport_dp;
+        assert!(
+            (scroll_state.max_value() - expected_max).abs() < 0.01,
+            "max scroll must equal content minus viewport ({expected_max}), got {}",
+            scroll_state.max_value()
+        );
+
+        // Drag to the bottom with realistic touch gestures (finger up 200dp per
+        // gesture, 8ms-per-8dp samples) until the offset stops moving.
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+        let mut time = 10_000i64;
+        let mut last_value = -1.0f32;
+        let mut gestures = 0;
+        while (scroll_state.value_non_reactive() - last_value).abs() > 0.001 && gestures < 100 {
+            last_value = scroll_state.value_non_reactive();
+            handler(timed_pointer_event(
+                PointerEventKind::Down,
+                0.0,
+                700.0,
+                time,
+            ));
+            let mut y = 700.0;
+            for _ in 0..25 {
+                time += 8;
+                y -= 8.0;
+                handler(timed_pointer_event(PointerEventKind::Move, 0.0, y, time));
+            }
+            // Rest before release so no fling is started.
+            time += 200;
+            handler(timed_pointer_event(PointerEventKind::Up, 0.0, y, time));
+            time += 100;
+            gestures += 1;
+        }
+
+        assert!(
+            (scroll_state.value_non_reactive() - scroll_state.max_value()).abs() < 0.001,
+            "bottom must be reachable: value {} vs max {}",
+            scroll_state.value_non_reactive(),
+            scroll_state.max_value()
         );
     });
 }

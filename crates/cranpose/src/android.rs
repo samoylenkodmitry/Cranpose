@@ -48,37 +48,79 @@ struct GpuResources {
 
 /// Pending input event to be processed outside poll_events callback.
 /// This prevents blocking the main thread during input event acknowledgment.
+///
+/// Each variant carries the MotionEvent's own timestamp in milliseconds
+/// (uptime clock). Android delivers touch input batched/frame-aligned, so
+/// several samples are processed back-to-back in one loop iteration;
+/// stamping them with the delivery time instead of the event time makes
+/// gesture velocity computations wildly wrong (dt collapses to ~0).
 enum PendingInput {
-    PointerDown(f32, f32),
-    PointerUp(f32, f32),
-    PointerMove(f32, f32),
+    PointerDown(f32, f32, Option<i64>),
+    PointerUp(f32, f32, Option<i64>),
+    PointerMove(f32, f32, Option<i64>),
 }
 
-fn pending_input_from_android_event(
+/// Converts an Android event time (nanoseconds, `java.lang.System.nanoTime()`
+/// base) into milliseconds for gesture velocity tracking.
+fn android_event_time_ms(event_time_ns: i64) -> i64 {
+    event_time_ns / 1_000_000
+}
+
+/// Translates one Android `MotionEvent` into pending pointer inputs.
+///
+/// Move events unpack the batched *historical* samples first (oldest to
+/// newest, each with its own timestamp) and then the current sample, so the
+/// velocity tracker sees every real touch sample instead of only the last
+/// position of each batch. Returns `true` when the event was consumed.
+fn push_pending_inputs_from_android_event(
     event: &android_activity::input::InputEvent<'_>,
     android_platform: &AndroidPlatform,
-) -> Option<PendingInput> {
+    pending_inputs: &mut Vec<PendingInput>,
+) -> bool {
     let android_activity::input::InputEvent::MotionEvent(motion_event) = event else {
-        return None;
+        return false;
     };
 
     let pointer = motion_event.pointer_at_index(0);
     let logical = android_platform.pointer_position(pointer.x() as f64, pointer.y() as f64);
+    let time_ms = Some(android_event_time_ms(motion_event.event_time()));
     match motion_event.action() {
         android_activity::input::MotionAction::Down
-        | android_activity::input::MotionAction::PointerDown => Some(PendingInput::PointerDown(
-            logical.x as f32,
-            logical.y as f32,
-        )),
+        | android_activity::input::MotionAction::PointerDown => {
+            pending_inputs.push(PendingInput::PointerDown(
+                logical.x as f32,
+                logical.y as f32,
+                time_ms,
+            ));
+            true
+        }
         android_activity::input::MotionAction::Up
         | android_activity::input::MotionAction::PointerUp => {
-            Some(PendingInput::PointerUp(logical.x as f32, logical.y as f32))
+            pending_inputs.push(PendingInput::PointerUp(
+                logical.x as f32,
+                logical.y as f32,
+                time_ms,
+            ));
+            true
         }
-        android_activity::input::MotionAction::Move => Some(PendingInput::PointerMove(
-            logical.x as f32,
-            logical.y as f32,
-        )),
-        _ => None,
+        android_activity::input::MotionAction::Move => {
+            for historical in pointer.history() {
+                let historical_logical =
+                    android_platform.pointer_position(historical.x() as f64, historical.y() as f64);
+                pending_inputs.push(PendingInput::PointerMove(
+                    historical_logical.x as f32,
+                    historical_logical.y as f32,
+                    Some(android_event_time_ms(historical.event_time())),
+                ));
+            }
+            pending_inputs.push(PendingInput::PointerMove(
+                logical.x as f32,
+                logical.y as f32,
+                time_ms,
+            ));
+            true
+        }
+        _ => false,
     }
 }
 
@@ -93,8 +135,7 @@ fn drain_android_input_events(
 
     for _ in 0..MAX_ANDROID_INPUT_EVENTS_PER_POLL {
         let event_available = iter.next(|event| {
-            if let Some(input) = pending_input_from_android_event(event, android_platform) {
-                pending_inputs.push(input);
+            if push_pending_inputs_from_android_event(event, android_platform, pending_inputs) {
                 android_activity::InputStatus::Handled
             } else {
                 android_activity::InputStatus::Unhandled
@@ -1159,22 +1200,30 @@ pub fn run(
                 }
                 android_overlay_window::AndroidOverlayWindowEvent::Pointer { action, x, y } => {
                     let logical = android_platform.pointer_position(x as f64, y as f64);
+                    // Overlay pointer events cross a JNI bridge that does not
+                    // forward MotionEvent timestamps; velocity tracking falls
+                    // back to delivery-time stamping for them.
                     match action {
                         android_overlay_window::AndroidOverlayPointerAction::Down => {
                             pending_inputs.push(PendingInput::PointerDown(
                                 logical.x as f32,
                                 logical.y as f32,
+                                None,
                             ));
                         }
                         android_overlay_window::AndroidOverlayPointerAction::Up
                         | android_overlay_window::AndroidOverlayPointerAction::Cancel => {
-                            pending_inputs
-                                .push(PendingInput::PointerUp(logical.x as f32, logical.y as f32));
+                            pending_inputs.push(PendingInput::PointerUp(
+                                logical.x as f32,
+                                logical.y as f32,
+                                None,
+                            ));
                         }
                         android_overlay_window::AndroidOverlayPointerAction::Move => {
                             pending_inputs.push(PendingInput::PointerMove(
                                 logical.x as f32,
                                 logical.y as f32,
+                                None,
                             ));
                         }
                     }
@@ -1187,16 +1236,16 @@ pub fn run(
             if let Some(shell) = &mut app_shell {
                 for input in pending_inputs.drain(..) {
                     match input {
-                        PendingInput::PointerDown(x, y) => {
-                            shell.set_cursor(x, y);
-                            shell.pointer_pressed();
+                        PendingInput::PointerDown(x, y, time_ms) => {
+                            shell.set_cursor_at_time(x, y, time_ms);
+                            shell.pointer_pressed_at_time(time_ms);
                         }
-                        PendingInput::PointerUp(x, y) => {
-                            shell.set_cursor(x, y);
-                            shell.pointer_released();
+                        PendingInput::PointerUp(x, y, time_ms) => {
+                            shell.set_cursor_at_time(x, y, time_ms);
+                            shell.pointer_released_at_time(time_ms);
                         }
-                        PendingInput::PointerMove(x, y) => {
-                            shell.set_cursor(x, y);
+                        PendingInput::PointerMove(x, y, time_ms) => {
+                            shell.set_cursor_at_time(x, y, time_ms);
                         }
                     }
                 }

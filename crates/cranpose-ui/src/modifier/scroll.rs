@@ -73,6 +73,11 @@ struct ScrollGestureState {
     /// Time when gesture down started (for velocity calculation).
     gesture_start_time: Option<Instant>,
 
+    /// Platform timestamp (ms) of the Down event, when the platform provides
+    /// input timestamps. Preferred over `gesture_start_time` because batched
+    /// input delivery (Android) makes delivery-time deltas meaningless.
+    gesture_start_event_time_ms: Option<i64>,
+
     /// Last time a velocity sample was recorded (milliseconds since gesture start).
     last_velocity_sample_ms: Option<i64>,
 
@@ -88,6 +93,7 @@ impl Default for ScrollGestureState {
             is_dragging: false,
             velocity_tracker: VelocityTracker1D::new(),
             gesture_start_time: None,
+            gesture_start_event_time_ms: None,
             last_velocity_sample_ms: None,
             fling_animation: None,
         }
@@ -248,7 +254,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     ///
     /// Returns `false` - Down events are never consumed to allow
     /// potential child click handlers to receive the initial press.
-    fn on_down(&self, position: Point) -> bool {
+    fn on_down(&self, position: Point, time_ms: Option<i64>) -> bool {
         let mut gs = self.gesture_state.borrow_mut();
 
         // Cancel any running fling animation
@@ -262,6 +268,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.is_dragging = false;
         gs.velocity_tracker.reset();
         gs.gesture_start_time = Some(Instant::now());
+        gs.gesture_start_event_time_ms = time_ms;
 
         // Add initial position to velocity tracker
         let pos = if self.is_vertical {
@@ -286,7 +293,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     /// 4. While dragging, apply scroll delta and consume events.
     ///
     /// Returns `true` if event should be consumed (we're actively dragging).
-    fn on_move(&self, position: Point, buttons: PointerButtons) -> bool {
+    fn on_move(&self, position: Point, buttons: PointerButtons, time_ms: Option<i64>) -> bool {
         let mut gs = self.gesture_state.borrow_mut();
 
         // Safety: detect missed Up events (hit test delivered to wrong target)
@@ -295,6 +302,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.last_position = None;
             gs.is_dragging = false;
             gs.gesture_start_time = None;
+            gs.gesture_start_event_time_ms = None;
             gs.last_velocity_sample_ms = None;
             gs.velocity_tracker.reset();
             self.motion_context.set_active(false);
@@ -322,16 +330,33 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.last_position = Some(position);
 
         // Track velocity for fling
-        if let Some(start_time) = gs.gesture_start_time {
+        let pos = if self.is_vertical {
+            position.y
+        } else {
+            position.x
+        };
+        let event_sample_ms = gs
+            .gesture_start_event_time_ms
+            .zip(time_ms)
+            .map(|(start_ms, now_ms)| now_ms - start_ms);
+        let sample_ms = if let Some(event_sample_ms) = event_sample_ms {
+            // The platform supplied real input timestamps: trust them.
+            // Android delivers touch samples batched/frame-aligned, so several
+            // moves are processed back-to-back here; only the event's own
+            // timestamp yields the real dt between finger positions. Real
+            // pauses must also stay real so a stop-then-release does not fling
+            // (the tracker treats gaps > ASSUME_STOPPED_MS as stopped).
+            Some(match gs.last_velocity_sample_ms {
+                Some(last_sample_ms) => event_sample_ms.max(last_sample_ms),
+                None => event_sample_ms.max(0),
+            })
+        } else if let Some(start_time) = gs.gesture_start_time {
+            // Fallback: delivery-time stamping for platforms without input
+            // timestamps (desktop mouse, web).
             let elapsed_ms = start_time.elapsed().as_millis() as i64;
-            let pos = if self.is_vertical {
-                position.y
-            } else {
-                position.x
-            };
             // Keep sample times strictly increasing so velocity stays stable when
             // multiple move events land in the same millisecond.
-            let sample_ms = match gs.last_velocity_sample_ms {
+            Some(match gs.last_velocity_sample_ms {
                 Some(last_sample_ms) => {
                     let mut sample_ms = if elapsed_ms <= last_sample_ms {
                         last_sample_ms + 1
@@ -345,7 +370,15 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                     sample_ms
                 }
                 None => elapsed_ms,
-            };
+            })
+        } else {
+            None
+        };
+        if let Some(sample_ms) = sample_ms {
+            log::trace!(
+                target: "cranpose::velocity",
+                "sample t={sample_ms}ms pos={pos:.2} event_time={time_ms:?}"
+            );
             gs.velocity_tracker.add_data_point(sample_ms, pos);
             gs.last_velocity_sample_ms = Some(sample_ms);
         }
@@ -394,6 +427,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.last_position = None;
             gs.is_dragging = false;
             gs.gesture_start_time = None;
+            gs.gesture_start_event_time_ms = None;
             gs.last_velocity_sample_ms = None;
 
             (was_dragging, velocity, start_fling, existing_fling)
@@ -401,6 +435,10 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         // Always record velocity for test accessibility (even if below fling threshold)
         if allow_fling && was_dragging {
+            log::debug!(
+                target: "cranpose::velocity",
+                "gesture finished: fling velocity={velocity:.2} dp/s start_fling={start_fling}"
+            );
             set_last_fling_velocity(velocity);
         }
 
@@ -490,6 +528,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.last_position = None;
             gs.is_dragging = false;
             gs.gesture_start_time = None;
+            gs.gesture_start_event_time_ms = None;
             gs.last_velocity_sample_ms = None;
             gs.velocity_tracker.reset();
         }
@@ -916,9 +955,11 @@ fn scroll_impl(
 
                         // Delegate to detector's lifecycle methods
                         let should_consume = match event.kind {
-                            PointerEventKind::Down => detector.on_down(event.position),
+                            PointerEventKind::Down => {
+                                detector.on_down(event.position, event.time_ms)
+                            }
                             PointerEventKind::Move => {
-                                detector.on_move(event.position, event.buttons)
+                                detector.on_move(event.position, event.buttons, event.time_ms)
                             }
                             PointerEventKind::Up => detector.on_up(),
                             PointerEventKind::Cancel => detector.on_cancel(),
@@ -1048,9 +1089,11 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
 
                             // Delegate to detector's lifecycle methods
                             let should_consume = match event.kind {
-                                PointerEventKind::Down => detector.on_down(event.position),
+                                PointerEventKind::Down => {
+                                    detector.on_down(event.position, event.time_ms)
+                                }
                                 PointerEventKind::Move => {
-                                    detector.on_move(event.position, event.buttons)
+                                    detector.on_move(event.position, event.buttons, event.time_ms)
                                 }
                                 PointerEventKind::Up => detector.on_up(),
                                 PointerEventKind::Cancel => detector.on_cancel(),

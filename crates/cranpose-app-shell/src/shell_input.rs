@@ -62,21 +62,32 @@ where
     }
 
     pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
+        self.set_cursor_at_time(x, y, None)
+    }
+
+    /// Like [`set_cursor`](Self::set_cursor), but carries the platform input
+    /// timestamp (milliseconds, platform-specific time base) of the sample.
+    ///
+    /// Platforms that deliver input batched/frame-aligned (Android) must use
+    /// this so gesture velocity is computed from real event times instead of
+    /// delivery times.
+    pub fn set_cursor_at_time(&mut self, x: f32, y: f32, time_ms: Option<i64>) -> bool {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
-        let result = app_context
-            .enter(|| run_in_mutable_snapshot(|| self.set_cursor_inner(x, y)).unwrap_or(false));
+        let result = app_context.enter(|| {
+            run_in_mutable_snapshot(|| self.set_cursor_inner(x, y, time_ms)).unwrap_or(false)
+        });
         if result {
             self.mark_dirty();
         }
         log::trace!(
             target: "cranpose::input",
-            "set_cursor ({x:.2},{y:.2}) -> {result}"
+            "set_cursor ({x:.2},{y:.2}) time_ms={time_ms:?} -> {result}"
         );
         result
     }
 
-    fn set_cursor_inner(&mut self, x: f32, y: f32) -> bool {
+    fn set_cursor_inner(&mut self, x: f32, y: f32, time_ms: Option<i64>) -> bool {
         self.cursor = (x, y);
 
         // During a gesture (button pressed), ONLY dispatch to the tracked hit path.
@@ -88,7 +99,8 @@ where
                 if !targets.is_empty() {
                     let event =
                         PointerEvent::new(PointerEventKind::Move, Point { x, y }, Point { x, y })
-                            .with_buttons(self.buttons_pressed);
+                            .with_buttons(self.buttons_pressed)
+                            .with_time_ms(time_ms);
                     self.dispatch_targets(targets, event, false);
                     return true;
                 }
@@ -132,7 +144,8 @@ where
 
         if !hits.is_empty() {
             let event = PointerEvent::new(PointerEventKind::Move, pos, pos)
-                .with_buttons(self.buttons_pressed);
+                .with_buttons(self.buttons_pressed)
+                .with_time_ms(time_ms);
             self.dispatch_targets(hits, event, true);
             true
         } else {
@@ -141,18 +154,25 @@ where
     }
 
     pub fn pointer_pressed(&mut self) -> bool {
+        self.pointer_pressed_at_time(None)
+    }
+
+    /// Like [`pointer_pressed`](Self::pointer_pressed), but carries the
+    /// platform input timestamp (milliseconds) of the press sample.
+    pub fn pointer_pressed_at_time(&mut self, time_ms: Option<i64>) -> bool {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
-        let result = app_context
-            .enter(|| run_in_mutable_snapshot(|| self.pointer_pressed_inner()).unwrap_or(false));
+        let result = app_context.enter(|| {
+            run_in_mutable_snapshot(|| self.pointer_pressed_inner(time_ms)).unwrap_or(false)
+        });
         if result {
             self.mark_dirty();
         }
-        log::trace!(target: "cranpose::input", "pointer_pressed -> {result}");
+        log::trace!(target: "cranpose::input", "pointer_pressed time_ms={time_ms:?} -> {result}");
         result
     }
 
-    fn pointer_pressed_inner(&mut self) -> bool {
+    fn pointer_pressed_inner(&mut self, time_ms: Option<i64>) -> bool {
         // Track button state
         self.buttons_pressed.insert(PointerButton::Primary);
 
@@ -179,7 +199,8 @@ where
                     y: self.cursor.1,
                 },
             )
-            .with_buttons(self.buttons_pressed);
+            .with_buttons(self.buttons_pressed)
+            .with_time_ms(time_ms);
 
             let mut delivered_capture_paths = Vec::new();
             let mut applier = self.composition.applier_mut();
@@ -212,18 +233,25 @@ where
     }
 
     pub fn pointer_released(&mut self) -> bool {
+        self.pointer_released_at_time(None)
+    }
+
+    /// Like [`pointer_released`](Self::pointer_released), but carries the
+    /// platform input timestamp (milliseconds) of the release sample.
+    pub fn pointer_released_at_time(&mut self, time_ms: Option<i64>) -> bool {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
-        let result = app_context
-            .enter(|| run_in_mutable_snapshot(|| self.pointer_released_inner()).unwrap_or(false));
+        let result = app_context.enter(|| {
+            run_in_mutable_snapshot(|| self.pointer_released_inner(time_ms)).unwrap_or(false)
+        });
         if result {
             self.mark_dirty();
         }
-        log::trace!(target: "cranpose::input", "pointer_released -> {result}");
+        log::trace!(target: "cranpose::input", "pointer_released time_ms={time_ms:?} -> {result}");
         result
     }
 
-    fn pointer_released_inner(&mut self) -> bool {
+    fn pointer_released_inner(&mut self, time_ms: Option<i64>) -> bool {
         // UP events report buttons as "currently pressed" (after release),
         // matching typical platform semantics where primary is already gone.
         self.buttons_pressed.remove(PointerButton::Primary);
@@ -245,7 +273,8 @@ where
                     y: self.cursor.1,
                 },
             )
-            .with_buttons(corrected_buttons);
+            .with_buttons(corrected_buttons)
+            .with_time_ms(time_ms);
 
             self.dispatch_targets(targets, event, false);
             true

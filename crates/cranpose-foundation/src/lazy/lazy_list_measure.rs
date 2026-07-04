@@ -993,4 +993,67 @@ mod tests {
             }
         });
     }
+
+    /// Regression tests for real-device geometry: a phone viewport of 2280
+    /// physical px at density 2.75 is a *fractional* dp viewport (829.0909),
+    /// and item heights that are whole physical px are fractional dp. The
+    /// last item must stay exactly reachable — no truncation of the
+    /// scrollable range and no off-by-one in can_scroll_forward.
+    fn assert_end_reachable_with_step(step_dp: f32) {
+        with_test_runtime(|| {
+            let density = 2.75_f32;
+            let viewport = 2280.0 / density; // 829.0909 dp
+            let items = 40usize;
+            let item_size = 177.0 / density; // 64.3636 dp
+            let config = LazyListMeasureConfig::default();
+            let state = new_lazy_list_state();
+
+            let mut result = measure_lazy_list(items, &state, viewport, 300.0, &config, |i| {
+                create_test_item(i, item_size)
+            });
+
+            let mut frames = 0;
+            while result.can_scroll_forward && frames < 10_000 {
+                state.dispatch_scroll_delta(-step_dp);
+                result = measure_lazy_list(items, &state, viewport, 300.0, &config, |i| {
+                    create_test_item(i, item_size)
+                });
+                frames += 1;
+            }
+
+            assert!(
+                !result.can_scroll_forward,
+                "list must report the end as reached (step {step_dp} dp)"
+            );
+            let last = result.visible_items.last().expect("visible items at end");
+            assert_eq!(
+                last.index,
+                items - 1,
+                "last item must be reachable (step {step_dp} dp)"
+            );
+            let last_bottom = last.offset + last.main_axis_size;
+            assert!(
+                (last_bottom - viewport).abs() < 0.01,
+                "last item bottom {last_bottom} must align exactly with the fractional \
+                 viewport end {viewport} (step {step_dp} dp)"
+            );
+            // And the way back must open up again.
+            assert!(
+                result.can_scroll_backward,
+                "end position must allow scrolling back"
+            );
+        });
+    }
+
+    #[test]
+    fn fractional_density_drag_reaches_exact_end() {
+        // Slow finger drag: ~15 dp consumed per measured frame.
+        assert_end_reachable_with_step(15.0);
+    }
+
+    #[test]
+    fn fractional_density_fling_reaches_exact_end() {
+        // Fling-scale deltas: ~128 dp per frame (8000 dp/s at 16ms frames).
+        assert_end_reachable_with_step(128.0);
+    }
 }
