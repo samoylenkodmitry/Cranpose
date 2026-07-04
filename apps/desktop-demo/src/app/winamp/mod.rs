@@ -1326,6 +1326,7 @@ fn PressableSprite(
                                             is_pressed.set(false);
                                         }
                                         PointerEventKind::Scroll
+                                        | PointerEventKind::Zoom
                                         | PointerEventKind::Enter
                                         | PointerEventKind::Exit => {}
                                     }
@@ -1506,6 +1507,7 @@ fn WindowDragHandle(drag_target: WinampDragTarget, area: SpriteRect, scale: f32)
                                             drag_offset.set(None);
                                         }
                                         PointerEventKind::Scroll
+                                        | PointerEventKind::Zoom
                                         | PointerEventKind::Enter
                                         | PointerEventKind::Exit => {}
                                     }

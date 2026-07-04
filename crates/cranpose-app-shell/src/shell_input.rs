@@ -236,6 +236,50 @@ where
         self.pointer_released_at_time(None)
     }
 
+    /// Releases the pointer at the position carried by the platform's release
+    /// sample (Android `ACTION_UP`, web `pointerup`/`touchend`).
+    ///
+    /// The cursor is moved to `(x, y)` WITHOUT dispatching a Move event, then
+    /// the Up event is dispatched at that position. Platforms whose release
+    /// events carry their own coordinates must use this instead of
+    /// `set_cursor* + pointer_released*`: lift-off samples routinely roll back
+    /// a few dp against the travel direction as the finger peels off, and
+    /// feeding that jitter into gesture velocity trackers as a final Move
+    /// sample can flip the sign of the computed fling velocity (flings that
+    /// suddenly go the opposite way). Jetpack Compose likewise never feeds the
+    /// up sample into velocity tracking.
+    pub fn pointer_released_at_position(&mut self, x: f32, y: f32) -> bool {
+        self.pointer_released_at_position_time(x, y, None)
+    }
+
+    /// Like [`pointer_released_at_position`](Self::pointer_released_at_position),
+    /// but carries the platform input timestamp (milliseconds) of the release
+    /// sample.
+    pub fn pointer_released_at_position_time(
+        &mut self,
+        x: f32,
+        y: f32,
+        time_ms: Option<i64>,
+    ) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        let result = app_context.enter(|| {
+            run_in_mutable_snapshot(|| {
+                self.cursor = (x, y);
+                self.pointer_released_inner(time_ms)
+            })
+            .unwrap_or(false)
+        });
+        if result {
+            self.mark_dirty();
+        }
+        log::trace!(
+            target: "cranpose::input",
+            "pointer_released_at_position ({x:.2},{y:.2}) time_ms={time_ms:?} -> {result}"
+        );
+        result
+    }
+
     /// Like [`pointer_released`](Self::pointer_released), but carries the
     /// platform input timestamp (milliseconds) of the release sample.
     pub fn pointer_released_at_time(&mut self, time_ms: Option<i64>) -> bool {
@@ -281,6 +325,146 @@ where
         } else {
             false
         }
+    }
+
+    /// Dispatches an event for a secondary pointer (`pointer_id != 0`).
+    ///
+    /// Multi-touch gestures act on the element the first finger grabbed, so
+    /// secondary pointers are routed to the hit path captured by the primary
+    /// pointer's Down. They carry no hover/click semantics and are ignored
+    /// when no primary gesture is in progress.
+    ///
+    /// Returns `true` when the event was dispatched to at least one target.
+    pub fn secondary_pointer_pressed(
+        &mut self,
+        pointer_id: u64,
+        x: f32,
+        y: f32,
+        time_ms: Option<i64>,
+    ) -> bool {
+        self.dispatch_secondary_pointer(PointerEventKind::Down, pointer_id, x, y, time_ms)
+    }
+
+    /// Move counterpart of [`secondary_pointer_pressed`](Self::secondary_pointer_pressed).
+    pub fn secondary_pointer_moved(
+        &mut self,
+        pointer_id: u64,
+        x: f32,
+        y: f32,
+        time_ms: Option<i64>,
+    ) -> bool {
+        self.dispatch_secondary_pointer(PointerEventKind::Move, pointer_id, x, y, time_ms)
+    }
+
+    /// Release counterpart of [`secondary_pointer_pressed`](Self::secondary_pointer_pressed).
+    pub fn secondary_pointer_released(
+        &mut self,
+        pointer_id: u64,
+        x: f32,
+        y: f32,
+        time_ms: Option<i64>,
+    ) -> bool {
+        self.dispatch_secondary_pointer(PointerEventKind::Up, pointer_id, x, y, time_ms)
+    }
+
+    fn dispatch_secondary_pointer(
+        &mut self,
+        kind: PointerEventKind,
+        pointer_id: u64,
+        x: f32,
+        y: f32,
+        time_ms: Option<i64>,
+    ) -> bool {
+        if pointer_id == 0 {
+            log::warn!(
+                target: "cranpose::input",
+                "secondary pointer dispatch called with the primary pointer id"
+            );
+            return false;
+        }
+
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        let result = app_context.enter(|| {
+            run_in_mutable_snapshot(|| {
+                if !self.hit_path_tracker.has_path(PointerId::PRIMARY) {
+                    return false;
+                }
+                let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
+                if targets.is_empty() {
+                    return false;
+                }
+                let pos = Point { x, y };
+                let event = PointerEvent::new(kind, pos, pos)
+                    .with_buttons(self.buttons_pressed)
+                    .with_time_ms(time_ms)
+                    .with_id(pointer_id);
+                self.dispatch_targets(targets, event, false);
+                true
+            })
+            .unwrap_or(false)
+        });
+        if result {
+            self.mark_dirty();
+        }
+        log::trace!(
+            target: "cranpose::input",
+            "secondary_pointer {kind:?} id={pointer_id} ({x:.2},{y:.2}) time_ms={time_ms:?} -> {result}"
+        );
+        result
+    }
+
+    /// Dispatches a discrete zoom step (desktop ctrl+wheel, browser pinch)
+    /// to the pointer handlers under the cursor.
+    ///
+    /// `zoom_factor` is multiplicative: `> 1.0` zooms in, `< 1.0` zooms out.
+    /// Returns `true` if a handler consumed the event.
+    pub fn pointer_zoomed(&mut self, zoom_factor: f32) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        let result = app_context.enter(|| {
+            run_in_mutable_snapshot(|| self.pointer_zoomed_inner(zoom_factor)).unwrap_or(false)
+        });
+        if result {
+            self.mark_dirty();
+        }
+        log::trace!(
+            target: "cranpose::input",
+            "pointer_zoomed factor={zoom_factor:.4} -> {result}"
+        );
+        result
+    }
+
+    fn pointer_zoomed_inner(&mut self, zoom_factor: f32) -> bool {
+        if !zoom_factor.is_finite() || zoom_factor <= 0.0 || zoom_factor == 1.0 {
+            return false;
+        }
+
+        let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
+        if hits.is_empty() {
+            return false;
+        }
+
+        let pos = Point {
+            x: self.cursor.0,
+            y: self.cursor.1,
+        };
+        let event = PointerEvent::new(PointerEventKind::Zoom, pos, pos)
+            .with_buttons(self.buttons_pressed)
+            .with_zoom_delta(zoom_factor);
+
+        let capture_paths = hits
+            .iter()
+            .map(|hit| hit.capture_path())
+            .collect::<Vec<_>>();
+        let targets = crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
+            .into_iter()
+            .filter_map(|node_id| self.renderer.scene().find_target(node_id))
+            .collect::<Vec<_>>();
+
+        self.dispatch_targets(targets, event.clone(), true);
+
+        event.is_consumed()
     }
 
     /// Dispatches a mouse wheel / trackpad scroll event to hovered pointer handlers.

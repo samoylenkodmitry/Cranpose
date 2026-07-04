@@ -504,6 +504,25 @@ pub trait DrawScope {
         color_filter: Option<ColorFilter>,
         blend_mode: BlendMode,
     );
+    /// Fills a parsed SVG path in scope coordinates (path units are dp).
+    ///
+    /// The fill is rasterized on the CPU into a supersampled, anti-aliased
+    /// bitmap covering the path bounds and drawn as an image primitive, so
+    /// it works on every render backend. Parse the path once with
+    /// [`crate::VectorPath::parse`] and redraw it per frame. Solid brushes
+    /// are honored exactly; gradient brushes currently fall back to their
+    /// first stop color.
+    fn draw_vector_path(&mut self, path: &crate::VectorPath, brush: Brush);
+    /// Parses SVG path data (the `d` attribute syntax: `M/m L/l H/h V/v
+    /// C/c S/s Q/q T/t A/a Z/z`) and fills it. Invalid path data draws
+    /// nothing. Prefer [`crate::VectorPath::parse`] +
+    /// [`draw_vector_path`](Self::draw_vector_path) to avoid re-parsing
+    /// and to surface parse errors.
+    fn draw_svg_path(&mut self, d: &str, brush: Brush) {
+        if let Ok(path) = crate::VectorPath::parse(d) {
+            self.draw_vector_path(&path, brush);
+        }
+    }
     fn into_primitives(self) -> Vec<DrawPrimitive>;
 }
 
@@ -739,6 +758,80 @@ impl DrawScope for DrawScopeDefault {
         );
     }
 
+    fn draw_vector_path(&mut self, path: &crate::VectorPath, brush: Brush) {
+        /// Rasterization supersampling factor relative to scope units.
+        /// Combined with the rasterizer's own sub-scanline anti-aliasing
+        /// and linear image sampling, this keeps icon edges crisp on
+        /// high-density screens.
+        const SUPERSAMPLE: f32 = 2.0;
+        /// Safety cap for the rasterized mask dimensions.
+        const MAX_MASK_PIXELS: f32 = 4096.0;
+
+        if path.is_empty() {
+            return;
+        }
+        let bounds = path.bounds();
+        if bounds.width <= 0.0 || bounds.height <= 0.0 {
+            return;
+        }
+
+        let color = match &brush {
+            Brush::Solid(color) => *color,
+            Brush::LinearGradient { colors, .. }
+            | Brush::RadialGradient { colors, .. }
+            | Brush::SweepGradient { colors, .. } => match colors.first() {
+                Some(color) => *color,
+                None => return,
+            },
+        };
+        if color.3 <= 0.0 {
+            return;
+        }
+
+        // Rasterize a padded, integer-aligned bounding box so anti-aliased
+        // edges are never clipped by the mask border.
+        let origin = Point::new(bounds.x.floor() - 1.0, bounds.y.floor() - 1.0);
+        let rect_width = (bounds.x + bounds.width).ceil() - origin.x + 1.0;
+        let rect_height = (bounds.y + bounds.height).ceil() - origin.y + 1.0;
+        let mask_width = (rect_width * SUPERSAMPLE)
+            .ceil()
+            .clamp(1.0, MAX_MASK_PIXELS) as usize;
+        let mask_height = (rect_height * SUPERSAMPLE)
+            .ceil()
+            .clamp(1.0, MAX_MASK_PIXELS) as usize;
+
+        let mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE);
+
+        let red = (color.0.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let green = (color.1.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let blue = (color.2.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let alpha = color.3.clamp(0.0, 1.0);
+
+        let mut pixels = Vec::with_capacity(mask.len() * 4);
+        for coverage in mask {
+            pixels.extend_from_slice(&[red, green, blue, (alpha * coverage as f32 + 0.5) as u8]);
+        }
+
+        let Ok(image) = ImageBitmap::from_rgba8(mask_width as u32, mask_height as u32, pixels)
+        else {
+            return;
+        };
+
+        self.primitives.push(DrawPrimitive::Image {
+            rect: Rect {
+                x: origin.x,
+                y: origin.y,
+                width: rect_width,
+                height: rect_height,
+            },
+            image,
+            alpha: 1.0,
+            color_filter: None,
+            sampling: ImageSampling::Linear,
+            src_rect: None,
+        });
+    }
+
     fn into_primitives(self) -> Vec<DrawPrimitive> {
         self.primitives
     }
@@ -763,6 +856,65 @@ mod tests {
             DrawPrimitive::Blend { primitive, .. } => unwrap_image(primitive),
             other => panic!("expected image primitive, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn draw_svg_path_emits_supersampled_image_over_path_bounds() {
+        let mut scope = DrawScopeDefault::new(Size::new(32.0, 32.0));
+        scope.draw_svg_path("M 4 4 H 20 V 20 H 4 Z", Brush::solid(Color::RED));
+
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        let DrawPrimitive::Image { rect, image, .. } = &primitives[0] else {
+            panic!("expected image primitive, got {:?}", primitives[0]);
+        };
+
+        // Padded, integer-aligned bounds: (3,3) to (21,21).
+        assert_eq!((rect.x, rect.y), (3.0, 3.0));
+        assert_eq!((rect.width, rect.height), (18.0, 18.0));
+        // Rasterized at 2x supersampling.
+        assert_eq!((image.width(), image.height()), (36, 36));
+
+        // Probe the pixel at path point (12, 12): mask position
+        // ((12 - 3) * 2, (12 - 3) * 2) = (18, 18) — fully covered red.
+        let pixels = image.pixels();
+        let index = (18 * 36 + 18) * 4;
+        assert_eq!(
+            &pixels[index..index + 4],
+            &[255, 0, 0, 255],
+            "path interior must be opaque brush color"
+        );
+        // A corner outside the square must be transparent.
+        assert_eq!(pixels[3], 0, "outside the path must stay transparent");
+    }
+
+    #[test]
+    fn draw_svg_path_ignores_invalid_data() {
+        let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0));
+        scope.draw_svg_path("definitely not a path", Brush::solid(Color::WHITE));
+        assert!(scope.into_primitives().is_empty());
+    }
+
+    #[test]
+    fn draw_vector_path_applies_brush_alpha() {
+        let path = crate::VectorPath::parse("M 0 0 H 8 V 8 H 0 Z").expect("valid path");
+        let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0));
+        scope.draw_vector_path(&path, Brush::solid(Color::rgba(0.0, 0.0, 1.0, 0.5)));
+
+        let primitives = scope.into_primitives();
+        let DrawPrimitive::Image { image, .. } = &primitives[0] else {
+            panic!("expected image primitive");
+        };
+        let pixels = image.pixels();
+        // Center of the mask: interior pixel with half-alpha blue.
+        let width = image.width() as usize;
+        let index = ((image.height() as usize / 2) * width + width / 2) * 4;
+        assert_eq!(&pixels[index..index + 3], &[0, 0, 255]);
+        let alpha = pixels[index + 3];
+        assert!(
+            (alpha as i32 - 128).abs() <= 2,
+            "interior alpha must honor the brush alpha, got {alpha}"
+        );
     }
 
     #[test]

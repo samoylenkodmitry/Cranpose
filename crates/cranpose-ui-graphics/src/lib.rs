@@ -18,6 +18,7 @@ mod render_hash;
 mod shadow;
 mod typography;
 mod unit;
+mod vector_path;
 
 pub use alpha_mask::*;
 pub use brush::*;
@@ -30,6 +31,7 @@ pub use render_hash::*;
 pub use shadow::*;
 pub use typography::*;
 pub use unit::*;
+pub use vector_path::*;
 
 pub mod prelude {
     pub use crate::brush::Brush;
@@ -37,4 +39,5 @@ pub mod prelude {
     pub use crate::geometry::{CornerRadii, EdgeInsets, Point, Rect, RoundedCornerShape, Size};
     pub use crate::image::{ColorFilter, ImageBitmap, ImageBitmapError, ImageSampling};
     pub use crate::unit::{Dp, Sp};
+    pub use crate::vector_path::{PathFillRule, SvgPathError, VectorPath};
 }

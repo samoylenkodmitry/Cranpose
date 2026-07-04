@@ -62,6 +62,11 @@ enum PendingInput {
     /// Translated key event (physical keyboard or soft-keyboard fallback
     /// input), routed to the focused text field via `AppShell::on_key_event`.
     Key(KeyEvent),
+    /// Additional finger of a multi-touch gesture (pinch/zoom). The first
+    /// field is the shell pointer id (never 0, which is the primary finger).
+    SecondaryPointerDown(u64, f32, f32, Option<i64>),
+    SecondaryPointerUp(u64, f32, f32, Option<i64>),
+    SecondaryPointerMove(u64, f32, f32, Option<i64>),
 }
 
 /// Converts an Android event time (nanoseconds, `java.lang.System.nanoTime()`
@@ -89,17 +94,33 @@ fn push_pending_input_from_android_key_event(
     true
 }
 
+/// Maps an Android pointer id to the shell's pointer id space: the finger
+/// that started the gesture (`ACTION_DOWN`) is the shell's primary pointer
+/// `0`; every other finger gets a stable non-zero id.
+fn shell_pointer_id(android_pointer_id: i32, primary_pointer_id: i32) -> u64 {
+    if android_pointer_id == primary_pointer_id {
+        0
+    } else {
+        android_pointer_id as u64 + 1
+    }
+}
+
 /// Translates one Android input event into pending framework inputs.
 ///
+/// The finger that started the gesture (`ACTION_DOWN`) is tracked in
+/// `primary_pointer_id` and forwarded as the shell's primary pointer; its
 /// Move events unpack the batched *historical* samples first (oldest to
 /// newest, each with its own timestamp) and then the current sample, so the
 /// velocity tracker sees every real touch sample instead of only the last
-/// position of each batch. Returns `true` when the event was consumed.
+/// position of each batch. Additional fingers (`ACTION_POINTER_DOWN`) are
+/// forwarded as secondary pointers with their ids so multi-touch gestures
+/// (pinch/zoom) see them. Returns `true` when the event was consumed.
 fn push_pending_inputs_from_android_event(
     event: &android_activity::input::InputEvent<'_>,
     android_platform: &AndroidPlatform,
     key_translator: &mut AndroidKeyTranslator,
     pending_inputs: &mut Vec<PendingInput>,
+    primary_pointer_id: &mut Option<i32>,
 ) -> bool {
     let motion_event = match event {
         android_activity::input::InputEvent::MotionEvent(motion_event) => motion_event,
@@ -113,43 +134,120 @@ fn push_pending_inputs_from_android_event(
         _ => return false,
     };
 
-    let pointer = motion_event.pointer_at_index(0);
-    let logical = android_platform.pointer_position(pointer.x() as f64, pointer.y() as f64);
     let time_ms = Some(android_event_time_ms(motion_event.event_time()));
+    let logical_of = |x: f32, y: f32| {
+        let logical = android_platform.pointer_position(x as f64, y as f64);
+        (logical.x as f32, logical.y as f32)
+    };
+
     match motion_event.action() {
-        android_activity::input::MotionAction::Down
-        | android_activity::input::MotionAction::PointerDown => {
-            pending_inputs.push(PendingInput::PointerDown(
-                logical.x as f32,
-                logical.y as f32,
+        android_activity::input::MotionAction::Down => {
+            let pointer = motion_event.pointer_at_index(0);
+            *primary_pointer_id = Some(pointer.pointer_id());
+            let (x, y) = logical_of(pointer.x(), pointer.y());
+            pending_inputs.push(PendingInput::PointerDown(x, y, time_ms));
+            true
+        }
+        android_activity::input::MotionAction::PointerDown => {
+            let pointer = motion_event.pointer_at_index(motion_event.pointer_index());
+            let Some(primary) = *primary_pointer_id else {
+                return true;
+            };
+            let (x, y) = logical_of(pointer.x(), pointer.y());
+            pending_inputs.push(PendingInput::SecondaryPointerDown(
+                shell_pointer_id(pointer.pointer_id(), primary),
+                x,
+                y,
                 time_ms,
             ));
             true
         }
-        android_activity::input::MotionAction::Up
-        | android_activity::input::MotionAction::PointerUp => {
-            pending_inputs.push(PendingInput::PointerUp(
-                logical.x as f32,
-                logical.y as f32,
-                time_ms,
-            ));
+        android_activity::input::MotionAction::Up => {
+            let pointer = motion_event.pointer_at_index(motion_event.pointer_index());
+            let (x, y) = logical_of(pointer.x(), pointer.y());
+            match *primary_pointer_id {
+                Some(primary) if pointer.pointer_id() != primary => {
+                    // The gesture ends with a finger that is not the one that
+                    // started it (the primary lifted earlier without ending
+                    // the stream). Close the secondary, then the gesture.
+                    pending_inputs.push(PendingInput::SecondaryPointerUp(
+                        shell_pointer_id(pointer.pointer_id(), primary),
+                        x,
+                        y,
+                        time_ms,
+                    ));
+                }
+                _ => {}
+            }
+            pending_inputs.push(PendingInput::PointerUp(x, y, time_ms));
+            *primary_pointer_id = None;
+            true
+        }
+        android_activity::input::MotionAction::PointerUp => {
+            let pointer = motion_event.pointer_at_index(motion_event.pointer_index());
+            let Some(primary) = *primary_pointer_id else {
+                return true;
+            };
+            let (x, y) = logical_of(pointer.x(), pointer.y());
+            if pointer.pointer_id() == primary {
+                // The first finger lifted while others are still down. The
+                // shell's gesture is anchored to the primary pointer, so end
+                // the whole gesture: close the remaining secondaries, then
+                // release the primary. New touches start a fresh gesture.
+                for other in motion_event.pointers() {
+                    if other.pointer_id() == primary {
+                        continue;
+                    }
+                    let (ox, oy) = logical_of(other.x(), other.y());
+                    pending_inputs.push(PendingInput::SecondaryPointerUp(
+                        shell_pointer_id(other.pointer_id(), primary),
+                        ox,
+                        oy,
+                        time_ms,
+                    ));
+                }
+                pending_inputs.push(PendingInput::PointerUp(x, y, time_ms));
+                *primary_pointer_id = None;
+            } else {
+                pending_inputs.push(PendingInput::SecondaryPointerUp(
+                    shell_pointer_id(pointer.pointer_id(), primary),
+                    x,
+                    y,
+                    time_ms,
+                ));
+            }
             true
         }
         android_activity::input::MotionAction::Move => {
-            for historical in pointer.history() {
-                let historical_logical =
-                    android_platform.pointer_position(historical.x() as f64, historical.y() as f64);
-                pending_inputs.push(PendingInput::PointerMove(
-                    historical_logical.x as f32,
-                    historical_logical.y as f32,
-                    Some(android_event_time_ms(historical.event_time())),
-                ));
+            let primary = *primary_pointer_id;
+            for pointer in motion_event.pointers() {
+                let is_primary = primary == Some(pointer.pointer_id());
+                if is_primary {
+                    for historical in pointer.history() {
+                        let (hx, hy) = logical_of(historical.x(), historical.y());
+                        pending_inputs.push(PendingInput::PointerMove(
+                            hx,
+                            hy,
+                            Some(android_event_time_ms(historical.event_time())),
+                        ));
+                    }
+                }
+                let (x, y) = logical_of(pointer.x(), pointer.y());
+                match (is_primary, primary) {
+                    (true, _) => {
+                        pending_inputs.push(PendingInput::PointerMove(x, y, time_ms));
+                    }
+                    (false, Some(primary)) => {
+                        pending_inputs.push(PendingInput::SecondaryPointerMove(
+                            shell_pointer_id(pointer.pointer_id(), primary),
+                            x,
+                            y,
+                            time_ms,
+                        ));
+                    }
+                    (false, None) => {}
+                }
             }
-            pending_inputs.push(PendingInput::PointerMove(
-                logical.x as f32,
-                logical.y as f32,
-                time_ms,
-            ));
             true
         }
         _ => false,
@@ -161,6 +259,7 @@ fn drain_android_input_events(
     android_platform: &AndroidPlatform,
     key_translator: &mut AndroidKeyTranslator,
     pending_inputs: &mut Vec<PendingInput>,
+    primary_pointer_id: &mut Option<i32>,
 ) {
     let Ok(mut iter) = app.input_events_iter() else {
         return;
@@ -173,6 +272,7 @@ fn drain_android_input_events(
                 android_platform,
                 key_translator,
                 pending_inputs,
+                primary_pointer_id,
             ) {
                 android_activity::InputStatus::Handled
             } else {
@@ -914,6 +1014,9 @@ pub fn run(
 
     // Queue for input events (processed outside poll_events to prevent ANR)
     let mut pending_inputs: Vec<PendingInput> = Vec::new();
+    // Android pointer id of the finger that started the current gesture
+    // (the shell's primary pointer). None while no gesture is in progress.
+    let mut primary_pointer_id: Option<i32> = None;
 
     // Key-event translation (KeyCharacterMap lookups, dead-key state)
     let mut key_translator = AndroidKeyTranslator::new(app.clone());
@@ -1187,6 +1290,7 @@ pub fn run(
                             &android_platform,
                             &mut key_translator,
                             &mut pending_inputs,
+                            &mut primary_pointer_id,
                         );
                     }
                     _ => {}
@@ -1347,14 +1451,26 @@ pub fn run(
                             shell.pointer_pressed_at_time(time_ms);
                         }
                         PendingInput::PointerUp(x, y, time_ms) => {
-                            shell.set_cursor_at_time(x, y, time_ms);
-                            shell.pointer_released_at_time(time_ms);
+                            // ACTION_UP coordinates carry lift-off roll-back
+                            // jitter; they must NOT become a velocity sample
+                            // (a synthesized Move here can flip the fling
+                            // direction), so release without a Move dispatch.
+                            shell.pointer_released_at_position_time(x, y, time_ms);
                         }
                         PendingInput::PointerMove(x, y, time_ms) => {
                             shell.set_cursor_at_time(x, y, time_ms);
                         }
                         PendingInput::Key(event) => {
                             shell.on_key_event(&event);
+                        }
+                        PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
+                            shell.secondary_pointer_pressed(id, x, y, time_ms);
+                        }
+                        PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
+                            shell.secondary_pointer_released(id, x, y, time_ms);
+                        }
+                        PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
+                            shell.secondary_pointer_moved(id, x, y, time_ms);
                         }
                     }
                 }
