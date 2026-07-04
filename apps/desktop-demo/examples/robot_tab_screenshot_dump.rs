@@ -148,9 +148,11 @@ fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String
 }
 
 fn shot_dir() -> PathBuf {
+    // Default to a temp directory so the example runs unconfigured (CI robot
+    // shards); set ROBOT_SHOT_DIR to keep the screenshots somewhere useful.
     std::env::var_os(SHOT_DIR_ENV)
         .map(PathBuf::from)
-        .unwrap_or_else(|| panic!("{SHOT_DIR_ENV} must be set to a writable directory"))
+        .unwrap_or_else(|| std::env::temp_dir().join("cranpose-robot-shots"))
 }
 
 fn headless() -> bool {
