@@ -13,6 +13,7 @@ description = "Animation system for Cranpose"
 
 [dependencies]
 cranpose-core = { workspace = true, features = ["internal"] }
+cranpose-ui-graphics = { workspace = true }
 
 [features]
 default = []

@@ -1819,6 +1819,146 @@ impl ModifierNodeElement for OffsetElement {
 }
 
 // ============================================================================
+// Fractional Offset Modifier Node
+// ============================================================================
+
+/// Node that offsets its content by a fraction of its own measured size.
+///
+/// There is no direct Jetpack Compose modifier equivalent; Compose's slide
+/// transitions receive the measured size through a lambda instead. This node
+/// backs `slide_in_vertically` / `slide_out_vertically` in
+/// `AnimatedVisibility`, where the offset is expressed as a fraction of the
+/// content height.
+#[derive(Debug)]
+pub struct FractionalOffsetNode {
+    x_fraction: f32,
+    y_fraction: f32,
+    state: NodeState,
+}
+
+impl FractionalOffsetNode {
+    pub fn new(x_fraction: f32, y_fraction: f32) -> Self {
+        Self {
+            x_fraction,
+            y_fraction,
+            state: NodeState::new(),
+        }
+    }
+
+    pub fn fractions(&self) -> Point {
+        Point {
+            x: self.x_fraction,
+            y: self.y_fraction,
+        }
+    }
+}
+
+impl DelegatableNode for FractionalOffsetNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for FractionalOffsetNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        context.invalidate(cranpose_foundation::InvalidationKind::Layout);
+    }
+
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+impl LayoutModifierNode for FractionalOffsetNode {
+    fn measure(
+        &self,
+        _context: &mut dyn ModifierNodeContext,
+        measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
+        // Offset doesn't affect measurement, just placement. The placement
+        // offset is resolved against the measured content size.
+        let placeable = measurable.measure(constraints);
+
+        cranpose_ui_layout::LayoutModifierMeasureResult::new(
+            Size {
+                width: placeable.width(),
+                height: placeable.height(),
+            },
+            self.x_fraction * placeable.width(),
+            self.y_fraction * placeable.height(),
+        )
+    }
+
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        measurable.min_intrinsic_width(height)
+    }
+
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        measurable.max_intrinsic_width(height)
+    }
+
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        measurable.min_intrinsic_height(width)
+    }
+
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        measurable.max_intrinsic_height(width)
+    }
+}
+
+/// Element that creates and updates fractional offset nodes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FractionalOffsetElement {
+    x_fraction: f32,
+    y_fraction: f32,
+}
+
+impl FractionalOffsetElement {
+    pub fn new(x_fraction: f32, y_fraction: f32) -> Self {
+        Self {
+            x_fraction,
+            y_fraction,
+        }
+    }
+}
+
+impl Hash for FractionalOffsetElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        "fractional_offset".hash(state);
+        hash_f32_value(state, self.x_fraction);
+        hash_f32_value(state, self.y_fraction);
+    }
+}
+
+impl ModifierNodeElement for FractionalOffsetElement {
+    type Node = FractionalOffsetNode;
+
+    fn create(&self) -> Self::Node {
+        FractionalOffsetNode::new(self.x_fraction, self.y_fraction)
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        if node.x_fraction != self.x_fraction || node.y_fraction != self.y_fraction {
+            node.x_fraction = self.x_fraction;
+            node.y_fraction = self.y_fraction;
+        }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
+
+    fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
+        Some(InvalidationKind::Layout)
+    }
+}
+
+// ============================================================================
 // Fill Modifier Node
 // ============================================================================
 

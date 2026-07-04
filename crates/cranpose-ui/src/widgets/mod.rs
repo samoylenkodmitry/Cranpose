@@ -1,11 +1,13 @@
 //! UI Widget components
 
+pub mod animated_visibility;
 pub mod basic_text_field;
 pub mod box_widget;
 pub mod button;
 pub mod canvas;
 pub mod clickable_text;
 pub mod column;
+pub mod crossfade;
 pub mod foreach;
 pub mod image;
 pub mod layout;
@@ -17,12 +19,14 @@ pub mod scopes;
 pub mod spacer;
 pub mod text;
 
+pub use animated_visibility::*;
 pub use basic_text_field::*;
 pub use box_widget::*;
 pub use button::*;
 pub use canvas::*;
 pub use clickable_text::*;
 pub use column::*;
+pub use crossfade::*;
 pub use foreach::*;
 pub use image::*;
 pub use layout::*;

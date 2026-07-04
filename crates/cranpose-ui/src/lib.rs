@@ -56,8 +56,9 @@ pub use focus_dispatch::{
     process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
 };
 pub use interaction::{
-    rememberMutableInteractionSource, Interaction, MutableInteractionSource, PressInteraction,
-    PressInteractionCancel, PressInteractionPress, PressInteractionRelease,
+    collect_is_pressed_as_state, rememberMutableInteractionSource, Interaction,
+    MutableInteractionSource, PressInteraction, PressInteractionCancel, PressInteractionPress,
+    PressInteractionRelease,
 };
 pub use safe_area::local_safe_area_insets;
 // Re-export FocusManager from cranpose-foundation to avoid duplication
@@ -87,19 +88,21 @@ pub use modifier::{
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
-    CornerShapeElement, CornerShapeNode, FillDirection, FillElement, FillNode, OffsetElement,
-    OffsetNode, PaddingElement, PaddingNode, SizeElement, SizeNode,
+    CornerShapeElement, CornerShapeNode, FillDirection, FillElement, FillNode,
+    FractionalOffsetElement, FractionalOffsetNode, OffsetElement, OffsetNode, PaddingElement,
+    PaddingNode, SizeElement, SizeNode,
 };
 pub use pointer_dispatch::{
     clear_pointer_repasses, has_pending_pointer_repasses, process_pointer_repasses,
     schedule_pointer_repass,
 };
 pub use primitives::{
-    remember_svg, BasicText, BasicTextField, BasicTextFieldOptions, BasicTextWithOptions,
-    BitmapPainter, Box, BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope,
-    BoxWithConstraintsScopeImpl, Button, ButtonSpec, Canvas, Column, ColumnSpec, ContentScale,
-    ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec, Spacer, SubcomposeLayout,
-    SvgPainter, SvgPainterError, Text, TextWithOptions, DEFAULT_ALPHA,
+    fade_in, fade_out, remember_svg, slide_in_vertically, slide_out_vertically, AnimatedVisibility,
+    BasicText, BasicTextField, BasicTextFieldOptions, BasicTextWithOptions, BitmapPainter, Box,
+    BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl,
+    Button, ButtonSpec, Canvas, Column, ColumnSpec, ContentScale, Crossfade, EnterTransition,
+    ExitTransition, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec, Spacer,
+    SubcomposeLayout, SvgPainter, SvgPainterError, Text, TextWithOptions, DEFAULT_ALPHA,
 };
 // Lazy list exports - single source from cranpose-foundation
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
@@ -246,6 +249,14 @@ pub use cranpose_core::MutableState as SnapshotState;
 #[cfg(test)]
 #[path = "tests/anchor_async_tests.rs"]
 mod anchor_async_tests;
+
+#[cfg(test)]
+#[path = "tests/animated_visibility_tests.rs"]
+mod animated_visibility_tests;
+
+#[cfg(test)]
+#[path = "tests/crossfade_tests.rs"]
+mod crossfade_tests;
 
 #[cfg(test)]
 #[path = "tests/async_runtime_full_layout_test.rs"]
