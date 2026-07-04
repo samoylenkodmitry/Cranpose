@@ -44,6 +44,7 @@ fn settle(composition: &mut TestComposition, frame_time: &mut u64) {
 }
 
 #[composable]
+#[allow(non_snake_case)]
 fn VisibilityHost(visible: MutableState<bool>, alive: Rc<Cell<bool>>) {
     let is_visible = visible.value();
     let alive_for_content = Rc::clone(&alive);

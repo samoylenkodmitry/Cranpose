@@ -37,6 +37,7 @@ fn settle(composition: &mut TestComposition, frame_time: &mut u64) {
 }
 
 #[composable]
+#[allow(non_snake_case)]
 fn CrossfadeHost(target: MutableState<u32>, alive: Rc<RefCell<Vec<u32>>>) {
     let current = target.value();
     let alive_for_content = Rc::clone(&alive);
