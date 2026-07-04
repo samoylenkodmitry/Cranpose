@@ -755,3 +755,172 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
         *cell.borrow_mut() = None;
     });
 }
+
+/// Coordinator device repro: a LazyColumn whose content includes one item
+/// substantially TALLER than the viewport hard-stops partway even though a
+/// large portion of the tall item is still below the fold.
+///
+/// Drives the REAL widget path: LazyColumn composition, measure_layout per
+/// frame, scroll deltas dispatched between frames like the drag gesture does.
+fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -> (usize, f32) {
+    let mut composition = run_test_composition(move || {
+        let list_state = remember_lazy_list_state();
+        LAST_LAZY_STATE.with(|cell| {
+            *cell.borrow_mut() = Some(list_state);
+        });
+
+        LazyColumn(
+            Modifier::empty(),
+            list_state,
+            LazyColumnSpec::default(),
+            move |scope| {
+                scope.items(
+                    item_heights.len(),
+                    None::<fn(usize) -> u64>,
+                    None::<fn(usize) -> u64>,
+                    move |index| {
+                        Spacer(Size {
+                            width: 100.0,
+                            height: item_heights[index],
+                        });
+                    },
+                );
+            },
+        );
+    });
+
+    let root = composition.root().expect("lazy column root");
+    let viewport = ViewportSize {
+        width: 320.0,
+        height: viewport_height,
+    };
+    measure_tree(&mut composition, root, viewport);
+
+    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+
+    // Repeated 280dp finger drags, one measured frame per drag, until the list
+    // refuses to move any further.
+    let mut stuck_drags = 0;
+    for _ in 0..200 {
+        list_state.dispatch_scroll_delta(-280.0);
+        let before_index = list_state.first_visible_item_index_non_reactive();
+        let before_offset = list_state.first_visible_item_scroll_offset_non_reactive();
+        composition.process_invalid_scopes().expect("recompose");
+        measure_tree(&mut composition, root, viewport);
+        let moved = list_state.first_visible_item_index_non_reactive() != before_index
+            || (list_state.first_visible_item_scroll_offset_non_reactive() - before_offset).abs()
+                > 0.001;
+        if moved {
+            stuck_drags = 0;
+        } else {
+            stuck_drags += 1;
+            // Mirror the device repro: seven consecutive drags moving nothing.
+            if stuck_drags >= 7 {
+                break;
+            }
+        }
+    }
+
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    (
+        list_state.first_visible_item_index_non_reactive(),
+        list_state.first_visible_item_scroll_offset_non_reactive(),
+    )
+}
+
+#[test]
+fn lazy_column_single_item_taller_than_viewport_reaches_bottom() {
+    // viewport 600, single item 3000 => max scroll offset must be 2400.
+    let (final_index, final_offset) = drag_lazy_column_to_end(&[3000.0], 600.0);
+    assert_eq!(final_index, 0);
+    assert!(
+        (final_offset - 2400.0).abs() < 0.5,
+        "single 3000-tall item in a 600 viewport must scroll to offset 2400 \
+         (bottom aligned with viewport end), but the list stopped at {final_offset}"
+    );
+}
+
+#[test]
+fn lazy_column_trailing_tall_item_reaches_bottom() {
+    // 200 + 3000 content in a 600 viewport => final position is 2400 inside item 1.
+    let (final_index, final_offset) = drag_lazy_column_to_end(&[200.0, 3000.0], 600.0);
+    assert_eq!(final_index, 1);
+    assert!(
+        (final_offset - 2400.0).abs() < 0.5,
+        "trailing 3000-tall item must be scrollable until its bottom aligns with \
+         the viewport end (offset 2400 inside item 1), but the list stopped at {final_offset}"
+    );
+}
+
+/// Regression (device repro): a LazyColumn measured with UNBOUNDED height —
+/// exactly what a `vertical_scroll` parent provides — must report its TRUE
+/// content height and give up internal scrolling, instead of truncating the
+/// layout to an `average_item_size * 20` pseudo viewport. With one item much
+/// taller than the rest, the old estimate (a) cut the reported height below
+/// the real content and (b) flipped can_scroll_forward to false partway once
+/// the tall item raised the average, hard-stopping drags with content still
+/// below the fold.
+#[test]
+fn unbounded_lazy_column_with_tall_item_reports_true_content_height() {
+    let heights: &'static [f32] = &[
+        50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 800.0, 50.0, 50.0, 50.0, 50.0,
+    ];
+    let mut composition = run_test_composition(move || {
+        let list_state = remember_lazy_list_state();
+        LAST_LAZY_STATE.with(|cell| {
+            *cell.borrow_mut() = Some(list_state);
+        });
+        LazyColumn(
+            Modifier::empty(),
+            list_state,
+            LazyColumnSpec::default(),
+            move |scope| {
+                scope.items(
+                    heights.len(),
+                    None::<fn(usize) -> u64>,
+                    None::<fn(usize) -> u64>,
+                    move |index| {
+                        Spacer(Size {
+                            width: 100.0,
+                            height: heights[index],
+                        });
+                    },
+                );
+            },
+        );
+    });
+    let root = composition.root().expect("root");
+    let handle = composition.runtime_handle();
+    let measurements = {
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let result = measure_layout(
+            &mut applier,
+            root,
+            ViewportSize {
+                width: 320.0,
+                height: f32::INFINITY,
+            },
+        )
+        .expect("layout measurement");
+        applier.clear_runtime_handle();
+        result
+    };
+    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let true_content: f32 = heights.iter().sum();
+
+    assert!(
+        (measurements.root_size().height - true_content).abs() < 0.01,
+        "unbounded LazyColumn must report its true content height {true_content}, got {}",
+        measurements.root_size().height
+    );
+    assert!(
+        !list_state.can_scroll_forward_non_reactive(),
+        "a fully realized unbounded LazyColumn must not claim internal scrollability"
+    );
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+}

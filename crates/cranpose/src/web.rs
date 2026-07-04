@@ -311,8 +311,9 @@ pub async fn run(
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.set_cursor(logical.x, logical.y);
-                app_mut.pointer_released();
+                // Release positions must not become velocity samples (see
+                // AppShell::pointer_released_at_position).
+                app_mut.pointer_released_at_position(logical.x, logical.y);
                 request_frame();
             }
         }) as Box<dyn FnMut(_)>);
@@ -345,6 +346,22 @@ pub async fn run(
                     delta_y *= page_height;
                 }
                 _ => {}
+            }
+
+            // Ctrl+wheel is the browser zoom gesture; trackpad pinches also
+            // arrive as ctrl+wheel events. Translate the vertical delta into
+            // a multiplicative zoom step about the cursor.
+            if event.ctrl_key() {
+                // Browsers report wheel-down/pinch-in as positive delta_y.
+                let zoom_factor = 1.2f32.powf(-delta_y / 40.0);
+                if let Ok(mut app_mut) = app.try_borrow_mut() {
+                    app_mut.set_cursor(logical.x, logical.y);
+                    if app_mut.pointer_zoomed(zoom_factor) {
+                        event.prevent_default();
+                    }
+                    request_frame();
+                }
+                return;
             }
 
             if event.alt_key() {
@@ -414,8 +431,9 @@ pub async fn run(
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.set_cursor(logical.x, logical.y);
-                app_mut.pointer_released();
+                // Touch lift-off positions must not become velocity samples
+                // (see AppShell::pointer_released_at_position).
+                app_mut.pointer_released_at_position(logical.x, logical.y);
                 request_frame();
             }
         }) as Box<dyn FnMut(_)>);

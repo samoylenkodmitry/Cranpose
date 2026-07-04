@@ -19,6 +19,9 @@ pub enum PointerEventKind {
     Up,
     Cancel,
     Scroll,
+    /// Discrete zoom step (desktop ctrl+wheel, browser pinch-trackpad).
+    /// The multiplicative factor is carried in [`PointerEvent::zoom_delta`].
+    Zoom,
     Enter,
     Exit,
 }
@@ -85,6 +88,18 @@ pub struct PointerEvent {
     /// button/move events.
     pub scroll_delta: Point,
     pub buttons: PointerButtons,
+    /// Platform timestamp of the input sample in milliseconds, when available.
+    ///
+    /// The time base is platform specific (e.g. Android's uptime clock); only
+    /// differences between events of the same gesture are meaningful. Gesture
+    /// velocity trackers must prefer this over the delivery time because
+    /// platforms like Android deliver input batched/frame-aligned: several
+    /// samples arrive back-to-back and delivery-time stamping makes computed
+    /// velocities wildly wrong.
+    pub time_ms: Option<i64>,
+    /// Multiplicative zoom factor for [`PointerEventKind::Zoom`] events
+    /// (`> 1.0` zooms in, `< 1.0` zooms out). `1.0` for all other events.
+    pub zoom_delta: f32,
     /// Tracks whether this event has been consumed by a handler.
     /// Shared via Rc<Cell> so consumption can be tracked across copies.
     consumed: Rc<Cell<bool>>,
@@ -102,19 +117,39 @@ impl PointerEvent {
                 }
                 PointerEventKind::Up => PointerPhase::End,
                 PointerEventKind::Cancel => PointerPhase::Cancel,
-                PointerEventKind::Scroll => PointerPhase::Move,
+                PointerEventKind::Scroll | PointerEventKind::Zoom => PointerPhase::Move,
             },
             position,
             global_position,
             scroll_delta: Point { x: 0.0, y: 0.0 },
             buttons: PointerButtons::NONE,
+            time_ms: None,
+            zoom_delta: 1.0,
             consumed: Rc::new(Cell::new(false)),
         }
+    }
+
+    /// Set the pointer id for this event (`0` is the primary pointer).
+    pub fn with_id(mut self, id: PointerId) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// Set the multiplicative zoom factor for a [`PointerEventKind::Zoom`] event.
+    pub fn with_zoom_delta(mut self, zoom_delta: f32) -> Self {
+        self.zoom_delta = zoom_delta;
+        self
     }
 
     /// Set the scroll delta for this event.
     pub fn with_scroll_delta(mut self, scroll_delta: Point) -> Self {
         self.scroll_delta = scroll_delta;
+        self
+    }
+
+    /// Set the platform timestamp (milliseconds) for this event.
+    pub fn with_time_ms(mut self, time_ms: Option<i64>) -> Self {
+        self.time_ms = time_ms;
         self
     }
 
@@ -150,6 +185,8 @@ impl PointerEvent {
             global_position: self.global_position,
             scroll_delta: self.scroll_delta,
             buttons: self.buttons,
+            time_ms: self.time_ms,
+            zoom_delta: self.zoom_delta,
             consumed: self.consumed.clone(),
         }
     }

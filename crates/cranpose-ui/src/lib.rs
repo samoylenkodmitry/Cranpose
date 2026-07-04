@@ -30,13 +30,18 @@ pub mod text_field_focus;
 mod text_field_handler;
 mod text_field_input;
 mod text_field_modifier_node;
+pub mod text_input_session;
 pub mod text_layout_result;
 mod text_modifier_node;
 pub mod widgets;
 mod word_boundaries;
+pub mod zoom;
 
 // Export for cursor blink animation - AppShell checks this to continuously redraw
 pub use text_field_focus::has_focused_field;
+// Platform soft-keyboard bridge - platform runtimes install a handler so text
+// field focus changes can show/hide the on-screen keyboard
+pub use text_input_session::PlatformTextInputHandler;
 // Export cursor blink timing for WaitUntil scheduling
 pub use cursor_animation::{
     is_cursor_visible, next_cursor_blink_time, reset_cursor_blink, start_cursor_blink,
@@ -115,6 +120,7 @@ pub use render_state::{
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use scroll::{ScrollElement, ScrollNode, ScrollState};
+pub use zoom::ZoomState;
 // Test utilities for fling velocity verification (only with test-helpers feature)
 #[cfg(feature = "test-helpers")]
 pub use modifier::{last_fling_velocity, reset_last_fling_velocity};

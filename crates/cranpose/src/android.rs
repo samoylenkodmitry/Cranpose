@@ -6,13 +6,14 @@
 use crate::{
     android_host_window,
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
+    android_keyboard::{is_system_key, AndroidKeyTranslator, AndroidSoftKeyboard},
     android_overlay_window,
     android_surface::{create_android_wgpu_surface, AndroidSurfaceError},
     launcher::{AndroidOverlayWindowOptions, AppSettings},
     wgpu_surface::surface_present_required,
     wgpu_surface::{current_surface_texture, SurfaceFrame},
 };
-use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver};
+use cranpose_app_shell::{default_root_key, AppShell, KeyEvent, PlatformFrameDriver};
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::{Point, Size};
@@ -48,44 +49,217 @@ struct GpuResources {
 
 /// Pending input event to be processed outside poll_events callback.
 /// This prevents blocking the main thread during input event acknowledgment.
+///
+/// Pointer variants carry the MotionEvent's own timestamp in milliseconds
+/// (uptime clock). Android delivers touch input batched/frame-aligned, so
+/// several samples are processed back-to-back in one loop iteration;
+/// stamping them with the delivery time instead of the event time makes
+/// gesture velocity computations wildly wrong (dt collapses to ~0).
 enum PendingInput {
-    PointerDown(f32, f32),
-    PointerUp(f32, f32),
-    PointerMove(f32, f32),
+    PointerDown(f32, f32, Option<i64>),
+    PointerUp(f32, f32, Option<i64>),
+    PointerMove(f32, f32, Option<i64>),
+    /// Translated key event (physical keyboard or soft-keyboard fallback
+    /// input), routed to the focused text field via `AppShell::on_key_event`.
+    Key(KeyEvent),
+    /// Additional finger of a multi-touch gesture (pinch/zoom). The first
+    /// field is the shell pointer id (never 0, which is the primary finger).
+    SecondaryPointerDown(u64, f32, f32, Option<i64>),
+    SecondaryPointerUp(u64, f32, f32, Option<i64>),
+    SecondaryPointerMove(u64, f32, f32, Option<i64>),
 }
 
-fn pending_input_from_android_event(
+/// Converts an Android event time (nanoseconds, `java.lang.System.nanoTime()`
+/// base) into milliseconds for gesture velocity tracking.
+fn android_event_time_ms(event_time_ns: i64) -> i64 {
+    event_time_ns / 1_000_000
+}
+
+/// Translates one Android `KeyEvent` into a pending framework key event.
+///
+/// System keys (back, volume, media, ...) are reported as unhandled so the
+/// platform keeps processing them. Returns `true` when the event was consumed.
+fn push_pending_input_from_android_key_event(
+    key_event: &android_activity::input::KeyEvent<'_>,
+    key_translator: &mut AndroidKeyTranslator,
+    pending_inputs: &mut Vec<PendingInput>,
+) -> bool {
+    if is_system_key(key_event.key_code()) {
+        return false;
+    }
+    let Some(event) = key_translator.translate(key_event) else {
+        return false;
+    };
+    pending_inputs.push(PendingInput::Key(event));
+    true
+}
+
+/// Maps an Android pointer id to the shell's pointer id space: the finger
+/// that started the gesture (`ACTION_DOWN`) is the shell's primary pointer
+/// `0`; every other finger gets a stable non-zero id.
+fn shell_pointer_id(android_pointer_id: i32, primary_pointer_id: i32) -> u64 {
+    if android_pointer_id == primary_pointer_id {
+        0
+    } else {
+        android_pointer_id as u64 + 1
+    }
+}
+
+/// Translates one Android input event into pending framework inputs.
+///
+/// The finger that started the gesture (`ACTION_DOWN`) is tracked in
+/// `primary_pointer_id` and forwarded as the shell's primary pointer; its
+/// Move events unpack the batched *historical* samples first (oldest to
+/// newest, each with its own timestamp) and then the current sample, so the
+/// velocity tracker sees every real touch sample instead of only the last
+/// position of each batch. Additional fingers (`ACTION_POINTER_DOWN`) are
+/// forwarded as secondary pointers with their ids so multi-touch gestures
+/// (pinch/zoom) see them. Returns `true` when the event was consumed.
+fn push_pending_inputs_from_android_event(
     event: &android_activity::input::InputEvent<'_>,
     android_platform: &AndroidPlatform,
-) -> Option<PendingInput> {
-    let android_activity::input::InputEvent::MotionEvent(motion_event) = event else {
-        return None;
+    key_translator: &mut AndroidKeyTranslator,
+    pending_inputs: &mut Vec<PendingInput>,
+    primary_pointer_id: &mut Option<i32>,
+) -> bool {
+    let motion_event = match event {
+        android_activity::input::InputEvent::MotionEvent(motion_event) => motion_event,
+        android_activity::input::InputEvent::KeyEvent(key_event) => {
+            return push_pending_input_from_android_key_event(
+                key_event,
+                key_translator,
+                pending_inputs,
+            );
+        }
+        _ => return false,
     };
 
-    let pointer = motion_event.pointer_at_index(0);
-    let logical = android_platform.pointer_position(pointer.x() as f64, pointer.y() as f64);
+    let time_ms = Some(android_event_time_ms(motion_event.event_time()));
+    let logical_of = |x: f32, y: f32| {
+        let logical = android_platform.pointer_position(x as f64, y as f64);
+        (logical.x as f32, logical.y as f32)
+    };
+
     match motion_event.action() {
-        android_activity::input::MotionAction::Down
-        | android_activity::input::MotionAction::PointerDown => Some(PendingInput::PointerDown(
-            logical.x as f32,
-            logical.y as f32,
-        )),
-        android_activity::input::MotionAction::Up
-        | android_activity::input::MotionAction::PointerUp => {
-            Some(PendingInput::PointerUp(logical.x as f32, logical.y as f32))
+        android_activity::input::MotionAction::Down => {
+            let pointer = motion_event.pointer_at_index(0);
+            *primary_pointer_id = Some(pointer.pointer_id());
+            let (x, y) = logical_of(pointer.x(), pointer.y());
+            pending_inputs.push(PendingInput::PointerDown(x, y, time_ms));
+            true
         }
-        android_activity::input::MotionAction::Move => Some(PendingInput::PointerMove(
-            logical.x as f32,
-            logical.y as f32,
-        )),
-        _ => None,
+        android_activity::input::MotionAction::PointerDown => {
+            let pointer = motion_event.pointer_at_index(motion_event.pointer_index());
+            let Some(primary) = *primary_pointer_id else {
+                return true;
+            };
+            let (x, y) = logical_of(pointer.x(), pointer.y());
+            pending_inputs.push(PendingInput::SecondaryPointerDown(
+                shell_pointer_id(pointer.pointer_id(), primary),
+                x,
+                y,
+                time_ms,
+            ));
+            true
+        }
+        android_activity::input::MotionAction::Up => {
+            let pointer = motion_event.pointer_at_index(motion_event.pointer_index());
+            let (x, y) = logical_of(pointer.x(), pointer.y());
+            match *primary_pointer_id {
+                Some(primary) if pointer.pointer_id() != primary => {
+                    // The gesture ends with a finger that is not the one that
+                    // started it (the primary lifted earlier without ending
+                    // the stream). Close the secondary, then the gesture.
+                    pending_inputs.push(PendingInput::SecondaryPointerUp(
+                        shell_pointer_id(pointer.pointer_id(), primary),
+                        x,
+                        y,
+                        time_ms,
+                    ));
+                }
+                _ => {}
+            }
+            pending_inputs.push(PendingInput::PointerUp(x, y, time_ms));
+            *primary_pointer_id = None;
+            true
+        }
+        android_activity::input::MotionAction::PointerUp => {
+            let pointer = motion_event.pointer_at_index(motion_event.pointer_index());
+            let Some(primary) = *primary_pointer_id else {
+                return true;
+            };
+            let (x, y) = logical_of(pointer.x(), pointer.y());
+            if pointer.pointer_id() == primary {
+                // The first finger lifted while others are still down. The
+                // shell's gesture is anchored to the primary pointer, so end
+                // the whole gesture: close the remaining secondaries, then
+                // release the primary. New touches start a fresh gesture.
+                for other in motion_event.pointers() {
+                    if other.pointer_id() == primary {
+                        continue;
+                    }
+                    let (ox, oy) = logical_of(other.x(), other.y());
+                    pending_inputs.push(PendingInput::SecondaryPointerUp(
+                        shell_pointer_id(other.pointer_id(), primary),
+                        ox,
+                        oy,
+                        time_ms,
+                    ));
+                }
+                pending_inputs.push(PendingInput::PointerUp(x, y, time_ms));
+                *primary_pointer_id = None;
+            } else {
+                pending_inputs.push(PendingInput::SecondaryPointerUp(
+                    shell_pointer_id(pointer.pointer_id(), primary),
+                    x,
+                    y,
+                    time_ms,
+                ));
+            }
+            true
+        }
+        android_activity::input::MotionAction::Move => {
+            let primary = *primary_pointer_id;
+            for pointer in motion_event.pointers() {
+                let is_primary = primary == Some(pointer.pointer_id());
+                if is_primary {
+                    for historical in pointer.history() {
+                        let (hx, hy) = logical_of(historical.x(), historical.y());
+                        pending_inputs.push(PendingInput::PointerMove(
+                            hx,
+                            hy,
+                            Some(android_event_time_ms(historical.event_time())),
+                        ));
+                    }
+                }
+                let (x, y) = logical_of(pointer.x(), pointer.y());
+                match (is_primary, primary) {
+                    (true, _) => {
+                        pending_inputs.push(PendingInput::PointerMove(x, y, time_ms));
+                    }
+                    (false, Some(primary)) => {
+                        pending_inputs.push(PendingInput::SecondaryPointerMove(
+                            shell_pointer_id(pointer.pointer_id(), primary),
+                            x,
+                            y,
+                            time_ms,
+                        ));
+                    }
+                    (false, None) => {}
+                }
+            }
+            true
+        }
+        _ => false,
     }
 }
 
 fn drain_android_input_events(
     app: &android_activity::AndroidApp,
     android_platform: &AndroidPlatform,
+    key_translator: &mut AndroidKeyTranslator,
     pending_inputs: &mut Vec<PendingInput>,
+    primary_pointer_id: &mut Option<i32>,
 ) {
     let Ok(mut iter) = app.input_events_iter() else {
         return;
@@ -93,8 +267,13 @@ fn drain_android_input_events(
 
     for _ in 0..MAX_ANDROID_INPUT_EVENTS_PER_POLL {
         let event_available = iter.next(|event| {
-            if let Some(input) = pending_input_from_android_event(event, android_platform) {
-                pending_inputs.push(input);
+            if push_pending_inputs_from_android_event(
+                event,
+                android_platform,
+                key_translator,
+                pending_inputs,
+                primary_pointer_id,
+            ) {
                 android_activity::InputStatus::Handled
             } else {
                 android_activity::InputStatus::Unhandled
@@ -662,6 +841,43 @@ fn confirm_android_host_window_request(
     }
 }
 
+/// Whether the activity is currently in multi-window mode (split-screen,
+/// freeform, or desktop windowing such as Samsung DeX).
+///
+/// A fullscreen phone activity's window is laid out edge-to-edge across the
+/// whole display (`PhoneWindow.generateLayout` sets `FLAG_LAYOUT_IN_SCREEN |
+/// FLAG_LAYOUT_INSET_DECOR` and clears `fitInsetsTypes` for every non-floating
+/// window), so its `ANativeWindow` buffer already covers the areas behind the
+/// status and navigation bars. Calling `Window.setLayout` with a fixed pixel
+/// size on that window replaces `MATCH_PARENT`; devices that honor it shrink
+/// and center the surface, leaving uncovered strips of raw display that show
+/// as black bands at the top and bottom. Host-window sizing is therefore only
+/// meaningful in multi-window modes, where the window is genuinely resizable.
+///
+/// Returns `false` when the query fails (including API < 24, where
+/// `isInMultiWindowMode` does not exist and multi-window is unavailable).
+fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> bool {
+    use jni::{jni_sig, jni_str};
+
+    with_android_activity_env(app, |env, activity| {
+        env.call_method(
+            &activity,
+            jni_str!("isInMultiWindowMode"),
+            jni_sig!("()Z"),
+            &[],
+        )
+        .and_then(|value| value.z())
+        .map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to query Android multi-window mode: {error}")
+        })
+    })
+    .unwrap_or_else(|error| {
+        log::warn!("{error}");
+        false
+    })
+}
+
 fn set_android_window_layout_px(
     app: &android_activity::AndroidApp,
     width_px: i32,
@@ -798,6 +1014,14 @@ pub fn run(
 
     // Queue for input events (processed outside poll_events to prevent ANR)
     let mut pending_inputs: Vec<PendingInput> = Vec::new();
+    // Android pointer id of the finger that started the current gesture
+    // (the shell's primary pointer). None while no gesture is in progress.
+    let mut primary_pointer_id: Option<i32> = None;
+
+    // Key-event translation (KeyCharacterMap lookups, dead-key state)
+    let mut key_translator = AndroidKeyTranslator::new(app.clone());
+    // The soft-keyboard handler is installed once the app shell exists
+    let mut soft_keyboard_installed = false;
 
     // Main event loop
     loop {
@@ -905,31 +1129,46 @@ pub fn run(
                                             density
                                         );
 
+                                        // Only forward the launcher's initial size to the host
+                                        // window in multi-window/freeform modes. A fullscreen
+                                        // activity's window already spans the entire display
+                                        // (edge-to-edge, including behind the system bars);
+                                        // shrinking it with `Window.setLayout` pulls the native
+                                        // surface away from the display edges and the uncovered
+                                        // strips render as black bands.
                                         if let Some(requested) = initial_host_window_size.take() {
-                                            match dispatch_android_surface_size_request(
-                                                &app,
-                                                requested,
-                                                Point::ZERO,
-                                                density,
-                                                None,
-                                            ) {
-                                                Ok(()) => {
-                                                    pending_host_window_confirmation =
-                                                        Some(PendingHostWindowSizeRequest {
-                                                            state: None,
-                                                            requested,
-                                                            requested_at: Instant::now(),
-                                                        });
-                                                    log::info!(
-                                                        "Requested initial Android host-window size {:.1}x{:.1} dp",
-                                                        requested.width,
-                                                        requested.height
-                                                    );
-                                                }
-                                                Err(error) => {
-                                                    log::warn!(
-                                                        "Initial Android host-window size request failed: {error}"
-                                                    );
+                                            if !android_activity_in_multi_window_mode(&app) {
+                                                log::info!(
+                                                    "Ignoring initial window size {:.1}x{:.1} dp: fullscreen Android activities keep the display-sized edge-to-edge surface; size requests apply in multi-window/freeform modes",
+                                                    requested.width,
+                                                    requested.height
+                                                );
+                                            } else {
+                                                match dispatch_android_surface_size_request(
+                                                    &app,
+                                                    requested,
+                                                    Point::ZERO,
+                                                    density,
+                                                    None,
+                                                ) {
+                                                    Ok(()) => {
+                                                        pending_host_window_confirmation =
+                                                            Some(PendingHostWindowSizeRequest {
+                                                                state: None,
+                                                                requested,
+                                                                requested_at: Instant::now(),
+                                                            });
+                                                        log::info!(
+                                                            "Requested initial Android host-window size {:.1}x{:.1} dp",
+                                                            requested.width,
+                                                            requested.height
+                                                        );
+                                                    }
+                                                    Err(error) => {
+                                                        log::warn!(
+                                                            "Initial Android host-window size request failed: {error}"
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
@@ -1049,7 +1288,9 @@ pub fn run(
                         drain_android_input_events(
                             &app,
                             &android_platform,
+                            &mut key_translator,
                             &mut pending_inputs,
+                            &mut primary_pointer_id,
                         );
                     }
                     _ => {}
@@ -1159,26 +1400,44 @@ pub fn run(
                 }
                 android_overlay_window::AndroidOverlayWindowEvent::Pointer { action, x, y } => {
                     let logical = android_platform.pointer_position(x as f64, y as f64);
+                    // Overlay pointer events cross a JNI bridge that does not
+                    // forward MotionEvent timestamps; velocity tracking falls
+                    // back to delivery-time stamping for them.
                     match action {
                         android_overlay_window::AndroidOverlayPointerAction::Down => {
                             pending_inputs.push(PendingInput::PointerDown(
                                 logical.x as f32,
                                 logical.y as f32,
+                                None,
                             ));
                         }
                         android_overlay_window::AndroidOverlayPointerAction::Up
                         | android_overlay_window::AndroidOverlayPointerAction::Cancel => {
-                            pending_inputs
-                                .push(PendingInput::PointerUp(logical.x as f32, logical.y as f32));
+                            pending_inputs.push(PendingInput::PointerUp(
+                                logical.x as f32,
+                                logical.y as f32,
+                                None,
+                            ));
                         }
                         android_overlay_window::AndroidOverlayPointerAction::Move => {
                             pending_inputs.push(PendingInput::PointerMove(
                                 logical.x as f32,
                                 logical.y as f32,
+                                None,
                             ));
                         }
                     }
                 }
+            }
+        }
+
+        // Install the soft-keyboard focus hook as soon as the shell exists so
+        // the first tap on a text field already opens the keyboard.
+        if !soft_keyboard_installed {
+            if let Some(shell) = &mut app_shell {
+                shell.set_platform_text_input(Rc::new(AndroidSoftKeyboard::new(app.clone())));
+                soft_keyboard_installed = true;
+                log::info!("Android soft keyboard focus hook installed");
             }
         }
 
@@ -1187,16 +1446,31 @@ pub fn run(
             if let Some(shell) = &mut app_shell {
                 for input in pending_inputs.drain(..) {
                     match input {
-                        PendingInput::PointerDown(x, y) => {
-                            shell.set_cursor(x, y);
-                            shell.pointer_pressed();
+                        PendingInput::PointerDown(x, y, time_ms) => {
+                            shell.set_cursor_at_time(x, y, time_ms);
+                            shell.pointer_pressed_at_time(time_ms);
                         }
-                        PendingInput::PointerUp(x, y) => {
-                            shell.set_cursor(x, y);
-                            shell.pointer_released();
+                        PendingInput::PointerUp(x, y, time_ms) => {
+                            // ACTION_UP coordinates carry lift-off roll-back
+                            // jitter; they must NOT become a velocity sample
+                            // (a synthesized Move here can flip the fling
+                            // direction), so release without a Move dispatch.
+                            shell.pointer_released_at_position_time(x, y, time_ms);
                         }
-                        PendingInput::PointerMove(x, y) => {
-                            shell.set_cursor(x, y);
+                        PendingInput::PointerMove(x, y, time_ms) => {
+                            shell.set_cursor_at_time(x, y, time_ms);
+                        }
+                        PendingInput::Key(event) => {
+                            shell.on_key_event(&event);
+                        }
+                        PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
+                            shell.secondary_pointer_pressed(id, x, y, time_ms);
+                        }
+                        PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
+                            shell.secondary_pointer_released(id, x, y, time_ms);
+                        }
+                        PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
+                            shell.secondary_pointer_moved(id, x, y, time_ms);
                         }
                     }
                 }

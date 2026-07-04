@@ -261,6 +261,11 @@ impl PressInteractionNode {
         active_press: Rc<RefCell<Option<PressInteractionPress>>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
+            // Press interactions track the primary pointer only.
+            if event.id != 0 {
+                return;
+            }
+
             if event.is_consumed() {
                 if let Some(press) = active_press.borrow_mut().take() {
                     interaction_source.cancel(press);
@@ -287,6 +292,7 @@ impl PressInteractionNode {
                 }
                 PointerEventKind::Move
                 | PointerEventKind::Scroll
+                | PointerEventKind::Zoom
                 | PointerEventKind::Enter
                 | PointerEventKind::Exit => {}
             }

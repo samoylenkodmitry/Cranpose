@@ -319,10 +319,16 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             } => {
                 let logical = self.platform.pointer_position(position);
                 if let Some(shell) = self.shell.as_mut() {
-                    shell.set_cursor(logical.x, logical.y);
                     let changed = match state {
-                        ElementState::Pressed => shell.pointer_pressed(),
-                        ElementState::Released => shell.pointer_released(),
+                        ElementState::Pressed => {
+                            shell.set_cursor(logical.x, logical.y);
+                            shell.pointer_pressed()
+                        }
+                        // Touch lift-off positions must not become velocity
+                        // samples (see AppShell::pointer_released_at_position).
+                        ElementState::Released => {
+                            shell.pointer_released_at_position(logical.x, logical.y)
+                        }
                     };
                     if changed {
                         window.request_redraw();

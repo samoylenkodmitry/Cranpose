@@ -43,6 +43,8 @@ use std::collections::HashSet;
 
 // Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+// Re-export the platform soft-keyboard hook so runtimes only depend on the shell
+pub use cranpose_ui::PlatformTextInputHandler;
 
 #[cfg(any(test, feature = "test-support"))]
 use cranpose_core::{

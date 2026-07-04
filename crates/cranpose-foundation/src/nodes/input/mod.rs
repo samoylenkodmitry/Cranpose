@@ -10,7 +10,7 @@ pub use types::{
 pub mod prelude {
     pub use super::gestures::{
         DragGesture, DragGestureEvent, FlingGesture, FlingGestureEvent, ScrollGesture,
-        ScrollGestureEvent, TapGesture, TapGestureEvent,
+        ScrollGestureEvent, TapGesture, TapGestureEvent, TransformGesture, TransformGestureEvent,
     };
     pub use super::types::{
         PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId, PointerPhase,

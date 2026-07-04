@@ -2319,6 +2319,7 @@ fn pointer_driven_graphics_layer_point_app(position_state: cranpose_core::Mutabl
                                             PointerEventKind::Up
                                             | PointerEventKind::Cancel
                                             | PointerEventKind::Scroll
+                                            | PointerEventKind::Zoom
                                             | PointerEventKind::Enter
                                             | PointerEventKind::Exit => {}
                                         }
@@ -2417,6 +2418,98 @@ fn layout_recovers_after_tab_switching_updates() {
         peak_live_slots <= baseline_live_slots + 64,
         "tabbed progress updates leaked live slots: baseline={baseline_live_slots} peak={peak_live_slots}",
     );
+}
+
+#[derive(Default)]
+struct SoftKeyboardProbe {
+    calls: RefCell<Vec<&'static str>>,
+}
+
+impl cranpose_ui::PlatformTextInputHandler for SoftKeyboardProbe {
+    fn show_keyboard(&self) {
+        self.calls.borrow_mut().push("show");
+    }
+
+    fn hide_keyboard(&self) {
+        self.calls.borrow_mut().push("hide");
+    }
+}
+
+/// Text-field focus transitions must reach the installed platform handler:
+/// this is what opens/closes the Android soft keyboard.
+#[test]
+fn text_field_focus_drives_platform_soft_keyboard() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.update();
+
+    let keyboard = Rc::new(SoftKeyboardProbe::default());
+    shell.set_platform_text_input(keyboard.clone());
+
+    let focus_flag = Rc::new(RefCell::new(false));
+    let handler = Rc::new(TextFieldDispatchProbe::default());
+
+    shell.debug_enter_app_context(|| {
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+    });
+    assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
+
+    shell.debug_enter_app_context(cranpose_ui::text_field_focus::clear_focus);
+    assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
+}
+
+/// When the focused field disappears without an explicit clear_focus (for
+/// example the composition removed it), the next key event's stale-focus
+/// detection must hide the soft keyboard.
+#[test]
+fn key_event_after_field_removal_hides_soft_keyboard() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.update();
+
+    let keyboard = Rc::new(SoftKeyboardProbe::default());
+    shell.set_platform_text_input(keyboard.clone());
+
+    let handler = Rc::new(TextFieldDispatchProbe::default());
+    {
+        let focus_flag = Rc::new(RefCell::new(false));
+        shell.debug_enter_app_context(|| {
+            cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        });
+        // focus_flag drops here: the focus manager's weak reference goes stale.
+    }
+
+    let event = KeyEvent::key_down(KeyCode::A, "a");
+    assert!(!shell.on_key_event(&event));
+    assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
+}
+
+/// Even without further key events, the per-frame stale-focus check must
+/// release the soft keyboard once the focused field leaves the composition.
+#[test]
+fn frame_update_after_field_removal_hides_soft_keyboard() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.update();
+
+    let keyboard = Rc::new(SoftKeyboardProbe::default());
+    shell.set_platform_text_input(keyboard.clone());
+
+    let handler = Rc::new(TextFieldDispatchProbe::default());
+    {
+        let focus_flag = Rc::new(RefCell::new(false));
+        shell.debug_enter_app_context(|| {
+            cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        });
+        // focus_flag drops here: the focus manager's weak reference goes stale.
+    }
+    assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
+
+    shell.update();
+    assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
 }
 
 #[test]
@@ -3097,6 +3190,186 @@ fn consumed_child_drag_does_not_scroll_parent_vertical_scroll() {
         scroll_state.value_non_reactive(),
         0.0,
         "parent vertical_scroll must ignore a drag consumed by a child pointer handler"
+    );
+}
+
+/// Regression test for reversed consecutive flings on Android
+/// (device report: "several flings in one direction — one of them wrongly
+/// goes to the opposite direction").
+///
+/// Root cause: the Android runtime dispatched the ACTION_UP sample as a
+/// trailing Move (`set_cursor_at_time` before `pointer_released_at_time`).
+/// Lift-off positions routinely roll back a few dp against the travel
+/// direction as the finger peels off; fed into the impulse velocity tracker
+/// as a final sample, a >=3dp roll-back flips the sign of the whole computed
+/// gesture velocity, so the fling runs backwards. The fix releases via
+/// `pointer_released_at_position_time`, which never feeds the up sample into
+/// velocity tracking (matching Jetpack Compose).
+///
+/// This test replays three identical Android-timed flings (8ms input samples,
+/// ~104ms gesture, ~300ms between gestures, previous fling still animating
+/// when the next finger lands) with a realistic 4dp lift-off roll-back, and
+/// asserts every computed velocity has the same sign and every fling keeps
+/// scrolling in the gesture direction.
+#[test]
+fn android_style_consecutive_flings_keep_direction() {
+    let _guard = test_guard();
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_tall_fling_scroll_probe,
+    );
+    shell.set_buffer_size(320, 640);
+    shell.set_viewport(320.0, 640.0);
+    let mut frame_ns = 16_000_000u64;
+    shell.update_at_frame_time_nanos(frame_ns);
+
+    let scroll_state = APP_SHELL_WHEEL_SCROLL_STATE
+        .with(|slot| slot.borrow().as_ref().cloned())
+        .expect("fling probe should expose its scroll state");
+    assert!(
+        scroll_state.max_value() > 10_000.0,
+        "probe content must leave plenty of scroll room"
+    );
+
+    // Android uptime-based MotionEvent timestamps (arbitrary base).
+    let mut event_ms = 5_000_000i64;
+    let mut velocities = Vec::new();
+
+    for gesture in 0..3 {
+        // ACTION_DOWN: the runtime updates the cursor, then presses.
+        shell.set_cursor_at_time(160.0, 600.0, Some(event_ms));
+        shell.pointer_pressed_at_time(Some(event_ms));
+
+        // Finger flicks UP at ~1000 dp/s: 12 samples, 8dp every 8ms.
+        let mut y = 600.0f32;
+        for _ in 0..12 {
+            event_ms += 8;
+            y -= 8.0;
+            shell.set_cursor_at_time(160.0, y, Some(event_ms));
+        }
+
+        // ACTION_UP one input period later, with a 4dp lift-off roll-back
+        // (the finger peels off and the reported centroid slips downward).
+        event_ms += 8;
+        shell.pointer_released_at_position_time(160.0, y + 4.0, Some(event_ms));
+
+        velocities.push(shell.debug_enter_app_context(cranpose_ui::debug_last_fling_velocity));
+
+        let offset_at_release = scroll_state.value_non_reactive();
+
+        // ~300ms pass before the next finger lands; the fling keeps
+        // animating during that window (its duration is >500ms).
+        for _ in 0..19 {
+            frame_ns += 16_000_000;
+            shell.update_at_frame_time_nanos(frame_ns);
+        }
+        event_ms += 304 - 104;
+
+        let offset_after_fling_window = scroll_state.value_non_reactive();
+        assert!(
+            offset_after_fling_window > offset_at_release + 20.0,
+            "gesture {gesture}: fling must keep scrolling in the finger's travel direction \
+             (offset_at_release={offset_at_release}, after={offset_after_fling_window}, \
+             velocity={})",
+            velocities[gesture],
+        );
+    }
+
+    assert!(
+        velocities.iter().all(|v| *v < 0.0),
+        "all three identical upward flicks must compute the same (negative) velocity sign, \
+         got {velocities:?}"
+    );
+}
+
+/// End-to-end pinch: two Android fingers routed through the shell's primary
+/// and secondary pointer paths must drive `ZoomState` on a zoomable element.
+#[test]
+fn two_finger_pinch_reaches_zoomable_state_through_shell() {
+    let _guard = test_guard();
+    APP_SHELL_ZOOM_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_zoomable_probe,
+    );
+    shell.set_buffer_size(320, 640);
+    shell.set_viewport(320.0, 640.0);
+    shell.update();
+
+    let zoom_state = APP_SHELL_ZOOM_STATE
+        .with(|slot| slot.borrow().as_ref().cloned())
+        .expect("zoomable probe should expose its zoom state");
+    assert_eq!(zoom_state.scale_non_reactive(), 1.0);
+
+    let mut event_ms = 9_000_000i64;
+
+    // First finger lands (primary pointer, id 0).
+    shell.set_cursor_at_time(140.0, 300.0, Some(event_ms));
+    shell.pointer_pressed_at_time(Some(event_ms));
+
+    // Second finger lands 80dp to the right (secondary pointer).
+    event_ms += 16;
+    assert!(
+        shell.secondary_pointer_pressed(2, 220.0, 300.0, Some(event_ms)),
+        "secondary pointer must reach the primary gesture's hit path"
+    );
+
+    // Pinch out: the second finger doubles the spread over a few samples.
+    for step in 1..=5i64 {
+        event_ms += 8;
+        shell.secondary_pointer_moved(2, 220.0 + step as f32 * 16.0, 300.0, Some(event_ms));
+    }
+
+    event_ms += 8;
+    shell.secondary_pointer_released(2, 300.0, 300.0, Some(event_ms));
+    shell.pointer_released_at_position_time(140.0, 300.0, Some(event_ms));
+    shell.update();
+
+    let scale = zoom_state.scale_non_reactive();
+    assert!(
+        (scale - 2.0).abs() < 0.05,
+        "doubling the finger spread must double the zoom scale, got {scale}"
+    );
+}
+
+/// Ctrl+wheel zoom steps must reach a zoomable element under the cursor.
+#[test]
+fn pointer_zoomed_reaches_zoomable_state() {
+    let _guard = test_guard();
+    APP_SHELL_ZOOM_STATE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_zoomable_probe,
+    );
+    shell.set_buffer_size(320, 640);
+    shell.set_viewport(320.0, 640.0);
+    shell.update();
+
+    let zoom_state = APP_SHELL_ZOOM_STATE
+        .with(|slot| slot.borrow().as_ref().cloned())
+        .expect("zoomable probe should expose its zoom state");
+
+    assert!(shell.set_cursor(160.0, 320.0), "probe should be hoverable");
+    assert!(
+        shell.pointer_zoomed(1.5),
+        "zoom step must be consumed by the zoomable modifier"
+    );
+    shell.update();
+
+    let scale = zoom_state.scale_non_reactive();
+    assert!(
+        (scale - 1.5).abs() < 1e-4,
+        "ctrl+wheel zoom step must multiply the scale, got {scale}"
     );
 }
 
@@ -4986,6 +5259,56 @@ fn app_shell_wheel_scroll_probe() {
     );
 }
 
+thread_local! {
+    static APP_SHELL_ZOOM_STATE: RefCell<Option<cranpose_ui::ZoomState>> =
+        const { RefCell::new(None) };
+}
+
+#[composable]
+fn app_shell_zoomable_probe() {
+    let zoom_state =
+        cranpose_core::remember(cranpose_ui::ZoomState::new).with(|state| state.clone());
+    APP_SHELL_ZOOM_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(zoom_state.clone());
+    });
+
+    Box(
+        Modifier::empty().fill_max_size().zoomable(zoom_state),
+        BoxSpec::default(),
+        || {
+            Text("Zoomable probe", Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+
+#[composable]
+fn app_shell_tall_fling_scroll_probe() {
+    let scroll_state =
+        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(scroll_state.clone());
+    });
+
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll_state, false),
+        ColumnSpec::default(),
+        move || {
+            Text("Fling probe top", Modifier::empty(), TextStyle::default());
+            Spacer(Size {
+                width: 0.0,
+                height: 60_000.0,
+            });
+            Text(
+                "Fling probe bottom",
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+
 #[composable]
 fn app_shell_consumed_child_drag_scroll_probe() {
     let scroll_state =
@@ -5018,6 +5341,7 @@ fn app_shell_consumed_child_drag_scroll_probe() {
                                         PointerEventKind::Up
                                         | PointerEventKind::Cancel
                                         | PointerEventKind::Scroll
+                                        | PointerEventKind::Zoom
                                         | PointerEventKind::Enter
                                         | PointerEventKind::Exit => {}
                                     }
@@ -5146,6 +5470,7 @@ fn app_shell_interactive_counter_test_tab(counter: MutableState<i32>) {
                                                 pointer_position.set(event.position);
                                             }
                                             PointerEventKind::Scroll
+                                            | PointerEventKind::Zoom
                                             | PointerEventKind::Enter
                                             | PointerEventKind::Exit => {}
                                         }
@@ -5505,6 +5830,7 @@ fn app_shell_demo_like_counter_tab() {
                                                             pointer_position.set(event.position);
                                                         }
                                                         PointerEventKind::Scroll
+                                                        | PointerEventKind::Zoom
                                                         | PointerEventKind::Enter
                                                         | PointerEventKind::Exit => {}
                                                     }
@@ -5754,6 +6080,7 @@ fn app_shell_actual_like_counter_tab() {
                                                 });
                                             }
                                             PointerEventKind::Scroll
+                                            | PointerEventKind::Zoom
                                             | PointerEventKind::Enter
                                             | PointerEventKind::Exit => {}
                                         }

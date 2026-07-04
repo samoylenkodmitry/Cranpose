@@ -32,7 +32,11 @@ only from Android surface resize events.
 Behavior by Android windowing mode:
 
 -   Fullscreen activities usually keep the display-sized system bounds and
-    report `AndroidHostWindowSizeStatus::Unsupported`.
+    report `AndroidHostWindowSizeStatus::Unsupported`. The launcher's
+    `with_size` initial size is not even dispatched to a fullscreen activity:
+    the window already spans the whole display edge-to-edge (including behind
+    the system bars), and devices that honor `Window.setLayout` there would
+    shrink the native surface and leave black bands of uncovered display.
 -   Split-screen activities are system-managed and may clamp or ignore app
     requests.
 -   Freeform and desktop-windowing activities can honor `Window.setLayout`, then

@@ -1677,6 +1677,7 @@ fn counter_app() {
                                                 }
                                                 PointerEventKind::Cancel => pointer_down.set(false),
                                                 PointerEventKind::Scroll
+                                                | PointerEventKind::Zoom
                                                 | PointerEventKind::Enter
                                                 | PointerEventKind::Exit => {}
                                             }

@@ -181,6 +181,23 @@ where
         measure_state.average_item_size,
         config.spacing,
     );
+    if viewport.is_infinite() {
+        // Unbounded main axis (e.g. a LazyColumn nested in a vertical_scroll
+        // container): there is no viewport to virtualize against, so realize
+        // every item and report the true content extent. The previous
+        // average-size-derived pseudo viewport (avg * 20) truncated the
+        // reported height below the real content and, once a single tall item
+        // raised the average past the total content, flipped
+        // can_scroll_forward to false partway through — hard-stopping scroll
+        // gestures while content was still below the fold.
+        return measure_unbounded_lazy_list(
+            items_count,
+            state,
+            raw_viewport_size,
+            config,
+            &mut measure_item,
+        );
+    }
     let effective_viewport_size = viewport.effective_size();
     let is_infinite_viewport = viewport.is_infinite();
 
@@ -401,6 +418,81 @@ where
         total_content_size,
         can_scroll_forward,
         can_scroll_backward,
+    }
+}
+
+/// Safety cap for the number of items realized when the viewport is
+/// unbounded. Mirrors `MAX_VISIBLE_ITEMS_SAFETY` in the item measurer.
+const MAX_UNBOUNDED_REALIZED_ITEMS: usize = 10_000;
+
+/// Measures a lazy list whose main-axis viewport is unbounded/infinite.
+///
+/// Without a finite viewport there is nothing to virtualize against: every
+/// item is realized sequentially from the start and the list reports its true
+/// content extent. Scrolling is delegated entirely to the enclosing
+/// scrollable, so the internal scroll position is pinned to the origin and
+/// both scroll capabilities are reported as exhausted (which also stops the
+/// scroll gesture detector from capturing drags that the outer scrollable
+/// needs).
+fn measure_unbounded_lazy_list<F>(
+    items_count: usize,
+    state: &LazyListState,
+    raw_viewport_size: f32,
+    config: &LazyListMeasureConfig,
+    measure_item: &mut F,
+) -> LazyListMeasureResult
+where
+    F: FnMut(usize) -> LazyListMeasuredItem,
+{
+    let realized_count = items_count.min(MAX_UNBOUNDED_REALIZED_ITEMS);
+    if realized_count < items_count {
+        log::warn!(
+            "LazyList: unbounded viewport with {} items; realizing only the first {}. \
+             Wrap the list in a constrained container to restore virtualization.",
+            items_count,
+            realized_count
+        );
+    }
+
+    let mut visible_items = Vec::with_capacity(realized_count);
+    let mut offset = config.before_content_padding;
+    for index in 0..realized_count {
+        let mut item = measure_item(index);
+        item.offset = offset;
+        offset += item.main_axis_size;
+        if index + 1 < items_count {
+            offset += config.spacing;
+        }
+        visible_items.push(item);
+    }
+    let content_extent = offset + config.after_content_padding;
+
+    // The list itself does not scroll in this configuration.
+    state.update_scroll_position(0, 0.0);
+    state.update_layout_info(LazyListLayoutInfo {
+        visible_items_info: visible_items.iter().map(|i| i.to_item_info()).collect(),
+        total_items_count: items_count,
+        raw_viewport_size,
+        is_infinite_viewport: true,
+        viewport_size: content_extent,
+        viewport_start_offset: config.before_content_padding,
+        viewport_end_offset: config.after_content_padding,
+        before_content_padding: config.before_content_padding,
+        after_content_padding: config.after_content_padding,
+        snap_anchor_offset: 0.0,
+        reverse_layout: config.reverse_layout,
+    });
+    state.update_scroll_bounds();
+
+    let can_scroll_forward = realized_count < items_count;
+    LazyListMeasureResult {
+        visible_items,
+        first_visible_item_index: 0,
+        first_visible_item_scroll_offset: 0.0,
+        viewport_size: content_extent,
+        total_content_size: content_extent,
+        can_scroll_forward,
+        can_scroll_backward: false,
     }
 }
 
@@ -991,6 +1083,218 @@ mod tests {
                     result.first_visible_item_scroll_offset
                 );
             }
+        });
+    }
+
+    /// Regression tests for real-device geometry: a phone viewport of 2280
+    /// physical px at density 2.75 is a *fractional* dp viewport (829.0909),
+    /// and item heights that are whole physical px are fractional dp. The
+    /// last item must stay exactly reachable — no truncation of the
+    /// scrollable range and no off-by-one in can_scroll_forward.
+    fn assert_end_reachable_with_step(step_dp: f32) {
+        with_test_runtime(|| {
+            let density = 2.75_f32;
+            let viewport = 2280.0 / density; // 829.0909 dp
+            let items = 40usize;
+            let item_size = 177.0 / density; // 64.3636 dp
+            let config = LazyListMeasureConfig::default();
+            let state = new_lazy_list_state();
+
+            let mut result = measure_lazy_list(items, &state, viewport, 300.0, &config, |i| {
+                create_test_item(i, item_size)
+            });
+
+            let mut frames = 0;
+            while result.can_scroll_forward && frames < 10_000 {
+                state.dispatch_scroll_delta(-step_dp);
+                result = measure_lazy_list(items, &state, viewport, 300.0, &config, |i| {
+                    create_test_item(i, item_size)
+                });
+                frames += 1;
+            }
+
+            assert!(
+                !result.can_scroll_forward,
+                "list must report the end as reached (step {step_dp} dp)"
+            );
+            let last = result.visible_items.last().expect("visible items at end");
+            assert_eq!(
+                last.index,
+                items - 1,
+                "last item must be reachable (step {step_dp} dp)"
+            );
+            let last_bottom = last.offset + last.main_axis_size;
+            assert!(
+                (last_bottom - viewport).abs() < 0.01,
+                "last item bottom {last_bottom} must align exactly with the fractional \
+                 viewport end {viewport} (step {step_dp} dp)"
+            );
+            // And the way back must open up again.
+            assert!(
+                result.can_scroll_backward,
+                "end position must allow scrolling back"
+            );
+        });
+    }
+
+    #[test]
+    fn fractional_density_drag_reaches_exact_end() {
+        // Slow finger drag: ~15 dp consumed per measured frame.
+        assert_end_reachable_with_step(15.0);
+    }
+
+    #[test]
+    fn fractional_density_fling_reaches_exact_end() {
+        // Fling-scale deltas: ~128 dp per frame (8000 dp/s at 16ms frames).
+        assert_end_reachable_with_step(128.0);
+    }
+
+    /// Coordinator repro: ONE item substantially TALLER than the viewport.
+    /// Max scroll must be derived from the measured pixel extent of the item,
+    /// not from item count/index granularity: viewport 600, single item 3000
+    /// => maximum scroll offset 2400, reachable through repeated finger drags.
+    fn drag_to_end_with_tall_items(
+        item_sizes: &[f32],
+        viewport: f32,
+        drag_dp: f32,
+    ) -> (usize, f32, bool) {
+        let items = item_sizes.len();
+        let config = LazyListMeasureConfig::default();
+        let state = new_lazy_list_state();
+
+        let mut result = measure_lazy_list(items, &state, viewport, 300.0, &config, |i| {
+            create_test_item(i, item_sizes[i])
+        });
+
+        let mut frames = 0;
+        while result.can_scroll_forward && frames < 10_000 {
+            state.dispatch_scroll_delta(-drag_dp);
+            result = measure_lazy_list(items, &state, viewport, 300.0, &config, |i| {
+                create_test_item(i, item_sizes[i])
+            });
+            frames += 1;
+        }
+
+        let last = result.visible_items.last().expect("visible items at end");
+        let last_bottom = last.offset + last.main_axis_size;
+        (last.index, last_bottom, !result.can_scroll_forward)
+    }
+
+    #[test]
+    fn single_item_taller_than_viewport_scrolls_to_its_bottom() {
+        with_test_runtime(|| {
+            let viewport = 600.0;
+            let (last_index, last_bottom, reached_end) =
+                drag_to_end_with_tall_items(&[3000.0], viewport, 280.0);
+            assert!(reached_end, "list must eventually report the end");
+            assert_eq!(last_index, 0);
+            assert!(
+                (last_bottom - viewport).abs() < 0.01,
+                "single 3000-tall item in a 600 viewport must scroll a full 2400 so its \
+                 bottom aligns with the viewport end; item bottom ended at {last_bottom}"
+            );
+        });
+    }
+
+    #[test]
+    fn trailing_item_taller_than_viewport_scrolls_to_its_bottom() {
+        with_test_runtime(|| {
+            let viewport = 600.0;
+            let (last_index, last_bottom, reached_end) =
+                drag_to_end_with_tall_items(&[200.0, 3000.0], viewport, 280.0);
+            assert!(reached_end, "list must eventually report the end");
+            assert_eq!(last_index, 1);
+            assert!(
+                (last_bottom - viewport).abs() < 0.01,
+                "trailing 3000-tall item must be scrollable until its bottom aligns with \
+                 the viewport end; item bottom ended at {last_bottom}"
+            );
+        });
+    }
+
+    #[test]
+    fn tall_item_scroll_position_advances_within_the_item() {
+        // Not just the final clamp: every drag must make progress while the
+        // tall item still has content below the fold (hard-stop regression).
+        with_test_runtime(|| {
+            let viewport = 600.0;
+            let config = LazyListMeasureConfig::default();
+            let state = new_lazy_list_state();
+            let sizes = [200.0f32, 3000.0];
+
+            let mut result = measure_lazy_list(2, &state, viewport, 300.0, &config, |i| {
+                create_test_item(i, sizes[i])
+            });
+            let mut consumed_total = 0.0f32;
+            for step in 0..20 {
+                if !result.can_scroll_forward {
+                    break;
+                }
+                let before_index = result.first_visible_item_index;
+                let before_offset = result.first_visible_item_scroll_offset;
+                state.dispatch_scroll_delta(-280.0);
+                result = measure_lazy_list(2, &state, viewport, 300.0, &config, |i| {
+                    create_test_item(i, sizes[i])
+                });
+                let advanced = result.first_visible_item_index > before_index
+                    || result.first_visible_item_scroll_offset > before_offset + 0.001;
+                assert!(
+                    advanced || !result.can_scroll_forward,
+                    "drag step {step} made no progress: stuck at index {} offset {:.2} while \
+                     can_scroll_forward is still true",
+                    result.first_visible_item_index,
+                    result.first_visible_item_scroll_offset
+                );
+                consumed_total += 280.0;
+                if consumed_total > 4000.0 {
+                    break;
+                }
+            }
+            // total content 3200, viewport 600 => max scroll 2600 inside item 1
+            assert!(!result.can_scroll_forward, "end must be reachable");
+            assert_eq!(result.first_visible_item_index, 1);
+            assert!(
+                (result.first_visible_item_scroll_offset - 2400.0).abs() < 0.01,
+                "expected final in-item offset 2400 (item bottom at viewport end), got {:.2}",
+                result.first_visible_item_scroll_offset
+            );
+        });
+    }
+
+    #[test]
+    fn unbounded_viewport_realizes_all_items_and_disables_inner_scroll() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            let config = LazyListMeasureConfig {
+                spacing: 10.0,
+                before_content_padding: 4.0,
+                after_content_padding: 6.0,
+                ..Default::default()
+            };
+            let sizes = [50.0f32, 800.0, 50.0];
+
+            let result =
+                measure_lazy_list(sizes.len(), &state, f32::INFINITY, 320.0, &config, |i| {
+                    create_test_item(i, sizes[i])
+                });
+
+            assert_eq!(
+                result.visible_items.len(),
+                sizes.len(),
+                "an unbounded viewport must realize every item"
+            );
+            // 4 + 50 + 10 + 800 + 10 + 50 + 6 = 930
+            assert!((result.total_content_size - 930.0).abs() < 0.01);
+            assert!((result.viewport_size - 930.0).abs() < 0.01);
+            assert!((result.visible_items[0].offset - 4.0).abs() < 0.01);
+            assert!((result.visible_items[1].offset - 64.0).abs() < 0.01);
+            assert!((result.visible_items[2].offset - 874.0).abs() < 0.01);
+            assert!(!result.can_scroll_forward, "outer container owns scrolling");
+            assert!(!result.can_scroll_backward);
+            assert!(!state.can_scroll_forward_non_reactive());
+            assert_eq!(result.first_visible_item_index, 0);
+            assert_eq!(state.first_visible_item_index_non_reactive(), 0);
+            assert!(state.layout_info().is_infinite_viewport);
         });
     }
 }
