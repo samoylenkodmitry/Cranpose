@@ -463,7 +463,7 @@ fn android_native_input_is_drained_on_input_available_event() {
     assert!(
         source.contains("MainEvent::InputAvailable")
             && source.contains("drain_android_input_events(")
-            && source.contains("pending_input_from_android_event(")
+            && source.contains("push_pending_inputs_from_android_event(")
             && source.contains("android_activity::InputStatus::Handled"),
         "Android NativeActivity input must be drained from MainEvent::InputAvailable so every input event reaches finish_event before the platform ANR timeout"
     );
