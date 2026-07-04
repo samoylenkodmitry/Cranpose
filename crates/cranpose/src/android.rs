@@ -703,6 +703,43 @@ fn confirm_android_host_window_request(
     }
 }
 
+/// Whether the activity is currently in multi-window mode (split-screen,
+/// freeform, or desktop windowing such as Samsung DeX).
+///
+/// A fullscreen phone activity's window is laid out edge-to-edge across the
+/// whole display (`PhoneWindow.generateLayout` sets `FLAG_LAYOUT_IN_SCREEN |
+/// FLAG_LAYOUT_INSET_DECOR` and clears `fitInsetsTypes` for every non-floating
+/// window), so its `ANativeWindow` buffer already covers the areas behind the
+/// status and navigation bars. Calling `Window.setLayout` with a fixed pixel
+/// size on that window replaces `MATCH_PARENT`; devices that honor it shrink
+/// and center the surface, leaving uncovered strips of raw display that show
+/// as black bands at the top and bottom. Host-window sizing is therefore only
+/// meaningful in multi-window modes, where the window is genuinely resizable.
+///
+/// Returns `false` when the query fails (including API < 24, where
+/// `isInMultiWindowMode` does not exist and multi-window is unavailable).
+fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> bool {
+    use jni::{jni_sig, jni_str};
+
+    with_android_activity_env(app, |env, activity| {
+        env.call_method(
+            &activity,
+            jni_str!("isInMultiWindowMode"),
+            jni_sig!("()Z"),
+            &[],
+        )
+        .and_then(|value| value.z())
+        .map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to query Android multi-window mode: {error}")
+        })
+    })
+    .unwrap_or_else(|error| {
+        log::warn!("{error}");
+        false
+    })
+}
+
 fn set_android_window_layout_px(
     app: &android_activity::AndroidApp,
     width_px: i32,
@@ -946,31 +983,46 @@ pub fn run(
                                             density
                                         );
 
+                                        // Only forward the launcher's initial size to the host
+                                        // window in multi-window/freeform modes. A fullscreen
+                                        // activity's window already spans the entire display
+                                        // (edge-to-edge, including behind the system bars);
+                                        // shrinking it with `Window.setLayout` pulls the native
+                                        // surface away from the display edges and the uncovered
+                                        // strips render as black bands.
                                         if let Some(requested) = initial_host_window_size.take() {
-                                            match dispatch_android_surface_size_request(
-                                                &app,
-                                                requested,
-                                                Point::ZERO,
-                                                density,
-                                                None,
-                                            ) {
-                                                Ok(()) => {
-                                                    pending_host_window_confirmation =
-                                                        Some(PendingHostWindowSizeRequest {
-                                                            state: None,
-                                                            requested,
-                                                            requested_at: Instant::now(),
-                                                        });
-                                                    log::info!(
-                                                        "Requested initial Android host-window size {:.1}x{:.1} dp",
-                                                        requested.width,
-                                                        requested.height
-                                                    );
-                                                }
-                                                Err(error) => {
-                                                    log::warn!(
-                                                        "Initial Android host-window size request failed: {error}"
-                                                    );
+                                            if !android_activity_in_multi_window_mode(&app) {
+                                                log::info!(
+                                                    "Ignoring initial window size {:.1}x{:.1} dp: fullscreen Android activities keep the display-sized edge-to-edge surface; size requests apply in multi-window/freeform modes",
+                                                    requested.width,
+                                                    requested.height
+                                                );
+                                            } else {
+                                                match dispatch_android_surface_size_request(
+                                                    &app,
+                                                    requested,
+                                                    Point::ZERO,
+                                                    density,
+                                                    None,
+                                                ) {
+                                                    Ok(()) => {
+                                                        pending_host_window_confirmation =
+                                                            Some(PendingHostWindowSizeRequest {
+                                                                state: None,
+                                                                requested,
+                                                                requested_at: Instant::now(),
+                                                            });
+                                                        log::info!(
+                                                            "Requested initial Android host-window size {:.1}x{:.1} dp",
+                                                            requested.width,
+                                                            requested.height
+                                                        );
+                                                    }
+                                                    Err(error) => {
+                                                        log::warn!(
+                                                            "Initial Android host-window size request failed: {error}"
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }

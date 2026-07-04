@@ -281,10 +281,12 @@ impl AppLauncher {
 
     /// Set the initial window size.
     ///
-    /// Desktop uses this as the initial primary window size. Android sends it
-    /// as a best-effort host-window request after the native surface exists;
-    /// fullscreen and split-screen activities may keep the system-managed
-    /// bounds, while freeform and desktop-windowing activities can honor it.
+    /// Desktop uses this as the initial primary window size. Android applies
+    /// it as a best-effort host-window request only when the activity starts
+    /// in a multi-window mode (freeform / desktop windowing such as DeX);
+    /// fullscreen activities ignore it and keep the display-sized,
+    /// edge-to-edge surface, because shrinking the fullscreen window would
+    /// leave uncovered (black) strips of display around the surface.
     /// Maximized Web canvases still keep platform-controlled bounds.
     ///
     /// # Arguments
