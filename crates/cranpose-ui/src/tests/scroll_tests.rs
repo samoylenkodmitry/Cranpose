@@ -141,6 +141,80 @@ fn vertical_scroll_ignores_move_consumed_by_child_drag() {
 }
 
 #[test]
+fn touch_drag_moves_content_with_the_finger() {
+    // Touch semantics: content must FOLLOW the finger.
+    // Dragging the finger UP (y decreases) moves content up, revealing content
+    // further down, i.e. the scroll offset must INCREASE by the drag distance.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let scroll_state = ScrollState::new(100.0);
+        scroll_state.set_max_value(400.0);
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+
+        handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 100.0));
+        // Finger moves up by 60px (beyond the 8px drag threshold).
+        handler(scroll_pointer_event(PointerEventKind::Move, 0.0, 40.0));
+        handler(scroll_pointer_event(PointerEventKind::Up, 0.0, 40.0));
+
+        assert!(
+            (scroll_state.value_non_reactive() - 160.0).abs() < 0.001,
+            "finger up by 60 must increase scroll offset by 60 (content follows finger), got {}",
+            scroll_state.value_non_reactive()
+        );
+    });
+}
+
+#[test]
+fn touch_drag_down_moves_content_down() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let scroll_state = ScrollState::new(100.0);
+        scroll_state.set_max_value(400.0);
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+
+        handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 40.0));
+        // Finger moves down by 60px: content follows, scroll offset decreases.
+        handler(scroll_pointer_event(PointerEventKind::Move, 0.0, 100.0));
+        handler(scroll_pointer_event(PointerEventKind::Up, 0.0, 100.0));
+
+        assert!(
+            (scroll_state.value_non_reactive() - 40.0).abs() < 0.001,
+            "finger down by 60 must decrease scroll offset by 60 (content follows finger), got {}",
+            scroll_state.value_non_reactive()
+        );
+    });
+}
+
+#[test]
+fn lazy_touch_drag_up_scrolls_toward_later_items() {
+    // Finger up => content up => later items become visible => the pending
+    // lazy scroll delta must be negative (dispatch_scroll_delta(<0) scrolls forward).
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let mut list_state = None;
+        let _composition = crate::run_test_composition(|| {
+            list_state = Some(remember_lazy_list_state());
+        });
+        let list_state = list_state.expect("lazy list state should be created");
+
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().lazy_vertical_scroll(list_state, false));
+
+        handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 100.0));
+        handler(scroll_pointer_event(PointerEventKind::Move, 0.0, 40.0));
+        handler(scroll_pointer_event(PointerEventKind::Up, 0.0, 40.0));
+
+        let pending = list_state.peek_scroll_delta();
+        assert!(
+            (pending + 60.0).abs() < 0.001,
+            "finger up by 60 must queue a forward (-60) lazy scroll delta, got {pending}"
+        );
+    });
+}
+
+#[test]
 fn wheel_scroll_updates_vertical_scroll_state() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
