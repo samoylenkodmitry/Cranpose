@@ -6,13 +6,14 @@
 use crate::{
     android_host_window,
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
+    android_keyboard::{is_system_key, AndroidKeyTranslator, AndroidSoftKeyboard},
     android_overlay_window,
     android_surface::{create_android_wgpu_surface, AndroidSurfaceError},
     launcher::{AndroidOverlayWindowOptions, AppSettings},
     wgpu_surface::surface_present_required,
     wgpu_surface::{current_surface_texture, SurfaceFrame},
 };
-use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver};
+use cranpose_app_shell::{default_root_key, AppShell, KeyEvent, PlatformFrameDriver};
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::{Point, Size};
@@ -49,7 +50,7 @@ struct GpuResources {
 /// Pending input event to be processed outside poll_events callback.
 /// This prevents blocking the main thread during input event acknowledgment.
 ///
-/// Each variant carries the MotionEvent's own timestamp in milliseconds
+/// Pointer variants carry the MotionEvent's own timestamp in milliseconds
 /// (uptime clock). Android delivers touch input batched/frame-aligned, so
 /// several samples are processed back-to-back in one loop iteration;
 /// stamping them with the delivery time instead of the event time makes
@@ -58,6 +59,9 @@ enum PendingInput {
     PointerDown(f32, f32, Option<i64>),
     PointerUp(f32, f32, Option<i64>),
     PointerMove(f32, f32, Option<i64>),
+    /// Translated key event (physical keyboard or soft-keyboard fallback
+    /// input), routed to the focused text field via `AppShell::on_key_event`.
+    Key(KeyEvent),
 }
 
 /// Converts an Android event time (nanoseconds, `java.lang.System.nanoTime()`
@@ -66,7 +70,26 @@ fn android_event_time_ms(event_time_ns: i64) -> i64 {
     event_time_ns / 1_000_000
 }
 
-/// Translates one Android `MotionEvent` into pending pointer inputs.
+/// Translates one Android `KeyEvent` into a pending framework key event.
+///
+/// System keys (back, volume, media, ...) are reported as unhandled so the
+/// platform keeps processing them. Returns `true` when the event was consumed.
+fn push_pending_input_from_android_key_event(
+    key_event: &android_activity::input::KeyEvent<'_>,
+    key_translator: &mut AndroidKeyTranslator,
+    pending_inputs: &mut Vec<PendingInput>,
+) -> bool {
+    if is_system_key(key_event.key_code()) {
+        return false;
+    }
+    let Some(event) = key_translator.translate(key_event) else {
+        return false;
+    };
+    pending_inputs.push(PendingInput::Key(event));
+    true
+}
+
+/// Translates one Android input event into pending framework inputs.
 ///
 /// Move events unpack the batched *historical* samples first (oldest to
 /// newest, each with its own timestamp) and then the current sample, so the
@@ -75,10 +98,19 @@ fn android_event_time_ms(event_time_ns: i64) -> i64 {
 fn push_pending_inputs_from_android_event(
     event: &android_activity::input::InputEvent<'_>,
     android_platform: &AndroidPlatform,
+    key_translator: &mut AndroidKeyTranslator,
     pending_inputs: &mut Vec<PendingInput>,
 ) -> bool {
-    let android_activity::input::InputEvent::MotionEvent(motion_event) = event else {
-        return false;
+    let motion_event = match event {
+        android_activity::input::InputEvent::MotionEvent(motion_event) => motion_event,
+        android_activity::input::InputEvent::KeyEvent(key_event) => {
+            return push_pending_input_from_android_key_event(
+                key_event,
+                key_translator,
+                pending_inputs,
+            );
+        }
+        _ => return false,
     };
 
     let pointer = motion_event.pointer_at_index(0);
@@ -127,6 +159,7 @@ fn push_pending_inputs_from_android_event(
 fn drain_android_input_events(
     app: &android_activity::AndroidApp,
     android_platform: &AndroidPlatform,
+    key_translator: &mut AndroidKeyTranslator,
     pending_inputs: &mut Vec<PendingInput>,
 ) {
     let Ok(mut iter) = app.input_events_iter() else {
@@ -135,7 +168,12 @@ fn drain_android_input_events(
 
     for _ in 0..MAX_ANDROID_INPUT_EVENTS_PER_POLL {
         let event_available = iter.next(|event| {
-            if push_pending_inputs_from_android_event(event, android_platform, pending_inputs) {
+            if push_pending_inputs_from_android_event(
+                event,
+                android_platform,
+                key_translator,
+                pending_inputs,
+            ) {
                 android_activity::InputStatus::Handled
             } else {
                 android_activity::InputStatus::Unhandled
@@ -877,6 +915,11 @@ pub fn run(
     // Queue for input events (processed outside poll_events to prevent ANR)
     let mut pending_inputs: Vec<PendingInput> = Vec::new();
 
+    // Key-event translation (KeyCharacterMap lookups, dead-key state)
+    let mut key_translator = AndroidKeyTranslator::new(app.clone());
+    // The soft-keyboard handler is installed once the app shell exists
+    let mut soft_keyboard_installed = false;
+
     // Main event loop
     loop {
         let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
@@ -1142,6 +1185,7 @@ pub fn run(
                         drain_android_input_events(
                             &app,
                             &android_platform,
+                            &mut key_translator,
                             &mut pending_inputs,
                         );
                     }
@@ -1283,6 +1327,16 @@ pub fn run(
             }
         }
 
+        // Install the soft-keyboard focus hook as soon as the shell exists so
+        // the first tap on a text field already opens the keyboard.
+        if !soft_keyboard_installed {
+            if let Some(shell) = &mut app_shell {
+                shell.set_platform_text_input(Rc::new(AndroidSoftKeyboard::new(app.clone())));
+                soft_keyboard_installed = true;
+                log::info!("Android soft keyboard focus hook installed");
+            }
+        }
+
         // Process pending input events outside poll_events to prevent ANR
         if !pending_inputs.is_empty() {
             if let Some(shell) = &mut app_shell {
@@ -1298,6 +1352,9 @@ pub fn run(
                         }
                         PendingInput::PointerMove(x, y, time_ms) => {
                             shell.set_cursor_at_time(x, y, time_ms);
+                        }
+                        PendingInput::Key(event) => {
+                            shell.on_key_event(&event);
                         }
                     }
                 }

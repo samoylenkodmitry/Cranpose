@@ -152,6 +152,10 @@ pub fn request_focus(is_focused: Rc<RefCell<bool>>, handler: Rc<dyn FocusedTextF
     // Start cursor blink animation (timer-based, not continuous redraw)
     crate::cursor_animation::start_cursor_blink();
 
+    // Tell the platform to show its soft keyboard (fires on every focus
+    // request on purpose - see text_input_session module docs).
+    crate::text_input_session::notify_text_input_focus_gained();
+
     // Only render invalidation needed - cursor is drawn via create_draw_closure()
     // which checks focus at draw time. No layout change occurs on focus.
     crate::request_render_invalidation();
@@ -164,13 +168,23 @@ pub fn clear_focus() {
     // Stop cursor blink animation
     crate::cursor_animation::stop_cursor_blink();
 
+    // Tell the platform to hide its soft keyboard.
+    crate::text_input_session::notify_text_input_focus_lost();
+
     crate::request_render_invalidation();
 }
 
 /// Returns true if any text field currently has focus.
 /// Checks weak ref liveness and clears stale focus state.
 pub fn has_focused_field() -> bool {
-    crate::render_state::with_text_field_focus(|state| state.has_focused_field())
+    let has_focus = crate::render_state::with_text_field_focus(|state| state.has_focused_field());
+    if !has_focus {
+        // The focused field may have just been detected as stale (removed from
+        // the composition without clear_focus). Hide the soft keyboard; this
+        // is a gated no-op when no keyboard request is outstanding.
+        crate::text_input_session::notify_text_input_focus_lost();
+    }
+    has_focus
 }
 
 // ============================================================================
@@ -371,6 +385,61 @@ mod tests {
             0,
             "stale focused-field handlers must not receive input"
         );
+    }
+
+    #[derive(Default)]
+    struct KeyboardProbe {
+        calls: RefCell<Vec<&'static str>>,
+    }
+
+    impl crate::text_input_session::PlatformTextInputHandler for KeyboardProbe {
+        fn show_keyboard(&self) {
+            self.calls.borrow_mut().push("show");
+        }
+
+        fn hide_keyboard(&self) {
+            self.calls.borrow_mut().push("hide");
+        }
+    }
+
+    #[test]
+    fn focus_transitions_drive_platform_keyboard() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let keyboard = Rc::new(KeyboardProbe::default());
+        crate::text_input_session::set_platform_text_input_handler(keyboard.clone());
+
+        let focus = Rc::new(RefCell::new(false));
+        request_focus(focus.clone(), mock_handler());
+        assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
+
+        // Tapping the (already focused) field again must re-request the
+        // keyboard: the user may have dismissed it with the back gesture.
+        request_focus(focus, mock_handler());
+        assert_eq!(*keyboard.calls.borrow(), vec!["show", "show"]);
+
+        clear_focus();
+        assert_eq!(*keyboard.calls.borrow(), vec!["show", "show", "hide"]);
+    }
+
+    #[test]
+    fn stale_focus_detection_hides_platform_keyboard() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let keyboard = Rc::new(KeyboardProbe::default());
+        crate::text_input_session::set_platform_text_input_handler(keyboard.clone());
+
+        {
+            let focus = Rc::new(RefCell::new(false));
+            request_focus(focus, mock_handler());
+            // The focused field's Rc is dropped here (field removed from the
+            // composition without an explicit clear_focus).
+        }
+
+        assert!(!has_focused_field());
+        assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
+
+        // Repeated stale checks must not re-hide.
+        assert!(!has_focused_field());
+        assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
     }
 
     #[test]

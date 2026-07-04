@@ -397,6 +397,27 @@ where
         self.hovered_nodes.clear();
     }
 
+    /// Installs the platform soft-keyboard handler for this shell's app context.
+    ///
+    /// The handler is invoked when a text field gains focus (`show_keyboard`)
+    /// or when text-field focus is cleared or goes stale (`hide_keyboard`).
+    /// Platform runtimes with an on-screen keyboard (Android, iOS) call this
+    /// once after creating the shell.
+    pub fn set_platform_text_input(
+        &mut self,
+        handler: Rc<dyn cranpose_ui::PlatformTextInputHandler>,
+    ) {
+        let app_context = Rc::clone(&self.app_context);
+        app_context
+            .enter(|| cranpose_ui::text_input_session::set_platform_text_input_handler(handler));
+    }
+
+    /// Removes the platform soft-keyboard handler, if one is installed.
+    pub fn clear_platform_text_input(&mut self) {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::text_input_session::clear_platform_text_input_handler);
+    }
+
     /// Routes a keyboard event to the focused text field, if any.
     ///
     /// Returns `true` if the event was consumed by a text field.

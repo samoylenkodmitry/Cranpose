@@ -12,6 +12,8 @@ mod android_host_window;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_jni;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+mod android_keyboard;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_overlay_window;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_surface;

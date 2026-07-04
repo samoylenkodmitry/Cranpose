@@ -454,6 +454,11 @@ where
         let draw_dirty_node_count = draw_dirty_nodes.len();
         let layout_dirty_node_count = layout_dirty_nodes.len();
         let partial_dirty_node_count = partial_dirty_nodes.len();
+        // Detect a focused text field that left the composition this frame:
+        // the check clears the stale focus entry and asks the platform to
+        // hide its soft keyboard (no-op while focus is live or when no
+        // keyboard was requested).
+        let _ = cranpose_ui::has_focused_field();
         // Tick cursor blink timer - only marks dirty when visibility state changes
         let cursor_blink_dirty = cranpose_ui::tick_cursor_blink();
 

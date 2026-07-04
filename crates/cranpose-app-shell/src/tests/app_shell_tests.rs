@@ -2419,6 +2419,98 @@ fn layout_recovers_after_tab_switching_updates() {
     );
 }
 
+#[derive(Default)]
+struct SoftKeyboardProbe {
+    calls: RefCell<Vec<&'static str>>,
+}
+
+impl cranpose_ui::PlatformTextInputHandler for SoftKeyboardProbe {
+    fn show_keyboard(&self) {
+        self.calls.borrow_mut().push("show");
+    }
+
+    fn hide_keyboard(&self) {
+        self.calls.borrow_mut().push("hide");
+    }
+}
+
+/// Text-field focus transitions must reach the installed platform handler:
+/// this is what opens/closes the Android soft keyboard.
+#[test]
+fn text_field_focus_drives_platform_soft_keyboard() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.update();
+
+    let keyboard = Rc::new(SoftKeyboardProbe::default());
+    shell.set_platform_text_input(keyboard.clone());
+
+    let focus_flag = Rc::new(RefCell::new(false));
+    let handler = Rc::new(TextFieldDispatchProbe::default());
+
+    shell.debug_enter_app_context(|| {
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+    });
+    assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
+
+    shell.debug_enter_app_context(cranpose_ui::text_field_focus::clear_focus);
+    assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
+}
+
+/// When the focused field disappears without an explicit clear_focus (for
+/// example the composition removed it), the next key event's stale-focus
+/// detection must hide the soft keyboard.
+#[test]
+fn key_event_after_field_removal_hides_soft_keyboard() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.update();
+
+    let keyboard = Rc::new(SoftKeyboardProbe::default());
+    shell.set_platform_text_input(keyboard.clone());
+
+    let handler = Rc::new(TextFieldDispatchProbe::default());
+    {
+        let focus_flag = Rc::new(RefCell::new(false));
+        shell.debug_enter_app_context(|| {
+            cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        });
+        // focus_flag drops here: the focus manager's weak reference goes stale.
+    }
+
+    let event = KeyEvent::key_down(KeyCode::A, "a");
+    assert!(!shell.on_key_event(&event));
+    assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
+}
+
+/// Even without further key events, the per-frame stale-focus check must
+/// release the soft keyboard once the focused field leaves the composition.
+#[test]
+fn frame_update_after_field_removal_hides_soft_keyboard() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.update();
+
+    let keyboard = Rc::new(SoftKeyboardProbe::default());
+    shell.set_platform_text_input(keyboard.clone());
+
+    let handler = Rc::new(TextFieldDispatchProbe::default());
+    {
+        let focus_flag = Rc::new(RefCell::new(false));
+        shell.debug_enter_app_context(|| {
+            cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        });
+        // focus_flag drops here: the focus manager's weak reference goes stale.
+    }
+    assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
+
+    shell.update();
+    assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
+}
+
 #[test]
 fn ime_delete_surrounding_marks_dirty() {
     let _guard = test_guard();
