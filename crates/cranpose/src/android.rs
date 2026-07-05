@@ -6,9 +6,10 @@
 use crate::{
     android_host_window,
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
-    android_keyboard::{is_system_key, AndroidKeyTranslator, AndroidSoftKeyboard},
+    android_keyboard::{self, is_system_key, AndroidKeyTranslator, AndroidSoftKeyboard},
     android_overlay_window,
     android_surface::{create_android_wgpu_surface, AndroidSurfaceError},
+    android_text_input::{self, AndroidImeEvent},
     launcher::{AndroidOverlayWindowOptions, AppSettings},
     wgpu_surface::surface_present_required,
     wgpu_surface::{current_surface_texture, SurfaceFrame},
@@ -92,6 +93,80 @@ fn push_pending_input_from_android_key_event(
     };
     pending_inputs.push(PendingInput::Key(event));
     true
+}
+
+/// `EditorInfo.IME_ACTION_DONE`: the user tapped the keyboard's Done action.
+const IME_ACTION_DONE: i32 = 6;
+
+/// Applies one editing operation forwarded by the Java `InputConnection`
+/// (see [`crate::android_text_input`]) to the focused text field.
+fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: AndroidImeEvent) {
+    match event {
+        AndroidImeEvent::CommitText { text, .. } => {
+            // commitText replaces the composing text (if any); clearing the
+            // preedit first deletes it, then the final text is inserted.
+            // `new_cursor_position` values other than 1 are not honored yet;
+            // the editor-state sync restarts the IME session if the cursor
+            // ends up somewhere the IME did not expect.
+            let _ = shell.on_ime_preedit("", None);
+            let _ = shell.on_paste(&text);
+        }
+        AndroidImeEvent::SetComposingText { text, cursor_bytes } => {
+            let _ = shell.on_ime_preedit(&text, Some((cursor_bytes, cursor_bytes)));
+        }
+        AndroidImeEvent::SetComposingRegion {
+            start_bytes,
+            end_bytes,
+        } => {
+            let _ = shell.on_ime_set_composing_region(start_bytes, end_bytes);
+        }
+        AndroidImeEvent::FinishComposing => {
+            let _ = shell.on_ime_finish_composing();
+        }
+        AndroidImeEvent::DeleteSurrounding {
+            before_bytes,
+            after_bytes,
+        } => {
+            let _ = shell.on_ime_delete_surrounding(before_bytes, after_bytes);
+        }
+        AndroidImeEvent::Key {
+            action,
+            key_code,
+            meta_state,
+            unicode_char,
+        } => {
+            if let Some(event) =
+                android_keyboard::ime_key_event(action, key_code, meta_state, unicode_char)
+            {
+                let _ = shell.on_key_event(&event);
+            }
+        }
+        AndroidImeEvent::EditorAction { action } => {
+            // Done follows the platform convention of dismissing the
+            // keyboard (focus stays in the field). Other actions are
+            // surfaced as an Enter key press: single-line fields ignore it
+            // and apps can react through their key handlers. A dedicated
+            // per-field ime-action callback (Compose `KeyboardActions`) is
+            // not modeled yet.
+            if action == IME_ACTION_DONE {
+                let _ = shell.on_ime_finish_composing();
+                shell.clear_text_field_focus();
+            } else {
+                for event_type in [
+                    cranpose_app_shell::KeyEventType::KeyDown,
+                    cranpose_app_shell::KeyEventType::KeyUp,
+                ] {
+                    let key = KeyEvent::new(
+                        cranpose_app_shell::KeyCode::Enter,
+                        "",
+                        cranpose_app_shell::Modifiers::NONE,
+                        event_type,
+                    );
+                    let _ = shell.on_key_event(&key);
+                }
+            }
+        }
+    }
 }
 
 /// Maps an Android pointer id to the shell's pointer id space: the finger
@@ -980,6 +1055,13 @@ pub fn run(
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
     let overlay_event_queue = Arc::new(android_overlay_window::AndroidOverlayEventQueue::default());
 
+    // IME editor bridge (InputConnection-backed text input). The queue crosses
+    // the JNI/UI-thread boundary; the session state stays on this thread.
+    let ime_event_queue = Arc::new(android_text_input::AndroidImeEventQueue::new());
+    ime_event_queue.set_waker(app.create_waker());
+    let ime_session =
+        android_keyboard::AndroidImeSession::new(app.clone(), Arc::clone(&ime_event_queue));
+
     // Exit flag for Destroy event (can't break from inside poll_events closure)
     let should_exit = Arc::new(AtomicBool::new(false));
 
@@ -1435,9 +1517,19 @@ pub fn run(
         // the first tap on a text field already opens the keyboard.
         if !soft_keyboard_installed {
             if let Some(shell) = &mut app_shell {
-                shell.set_platform_text_input(Rc::new(AndroidSoftKeyboard::new(app.clone())));
+                shell.set_platform_text_input(Rc::new(AndroidSoftKeyboard::new(Rc::clone(
+                    &ime_session,
+                ))));
                 soft_keyboard_installed = true;
                 log::info!("Android soft keyboard focus hook installed");
+            }
+        }
+
+        // Apply editing operations forwarded by the IME InputConnection
+        // (commit/compose/delete/key/editor-action), in arrival order.
+        if let Some(shell) = &mut app_shell {
+            for event in ime_event_queue.drain() {
+                dispatch_android_ime_event(shell, event);
             }
         }
 
@@ -1474,6 +1566,16 @@ pub fn run(
                         }
                     }
                 }
+            }
+        }
+
+        // Mirror the editor state back to the Java InputConnection after
+        // input handling: refreshes the IME's selection view and restarts
+        // the input session when the field content diverged from the mirror
+        // (e.g. the app transformed or rejected input).
+        if ime_session.is_active() {
+            if let Some(shell) = &mut app_shell {
+                ime_session.sync_editor_state(shell.ime_editor_state());
             }
         }
 

@@ -46,6 +46,58 @@ pub(crate) fn clear_pending_android_jni_exception(env: &mut Env<'_>) {
     }
 }
 
+/// Loads a cranpose Java helper class (`dev.cranpose.android.*`) through the
+/// activity's class loader.
+///
+/// `FindClass` cannot be used from native (non-Java) threads because they have
+/// no application class loader; going through the Activity works everywhere.
+/// `class_name` uses JNI slash notation (`dev/cranpose/android/Foo`).
+pub(crate) fn load_cranpose_java_class<'local>(
+    env: &mut Env<'local>,
+    activity: &jni::objects::JObject<'local>,
+    class_name: &str,
+) -> Result<JClass<'local>, String> {
+    use jni::{jni_sig, jni_str, objects::JValue};
+
+    let class_name_string = env
+        .new_string(class_name.replace('/', "."))
+        .map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to create Java class name for {class_name}: {error}")
+        })?;
+    let class_name_string = JObject::from(class_name_string);
+
+    let class = env
+        .call_method(
+            activity,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
+        .and_then(|value| value.l())
+        .and_then(|class_loader| {
+            env.call_method(
+                &class_loader,
+                jni_str!("loadClass"),
+                jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+                &[JValue::Object(&class_name_string)],
+            )
+            .and_then(|value| value.l())
+        })
+        .map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!(
+                "failed to load Android helper class {}; include cranpose/android/java in the Android source set: {error}",
+                class_name
+            )
+        })?;
+
+    env.cast_local::<JClass>(class).map_err(|error| {
+        clear_pending_android_jni_exception(env);
+        format!("Android helper {class_name} did not resolve to a Java class: {error}")
+    })
+}
+
 pub(crate) fn native_window_from_surface(
     env: &mut Env<'_>,
     surface: JObject<'_>,

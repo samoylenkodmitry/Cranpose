@@ -433,9 +433,13 @@ fn android_overlay_events_are_runtime_owned() {
         "Android runtime should own and explicitly drain overlay events"
     );
     assert!(
-        overlay_source.contains("jni_str!(\"getClassLoader\")")
+        jni_source.contains("jni_str!(\"getClassLoader\")")
+            && !jni_source.contains("jni_str!(\"getClass\")")
+            && overlay_source.contains("load_cranpose_java_class")
             && !overlay_source.contains("jni_str!(\"getClass\")"),
-        "Android Java bridge loading must use the Activity context classloader; android.app.NativeActivity itself is framework-loaded by the boot classloader"
+        "Android Java bridge loading must use the Activity context classloader (via the shared \
+         android_jni helper); android.app.NativeActivity itself is framework-loaded by the boot \
+         classloader"
     );
 }
 
@@ -997,6 +1001,7 @@ fn unsafe_code_stays_in_android_boundary_modules() {
         "android_jni.rs",
         "android_surface.rs",
         "android_file_picker.rs",
+        "android_text_input.rs",
         "android_writable_folder.rs",
         "ios_file_picker.rs",
     ];
@@ -1161,6 +1166,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/android_jni.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/android_file_picker.rs",
+        "crates/cranpose/src/android_text_input.rs",
         "crates/cranpose/src/android_writable_folder.rs",
         "crates/cranpose/src/ios_file_picker.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
