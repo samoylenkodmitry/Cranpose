@@ -20,7 +20,7 @@ use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
     LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode,
+    NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode, PointerSource,
     SemanticsConfiguration, SemanticsNode, Size,
 };
 use cranpose_ui_graphics::{Brush, Color};
@@ -122,6 +122,10 @@ pub(crate) struct TextFieldRefs {
     /// Horizontal scroll (pan) offset in px for single-line fields.
     /// Keeps the cursor visible when the text is wider than the field.
     pub scroll_offset: Rc<Cell<f32>>,
+    /// Device source of the most recent pointer press on the field. Drives
+    /// touch-only affordances: finger selection handles are shown for touch /
+    /// stylus presses, while a mouse keeps a clean caret.
+    pub last_pointer_source: Rc<Cell<PointerSource>>,
 }
 
 impl TextFieldRefs {
@@ -137,6 +141,7 @@ impl TextFieldRefs {
             click_count: Rc::new(Cell::new(0_u8)),
             node_id: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
             scroll_offset: Rc::new(Cell::new(0.0_f32)),
+            last_pointer_source: Rc::new(Cell::new(PointerSource::Unknown)),
         }
     }
 }
@@ -320,6 +325,11 @@ impl TextFieldModifierNode {
 
             match event.kind {
                 PointerEventKind::Down => {
+                    // Remember the device that pressed so the draw closure can
+                    // show finger selection handles for touch/stylus and keep a
+                    // clean caret for a mouse.
+                    refs.last_pointer_source.set(event.source);
+
                     // Request focus with O(1) handler, passing node_id and line_limits for key handling
                     let handler =
                         TextFieldHandler::new(state.clone(), refs.node_id.get(), line_limits);

@@ -43,6 +43,8 @@ use std::collections::HashSet;
 
 // Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+// Re-export the pointer device source so platform backends can stamp it.
+pub use cranpose_foundation::PointerSource;
 // Re-export the platform soft-keyboard hook so runtimes only depend on the shell
 pub use cranpose_ui::PlatformTextInputHandler;
 // Re-export the IME editable-state snapshot for platform text-input bridges
@@ -86,6 +88,12 @@ where
     is_dirty: bool,
     /// Tracks which mouse buttons are currently pressed
     buttons_pressed: PointerButtons,
+    /// Device source (touch/mouse/stylus) of the most recent pointer sample,
+    /// set by the platform before dispatching and stamped onto every
+    /// `PointerEvent` the shell constructs. The pointer model is stateful
+    /// (`set_cursor` then `pointer_pressed`), so a single per-shell cell mirrors
+    /// the existing cursor/buttons state without churning every method signature.
+    pointer_source: PointerSource,
     /// Tracks which nodes were hit on PointerDown (by stable NodeId).
     ///
     /// This follows Jetpack Compose's HitPathTracker pattern:
@@ -411,6 +419,7 @@ where
             scoped_layout_scene_nodes: Vec::new(),
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
+            pointer_source: PointerSource::Unknown,
             hit_path_tracker: HitPathTracker::new(),
             hovered_nodes: Vec::new(),
             #[cfg(all(

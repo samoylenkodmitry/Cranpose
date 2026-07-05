@@ -20,6 +20,7 @@ pub use modifier::*;
 pub use modifier_helpers::*;
 pub use nodes::input::{
     PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId, PointerPhase,
+    PointerSource,
 };
 
 pub mod prelude {

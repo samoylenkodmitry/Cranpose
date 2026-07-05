@@ -87,7 +87,7 @@ pub use modifier::{
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, EdgeInsets,
     FocusDirection, FocusRequester, GlassMaterial, GraphicsLayer, LayerShape, Modifier,
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, PointerEvent, PointerEventKind,
-    PointerInputScope, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
+    PointerInputScope, PointerSource, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
     RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size, TransformOrigin,
 };
 pub use modifier_nodes::{

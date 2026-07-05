@@ -26,6 +26,34 @@ pub enum PointerEventKind {
     Exit,
 }
 
+/// The kind of physical device that produced a pointer event.
+///
+/// Threaded from the platform layer (Android `MotionEvent` tool type, winit
+/// `PointerSource`/`ButtonSource`, web `PointerEvent.pointerType`) so input
+/// consumers can behave differently for finger vs. mouse input — for example a
+/// text field shows draggable finger handles only for [`PointerSource::Touch`]
+/// / [`PointerSource::Stylus`] and keeps a clean caret for a mouse.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PointerSource {
+    /// A mouse or other indirect precise pointer (desktop, web `"mouse"`).
+    Mouse,
+    /// A finger on a touchscreen (Android finger, winit touch, web `"touch"`).
+    Touch,
+    /// A stylus/pen (Android stylus/eraser, winit tablet tool, web `"pen"`).
+    Stylus,
+    /// The platform did not report a device type.
+    #[default]
+    Unknown,
+}
+
+impl PointerSource {
+    /// Whether this source is a direct-touch device (finger or stylus) for
+    /// which platforms show draggable selection handles rather than a caret.
+    pub fn is_touch_like(self) -> bool {
+        matches!(self, PointerSource::Touch | PointerSource::Stylus)
+    }
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PointerButton {
@@ -100,6 +128,9 @@ pub struct PointerEvent {
     /// Multiplicative zoom factor for [`PointerEventKind::Zoom`] events
     /// (`> 1.0` zooms in, `< 1.0` zooms out). `1.0` for all other events.
     pub zoom_delta: f32,
+    /// The kind of device that produced this event (touch, mouse, stylus), when
+    /// the platform reports it. Defaults to [`PointerSource::Unknown`].
+    pub source: PointerSource,
     /// Tracks whether this event has been consumed by a handler.
     /// Shared via Rc<Cell> so consumption can be tracked across copies.
     consumed: Rc<Cell<bool>>,
@@ -125,6 +156,7 @@ impl PointerEvent {
             buttons: PointerButtons::NONE,
             time_ms: None,
             zoom_delta: 1.0,
+            source: PointerSource::Unknown,
             consumed: Rc::new(Cell::new(false)),
         }
     }
@@ -159,6 +191,12 @@ impl PointerEvent {
         self
     }
 
+    /// Set the device source (touch/mouse/stylus) for this event.
+    pub fn with_source(mut self, source: PointerSource) -> Self {
+        self.source = source;
+        self
+    }
+
     /// Mark this event as consumed, preventing other handlers from processing it.
     ///
     /// Example: Scroll gestures consume events once dragging starts to prevent
@@ -187,6 +225,7 @@ impl PointerEvent {
             buttons: self.buttons,
             time_ms: self.time_ms,
             zoom_delta: self.zoom_delta,
+            source: self.source,
             consumed: self.consumed.clone(),
         }
     }
@@ -211,6 +250,23 @@ mod tests {
 
         assert!(event.is_consumed());
         assert!(cloned.is_consumed());
+    }
+
+    #[test]
+    fn pointer_event_source_defaults_unknown_and_threads_through_copy() {
+        let event = PointerEvent::new(PointerEventKind::Down, point(1.0, 1.0), point(1.0, 1.0));
+        assert_eq!(event.source, PointerSource::Unknown);
+        assert!(!PointerSource::Unknown.is_touch_like());
+
+        let touch = event.with_source(PointerSource::Touch);
+        assert_eq!(touch.source, PointerSource::Touch);
+        assert!(PointerSource::Touch.is_touch_like());
+        assert!(PointerSource::Stylus.is_touch_like());
+        assert!(!PointerSource::Mouse.is_touch_like());
+
+        // Local-position copies (used during hit-test dispatch) keep the source.
+        let local = touch.copy_with_local_position(point(5.0, 5.0));
+        assert_eq!(local.source, PointerSource::Touch);
     }
 
     #[test]

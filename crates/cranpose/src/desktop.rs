@@ -17,7 +17,9 @@ use crate::robot::{
 };
 use crate::wgpu_surface::surface_present_required;
 use crate::wgpu_surface::{current_surface_texture, SurfaceFrame};
-use cranpose_app_shell::{default_root_key, AppShell, FramePacingMode, FrameUpdateResult};
+use cranpose_app_shell::{
+    default_root_key, AppShell, FramePacingMode, FrameUpdateResult, PointerSource,
+};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 use std::cell::{Cell, RefCell};
@@ -27,7 +29,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position};
-use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
+use winit::event::{
+    ButtonSource, ElementState, MouseButton, PointerSource as WinitPointerSource, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{
     ResizeDirection, Window, WindowAttributes, WindowId as WinitWindowId, WindowLevel,
@@ -41,6 +45,26 @@ const NATIVE_WINDOW_PLACEMENT_MARGIN: f32 = 32.0;
 #[cfg(feature = "robot")]
 const ROBOT_PUMP_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const DEFAULT_DESKTOP_FRAME_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
+
+/// Maps a winit pointer-move source to the framework [`PointerSource`].
+fn pointer_source_from_winit(source: &WinitPointerSource) -> PointerSource {
+    match source {
+        WinitPointerSource::Mouse => PointerSource::Mouse,
+        WinitPointerSource::Touch { .. } => PointerSource::Touch,
+        WinitPointerSource::TabletTool { .. } => PointerSource::Stylus,
+        _ => PointerSource::Unknown,
+    }
+}
+
+/// Maps a winit button source (mouse click / touch / tablet) to [`PointerSource`].
+fn pointer_source_from_button(button: &ButtonSource) -> PointerSource {
+    match button {
+        ButtonSource::Mouse(_) => PointerSource::Mouse,
+        ButtonSource::Touch { .. } => PointerSource::Touch,
+        ButtonSource::TabletTool { .. } => PointerSource::Stylus,
+        _ => PointerSource::Unknown,
+    }
+}
 
 #[cfg(feature = "robot")]
 use std::sync::mpsc;
@@ -2169,10 +2193,15 @@ impl App {
                     }
                 }
             }
-            WindowEvent::PointerMoved { position, .. } => {
+            WindowEvent::PointerMoved {
+                position, source, ..
+            } => {
                 let logical = native.platform.pointer_position(position);
                 native.last_cursor_position = Some((logical.x, logical.y));
                 native.last_cursor_physical_position = Some(position);
+                native
+                    .app
+                    .set_pointer_source(pointer_source_from_winit(&source));
                 let platform_probe = &self.native_window_platform_probe;
                 let event_pointer =
                     native_window_screen_pointer_physical(platform_probe, &native.window, position);
@@ -2253,9 +2282,12 @@ impl App {
             }
             WindowEvent::PointerButton {
                 state,
-                button: ButtonSource::Mouse(MouseButton::Left),
+                button: button @ ButtonSource::Mouse(MouseButton::Left),
                 ..
             } => {
+                native
+                    .app
+                    .set_pointer_source(pointer_source_from_button(&button));
                 if native.last_cursor_position.is_none() {
                     Self::refresh_native_cursor_from_platform_pointer(
                         &self.native_window_platform_probe,
@@ -4004,7 +4036,9 @@ impl ApplicationHandler for App {
             WindowEvent::Moved(_) => {
                 self.vsync_interval = monitor_refresh_interval(window);
             }
-            WindowEvent::PointerMoved { position, .. } => {
+            WindowEvent::PointerMoved {
+                position, source, ..
+            } => {
                 let logical = platform.pointer_position(position);
                 self.last_cursor_position = Some((logical.x, logical.y));
                 log::trace!(
@@ -4013,6 +4047,7 @@ impl ApplicationHandler for App {
                     logical.x,
                     logical.y
                 );
+                app.set_pointer_source(pointer_source_from_winit(&source));
                 if app.set_cursor(logical.x, logical.y) {
                     request_redraw_once(window, &mut self.primary_redraw_pending);
                 }
@@ -4087,9 +4122,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::PointerButton {
                 state,
-                button: ButtonSource::Mouse(MouseButton::Left),
+                button: button @ ButtonSource::Mouse(MouseButton::Left),
                 ..
             } => {
+                app.set_pointer_source(pointer_source_from_button(&button));
                 if self.last_cursor_position.is_none()
                     && Self::refresh_primary_cursor_from_platform_pointer(
                         &self.native_window_platform_probe,

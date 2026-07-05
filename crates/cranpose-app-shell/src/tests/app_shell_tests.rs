@@ -4,7 +4,7 @@ use cranpose_core::{
     useState, CompositionLocal, CompositionLocalProvider, MutableState,
 };
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
-use cranpose_foundation::{PointerEvent, PointerEventKind};
+use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
 use cranpose_macros::composable;
 use cranpose_ui::{
     Alignment, BlendMode, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
@@ -7545,4 +7545,82 @@ fn find_rect_width(scene: &cranpose_ui::RecordedRenderScene, color: Color) -> Op
         }
     }
     None
+}
+
+thread_local! {
+    static POINTER_SOURCE_PROBE: RefCell<Option<Rc<Cell<PointerSource>>>> =
+        const { RefCell::new(None) };
+}
+
+/// A probe that records the `PointerSource` of every pointer-down it receives,
+/// exposing it via a thread-local so the test can assert what the shell stamped.
+fn app_shell_pointer_source_probe() {
+    let captured = Rc::new(Cell::new(PointerSource::Unknown));
+    POINTER_SOURCE_PROBE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&captured)));
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: 200.0,
+                height: 200.0,
+            })
+            .pointer_input((), move |scope: PointerInputScope| {
+                let captured = Rc::clone(&captured);
+                async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                if event.kind == PointerEventKind::Down {
+                                    captured.set(event.source);
+                                    event.consume();
+                                }
+                            }
+                        })
+                        .await;
+                }
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn shell_stamps_pointer_source_on_dispatched_events() {
+    let _guard = test_guard();
+    POINTER_SOURCE_PROBE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_pointer_source_probe,
+    );
+    shell.set_buffer_size(200, 200);
+    shell.set_viewport(200.0, 200.0);
+    shell.update();
+
+    let captured = POINTER_SOURCE_PROBE
+        .with(|slot| slot.borrow().as_ref().map(Rc::clone))
+        .expect("probe should install its capture cell");
+
+    // A touch press must reach the handler stamped as Touch.
+    shell.set_pointer_source(PointerSource::Touch);
+    assert!(shell.set_cursor(50.0, 50.0));
+    assert!(shell.pointer_pressed(), "down should hit the probe");
+    assert_eq!(
+        captured.get(),
+        PointerSource::Touch,
+        "shell must stamp the touch source onto the dispatched pointer event"
+    );
+    shell.pointer_released();
+
+    // A subsequent mouse press updates the stamped source.
+    shell.set_pointer_source(PointerSource::Mouse);
+    assert!(shell.set_cursor(50.0, 50.0));
+    assert!(shell.pointer_pressed());
+    assert_eq!(
+        captured.get(),
+        PointerSource::Mouse,
+        "shell must stamp the mouse source onto the dispatched pointer event"
+    );
 }
