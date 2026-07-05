@@ -21,7 +21,7 @@ jobs:
             artifact_name: cranpose-demo-linux-x86_64
 
           - name: macos-aarch64
-            runner: macos-latest
+            runner: [self-hosted, macOS, ARM64]
             target: aarch64-apple-darwin
             artifact_name: cranpose-demo-macos-aarch64
 
