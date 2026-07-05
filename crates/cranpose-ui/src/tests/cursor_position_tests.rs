@@ -270,3 +270,303 @@ fn cursor_y_position_at_zero_without_padding() {
         );
     });
 }
+
+// ============================================================================
+// Horizontal pan (single-line cursor-follow scrolling) and clipping tests
+// ============================================================================
+
+use crate::text_field_modifier_node::{compute_horizontal_scroll_offset, intersect_rect};
+
+const CURSOR_WIDTH: f32 = 2.0;
+const LONG_TEXT: &str = "The quick brown fox jumps over the lazy dog and keeps on running";
+
+fn focused_single_line_chain(state: TextFieldState, style: TextStyle) -> ModifierNodeChain {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![modifier_element(
+        TextFieldElement::new(state, style).with_line_limits(TextFieldLineLimits::SingleLine),
+    )];
+    chain.update_from_slice(&elements, &mut context);
+
+    let mut node = chain
+        .node_mut::<TextFieldModifierNode>(0)
+        .expect("text field node exists");
+    node.set_focused(true);
+    drop(node);
+
+    chain
+}
+
+fn run_field_draw(
+    chain: &ModifierNodeChain,
+    size: crate::modifier::Size,
+) -> Vec<cranpose_ui_graphics::DrawPrimitive> {
+    let slices = collect_modifier_slices(chain);
+    let draw_commands = slices.draw_commands();
+    assert!(!draw_commands.is_empty(), "expected draw commands");
+    draw_commands
+        .iter()
+        .flat_map(|command| match command {
+            crate::DrawCommand::Behind(func) => func(size),
+            crate::DrawCommand::Overlay(func) => func(size),
+            crate::DrawCommand::WithContent(func) => func(size),
+        })
+        .collect()
+}
+
+/// Pan-offset math keeps the cursor in view at both ends of the text.
+#[test]
+fn horizontal_scroll_offset_math_keeps_cursor_visible() {
+    let viewport = 100.0;
+    let text_width = 400.0;
+
+    // Cursor past the right edge: pan so the cursor sits at the right edge.
+    let offset = compute_horizontal_scroll_offset(0.0, 400.0, text_width, viewport);
+    assert!(
+        (offset - (400.0 - viewport + CURSOR_WIDTH)).abs() < 0.01,
+        "cursor at text end must pan to right edge, got {offset}"
+    );
+    let cursor_in_viewport = 400.0 - offset;
+    assert!(cursor_in_viewport >= 0.0 && cursor_in_viewport + CURSOR_WIDTH <= viewport);
+
+    // Cursor within the visible window: offset must not move.
+    let stable = compute_horizontal_scroll_offset(offset, 350.0, text_width, viewport);
+    assert_eq!(stable, offset, "offset must be stable while cursor visible");
+
+    // Cursor moved left of the visible window: pan back so it sits at the left edge.
+    let left = compute_horizontal_scroll_offset(offset, 50.0, text_width, viewport);
+    assert!(
+        (left - 50.0).abs() < 0.01,
+        "cursor left of window must pan back, got {left}"
+    );
+    assert!((50.0 - left) >= 0.0 && (50.0 - left) + CURSOR_WIDTH <= viewport);
+
+    // Cursor at the very start: offset returns to zero.
+    let start = compute_horizontal_scroll_offset(left, 0.0, text_width, viewport);
+    assert_eq!(start, 0.0, "cursor at text start must fully pan back");
+
+    // Text narrower than the viewport: never pans.
+    assert_eq!(
+        compute_horizontal_scroll_offset(37.0, 40.0, 60.0, viewport),
+        0.0
+    );
+
+    // Offset clamps to the scrollable range even from a stale value.
+    let clamped = compute_horizontal_scroll_offset(1000.0, 200.0, text_width, viewport);
+    assert!(clamped <= text_width + CURSOR_WIDTH - viewport + 0.01);
+
+    // Degenerate viewport is a no-op.
+    assert_eq!(
+        compute_horizontal_scroll_offset(10.0, 50.0, 400.0, 0.0),
+        0.0
+    );
+}
+
+#[test]
+fn intersect_rect_clips_to_bounds() {
+    let bounds = cranpose_ui_graphics::Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 40.0,
+    };
+    // Fully inside: unchanged.
+    let inner = cranpose_ui_graphics::Rect {
+        x: 10.0,
+        y: 5.0,
+        width: 20.0,
+        height: 10.0,
+    };
+    assert_eq!(intersect_rect(inner, bounds), Some(inner));
+    // Overhanging the right edge: clamped.
+    let overhang = cranpose_ui_graphics::Rect {
+        x: 90.0,
+        y: 0.0,
+        width: 50.0,
+        height: 40.0,
+    };
+    let clipped = intersect_rect(overhang, bounds).expect("clipped rect");
+    assert_eq!(clipped.x, 90.0);
+    assert_eq!(clipped.width, 10.0);
+    // Fully outside: dropped.
+    let outside = cranpose_ui_graphics::Rect {
+        x: 150.0,
+        y: 0.0,
+        width: 20.0,
+        height: 40.0,
+    };
+    assert_eq!(intersect_rect(outside, bounds), None);
+}
+
+/// A single-line field with text wider than the viewport pans so the cursor
+/// (at the end of the text) stays visible at the right edge.
+#[test]
+fn single_line_field_pans_to_keep_cursor_visible() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let style = TextStyle::default();
+        let text_width =
+            crate::text::measure_text(&crate::text::AnnotatedString::from(LONG_TEXT), &style).width;
+        let size = crate::modifier::Size {
+            width: 80.0,
+            height: 40.0,
+        };
+        assert!(
+            text_width > size.width,
+            "test precondition: text must be wider than the field"
+        );
+
+        // Cursor is placed at the end of the text by default.
+        let state = TextFieldState::new(LONG_TEXT);
+        let chain = focused_single_line_chain(state, style);
+        let primitives = run_field_draw(&chain, size);
+
+        let cursor_rect = primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. }
+                    if rect.width <= CURSOR_WIDTH + 0.01 =>
+                {
+                    Some(*rect)
+                }
+                _ => None,
+            })
+            .expect("cursor rect must be drawn");
+
+        // The cursor must sit at the right edge of the viewport, not at
+        // text_width (which lies far outside the field).
+        assert!(
+            cursor_rect.x + cursor_rect.width <= size.width + 0.01,
+            "cursor must stay inside the field, got x={}",
+            cursor_rect.x
+        );
+        assert!(
+            cursor_rect.x >= size.width - CURSOR_WIDTH - 0.5,
+            "cursor must be panned to the right edge, got x={} (field width {})",
+            cursor_rect.x,
+            size.width
+        );
+
+        // The node reports the pan offset that renderers use to shift glyphs.
+        let node = chain
+            .node::<TextFieldModifierNode>(0)
+            .expect("text field node");
+        let offset = node.scroll_offset();
+        assert!(
+            (offset - (text_width + CURSOR_WIDTH - size.width)).abs() < 0.5,
+            "pan offset {offset} must scroll the text end into view"
+        );
+    });
+}
+
+/// Moving the cursor back to the start pans the text fully back.
+#[test]
+fn single_line_field_pans_back_when_cursor_moves_to_start() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let style = TextStyle::default();
+        let size = crate::modifier::Size {
+            width: 80.0,
+            height: 40.0,
+        };
+        let state = TextFieldState::new(LONG_TEXT);
+        let chain = focused_single_line_chain(state.clone(), style);
+
+        // First draw: cursor at end, field pans right.
+        let _ = run_field_draw(&chain, size);
+        {
+            let node = chain
+                .node::<TextFieldModifierNode>(0)
+                .expect("text field node");
+            assert!(node.scroll_offset() > 0.0, "expected initial pan");
+        }
+
+        // Move the cursor to the start and draw again.
+        state.edit(|buffer| buffer.place_cursor_at_start());
+        let primitives = run_field_draw(&chain, size);
+
+        let cursor_rect = primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. }
+                    if rect.width <= CURSOR_WIDTH + 0.01 =>
+                {
+                    Some(*rect)
+                }
+                _ => None,
+            })
+            .expect("cursor rect must be drawn");
+        assert!(
+            cursor_rect.x.abs() < 0.01,
+            "cursor at text start must draw at the left edge, got {}",
+            cursor_rect.x
+        );
+
+        let node = chain
+            .node::<TextFieldModifierNode>(0)
+            .expect("text field node");
+        assert_eq!(node.scroll_offset(), 0.0, "pan must return to zero");
+    });
+}
+
+/// Selecting text that extends beyond the viewport must not draw selection
+/// rectangles outside the field bounds.
+#[test]
+fn selection_primitives_clipped_to_field_bounds() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let style = TextStyle::default();
+        let size = crate::modifier::Size {
+            width: 80.0,
+            height: 40.0,
+        };
+        // Select the entire long text; unclipped, the highlight would extend
+        // far past the field's right edge.
+        let state = TextFieldState::with_selection(LONG_TEXT, TextRange::new(0, LONG_TEXT.len()));
+        let chain = focused_single_line_chain(state, style);
+        let primitives = run_field_draw(&chain, size);
+        assert!(!primitives.is_empty(), "expected selection primitives");
+
+        for primitive in &primitives {
+            if let cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. } = primitive {
+                assert!(
+                    rect.x >= -0.01 && rect.x + rect.width <= size.width + 0.01,
+                    "primitive escapes field horizontally: {rect:?} (field width {})",
+                    size.width
+                );
+                assert!(
+                    rect.y >= -0.01 && rect.y + rect.height <= size.height + 0.01,
+                    "primitive escapes field vertically: {rect:?} (field height {})",
+                    size.height
+                );
+            }
+        }
+    });
+}
+
+/// Multi-line fields do not pan; only single-line fields expose a pan
+/// resolver for the renderer to shift text glyphs.
+#[test]
+fn only_single_line_fields_expose_pan_resolver() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let style = TextStyle::default();
+
+        let single = focused_single_line_chain(TextFieldState::new(LONG_TEXT), style.clone());
+        let single_slices = collect_modifier_slices(&single);
+        let resolver = single_slices
+            .text_pan_resolver()
+            .expect("single-line field exposes a pan resolver");
+        // The resolver reports the offset for a given viewport width and
+        // keeps the node's stored offset in sync.
+        let offset = resolver(80.0);
+        assert!(offset > 0.0, "long text must pan, got {offset}");
+
+        let multi = focused_text_field_chain(TextFieldState::new(LONG_TEXT), style);
+        let multi_slices = collect_modifier_slices(&multi);
+        assert!(
+            multi_slices.text_pan_resolver().is_none(),
+            "multi-line fields must not pan horizontally"
+        );
+    });
+}

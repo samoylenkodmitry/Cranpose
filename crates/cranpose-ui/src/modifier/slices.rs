@@ -14,7 +14,7 @@ use crate::modifier_nodes::{
     PaddingNode,
 };
 use crate::text::{TextLayoutOptions, TextStyle};
-use crate::text_field_modifier_node::TextFieldModifierNode;
+use crate::text_field_modifier_node::{TextFieldModifierNode, TextPanResolver};
 use crate::text_modifier_node::{TextModifierNode, TextPreparedLayoutHandle};
 use cranpose_ui_graphics::EdgeInsets;
 
@@ -33,6 +33,7 @@ pub struct ModifierNodeSlices {
     text_style: Option<TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
     prepared_text_layout: Option<TextPreparedLayoutHandle>,
+    text_pan: Option<TextPanResolver>,
     graphics_layer: Option<GraphicsLayer>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     corner_shape: Option<RoundedCornerShape>,
@@ -75,6 +76,7 @@ impl Clone for ModifierNodeSlices {
             text_style: self.text_style.clone(),
             text_layout_options: self.text_layout_options,
             prepared_text_layout: self.prepared_text_layout.clone(),
+            text_pan: self.text_pan.clone(),
             graphics_layer: self.graphics_layer.clone(),
             graphics_layer_resolver: self.graphics_layer_resolver.clone(),
             corner_shape: self.corner_shape,
@@ -204,6 +206,16 @@ impl ModifierNodeSlices {
         self.text_layout_options
     }
 
+    /// Returns the horizontal pan resolver for single-line text fields.
+    ///
+    /// The resolver takes the content viewport width (px) and returns the
+    /// horizontal scroll offset that keeps the cursor visible. Renderers
+    /// subtract this offset from the text origin so the glyphs pan together
+    /// with the cursor and selection.
+    pub fn text_pan_resolver(&self) -> Option<TextPanResolver> {
+        self.text_pan.clone()
+    }
+
     pub fn prepare_text_layout(
         &self,
         max_width: Option<f32>,
@@ -308,6 +320,7 @@ impl ModifierNodeSlices {
         self.text_style = None;
         self.text_layout_options = None;
         self.prepared_text_layout = None;
+        self.text_pan = None;
         self.graphics_layer = None;
         self.graphics_layer_resolver = None;
         self.corner_shape = None;
@@ -479,6 +492,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                     slices.text_style = Some(text_field_node.style().clone());
                     slices.text_layout_options = Some(TextLayoutOptions::default());
                     slices.prepared_text_layout = None;
+                    slices.text_pan = text_field_node.text_pan_resolver();
 
                     text_field_node.set_content_offset(padding.left);
                     text_field_node.set_content_y_offset(padding.top);
