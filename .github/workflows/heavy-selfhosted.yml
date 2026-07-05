@@ -50,7 +50,12 @@ jobs:
 
       - name: Build Android release APK
         working-directory: apps/android-demo/android
-        run: ./gradlew :app:assembleRelease
+        # --no-daemon: never attach to a shared/foreign Gradle daemon on this
+        # self-hosted box. Reused daemons started by other builds on the runner
+        # can carry a PATH without ~/.cargo/bin, which makes the cargo-ndk check
+        # (providers.exec "cargo ndk") fail spuriously. A single-use daemon
+        # inherits this step's PATH (which includes ~/.cargo/bin), fixing the race.
+        run: ./gradlew --no-daemon :app:assembleRelease
 
       - name: sccache stats
         if: always()
