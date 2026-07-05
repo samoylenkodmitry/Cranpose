@@ -38,7 +38,7 @@ pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 pub use cranpose_foundation::{
     modifier_element, AnyModifierElement, DynModifierElement, FocusState, PointerEvent,
-    PointerEventKind, SemanticsConfiguration,
+    PointerEventKind, PointerSource, SemanticsConfiguration,
 };
 use cranpose_foundation::{ModifierNodeElement, NodeCapabilities};
 #[allow(unused_imports)]

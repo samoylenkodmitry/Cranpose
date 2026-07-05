@@ -45,6 +45,8 @@ pub trait FocusedTextFieldHandler {
     fn copy_selection(&self) -> Option<String>;
     /// Cut current selection (copy + delete). Returns None if nothing selected.
     fn cut_selection(&self) -> Option<String>;
+    /// Selects all the field's text (contextual-menu "Select all").
+    fn select_all(&self) {}
     /// Set IME composition (preedit) state.
     /// - `text`: The composition text being typed (empty string to clear,
     ///   which *deletes* the preedit text)
@@ -59,6 +61,14 @@ pub trait FocusedTextFieldHandler {
     /// re-compose an already committed word). Offsets are UTF-8 bytes;
     /// implementations clamp them to valid character boundaries.
     fn set_composing_region(&self, start_bytes: usize, end_bytes: usize) {
+        let _ = (start_bytes, end_bytes);
+    }
+    /// Move the selection/caret to `[start_bytes, end_bytes)` without editing
+    /// text (Android `InputConnection.setSelection` semantics). Used by
+    /// Gboard's spacebar-swipe cursor control, which scrubs the caret by
+    /// repeatedly setting the selection. Offsets are UTF-8 bytes; implementations
+    /// clamp them to valid character boundaries.
+    fn set_selection(&self, start_bytes: usize, end_bytes: usize) {
         let _ = (start_bytes, end_bytes);
     }
     /// Snapshot of the current editable state for platform IMEs
@@ -169,6 +179,15 @@ impl TextFieldFocusState {
             .and_then(|handler| handler.cut_selection())
     }
 
+    fn dispatch_select_all(&self) -> bool {
+        if let Some(handler) = self.focused_handler() {
+            handler.select_all();
+            true
+        } else {
+            false
+        }
+    }
+
     fn dispatch_ime_preedit(&self, text: &str, cursor: Option<(usize, usize)>) -> bool {
         if let Some(handler) = self.focused_handler() {
             handler.set_composition(text, cursor);
@@ -190,6 +209,15 @@ impl TextFieldFocusState {
     fn dispatch_ime_set_composing_region(&self, start_bytes: usize, end_bytes: usize) -> bool {
         if let Some(handler) = self.focused_handler() {
             handler.set_composing_region(start_bytes, end_bytes);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn dispatch_ime_set_selection(&self, start_bytes: usize, end_bytes: usize) -> bool {
+        if let Some(handler) = self.focused_handler() {
+            handler.set_selection(start_bytes, end_bytes);
             true
         } else {
             false
@@ -284,6 +312,12 @@ pub fn dispatch_cut() -> Option<String> {
     crate::render_state::with_text_field_focus(|state| state.dispatch_cut())
 }
 
+/// Selects all the text in the focused text field (contextual-menu "Select
+/// all"). Returns true if a text field was focused.
+pub fn dispatch_select_all() -> bool {
+    crate::render_state::with_text_field_focus(|state| state.dispatch_select_all())
+}
+
 /// Dispatches IME preedit (composition) state to the focused text field.
 /// O(1) operation using stored handler.
 /// Returns true if a text field was focused and received the event.
@@ -304,6 +338,16 @@ pub fn dispatch_ime_finish_composing() -> bool {
 pub fn dispatch_ime_set_composing_region(start_bytes: usize, end_bytes: usize) -> bool {
     crate::render_state::with_text_field_focus(|state| {
         state.dispatch_ime_set_composing_region(start_bytes, end_bytes)
+    })
+}
+
+/// Moves the focused field's selection/caret to `[start_bytes, end_bytes)`
+/// without editing text (Android `setSelection` semantics; the path Gboard's
+/// spacebar-swipe uses to scrub the cursor).
+/// Returns true if a text field was focused and received the event.
+pub fn dispatch_ime_set_selection(start_bytes: usize, end_bytes: usize) -> bool {
+    crate::render_state::with_text_field_focus(|state| {
+        state.dispatch_ime_set_selection(start_bytes, end_bytes)
     })
 }
 

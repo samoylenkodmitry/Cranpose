@@ -43,6 +43,43 @@ use std::collections::HashSet;
 
 // Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+// Re-export the pointer device source so platform backends can stamp it.
+pub use cranpose_foundation::PointerSource;
+
+/// Bridges the in-tree selection menu's clipboard actions to the desktop OS
+/// clipboard (`arboard`). Holds a persistent clipboard handle (Linux X11 loses
+/// clipboard contents when the last owning handle drops), shared behind an
+/// `Rc<RefCell<..>>` so it stays alive for the app-context's lifetime.
+#[cfg(all(
+    feature = "clipboard-native",
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios")
+))]
+struct ShellClipboard {
+    inner: std::rc::Rc<std::cell::RefCell<Option<arboard::Clipboard>>>,
+}
+
+#[cfg(all(
+    feature = "clipboard-native",
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios")
+))]
+impl cranpose_ui::clipboard_session::PlatformClipboard for ShellClipboard {
+    fn write_text(&self, text: &str) {
+        if let Some(clipboard) = self.inner.borrow_mut().as_mut() {
+            let _ = clipboard.set_text(text);
+        }
+    }
+
+    fn read_text(&self) -> Option<String> {
+        self.inner
+            .borrow_mut()
+            .as_mut()
+            .and_then(|clipboard| clipboard.get_text().ok())
+    }
+}
 // Re-export the platform soft-keyboard hook so runtimes only depend on the shell
 pub use cranpose_ui::PlatformTextInputHandler;
 // Re-export the IME editable-state snapshot for platform text-input bridges
@@ -86,6 +123,12 @@ where
     is_dirty: bool,
     /// Tracks which mouse buttons are currently pressed
     buttons_pressed: PointerButtons,
+    /// Device source (touch/mouse/stylus) of the most recent pointer sample,
+    /// set by the platform before dispatching and stamped onto every
+    /// `PointerEvent` the shell constructs. The pointer model is stateful
+    /// (`set_cursor` then `pointer_pressed`), so a single per-shell cell mirrors
+    /// the existing cursor/buttons state without churning every method signature.
+    pointer_source: PointerSource,
     /// Tracks which nodes were hit on PointerDown (by stable NodeId).
     ///
     /// This follows Jetpack Compose's HitPathTracker pattern:
@@ -372,9 +415,35 @@ where
         let app_context = cranpose_ui::AppContext::new_with_density(density);
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
-        let mut build: Box<dyn FnMut()> = Box::new(content);
+        // Install the top-level overlay layer once, at the root, so every app
+        // gets `Popup`/selection-handle/context-menu support for free and the
+        // overlay is composed (and thus painted and hit-tested) last. The app's
+        // content is called through a shared handle so this wrapper can be
+        // re-created cheaply on every recomposition without moving `content`.
+        let app_content = Rc::new(std::cell::RefCell::new(content));
+        let mut build: Box<dyn FnMut()> = Box::new(move || {
+            let app_content = Rc::clone(&app_content);
+            cranpose_ui::widgets::PopupHost(move || {
+                (app_content.borrow_mut())();
+            });
+        });
         renderer.attach_app_context_services(&app_context);
         app_context.enter(|| {
+            // Route the selection menu's Copy/Cut/Paste through the OS clipboard
+            // on desktop; other platforms fall back to the in-process clipboard.
+            #[cfg(all(
+                feature = "clipboard-native",
+                not(target_arch = "wasm32"),
+                not(target_os = "android"),
+                not(target_os = "ios")
+            ))]
+            {
+                let clipboard =
+                    std::rc::Rc::new(std::cell::RefCell::new(arboard::Clipboard::new().ok()));
+                cranpose_ui::clipboard_session::set_platform_clipboard(std::rc::Rc::new(
+                    ShellClipboard { inner: clipboard },
+                ));
+            }
             if let Err(err) = composition.render_stable(root_key, &mut *build) {
                 log::error!("initial render failed: {err}");
             }
@@ -400,6 +469,7 @@ where
             scoped_layout_scene_nodes: Vec::new(),
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
+            pointer_source: PointerSource::Unknown,
             hit_path_tracker: HitPathTracker::new(),
             hovered_nodes: Vec::new(),
             #[cfg(all(

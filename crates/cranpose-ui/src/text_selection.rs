@@ -154,6 +154,10 @@ pub fn handle_path_data(kind: HandleKind, tip_x: f32, tip_y: f32, radius: f32) -
     }
 }
 
+/// Extra padding (px) added around a handle's drawn teardrop to enlarge the
+/// finger touch target, matching Android's generous handle hit area.
+pub const HANDLE_TOUCH_PADDING: f32 = 12.0;
+
 /// The axis-aligned hit region for a handle, expanded by touch slop, used to
 /// decide whether a pointer-down grabbed a handle.
 pub fn handle_hit_rect(kind: HandleKind, tip_x: f32, tip_y: f32, radius: f32, slop: f32) -> Rect {

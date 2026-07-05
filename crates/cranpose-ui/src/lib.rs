@@ -8,6 +8,7 @@ pub use cranpose_macros::composable;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
+pub mod clipboard_session;
 mod cursor_animation;
 mod debug;
 mod draw;
@@ -87,7 +88,7 @@ pub use modifier::{
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, EdgeInsets,
     FocusDirection, FocusRequester, GlassMaterial, GraphicsLayer, LayerShape, Modifier,
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, PointerEvent, PointerEventKind,
-    PointerInputScope, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
+    PointerInputScope, PointerSource, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
     RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size, TransformOrigin,
 };
 pub use modifier_nodes::{
@@ -270,6 +271,14 @@ mod async_runtime_full_layout_test;
 #[cfg(test)]
 #[path = "tests/cursor_position_tests.rs"]
 mod cursor_position_tests;
+
+#[cfg(test)]
+#[path = "tests/popup_tests.rs"]
+mod popup_tests;
+
+#[cfg(test)]
+#[path = "tests/selection_handle_tests.rs"]
+mod selection_handle_tests;
 
 #[cfg(test)]
 #[path = "tests/tab_switching_tests.rs"]

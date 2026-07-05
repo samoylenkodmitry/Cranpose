@@ -191,6 +191,24 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         crate::request_render_invalidation();
     }
 
+    fn select_all(&self) {
+        self.state.edit(|buffer| buffer.select_all());
+        crate::request_render_invalidation();
+    }
+
+    fn set_selection(&self, start_bytes: usize, end_bytes: usize) {
+        // Selection-only change (Android `setSelection`, e.g. Gboard's
+        // spacebar-swipe cursor scrub): move the caret/selection without
+        // touching the text, so no relayout is needed. `set_selection` bypasses
+        // the undo stack, matching drag-selection.
+        let text = self.state.value().text;
+        let start = floor_char_boundary(&text, start_bytes.min(end_bytes));
+        let end = floor_char_boundary(&text, start_bytes.max(end_bytes));
+        self.state
+            .set_selection(cranpose_foundation::text::TextRange::new(start, end));
+        crate::request_render_invalidation();
+    }
+
     fn editor_state(&self) -> Option<crate::text_field_focus::ImeEditorState> {
         let value = self.state.value();
         Some(crate::text_field_focus::ImeEditorState {
@@ -298,6 +316,97 @@ mod tests {
             assert_eq!(state.text(), "hi\n");
 
             text_field_focus::clear_focus();
+        });
+    }
+
+    /// The contextual-menu "Select all" action selects the whole field.
+    #[test]
+    fn select_all_dispatch_selects_entire_field() {
+        use cranpose_foundation::text::TextRange;
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (state, _focus) = focused_state("hello world", TextFieldLineLimits::SingleLine);
+            state.edit(|buffer| buffer.place_cursor_at_end());
+
+            assert!(text_field_focus::dispatch_select_all());
+            assert_eq!(state.selection(), TextRange::new(0, "hello world".len()));
+
+            text_field_focus::clear_focus();
+            assert!(!text_field_focus::dispatch_select_all());
+        });
+    }
+
+    /// The in-process clipboard fallback (used when no platform clipboard is
+    /// installed) round-trips copy → paste so the menu works in tests/headless.
+    #[test]
+    fn clipboard_fallback_round_trips() {
+        use crate::clipboard_session::{clipboard_read_text, clipboard_write_text};
+        let _app_context = crate::render_state::app_context_test_scope();
+        assert_eq!(clipboard_read_text(), None);
+        clipboard_write_text("copied text");
+        assert_eq!(clipboard_read_text(), Some("copied text".to_string()));
+    }
+
+    /// Gboard's spacebar-swipe cursor control sends `KEYCODE_DPAD_LEFT`/
+    /// `KEYCODE_DPAD_RIGHT` (as key repeats), which the Android key path maps to
+    /// `ArrowLeft`/`ArrowRight`. This exercises exactly that platform-agnostic
+    /// key path so the caret scrubs one grapheme per press without editing text.
+    #[test]
+    fn spacebar_swipe_arrow_keys_scrub_caret() {
+        use cranpose_foundation::text::TextRange;
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (state, _focus) = focused_state("hello", TextFieldLineLimits::SingleLine);
+            state.edit(|buffer| buffer.place_cursor_at_end());
+            assert_eq!(state.selection(), TextRange::new(5, 5));
+
+            // Swipe left: two DPAD_LEFT repeats.
+            assert!(text_field_focus::dispatch_key_event(&key_down(
+                KeyCode::ArrowLeft,
+                ""
+            )));
+            assert_eq!(state.selection(), TextRange::new(4, 4));
+            assert!(text_field_focus::dispatch_key_event(&key_down(
+                KeyCode::ArrowLeft,
+                ""
+            )));
+            assert_eq!(state.selection(), TextRange::new(3, 3));
+
+            // Swipe right: one DPAD_RIGHT repeat.
+            assert!(text_field_focus::dispatch_key_event(&key_down(
+                KeyCode::ArrowRight,
+                ""
+            )));
+            assert_eq!(state.selection(), TextRange::new(4, 4));
+
+            // Scrubbing the cursor must never change the text.
+            assert_eq!(state.text(), "hello");
+            text_field_focus::clear_focus();
+        });
+    }
+
+    /// Modern Gboard spacebar-swipe uses `InputConnection.setSelection` to move
+    /// the caret directly; the Android IME path routes that to
+    /// `dispatch_ime_set_selection`. It must scrub the caret without editing.
+    #[test]
+    fn ime_set_selection_scrubs_caret_without_editing() {
+        use cranpose_foundation::text::TextRange;
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (state, _focus) = focused_state("hello world", TextFieldLineLimits::SingleLine);
+            state.edit(|buffer| buffer.place_cursor_at_end());
+
+            assert!(text_field_focus::dispatch_ime_set_selection(2, 2));
+            assert_eq!(state.selection(), TextRange::new(2, 2));
+            assert_eq!(state.text(), "hello world");
+
+            // A non-collapsed range (Gboard also uses this to select) is honored.
+            assert!(text_field_focus::dispatch_ime_set_selection(0, 5));
+            assert_eq!(state.selection(), TextRange::new(0, 5));
+
+            // No focused field: the dispatch reports unhandled.
+            text_field_focus::clear_focus();
+            assert!(!text_field_focus::dispatch_ime_set_selection(1, 1));
         });
     }
 

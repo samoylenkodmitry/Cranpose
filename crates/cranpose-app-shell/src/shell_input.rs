@@ -61,6 +61,20 @@ where
         }
     }
 
+    /// Sets the device source (touch/mouse/stylus) of the pointer sample that
+    /// the platform is about to dispatch. Call this before `set_cursor` /
+    /// `pointer_pressed` / `pointer_released` so the resulting `PointerEvent`s
+    /// carry the source; consumers (e.g. text fields) use it to show finger
+    /// selection handles only for touch and keep a clean caret for a mouse.
+    pub fn set_pointer_source(&mut self, source: PointerSource) {
+        self.pointer_source = source;
+    }
+
+    /// The device source of the most recent pointer sample.
+    pub fn pointer_source(&self) -> PointerSource {
+        self.pointer_source
+    }
+
     pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
         self.set_cursor_at_time(x, y, None)
     }
@@ -100,7 +114,8 @@ where
                     let event =
                         PointerEvent::new(PointerEventKind::Move, Point { x, y }, Point { x, y })
                             .with_buttons(self.buttons_pressed)
-                            .with_time_ms(time_ms);
+                            .with_time_ms(time_ms)
+                            .with_source(self.pointer_source);
                     self.dispatch_targets(targets, event, false);
                     return true;
                 }
@@ -125,7 +140,8 @@ where
             if !new_ids.contains(&old_id) {
                 if let Some(target) = self.renderer.scene().find_target(old_id) {
                     let exit_event = PointerEvent::new(PointerEventKind::Exit, pos, pos)
-                        .with_buttons(self.buttons_pressed);
+                        .with_buttons(self.buttons_pressed)
+                        .with_source(self.pointer_source);
                     self.dispatch_targets(std::iter::once(target), exit_event, false);
                 }
             }
@@ -135,7 +151,8 @@ where
         for hit in &hits {
             if !self.hovered_nodes.contains(&hit.node_id()) {
                 let enter_event = PointerEvent::new(PointerEventKind::Enter, pos, pos)
-                    .with_buttons(self.buttons_pressed);
+                    .with_buttons(self.buttons_pressed)
+                    .with_source(self.pointer_source);
                 self.dispatch_targets(std::iter::once(hit.clone()), enter_event, false);
             }
         }
@@ -145,7 +162,8 @@ where
         if !hits.is_empty() {
             let event = PointerEvent::new(PointerEventKind::Move, pos, pos)
                 .with_buttons(self.buttons_pressed)
-                .with_time_ms(time_ms);
+                .with_time_ms(time_ms)
+                .with_source(self.pointer_source);
             self.dispatch_targets(hits, event, true);
             true
         } else {
@@ -200,7 +218,8 @@ where
                 },
             )
             .with_buttons(self.buttons_pressed)
-            .with_time_ms(time_ms);
+            .with_time_ms(time_ms)
+            .with_source(self.pointer_source);
 
             let mut delivered_capture_paths = Vec::new();
             let mut applier = self.composition.applier_mut();
@@ -318,7 +337,8 @@ where
                 },
             )
             .with_buttons(corrected_buttons)
-            .with_time_ms(time_ms);
+            .with_time_ms(time_ms)
+            .with_source(self.pointer_source);
 
             self.dispatch_targets(targets, event, false);
             true
@@ -398,7 +418,8 @@ where
                 let event = PointerEvent::new(kind, pos, pos)
                     .with_buttons(self.buttons_pressed)
                     .with_time_ms(time_ms)
-                    .with_id(pointer_id);
+                    .with_id(pointer_id)
+                    .with_source(self.pointer_source);
                 self.dispatch_targets(targets, event, false);
                 true
             })
@@ -451,7 +472,8 @@ where
         };
         let event = PointerEvent::new(PointerEventKind::Zoom, pos, pos)
             .with_buttons(self.buttons_pressed)
-            .with_zoom_delta(zoom_factor);
+            .with_zoom_delta(zoom_factor)
+            .with_source(self.pointer_source);
 
         let capture_paths = hits
             .iter()
@@ -512,7 +534,8 @@ where
         .with_scroll_delta(Point {
             x: delta_x,
             y: delta_y,
-        });
+        })
+        .with_source(self.pointer_source);
 
         let capture_paths = hits
             .iter()
@@ -561,7 +584,8 @@ where
                     x: self.cursor.0,
                     y: self.cursor.1,
                 },
-            );
+            )
+            .with_source(self.pointer_source);
 
             self.dispatch_targets(targets, event, false);
         }
@@ -574,7 +598,8 @@ where
         let hovered_nodes = self.hovered_nodes.clone();
         for node_id in hovered_nodes {
             if let Some(target) = self.renderer.scene().find_target(node_id) {
-                let exit_event = PointerEvent::new(PointerEventKind::Exit, pos, pos);
+                let exit_event = PointerEvent::new(PointerEventKind::Exit, pos, pos)
+                    .with_source(self.pointer_source);
                 self.dispatch_targets(std::iter::once(target), exit_event, false);
             }
         }
@@ -885,6 +910,29 @@ where
             if handled {
                 self.mark_dirty();
                 self.request_layout_pass();
+            }
+
+            handled
+        })
+    }
+
+    /// Moves the focused field's selection/caret to `[start_bytes, end_bytes)`
+    /// without editing text (Android `InputConnection.setSelection`; the path
+    /// Gboard's spacebar-swipe uses to scrub the cursor). Offsets are UTF-8
+    /// bytes. Returns `true` if a text field consumed the event.
+    pub fn on_ime_set_selection(&mut self, start_bytes: usize, end_bytes: usize) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| {
+            let handled = run_in_mutable_snapshot(|| {
+                cranpose_ui::text_field_focus::dispatch_ime_set_selection(start_bytes, end_bytes)
+            })
+            .unwrap_or(false);
+
+            // A selection-only change never reflows text, so it needs a redraw
+            // but not a layout pass.
+            if handled {
+                self.mark_dirty();
             }
 
             handled

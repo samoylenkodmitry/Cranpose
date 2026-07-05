@@ -4,7 +4,7 @@ use cranpose_core::{
     useState, CompositionLocal, CompositionLocalProvider, MutableState,
 };
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
-use cranpose_foundation::{PointerEvent, PointerEventKind};
+use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
 use cranpose_macros::composable;
 use cranpose_ui::{
     Alignment, BlendMode, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
@@ -2350,6 +2350,7 @@ struct TextFieldDispatchProbe {
     delete_in_applied_snapshot: Cell<bool>,
     finish_composition_count: Cell<usize>,
     last_composing_region: Cell<Option<(usize, usize)>>,
+    last_selection: Cell<Option<(usize, usize)>>,
 }
 
 impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for TextFieldDispatchProbe {
@@ -2401,6 +2402,10 @@ impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for TextFieldDispatc
     fn set_composing_region(&self, start_bytes: usize, end_bytes: usize) {
         self.last_composing_region
             .set(Some((start_bytes, end_bytes)));
+    }
+
+    fn set_selection(&self, start_bytes: usize, end_bytes: usize) {
+        self.last_selection.set(Some((start_bytes, end_bytes)));
     }
 
     fn editor_state(&self) -> Option<cranpose_ui::ImeEditorState> {
@@ -2570,6 +2575,7 @@ fn ime_session_shell_methods_dispatch_to_focused_field() {
     // Without a focused field nothing dispatches.
     assert!(!shell.on_ime_finish_composing());
     assert!(!shell.on_ime_set_composing_region(0, 1));
+    assert!(!shell.on_ime_set_selection(0, 1));
     assert!(shell.ime_editor_state().is_none());
 
     let focus_flag = Rc::new(RefCell::new(false));
@@ -2584,6 +2590,10 @@ fn ime_session_shell_methods_dispatch_to_focused_field() {
 
     assert!(shell.on_ime_set_composing_region(2, 5));
     assert_eq!(handler.last_composing_region.get(), Some((2, 5)));
+
+    // Gboard's spacebar-swipe scrubs the caret via setSelection.
+    assert!(shell.on_ime_set_selection(3, 3));
+    assert_eq!(handler.last_selection.get(), Some((3, 3)));
 
     let state = shell.ime_editor_state().expect("focused editor state");
     assert_eq!(state.text, "probe");
@@ -5179,11 +5189,13 @@ fn draw_refresh_scope_only_contains_dirty_ancestors() {
 
     shell.update();
     let layout_tree = shell.layout_tree().expect("expected layout tree");
-    let root = node_id_at_path(layout_tree.root(), &[]);
-    let left = node_id_at_path(layout_tree.root(), &[0]);
-    let left_leaf = node_id_at_path(layout_tree.root(), &[0, 0]);
-    let right = node_id_at_path(layout_tree.root(), &[1]);
-    let right_leaf = node_id_at_path(layout_tree.root(), &[1, 0]);
+    // The shell wraps app content in a top-level `PopupHost` overlay Box, so
+    // the app's own root sits at path `[0]` under the true layout root.
+    let root = node_id_at_path(layout_tree.root(), &[0]);
+    let left = node_id_at_path(layout_tree.root(), &[0, 0]);
+    let left_leaf = node_id_at_path(layout_tree.root(), &[0, 0, 0]);
+    let right = node_id_at_path(layout_tree.root(), &[0, 1]);
+    let right_leaf = node_id_at_path(layout_tree.root(), &[0, 1, 0]);
 
     let dirty_nodes = HashSet::from([left_leaf]);
     let refresh_scope = {
@@ -5221,9 +5233,11 @@ fn layout_bounds_index_matches_cached_layout_tree() {
             .layout_tree
             .as_ref()
             .expect("expected cached layout tree");
+        // App content sits at `[0]` beneath the shell's top-level `PopupHost`
+        // overlay Box (the true layout root).
         let root = layout_box_at_path(layout_tree.root(), &[]);
-        let left_leaf = layout_box_at_path(layout_tree.root(), &[0, 0]);
-        let right = layout_box_at_path(layout_tree.root(), &[1]);
+        let left_leaf = layout_box_at_path(layout_tree.root(), &[0, 0, 0]);
+        let right = layout_box_at_path(layout_tree.root(), &[0, 1]);
 
         (
             root.node_id,
@@ -7541,4 +7555,82 @@ fn find_rect_width(scene: &cranpose_ui::RecordedRenderScene, color: Color) -> Op
         }
     }
     None
+}
+
+thread_local! {
+    static POINTER_SOURCE_PROBE: RefCell<Option<Rc<Cell<PointerSource>>>> =
+        const { RefCell::new(None) };
+}
+
+/// A probe that records the `PointerSource` of every pointer-down it receives,
+/// exposing it via a thread-local so the test can assert what the shell stamped.
+fn app_shell_pointer_source_probe() {
+    let captured = Rc::new(Cell::new(PointerSource::Unknown));
+    POINTER_SOURCE_PROBE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&captured)));
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: 200.0,
+                height: 200.0,
+            })
+            .pointer_input((), move |scope: PointerInputScope| {
+                let captured = Rc::clone(&captured);
+                async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                if event.kind == PointerEventKind::Down {
+                                    captured.set(event.source);
+                                    event.consume();
+                                }
+                            }
+                        })
+                        .await;
+                }
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn shell_stamps_pointer_source_on_dispatched_events() {
+    let _guard = test_guard();
+    POINTER_SOURCE_PROBE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_pointer_source_probe,
+    );
+    shell.set_buffer_size(200, 200);
+    shell.set_viewport(200.0, 200.0);
+    shell.update();
+
+    let captured = POINTER_SOURCE_PROBE
+        .with(|slot| slot.borrow().as_ref().map(Rc::clone))
+        .expect("probe should install its capture cell");
+
+    // A touch press must reach the handler stamped as Touch.
+    shell.set_pointer_source(PointerSource::Touch);
+    assert!(shell.set_cursor(50.0, 50.0));
+    assert!(shell.pointer_pressed(), "down should hit the probe");
+    assert_eq!(
+        captured.get(),
+        PointerSource::Touch,
+        "shell must stamp the touch source onto the dispatched pointer event"
+    );
+    shell.pointer_released();
+
+    // A subsequent mouse press updates the stamped source.
+    shell.set_pointer_source(PointerSource::Mouse);
+    assert!(shell.set_cursor(50.0, 50.0));
+    assert!(shell.pointer_pressed());
+    assert_eq!(
+        captured.get(),
+        PointerSource::Mouse,
+        "shell must stamp the mouse source onto the dispatched pointer event"
+    );
 }

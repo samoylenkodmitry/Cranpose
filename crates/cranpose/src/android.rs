@@ -14,7 +14,9 @@ use crate::{
     wgpu_surface::surface_present_required,
     wgpu_surface::{current_surface_texture, SurfaceFrame},
 };
-use cranpose_app_shell::{default_root_key, AppShell, KeyEvent, PlatformFrameDriver};
+use cranpose_app_shell::{
+    default_root_key, AppShell, KeyEvent, PlatformFrameDriver, PointerSource,
+};
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::{Point, Size};
@@ -57,9 +59,9 @@ struct GpuResources {
 /// stamping them with the delivery time instead of the event time makes
 /// gesture velocity computations wildly wrong (dt collapses to ~0).
 enum PendingInput {
-    PointerDown(f32, f32, Option<i64>),
-    PointerUp(f32, f32, Option<i64>),
-    PointerMove(f32, f32, Option<i64>),
+    PointerDown(f32, f32, Option<i64>, PointerSource),
+    PointerUp(f32, f32, Option<i64>, PointerSource),
+    PointerMove(f32, f32, Option<i64>, PointerSource),
     /// Translated key event (physical keyboard or soft-keyboard fallback
     /// input), routed to the focused text field via `AppShell::on_key_event`.
     Key(KeyEvent),
@@ -74,6 +76,18 @@ enum PendingInput {
 /// base) into milliseconds for gesture velocity tracking.
 fn android_event_time_ms(event_time_ns: i64) -> i64 {
     event_time_ns / 1_000_000
+}
+
+/// Maps an Android `MotionEvent` pointer tool type onto the framework
+/// [`PointerSource`] so text fields can show finger handles only for touch.
+fn android_pointer_source(pointer: &android_activity::input::Pointer<'_>) -> PointerSource {
+    use android_activity::input::ToolType;
+    match pointer.tool_type() {
+        ToolType::Finger => PointerSource::Touch,
+        ToolType::Mouse => PointerSource::Mouse,
+        ToolType::Stylus | ToolType::Eraser => PointerSource::Stylus,
+        _ => PointerSource::Unknown,
+    }
 }
 
 /// Translates one Android `KeyEvent` into a pending framework key event.
@@ -119,6 +133,12 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
             end_bytes,
         } => {
             let _ = shell.on_ime_set_composing_region(start_bytes, end_bytes);
+        }
+        AndroidImeEvent::SetSelection {
+            start_bytes,
+            end_bytes,
+        } => {
+            let _ = shell.on_ime_set_selection(start_bytes, end_bytes);
         }
         AndroidImeEvent::FinishComposing => {
             let _ = shell.on_ime_finish_composing();
@@ -220,7 +240,12 @@ fn push_pending_inputs_from_android_event(
             let pointer = motion_event.pointer_at_index(0);
             *primary_pointer_id = Some(pointer.pointer_id());
             let (x, y) = logical_of(pointer.x(), pointer.y());
-            pending_inputs.push(PendingInput::PointerDown(x, y, time_ms));
+            pending_inputs.push(PendingInput::PointerDown(
+                x,
+                y,
+                time_ms,
+                android_pointer_source(&pointer),
+            ));
             true
         }
         android_activity::input::MotionAction::PointerDown => {
@@ -254,7 +279,12 @@ fn push_pending_inputs_from_android_event(
                 }
                 _ => {}
             }
-            pending_inputs.push(PendingInput::PointerUp(x, y, time_ms));
+            pending_inputs.push(PendingInput::PointerUp(
+                x,
+                y,
+                time_ms,
+                android_pointer_source(&pointer),
+            ));
             *primary_pointer_id = None;
             true
         }
@@ -281,7 +311,12 @@ fn push_pending_inputs_from_android_event(
                         time_ms,
                     ));
                 }
-                pending_inputs.push(PendingInput::PointerUp(x, y, time_ms));
+                pending_inputs.push(PendingInput::PointerUp(
+                    x,
+                    y,
+                    time_ms,
+                    android_pointer_source(&pointer),
+                ));
                 *primary_pointer_id = None;
             } else {
                 pending_inputs.push(PendingInput::SecondaryPointerUp(
@@ -297,6 +332,7 @@ fn push_pending_inputs_from_android_event(
             let primary = *primary_pointer_id;
             for pointer in motion_event.pointers() {
                 let is_primary = primary == Some(pointer.pointer_id());
+                let source = android_pointer_source(&pointer);
                 if is_primary {
                     for historical in pointer.history() {
                         let (hx, hy) = logical_of(historical.x(), historical.y());
@@ -304,13 +340,14 @@ fn push_pending_inputs_from_android_event(
                             hx,
                             hy,
                             Some(android_event_time_ms(historical.event_time())),
+                            source,
                         ));
                     }
                 }
                 let (x, y) = logical_of(pointer.x(), pointer.y());
                 match (is_primary, primary) {
                     (true, _) => {
-                        pending_inputs.push(PendingInput::PointerMove(x, y, time_ms));
+                        pending_inputs.push(PendingInput::PointerMove(x, y, time_ms, source));
                     }
                     (false, Some(primary)) => {
                         pending_inputs.push(PendingInput::SecondaryPointerMove(
@@ -1491,6 +1528,9 @@ pub fn run(
                                 logical.x as f32,
                                 logical.y as f32,
                                 None,
+                                // The overlay JNI bridge does not forward tool
+                                // type; overlay surfaces are touch in practice.
+                                PointerSource::Touch,
                             ));
                         }
                         android_overlay_window::AndroidOverlayPointerAction::Up
@@ -1499,6 +1539,7 @@ pub fn run(
                                 logical.x as f32,
                                 logical.y as f32,
                                 None,
+                                PointerSource::Touch,
                             ));
                         }
                         android_overlay_window::AndroidOverlayPointerAction::Move => {
@@ -1506,6 +1547,7 @@ pub fn run(
                                 logical.x as f32,
                                 logical.y as f32,
                                 None,
+                                PointerSource::Touch,
                             ));
                         }
                     }
@@ -1538,30 +1580,37 @@ pub fn run(
             if let Some(shell) = &mut app_shell {
                 for input in pending_inputs.drain(..) {
                     match input {
-                        PendingInput::PointerDown(x, y, time_ms) => {
+                        PendingInput::PointerDown(x, y, time_ms, source) => {
+                            shell.set_pointer_source(source);
                             shell.set_cursor_at_time(x, y, time_ms);
                             shell.pointer_pressed_at_time(time_ms);
                         }
-                        PendingInput::PointerUp(x, y, time_ms) => {
+                        PendingInput::PointerUp(x, y, time_ms, source) => {
                             // ACTION_UP coordinates carry lift-off roll-back
                             // jitter; they must NOT become a velocity sample
                             // (a synthesized Move here can flip the fling
                             // direction), so release without a Move dispatch.
+                            shell.set_pointer_source(source);
                             shell.pointer_released_at_position_time(x, y, time_ms);
                         }
-                        PendingInput::PointerMove(x, y, time_ms) => {
+                        PendingInput::PointerMove(x, y, time_ms, source) => {
+                            shell.set_pointer_source(source);
                             shell.set_cursor_at_time(x, y, time_ms);
                         }
                         PendingInput::Key(event) => {
                             shell.on_key_event(&event);
                         }
                         PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
+                            // Additional fingers of a multi-touch gesture: touch.
+                            shell.set_pointer_source(PointerSource::Touch);
                             shell.secondary_pointer_pressed(id, x, y, time_ms);
                         }
                         PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
+                            shell.set_pointer_source(PointerSource::Touch);
                             shell.secondary_pointer_released(id, x, y, time_ms);
                         }
                         PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
+                            shell.set_pointer_source(PointerSource::Touch);
                             shell.secondary_pointer_moved(id, x, y, time_ms);
                         }
                     }

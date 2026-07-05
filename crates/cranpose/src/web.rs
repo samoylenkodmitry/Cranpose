@@ -6,7 +6,7 @@ use crate::{
     launcher::AppSettings,
     wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
 };
-use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver};
+use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver, PointerSource};
 use cranpose_platform_web::WebPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use std::cell::{Cell, RefCell};
@@ -14,7 +14,18 @@ use std::rc::Rc;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, MouseEvent, PointerEvent, WheelEvent};
+use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
+
+/// Maps a DOM `PointerEvent.pointerType` string onto the framework
+/// [`PointerSource`] so text fields show finger handles only for touch.
+fn web_pointer_source(event: &PointerEvent) -> PointerSource {
+    match event.pointer_type().as_str() {
+        "touch" => PointerSource::Touch,
+        "pen" => PointerSource::Stylus,
+        "mouse" => PointerSource::Mouse,
+        _ => PointerSource::Unknown,
+    }
+}
 
 const WEB_WHEEL_LINE_DELTA_PIXELS: f32 = 40.0;
 
@@ -276,62 +287,10 @@ pub async fn run(
             textarea: ime_textarea.clone(),
         }));
 
-    // Set up mouse event handlers
-    {
-        let app = app.clone();
-        let platform = platform.clone();
-        let request_frame = request_frame.clone();
-        let closure = Closure::wrap(Box::new(move |event: MouseEvent| {
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
-            let logical = platform.borrow().pointer_position(x, y);
-            // Use try_borrow_mut to avoid panic if render loop is active
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.set_cursor(logical.x, logical.y);
-                request_frame();
-            }
-        }) as Box<dyn FnMut(_)>);
-        canvas.add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
-
-    {
-        let app = app.clone();
-        let platform = platform.clone();
-        let request_frame = request_frame.clone();
-        let closure = Closure::wrap(Box::new(move |event: MouseEvent| {
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
-            let logical = platform.borrow().pointer_position(x, y);
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.set_cursor(logical.x, logical.y);
-                app_mut.pointer_pressed();
-                request_frame();
-            }
-        }) as Box<dyn FnMut(_)>);
-        canvas.add_event_listener_with_callback("mousedown", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
-
-    {
-        let app = app.clone();
-        let platform = platform.clone();
-        let request_frame = request_frame.clone();
-        let closure = Closure::wrap(Box::new(move |event: MouseEvent| {
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
-            let logical = platform.borrow().pointer_position(x, y);
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                // Release positions must not become velocity samples (see
-                // AppShell::pointer_released_at_position).
-                app_mut.pointer_released_at_position(logical.x, logical.y);
-                request_frame();
-            }
-        }) as Box<dyn FnMut(_)>);
-        canvas.add_event_listener_with_callback("mouseup", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
-
+    // Pointer events (below) cover mouse, touch and pen and carry the device
+    // type via `pointerType`; the separate `mouse*` listeners are intentionally
+    // not registered so a mouse click is not double-dispatched and the pointer
+    // source stays unambiguous.
     {
         let app = app.clone();
         let platform = platform.clone();
@@ -405,6 +364,7 @@ pub async fn run(
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_pointer_source(web_pointer_source(&event));
                 app_mut.set_cursor(logical.x, logical.y);
                 request_frame();
             }
@@ -423,6 +383,7 @@ pub async fn run(
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_pointer_source(web_pointer_source(&event));
                 app_mut.set_cursor(logical.x, logical.y);
                 app_mut.pointer_pressed();
                 request_frame();
@@ -442,6 +403,7 @@ pub async fn run(
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_pointer_source(web_pointer_source(&event));
                 // Touch lift-off positions must not become velocity samples
                 // (see AppShell::pointer_released_at_position).
                 app_mut.pointer_released_at_position(logical.x, logical.y);
