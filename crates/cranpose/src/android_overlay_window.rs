@@ -207,50 +207,7 @@ pub(crate) fn find_android_overlay_class<'local>(
     env: &mut Env<'local>,
     activity: &JObject<'local>,
 ) -> Result<JClass<'local>, String> {
-    load_overlay_class(env, activity)
-}
-
-fn load_overlay_class<'local>(
-    env: &mut Env<'local>,
-    activity: &JObject<'local>,
-) -> Result<JClass<'local>, String> {
-    let class_name = env
-        .new_string(OVERLAY_CLASS.replace('/', "."))
-        .map_err(|error| {
-            clear_pending_android_jni_exception(env);
-            format!("failed to create Android overlay helper class name: {error}")
-        })?;
-    let class_name = JObject::from(class_name);
-
-    let class = env
-        .call_method(
-            activity,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )
-        .and_then(|value| value.l())
-        .and_then(|class_loader| {
-            env.call_method(
-                &class_loader,
-                jni_str!("loadClass"),
-                jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-                &[JValue::Object(&class_name)],
-            )
-            .and_then(|value| value.l())
-        })
-        .map_err(|error| {
-            clear_pending_android_jni_exception(env);
-            format!(
-                "failed to load Android overlay helper class {}; include cranpose/android/java in the Android source set: {error}",
-                OVERLAY_CLASS
-            )
-        })?;
-
-    env.cast_local::<JClass>(class).map_err(|error| {
-        clear_pending_android_jni_exception(env);
-        format!("Android overlay helper did not resolve to a Java class: {error}")
-    })
+    crate::android_jni::load_cranpose_java_class(env, activity, OVERLAY_CLASS)
 }
 
 fn overlay_options_to_physical_bounds(

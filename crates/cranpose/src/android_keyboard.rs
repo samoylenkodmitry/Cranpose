@@ -4,57 +4,221 @@
 //!
 //! 1. [`AndroidSoftKeyboard`] implements the framework's
 //!    [`PlatformTextInputHandler`] hook: when a `BasicTextField` gains focus
-//!    the framework calls `show_keyboard` and we ask the platform to show the
-//!    soft keyboard via [`AndroidApp::show_soft_input`]; when text-field focus
-//!    is cleared (or goes stale) we hide it again.
+//!    the framework calls `show_keyboard` and we open an IME editor session
+//!    through the `CranposeTextInput` Java helper (a real `InputConnection`,
+//!    see [`crate::android_text_input`]); when text-field focus is cleared
+//!    (or goes stale) the session is closed again. Apps that do not compile
+//!    the `cranpose/android/java` sources fall back to the plain
+//!    [`AndroidApp::show_soft_input`] path.
 //!
 //! 2. [`AndroidKeyTranslator`] converts [`android_activity`] `KeyEvent`s into
 //!    the framework [`KeyEvent`] consumed by the focused text field. Printable
 //!    characters are resolved through the device [`KeyCharacterMap`]
 //!    (including dead-key/combining-accent composition), while editing keys
 //!    (backspace, enter, arrows, ...) are mapped to framework [`KeyCode`]s.
-//!
-//! # Limitation: KeyCharacterMap path, not a full IME `InputConnection`
-//!
-//! A `NativeActivity` has no Java `View` overriding `onCreateInputConnection`,
-//! so IMEs run in their fallback mode and deliver input as plain key events.
-//! Simple keyboards (and Gboard's basic Latin layouts) work fine through the
-//! `KeyCharacterMap` path implemented here, but anything that needs a real
-//! `InputConnection` - autocorrect/suggestions, swipe typing, voice input,
-//! and composing-text scripts such as CJK or Indic - cannot be delivered as
-//! key events by the IME. Supporting those requires a Java editor overlay
-//! providing an `InputConnection` (the framework side is already prepared:
-//! see `AppShell::on_ime_preedit` / `on_paste` for committed text).
+//!    This remains the path for hardware keyboards, and the whole-app
+//!    fallback when the Java IME helper is unavailable.
 
+use crate::android_text_input::{
+    hide_android_text_input, show_android_text_input, update_android_text_input_state,
+    AndroidImeEventQueue,
+};
 use android_activity::input::{KeyAction, KeyCharacterMap, KeyMapChar, Keycode, MetaState};
 use android_activity::AndroidApp;
-use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers, PlatformTextInputHandler};
+use cranpose_app_shell::{
+    ImeEditorState, KeyCode, KeyEvent, KeyEventType, Modifiers, PlatformTextInputHandler,
+};
+use std::cell::{Cell, RefCell};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::Arc;
+
+/// Android `KeyEvent` action constants (`ACTION_DOWN` / `ACTION_UP`).
+const ANDROID_KEY_ACTION_DOWN: i32 = 0;
+const ANDROID_KEY_ACTION_UP: i32 = 1;
+
+/// State of the IME editor session shared between the focus-driven
+/// [`AndroidSoftKeyboard`] handler and the main loop (which drains IME events
+/// and pushes editor-state updates back to the Java mirror).
+///
+/// Main-thread only (`Rc`); the cross-thread part is the event queue.
+pub(crate) struct AndroidImeSession {
+    app: AndroidApp,
+    queue: Arc<AndroidImeEventQueue>,
+    /// A Java editor session is currently open.
+    active: Cell<bool>,
+    /// The Java helper class could not be used; stick to the plain
+    /// `show_soft_input` path for the rest of the process lifetime.
+    bridge_failed: Cell<bool>,
+    /// Editor state last pushed to (or seeded into) the Java mirror. Used to
+    /// skip redundant JNI round-trips on every frame.
+    last_synced: RefCell<Option<ImeEditorState>>,
+}
+
+impl AndroidImeSession {
+    pub(crate) fn new(app: AndroidApp, queue: Arc<AndroidImeEventQueue>) -> Rc<Self> {
+        Rc::new(Self {
+            app,
+            queue,
+            active: Cell::new(false),
+            bridge_failed: Cell::new(false),
+            last_synced: RefCell::new(None),
+        })
+    }
+
+    /// Whether the Java editor session is open (and therefore editor-state
+    /// syncing is worthwhile).
+    pub(crate) fn is_active(&self) -> bool {
+        self.active.get() && !self.bridge_failed.get()
+    }
+
+    /// Pushes the current editor state to the Java mirror when it changed
+    /// since the last push. Called from the main loop after input handling.
+    pub(crate) fn sync_editor_state(&self, state: Option<ImeEditorState>) {
+        if !self.is_active() {
+            return;
+        }
+        let Some(state) = state else {
+            // No focused field: the session is about to be closed by the
+            // focus-loss notification; nothing to sync.
+            return;
+        };
+        if self.last_synced.borrow().as_ref() == Some(&state) {
+            return;
+        }
+        match update_android_text_input_state(&self.app, &state) {
+            Ok(()) => {
+                *self.last_synced.borrow_mut() = Some(state);
+            }
+            Err(error) => {
+                log::warn!("Android IME state sync failed: {error}");
+            }
+        }
+    }
+
+    fn show(&self) {
+        if self.bridge_failed.get() {
+            self.show_soft_input_only();
+            return;
+        }
+
+        // Seed the Java mirror with the focused field's state. This runs
+        // inside the app context (the focus manager invokes the platform
+        // handler synchronously), so the focused handler is accessible.
+        let state = cranpose_ui::text_field_focus::focused_editor_state().unwrap_or_else(|| {
+            // Focus notifications only fire for text fields; an absent state
+            // still opens a session so the keyboard appears.
+            ImeEditorState {
+                text: String::new(),
+                selection_start: 0,
+                selection_end: 0,
+                composition: None,
+                single_line: true,
+            }
+        });
+
+        match show_android_text_input(&self.app, &self.queue, &state) {
+            Ok(()) => {
+                self.active.set(true);
+                *self.last_synced.borrow_mut() = Some(state);
+            }
+            Err(error) => {
+                log::warn!(
+                    "Android IME editor bridge unavailable, falling back to key-event input \
+                     (include cranpose/android/java sources for full IME support): {error}"
+                );
+                self.bridge_failed.set(true);
+                self.show_soft_input_only();
+            }
+        }
+    }
+
+    fn hide(&self) {
+        if self.bridge_failed.get() {
+            // `false` = do not restrict to implicitly-shown keyboards; always hide.
+            self.app.hide_soft_input(false);
+            return;
+        }
+        self.active.set(false);
+        *self.last_synced.borrow_mut() = None;
+        if let Err(error) = hide_android_text_input(&self.app) {
+            log::warn!("Android IME editor hide failed: {error}");
+            self.app.hide_soft_input(false);
+        }
+    }
+
+    fn show_soft_input_only(&self) {
+        // `true` requests SHOW_IMPLICIT: the system may coordinate visibility
+        // with hardware keyboards / display modes instead of forcing the IME.
+        self.app.show_soft_input(true);
+    }
+}
 
 /// Shows/hides the Android soft keyboard in response to text-field focus
 /// changes. Installed on the `AppShell` via `set_platform_text_input`.
 pub(crate) struct AndroidSoftKeyboard {
-    app: AndroidApp,
+    session: Rc<AndroidImeSession>,
 }
 
 impl AndroidSoftKeyboard {
-    pub(crate) fn new(app: AndroidApp) -> Self {
-        Self { app }
+    pub(crate) fn new(session: Rc<AndroidImeSession>) -> Self {
+        Self { session }
     }
 }
 
 impl PlatformTextInputHandler for AndroidSoftKeyboard {
     fn show_keyboard(&self) {
-        // `true` requests SHOW_IMPLICIT: the system may coordinate visibility
-        // with hardware keyboards / display modes instead of forcing the IME.
-        self.app.show_soft_input(true);
+        self.session.show();
     }
 
     fn hide_keyboard(&self) {
-        // `false` = do not restrict to implicitly-shown keyboards; always hide.
-        self.app.hide_soft_input(false);
+        self.session.hide();
     }
+}
+
+/// Translates a raw key event forwarded by the IME through
+/// `InputConnection.sendKeyEvent` (some keyboards deliver backspace/enter
+/// this way even with a real editor attached) into a framework [`KeyEvent`].
+///
+/// Returns `None` for events the text pipeline cannot use; system keys are
+/// never expected through this path and are dropped defensively.
+pub(crate) fn ime_key_event(
+    action: i32,
+    key_code: i32,
+    meta_state: i32,
+    unicode_char: i32,
+) -> Option<KeyEvent> {
+    let event_type = match action {
+        ANDROID_KEY_ACTION_DOWN => KeyEventType::KeyDown,
+        ANDROID_KEY_ACTION_UP => KeyEventType::KeyUp,
+        _ => return None,
+    };
+
+    let keycode = Keycode::from(key_code.max(0) as u32);
+    if is_system_key(keycode) {
+        return None;
+    }
+    let key_code = map_keycode(keycode);
+    let modifiers = map_modifiers(MetaState(meta_state.max(0) as u32));
+
+    // Characters commit on key-down only, mirroring the hardware-key path.
+    let text = if event_type == KeyEventType::KeyDown {
+        u32::try_from(unicode_char)
+            .ok()
+            .and_then(char::from_u32)
+            .filter(|ch| *ch != '\0' && !ch.is_control())
+            .map(|ch| ch.to_string())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    if key_code == KeyCode::Unknown && text.is_empty() {
+        return None;
+    }
+
+    Some(KeyEvent::new(key_code, text, modifiers, event_type))
 }
 
 /// Translates Android key events into framework [`KeyEvent`]s.

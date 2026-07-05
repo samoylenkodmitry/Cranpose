@@ -132,13 +132,16 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
                 }
                 buffer.set_composition(None);
             } else {
-                // Set composition text and range
-                // The composition range is relative to where the IME text will be inserted
-                let insert_pos = buffer.selection().min();
+                // Successive preedit updates must *replace* the previous
+                // composing text (IMEs resend the whole preedit on every
+                // keystroke); without an active composition the preedit
+                // replaces the current selection, like Android's
+                // `setComposingText` and winit's `Ime::Preedit`.
+                let target = buffer.composition().unwrap_or_else(|| buffer.selection());
+                let insert_pos = target.min();
                 let comp_end = insert_pos + text.len();
 
-                // Replace current selection with composition text
-                buffer.replace(buffer.selection(), text);
+                buffer.replace(target, text);
 
                 // Set composition range to highlight the preedit text
                 let comp_range = cranpose_foundation::text::TextRange::new(insert_pos, comp_end);
@@ -155,6 +158,55 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         // Request redraw for composition underline
         crate::request_render_invalidation();
     }
+
+    fn finish_composition(&self) {
+        // Android `finishComposingText`: keep the composed text as committed
+        // text, only drop the composing region (unlike `set_composition("")`,
+        // which deletes the preedit text).
+        if self.state.composition().is_none() {
+            return;
+        }
+        self.state.edit(|buffer| {
+            buffer.set_composition(None);
+        });
+        crate::request_render_invalidation();
+    }
+
+    fn set_composing_region(&self, start_bytes: usize, end_bytes: usize) {
+        self.state.edit(|buffer| {
+            let text = buffer.text();
+            let start = floor_char_boundary(text, start_bytes.min(end_bytes));
+            let end = floor_char_boundary(text, start_bytes.max(end_bytes));
+            if start == end {
+                // An empty region clears the composing state (keeping the
+                // text), matching Android's setComposingRegion contract.
+                buffer.set_composition(None);
+            } else {
+                buffer.set_composition(Some(cranpose_foundation::text::TextRange::new(start, end)));
+            }
+        });
+        crate::request_render_invalidation();
+    }
+
+    fn editor_state(&self) -> Option<crate::text_field_focus::ImeEditorState> {
+        let value = self.state.value();
+        Some(crate::text_field_focus::ImeEditorState {
+            text: value.text.clone(),
+            selection_start: value.selection.min(),
+            selection_end: value.selection.max(),
+            composition: value.composition.map(|range| (range.min(), range.max())),
+            single_line: matches!(self.line_limits, TextFieldLineLimits::SingleLine),
+        })
+    }
+}
+
+/// Largest byte index `<= index` that lies on a `char` boundary of `text`.
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 #[cfg(test)]
@@ -243,6 +295,125 @@ mod tests {
             assert_eq!(state.text(), "hi\n");
 
             text_field_focus::clear_focus();
+        });
+    }
+
+    /// IMEs resend the whole preedit on every keystroke; successive preedit
+    /// updates must replace the previous composing text, not accumulate.
+    #[test]
+    fn successive_preedit_updates_replace_previous_composition() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (state, _focus) = focused_state("ab", TextFieldLineLimits::SingleLine);
+            state.edit(|buffer| buffer.place_cursor_at_end());
+
+            assert!(text_field_focus::dispatch_ime_preedit("k", Some((1, 1))));
+            assert_eq!(state.text(), "abk");
+            assert!(text_field_focus::dispatch_ime_preedit("ka", Some((2, 2))));
+            assert_eq!(state.text(), "abka");
+            assert!(text_field_focus::dispatch_ime_preedit(
+                "\u{304b}",
+                Some((3, 3))
+            ));
+            assert_eq!(state.text(), "ab\u{304b}");
+            let comp = state.composition().expect("composition active");
+            assert_eq!((comp.min(), comp.max()), (2, 2 + "\u{304b}".len()));
+
+            // Commit path: clear preedit (deletes it), then insert the final text.
+            assert!(text_field_focus::dispatch_ime_preedit("", None));
+            assert_eq!(state.text(), "ab");
+            assert!(text_field_focus::dispatch_paste("\u{304b}\u{306a}"));
+            assert_eq!(state.text(), "ab\u{304b}\u{306a}");
+            assert_eq!(state.composition(), None);
+
+            text_field_focus::clear_focus();
+        });
+    }
+
+    /// `finishComposingText` keeps the composed text and only clears the
+    /// composing region, unlike an empty preedit which deletes the text.
+    #[test]
+    fn finish_composition_keeps_text() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (state, _focus) = focused_state("", TextFieldLineLimits::SingleLine);
+
+            assert!(text_field_focus::dispatch_ime_preedit("hello", None));
+            assert_eq!(state.text(), "hello");
+            assert!(state.composition().is_some());
+
+            assert!(text_field_focus::dispatch_ime_finish_composing());
+            assert_eq!(state.text(), "hello");
+            assert_eq!(state.composition(), None);
+
+            // Finishing again is a no-op.
+            assert!(text_field_focus::dispatch_ime_finish_composing());
+            assert_eq!(state.text(), "hello");
+
+            text_field_focus::clear_focus();
+        });
+    }
+
+    /// Autocorrect re-composes an already committed word via
+    /// `setComposingRegion`; the text must not change, only the region.
+    #[test]
+    fn set_composing_region_marks_text_without_changing_it() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (state, _focus) = focused_state("hello world", TextFieldLineLimits::SingleLine);
+
+            assert!(text_field_focus::dispatch_ime_set_composing_region(0, 5));
+            assert_eq!(state.text(), "hello world");
+            let comp = state.composition().expect("composition active");
+            assert_eq!((comp.min(), comp.max()), (0, 5));
+
+            // Replacing the composing region rewrites the marked word.
+            assert!(text_field_focus::dispatch_ime_preedit("Hello", None));
+            assert_eq!(state.text(), "Hello world");
+
+            // Offsets that fall inside a multi-byte character are clamped to
+            // the previous boundary instead of panicking.
+            assert!(text_field_focus::dispatch_ime_preedit("", None));
+            state.edit(|buffer| {
+                buffer.clear();
+                buffer.insert("\u{00e9}x");
+            });
+            assert!(text_field_focus::dispatch_ime_set_composing_region(1, 3));
+            let comp = state.composition().expect("composition active");
+            assert_eq!((comp.min(), comp.max()), (0, 3));
+
+            // An empty region clears composing state but keeps the text.
+            assert!(text_field_focus::dispatch_ime_set_composing_region(1, 1));
+            assert_eq!(state.composition(), None);
+            assert_eq!(state.text(), "\u{00e9}x");
+
+            text_field_focus::clear_focus();
+        });
+    }
+
+    #[test]
+    fn editor_state_reflects_text_selection_and_composition() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (state, _focus) = focused_state("hi", TextFieldLineLimits::SingleLine);
+            state.edit(|buffer| buffer.place_cursor_at_end());
+
+            let snapshot = text_field_focus::focused_editor_state().expect("focused field");
+            assert_eq!(snapshot.text, "hi");
+            assert_eq!(
+                (snapshot.selection_start, snapshot.selection_end),
+                (2usize, 2usize)
+            );
+            assert_eq!(snapshot.composition, None);
+            assert!(snapshot.single_line);
+
+            assert!(text_field_focus::dispatch_ime_preedit("ab", None));
+            let snapshot = text_field_focus::focused_editor_state().expect("focused field");
+            assert_eq!(snapshot.text, "hiab");
+            assert_eq!(snapshot.composition, Some((2, 4)));
+
+            text_field_focus::clear_focus();
+            assert_eq!(text_field_focus::focused_editor_state(), None);
         });
     }
 

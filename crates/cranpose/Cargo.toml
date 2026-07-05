@@ -107,6 +107,10 @@ web-sys = { version = "0.3", optional = true, features = [
     "Clipboard",
     "ClipboardEvent",
     "DataTransfer",
+    # IME composition support (hidden textarea + composition events)
+    "CompositionEvent",
+    "HtmlTextAreaElement",
+    "Node",
 ] }
 log = "0.4"
 cranpose-services = { workspace = true, default-features = false }

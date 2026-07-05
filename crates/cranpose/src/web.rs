@@ -265,6 +265,17 @@ pub async fn run(
         move || request_frame()
     });
 
+    // Hidden editable element backing IME composition. Browsers only start
+    // IME composition sessions (and mobile browsers only show their virtual
+    // keyboard) when an editable element is focused, so text-field focus
+    // moves DOM focus onto this textarea; its composition events feed the
+    // shared preedit/commit pipeline below.
+    let ime_textarea = create_ime_textarea(&document)?;
+    app.borrow_mut()
+        .set_platform_text_input(Rc::new(WebTextInput {
+            textarea: ime_textarea.clone(),
+        }));
+
     // Set up mouse event handlers
     {
         let app = app.clone();
@@ -465,6 +476,15 @@ pub async fn run(
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 
+            // During IME composition the browser owns text input: key events
+            // arrive with `isComposing` (or the synthetic 229 keyCode) and the
+            // composition listeners deliver the text. Dispatching them (or
+            // calling prevent_default) would double-commit characters and can
+            // break the composition session.
+            if event.is_composing() || event.key_code() == 229 {
+                return;
+            }
+
             // Convert web key code to our KeyCode
             let key_code = match event.code().as_str() {
                 // Letters
@@ -577,6 +597,11 @@ pub async fn run(
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+
+            // Skip IME-composition key events (see the keydown handler).
+            if event.is_composing() || event.key_code() == 229 {
+                return;
+            }
 
             // Similar conversion for keyup
             let key_code = match event.code().as_str() {
@@ -714,6 +739,50 @@ pub async fn run(
         closure.forget();
     }
 
+    // IME composition: the browser resends the whole preedit on every update,
+    // so `compositionupdate` maps 1:1 onto the framework preedit hook.
+    {
+        let app = app.clone();
+        let request_frame = request_frame.clone();
+        let closure = Closure::wrap(Box::new(move |event: web_sys::CompositionEvent| {
+            let text = event.data().unwrap_or_default();
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.on_ime_preedit(&text, None);
+                request_frame();
+            }
+        }) as Box<dyn FnMut(_)>);
+        ime_textarea.add_event_listener_with_callback(
+            "compositionupdate",
+            closure.as_ref().unchecked_ref(),
+        )?;
+        closure.forget();
+    }
+
+    // Composition finished: clear the preedit (which deletes the composing
+    // text) and commit the final string, mirroring the desktop
+    // `Ime::Commit` flow.
+    {
+        let app = app.clone();
+        let request_frame = request_frame.clone();
+        let textarea = ime_textarea.clone();
+        let closure = Closure::wrap(Box::new(move |event: web_sys::CompositionEvent| {
+            let text = event.data().unwrap_or_default();
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                let _ = app_mut.on_ime_preedit("", None);
+                if !text.is_empty() {
+                    app_mut.on_paste(&text);
+                }
+                request_frame();
+            }
+            // Drop the composed text from the hidden textarea so the next
+            // composition session starts from an empty mirror.
+            textarea.set_value("");
+        }) as Box<dyn FnMut(_)>);
+        ime_textarea
+            .add_event_listener_with_callback("compositionend", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
     let frame_pending_for_loop = frame_pending.clone();
     let frame_timer_for_loop = frame_timer.clone();
     let render_loop_for_deadline = render_loop.clone();
@@ -792,6 +861,70 @@ pub async fn run(
     request_frame();
 
     Ok(())
+}
+
+/// Web text-input focus hook: moves DOM focus onto the hidden IME textarea
+/// while a cranpose text field is focused, and releases it when text-field
+/// focus is lost.
+///
+/// The browser only starts IME composition sessions for editable elements
+/// (and mobile browsers only show their virtual keyboard for them), so the
+/// canvas alone can never receive composition events.
+struct WebTextInput {
+    textarea: web_sys::HtmlTextAreaElement,
+}
+
+impl cranpose_app_shell::PlatformTextInputHandler for WebTextInput {
+    fn show_keyboard(&self) {
+        let _ = self.textarea.focus();
+    }
+
+    fn hide_keyboard(&self) {
+        self.textarea.set_value("");
+        let _ = self.textarea.blur();
+    }
+}
+
+/// Creates the visually hidden, focusable textarea that backs IME
+/// composition and appends it to the document body.
+fn create_ime_textarea(
+    document: &web_sys::Document,
+) -> Result<web_sys::HtmlTextAreaElement, JsValue> {
+    let textarea: web_sys::HtmlTextAreaElement = document.create_element("textarea")?.dyn_into()?;
+
+    // The composed text is delivered through composition events; browser
+    // assistance on the mirror itself would only interfere.
+    textarea.set_attribute("autocomplete", "off")?;
+    textarea.set_attribute("autocorrect", "off")?;
+    textarea.set_attribute("autocapitalize", "off")?;
+    textarea.set_attribute("spellcheck", "false")?;
+    // Programmatic focus only - the textarea must never be tab-reachable.
+    textarea.set_attribute("tabindex", "-1")?;
+    textarea.set_attribute("aria-hidden", "true")?;
+
+    // Visually hidden but still focusable: `display:none`/`visibility:hidden`
+    // elements refuse focus, so shrink to a transparent 1x1 point instead.
+    let style = textarea.style();
+    style.set_property("position", "fixed")?;
+    style.set_property("top", "0")?;
+    style.set_property("left", "0")?;
+    style.set_property("width", "1px")?;
+    style.set_property("height", "1px")?;
+    style.set_property("opacity", "0")?;
+    style.set_property("border", "0")?;
+    style.set_property("padding", "0")?;
+    style.set_property("margin", "0")?;
+    style.set_property("outline", "none")?;
+    style.set_property("resize", "none")?;
+    style.set_property("overflow", "hidden")?;
+    style.set_property("background", "transparent")?;
+    style.set_property("pointer-events", "none")?;
+
+    let body = document
+        .body()
+        .ok_or_else(|| JsValue::from_str("document has no body for the IME textarea"))?;
+    body.append_child(&textarea)?;
+    Ok(textarea)
 }
 
 fn request_animation_frame(f: &Closure<dyn FnMut()>) -> bool {
