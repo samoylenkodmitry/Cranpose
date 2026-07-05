@@ -39,6 +39,9 @@ pub mod zoom;
 
 // Export for cursor blink animation - AppShell checks this to continuously redraw
 pub use text_field_focus::has_focused_field;
+// Editable-state snapshot for platform IMEs (Android InputConnection, web
+// composition) - platform runtimes read it through the shell
+pub use text_field_focus::ImeEditorState;
 // Platform soft-keyboard bridge - platform runtimes install a handler so text
 // field focus changes can show/hide the on-screen keyboard
 pub use text_input_session::PlatformTextInputHandler;

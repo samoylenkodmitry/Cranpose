@@ -45,6 +45,8 @@ use std::collections::HashSet;
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 // Re-export the platform soft-keyboard hook so runtimes only depend on the shell
 pub use cranpose_ui::PlatformTextInputHandler;
+// Re-export the IME editable-state snapshot for platform text-input bridges
+pub use cranpose_ui::ImeEditorState;
 
 #[cfg(any(test, feature = "test-support"))]
 use cranpose_core::{

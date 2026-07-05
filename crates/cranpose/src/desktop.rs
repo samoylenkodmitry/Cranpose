@@ -1319,6 +1319,9 @@ impl App {
         dev_options.frame_pacing_mode = self.frame_pacing_mode;
         dev_options.frame_pacing_controls = false;
         app.set_dev_options(dev_options);
+        // Enable/disable the platform IME with text-field focus so composing
+        // input methods (CJK, dead keys via IME) work in native windows.
+        DesktopTextInput::install(&mut app, &window);
         trace_native_window_timing(format_args!(
             "{} app_shell {}ms",
             options.title,
@@ -3636,7 +3639,73 @@ fn dispatch_ime_event(app: &mut AppShell<WgpuRenderer>, ime_event: winit::event:
         Ime::Disabled => {
             app.on_ime_preedit("", None);
         }
-        Ime::DeleteSurrounding { .. } => {}
+        Ime::DeleteSurrounding {
+            before_bytes,
+            after_bytes,
+        } => {
+            // winit guarantees byte-wise UTF-8 counts, matching the shell API.
+            // The buffer implementation already preserves any active preedit
+            // region, as this event requires.
+            let _ = app.on_ime_delete_surrounding(before_bytes, after_bytes);
+        }
+    }
+}
+
+/// Text-input focus hook for desktop: enables the platform IME on the window
+/// while a text field is focused and disables it when focus is lost.
+///
+/// winit only delivers [`winit::event::Ime`] events (preedit/commit for CJK
+/// and other composing input methods) while the IME is enabled via
+/// [`winit::window::ImeRequest::Enable`], so without this hook the
+/// `dispatch_ime_event` path never fires.
+///
+/// The candidate-window cursor area (`ImeCapabilities::with_cursor_area`) is
+/// not reported yet: the framework does not currently expose the focused
+/// field's caret rectangle to the platform layer. Until it does, IME popups
+/// may appear at a default position instead of next to the caret.
+struct DesktopTextInput {
+    window: std::sync::Weak<dyn Window>,
+}
+
+impl DesktopTextInput {
+    fn install(app: &mut AppShell<WgpuRenderer>, window: &Arc<dyn Window>) {
+        app.set_platform_text_input(Rc::new(DesktopTextInput {
+            window: Arc::downgrade(window),
+        }));
+    }
+}
+
+impl cranpose_app_shell::PlatformTextInputHandler for DesktopTextInput {
+    fn show_keyboard(&self) {
+        use winit::window::{ImeCapabilities, ImeEnableRequest, ImeRequest, ImeRequestData};
+
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        // No optional capabilities requested, so the enable request is always
+        // well-formed.
+        let Some(enable) = ImeEnableRequest::new(ImeCapabilities::new(), ImeRequestData::default())
+        else {
+            return;
+        };
+        match window.request_ime_update(ImeRequest::Enable(enable)) {
+            // `show_keyboard` intentionally fires on every focus request;
+            // an already enabled IME stays enabled.
+            Ok(()) | Err(winit::window::ImeRequestError::AlreadyEnabled) => {}
+            Err(error) => log::debug!("winit IME enable failed: {error}"),
+        }
+    }
+
+    fn hide_keyboard(&self) {
+        use winit::window::{ImeRequest, ImeRequestError};
+
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        match window.request_ime_update(ImeRequest::Disable) {
+            Ok(()) | Err(ImeRequestError::NotEnabled) => {}
+            Err(error) => log::debug!("winit IME disable failed: {error}"),
+        }
     }
 }
 
@@ -3791,6 +3860,10 @@ impl ApplicationHandler for App {
         let mut dev_options = self.settings.dev_options.clone();
         dev_options.frame_pacing_mode = self.frame_pacing_mode;
         app.set_dev_options(dev_options);
+
+        // Enable/disable the platform IME with text-field focus so composing
+        // input methods (CJK, dead keys via IME) work on desktop.
+        DesktopTextInput::install(&mut app, &window);
 
         // Runtime-driven frame scheduling: Compose invalidations and animations
         // request frames via the runtime waker, not per-input host redraw forcing.

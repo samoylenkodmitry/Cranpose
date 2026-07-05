@@ -12,6 +12,26 @@ use std::rc::{Rc, Weak};
 
 use crate::key_event::KeyEvent;
 
+/// Snapshot of the focused text field's editable state for platform IMEs.
+///
+/// All offsets are UTF-8 byte offsets into `text`. Platform layers that talk
+/// to UTF-16 based IMEs (Android's `InputConnection`, web composition events)
+/// convert on their side of the boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImeEditorState {
+    /// Full text content of the field.
+    pub text: String,
+    /// Selection start (min) in bytes. Equal to `selection_end` for a caret.
+    pub selection_start: usize,
+    /// Selection end (max) in bytes.
+    pub selection_end: usize,
+    /// Active composing (preedit) region in bytes, if any.
+    pub composition: Option<(usize, usize)>,
+    /// Whether the field is single-line (platforms use this to pick the
+    /// keyboard action, e.g. Android `IME_ACTION_DONE` vs newline).
+    pub single_line: bool,
+}
+
 /// Handler trait for focused text field operations.
 /// Stored in focus module for O(1) key/clipboard dispatch.
 pub trait FocusedTextFieldHandler {
@@ -26,9 +46,27 @@ pub trait FocusedTextFieldHandler {
     /// Cut current selection (copy + delete). Returns None if nothing selected.
     fn cut_selection(&self) -> Option<String>;
     /// Set IME composition (preedit) state.
-    /// - `text`: The composition text being typed (empty string to clear)
+    /// - `text`: The composition text being typed (empty string to clear,
+    ///   which *deletes* the preedit text)
     /// - `cursor`: Optional cursor position within composition (start, end)
     fn set_composition(&self, text: &str, cursor: Option<(usize, usize)>);
+    /// Finish the active composition, keeping the composed text as regular
+    /// committed text (Android `finishComposingText` semantics). No-op when
+    /// no composition is active.
+    fn finish_composition(&self) {}
+    /// Mark existing text as the composing region without changing it
+    /// (Android `setComposingRegion` semantics, used by autocorrect to
+    /// re-compose an already committed word). Offsets are UTF-8 bytes;
+    /// implementations clamp them to valid character boundaries.
+    fn set_composing_region(&self, start_bytes: usize, end_bytes: usize) {
+        let _ = (start_bytes, end_bytes);
+    }
+    /// Snapshot of the current editable state for platform IMEs
+    /// (`InputConnection` text queries, session seeding). `None` when the
+    /// handler cannot expose its state.
+    fn editor_state(&self) -> Option<ImeEditorState> {
+        None
+    }
 }
 
 pub(crate) struct TextFieldFocusState {
@@ -139,6 +177,29 @@ impl TextFieldFocusState {
             false
         }
     }
+
+    fn dispatch_ime_finish_composing(&self) -> bool {
+        if let Some(handler) = self.focused_handler() {
+            handler.finish_composition();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn dispatch_ime_set_composing_region(&self, start_bytes: usize, end_bytes: usize) -> bool {
+        if let Some(handler) = self.focused_handler() {
+            handler.set_composing_region(start_bytes, end_bytes);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn focused_editor_state(&self) -> Option<ImeEditorState> {
+        self.focused_handler()
+            .and_then(|handler| handler.editor_state())
+    }
 }
 
 /// Requests focus for a text field.
@@ -228,6 +289,29 @@ pub fn dispatch_cut() -> Option<String> {
 /// Returns true if a text field was focused and received the event.
 pub fn dispatch_ime_preedit(text: &str, cursor: Option<(usize, usize)>) -> bool {
     crate::render_state::with_text_field_focus(|state| state.dispatch_ime_preedit(text, cursor))
+}
+
+/// Finishes the active composition in the focused text field, keeping the
+/// composed text (Android `finishComposingText` semantics).
+/// Returns true if a text field was focused and received the event.
+pub fn dispatch_ime_finish_composing() -> bool {
+    crate::render_state::with_text_field_focus(|state| state.dispatch_ime_finish_composing())
+}
+
+/// Marks existing text in the focused field as the composing region without
+/// changing it (Android `setComposingRegion` semantics).
+/// Returns true if a text field was focused and received the event.
+pub fn dispatch_ime_set_composing_region(start_bytes: usize, end_bytes: usize) -> bool {
+    crate::render_state::with_text_field_focus(|state| {
+        state.dispatch_ime_set_composing_region(start_bytes, end_bytes)
+    })
+}
+
+/// Returns a snapshot of the focused text field's editable state for
+/// platform IMEs, or `None` when no field is focused (or the handler does
+/// not expose its state).
+pub fn focused_editor_state() -> Option<ImeEditorState> {
+    crate::render_state::with_text_field_focus(|state| state.focused_editor_state())
 }
 
 #[cfg(test)]

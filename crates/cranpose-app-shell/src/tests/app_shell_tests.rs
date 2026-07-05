@@ -2348,6 +2348,8 @@ struct TextFieldDispatchProbe {
     last_delete: Cell<Option<(usize, usize)>>,
     delete_in_event_handler: Cell<bool>,
     delete_in_applied_snapshot: Cell<bool>,
+    finish_composition_count: Cell<usize>,
+    last_composing_region: Cell<Option<(usize, usize)>>,
 }
 
 impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for TextFieldDispatchProbe {
@@ -2389,6 +2391,26 @@ impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for TextFieldDispatc
             .set(cranpose_core::in_event_handler());
         self.preedit_in_applied_snapshot
             .set(cranpose_core::in_applied_snapshot());
+    }
+
+    fn finish_composition(&self) {
+        self.finish_composition_count
+            .set(self.finish_composition_count.get() + 1);
+    }
+
+    fn set_composing_region(&self, start_bytes: usize, end_bytes: usize) {
+        self.last_composing_region
+            .set(Some((start_bytes, end_bytes)));
+    }
+
+    fn editor_state(&self) -> Option<cranpose_ui::ImeEditorState> {
+        Some(cranpose_ui::ImeEditorState {
+            text: "probe".to_string(),
+            selection_start: 1,
+            selection_end: 2,
+            composition: Some((0, 3)),
+            single_line: true,
+        })
     }
 }
 
@@ -2530,6 +2552,50 @@ fn ime_delete_surrounding_marks_dirty() {
     assert_eq!(handler.last_delete.get(), Some((2, 1)));
     assert!(shell.needs_redraw());
     shell.debug_enter_app_context(cranpose_ui::text_field_focus::clear_focus);
+}
+
+/// The InputConnection-facing shell methods (finish-composing, composing
+/// region, editor-state snapshot, focus clearing for the Done action) must
+/// dispatch to the focused field and drive the platform keyboard.
+#[test]
+fn ime_session_shell_methods_dispatch_to_focused_field() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.update();
+
+    let keyboard = Rc::new(SoftKeyboardProbe::default());
+    shell.set_platform_text_input(keyboard.clone());
+
+    // Without a focused field nothing dispatches.
+    assert!(!shell.on_ime_finish_composing());
+    assert!(!shell.on_ime_set_composing_region(0, 1));
+    assert!(shell.ime_editor_state().is_none());
+
+    let focus_flag = Rc::new(RefCell::new(false));
+    let handler = Rc::new(TextFieldDispatchProbe::default());
+    shell.debug_enter_app_context(|| {
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+    });
+    assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
+
+    assert!(shell.on_ime_finish_composing());
+    assert_eq!(handler.finish_composition_count.get(), 1);
+
+    assert!(shell.on_ime_set_composing_region(2, 5));
+    assert_eq!(handler.last_composing_region.get(), Some((2, 5)));
+
+    let state = shell.ime_editor_state().expect("focused editor state");
+    assert_eq!(state.text, "probe");
+    assert_eq!((state.selection_start, state.selection_end), (1, 2));
+    assert_eq!(state.composition, Some((0, 3)));
+    assert!(state.single_line);
+
+    // The IME Done action clears focus, which hides the soft keyboard.
+    shell.clear_text_field_focus();
+    assert!(!*focus_flag.borrow());
+    assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
+    assert!(shell.ime_editor_state().is_none());
 }
 
 #[test]

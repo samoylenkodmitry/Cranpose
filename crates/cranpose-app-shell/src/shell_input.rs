@@ -845,6 +845,70 @@ where
         handled
     }
 
+    /// Finishes the active IME composition, keeping the composed text as
+    /// committed text (Android `finishComposingText` semantics).
+    /// Returns `true` if a text field consumed the event.
+    pub fn on_ime_finish_composing(&mut self) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.on_ime_finish_composing_inner())
+    }
+
+    fn on_ime_finish_composing_inner(&mut self) -> bool {
+        let handled =
+            run_in_mutable_snapshot(cranpose_ui::text_field_focus::dispatch_ime_finish_composing)
+                .unwrap_or(false);
+
+        if handled {
+            self.mark_dirty();
+            self.request_layout_pass();
+        }
+
+        handled
+    }
+
+    /// Marks existing text in the focused field as the composing region
+    /// without changing it (Android `setComposingRegion` semantics). Offsets
+    /// are UTF-8 bytes. Returns `true` if a text field consumed the event.
+    pub fn on_ime_set_composing_region(&mut self, start_bytes: usize, end_bytes: usize) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| {
+            let handled = run_in_mutable_snapshot(|| {
+                cranpose_ui::text_field_focus::dispatch_ime_set_composing_region(
+                    start_bytes,
+                    end_bytes,
+                )
+            })
+            .unwrap_or(false);
+
+            if handled {
+                self.mark_dirty();
+                self.request_layout_pass();
+            }
+
+            handled
+        })
+    }
+
+    /// Returns a snapshot of the focused text field's editable state for
+    /// platform IMEs (text, selection and composition in UTF-8 bytes), or
+    /// `None` when no text field is focused.
+    pub fn ime_editor_state(&mut self) -> Option<cranpose_ui::text_field_focus::ImeEditorState> {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::text_field_focus::focused_editor_state)
+    }
+
+    /// Clears text-field focus (used by platform IME actions such as
+    /// Android's Done). The focus-loss notification hides the soft keyboard.
+    pub fn clear_text_field_focus(&mut self) {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::text_field_focus::clear_focus);
+        self.mark_dirty();
+        self.request_layout_pass();
+    }
+
     /// Handles IME delete-surrounding events.
     /// Returns `true` if a text field consumed the event.
     pub fn on_ime_delete_surrounding(&mut self, before_bytes: usize, after_bytes: usize) -> bool {
