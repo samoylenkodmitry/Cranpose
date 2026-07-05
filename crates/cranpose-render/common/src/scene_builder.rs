@@ -7,6 +7,7 @@ use cranpose_ui::text::{resolve_text_direction, TextAlign, TextStyle};
 use cranpose_ui::{
     prepare_text_layout, DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect,
     ResolvedModifiers, Size, SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
+    TextPanResolver,
 };
 use cranpose_ui_graphics::{
     rounded_corner_alpha_mask_effect, CompositingStrategy, GraphicsLayer, LayerShape,
@@ -41,6 +42,7 @@ struct BuildNodeSnapshot {
     annotated_text: Option<AnnotatedString>,
     text_style: Option<TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
+    text_pan: Option<TextPanResolver>,
     graphics_layer: Option<GraphicsLayer>,
     children: Vec<Self>,
 }
@@ -283,6 +285,7 @@ fn build_layer_node_internal(
         annotated_text,
         text_style,
         text_layout_options,
+        text_pan,
         graphics_layer,
         children: child_snapshots,
     } = snapshot;
@@ -326,6 +329,7 @@ fn build_layer_node_internal(
         annotated_text: annotated_text.as_ref(),
         text_style: text_style.as_ref(),
         text_layout_options,
+        text_pan,
         modifier_slices: None,
     }) {
         children.push(RenderNode::Primitive(PrimitiveEntry {
@@ -526,6 +530,7 @@ fn build_layer_node_from_data(
         annotated_text: modifier_slices.annotated_text(),
         text_style: modifier_slices.text_style(),
         text_layout_options: modifier_slices.text_layout_options(),
+        text_pan: modifier_slices.text_pan_resolver(),
         modifier_slices: Some(modifier_slices.as_ref()),
     }) {
         render_children.push(RenderNode::Primitive(PrimitiveEntry {
@@ -621,6 +626,7 @@ struct TextNodeParts<'a> {
     annotated_text: Option<&'a AnnotatedString>,
     text_style: Option<&'a TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
+    text_pan: Option<TextPanResolver>,
     modifier_slices: Option<&'a ModifierNodeSlices>,
 }
 
@@ -633,6 +639,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         annotated_text,
         text_style,
         text_layout_options,
+        text_pan,
         modifier_slices,
     } = parts;
     let value = annotated_text?;
@@ -645,15 +652,28 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         return None;
     }
 
-    let measure_width =
-        resolve_text_measure_width(content_width, padding, measured_max_width, options);
-    let max_width = Some(measure_width).filter(|width| width.is_finite() && *width > 0.0);
+    // Single-line text fields pan horizontally to keep the cursor visible:
+    // the text is laid out unconstrained (no wrapping), shifted left by the
+    // pan offset, and clipped to the field bounds.
+    let pan_offset = text_pan
+        .as_ref()
+        .map(|resolve| resolve(content_width))
+        .unwrap_or(0.0);
+    let pans_horizontally = text_pan.is_some();
+
+    let max_width = if pans_horizontally {
+        None
+    } else {
+        let measure_width =
+            resolve_text_measure_width(content_width, padding, measured_max_width, options);
+        Some(measure_width).filter(|width| width.is_finite() && *width > 0.0)
+    };
     let prepared = modifier_slices
         .and_then(|slices| slices.prepare_text_layout(max_width))
         .unwrap_or_else(|| prepare_text_layout(value, &text_style, options, max_width));
     let visual_style = prepared.visual_style.clone();
     let measured_draw_width = prepared.metrics.width.max(0.0);
-    let draw_width = if options.overflow == TextOverflow::Visible {
+    let draw_width = if options.overflow == TextOverflow::Visible || pans_horizontally {
         measured_draw_width
     } else {
         measured_draw_width.min(content_width)
@@ -665,7 +685,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         prepared.metrics.width,
     );
     let rect = Rect {
-        x: padding.left + alignment_offset,
+        x: padding.left + alignment_offset - pan_offset,
         y: padding.top,
         width: draw_width,
         height: prepared.metrics.height,
@@ -679,7 +699,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
     let font_size = visual_style.resolve_font_size(14.0);
     let expanded_bounds =
         expand_text_bounds_for_baseline_shift(text_bounds, &visual_style, font_size);
-    let clip = if options.overflow == TextOverflow::Visible {
+    let clip = if options.overflow == TextOverflow::Visible && !pans_horizontally {
         None
     } else {
         Some(pad_clip_rect(expanded_bounds))
@@ -741,6 +761,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         annotated_text: node.node_data.modifier_slices.annotated_string(),
         text_style: node.node_data.modifier_slices.text_style().cloned(),
         text_layout_options: node.node_data.modifier_slices.text_layout_options(),
+        text_pan: node.node_data.modifier_slices.text_pan_resolver(),
         graphics_layer: has_graphics_layer.then_some(graphics_layer),
         children,
     }
@@ -1065,6 +1086,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -1088,6 +1110,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: Some(GraphicsLayer {
                 translation_x: tx,
                 ..GraphicsLayer::default()
@@ -1163,6 +1186,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -1186,6 +1210,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![child],
         };
@@ -1233,6 +1258,7 @@ mod tests {
                 annotated_text: None,
                 text_style: None,
                 text_layout_options: None,
+                text_pan: None,
                 graphics_layer: None,
                 children: vec![],
             };
@@ -1256,6 +1282,7 @@ mod tests {
                 annotated_text: None,
                 text_style: None,
                 text_layout_options: None,
+                text_pan: None,
                 graphics_layer: None,
                 children: vec![child],
             }
@@ -2010,6 +2037,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -2055,6 +2083,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![child],
         };
@@ -2095,6 +2124,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -2120,6 +2150,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![child],
         };
@@ -2159,6 +2190,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -2208,6 +2240,7 @@ mod tests {
                 overflow: cranpose_ui::TextOverflow::Clip,
                 ..Default::default()
             }),
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -2261,6 +2294,7 @@ mod tests {
                 overflow: cranpose_ui::TextOverflow::Clip,
                 ..Default::default()
             }),
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -2281,6 +2315,89 @@ mod tests {
         assert_eq!(
             clip.width, 322.0,
             "text clip should still preserve the full content box plus clip padding"
+        );
+    }
+
+    /// Single-line text fields provide a pan resolver: the glyphs must be
+    /// laid out unconstrained (no wrapping), shifted left by the pan offset,
+    /// and clipped to the field bounds.
+    #[test]
+    fn text_field_pan_shifts_glyphs_and_clips_to_field_bounds() {
+        let pan_offset = 25.0_f32;
+        let field_width = 80.0_f32;
+        let resolved_viewports = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let viewports = resolved_viewports.clone();
+        let make_snapshot = |text_pan: Option<cranpose_ui::TextPanResolver>| BuildNodeSnapshot {
+            node_id: 1,
+            placement: Point::default(),
+            size: Size {
+                width: field_width,
+                height: 24.0,
+            },
+            content_offset: Point::default(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            measured_max_width: Some(field_width),
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: Some(AnnotatedString::from(
+                "a very long single line of text that cannot fit",
+            )),
+            text_style: Some(TextStyle::default()),
+            text_layout_options: Some(cranpose_ui::TextLayoutOptions::default()),
+            text_pan,
+            graphics_layer: None,
+            children: vec![],
+        };
+
+        let text_node = |snapshot: BuildNodeSnapshot| {
+            let graph = build_layer_node_for_test(snapshot, 1.0, false);
+            let RenderNode::Primitive(text_primitive) = &graph.children[0] else {
+                panic!("expected text primitive");
+            };
+            let PrimitiveNode::Text(text) = &text_primitive.node else {
+                panic!("expected text primitive");
+            };
+            (**text).clone()
+        };
+
+        let unpanned = text_node(make_snapshot(None));
+        let panned = text_node(make_snapshot(Some(Rc::new(move |viewport| {
+            viewports.borrow_mut().push(viewport);
+            pan_offset
+        }))));
+
+        assert_eq!(
+            resolved_viewports.borrow().as_slice(),
+            &[field_width],
+            "the pan resolver must receive the content viewport width"
+        );
+        assert_eq!(
+            panned.rect.x, -pan_offset,
+            "text glyphs must shift left by the pan offset"
+        );
+        assert!(
+            panned.rect.width > field_width,
+            "panned single-line text must be laid out unconstrained, got {}",
+            panned.rect.width
+        );
+        assert!(
+            panned.rect.width >= unpanned.rect.width,
+            "unconstrained layout must not be narrower than wrapped layout"
+        );
+        assert!(
+            panned.rect.height <= unpanned.rect.height,
+            "single-line layout must not wrap onto extra lines"
+        );
+        let clip = panned
+            .clip
+            .expect("panned text field must clip to field bounds");
+        assert!(
+            clip.x + clip.width <= field_width + TEXT_CLIP_PAD + f32::EPSILON,
+            "clip must not extend past the field bounds, got {clip:?}"
         );
     }
 
@@ -2305,6 +2422,7 @@ mod tests {
             annotated_text: Some(AnnotatedString::from("scrolling")),
             text_style: Some(TextStyle::default()),
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -2327,6 +2445,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![child],
         };
@@ -2367,6 +2486,7 @@ mod tests {
             annotated_text: Some(AnnotatedString::from("scrolling")),
             text_style: Some(TextStyle::default()),
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -2389,6 +2509,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![child],
         };
@@ -2439,6 +2560,7 @@ mod tests {
                 ..SpanStyle::default()
             })),
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -2461,6 +2583,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![child],
         };
@@ -2500,6 +2623,7 @@ mod tests {
             annotated_text: Some(AnnotatedString::from("lazy")),
             text_style: Some(TextStyle::default()),
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -2522,6 +2646,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![child],
         };
@@ -2838,6 +2963,7 @@ mod tests {
                 },
             )),
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![],
         };
@@ -2860,6 +2986,7 @@ mod tests {
             annotated_text: None,
             text_style: None,
             text_layout_options: None,
+            text_pan: None,
             graphics_layer: None,
             children: vec![child],
         };

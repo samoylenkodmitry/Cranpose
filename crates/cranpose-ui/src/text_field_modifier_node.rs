@@ -43,6 +43,62 @@ const DEFAULT_LINE_HEIGHT: f32 = 20.0;
 /// Cursor width in pixels
 const CURSOR_WIDTH: f32 = 2.0;
 
+/// Computes the horizontal scroll (pan) offset that keeps the cursor visible
+/// inside the viewport of a single-line text field.
+///
+/// Mirrors Jetpack Compose's `TextFieldScrollerPosition.coerceOffset` behavior:
+/// - the offset only changes when the cursor would leave the viewport,
+/// - the offset is clamped so the text never detaches from the left edge and
+///   never scrolls further than needed to show the end of the text (plus the
+///   cursor width, so a cursor at the end of the text stays visible).
+///
+/// All values are in px within the field's content coordinate space.
+pub(crate) fn compute_horizontal_scroll_offset(
+    current_offset: f32,
+    cursor_x: f32,
+    text_width: f32,
+    viewport_width: f32,
+) -> f32 {
+    if viewport_width <= 0.0 {
+        return 0.0;
+    }
+    let max_offset = (text_width + CURSOR_WIDTH - viewport_width).max(0.0);
+    let mut offset = current_offset.clamp(0.0, max_offset);
+    let visible_end = offset + viewport_width - CURSOR_WIDTH;
+    if cursor_x > visible_end {
+        // Cursor ran past the right edge: pan so it sits at the right edge.
+        offset = cursor_x - viewport_width + CURSOR_WIDTH;
+    } else if cursor_x < offset {
+        // Cursor ran past the left edge: pan so it sits at the left edge.
+        offset = cursor_x;
+    }
+    offset.clamp(0.0, max_offset)
+}
+
+/// Intersects `rect` with `bounds`, returning `None` when nothing remains.
+///
+/// Used to clip selection/cursor/composition primitives to the field's
+/// viewport so they never draw outside the field bounds.
+pub(crate) fn intersect_rect(
+    rect: cranpose_ui_graphics::Rect,
+    bounds: cranpose_ui_graphics::Rect,
+) -> Option<cranpose_ui_graphics::Rect> {
+    let x0 = rect.x.max(bounds.x);
+    let y0 = rect.y.max(bounds.y);
+    let x1 = (rect.x + rect.width).min(bounds.x + bounds.width);
+    let y1 = (rect.y + rect.height).min(bounds.y + bounds.height);
+    (x1 > x0 && y1 > y0).then_some(cranpose_ui_graphics::Rect {
+        x: x0,
+        y: y0,
+        width: x1 - x0,
+        height: y1 - y0,
+    })
+}
+
+/// Resolver that recomputes (and stores) the horizontal pan offset for a
+/// text field given the current content viewport width in px.
+pub type TextPanResolver = Rc<dyn Fn(f32) -> f32>;
+
 /// Shared references for text field input handling.
 ///
 /// This struct bundles the shared state references passed to the pointer input handler,
@@ -64,6 +120,9 @@ pub(crate) struct TextFieldRefs {
     pub click_count: Rc<Cell<u8>>,
     /// Node ID for scoped layout invalidation
     pub node_id: Rc<Cell<Option<cranpose_core::NodeId>>>,
+    /// Horizontal scroll (pan) offset in px for single-line fields.
+    /// Keeps the cursor visible when the text is wider than the field.
+    pub scroll_offset: Rc<Cell<f32>>,
 }
 
 impl TextFieldRefs {
@@ -77,6 +136,7 @@ impl TextFieldRefs {
             last_click_time: Rc::new(Cell::new(None::<web_time::Instant>)),
             click_count: Rc::new(Cell::new(0_u8)),
             node_id: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
+            scroll_offset: Rc::new(Cell::new(0.0_f32)),
         }
     }
 }
@@ -108,12 +168,14 @@ pub struct TextFieldModifierNode {
     cached_selection: TextRange,
     /// Node state for delegation
     node_state: NodeState,
-    /// Measured size cache
-    measured_size: Cell<Size>,
+    /// Measured size cache (shared with the draw closure as the pan viewport)
+    measured_size: Rc<Cell<Size>>,
     /// Cached line height from last measurement (shared with draw closure)
     measured_line_height: Rc<Cell<f32>>,
     /// Cached pointer input handler
     cached_handler: Rc<dyn Fn(PointerEvent)>,
+    /// Cached horizontal pan resolver (recomputes + stores the scroll offset)
+    cached_pan_resolver: TextPanResolver,
 }
 
 impl std::fmt::Debug for TextFieldModifierNode {
@@ -137,6 +199,8 @@ impl TextFieldModifierNode {
         let line_limits = TextFieldLineLimits::default();
         let cached_handler =
             Self::create_handler(state.clone(), refs.clone(), line_limits, style.clone());
+        let cached_pan_resolver =
+            Self::create_pan_resolver(state.clone(), refs.clone(), line_limits, style.clone());
 
         Self {
             state,
@@ -148,19 +212,83 @@ impl TextFieldModifierNode {
             cached_text: value.text,
             cached_selection: value.selection,
             node_state: NodeState::new(),
-            measured_size: Cell::new(Size {
+            measured_size: Rc::new(Cell::new(Size {
                 width: 0.0,
                 height: 0.0,
-            }),
+            })),
             measured_line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
             cached_handler,
+            cached_pan_resolver,
         }
     }
 
     /// Creates a node with custom line limits.
     pub fn with_line_limits(mut self, line_limits: TextFieldLineLimits) -> Self {
         self.line_limits = line_limits;
+        self.cached_pan_resolver = Self::create_pan_resolver(
+            self.state.clone(),
+            self.refs.clone(),
+            line_limits,
+            self.style.clone(),
+        );
         self
+    }
+
+    /// Creates the horizontal pan resolver closure.
+    ///
+    /// The resolver takes the content viewport width (px) and returns the
+    /// horizontal scroll offset that keeps the cursor visible, storing the
+    /// result in `refs.scroll_offset` so pointer input and rendering agree.
+    /// It recomputes from the live state so layout, the render scene builder,
+    /// and the draw closure all observe the same value within a frame.
+    fn create_pan_resolver(
+        state: TextFieldState,
+        refs: TextFieldRefs,
+        line_limits: TextFieldLineLimits,
+        style: TextStyle,
+    ) -> TextPanResolver {
+        Rc::new(move |viewport_width: f32| {
+            if !line_limits.is_single_line() {
+                // Multi-line fields do not pan horizontally.
+                refs.scroll_offset.set(0.0);
+                return 0.0;
+            }
+            let text = state.text();
+            let pos = state.selection().start.min(text.len());
+            let text_width = crate::text::measure_text(
+                &crate::text::AnnotatedString::from(text.as_str()),
+                &style,
+            )
+            .width;
+            let cursor_x = crate::text::measure_text(
+                &crate::text::AnnotatedString::from(&text[..pos]),
+                &style,
+            )
+            .width;
+            let offset = compute_horizontal_scroll_offset(
+                refs.scroll_offset.get(),
+                cursor_x,
+                text_width,
+                viewport_width,
+            );
+            refs.scroll_offset.set(offset);
+            offset
+        })
+    }
+
+    /// Returns the pan resolver for single-line fields, `None` for multi-line.
+    ///
+    /// Exposed to the modifier slices so the render scene builder can pan the
+    /// text glyphs by the same offset used for the cursor and selection.
+    pub fn text_pan_resolver(&self) -> Option<TextPanResolver> {
+        self.line_limits
+            .is_single_line()
+            .then(|| self.cached_pan_resolver.clone())
+    }
+
+    /// Returns the current horizontal scroll (pan) offset in px.
+    pub fn scroll_offset(&self) -> f32 {
+        self.refs.scroll_offset.get()
     }
 
     /// Returns the current line limits configuration.
@@ -179,8 +307,11 @@ impl TextFieldModifierNode {
         use crate::word_boundaries::find_word_boundaries;
 
         Rc::new(move |event: PointerEvent| {
-            // Account for content padding offsets
-            let click_x = (event.position.x - refs.content_offset.get()).max(0.0);
+            // Account for content padding offsets and the horizontal pan
+            // offset (single-line fields pan to keep the cursor visible, so
+            // clicks must map back into text space).
+            let click_x =
+                (event.position.x - refs.content_offset.get() + refs.scroll_offset.get()).max(0.0);
             let click_y = (event.position.y - refs.content_y_offset.get()).max(0.0);
 
             match event.kind {
@@ -414,11 +545,12 @@ impl TextFieldModifierNode {
             return;
         }
 
-        // Use proper text layout hit testing instead of character-based calculation
+        // Use proper text layout hit testing instead of character-based calculation.
+        // Map the viewport-relative offset into text space by adding the pan offset.
         let byte_offset = crate::text::get_offset_for_position(
             &crate::text::AnnotatedString::from(text.as_str()),
             &self.style,
-            x_offset,
+            x_offset + self.refs.scroll_offset.get(),
             0.0,
         );
 
@@ -510,6 +642,10 @@ impl LayoutModifierNode for TextFieldModifierNode {
         let size = Size { width, height };
         self.measured_size.set(size);
 
+        // Refresh the horizontal pan offset so it is up to date for pointer
+        // input and rendering even before the next draw pass runs.
+        let _ = (self.cached_pan_resolver)(size.width);
+
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(size)
     }
 
@@ -552,8 +688,10 @@ impl DrawModifierNode for TextFieldModifierNode {
         let selection_brush = self.selection_brush.clone();
         let style = self.style.clone();
         let cached_line_height = self.measured_line_height.clone();
+        let measured_size = self.measured_size.clone();
+        let pan_resolver = self.cached_pan_resolver.clone();
 
-        Some(Rc::new(move |_size| {
+        Some(Rc::new(move |size| {
             // Check focus at DRAW time
             if !*is_focused.borrow() {
                 return vec![];
@@ -568,6 +706,31 @@ impl DrawModifierNode for TextFieldModifierNode {
             // Reuse line_height from the most recent layout measurement
             // instead of re-measuring the full text.
             let line_height = cached_line_height.get();
+
+            // Content viewport (excludes padding). Fall back to the node size
+            // when measurement has not run yet.
+            let measured = measured_size.get();
+            let viewport_width = if measured.width > 0.0 {
+                measured.width
+            } else {
+                (size.width - padding_left).max(0.0)
+            };
+            let viewport_height = if measured.height > 0.0 {
+                measured.height
+            } else {
+                (size.height - padding_top).max(0.0)
+            };
+            // Horizontal pan that keeps the cursor visible (0 for multi-line).
+            let pan = pan_resolver(viewport_width);
+            // Everything the field draws (selection, IME underline, cursor)
+            // is clipped to the content viewport so primitives never extend
+            // outside the field bounds.
+            let clip_bounds = cranpose_ui_graphics::Rect {
+                x: padding_left,
+                y: padding_top,
+                width: viewport_width,
+                height: viewport_height,
+            };
 
             // Draw selection highlight
             if !selection.collapsed() {
@@ -590,13 +753,15 @@ impl DrawModifierNode for TextFieldModifierNode {
                             &style,
                         )
                         .width
-                            + padding_left;
+                            + padding_left
+                            - pan;
                         let sel_end_x = crate::text::measure_text(
                             &crate::text::AnnotatedString::from(&line[..sel_end_in_line]),
                             &style,
                         )
                         .width
-                            + padding_left;
+                            + padding_left
+                            - pan;
                         let sel_width = sel_end_x - sel_start_x;
 
                         if sel_width > 0.0 {
@@ -606,10 +771,12 @@ impl DrawModifierNode for TextFieldModifierNode {
                                 width: sel_width,
                                 height: line_height,
                             };
-                            primitives.push(DrawPrimitive::Rect {
-                                rect: sel_rect,
-                                brush: selection_brush.clone(),
-                            });
+                            if let Some(clipped) = intersect_rect(sel_rect, clip_bounds) {
+                                primitives.push(DrawPrimitive::Rect {
+                                    rect: clipped,
+                                    brush: selection_brush.clone(),
+                                });
+                            }
                         }
                     }
                     byte_offset = line_end + 1;
@@ -658,13 +825,15 @@ impl DrawModifierNode for TextFieldModifierNode {
                                 &style,
                             )
                             .width
-                                + padding_left;
+                                + padding_left
+                                - pan;
                             let comp_end_x = crate::text::measure_text(
                                 &crate::text::AnnotatedString::from(&line[..comp_end_in_line]),
                                 &style,
                             )
                             .width
-                                + padding_left;
+                                + padding_left
+                                - pan;
                             let comp_width = comp_end_x - comp_start_x;
 
                             if comp_width > 0.0 {
@@ -676,10 +845,12 @@ impl DrawModifierNode for TextFieldModifierNode {
                                     width: comp_width,
                                     height: underline_height,
                                 };
-                                primitives.push(DrawPrimitive::Rect {
-                                    rect: underline_rect,
-                                    brush: underline_brush.clone(),
-                                });
+                                if let Some(clipped) = intersect_rect(underline_rect, clip_bounds) {
+                                    primitives.push(DrawPrimitive::Rect {
+                                        rect: clipped,
+                                        brush: underline_brush.clone(),
+                                    });
+                                }
                             }
                         }
                         byte_offset = line_end + 1;
@@ -698,7 +869,8 @@ impl DrawModifierNode for TextFieldModifierNode {
                     &style,
                 )
                 .width
-                    + padding_left;
+                    + padding_left
+                    - pan;
                 let cursor_y = padding_top + line_index as f32 * line_height;
 
                 let cursor_rect = cranpose_ui_graphics::Rect {
@@ -708,10 +880,12 @@ impl DrawModifierNode for TextFieldModifierNode {
                     height: line_height,
                 };
 
-                primitives.push(DrawPrimitive::Rect {
-                    rect: cursor_rect,
-                    brush: cursor_brush.clone(),
-                });
+                if let Some(clipped) = intersect_rect(cursor_rect, clip_bounds) {
+                    primitives.push(DrawPrimitive::Rect {
+                        rect: clipped,
+                        brush: cursor_brush.clone(),
+                    });
+                }
             }
 
             primitives
@@ -862,6 +1036,14 @@ impl ModifierNodeElement for TextFieldElement {
 
         // Recreate the cached handler with the new state but same refs
         node.cached_handler = TextFieldModifierNode::create_handler(
+            node.state.clone(),
+            node.refs.clone(),
+            node.line_limits,
+            self.style.clone(),
+        );
+
+        // Recreate the pan resolver so it captures the new state/style/limits
+        node.cached_pan_resolver = TextFieldModifierNode::create_pan_resolver(
             node.state.clone(),
             node.refs.clone(),
             node.line_limits,

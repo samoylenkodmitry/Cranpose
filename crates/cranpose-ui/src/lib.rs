@@ -140,7 +140,7 @@ pub use text::{
     TextLayoutResult, TextLinePrefixWidths, TextMeasurer, TextMetrics, TextOptions, TextOverflow,
     TextShaping, TextStyle,
 };
-pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
+pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode, TextPanResolver};
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};
 pub use widgets::clickable_text::ClickableText;
 pub use widgets::lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec};
