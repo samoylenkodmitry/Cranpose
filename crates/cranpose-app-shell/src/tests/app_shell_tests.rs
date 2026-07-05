@@ -2350,6 +2350,7 @@ struct TextFieldDispatchProbe {
     delete_in_applied_snapshot: Cell<bool>,
     finish_composition_count: Cell<usize>,
     last_composing_region: Cell<Option<(usize, usize)>>,
+    last_selection: Cell<Option<(usize, usize)>>,
 }
 
 impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for TextFieldDispatchProbe {
@@ -2401,6 +2402,10 @@ impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for TextFieldDispatc
     fn set_composing_region(&self, start_bytes: usize, end_bytes: usize) {
         self.last_composing_region
             .set(Some((start_bytes, end_bytes)));
+    }
+
+    fn set_selection(&self, start_bytes: usize, end_bytes: usize) {
+        self.last_selection.set(Some((start_bytes, end_bytes)));
     }
 
     fn editor_state(&self) -> Option<cranpose_ui::ImeEditorState> {
@@ -2570,6 +2575,7 @@ fn ime_session_shell_methods_dispatch_to_focused_field() {
     // Without a focused field nothing dispatches.
     assert!(!shell.on_ime_finish_composing());
     assert!(!shell.on_ime_set_composing_region(0, 1));
+    assert!(!shell.on_ime_set_selection(0, 1));
     assert!(shell.ime_editor_state().is_none());
 
     let focus_flag = Rc::new(RefCell::new(false));
@@ -2584,6 +2590,10 @@ fn ime_session_shell_methods_dispatch_to_focused_field() {
 
     assert!(shell.on_ime_set_composing_region(2, 5));
     assert_eq!(handler.last_composing_region.get(), Some((2, 5)));
+
+    // Gboard's spacebar-swipe scrubs the caret via setSelection.
+    assert!(shell.on_ime_set_selection(3, 3));
+    assert_eq!(handler.last_selection.get(), Some((3, 3)));
 
     let state = shell.ime_editor_state().expect("focused editor state");
     assert_eq!(state.text, "probe");

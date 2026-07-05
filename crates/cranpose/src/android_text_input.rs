@@ -63,6 +63,12 @@ pub(crate) enum AndroidImeEvent {
         start_bytes: usize,
         end_bytes: usize,
     },
+    /// `setSelection`: move the selection/caret without editing text (UTF-8
+    /// bytes). Gboard's spacebar-swipe cursor control scrubs the caret this way.
+    SetSelection {
+        start_bytes: usize,
+        end_bytes: usize,
+    },
     /// `finishComposingText`: keep the composed text, clear the region.
     FinishComposing,
     /// `deleteSurroundingText`, already converted to UTF-8 byte counts.
@@ -373,6 +379,24 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetC
     push_ime_event_for_handle(
         queue_handle,
         AndroidImeEvent::SetComposingRegion {
+            start_bytes: non_negative(start_bytes),
+            end_bytes: non_negative(end_bytes),
+        },
+    );
+}
+
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetSelection(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    queue_handle: jlong,
+    start_bytes: jint,
+    end_bytes: jint,
+) {
+    push_ime_event_for_handle(
+        queue_handle,
+        AndroidImeEvent::SetSelection {
             start_bytes: non_negative(start_bytes),
             end_bytes: non_negative(end_bytes),
         },

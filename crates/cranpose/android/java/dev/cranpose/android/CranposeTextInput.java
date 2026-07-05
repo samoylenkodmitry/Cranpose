@@ -334,6 +334,24 @@ public final class CranposeTextInput {
         }
 
         @Override
+        public boolean setSelection(int start, int end) {
+            if (!state.disposed) {
+                // Move the caret/selection natively (BaseInputConnection's
+                // default only touches the local Editable mirror). This is how
+                // Gboard's spacebar-swipe scrubs the cursor.
+                Editable editable = getEditable();
+                int length = editable.length();
+                int clampedStart = Math.max(0, Math.min(Math.min(start, end), length));
+                int clampedEnd = Math.max(0, Math.min(Math.max(start, end), length));
+                int startBytes = utf8Length(editable.subSequence(0, clampedStart));
+                int endBytes =
+                        startBytes + utf8Length(editable.subSequence(clampedStart, clampedEnd));
+                nativeImeSetSelection(state.queueHandle, startBytes, endBytes);
+            }
+            return super.setSelection(start, end);
+        }
+
+        @Override
         public boolean finishComposingText() {
             if (!state.disposed) {
                 nativeImeFinishComposing(state.queueHandle);
@@ -421,6 +439,9 @@ public final class CranposeTextInput {
             long queueHandle, String text, int cursorBytes);
 
     private static native void nativeImeSetComposingRegion(
+            long queueHandle, int startBytes, int endBytes);
+
+    private static native void nativeImeSetSelection(
             long queueHandle, int startBytes, int endBytes);
 
     private static native void nativeImeFinishComposing(long queueHandle);

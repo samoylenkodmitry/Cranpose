@@ -134,6 +134,12 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
         } => {
             let _ = shell.on_ime_set_composing_region(start_bytes, end_bytes);
         }
+        AndroidImeEvent::SetSelection {
+            start_bytes,
+            end_bytes,
+        } => {
+            let _ = shell.on_ime_set_selection(start_bytes, end_bytes);
+        }
         AndroidImeEvent::FinishComposing => {
             let _ = shell.on_ime_finish_composing();
         }

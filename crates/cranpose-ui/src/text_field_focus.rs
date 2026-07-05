@@ -61,6 +61,14 @@ pub trait FocusedTextFieldHandler {
     fn set_composing_region(&self, start_bytes: usize, end_bytes: usize) {
         let _ = (start_bytes, end_bytes);
     }
+    /// Move the selection/caret to `[start_bytes, end_bytes)` without editing
+    /// text (Android `InputConnection.setSelection` semantics). Used by
+    /// Gboard's spacebar-swipe cursor control, which scrubs the caret by
+    /// repeatedly setting the selection. Offsets are UTF-8 bytes; implementations
+    /// clamp them to valid character boundaries.
+    fn set_selection(&self, start_bytes: usize, end_bytes: usize) {
+        let _ = (start_bytes, end_bytes);
+    }
     /// Snapshot of the current editable state for platform IMEs
     /// (`InputConnection` text queries, session seeding). `None` when the
     /// handler cannot expose its state.
@@ -196,6 +204,15 @@ impl TextFieldFocusState {
         }
     }
 
+    fn dispatch_ime_set_selection(&self, start_bytes: usize, end_bytes: usize) -> bool {
+        if let Some(handler) = self.focused_handler() {
+            handler.set_selection(start_bytes, end_bytes);
+            true
+        } else {
+            false
+        }
+    }
+
     fn focused_editor_state(&self) -> Option<ImeEditorState> {
         self.focused_handler()
             .and_then(|handler| handler.editor_state())
@@ -304,6 +321,16 @@ pub fn dispatch_ime_finish_composing() -> bool {
 pub fn dispatch_ime_set_composing_region(start_bytes: usize, end_bytes: usize) -> bool {
     crate::render_state::with_text_field_focus(|state| {
         state.dispatch_ime_set_composing_region(start_bytes, end_bytes)
+    })
+}
+
+/// Moves the focused field's selection/caret to `[start_bytes, end_bytes)`
+/// without editing text (Android `setSelection` semantics; the path Gboard's
+/// spacebar-swipe uses to scrub the cursor).
+/// Returns true if a text field was focused and received the event.
+pub fn dispatch_ime_set_selection(start_bytes: usize, end_bytes: usize) -> bool {
+    crate::render_state::with_text_field_focus(|state| {
+        state.dispatch_ime_set_selection(start_bytes, end_bytes)
     })
 }
 

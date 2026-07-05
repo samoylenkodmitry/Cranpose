@@ -916,6 +916,29 @@ where
         })
     }
 
+    /// Moves the focused field's selection/caret to `[start_bytes, end_bytes)`
+    /// without editing text (Android `InputConnection.setSelection`; the path
+    /// Gboard's spacebar-swipe uses to scrub the cursor). Offsets are UTF-8
+    /// bytes. Returns `true` if a text field consumed the event.
+    pub fn on_ime_set_selection(&mut self, start_bytes: usize, end_bytes: usize) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| {
+            let handled = run_in_mutable_snapshot(|| {
+                cranpose_ui::text_field_focus::dispatch_ime_set_selection(start_bytes, end_bytes)
+            })
+            .unwrap_or(false);
+
+            // A selection-only change never reflows text, so it needs a redraw
+            // but not a layout pass.
+            if handled {
+                self.mark_dirty();
+            }
+
+            handled
+        })
+    }
+
     /// Returns a snapshot of the focused text field's editable state for
     /// platform IMEs (text, selection and composition in UTF-8 bytes), or
     /// `None` when no text field is focused.
