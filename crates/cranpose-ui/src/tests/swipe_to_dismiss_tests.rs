@@ -76,6 +76,11 @@ impl Harness {
         self.controller.current_offset()
     }
 
+    /// Non-reactive read of the background-reveal flag driven by the gesture.
+    fn revealed(&self) -> bool {
+        self.controller.revealed.get_non_reactive()
+    }
+
     /// Advances the frame clock, driving springs and the settle watcher.
     fn pump_frames(&mut self, frames: usize) {
         let handle = self._runtime.handle();
@@ -274,6 +279,47 @@ fn consumed_move_abandons_the_gesture_and_restores() {
     harness.pump_frames(300);
     assert_eq!(harness.dismiss_count.get(), 0);
     assert!(harness.offset().abs() <= 0.5);
+}
+
+#[test]
+fn background_reveal_tracks_displacement() {
+    let mut harness = Harness::new(200.0, 0.5);
+    assert!(!harness.revealed(), "background hidden at rest");
+
+    harness.send(&down(10.0, 10.0));
+    assert!(
+        !harness.revealed(),
+        "still hidden before the swipe captures"
+    );
+
+    harness.send(&move_to(30.0, 10.0)); // captured, offset 20
+    assert!(harness.revealed(), "revealed once the row is displaced");
+
+    // Below threshold: springs back and the reveal turns off at rest so the
+    // background cannot flash while the row sits still.
+    harness.send(&up(30.0, 10.0));
+    harness.pump_frames(300);
+    assert!(harness.offset().abs() <= 0.5);
+    assert!(
+        !harness.revealed(),
+        "background hidden again after springing back to rest"
+    );
+}
+
+#[test]
+fn background_reveal_stays_on_through_dismissal() {
+    let mut harness = Harness::new(200.0, 0.5);
+    harness.send(&down(10.0, 10.0));
+    harness.send(&move_to(30.0, 10.0));
+    harness.send(&move_to(140.0, 10.0)); // offset 130 >= threshold 100
+    harness.send(&up(140.0, 10.0));
+    harness.pump_frames(300);
+
+    assert_eq!(harness.dismiss_count.get(), 1);
+    assert!(
+        harness.revealed(),
+        "background stays revealed while the dismissed row rests off-screen"
+    );
 }
 
 #[test]

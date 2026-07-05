@@ -284,5 +284,9 @@ mod lazy_list_viewport_tests;
 mod swipe_to_dismiss_lazy_tests;
 
 #[cfg(test)]
+#[path = "tests/swipe_to_dismiss_render_tests.rs"]
+mod swipe_to_dismiss_render_tests;
+
+#[cfg(test)]
 #[path = "tests/lazy_list_recompose_tests.rs"]
 mod lazy_list_recompose_tests;
