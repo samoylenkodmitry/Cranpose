@@ -276,6 +276,10 @@ mod cursor_position_tests;
 mod popup_tests;
 
 #[cfg(test)]
+#[path = "tests/selection_handle_tests.rs"]
+mod selection_handle_tests;
+
+#[cfg(test)]
 #[path = "tests/tab_switching_tests.rs"]
 mod tab_switching_tests;
 

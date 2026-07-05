@@ -16,6 +16,7 @@
 //! - Tracks focus state for cursor visibility
 //! - Handles pointer events for cursor positioning
 
+use cranpose_core::{mutableStateOf, MutableState};
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
@@ -23,10 +24,83 @@ use cranpose_foundation::{
     NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode, PointerSource,
     SemanticsConfiguration, SemanticsNode, Size,
 };
-use cranpose_ui_graphics::{Brush, Color};
+use cranpose_ui_graphics::{Brush, Color, Point};
 use std::cell::{Cell, RefCell};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+
+/// Live geometry a `BasicTextField` needs to place and drive its finger
+/// selection handles: whether the field is focused and was touched, its
+/// on-screen origin (window coordinates) and the metrics that map a window
+/// position back to a text offset.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TextFieldHandleMetrics {
+    pub focused: bool,
+    pub touch: bool,
+    /// Field node's top-left in window coordinates.
+    pub node_origin: Point,
+    pub padding_left: f32,
+    pub padding_top: f32,
+    pub scroll_offset: f32,
+    pub line_height: f32,
+}
+
+/// Shared channel by which a `TextFieldModifierNode` publishes its live handle
+/// [`TextFieldHandleMetrics`] to the `BasicTextField` composable that renders
+/// the handles. Reads subscribe reactively (backed by a revision `MutableState`)
+/// so the composable recomposes when the field's focus/geometry changes.
+#[derive(Clone)]
+pub struct TextFieldHandleController {
+    inner: Rc<TextFieldHandleControllerInner>,
+}
+
+impl PartialEq for TextFieldHandleController {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+struct TextFieldHandleControllerInner {
+    metrics: Cell<Option<TextFieldHandleMetrics>>,
+    revision: MutableState<u64>,
+}
+
+impl TextFieldHandleController {
+    /// Creates a controller. Must run with an active runtime (i.e. inside a
+    /// composition, via `remember`).
+    pub fn new() -> Self {
+        Self {
+            inner: Rc::new(TextFieldHandleControllerInner {
+                metrics: Cell::new(None),
+                revision: mutableStateOf(0u64),
+            }),
+        }
+    }
+
+    /// Publishes fresh metrics, waking any reader only when they actually
+    /// changed (so a resting frame does not spin recomposition).
+    pub(crate) fn publish(&self, metrics: TextFieldHandleMetrics) {
+        if self.inner.metrics.get() != Some(metrics) {
+            self.inner.metrics.set(Some(metrics));
+            self.inner
+                .revision
+                .update(|value| *value = value.wrapping_add(1));
+        }
+    }
+
+    /// Reads the latest metrics, subscribing the current recompose scope to
+    /// future changes.
+    pub fn metrics(&self) -> Option<TextFieldHandleMetrics> {
+        let _ = self.inner.revision.value();
+        self.inner.metrics.get()
+    }
+}
+
+impl Default for TextFieldHandleController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Default cursor color (white - visible on dark backgrounds)
 const DEFAULT_CURSOR_COLOR: Color = Color(1.0, 1.0, 1.0, 1.0);
@@ -126,6 +200,10 @@ pub(crate) struct TextFieldRefs {
     /// touch-only affordances: finger selection handles are shown for touch /
     /// stylus presses, while a mouse keeps a clean caret.
     pub last_pointer_source: Rc<Cell<PointerSource>>,
+    /// Field node's top-left in window coordinates, derived from the most recent
+    /// pointer event (`global_position - position`). Used to place selection
+    /// handles in the top-level overlay, which is in window space.
+    pub node_origin: Rc<Cell<Point>>,
 }
 
 impl TextFieldRefs {
@@ -142,6 +220,7 @@ impl TextFieldRefs {
             node_id: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
             scroll_offset: Rc::new(Cell::new(0.0_f32)),
             last_pointer_source: Rc::new(Cell::new(PointerSource::Unknown)),
+            node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
         }
     }
 }
@@ -181,6 +260,10 @@ pub struct TextFieldModifierNode {
     cached_handler: Rc<dyn Fn(PointerEvent)>,
     /// Cached horizontal pan resolver (recomputes + stores the scroll offset)
     cached_pan_resolver: TextPanResolver,
+    /// Channel to publish live handle metrics to the `BasicTextField`
+    /// composable that renders the finger selection handles. `None` when the
+    /// field is used without handle support.
+    handle_controller: Option<TextFieldHandleController>,
 }
 
 impl std::fmt::Debug for TextFieldModifierNode {
@@ -224,6 +307,7 @@ impl TextFieldModifierNode {
             measured_line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
             cached_handler,
             cached_pan_resolver,
+            handle_controller: None,
         }
     }
 
@@ -236,6 +320,12 @@ impl TextFieldModifierNode {
             line_limits,
             self.style.clone(),
         );
+        self
+    }
+
+    /// Installs the controller the field publishes live handle metrics to.
+    pub fn with_handle_controller(mut self, controller: TextFieldHandleController) -> Self {
+        self.handle_controller = Some(controller);
         self
     }
 
@@ -316,6 +406,14 @@ impl TextFieldModifierNode {
         use crate::word_boundaries::find_word_boundaries;
 
         Rc::new(move |event: PointerEvent| {
+            // Track the field node's window-space origin so selection handles
+            // (rendered in the top-level overlay, which is in window space) can
+            // be positioned relative to the field.
+            refs.node_origin.set(Point {
+                x: event.global_position.x - event.position.x,
+                y: event.global_position.y - event.position.y,
+            });
+
             // Account for content padding offsets and the horizontal pan
             // offset (single-line fields pan to keep the cursor visible, so
             // clicks must map back into text space).
@@ -745,10 +843,26 @@ impl DrawModifierNode for TextFieldModifierNode {
         let cached_line_height = self.measured_line_height.clone();
         let measured_size = self.measured_size.clone();
         let pan_resolver = self.cached_pan_resolver.clone();
+        let handle_controller = self.handle_controller.clone();
+        let node_origin = self.refs.node_origin.clone();
+        let last_pointer_source = self.refs.last_pointer_source.clone();
 
         Some(Rc::new(move |size| {
             // Check focus at DRAW time
             if !*is_focused.borrow() {
+                // Publish an unfocused snapshot so the composable clears any
+                // finger handles when the field loses focus.
+                if let Some(controller) = &handle_controller {
+                    controller.publish(TextFieldHandleMetrics {
+                        focused: false,
+                        touch: false,
+                        node_origin: node_origin.get(),
+                        padding_left: 0.0,
+                        padding_top: 0.0,
+                        scroll_offset: 0.0,
+                        line_height: cached_line_height.get(),
+                    });
+                }
                 return vec![];
             }
 
@@ -777,6 +891,20 @@ impl DrawModifierNode for TextFieldModifierNode {
             };
             // Horizontal pan that keeps the cursor visible (0 for multi-line).
             let pan = pan_resolver(viewport_width);
+
+            // Publish live geometry so the `BasicTextField` composable can place
+            // and drive the finger selection handles.
+            if let Some(controller) = &handle_controller {
+                controller.publish(TextFieldHandleMetrics {
+                    focused: true,
+                    touch: last_pointer_source.get().is_touch_like(),
+                    node_origin: node_origin.get(),
+                    padding_left,
+                    padding_top,
+                    scroll_offset: pan,
+                    line_height,
+                });
+            }
             // Everything the field draws (selection, IME underline, cursor)
             // is clipped to the content viewport so primitives never extend
             // outside the field bounds.
@@ -1008,6 +1136,9 @@ pub struct TextFieldElement {
     cursor_color: Color,
     /// Line limits configuration
     line_limits: TextFieldLineLimits,
+    /// Channel the node publishes live handle metrics to (finger selection
+    /// handles). `None` disables handle support.
+    handle_controller: Option<TextFieldHandleController>,
 }
 
 impl TextFieldElement {
@@ -1018,6 +1149,7 @@ impl TextFieldElement {
             style,
             cursor_color: DEFAULT_CURSOR_COLOR,
             line_limits: TextFieldLineLimits::default(),
+            handle_controller: None,
         }
     }
 
@@ -1030,6 +1162,12 @@ impl TextFieldElement {
     /// Creates an element with custom line limits.
     pub fn with_line_limits(mut self, line_limits: TextFieldLineLimits) -> Self {
         self.line_limits = line_limits;
+        self
+    }
+
+    /// Installs the finger-handle metrics channel shared with the composable.
+    pub fn with_handle_controller(mut self, controller: TextFieldHandleController) -> Self {
+        self.handle_controller = Some(controller);
         self
     }
 }
@@ -1077,9 +1215,13 @@ impl ModifierNodeElement for TextFieldElement {
     type Node = TextFieldModifierNode;
 
     fn create(&self) -> Self::Node {
-        TextFieldModifierNode::new(self.state.clone(), self.style.clone())
+        let mut node = TextFieldModifierNode::new(self.state.clone(), self.style.clone())
             .with_cursor_color(self.cursor_color)
-            .with_line_limits(self.line_limits)
+            .with_line_limits(self.line_limits);
+        if let Some(controller) = self.handle_controller.clone() {
+            node = node.with_handle_controller(controller);
+        }
+        node
     }
 
     fn update(&self, node: &mut Self::Node) {
@@ -1088,6 +1230,7 @@ impl ModifierNodeElement for TextFieldElement {
         node.style = self.style.clone();
         node.cursor_brush = Brush::solid(self.cursor_color);
         node.line_limits = self.line_limits;
+        node.handle_controller = self.handle_controller.clone();
 
         // Recreate the cached handler with the new state but same refs
         node.cached_handler = TextFieldModifierNode::create_handler(
