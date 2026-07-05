@@ -19,6 +19,7 @@ pub mod progress_indicator;
 pub mod row;
 pub mod scopes;
 pub mod spacer;
+pub mod swipe_to_dismiss;
 pub mod text;
 
 pub use animated_visibility::*;

@@ -148,6 +148,7 @@ pub use text_modifier_node::{TextModifierElement, TextModifierNode};
 pub use widgets::clickable_text::ClickableText;
 pub use widgets::lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec};
 pub use widgets::linked_text::LinkedText;
+pub use widgets::swipe_to_dismiss::{SwipeToDismiss, SwipeToDismissSpec};
 
 // Debug utilities
 pub use debug::{
