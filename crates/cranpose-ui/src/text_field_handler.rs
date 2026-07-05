@@ -31,6 +31,23 @@ impl TextFieldHandler {
             line_limits,
         })
     }
+
+    /// Invalidations every text mutation needs.
+    ///
+    /// A text change can grow or shrink the field (wrapped lines added/removed),
+    /// so the field must re-measure, not just redraw. The scoped
+    /// `schedule_layout_repass` re-measures the field's subtree on the same
+    /// frame the input is dispatched; without it a field only relayouts when
+    /// something else forces a full rebuild (e.g. focus loss), which is why
+    /// IME-composed edits appeared to "stick" until the field was blurred.
+    fn on_text_mutated(&self) {
+        crate::cursor_animation::reset_cursor_blink();
+        // Scoped O(subtree) relayout instead of O(app size) global invalidation.
+        if let Some(node_id) = self.node_id {
+            crate::schedule_layout_repass(node_id);
+        }
+        crate::request_render_invalidation();
+    }
 }
 
 impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
@@ -46,12 +63,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         let consumed = handle_key_event_impl(&self.state, event, self.line_limits);
 
         if consumed {
-            crate::cursor_animation::reset_cursor_blink();
-            // Use scoped invalidation for O(subtree) instead of O(app size)
-            if let Some(node_id) = self.node_id {
-                crate::schedule_layout_repass(node_id);
-            }
-            crate::request_render_invalidation();
+            self.on_text_mutated();
         }
 
         consumed
@@ -61,12 +73,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         self.state.edit(|buffer| {
             buffer.insert(text);
         });
-        crate::cursor_animation::reset_cursor_blink();
-        // Text content changed - use scoped invalidation for O(subtree)
-        if let Some(node_id) = self.node_id {
-            crate::schedule_layout_repass(node_id);
-        }
-        crate::request_render_invalidation();
+        self.on_text_mutated();
     }
 
     fn delete_surrounding(&self, before_bytes: usize, after_bytes: usize) {
@@ -78,11 +85,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             buffer.delete_surrounding(before_bytes, after_bytes);
         });
         self.state.set_desired_column(None);
-        crate::cursor_animation::reset_cursor_blink();
-        if let Some(node_id) = self.node_id {
-            crate::schedule_layout_repass(node_id);
-        }
-        crate::request_render_invalidation();
+        self.on_text_mutated();
     }
 
     fn copy_selection(&self) -> Option<String> {
@@ -118,8 +121,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         self.state.edit(|buffer| {
             buffer.delete(selection);
         });
-        crate::cursor_animation::reset_cursor_blink();
-        crate::request_render_invalidation();
+        self.on_text_mutated();
         Some(text)
     }
 
@@ -155,8 +157,9 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             }
         });
 
-        // Request redraw for composition underline
-        crate::request_render_invalidation();
+        // Preedit changes the text (grows/shrinks the field), so it needs a
+        // relayout, not just a redraw of the composition underline.
+        self.on_text_mutated();
     }
 
     fn finish_composition(&self) {

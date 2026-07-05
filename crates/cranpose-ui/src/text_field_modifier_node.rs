@@ -34,9 +34,6 @@ const DEFAULT_CURSOR_COLOR: Color = Color(1.0, 1.0, 1.0, 1.0);
 /// Default selection highlight color (light blue with transparency)
 const DEFAULT_SELECTION_COLOR: Color = Color(0.0, 0.5, 1.0, 0.3);
 
-/// Double-click timeout in milliseconds
-const DOUBLE_CLICK_MS: u128 = 500;
-
 /// Default line height for empty text fields
 const DEFAULT_LINE_HEIGHT: f32 = 20.0;
 
@@ -116,6 +113,8 @@ pub(crate) struct TextFieldRefs {
     pub drag_anchor: Rc<Cell<Option<usize>>>,
     /// Last click time for double/triple-click detection
     pub last_click_time: Rc<Cell<Option<web_time::Instant>>>,
+    /// Last click screen position, for multi-tap slop gating
+    pub last_click_pos: Rc<Cell<Option<(f32, f32)>>>,
     /// Click count (1=single, 2=double, 3=triple)
     pub click_count: Rc<Cell<u8>>,
     /// Node ID for scoped layout invalidation
@@ -134,6 +133,7 @@ impl TextFieldRefs {
             content_y_offset: Rc::new(Cell::new(0.0_f32)),
             drag_anchor: Rc::new(Cell::new(None::<usize>)),
             last_click_time: Rc::new(Cell::new(None::<web_time::Instant>)),
+            last_click_pos: Rc::new(Cell::new(None::<(f32, f32)>)),
             click_count: Rc::new(Cell::new(0_u8)),
             node_id: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
             scroll_offset: Rc::new(Cell::new(0.0_f32)),
@@ -303,7 +303,11 @@ impl TextFieldModifierNode {
         line_limits: TextFieldLineLimits,
         style: TextStyle, // Add style
     ) -> Rc<dyn Fn(PointerEvent)> {
-        // Use word_boundaries module for double-click word selection
+        // Word boundaries for double-tap; selection classification/line
+        // boundaries for the tap-count-driven selection gestures.
+        use crate::text_selection::{
+            classify_tap, find_line_boundaries, TapCount, MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS,
+        };
         use crate::word_boundaries::find_word_boundaries;
 
         Rc::new(move |event: PointerEvent| {
@@ -330,44 +334,58 @@ impl TextFieldModifierNode {
                         click_y,
                     );
 
-                    // Detect double-click
-                    let is_double_click = if let Some(last) = refs.last_click_time.get() {
-                        now.duration_since(last).as_millis() < DOUBLE_CLICK_MS
-                    } else {
-                        false
-                    };
+                    // Classify the press into single/double/triple by both the
+                    // time since and the distance from the previous press (a tap
+                    // far from the last one starts a fresh single tap, matching
+                    // Android's double-tap slop).
+                    let previous = refs.click_count.get().try_into().ok().and_then(|count| {
+                        let (px, py) = refs.last_click_pos.get()?;
+                        Some((count, px, py))
+                    });
+                    let elapsed_ms = refs
+                        .last_click_time
+                        .get()
+                        .map(|last| now.duration_since(last).as_millis())
+                        .unwrap_or(u128::MAX);
+                    let tap = classify_tap(
+                        previous,
+                        elapsed_ms,
+                        event.position.x,
+                        event.position.y,
+                        MULTI_TAP_TIMEOUT_MS,
+                        MULTI_TAP_SLOP_PX,
+                    );
 
-                    if is_double_click {
-                        // Increment click count for potential triple-click
-                        let count = refs.click_count.get() + 1;
-                        refs.click_count.set(count.min(3));
-
-                        if count >= 3 {
-                            // Triple-click: select all
+                    match tap {
+                        TapCount::Triple => {
+                            // Triple tap/click: select the line/paragraph.
+                            let (line_start, line_end) = find_line_boundaries(&text, pos);
                             state.edit(|buffer| {
-                                buffer.select_all();
+                                buffer.select(TextRange::new(line_start, line_end));
                             });
-                            // Set drag anchor to start for select-all drag
-                            refs.drag_anchor.set(Some(0));
-                        } else if count >= 2 {
-                            // Double-click: select word
+                            refs.drag_anchor.set(Some(line_start));
+                        }
+                        TapCount::Double => {
+                            // Double tap/click: select the word.
                             let (word_start, word_end) = find_word_boundaries(&text, pos);
                             state.edit(|buffer| {
                                 buffer.select(TextRange::new(word_start, word_end));
                             });
-                            // Set drag anchor to word boundaries for word-extend drag
                             refs.drag_anchor.set(Some(word_start));
                         }
-                    } else {
-                        // Single click: reset click count, place cursor
-                        refs.click_count.set(1);
-                        refs.drag_anchor.set(Some(pos));
-                        state.edit(|buffer| {
-                            buffer.place_cursor_before_char(pos);
-                        });
+                        TapCount::Single => {
+                            // Single tap/click: place the cursor.
+                            refs.drag_anchor.set(Some(pos));
+                            state.edit(|buffer| {
+                                buffer.place_cursor_before_char(pos);
+                            });
+                        }
                     }
 
+                    refs.click_count.set(tap.as_u8());
                     refs.last_click_time.set(Some(now));
+                    refs.last_click_pos
+                        .set(Some((event.position.x, event.position.y)));
                     event.consume();
                 }
                 PointerEventKind::Move => {
@@ -502,15 +520,36 @@ impl TextFieldModifierNode {
         self.refs.content_y_offset.set(offset);
     }
 
+    /// The wrap width a multi-line field lays its text out at, or `None` when
+    /// the text must not wrap (single-line fields pan horizontally instead).
+    ///
+    /// Multi-line fields wrap at the available content width exactly like the
+    /// render scene builder, so the measured height reflects every wrapped line
+    /// and the field grows to fit its content instead of clipping it.
+    fn wrap_width(&self, available_width: f32) -> Option<f32> {
+        (!self.line_limits.is_single_line() && available_width.is_finite() && available_width > 0.0)
+            .then_some(available_width)
+    }
+
     /// Measures the text content using node-identity-based caching.
-    fn measure_text_content(&self) -> Size {
+    ///
+    /// `wrap_width` bounds the layout width so multi-line text wraps; `None`
+    /// measures the natural single-line width (single-line fields, intrinsic
+    /// width queries).
+    fn measure_text_content(&self, wrap_width: Option<f32>) -> Size {
         let text = self.state.text();
         let node_id = self.refs.node_id.get();
-        let metrics = crate::text::measure_text_for_node(
-            node_id,
-            &crate::text::AnnotatedString::from(text.as_str()),
-            &self.style,
-        );
+        let annotated = crate::text::AnnotatedString::from(text.as_str());
+        let metrics = match wrap_width {
+            Some(max_width) => crate::text::measure_text_with_options_for_node(
+                node_id,
+                &annotated,
+                &self.style,
+                crate::text::TextLayoutOptions::default(),
+                Some(max_width),
+            ),
+            None => crate::text::measure_text_for_node(node_id, &annotated, &self.style),
+        };
         self.measured_line_height.set(metrics.line_height);
         Size {
             width: metrics.width,
@@ -620,8 +659,10 @@ impl LayoutModifierNode for TextFieldModifierNode {
         _measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        // Measure the text content
-        let text_size = self.measure_text_content();
+        // Measure the text content, wrapping multi-line fields at the available
+        // width so the field grows to fit every wrapped line instead of
+        // clipping content past the first line.
+        let text_size = self.measure_text_content(self.wrap_width(constraints.max_width));
 
         // Add minimum height for empty text (cursor needs space)
         let min_height = if text_size.height < 1.0 {
@@ -650,19 +691,23 @@ impl LayoutModifierNode for TextFieldModifierNode {
     }
 
     fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content().width
+        self.measure_text_content(None).width
     }
 
     fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content().width
+        self.measure_text_content(None).width
     }
 
-    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content().height.max(DEFAULT_LINE_HEIGHT)
+    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32) -> f32 {
+        self.measure_text_content(self.wrap_width(width))
+            .height
+            .max(DEFAULT_LINE_HEIGHT)
     }
 
-    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content().height.max(DEFAULT_LINE_HEIGHT)
+    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32) -> f32 {
+        self.measure_text_content(self.wrap_width(width))
+            .height
+            .max(DEFAULT_LINE_HEIGHT)
     }
 }
 
@@ -1161,6 +1206,51 @@ mod tests {
 
             assert_eq!(node.text(), "themed text");
             assert_eq!(node.style(), &light_style);
+        });
+    }
+
+    /// A multi-line field must measure the *wrapped* height at the available
+    /// width, so a long transcript grows the field instead of being clipped to
+    /// a single line. Regression for the "edits only appear after focus loss"
+    /// bug where a wrapped OCR transcript rendered only its first line.
+    #[test]
+    fn multiline_field_measures_wrapped_height() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let long = "abcd ".repeat(40); // ~200 chars, no explicit newlines
+            let state = TextFieldState::new(&long);
+            let node = TextFieldModifierNode::new(state, TextStyle::default());
+            assert!(
+                !node.line_limits().is_single_line(),
+                "default fields are multi-line"
+            );
+
+            let natural = node.measure_text_content(None);
+            let wrapped = node.measure_text_content(node.wrap_width(20.0));
+
+            assert!(
+                wrapped.height > natural.height,
+                "wrapped multi-line height {} must exceed the single-line height {}",
+                wrapped.height,
+                natural.height
+            );
+        });
+    }
+
+    /// Single-line fields pan horizontally instead of wrapping, so they never
+    /// derive a wrap width even under a narrow constraint.
+    #[test]
+    fn single_line_field_never_wraps() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let state = TextFieldState::new("abcd ".repeat(40));
+            let node = TextFieldModifierNode::new(state, TextStyle::default())
+                .with_line_limits(TextFieldLineLimits::SingleLine);
+            assert_eq!(
+                node.wrap_width(20.0),
+                None,
+                "single-line fields must not wrap"
+            );
         });
     }
 
