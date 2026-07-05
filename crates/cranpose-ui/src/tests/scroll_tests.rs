@@ -187,6 +187,178 @@ fn touch_drag_down_moves_content_down() {
     });
 }
 
+/// Dispatches an event leaf-first (child, then parent), mirroring the
+/// shell's hit-path dispatch order for nested scrollables.
+fn dispatch_nested(
+    child: &Rc<dyn Fn(PointerEvent)>,
+    parent: &Rc<dyn Fn(PointerEvent)>,
+    event: PointerEvent,
+) -> PointerEvent {
+    child(event.clone());
+    parent(event.clone());
+    event
+}
+
+#[test]
+fn horizontal_drag_with_jitter_scrolls_nested_horizontal_not_vertical_parent() {
+    // A chips row (horizontal scroll) nested in a screen list (vertical
+    // scroll): a mostly-horizontal drag with vertical jitter must scroll the
+    // chips row by the horizontal drag distance and leave the screen alone.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let horizontal = ScrollState::new(100.0);
+        horizontal.set_max_value(400.0);
+        let vertical = ScrollState::new(100.0);
+        vertical.set_max_value(400.0);
+        let (child, _child_chain) =
+            pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal.clone(), false));
+        let (parent, _parent_chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(vertical.clone(), false));
+
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Down, 100.0, 100.0),
+        );
+        // Below the slop on both axes: nobody captures yet.
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Move, 106.0, 96.0),
+        );
+        // dx = 14 crosses the slop and dominates dy = 6: the child captures.
+        let capture = dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Move, 114.0, 106.0),
+        );
+        assert!(
+            capture.is_consumed(),
+            "the horizontal child must capture a mostly-horizontal drag"
+        );
+        // Keep dragging right with vertical jitter.
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Move, 140.0, 103.0),
+        );
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Move, 170.0, 97.0),
+        );
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Up, 170.0, 97.0),
+        );
+
+        // Content follows the finger from the position preceding the
+        // capturing move (106): 170 - 106 = 64 to the right.
+        assert!(
+            (horizontal.value_non_reactive() - 36.0).abs() < 1e-3,
+            "the horizontal scrollable must scroll by the horizontal drag \
+             distance (100 - 64 = 36), got {}",
+            horizontal.value_non_reactive()
+        );
+        assert_eq!(
+            vertical.value_non_reactive(),
+            100.0,
+            "the vertical parent must not steal a mostly-horizontal drag"
+        );
+    });
+}
+
+#[test]
+fn vertical_drag_with_horizontal_jitter_scrolls_parent_not_nested_child() {
+    // The same nesting dragged mostly vertically, with sideways jitter that
+    // crosses the slop: the vertical parent must win even though the
+    // horizontal child sees every event first.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let horizontal = ScrollState::new(100.0);
+        horizontal.set_max_value(400.0);
+        let vertical = ScrollState::new(100.0);
+        vertical.set_max_value(400.0);
+        let (child, _child_chain) =
+            pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal.clone(), false));
+        let (parent, _parent_chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(vertical.clone(), false));
+
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Down, 100.0, 100.0),
+        );
+        // dx = 12 crosses the slop too, but dy = 30 dominates: the child must
+        // decline and the parent must capture.
+        let capture = dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Move, 112.0, 130.0),
+        );
+        assert!(
+            capture.is_consumed(),
+            "the vertical parent must capture a mostly-vertical drag"
+        );
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Move, 115.0, 170.0),
+        );
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Up, 115.0, 170.0),
+        );
+
+        assert_eq!(
+            horizontal.value_non_reactive(),
+            100.0,
+            "the horizontal child must not steal a mostly-vertical drag"
+        );
+        // Finger moved down by 70 from the down position: content follows.
+        assert!(
+            (vertical.value_non_reactive() - 30.0).abs() < 1e-3,
+            "the vertical parent must scroll by the vertical drag distance \
+             (100 - 70 = 30), got {}",
+            vertical.value_non_reactive()
+        );
+    });
+}
+
+#[test]
+fn cross_axis_drag_locks_scrollable_out_for_the_rest_of_the_gesture() {
+    // A drag that decisively starts vertical must never be captured by a
+    // horizontal scrollable later in the gesture, even when its horizontal
+    // component eventually exceeds the vertical one.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let horizontal = ScrollState::new(100.0);
+        horizontal.set_max_value(400.0);
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal.clone(), false));
+
+        handler(scroll_pointer_event(PointerEventKind::Down, 100.0, 100.0));
+        // Decisively vertical: dy = 20 crosses the slop while dx = 4.
+        handler(scroll_pointer_event(PointerEventKind::Move, 104.0, 120.0));
+        // The drag drifts sideways: dx = 60 now exceeds dy = 25.
+        let late_move = scroll_pointer_event(PointerEventKind::Move, 160.0, 125.0);
+        handler(late_move.clone());
+        handler(scroll_pointer_event(PointerEventKind::Up, 160.0, 125.0));
+
+        assert_eq!(
+            horizontal.value_non_reactive(),
+            100.0,
+            "a locked-out scrollable must stay inert for the whole gesture"
+        );
+        assert!(
+            !late_move.is_consumed(),
+            "a locked-out scrollable must not consume later moves"
+        );
+    });
+}
+
 #[test]
 fn lazy_touch_drag_up_scrolls_toward_later_items() {
     // Finger up => content up => later items become visible => the pending

@@ -2328,3 +2328,80 @@ fn find_node_layout(tree: &LayoutBox, target: NodeId) -> Option<LayoutBox> {
     }
     None
 }
+
+#[test]
+fn flow_row_widget_wraps_spacers_and_applies_spacing() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+
+    let flow_id: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+    let child_ids: Rc<RefCell<Vec<NodeId>>> = Rc::new(RefCell::new(Vec::new()));
+
+    let flow_render = Rc::clone(&flow_id);
+    let children_render = Rc::clone(&child_ids);
+    composition
+        .render(key, move || {
+            let flow_capture = Rc::clone(&flow_render);
+            let children_capture = Rc::clone(&children_render);
+            *flow_capture.borrow_mut() = Some(crate::widgets::FlowRow(
+                Modifier::empty(),
+                crate::widgets::FlowRowSpec::new()
+                    .main_axis_spacing(10.0)
+                    .cross_axis_spacing(5.0),
+                move || {
+                    let mut ids = children_capture.borrow_mut();
+                    ids.clear();
+                    ids.push(Spacer(Size::new(40.0, 20.0)));
+                    ids.push(Spacer(Size::new(40.0, 30.0)));
+                    ids.push(Spacer(Size::new(40.0, 20.0)));
+                },
+            ));
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let layout_tree = composition
+        .applier_mut()
+        .compute_layout(
+            root,
+            Size {
+                width: 100.0,
+                height: 400.0,
+            },
+        )
+        .expect("compute layout");
+
+    let flow_node_id = flow_id.borrow().expect("flow row node id");
+    let flow_layout = find_node_layout(layout_tree.root(), flow_node_id).expect("flow row layout");
+    let child_layouts: Vec<LayoutBox> = child_ids
+        .borrow()
+        .iter()
+        .map(|id| find_node_layout(layout_tree.root(), *id).expect("child layout"))
+        .collect();
+
+    let relative: Vec<(f32, f32)> = child_layouts
+        .iter()
+        .map(|layout| {
+            (
+                layout.rect.x - flow_layout.rect.x,
+                layout.rect.y - flow_layout.rect.y,
+            )
+        })
+        .collect();
+
+    // Line 1 in a 100dp viewport: [0..40] and [50..90] (10dp gap); the third
+    // 40dp child would need 140dp, so it wraps below the tallest child (30)
+    // plus the 5dp cross-axis gap.
+    assert_eq!(relative[0], (0.0, 0.0));
+    assert_eq!(relative[1], (50.0, 0.0));
+    assert_eq!(relative[2], (0.0, 35.0));
+
+    assert!(
+        (flow_layout.rect.width - 90.0).abs() < 1e-3
+            && (flow_layout.rect.height - 55.0).abs() < 1e-3,
+        "flow row must wrap to 90x55, got {}x{}",
+        flow_layout.rect.width,
+        flow_layout.rect.height
+    );
+}

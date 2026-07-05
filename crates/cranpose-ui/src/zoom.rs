@@ -23,10 +23,17 @@
 //! - **Two-finger pinch** (Android/touch): scale about the finger centroid,
 //!   plus centroid pan. Activates immediately when the second finger lands.
 //! - **One-finger pan**: activates after the drag threshold, and only while
-//!   the content is transformed (`scale != 1` or panned) so an untransformed
-//!   zoomable never steals drags from an enclosing scrollable.
+//!   the content is zoomed in (`scale > 1`) so an unzoomed zoomable never
+//!   steals drags from an enclosing scrollable.
+//! - **Double tap**: resets a transformed state back to identity.
 //! - **Ctrl+wheel / trackpad pinch** (desktop, web): discrete
 //!   [`PointerEventKind::Zoom`] steps about the cursor.
+//!
+//! # Pan gating
+//! ALL pan — one-finger drags and the two-finger pinch centroid — is inert
+//! while `scale <= 1`: [`ZoomState::apply_transform`] clamps the offset back
+//! to zero whenever the resulting scale is at (or below) identity, so a pinch
+//! that zooms back out never strands the content at a stray offset.
 //!
 //! # Coordinate space
 //! Gesture math runs in window (global) coordinates, which stay stable while
@@ -41,9 +48,24 @@ use cranpose_foundation::DRAG_THRESHOLD;
 use cranpose_ui_graphics::{GraphicsLayer, Point, TransformOrigin};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use web_time::Instant;
 
 /// Scale factors closer to 1.0 than this are treated as "not zoomed".
 const SCALE_EPSILON: f32 = 1e-3;
+
+/// Maximum time between the taps of a double-tap, in milliseconds
+/// (matches Android's `ViewConfiguration` DOUBLE_TAP_TIMEOUT).
+const DOUBLE_TAP_TIMEOUT_MS: i64 = 300;
+
+/// Maximum distance between the taps of a double-tap, in dp
+/// (matches Android's `ViewConfiguration` doubleTapSlop).
+const DOUBLE_TAP_SLOP: f32 = 100.0;
+
+fn distance(a: Point, b: Point) -> f32 {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    (dx * dx + dy * dy).sqrt()
+}
 
 /// Shared zoom/pan transform state for `Modifier::zoomable`.
 ///
@@ -141,6 +163,15 @@ impl ZoomState {
             || offset.y != 0.0
     }
 
+    /// Whether the content is currently zoomed in beyond identity.
+    ///
+    /// Pan gestures only apply while this is `true`: an image at (or below)
+    /// its natural size has nothing to pan, and drags over it belong to
+    /// enclosing scrollables.
+    pub fn is_zoomed_in(&self) -> bool {
+        self.scale_non_reactive() > 1.0 + SCALE_EPSILON
+    }
+
     /// Sets the scale directly (clamped to the configured range).
     pub fn set_scale(&self, scale: f32) {
         let clamped = scale.clamp(self.min_scale(), self.max_scale());
@@ -168,15 +199,26 @@ impl ZoomState {
     /// point `c` renders at `p = c * scale + offset`; this update applies
     /// `p' = zoom * (p - centroid) + centroid + pan`, which keeps the
     /// content glued to the fingers.
+    ///
+    /// Pan is inert while not zoomed in: whenever the resulting scale is at
+    /// (or below) identity the offset is clamped back to zero, so a pinch
+    /// that zooms out to `scale <= 1` — or a pure centroid pan at identity —
+    /// never leaves the content stranded at a stray offset.
     pub fn apply_transform(&self, centroid: Point, pan: Point, zoom: f32) {
         let old_scale = self.scale_non_reactive();
         let new_scale = (old_scale * zoom).clamp(self.min_scale(), self.max_scale());
         let effective_zoom = new_scale / old_scale;
         let old_offset = self.offset_non_reactive();
 
-        let new_offset = Point {
-            x: centroid.x - (centroid.x - old_offset.x) * effective_zoom + pan.x,
-            y: centroid.y - (centroid.y - old_offset.y) * effective_zoom + pan.y,
+        let new_offset = if new_scale <= 1.0 + SCALE_EPSILON {
+            // Not zoomed in: pan (finger delta AND focal-point correction)
+            // must not displace the content.
+            Point { x: 0.0, y: 0.0 }
+        } else {
+            Point {
+                x: centroid.x - (centroid.x - old_offset.x) * effective_zoom + pan.x,
+                y: centroid.y - (centroid.y - old_offset.y) * effective_zoom + pan.y,
+            }
         };
 
         if new_scale != old_scale {
@@ -206,23 +248,58 @@ impl ZoomState {
 }
 
 /// Per-modifier gesture bookkeeping for `zoomable`.
-#[derive(Default)]
 struct ZoomGestureState {
     tracker: TransformGesture,
     /// Whether the gesture crossed into actively transforming (consuming).
     active: bool,
     /// Accumulated single-finger travel for the drag threshold.
     travel: f32,
+    /// Down position of a potential tap (single finger, in window coords).
+    tap_down: Option<Point>,
+    /// Time and position of the previous completed tap, for double-tap
+    /// detection.
+    last_tap: Option<(i64, Point)>,
+    /// Timestamp epoch for platforms whose events carry no input timestamps.
+    fallback_epoch: Instant,
+}
+
+impl Default for ZoomGestureState {
+    fn default() -> Self {
+        Self {
+            tracker: TransformGesture::default(),
+            active: false,
+            travel: 0.0,
+            tap_down: None,
+            last_tap: None,
+            fallback_epoch: Instant::now(),
+        }
+    }
+}
+
+impl ZoomGestureState {
+    /// The event's own timestamp when the platform provides one (Android),
+    /// falling back to delivery time (desktop mouse, web).
+    fn timestamp_ms(&self, time_ms: Option<i64>) -> i64 {
+        time_ms.unwrap_or_else(|| self.fallback_epoch.elapsed().as_millis() as i64)
+    }
+
+    /// Abandons any tap tracking (drag, pinch, cancel, foreign consumption).
+    fn abandon_tap(&mut self) {
+        self.tap_down = None;
+        self.last_tap = None;
+    }
 }
 
 impl Modifier {
     /// Makes the element respond to transform gestures, updating `state`.
     ///
     /// Recognizes two-finger pinch/pan (touch), one-finger pan while the
-    /// content is transformed, and [`PointerEventKind::Zoom`] steps
-    /// (desktop ctrl+wheel, browser pinch). Rendering is the app's choice —
-    /// typically `.graphics_layer(move || state.layer())` on the same or a
-    /// child element.
+    /// content is zoomed in (`scale > 1`), a double-tap that resets a
+    /// transformed state to identity, and [`PointerEventKind::Zoom`] steps
+    /// (desktop ctrl+wheel, browser pinch). Pan — including the pinch
+    /// centroid — is inert while `scale <= 1`. Rendering is the app's
+    /// choice — typically `.graphics_layer(move || state.layer())` on the
+    /// same or a child element.
     pub fn zoomable(self, state: ZoomState) -> Self {
         let gesture_state = Rc::new(RefCell::new(ZoomGestureState::default()));
         let key = state.id();
@@ -255,6 +332,7 @@ impl Modifier {
                                     gs.tracker.reset();
                                     gs.active = false;
                                     gs.travel = 0.0;
+                                    gs.abandon_tap();
                                 }
                                 PointerEventKind::Down
                                 | PointerEventKind::Move
@@ -267,6 +345,7 @@ impl Modifier {
                                         gs.tracker.reset();
                                         gs.active = false;
                                         gs.travel = 0.0;
+                                        gs.abandon_tap();
                                         continue;
                                     }
 
@@ -282,8 +361,12 @@ impl Modifier {
                                             // Pinch begins: transform gestures
                                             // own the sequence immediately.
                                             gs.active = true;
+                                            // A multi-finger gesture is never
+                                            // a tap.
+                                            gs.tap_down = None;
                                         } else {
                                             gs.travel = 0.0;
+                                            gs.tap_down = Some(event.global_position);
                                         }
                                         // Secondary fingers are meaningless to
                                         // single-pointer handlers; keep them.
@@ -291,6 +374,39 @@ impl Modifier {
                                             event.consume();
                                         }
                                         continue;
+                                    }
+
+                                    if event.kind == PointerEventKind::Up && event.id == 0 {
+                                        // Double-tap resets a transformed
+                                        // state back to identity.
+                                        let now_ms = gs.timestamp_ms(event.time_ms);
+                                        let up_position = event.global_position;
+                                        let is_tap = !gs.active
+                                            && gs.tap_down.is_some_and(|down| {
+                                                distance(down, up_position) <= DRAG_THRESHOLD
+                                            });
+                                        gs.tap_down = None;
+                                        if is_tap {
+                                            let is_double_tap = gs.last_tap.is_some_and(
+                                                |(tap_ms, tap_position)| {
+                                                    now_ms.saturating_sub(tap_ms)
+                                                        <= DOUBLE_TAP_TIMEOUT_MS
+                                                        && distance(tap_position, up_position)
+                                                            <= DOUBLE_TAP_SLOP
+                                                },
+                                            );
+                                            if is_double_tap {
+                                                gs.last_tap = None;
+                                                if state.is_transformed() {
+                                                    state.reset();
+                                                    event.consume();
+                                                }
+                                            } else {
+                                                gs.last_tap = Some((now_ms, up_position));
+                                            }
+                                        } else {
+                                            gs.last_tap = None;
+                                        }
                                     }
 
                                     match step {
@@ -302,10 +418,10 @@ impl Modifier {
                                         } => {
                                             if pointer_count >= 2 {
                                                 gs.active = true;
-                                            } else if !gs.active && state.is_transformed() {
+                                            } else if !gs.active && state.is_zoomed_in() {
                                                 // One-finger pan only grabs the
-                                                // gesture when there is a
-                                                // transform to pan, so identity
+                                                // gesture while zoomed in
+                                                // (scale > 1), so unzoomed
                                                 // zoomables never steal scrolls.
                                                 gs.travel += (pan.x * pan.x + pan.y * pan.y).sqrt();
                                                 if gs.travel > DRAG_THRESHOLD {

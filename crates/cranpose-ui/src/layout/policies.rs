@@ -603,6 +603,179 @@ impl MeasurePolicy for FlexMeasurePolicy {
     }
 }
 
+/// MeasurePolicy for FlowRow: children flow horizontally and wrap onto the
+/// next line when the available width runs out (Jetpack Compose `FlowRow`).
+///
+/// - Children are measured with loose constraints (min = 0) capped at the
+///   incoming max width/height, then packed left-to-right.
+/// - A child that no longer fits on the current line starts a new line; a
+///   child wider than the whole line gets a line of its own (and may
+///   overflow, like Compose).
+/// - `main_axis_spacing` separates children on the same line and
+///   `cross_axis_spacing` separates lines; children are top-aligned within
+///   their line.
+/// - With an unbounded max width everything stays on one line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlowRowMeasurePolicy {
+    /// Horizontal gap between adjacent children on the same line, in dp.
+    pub main_axis_spacing: f32,
+    /// Vertical gap between consecutive lines, in dp.
+    pub cross_axis_spacing: f32,
+}
+
+impl FlowRowMeasurePolicy {
+    pub fn new(main_axis_spacing: f32, cross_axis_spacing: f32) -> Self {
+        Self {
+            main_axis_spacing: main_axis_spacing.max(0.0),
+            cross_axis_spacing: cross_axis_spacing.max(0.0),
+        }
+    }
+
+    /// Simulates the wrapping flow for intrinsic height queries.
+    fn wrapped_intrinsic_height(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        available_width: f32,
+        use_min_height: bool,
+    ) -> f32 {
+        let mut cursor_x = 0.0_f32;
+        let mut line_top = 0.0_f32;
+        let mut line_height = 0.0_f32;
+
+        for measurable in measurables {
+            let child_width = measurable.max_intrinsic_width(f32::INFINITY);
+            let child_height = if use_min_height {
+                measurable.min_intrinsic_height(child_width)
+            } else {
+                measurable.max_intrinsic_height(child_width)
+            };
+
+            if cursor_x > 0.0 && cursor_x + self.main_axis_spacing + child_width > available_width {
+                line_top += line_height + self.cross_axis_spacing;
+                cursor_x = 0.0;
+                line_height = 0.0;
+            }
+            cursor_x += if cursor_x > 0.0 {
+                self.main_axis_spacing + child_width
+            } else {
+                child_width
+            };
+            line_height = line_height.max(child_height);
+        }
+
+        line_top + line_height
+    }
+}
+
+impl MeasurePolicy for FlowRowMeasurePolicy {
+    fn measure(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let mut placements = Vec::new();
+        let size = self.measure_into(measurables, constraints, &mut placements);
+        MeasureResult::new(size, placements)
+    }
+
+    fn measure_into(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        placements: &mut Vec<Placement>,
+    ) -> crate::modifier::Size {
+        placements.clear();
+        if measurables.is_empty() {
+            let (width, height) = constraints.constrain(0.0, 0.0);
+            return crate::modifier::Size { width, height };
+        }
+
+        // Children get loose constraints capped at the incoming maximums;
+        // wrapping happens on their measured sizes.
+        let child_constraints = Constraints {
+            min_width: 0.0,
+            max_width: constraints.max_width,
+            min_height: 0.0,
+            max_height: constraints.max_height,
+        };
+
+        let placeables: SmallVec<[cranpose_ui_layout::Placeable; 8]> = measurables
+            .iter()
+            .map(|measurable| measurable.measure(child_constraints))
+            .collect();
+
+        let mut cursor_x = 0.0_f32; // end of the current line's content
+        let mut line_top = 0.0_f32; // y of the current line
+        let mut line_height = 0.0_f32;
+        let mut max_line_width = 0.0_f32;
+
+        placements.reserve(placeables.len());
+        for placeable in placeables {
+            let child_width = placeable.width();
+            let child_height = placeable.height();
+
+            // Wrap when the child (plus the gap separating it from the
+            // previous child) no longer fits. The first child of a line
+            // never wraps, so an oversized child overflows instead of
+            // looping.
+            if cursor_x > 0.0
+                && cursor_x + self.main_axis_spacing + child_width > constraints.max_width
+            {
+                max_line_width = max_line_width.max(cursor_x);
+                line_top += line_height + self.cross_axis_spacing;
+                cursor_x = 0.0;
+                line_height = 0.0;
+            }
+
+            let x = if cursor_x > 0.0 {
+                cursor_x + self.main_axis_spacing
+            } else {
+                0.0
+            };
+            placeable.place(x, line_top);
+            placements.push(Placement::new(placeable.node_id(), x, line_top, 0));
+
+            cursor_x = x + child_width;
+            line_height = line_height.max(child_height);
+        }
+        max_line_width = max_line_width.max(cursor_x);
+
+        let width = max_line_width.clamp(constraints.min_width, constraints.max_width);
+        let height = (line_top + line_height).clamp(constraints.min_height, constraints.max_height);
+        crate::modifier::Size { width, height }
+    }
+
+    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+        // Narrowest sensible layout: one child per line.
+        measurables
+            .iter()
+            .map(|m| m.min_intrinsic_width(height))
+            .fold(0.0, f32::max)
+    }
+
+    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+        // Widest layout: everything on a single line.
+        let total_spacing = if measurables.len() > 1 {
+            self.main_axis_spacing * (measurables.len() - 1) as f32
+        } else {
+            0.0
+        };
+        measurables
+            .iter()
+            .map(|m| m.max_intrinsic_width(height))
+            .sum::<f32>()
+            + total_spacing
+    }
+
+    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+        self.wrapped_intrinsic_height(measurables, width, true)
+    }
+
+    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+        self.wrapped_intrinsic_height(measurables, width, false)
+    }
+}
+
 /// MeasurePolicy for leaf nodes with fixed intrinsic size (like Spacer).
 /// This policy respects the provided constraints but has a preferred intrinsic size.
 #[derive(Clone, Debug, PartialEq)]

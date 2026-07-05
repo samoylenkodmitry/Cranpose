@@ -9,9 +9,18 @@
 //!
 //! # Gesture Flow
 //! 1. **Down**: Record initial position, reset drag state
-//! 2. **Move**: Check if total movement exceeds `DRAG_THRESHOLD` (8px)
-//!    - If threshold crossed: start consuming events, apply scroll delta
-//!    - This prevents child click handlers from firing during scrolls
+//! 2. **Move**: Check if movement along the scroll axis exceeds
+//!    `DRAG_THRESHOLD` (8dp of touch slop — pointer positions arrive in
+//!    logical, density-independent pixels on every platform)
+//!    - The drag is captured only when the scroll axis DOMINATES the total
+//!      movement (`|main| >= |cross|`, Compose-style axis locking). A drag
+//!      that decisively belongs to the other axis locks this detector out
+//!      for the rest of the gesture, so a horizontal scrollable nested in a
+//!      vertical one (chips row in a screen list) wins mostly-horizontal
+//!      drags and never steals mostly-vertical ones — and vice versa.
+//!    - Once captured: start consuming events, apply scroll delta. This
+//!      prevents child click handlers from firing during scrolls, and makes
+//!      enclosing scrollables abandon the gesture (they see consumed moves).
 //! 3. **Up/Cancel**: Clean up state, consume if was dragging
 
 use super::{inspector_metadata, Modifier, Point, PointerEventKind};
@@ -67,6 +76,13 @@ struct ScrollGestureState {
     /// handlers from receiving drag events.
     is_dragging: bool,
 
+    /// Whether this gesture was decided to belong to the cross axis
+    /// (its cross-axis movement crossed the touch slop while dominating the
+    /// main axis). A locked-out detector never captures for the rest of the
+    /// gesture, so e.g. a horizontal chips row cannot steal a vertical
+    /// screen scroll that happens to drift sideways later on.
+    axis_locked_out: bool,
+
     /// Velocity tracker for fling gesture detection.
     velocity_tracker: VelocityTracker1D,
 
@@ -91,6 +107,7 @@ impl Default for ScrollGestureState {
             drag_down_position: None,
             last_position: None,
             is_dragging: false,
+            axis_locked_out: false,
             velocity_tracker: VelocityTracker1D::new(),
             gesture_start_time: None,
             gesture_start_event_time_ms: None,
@@ -106,8 +123,9 @@ impl Default for ScrollGestureState {
 
 /// Calculates the total movement distance from the original down position.
 ///
-/// This is used to determine if we've crossed the drag threshold.
-/// Returns the distance in the scroll axis direction (Y for vertical, X for horizontal).
+/// This is used to determine if we've crossed the drag threshold. Returns
+/// the distance along the requested axis (Y for `is_vertical`, X otherwise);
+/// callers pass `!is_vertical` to read the cross-axis component.
 #[inline]
 fn calculate_total_delta(from: Point, to: Point, is_vertical: bool) -> f32 {
     if is_vertical {
@@ -289,6 +307,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.drag_down_position = Some(position);
         gs.last_position = Some(position);
         gs.is_dragging = false;
+        gs.axis_locked_out = false;
         gs.velocity_tracker.reset();
         gs.gesture_start_time = Some(Instant::now());
         gs.gesture_start_event_time_ms = time_ms;
@@ -311,8 +330,11 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     /// This is the core gesture detection logic:
     /// 1. Safety check: if no primary button is pressed but we think we're
     ///    tracking, we missed an Up event - reset state.
-    /// 2. Calculate total movement from down position.
-    /// 3. If total movement exceeds `DRAG_THRESHOLD` (8px), start dragging.
+    /// 2. Calculate total movement from down position on BOTH axes.
+    /// 3. Axis-locked slop: start dragging once the scroll-axis movement
+    ///    exceeds `DRAG_THRESHOLD` (8dp) AND dominates the cross-axis
+    ///    movement; a decisively cross-axis drag locks this detector out
+    ///    for the rest of the gesture.
     /// 4. While dragging, apply scroll delta and consume events.
     ///
     /// Returns `true` if event should be consumed (we're actively dragging).
@@ -324,6 +346,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.drag_down_position = None;
             gs.last_position = None;
             gs.is_dragging = false;
+            gs.axis_locked_out = false;
             gs.gesture_start_time = None;
             gs.gesture_start_event_time_ms = None;
             gs.last_velocity_sample_ms = None;
@@ -341,16 +364,28 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             return false;
         };
 
-        let total_delta = calculate_total_delta(down_pos, position, self.is_vertical);
         let incremental_delta = calculate_incremental_delta(last_pos, position, self.is_vertical);
 
-        // Threshold check: start dragging only after moving 8px from down
-        // position. Targets that cannot scroll in either direction never
-        // capture the gesture, so enclosing scrollables receive it instead.
-        if !gs.is_dragging && total_delta.abs() > DRAG_THRESHOLD && self.scroll_target.can_scroll()
-        {
-            gs.is_dragging = true;
-            self.motion_context.set_active(true);
+        // Axis-locked touch slop (Compose-style): capture only when the
+        // movement along the scroll axis crosses the slop AND dominates the
+        // cross-axis movement, so of two nested scrollables the one whose
+        // axis matches the drag wins. Ties go to the innermost handler
+        // (children are dispatched before their ancestors). A drag that
+        // decisively belongs to the cross axis locks this detector out for
+        // the rest of the gesture. Targets that cannot scroll in either
+        // direction never capture, so enclosing scrollables receive the
+        // gesture instead.
+        if !gs.is_dragging && !gs.axis_locked_out {
+            let main_delta = calculate_total_delta(down_pos, position, self.is_vertical).abs();
+            let cross_delta = calculate_total_delta(down_pos, position, !self.is_vertical).abs();
+            if main_delta > DRAG_THRESHOLD && main_delta >= cross_delta {
+                if self.scroll_target.can_scroll() {
+                    gs.is_dragging = true;
+                    self.motion_context.set_active(true);
+                }
+            } else if cross_delta > DRAG_THRESHOLD && cross_delta > main_delta {
+                gs.axis_locked_out = true;
+            }
         }
 
         gs.last_position = Some(position);
@@ -452,6 +487,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.drag_down_position = None;
             gs.last_position = None;
             gs.is_dragging = false;
+            gs.axis_locked_out = false;
             gs.gesture_start_time = None;
             gs.gesture_start_event_time_ms = None;
             gs.last_velocity_sample_ms = None;
@@ -553,6 +589,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.drag_down_position = None;
             gs.last_position = None;
             gs.is_dragging = false;
+            gs.axis_locked_out = false;
             gs.gesture_start_time = None;
             gs.gesture_start_event_time_ms = None;
             gs.last_velocity_sample_ms = None;
