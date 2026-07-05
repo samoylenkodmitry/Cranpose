@@ -265,6 +265,166 @@ fn single_finger_drag_pans_only_when_transformed() {
 }
 
 #[test]
+fn two_finger_centroid_pan_at_identity_scale_is_inert() {
+    // Two fingers moving in parallel are a net centroid pan. While the
+    // content is not zoomed in, that pan must not displace it. The fingers
+    // move one event at a time (like real dispatch), so the range allows
+    // sub-1 scales to keep the shrink/grow spread steps symmetric.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = ZoomState::with_scale_range(0.5, 8.0);
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+
+        handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
+        handler(touch(PointerEventKind::Down, 1, 200.0, 100.0));
+        // Both fingers translate by (+40, +25): spread unchanged overall.
+        handler(touch(PointerEventKind::Move, 0, 140.0, 125.0));
+        handler(touch(PointerEventKind::Move, 1, 240.0, 125.0));
+        handler(touch(PointerEventKind::Up, 1, 240.0, 125.0));
+        handler(touch(PointerEventKind::Up, 0, 140.0, 125.0));
+
+        assert!(
+            (state.scale_non_reactive() - 1.0).abs() < 1e-4,
+            "a parallel two-finger pan must not change the scale, got {}",
+            state.scale_non_reactive()
+        );
+        assert_eq!(
+            state.offset_non_reactive(),
+            Point { x: 0.0, y: 0.0 },
+            "centroid pan at identity scale must be inert"
+        );
+    });
+}
+
+#[test]
+fn released_pinch_that_zoomed_back_out_leaves_no_offset() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = ZoomState::new();
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+
+        handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
+        handler(touch(PointerEventKind::Down, 1, 200.0, 100.0));
+        // Pinch out: spread 100 -> 200 (scale 2), off-center so the focal
+        // anchoring produces a non-zero offset.
+        handler(touch(PointerEventKind::Move, 1, 300.0, 100.0));
+        assert!(state.is_zoomed_in(), "pinch out must zoom in");
+        // Drag both fingers (centroid pan while zoomed): offset changes.
+        handler(touch(PointerEventKind::Move, 0, 130.0, 140.0));
+        handler(touch(PointerEventKind::Move, 1, 330.0, 140.0));
+        // Pinch back in past identity: spread 200 -> 80 (scale clamps to 1).
+        handler(touch(PointerEventKind::Move, 1, 210.0, 140.0));
+        handler(touch(PointerEventKind::Up, 1, 210.0, 140.0));
+        handler(touch(PointerEventKind::Up, 0, 130.0, 140.0));
+
+        assert_eq!(state.scale_non_reactive(), 1.0);
+        assert_eq!(
+            state.offset_non_reactive(),
+            Point { x: 0.0, y: 0.0 },
+            "a released pinch that zoomed back out must not leave a stray offset"
+        );
+        assert!(!state.is_transformed());
+    });
+}
+
+#[test]
+fn one_finger_drag_does_not_pan_offset_only_state() {
+    // Pan is gated on scale > 1, not on "any transform": a programmatic
+    // offset at identity scale must not turn drags into pans.
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = ZoomState::new();
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        state.set_offset(Point { x: 5.0, y: 5.0 });
+
+        handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
+        let drag = touch(PointerEventKind::Move, 0, 100.0, 160.0);
+        handler(drag.clone());
+        handler(touch(PointerEventKind::Up, 0, 100.0, 160.0));
+
+        assert_eq!(state.offset_non_reactive(), Point { x: 5.0, y: 5.0 });
+        assert!(
+            !drag.is_consumed(),
+            "an unzoomed zoomable must not steal drags even with a programmatic offset"
+        );
+    });
+}
+
+fn timed_touch(kind: PointerEventKind, x: f32, y: f32, time_ms: i64) -> PointerEvent {
+    touch(kind, 0, x, y).with_time_ms(Some(time_ms))
+}
+
+#[test]
+fn double_tap_resets_transformed_state() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = ZoomState::new();
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        state.set_scale(2.5);
+        state.set_offset(Point { x: -30.0, y: 12.0 });
+
+        handler(timed_touch(PointerEventKind::Down, 100.0, 100.0, 0));
+        handler(timed_touch(PointerEventKind::Up, 100.0, 100.0, 50));
+        handler(timed_touch(PointerEventKind::Down, 103.0, 98.0, 200));
+        let second_up = timed_touch(PointerEventKind::Up, 103.0, 98.0, 250);
+        handler(second_up.clone());
+
+        assert_eq!(state.scale_non_reactive(), 1.0);
+        assert_eq!(state.offset_non_reactive(), Point { x: 0.0, y: 0.0 });
+        assert!(
+            !state.is_transformed(),
+            "double tap must reset the transform"
+        );
+        assert!(
+            second_up.is_consumed(),
+            "the resetting tap must not leak to click handlers"
+        );
+    });
+}
+
+#[test]
+fn slow_second_tap_does_not_reset() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = ZoomState::new();
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        state.set_scale(2.0);
+
+        handler(timed_touch(PointerEventKind::Down, 100.0, 100.0, 0));
+        handler(timed_touch(PointerEventKind::Up, 100.0, 100.0, 50));
+        // Second tap lands after the double-tap timeout.
+        handler(timed_touch(PointerEventKind::Down, 100.0, 100.0, 500));
+        handler(timed_touch(PointerEventKind::Up, 100.0, 100.0, 550));
+
+        assert_eq!(
+            state.scale_non_reactive(),
+            2.0,
+            "taps slower than the double-tap timeout must not reset"
+        );
+    });
+}
+
+#[test]
+fn double_tap_at_identity_is_not_consumed() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = ZoomState::new();
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+
+        handler(timed_touch(PointerEventKind::Down, 100.0, 100.0, 0));
+        handler(timed_touch(PointerEventKind::Up, 100.0, 100.0, 50));
+        handler(timed_touch(PointerEventKind::Down, 100.0, 100.0, 200));
+        let second_up = timed_touch(PointerEventKind::Up, 100.0, 100.0, 250);
+        handler(second_up.clone());
+
+        assert!(
+            !second_up.is_consumed(),
+            "a double tap with nothing to reset must stay visible to click handlers"
+        );
+    });
+}
+
+#[test]
 fn zoom_events_scale_about_the_cursor() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
