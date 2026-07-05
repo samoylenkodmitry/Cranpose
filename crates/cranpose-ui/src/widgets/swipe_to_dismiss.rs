@@ -22,13 +22,13 @@
 #![allow(non_snake_case)]
 
 use crate::composable;
-use crate::modifier::{Modifier, PointerEvent, PointerEventKind};
+use crate::modifier::{GraphicsLayer, Modifier, PointerEvent, PointerEventKind};
 use crate::widgets::box_widget::{Box, BoxSpec};
 use crate::widgets::layout::BoxWithConstraints;
 use crate::widgets::scopes::BoxWithConstraintsScope;
 use cranpose_animation::{spring, Animatable, AnimationType, Spring};
 use cranpose_core::internal::FrameCallbackRegistration;
-use cranpose_core::{with_current_composer, Owned, RuntimeHandle};
+use cranpose_core::{with_current_composer, Owned, OwnedMutableState, RuntimeHandle};
 use cranpose_foundation::DRAG_THRESHOLD;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -150,6 +150,15 @@ struct SwipeToDismissController {
     runtime: RuntimeHandle,
     /// Animated horizontal offset of the content in logical px.
     offset: RefCell<Animatable<f32>>,
+    /// Reactive flag mirroring `|offset| > 0`, read inside the subcompose so
+    /// the row's background is *composed* only while the row is displaced.
+    /// Conditional composition (adding/removing the background node) re-applies
+    /// when the slot recomposes, unlike a layout-offset value change which is
+    /// placement-cached — so this bool, not the raw offset, gates the reveal.
+    /// A plain bool also recomposes only on rest/displaced transitions rather
+    /// than on every drag frame. Without gating, the always-composed background
+    /// flashes through content that fades in with alpha < 1 during an entrance.
+    revealed: OwnedMutableState<bool>,
     phase: Cell<SwipePhase>,
     /// Content width in logical px, refreshed from the incoming constraints.
     width_px: Cell<f32>,
@@ -167,6 +176,7 @@ impl SwipeToDismissController {
         Rc::new(Self {
             id: NEXT_SWIPE_ID.fetch_add(1, Ordering::Relaxed),
             offset: RefCell::new(Animatable::new(0.0, runtime.clone())),
+            revealed: OwnedMutableState::with_runtime(false, runtime.clone()),
             runtime,
             phase: Cell::new(SwipePhase::Idle),
             width_px: Cell::new(f32::NAN),
@@ -181,12 +191,36 @@ impl SwipeToDismissController {
         self.offset.borrow().state().value()
     }
 
+    /// Reactive read of the revealed flag; subscribes the reading scope (the
+    /// subcompose slot) so it recomposes when the background reveal toggles.
+    fn revealed(&self) -> bool {
+        self.revealed.value()
+    }
+
+    /// Updates the revealed flag (only writes on change, to avoid needless
+    /// recompositions each drag frame while already displaced).
+    fn set_revealed(&self, revealed: bool) {
+        if self.revealed.get_non_reactive() != revealed {
+            self.revealed.set_value(revealed);
+        }
+    }
+
     fn snap_to(&self, offset: f32) {
         self.offset.borrow_mut().snapTo(offset);
+        // A live drag frame: the background is revealed exactly while the row
+        // is displaced. Rest (offset 0) hides it, even mid-entrance.
+        self.set_revealed(offset != 0.0);
     }
 
     fn animate_to(&self, target: f32) {
         self.offset.borrow_mut().animateTo(target, swipe_spring());
+        // A dismissal fling keeps the row displaced, so reveal immediately.
+        // A spring-back keeps the reveal on until the settle watcher observes
+        // the row return to rest (so the background does not vanish out from
+        // under the still-sliding content).
+        if target != 0.0 {
+            self.set_revealed(true);
+        }
     }
 }
 
@@ -240,7 +274,7 @@ fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &Pointer
                 // Another handler owns this sequence (parent scroll started,
                 // or a sibling captured); abandon and rest.
                 if matches!(controller.phase.get(), SwipePhase::Dragging { .. }) {
-                    controller.animate_to(0.0);
+                    animate_spring_back(controller);
                 }
                 controller.phase.set(SwipePhase::Idle);
                 return;
@@ -291,7 +325,7 @@ fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &Pointer
         }
         PointerEventKind::Cancel => {
             if matches!(controller.phase.get(), SwipePhase::Dragging { .. }) {
-                controller.animate_to(0.0);
+                animate_spring_back(controller);
             }
             controller.phase.set(SwipePhase::Idle);
         }
@@ -308,20 +342,29 @@ fn settle_release(controller: &Rc<SwipeToDismissController>) {
     let offset = controller.current_offset();
     let width = controller.width_px.get();
     match dismissal_target(offset, width, controller.threshold_fraction.get()) {
-        Some(target) => {
-            controller.animate_to(target);
-            watch_dismiss_settle(controller);
-        }
-        None => {
-            controller.animate_to(0.0);
-        }
+        Some(target) => animate_dismiss(controller, target),
+        None => animate_spring_back(controller),
     }
 }
 
-/// Watches the dismiss animation frame-by-frame; once the offset settles at
-/// the off-screen target, fires `on_dismiss` exactly once. Runs in frame
-/// callbacks (outside composition), so the callback may freely mutate state.
-fn watch_dismiss_settle(controller: &Rc<SwipeToDismissController>) {
+/// Flings the row off-screen and watches for `on_dismiss` to fire once settled.
+fn animate_dismiss(controller: &Rc<SwipeToDismissController>, target: f32) {
+    controller.animate_to(target);
+    watch_settle(controller, true);
+}
+
+/// Springs the row back to rest and watches so the reveal is hidden again once
+/// the content actually returns to offset 0.
+fn animate_spring_back(controller: &Rc<SwipeToDismissController>) {
+    controller.animate_to(0.0);
+    watch_settle(controller, false);
+}
+
+/// Watches the settle animation frame-by-frame. Once the offset reaches its
+/// target it syncs the reveal flag to the resting displacement and, for a
+/// dismissal, fires `on_dismiss` exactly once. Runs in frame callbacks
+/// (outside composition), so the callback may freely mutate state.
+fn watch_settle(controller: &Rc<SwipeToDismissController>, dismissing: bool) {
     let weak = Rc::downgrade(controller);
     let registration =
         controller
@@ -332,23 +375,29 @@ fn watch_dismiss_settle(controller: &Rc<SwipeToDismissController>) {
                     return;
                 };
                 controller.settle_watcher.borrow_mut().take();
-                if controller.dismissed.get() {
+                if dismissing && controller.dismissed.get() {
                     return;
                 }
-                // A new gesture retargeted the animation; stop watching.
+                // A new gesture retargeted the animation; a fresh snap already
+                // owns the reveal flag, so stop watching.
                 if matches!(controller.phase.get(), SwipePhase::Dragging { .. }) {
                     return;
                 }
                 let target = controller.offset.borrow().target();
                 let value = controller.current_offset();
                 if (value - target).abs() <= DISMISS_SETTLE_EPSILON {
-                    controller.dismissed.set(true);
-                    let on_dismiss = controller.on_dismiss.borrow().clone();
-                    if let Some(on_dismiss) = on_dismiss {
-                        on_dismiss();
+                    // The row has settled: reveal iff it rests displaced (a
+                    // dismissal rests off-screen, a spring-back rests at 0).
+                    controller.set_revealed(target != 0.0);
+                    if dismissing && !controller.dismissed.get() {
+                        controller.dismissed.set(true);
+                        let on_dismiss = controller.on_dismiss.borrow().clone();
+                        if let Some(on_dismiss) = on_dismiss {
+                            on_dismiss();
+                        }
                     }
                 } else {
-                    watch_dismiss_settle(&controller);
+                    watch_settle(&controller, dismissing);
                 }
             });
     *controller.settle_watcher.borrow_mut() = Some(registration);
@@ -406,19 +455,33 @@ where
             .width_px
             .set(scope.constraints().max_width);
 
-        if let Some(background) = &background {
-            let background = Rc::clone(background);
-            Box(Modifier::empty(), BoxSpec::new(), move || {
-                (background.borrow_mut())();
-            });
+        // Only draw the background while the row is displaced. Reading the
+        // reveal flag inside the subcompose subscribes this slot, so it
+        // recomposes when the row leaves/returns to rest. At rest (offset 0)
+        // the background is not composed at all, so it cannot flash through
+        // content that fades in with alpha < 1 during an entrance animation.
+        let revealed = controller_for_layout.revealed();
+        if revealed {
+            if let Some(background) = &background {
+                let background = Rc::clone(background);
+                Box(Modifier::empty(), BoxSpec::new(), move || {
+                    (background.borrow_mut())();
+                });
+            }
         }
 
-        // Reading the animated offset subscribes this scope: every spring
-        // frame recomposes and re-places the content at the new offset.
-        let offset_x = controller_for_layout.current_offset();
+        // Translate the content with the finger via a graphics-layer resolver.
+        // The resolver re-reads the live offset on every draw pass, and an
+        // offset write schedules a draw repass for this node, so the content
+        // follows the finger 1:1 in real time and settles with the spring on
+        // release — without needing a re-measure of the subcompose each frame.
         let content = Rc::clone(&content);
+        let controller_for_layer = Rc::clone(&controller_for_layout);
         Box(
-            Modifier::empty().offset(offset_x, 0.0),
+            Modifier::empty().graphics_layer(move || GraphicsLayer {
+                translation_x: controller_for_layer.current_offset(),
+                ..GraphicsLayer::default()
+            }),
             BoxSpec::new(),
             move || {
                 (content.borrow_mut())();
