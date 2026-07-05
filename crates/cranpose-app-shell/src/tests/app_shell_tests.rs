@@ -5179,11 +5179,13 @@ fn draw_refresh_scope_only_contains_dirty_ancestors() {
 
     shell.update();
     let layout_tree = shell.layout_tree().expect("expected layout tree");
-    let root = node_id_at_path(layout_tree.root(), &[]);
-    let left = node_id_at_path(layout_tree.root(), &[0]);
-    let left_leaf = node_id_at_path(layout_tree.root(), &[0, 0]);
-    let right = node_id_at_path(layout_tree.root(), &[1]);
-    let right_leaf = node_id_at_path(layout_tree.root(), &[1, 0]);
+    // The shell wraps app content in a top-level `PopupHost` overlay Box, so
+    // the app's own root sits at path `[0]` under the true layout root.
+    let root = node_id_at_path(layout_tree.root(), &[0]);
+    let left = node_id_at_path(layout_tree.root(), &[0, 0]);
+    let left_leaf = node_id_at_path(layout_tree.root(), &[0, 0, 0]);
+    let right = node_id_at_path(layout_tree.root(), &[0, 1]);
+    let right_leaf = node_id_at_path(layout_tree.root(), &[0, 1, 0]);
 
     let dirty_nodes = HashSet::from([left_leaf]);
     let refresh_scope = {
@@ -5221,9 +5223,11 @@ fn layout_bounds_index_matches_cached_layout_tree() {
             .layout_tree
             .as_ref()
             .expect("expected cached layout tree");
+        // App content sits at `[0]` beneath the shell's top-level `PopupHost`
+        // overlay Box (the true layout root).
         let root = layout_box_at_path(layout_tree.root(), &[]);
-        let left_leaf = layout_box_at_path(layout_tree.root(), &[0, 0]);
-        let right = layout_box_at_path(layout_tree.root(), &[1]);
+        let left_leaf = layout_box_at_path(layout_tree.root(), &[0, 0, 0]);
+        let right = layout_box_at_path(layout_tree.root(), &[0, 1]);
 
         (
             root.node_id,

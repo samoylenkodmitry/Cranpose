@@ -272,6 +272,10 @@ mod async_runtime_full_layout_test;
 mod cursor_position_tests;
 
 #[cfg(test)]
+#[path = "tests/popup_tests.rs"]
+mod popup_tests;
+
+#[cfg(test)]
 #[path = "tests/tab_switching_tests.rs"]
 mod tab_switching_tests;
 

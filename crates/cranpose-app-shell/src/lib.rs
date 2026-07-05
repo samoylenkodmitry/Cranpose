@@ -372,7 +372,18 @@ where
         let app_context = cranpose_ui::AppContext::new_with_density(density);
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
-        let mut build: Box<dyn FnMut()> = Box::new(content);
+        // Install the top-level overlay layer once, at the root, so every app
+        // gets `Popup`/selection-handle/context-menu support for free and the
+        // overlay is composed (and thus painted and hit-tested) last. The app's
+        // content is called through a shared handle so this wrapper can be
+        // re-created cheaply on every recomposition without moving `content`.
+        let app_content = Rc::new(std::cell::RefCell::new(content));
+        let mut build: Box<dyn FnMut()> = Box::new(move || {
+            let app_content = Rc::clone(&app_content);
+            cranpose_ui::widgets::PopupHost(move || {
+                (app_content.borrow_mut())();
+            });
+        });
         renderer.attach_app_context_services(&app_context);
         app_context.enter(|| {
             if let Err(err) = composition.render_stable(root_key, &mut *build) {
