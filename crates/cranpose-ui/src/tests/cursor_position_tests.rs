@@ -297,6 +297,60 @@ fn focused_single_line_chain(state: TextFieldState, style: TextStyle) -> Modifie
     chain
 }
 
+/// Tap-count classification drives the selection through the real pointer
+/// handler: one tap places the cursor, two select the word under the tap, and
+/// three select its line/paragraph.
+#[test]
+fn tap_count_selects_cursor_word_and_line() {
+    use cranpose_foundation::nodes::input::{PointerEvent, PointerEventKind};
+    use cranpose_foundation::PointerInputNode;
+    use cranpose_ui_graphics::Point;
+
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let style = TextStyle::default();
+        let state = TextFieldState::new("hello world\nsecond line");
+        let chain = focused_text_field_chain(state.clone(), style.clone());
+        let handler = chain
+            .node::<TextFieldModifierNode>(0)
+            .expect("text field node")
+            .pointer_input_handler()
+            .expect("pointer handler");
+
+        // Tap at the x of the middle of "world" so the offset lands inside it.
+        let tap_x =
+            crate::text::measure_text(&crate::text::AnnotatedString::from("hello wor"), &style)
+                .width;
+        let tap = || {
+            let position = Point { x: tap_x, y: 0.0 };
+            handler(PointerEvent::new(
+                PointerEventKind::Down,
+                position,
+                position,
+            ));
+        };
+
+        // Single tap: collapsed cursor inside "world".
+        tap();
+        let single = state.selection();
+        assert!(single.collapsed(), "single tap must collapse the selection");
+        assert!(
+            (6..=11).contains(&single.start),
+            "single tap must land inside 'world', got {single:?}"
+        );
+
+        // Second tap (same spot, immediately): selects the word "world".
+        tap();
+        assert_eq!(state.selection(), TextRange::new(6, 11));
+
+        // Third tap: selects the whole first line (up to the newline).
+        tap();
+        assert_eq!(state.selection(), TextRange::new(0, 11));
+
+        crate::text_field_focus::clear_focus();
+    });
+}
+
 fn run_field_draw(
     chain: &ModifierNodeChain,
     size: crate::modifier::Size,
@@ -359,6 +413,38 @@ fn horizontal_scroll_offset_math_keeps_cursor_visible() {
     assert_eq!(
         compute_horizontal_scroll_offset(10.0, 50.0, 400.0, 0.0),
         0.0
+    );
+}
+
+/// Dragging a selection handle past the visible window auto-pans the field so
+/// the dragged edge stays in view, reusing the same cursor-follow pan resolver.
+#[test]
+fn handle_drag_auto_pans_to_keep_dragged_edge_visible() {
+    use crate::text_selection::{selection_after_handle_drag, HandleKind};
+
+    let viewport = 100.0;
+    let text_width = 400.0;
+
+    // Drag the end handle to a text offset whose x sits well past the right
+    // edge: the pan advances so the dragged edge lands at the right edge.
+    let dragged_edge_x = 360.0;
+    let panned = compute_horizontal_scroll_offset(0.0, dragged_edge_x, text_width, viewport);
+    let edge_in_viewport = dragged_edge_x - panned;
+    assert!(
+        edge_in_viewport >= 0.0 && edge_in_viewport + CURSOR_WIDTH <= viewport + 0.01,
+        "dragged edge must be visible after auto-pan, got {edge_in_viewport}"
+    );
+
+    // The selection math keeps the fixed (start) edge and extends to the drag.
+    let (min, max) = selection_after_handle_drag(HandleKind::SelectionEnd, 2, 40, 64);
+    assert_eq!((min, max), (2, 40));
+
+    // Dragging the same handle back before the visible window pans back to it.
+    let back_edge_x = 20.0;
+    let panned_back = compute_horizontal_scroll_offset(panned, back_edge_x, text_width, viewport);
+    assert!(
+        (back_edge_x - panned_back) >= 0.0,
+        "dragging the edge back must pan back to keep it visible"
     );
 }
 

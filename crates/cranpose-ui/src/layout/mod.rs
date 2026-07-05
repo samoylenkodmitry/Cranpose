@@ -1570,13 +1570,25 @@ impl LayoutBuilderState {
                 y: padding.top + placement.y,
             };
 
-            // Critical: Update the child LayoutNode's retained state.
-            // Standard layouts do this via Placeable::place(), but SubcomposeLayout logic
-            // bypasses Placeables and returns raw Placements.
+            // Critical: Update the child's retained placement state.
+            // Standard layouts do this via Placeable::place(), but SubcomposeLayout
+            // logic bypasses Placeables and returns raw Placements. A subcomposed
+            // child can itself be a SubcomposeLayout (e.g. a `BoxWithConstraints`
+            // inside a `LazyColumn` item), so both node kinds must be positioned
+            // and marked placed; otherwise the applier-traversal render, layout,
+            // and semantics builds cull the child's whole subtree (issue #305).
             if let Ok(mut applier) = applier_host.try_borrow_typed() {
-                let _ = applier.with_node::<LayoutNode, _>(placement.node_id, |node| {
-                    node.set_position(position);
-                });
+                if applier
+                    .with_node::<LayoutNode, _>(placement.node_id, |node| {
+                        node.set_position(position);
+                    })
+                    .is_err()
+                {
+                    let _ =
+                        applier.with_node::<SubcomposeLayoutNode, _>(placement.node_id, |node| {
+                            node.set_position(position);
+                        });
+                }
             }
 
             children.push(MeasuredChild {

@@ -33,6 +33,7 @@ mod text_field_modifier_node;
 pub mod text_input_session;
 pub mod text_layout_result;
 mod text_modifier_node;
+pub mod text_selection;
 pub mod widgets;
 mod word_boundaries;
 pub mod zoom;
@@ -277,6 +278,10 @@ mod tab_switching_tests;
 #[cfg(test)]
 #[path = "tests/lazy_list_viewport_tests.rs"]
 mod lazy_list_viewport_tests;
+
+#[cfg(test)]
+#[path = "tests/swipe_to_dismiss_lazy_tests.rs"]
+mod swipe_to_dismiss_lazy_tests;
 
 #[cfg(test)]
 #[path = "tests/lazy_list_recompose_tests.rs"]
