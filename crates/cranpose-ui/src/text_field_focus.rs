@@ -45,6 +45,8 @@ pub trait FocusedTextFieldHandler {
     fn copy_selection(&self) -> Option<String>;
     /// Cut current selection (copy + delete). Returns None if nothing selected.
     fn cut_selection(&self) -> Option<String>;
+    /// Selects all the field's text (contextual-menu "Select all").
+    fn select_all(&self) {}
     /// Set IME composition (preedit) state.
     /// - `text`: The composition text being typed (empty string to clear,
     ///   which *deletes* the preedit text)
@@ -177,6 +179,15 @@ impl TextFieldFocusState {
             .and_then(|handler| handler.cut_selection())
     }
 
+    fn dispatch_select_all(&self) -> bool {
+        if let Some(handler) = self.focused_handler() {
+            handler.select_all();
+            true
+        } else {
+            false
+        }
+    }
+
     fn dispatch_ime_preedit(&self, text: &str, cursor: Option<(usize, usize)>) -> bool {
         if let Some(handler) = self.focused_handler() {
             handler.set_composition(text, cursor);
@@ -299,6 +310,12 @@ pub fn dispatch_copy() -> Option<String> {
 /// O(1) operation using stored handler.
 pub fn dispatch_cut() -> Option<String> {
     crate::render_state::with_text_field_focus(|state| state.dispatch_cut())
+}
+
+/// Selects all the text in the focused text field (contextual-menu "Select
+/// all"). Returns true if a text field was focused.
+pub fn dispatch_select_all() -> bool {
+    crate::render_state::with_text_field_focus(|state| state.dispatch_select_all())
 }
 
 /// Dispatches IME preedit (composition) state to the focused text field.

@@ -45,6 +45,41 @@ use std::collections::HashSet;
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 // Re-export the pointer device source so platform backends can stamp it.
 pub use cranpose_foundation::PointerSource;
+
+/// Bridges the in-tree selection menu's clipboard actions to the desktop OS
+/// clipboard (`arboard`). Holds a persistent clipboard handle (Linux X11 loses
+/// clipboard contents when the last owning handle drops), shared behind an
+/// `Rc<RefCell<..>>` so it stays alive for the app-context's lifetime.
+#[cfg(all(
+    feature = "clipboard-native",
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios")
+))]
+struct ShellClipboard {
+    inner: std::rc::Rc<std::cell::RefCell<Option<arboard::Clipboard>>>,
+}
+
+#[cfg(all(
+    feature = "clipboard-native",
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios")
+))]
+impl cranpose_ui::clipboard_session::PlatformClipboard for ShellClipboard {
+    fn write_text(&self, text: &str) {
+        if let Some(clipboard) = self.inner.borrow_mut().as_mut() {
+            let _ = clipboard.set_text(text);
+        }
+    }
+
+    fn read_text(&self) -> Option<String> {
+        self.inner
+            .borrow_mut()
+            .as_mut()
+            .and_then(|clipboard| clipboard.get_text().ok())
+    }
+}
 // Re-export the platform soft-keyboard hook so runtimes only depend on the shell
 pub use cranpose_ui::PlatformTextInputHandler;
 // Re-export the IME editable-state snapshot for platform text-input bridges
@@ -394,6 +429,21 @@ where
         });
         renderer.attach_app_context_services(&app_context);
         app_context.enter(|| {
+            // Route the selection menu's Copy/Cut/Paste through the OS clipboard
+            // on desktop; other platforms fall back to the in-process clipboard.
+            #[cfg(all(
+                feature = "clipboard-native",
+                not(target_arch = "wasm32"),
+                not(target_os = "android"),
+                not(target_os = "ios")
+            ))]
+            {
+                let clipboard =
+                    std::rc::Rc::new(std::cell::RefCell::new(arboard::Clipboard::new().ok()));
+                cranpose_ui::clipboard_session::set_platform_clipboard(std::rc::Rc::new(
+                    ShellClipboard { inner: clipboard },
+                ));
+            }
             if let Err(err) = composition.render_stable(root_key, &mut *build) {
                 log::error!("initial render failed: {err}");
             }

@@ -5,19 +5,22 @@
 
 #![allow(non_snake_case)]
 
+use crate::clipboard_session::{clipboard_read_text, clipboard_write_text};
 use crate::composable;
 use crate::layout::policies::EmptyMeasurePolicy;
 use crate::modifier::Modifier;
 use crate::text::{measure_text, AnnotatedString, TextStyle};
+use crate::text_field_focus::{dispatch_copy, dispatch_cut, dispatch_paste, dispatch_select_all};
 use crate::text_field_modifier_node::{
     TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics,
 };
 use crate::text_selection::{selection_after_handle_drag, HandleKind, HANDLE_RADIUS};
-use crate::widgets::{Layout, SelectionHandle};
-use cranpose_core::{remember, NodeId};
+use crate::widgets::{Layout, SelectionHandle, TextSelectionMenu};
+use cranpose_core::{mutableStateOf, remember, NodeId, SideEffect};
 use cranpose_foundation::modifier_element;
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
 use cranpose_ui_graphics::{Color, Point};
+use std::cell::Cell;
 use std::rc::Rc;
 
 /// Fill color of the finger selection/cursor handles (Android accent blue).
@@ -168,6 +171,25 @@ fn SelectionHandles(
     style: TextStyle,
     controller: TextFieldHandleController,
 ) {
+    let selection = state.selection();
+    let current_range = (selection.min(), selection.max());
+
+    // Whether the contextual menu is open. Reopens whenever the selection range
+    // changes (a fresh selection), so tapping an action dismisses it until the
+    // next selection.
+    let menu_open = remember(|| mutableStateOf(true)).with(|state| *state);
+    let previous_range: Rc<Cell<(usize, usize)>> =
+        remember(|| Rc::new(Cell::new(current_range))).with(Rc::clone);
+    {
+        let previous_range = Rc::clone(&previous_range);
+        SideEffect(move || {
+            if previous_range.get() != current_range {
+                previous_range.set(current_range);
+                menu_open.set(true);
+            }
+        });
+    }
+
     let Some(metrics) = controller.metrics() else {
         return;
     };
@@ -176,7 +198,6 @@ fn SelectionHandles(
     }
 
     let text = state.text();
-    let selection = state.selection();
 
     if selection.collapsed() {
         // Collapsed caret: a single symmetric cursor handle.
@@ -226,6 +247,43 @@ fn SelectionHandles(
             move |pos| on_drag_end(pos),
             || {},
         );
+
+        // Contextual menu (Copy / Cut / Paste / Select all) floating above the
+        // selection. Actions run against the focused field and dismiss the menu.
+        if menu_open.value() {
+            // Top-center of the selection's first line.
+            let menu_anchor = Point {
+                x: (start_tip.x + end_tip.x) * 0.5,
+                y: start_tip.y - metrics.line_height,
+            };
+            let can_paste = clipboard_read_text().is_some();
+            TextSelectionMenu(
+                menu_anchor,
+                can_paste,
+                move || {
+                    if let Some(text) = dispatch_copy() {
+                        clipboard_write_text(&text);
+                    }
+                    menu_open.set(false);
+                },
+                move || {
+                    if let Some(text) = dispatch_cut() {
+                        clipboard_write_text(&text);
+                    }
+                    menu_open.set(false);
+                },
+                move || {
+                    if let Some(text) = clipboard_read_text() {
+                        dispatch_paste(&text);
+                    }
+                    menu_open.set(false);
+                },
+                move || {
+                    dispatch_select_all();
+                    menu_open.set(false);
+                },
+            );
+        }
     }
 }
 
@@ -342,6 +400,103 @@ mod tests {
         applier.clear_runtime_handle();
         drop(applier);
         HeadlessRenderer::new().render(&layout)
+    }
+
+    /// Composes the handles + contextual menu for a range selection with the
+    /// given metrics, returning the rendered scene.
+    fn render_range_menu(touch: bool) -> crate::renderer::RecordedRenderScene {
+        use crate::layout::LayoutEngine;
+        use crate::renderer::HeadlessRenderer;
+        use crate::widgets::PopupHost;
+        use cranpose_ui_graphics::Size;
+
+        let mut composition = Composition::new(MemoryApplier::new());
+        let key = location_key(file!(), line!(), column!());
+        let state = TextFieldState::new("hello world");
+
+        let mut content = {
+            let state = state.clone();
+            move || {
+                let state = state.clone();
+                PopupHost(move || {
+                    let controller = TextFieldHandleController::new();
+                    if state.selection() != TextRange::new(0, 5) {
+                        state.set_selection(TextRange::new(0, 5));
+                    }
+                    controller.publish(TextFieldHandleMetrics {
+                        focused: true,
+                        touch,
+                        node_origin: Point { x: 0.0, y: 40.0 },
+                        padding_left: 0.0,
+                        padding_top: 0.0,
+                        scroll_offset: 0.0,
+                        line_height: 18.0,
+                    });
+                    SelectionHandles(state.clone(), TextStyle::default(), controller);
+                });
+            }
+        };
+
+        composition.render(key, &mut content).expect("render");
+        for _ in 0..16 {
+            if !composition.should_render() {
+                break;
+            }
+            composition.reconcile(key, &mut content).expect("reconcile");
+        }
+        let root = composition.root().expect("root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let layout = applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 400.0,
+                    height: 400.0,
+                },
+            )
+            .expect("layout");
+        applier.clear_runtime_handle();
+        drop(applier);
+        HeadlessRenderer::new().render(&layout)
+    }
+
+    fn text_values(scene: &crate::renderer::RecordedRenderScene) -> Vec<String> {
+        use crate::renderer::RenderOp;
+        scene
+            .operations()
+            .iter()
+            .filter_map(|op| match op {
+                RenderOp::Text { value, .. } => Some(value.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn context_menu_shows_for_touch_selection_only() {
+        let _app_context = crate::render_state::app_context_test_scope();
+
+        let touch = text_values(&render_range_menu(true));
+        assert!(
+            touch.iter().any(|t| t == "Copy"),
+            "touch selection should show the Copy menu item, got {touch:?}"
+        );
+        assert!(
+            touch.iter().any(|t| t == "Cut"),
+            "expected Cut, got {touch:?}"
+        );
+        assert!(
+            touch.iter().any(|t| t == "Select all"),
+            "expected Select all, got {touch:?}"
+        );
+
+        let mouse = text_values(&render_range_menu(false));
+        assert!(
+            !mouse.iter().any(|t| t == "Copy"),
+            "mouse selection must not show the finger contextual menu, got {mouse:?}"
+        );
     }
 
     fn image_count(scene: &crate::renderer::RecordedRenderScene) -> usize {

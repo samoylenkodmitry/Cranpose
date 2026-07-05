@@ -23,6 +23,7 @@ pub mod selection_handle;
 pub mod spacer;
 pub mod swipe_to_dismiss;
 pub mod text;
+pub mod text_selection_menu;
 
 pub use animated_visibility::*;
 pub use basic_text_field::*;
@@ -46,3 +47,4 @@ pub use scopes::*;
 pub use selection_handle::*;
 pub use spacer::*;
 pub use text::*;
+pub use text_selection_menu::*;

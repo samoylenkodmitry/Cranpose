@@ -38,6 +38,7 @@ pub struct AppContext {
     cursor_animation: crate::cursor_animation::CursorAnimationState,
     text_field_focus: crate::text_field_focus::TextFieldFocusState,
     text_input_session: crate::text_input_session::PlatformTextInputState,
+    clipboard_session: crate::clipboard_session::ClipboardSessionState,
     pointer_input_tasks: crate::modifier::pointer_input::PointerInputTaskRegistry,
     modifier_chain_trace: RefCell<Option<Arc<ModifierChainTraceCallback>>>,
 }
@@ -157,6 +158,7 @@ impl AppContext {
             cursor_animation: crate::cursor_animation::CursorAnimationState::new(),
             text_field_focus: crate::text_field_focus::TextFieldFocusState::new(),
             text_input_session: crate::text_input_session::PlatformTextInputState::new(),
+            clipboard_session: crate::clipboard_session::ClipboardSessionState::new(),
             pointer_input_tasks: crate::modifier::pointer_input::PointerInputTaskRegistry::new(),
             modifier_chain_trace: RefCell::new(None),
         });
@@ -445,6 +447,13 @@ pub(crate) fn with_text_input_session<R>(
 ) -> R {
     let context = require_current_app_context("platform text input session access");
     f(&context.text_input_session)
+}
+
+pub(crate) fn with_clipboard_session<R>(
+    f: impl FnOnce(&crate::clipboard_session::ClipboardSessionState) -> R,
+) -> R {
+    let context = require_current_app_context("clipboard session access");
+    f(&context.clipboard_session)
 }
 
 pub(crate) fn register_pointer_input_task(

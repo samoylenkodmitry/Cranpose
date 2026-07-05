@@ -191,6 +191,11 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         crate::request_render_invalidation();
     }
 
+    fn select_all(&self) {
+        self.state.edit(|buffer| buffer.select_all());
+        crate::request_render_invalidation();
+    }
+
     fn set_selection(&self, start_bytes: usize, end_bytes: usize) {
         // Selection-only change (Android `setSelection`, e.g. Gboard's
         // spacebar-swipe cursor scrub): move the caret/selection without
@@ -312,6 +317,34 @@ mod tests {
 
             text_field_focus::clear_focus();
         });
+    }
+
+    /// The contextual-menu "Select all" action selects the whole field.
+    #[test]
+    fn select_all_dispatch_selects_entire_field() {
+        use cranpose_foundation::text::TextRange;
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (state, _focus) = focused_state("hello world", TextFieldLineLimits::SingleLine);
+            state.edit(|buffer| buffer.place_cursor_at_end());
+
+            assert!(text_field_focus::dispatch_select_all());
+            assert_eq!(state.selection(), TextRange::new(0, "hello world".len()));
+
+            text_field_focus::clear_focus();
+            assert!(!text_field_focus::dispatch_select_all());
+        });
+    }
+
+    /// The in-process clipboard fallback (used when no platform clipboard is
+    /// installed) round-trips copy → paste so the menu works in tests/headless.
+    #[test]
+    fn clipboard_fallback_round_trips() {
+        use crate::clipboard_session::{clipboard_read_text, clipboard_write_text};
+        let _app_context = crate::render_state::app_context_test_scope();
+        assert_eq!(clipboard_read_text(), None);
+        clipboard_write_text("copied text");
+        assert_eq!(clipboard_read_text(), Some("copied text".to_string()));
     }
 
     /// Gboard's spacebar-swipe cursor control sends `KEYCODE_DPAD_LEFT`/

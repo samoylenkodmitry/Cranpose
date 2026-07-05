@@ -288,8 +288,8 @@ pub async fn run(
         }));
 
     // Pointer events (below) cover mouse, touch and pen and carry the device
-    // type via `pointerType`; legacy `mouse*` listeners are intentionally not
-    // registered so a mouse click is not double-dispatched and the pointer
+    // type via `pointerType`; the separate `mouse*` listeners are intentionally
+    // not registered so a mouse click is not double-dispatched and the pointer
     // source stays unambiguous.
     {
         let app = app.clone();

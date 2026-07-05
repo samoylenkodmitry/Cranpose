@@ -8,6 +8,7 @@ pub use cranpose_macros::composable;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
+pub mod clipboard_session;
 mod cursor_animation;
 mod debug;
 mod draw;
