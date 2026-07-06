@@ -64,6 +64,10 @@ pub enum SwipeDismissSide {
     End,
 }
 
+/// Boxed background closure, invoked each frame with the current
+/// [`SwipeDismissSide`] so the reveal can follow the swipe direction.
+type BackgroundFn = Rc<RefCell<dyn FnMut(SwipeDismissSide)>>;
+
 /// Configuration for [`SwipeToDismiss`].
 #[derive(Clone)]
 pub struct SwipeToDismissSpec {
@@ -73,7 +77,7 @@ pub struct SwipeToDismissSpec {
     /// Optional content drawn behind the swiped row (e.g. a delete bin),
     /// revealed as the row slides away. Receives the [`SwipeDismissSide`] the
     /// row is being swiped toward so the reveal can follow the swipe direction.
-    background: Option<Rc<RefCell<dyn FnMut(SwipeDismissSide)>>>,
+    background: Option<BackgroundFn>,
 }
 
 impl SwipeToDismissSpec {

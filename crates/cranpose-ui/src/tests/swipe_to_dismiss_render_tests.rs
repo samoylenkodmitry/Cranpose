@@ -384,14 +384,13 @@ fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
     );
 }
 
+/// A pointer handler tagged with the tree depth it was found at.
+type DepthTaggedHandler = (usize, Rc<dyn Fn(PointerEvent)>);
+
 /// The deepest pointer handler in the tree — the swipe row's, below the list's
 /// scroll handler.
 fn deepest_pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
-    fn walk(
-        node: &crate::LayoutBox,
-        best: &mut Option<(usize, Rc<dyn Fn(PointerEvent)>)>,
-        depth: usize,
-    ) {
+    fn walk(node: &crate::LayoutBox, best: &mut Option<DepthTaggedHandler>, depth: usize) {
         if let Some(handler) = node.node_data.modifier_slices().pointer_inputs().first() {
             if best.as_ref().is_none_or(|(d, _)| depth >= *d) {
                 *best = Some((depth, Rc::clone(handler)));
@@ -411,12 +410,11 @@ fn deepest_pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)>
 fn outer_item_height(tree: &crate::LayoutTree) -> Option<f32> {
     fn walk(node: &crate::LayoutBox) -> Option<f32> {
         for child in &node.children {
-            if child
+            if !child
                 .node_data
                 .modifier_slices()
                 .pointer_inputs()
-                .first()
-                .is_some()
+                .is_empty()
                 && (node.rect.height - 480.0).abs() > 1.0
             {
                 return Some(node.rect.height);
