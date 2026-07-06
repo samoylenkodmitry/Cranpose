@@ -210,6 +210,7 @@ fn SelectionHandles(
             HANDLE_COLOR,
             move |pos| on_drag(pos),
             || {},
+            || {},
         );
     } else {
         // Range selection: start (leftmost) and end (rightmost) teardrops.
@@ -231,6 +232,10 @@ fn SelectionHandles(
             HANDLE_COLOR,
             move |pos| on_drag_start(pos),
             || {},
+            // Long-pressing a handle re-opens the contextual menu even when the
+            // selection range has not changed (e.g. after it was dismissed by a
+            // previous action), so the text actions stay reachable.
+            move || menu_open.set(true),
         );
 
         let on_drag_end = drag_edge_closure(
@@ -246,6 +251,7 @@ fn SelectionHandles(
             HANDLE_COLOR,
             move |pos| on_drag_end(pos),
             || {},
+            move || menu_open.set(true),
         );
 
         // Contextual menu (Copy / Cut / Paste / Select all) floating above the
@@ -541,6 +547,100 @@ mod tests {
         scene.expect("scene")
     }
 
+    /// Like [`render_range_menu_subcomposed`], but the field lives inside a
+    /// `LazyColumn` *item* — the exact shape of the reported device bug (a
+    /// multi-line field in a lazy list). The item is subcomposed off the
+    /// measure pass through `LazyColumn`'s own `SubcomposeLayoutNode`, so the
+    /// overlay `Popup`s (handles + menu) only reach the enclosing `PopupHost`
+    /// once the item subcomposition inherits the call-site composition locals.
+    fn render_range_menu_lazy_column(touch: bool) -> crate::renderer::RecordedRenderScene {
+        use crate::layout::LayoutEngine;
+        use crate::renderer::HeadlessRenderer;
+        use crate::widgets::PopupHost;
+        use crate::{LazyColumn, LazyColumnSpec};
+        use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+        use cranpose_ui_graphics::Size;
+
+        let mut composition = Composition::new(MemoryApplier::new());
+        let key = location_key(file!(), line!(), column!());
+        let state = TextFieldState::new("hello world");
+
+        let mut content = {
+            let state = state.clone();
+            move || {
+                let state = state.clone();
+                PopupHost(move || {
+                    let state = state.clone();
+                    let list_state = remember_lazy_list_state();
+                    LazyColumn(
+                        Modifier::empty().size(Size {
+                            width: 300.0,
+                            height: 300.0,
+                        }),
+                        list_state,
+                        LazyColumnSpec::default(),
+                        move |scope| {
+                            let state = state.clone();
+                            scope.items(
+                                1,
+                                None::<fn(usize) -> u64>,
+                                None::<fn(usize) -> u64>,
+                                move |_index| {
+                                    let controller = TextFieldHandleController::new();
+                                    if state.selection() != TextRange::new(0, 5) {
+                                        state.set_selection(TextRange::new(0, 5));
+                                    }
+                                    controller.publish(TextFieldHandleMetrics {
+                                        focused: true,
+                                        touch,
+                                        node_origin: Point { x: 0.0, y: 40.0 },
+                                        padding_left: 0.0,
+                                        padding_top: 0.0,
+                                        scroll_offset: 0.0,
+                                        line_height: 18.0,
+                                    });
+                                    SelectionHandles(
+                                        state.clone(),
+                                        TextStyle::default(),
+                                        controller,
+                                    );
+                                },
+                            );
+                        },
+                    );
+                });
+            }
+        };
+
+        composition.render(key, &mut content).expect("render");
+        let root = composition.root().expect("root");
+        let handle = composition.runtime_handle();
+        let mut scene = None;
+        for _ in 0..8 {
+            for _ in 0..16 {
+                if !composition.should_render() {
+                    break;
+                }
+                composition.reconcile(key, &mut content).expect("reconcile");
+            }
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle.clone());
+            let layout = applier
+                .compute_layout(
+                    root,
+                    Size {
+                        width: 400.0,
+                        height: 400.0,
+                    },
+                )
+                .expect("layout");
+            applier.clear_runtime_handle();
+            drop(applier);
+            scene = Some(HeadlessRenderer::new().render(&layout));
+        }
+        scene.expect("scene")
+    }
+
     fn text_values(scene: &crate::renderer::RecordedRenderScene) -> Vec<String> {
         use crate::renderer::RenderOp;
         scene
@@ -603,6 +703,35 @@ mod tests {
             2,
             "a touch range selection should show two finger teardrop handles in \
              the overlay across the subcomposition boundary"
+        );
+    }
+
+    #[test]
+    fn selection_handles_and_menu_survive_lazy_column_item() {
+        // Regression for the reported device bug: a text field inside a
+        // `LazyColumn` item shows neither its selection handles nor its context
+        // menu, because the item is subcomposed off the list's measure pass and
+        // the overlay `Popup`s lose the enclosing `PopupHost` registry across
+        // that boundary. After capturing the call-site locals in `LazyColumn`
+        // the handles + menu reach the host, just like a top-level field.
+        let _app_context = crate::render_state::app_context_test_scope();
+        let scene = render_range_menu_lazy_column(true);
+
+        let texts = text_values(&scene);
+        assert!(
+            texts.iter().any(|t| t == "Copy"),
+            "a touch selection inside a LazyColumn item should show the Copy menu \
+             item through the host, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "Select all"),
+            "expected Select all inside a LazyColumn item, got {texts:?}"
+        );
+        assert_eq!(
+            image_count(&scene),
+            2,
+            "a touch range selection should show two finger teardrop handles in \
+             the overlay across the LazyColumn item subcomposition boundary"
         );
     }
 

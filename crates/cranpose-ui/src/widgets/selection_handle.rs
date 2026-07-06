@@ -19,8 +19,16 @@ use crate::text_selection::{handle_path_data, HandleKind, HANDLE_TOUCH_PADDING};
 use crate::widgets::box_widget::{Box, BoxSpec};
 use crate::widgets::popup::Popup;
 use crate::PointerInputScope;
-use cranpose_foundation::PointerEventKind;
+use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::{Brush, Color, DrawScope, Point, Rect, Size, VectorPath};
+
+/// How long (ms) the finger must rest on a handle — without moving beyond
+/// [`HANDLE_LONG_PRESS_SLOP_PX`] — before it counts as a long-press. Matches
+/// Android's ~500ms long-press timeout.
+pub(crate) const HANDLE_LONG_PRESS_TIMEOUT_MS: i64 = 500;
+/// Movement (px) tolerated during a long-press before it is treated as a drag
+/// instead. Keeps a resting finger a long-press even with minor jitter.
+pub(crate) const HANDLE_LONG_PRESS_SLOP_PX: f32 = 12.0;
 
 /// Geometry of a handle's drawable teardrop for a bulb `radius`: the box the
 /// teardrop occupies and where the tip sits inside that box, so the caller can
@@ -77,6 +85,9 @@ fn handle_shape(kind: HandleKind, radius: f32) -> HandleShape {
 ///   caret / extend the selection.
 /// * `on_drag_end` — invoked when the finger lifts, so the field can settle
 ///   (e.g. show the contextual menu).
+/// * `on_long_press` — invoked once when the finger rests on the handle past the
+///   long-press timeout without dragging it, so the field can (re)open the
+///   contextual menu even when the selection range has not changed.
 #[composable]
 pub fn SelectionHandle(
     kind: HandleKind,
@@ -85,6 +96,7 @@ pub fn SelectionHandle(
     color: Color,
     on_drag: impl Fn(Point) + 'static,
     on_drag_end: impl Fn() + 'static,
+    on_long_press: impl Fn() + 'static,
 ) {
     let shape = handle_shape(kind, radius);
     let anchor = Rect {
@@ -97,11 +109,13 @@ pub fn SelectionHandle(
     let box_size = shape.box_size;
     let on_drag: Rc<dyn Fn(Point)> = Rc::new(on_drag);
     let on_drag_end: Rc<dyn Fn()> = Rc::new(on_drag_end);
+    let on_long_press: Rc<dyn Fn()> = Rc::new(on_long_press);
 
     Popup(anchor, Point { x: 0.0, y: 0.0 }, move || {
         let path_data = path_data.clone();
         let on_drag = Rc::clone(&on_drag);
         let on_drag_end = Rc::clone(&on_drag_end);
+        let on_long_press = Rc::clone(&on_long_press);
         Box(
             Modifier::empty()
                 .size(box_size)
@@ -110,32 +124,121 @@ pub fn SelectionHandle(
                         scope.draw_vector_path(&path, Brush::solid(color));
                     }
                 })
-                .pointer_input((), move |scope: PointerInputScope| {
-                    let on_drag = Rc::clone(&on_drag);
-                    let on_drag_end = Rc::clone(&on_drag_end);
-                    async move {
-                        scope
-                            .await_pointer_event_scope(|await_scope| async move {
-                                loop {
-                                    let event = await_scope.await_pointer_event().await;
-                                    match event.kind {
-                                        PointerEventKind::Down | PointerEventKind::Move => {
-                                            on_drag(event.global_position);
-                                            event.consume();
-                                        }
-                                        PointerEventKind::Up | PointerEventKind::Cancel => {
-                                            on_drag_end();
-                                            event.consume();
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            })
-                            .await;
-                    }
-                }),
+                .then(selection_handle_pointer_input(
+                    Rc::clone(&on_drag),
+                    Rc::clone(&on_drag_end),
+                    Rc::clone(&on_long_press),
+                )),
             BoxSpec::default(),
             || {},
         );
     });
+}
+
+/// Builds the pointer-input modifier that drives a selection handle: it reports
+/// every drag position, the drag end (finger lift), and a long-press (finger
+/// held in place past [`HANDLE_LONG_PRESS_TIMEOUT_MS`]). Shared by
+/// [`SelectionHandle`] and exercised directly in tests so the gesture semantics
+/// stay pinned without a full compose/layout/hit-test round-trip.
+pub(crate) fn selection_handle_pointer_input(
+    on_drag: Rc<dyn Fn(Point)>,
+    on_drag_end: Rc<dyn Fn()>,
+    on_long_press: Rc<dyn Fn()>,
+) -> Modifier {
+    Modifier::empty().pointer_input((), move |scope: PointerInputScope| {
+        let on_drag = Rc::clone(&on_drag);
+        let on_drag_end = Rc::clone(&on_drag_end);
+        let on_long_press = Rc::clone(&on_long_press);
+        async move {
+            scope
+                .await_pointer_event_scope(|await_scope| async move {
+                    // Track the initial press so a resting finger can be told
+                    // apart from a drag. `time_ms` is the platform input clock;
+                    // when it is unavailable the long-press simply never fires
+                    // (a drag/lift still settles the selection).
+                    let mut down_time: Option<i64> = None;
+                    let mut down_pos = Point { x: 0.0, y: 0.0 };
+                    let mut long_press_fired = false;
+                    loop {
+                        let event = await_scope.await_pointer_event().await;
+                        match event.kind {
+                            PointerEventKind::Down => {
+                                down_time = event.time_ms;
+                                down_pos = event.global_position;
+                                long_press_fired = false;
+                                on_drag(event.global_position);
+                                event.consume();
+                            }
+                            PointerEventKind::Move => {
+                                on_drag(event.global_position);
+                                maybe_fire_long_press(
+                                    &event,
+                                    down_time,
+                                    down_pos,
+                                    &mut long_press_fired,
+                                    &on_long_press,
+                                );
+                                event.consume();
+                            }
+                            PointerEventKind::Up => {
+                                maybe_fire_long_press(
+                                    &event,
+                                    down_time,
+                                    down_pos,
+                                    &mut long_press_fired,
+                                    &on_long_press,
+                                );
+                                on_drag_end();
+                                down_time = None;
+                                event.consume();
+                            }
+                            PointerEventKind::Cancel => {
+                                on_drag_end();
+                                down_time = None;
+                                event.consume();
+                            }
+                            _ => {}
+                        }
+                    }
+                })
+                .await;
+        }
+    })
+}
+
+/// Fires `on_long_press` at most once per press when the finger has rested on
+/// the handle for at least [`HANDLE_LONG_PRESS_TIMEOUT_MS`] without moving more
+/// than [`HANDLE_LONG_PRESS_SLOP_PX`] from where it went down (i.e. a hold, not
+/// a drag).
+fn maybe_fire_long_press(
+    event: &PointerEvent,
+    down_time: Option<i64>,
+    down_pos: Point,
+    long_press_fired: &mut bool,
+    on_long_press: &Rc<dyn Fn()>,
+) {
+    if *long_press_fired {
+        return;
+    }
+    let (Some(down_ms), Some(now_ms)) = (down_time, event.time_ms) else {
+        return;
+    };
+    if is_handle_long_press(down_ms, now_ms, down_pos, event.global_position) {
+        *long_press_fired = true;
+        on_long_press();
+    }
+}
+
+/// Pure predicate for a handle long-press: held long enough and moved little
+/// enough to be a rest rather than a drag.
+pub(crate) fn is_handle_long_press(
+    down_ms: i64,
+    now_ms: i64,
+    down_pos: Point,
+    now_pos: Point,
+) -> bool {
+    let dx = now_pos.x - down_pos.x;
+    let dy = now_pos.y - down_pos.y;
+    let moved = (dx * dx + dy * dy).sqrt();
+    now_ms - down_ms >= HANDLE_LONG_PRESS_TIMEOUT_MS && moved <= HANDLE_LONG_PRESS_SLOP_PX
 }

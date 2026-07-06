@@ -9,8 +9,9 @@ use crate::modifier::{Brush, Color, Modifier};
 use crate::primitives::{Column, ColumnSpec};
 use crate::renderer::{HeadlessRenderer, RenderOp};
 use crate::widgets::{Popup, PopupHost};
-use crate::{layout::LayoutTree, Composition};
+use crate::{layout::LayoutTree, Composition, LazyColumn, LazyColumnSpec};
 use cranpose_core::{location_key, MemoryApplier, NodeId};
+use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_ui_graphics::{DrawPrimitive, Point, Rect, Size};
 
 /// A distinctive brush color the overlay content paints, so it can be located
@@ -287,6 +288,94 @@ fn popup_inside_subcomposition_still_reaches_the_host() {
          the enclosing PopupHost, got {rects:?}"
     );
     // And it lands at its anchor in window space, not clamped to the origin.
+    assert!(
+        (rects[0].x - 120.0).abs() <= 0.5 && (rects[0].y - 90.0).abs() <= 0.5,
+        "overlay marker should paint at the anchor (120,90), was {:?}",
+        rects[0]
+    );
+}
+
+#[test]
+fn popup_inside_lazy_column_item_still_reaches_the_host() {
+    // Regression (the reported device bug): a `Popup` composed inside a
+    // `LazyColumn` *item* must still register into the enclosing `PopupHost`.
+    // `LazyColumn` builds its own `SubcomposeLayoutNode` and subcomposes each
+    // item off the measure pass, so — exactly like `BoxWithConstraints` — the
+    // item subcomposition has to inherit the composition locals in scope where
+    // the `LazyColumn` was composed. Otherwise the `Popup` (a text field's
+    // selection handle / context menu in the real app) resolves the detached
+    // default registry and never renders. This failed before the
+    // capture-locals fix in `LazyColumnImpl`/`LazyRowImpl`.
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+
+    let mut content = || {
+        PopupHost(|| {
+            let state = remember_lazy_list_state();
+            LazyColumn(
+                Modifier::empty().size(Size {
+                    width: 200.0,
+                    height: 200.0,
+                }),
+                state,
+                LazyColumnSpec::default(),
+                |scope| {
+                    scope.items(
+                        1,
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        |_index| {
+                            Popup(
+                                Rect {
+                                    x: 120.0,
+                                    y: 90.0,
+                                    width: 0.0,
+                                    height: 0.0,
+                                },
+                                Point { x: 0.0, y: 0.0 },
+                                || {
+                                    Column(
+                                        Modifier::empty()
+                                            .size(Size {
+                                                width: 15.0,
+                                                height: 15.0,
+                                            })
+                                            .background(MARKER),
+                                        ColumnSpec::default(),
+                                        || {},
+                                    );
+                                },
+                            );
+                        },
+                    );
+                },
+            );
+        });
+    };
+
+    composition.render(key, &mut content).expect("render");
+    // As with the BoxWithConstraints case, the Popup registers during the
+    // measure-pass subcomposition (in `compute_layout`), so alternate
+    // reconcile + layout a few frames before sampling the scene.
+    let scene = {
+        let mut scene = None;
+        for _ in 0..8 {
+            settle(&mut composition, key, &mut content);
+            let root = composition.root().expect("root");
+            let layout = compute_layout(&mut composition, root);
+            scene = Some(HeadlessRenderer::new().render(&layout));
+        }
+        scene.expect("scene")
+    };
+
+    let rects = marker_rects(&scene);
+    assert_eq!(
+        rects.len(),
+        1,
+        "a Popup composed inside a LazyColumn item must reach the enclosing \
+         PopupHost, got {rects:?}"
+    );
     assert!(
         (rects[0].x - 120.0).abs() <= 0.5 && (rects[0].y - 90.0).abs() <= 0.5,
         "overlay marker should paint at the anchor (120,90), was {:?}",
