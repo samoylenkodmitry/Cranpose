@@ -1320,6 +1320,76 @@ mod tests {
         });
     }
 
+    /// End-to-end guard for the touch-vs-mouse finger-handle pipeline through
+    /// the real pointer handler and draw closure: a Touch-source press makes the
+    /// focused field publish `touch = true` (so `SelectionHandles` shows the
+    /// finger cursor/selection handles and the Copy/Cut/Paste popup), while a
+    /// Mouse-source press publishes `touch = false` (a clean caret, no handles).
+    /// The published `touch` flag is exactly what the overlay is gated on, so
+    /// this pins the source → `last_pointer_source` → metrics link the Android
+    /// touch handles depend on.
+    #[test]
+    fn touch_press_publishes_touch_handle_metrics_but_mouse_does_not() {
+        use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
+        use cranpose_ui_graphics::Point;
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let state = TextFieldState::new("hello world");
+            let controller = TextFieldHandleController::new();
+            let node = TextFieldModifierNode::new(state.clone(), TextStyle::default())
+                .with_handle_controller(controller.clone());
+            // Give the field a measured size so the draw closure has geometry.
+            node.measured_size.set(Size {
+                width: 120.0,
+                height: 20.0,
+            });
+
+            let handler = node
+                .pointer_input_handler()
+                .expect("field exposes a pointer handler");
+            let draw = node
+                .create_draw_closure()
+                .expect("field exposes a draw closure");
+            let at = Point { x: 12.0, y: 8.0 };
+            let size = Size {
+                width: 120.0,
+                height: 20.0,
+            };
+
+            // Touch tap: the field focuses and remembers the touch source, so
+            // its draw closure publishes touch = true.
+            handler(
+                PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
+            );
+            let _ = draw(size);
+            let metrics = controller
+                .metrics()
+                .expect("focused field publishes handle metrics");
+            assert!(metrics.focused, "a tap focuses the field");
+            assert!(
+                metrics.touch,
+                "a touch tap must publish touch = true so the finger handles show"
+            );
+
+            // Mouse tap on the same field: the source flips to mouse, so the
+            // field publishes touch = false (clean caret, no finger handles).
+            handler(
+                PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Mouse),
+            );
+            let _ = draw(size);
+            let metrics = controller
+                .metrics()
+                .expect("focused field publishes handle metrics");
+            assert!(
+                !metrics.touch,
+                "a mouse tap must publish touch = false (clean caret, no finger handle)"
+            );
+
+            crate::text_field_focus::clear_focus();
+        });
+    }
+
     #[test]
     fn text_field_element_equality() {
         let _app_context = crate::render_state::app_context_test_scope();

@@ -78,16 +78,34 @@ fn android_event_time_ms(event_time_ns: i64) -> i64 {
     event_time_ns / 1_000_000
 }
 
-/// Maps an Android `MotionEvent` pointer tool type onto the framework
-/// [`PointerSource`] so text fields can show finger handles only for touch.
-fn android_pointer_source(pointer: &android_activity::input::Pointer<'_>) -> PointerSource {
-    use android_activity::input::ToolType;
-    match pointer.tool_type() {
-        ToolType::Finger => PointerSource::Touch,
-        ToolType::Mouse => PointerSource::Mouse,
-        ToolType::Stylus | ToolType::Eraser => PointerSource::Stylus,
-        _ => PointerSource::Unknown,
-    }
+/// Maps an Android `MotionEvent` pointer onto the framework [`PointerSource`]
+/// so text fields can show finger handles only for touch/stylus input.
+///
+/// The per-pointer tool type is the most specific signal, but many devices and
+/// the Android emulator report `TOOL_TYPE_UNKNOWN` for genuine finger touches;
+/// in that case the whole-event input source class (`getSource`) is consulted
+/// so a touchscreen press is still stamped [`PointerSource::Touch`]. Without
+/// this fallback the finger selection/cursor handles (touch-only) never appear.
+fn android_pointer_source(
+    pointer: &android_activity::input::Pointer<'_>,
+    event_source: android_activity::input::Source,
+) -> PointerSource {
+    use crate::android_input::{resolve_pointer_source, AndroidSourceKind, AndroidToolKind};
+    use android_activity::input::{Source, ToolType};
+
+    let tool = match pointer.tool_type() {
+        ToolType::Finger => AndroidToolKind::Finger,
+        ToolType::Mouse => AndroidToolKind::Mouse,
+        ToolType::Stylus | ToolType::Eraser => AndroidToolKind::Stylus,
+        _ => AndroidToolKind::Indeterminate,
+    };
+    let source = match event_source {
+        Source::Touchscreen => AndroidSourceKind::Touchscreen,
+        Source::Stylus | Source::BluetoothStylus => AndroidSourceKind::Stylus,
+        Source::Mouse | Source::MouseRelative => AndroidSourceKind::Mouse,
+        _ => AndroidSourceKind::Other,
+    };
+    resolve_pointer_source(tool, source)
 }
 
 /// Translates one Android `KeyEvent` into a pending framework key event.
@@ -230,6 +248,9 @@ fn push_pending_inputs_from_android_event(
     };
 
     let time_ms = Some(android_event_time_ms(motion_event.event_time()));
+    // The whole-event input source class; used to recover a touch classification
+    // when the per-pointer tool type is unreported (see `android_pointer_source`).
+    let event_source = motion_event.source();
     let logical_of = |x: f32, y: f32| {
         let logical = android_platform.pointer_position(x as f64, y as f64);
         (logical.x as f32, logical.y as f32)
@@ -244,7 +265,7 @@ fn push_pending_inputs_from_android_event(
                 x,
                 y,
                 time_ms,
-                android_pointer_source(&pointer),
+                android_pointer_source(&pointer, event_source),
             ));
             true
         }
@@ -283,7 +304,7 @@ fn push_pending_inputs_from_android_event(
                 x,
                 y,
                 time_ms,
-                android_pointer_source(&pointer),
+                android_pointer_source(&pointer, event_source),
             ));
             *primary_pointer_id = None;
             true
@@ -315,7 +336,7 @@ fn push_pending_inputs_from_android_event(
                     x,
                     y,
                     time_ms,
-                    android_pointer_source(&pointer),
+                    android_pointer_source(&pointer, event_source),
                 ));
                 *primary_pointer_id = None;
             } else {
@@ -332,7 +353,7 @@ fn push_pending_inputs_from_android_event(
             let primary = *primary_pointer_id;
             for pointer in motion_event.pointers() {
                 let is_primary = primary == Some(pointer.pointer_id());
-                let source = android_pointer_source(&pointer);
+                let source = android_pointer_source(&pointer, event_source);
                 if is_primary {
                     for historical in pointer.history() {
                         let (hx, hy) = logical_of(historical.x(), historical.y());

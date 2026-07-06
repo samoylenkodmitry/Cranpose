@@ -41,6 +41,9 @@ fn cancel() -> PointerEvent {
 }
 
 struct Harness {
+    // The collapse watcher requests render/layout invalidation, which needs an
+    // active app context; keep one alive for the whole harness.
+    _app_context: crate::render_state::TestAppContextScope,
     _runtime: Runtime,
     controller: Rc<SwipeToDismissController>,
     dismiss_count: Rc<Cell<usize>>,
@@ -49,6 +52,7 @@ struct Harness {
 
 impl Harness {
     fn new(width: f32, threshold_fraction: f32) -> Self {
+        let app_context = crate::render_state::app_context_test_scope();
         let runtime = Runtime::new(std::sync::Arc::new(DefaultScheduler));
         let controller = SwipeToDismissController::new(runtime.handle());
         controller.width_px.set(width);
@@ -61,6 +65,7 @@ impl Harness {
         }));
 
         Self {
+            _app_context: app_context,
             _runtime: runtime,
             controller,
             dismiss_count,
@@ -79,6 +84,11 @@ impl Harness {
     /// Non-reactive read of the background-reveal flag driven by the gesture.
     fn revealed(&self) -> bool {
         self.controller.revealed.get_non_reactive()
+    }
+
+    /// Current row height scale (`1.0` at rest, `0.0` fully collapsed).
+    fn collapse(&self) -> f32 {
+        self.controller.collapse_fraction()
     }
 
     /// Advances the frame clock, driving springs and the settle watcher.
@@ -307,18 +317,30 @@ fn background_reveal_tracks_displacement() {
 }
 
 #[test]
-fn background_reveal_stays_on_through_dismissal() {
+fn dismiss_hides_background_and_collapses_row() {
     let mut harness = Harness::new(200.0, 0.5);
+    assert_eq!(harness.collapse(), 1.0, "row starts at full height");
+
     harness.send(&down(10.0, 10.0));
     harness.send(&move_to(30.0, 10.0));
     harness.send(&move_to(140.0, 10.0)); // offset 130 >= threshold 100
+    assert!(harness.revealed(), "background revealed while displaced");
     harness.send(&up(140.0, 10.0));
     harness.pump_frames(300);
 
+    // The dismiss fired exactly once and the row has fully settled: the
+    // background is no longer drawn (nothing to leave a red strip) and the row
+    // has collapsed to zero height (no lingering gap) regardless of when the
+    // host removes the item.
     assert_eq!(harness.dismiss_count.get(), 1);
     assert!(
-        harness.revealed(),
-        "background stays revealed while the dismissed row rests off-screen"
+        !harness.revealed(),
+        "background must be hidden after a dismiss settles, not left as a strip"
+    );
+    assert!(
+        harness.collapse() <= 0.01,
+        "row must collapse to zero height after a dismiss, got scale {}",
+        harness.collapse()
     );
 }
 

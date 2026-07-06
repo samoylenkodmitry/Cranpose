@@ -206,6 +206,13 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         let end = floor_char_boundary(&text, start_bytes.max(end_bytes));
         self.state
             .set_selection(cranpose_foundation::text::TextRange::new(start, end));
+        // Moving the caret counts as activity: snap it solid and restart the
+        // blink timer so the caret stays visible while it is actively scrubbing
+        // (spacebar-swipe / arrow scrub) and only resumes blinking once the
+        // movement stops (standard IME behavior). The key-driven scrub path
+        // already resets via `on_text_mutated`; this covers the IME
+        // `setSelection` path that never touches the text.
+        crate::cursor_animation::reset_cursor_blink();
         crate::request_render_invalidation();
     }
 
@@ -381,6 +388,38 @@ mod tests {
 
             // Scrubbing the cursor must never change the text.
             assert_eq!(state.text(), "hello");
+            text_field_focus::clear_focus();
+        });
+    }
+
+    /// A cursor move via `setSelection` (Gboard spacebar-swipe / arrow scrub)
+    /// must snap the blinking caret solid and restart the blink timer, so the
+    /// caret stays visible while the cursor is actively moving and only resumes
+    /// blinking once movement stops. Without this the caret keeps blinking
+    /// mid-scrub.
+    #[test]
+    fn cursor_move_via_set_selection_resets_blink_to_solid() {
+        use crate::cursor_animation::{is_cursor_visible, start_cursor_blink, BLINK_INTERVAL_MS};
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (state, _focus) = focused_state("hello world", TextFieldLineLimits::SingleLine);
+            state.edit(|buffer| buffer.place_cursor_at_end());
+
+            // Start blinking, then advance one full interval so the caret is in
+            // its hidden phase (actively blinking).
+            start_cursor_blink();
+            let hidden_at =
+                web_time::Instant::now() + std::time::Duration::from_millis(BLINK_INTERVAL_MS + 1);
+            crate::render_state::with_cursor_animation(|state| state.tick(hidden_at));
+            assert!(!is_cursor_visible(), "caret should be hidden mid-blink");
+
+            // Scrub the caret via the IME setSelection path.
+            assert!(text_field_focus::dispatch_ime_set_selection(2, 2));
+            assert!(
+                is_cursor_visible(),
+                "a cursor-move must reset the blink phase to solid (visible)"
+            );
+
             text_field_focus::clear_focus();
         });
     }
