@@ -25,7 +25,7 @@ fn compose_row(with_background: bool) -> TestComposition {
     run_test_composition(move || {
         let mut spec = SwipeToDismissSpec::default();
         if with_background {
-            spec = spec.with_background(|| {
+            spec = spec.with_background(|_side| {
                 Box(
                     Modifier::empty().fill_max_size().background(BIN_RED),
                     BoxSpec::new(),
@@ -42,6 +42,48 @@ fn compose_row(with_background: bool) -> TestComposition {
                     "CONTENT".to_string(),
                     Modifier::empty(),
                     TextStyle::default(),
+                );
+            },
+        );
+    })
+}
+
+/// A `SwipeToDismiss` row (with a red bin background) inside a `LazyColumn`
+/// item — the real app shape where the lingering-strip bug appears.
+fn compose_lazy_row_with_background() -> TestComposition {
+    use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+    run_test_composition(move || {
+        let list_state = remember_lazy_list_state();
+        LazyColumn(
+            Modifier::empty().fill_max_size(),
+            list_state,
+            LazyColumnSpec::default(),
+            |scope| {
+                scope.items(
+                    1,
+                    None::<fn(usize) -> u64>,
+                    None::<fn(usize) -> u64>,
+                    |_index| {
+                        let spec = SwipeToDismissSpec::default().with_background(|_side| {
+                            Box(
+                                Modifier::empty().fill_max_size().background(BIN_RED),
+                                BoxSpec::new(),
+                                || {},
+                            );
+                        });
+                        SwipeToDismiss(
+                            Modifier::empty().fill_max_width().height(48.0),
+                            spec,
+                            || {},
+                            || {
+                                Text(
+                                    "CONTENT".to_string(),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    },
                 );
             },
         );
@@ -273,4 +315,115 @@ fn dismissed_row_hides_background_and_collapses_to_zero_height() {
         "the dismissed row must collapse to zero height, got {}",
         settled.root().rect.height
     );
+}
+
+/// The same dismiss, but with the row inside a `LazyColumn` item — the real app
+/// shape. The collapse re-measures via `schedule_measure_repass`, which bubbles
+/// *measure* dirtiness so the list re-measures the shrinking item instead of
+/// reusing its cached, full-height slot. Without that, the red background and
+/// the pre-dismiss height linger until the whole list is rebuilt.
+#[test]
+fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
+    let mut composition = compose_lazy_row_with_background();
+    let root = composition.root().expect("root");
+    measure_row(&mut composition, root);
+
+    let tree = layout_tree(&mut composition, root);
+    // The list's scroll node also carries a pointer handler; the swipe row's is
+    // the deepest one, so dispatch there (the swipe consumes the horizontal
+    // drag before it would reach the parent scroll).
+    let handler = deepest_pointer_handler(&tree);
+
+    // Swipe past the dismiss threshold (0.5 * 320px width = 160px) and release.
+    handler(down(10.0));
+    handler(move_to(30.0)); // capture
+    handler(move_to(210.0)); // dx = 200 >= threshold
+
+    // Sanity: the swipe captured and revealed the background (proves the events
+    // reached the swipe handler, not the parent scroll).
+    composition
+        .process_invalid_scopes()
+        .expect("recompose after capture");
+    measure_row(&mut composition, root);
+    assert!(
+        count_bin_primitives(&layout_tree(&mut composition, root)) > 0,
+        "the swipe must reveal the bin background mid-drag"
+    );
+
+    handler(up(210.0));
+
+    // Settle + collapse. Interleave frame pumps with re-measures/recomposes, as
+    // the shell does each frame: the collapse animation advances and schedules a
+    // measure repass, which the next measure pass consumes to re-measure the row
+    // through the LazyColumn (bubbling measure dirtiness defeats the item cache).
+    let handle = composition.runtime_handle();
+    let mut frame_time = 0u64;
+    for _ in 0..120 {
+        for _ in 0..8 {
+            frame_time += 16_666_667;
+            composition.with_app_context(|| handle.drain_frame_callbacks(frame_time));
+        }
+        composition
+            .process_invalid_scopes()
+            .expect("recompose during collapse");
+        measure_row(&mut composition, root);
+    }
+
+    let settled = layout_tree(&mut composition, root);
+    assert_eq!(
+        count_bin_primitives(&settled),
+        0,
+        "no red background strip may linger after a dismiss inside a LazyColumn"
+    );
+    // The collapsing item node (the outer SubcomposeLayout that scales its height
+    // by the collapse fraction) must have shrunk to zero inside the list.
+    let item_height = outer_item_height(&settled).expect("collapsing item present in tree");
+    assert!(
+        item_height <= 0.5,
+        "the dismissed row inside a LazyColumn must collapse to zero height, got {item_height}"
+    );
+}
+
+/// A pointer handler tagged with the tree depth it was found at.
+type DepthTaggedHandler = (usize, Rc<dyn Fn(PointerEvent)>);
+
+/// The deepest pointer handler in the tree — the swipe row's, below the list's
+/// scroll handler.
+fn deepest_pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
+    fn walk(node: &crate::LayoutBox, best: &mut Option<DepthTaggedHandler>, depth: usize) {
+        if let Some(handler) = node.node_data.modifier_slices().pointer_inputs().first() {
+            if best.as_ref().is_none_or(|(d, _)| depth >= *d) {
+                *best = Some((depth, Rc::clone(handler)));
+            }
+        }
+        for child in &node.children {
+            walk(child, best, depth + 1);
+        }
+    }
+    let mut best = None;
+    walk(tree.root(), &mut best, 0);
+    best.expect("swipe pointer handler").1
+}
+
+/// Height of the collapsing item: the parent node of the swipe-handler node
+/// (the outer SubcomposeLayout that scales height by the collapse fraction).
+fn outer_item_height(tree: &crate::LayoutTree) -> Option<f32> {
+    fn walk(node: &crate::LayoutBox) -> Option<f32> {
+        for child in &node.children {
+            if !child
+                .node_data
+                .modifier_slices()
+                .pointer_inputs()
+                .is_empty()
+                && (node.rect.height - 480.0).abs() > 1.0
+            {
+                return Some(node.rect.height);
+            }
+            if let Some(h) = walk(child) {
+                return Some(h);
+            }
+        }
+        None
+    }
+    walk(tree.root())
 }

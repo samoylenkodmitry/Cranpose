@@ -772,6 +772,12 @@ impl SubcomposeLayoutNode {
         self.invalidate_subcomposition();
     }
 
+    /// Records the composition locals in scope where the `SubcomposeLayout` was
+    /// composed, so they can be replayed during the measure-pass subcomposition.
+    pub fn set_captured_locals(&mut self, locals: cranpose_core::CapturedCompositionLocals) {
+        self.inner.borrow_mut().captured_locals = Some(locals);
+    }
+
     pub fn set_modifier(&mut self, modifier: Modifier) {
         // Capture capabilities BEFORE updating to detect removed modifiers
         let prev_caps = self.modifier_capabilities();
@@ -1286,13 +1292,20 @@ impl SubcomposeLayoutNodeHandle {
             retained_measure_registrar,
             error,
         } = callbacks;
-        let (policy, mut state, slots_host, placement_scratch) = {
+        let (policy, mut state, slots_host, placement_scratch, captured_locals) = {
             let mut inner = self.inner.borrow_mut();
             let policy = Rc::clone(&inner.measure_policy);
             let state = std::mem::take(&mut inner.state);
             let slots_host = Rc::clone(&inner.slots);
             let placement_scratch = std::mem::take(&mut inner.placement_scratch);
-            (policy, state, slots_host, placement_scratch)
+            let captured_locals = inner.captured_locals.clone();
+            (
+                policy,
+                state,
+                slots_host,
+                placement_scratch,
+                captured_locals,
+            )
         };
         state.begin_pass();
 
@@ -1310,8 +1323,11 @@ impl SubcomposeLayoutNodeHandle {
         //
         // Reference: LazyLayoutMeasureScope.subcompose() in JC reuses existing slots by key,
         // and SubcomposeLayoutState holds `slotIdToNode` map across measurements.
-        let ((result, placement_scratch), _) =
-            composer.subcompose_slot(&slots_host, Some(node_id), |inner_composer| {
+        let ((result, placement_scratch), _) = composer.subcompose_slot_with_locals(
+            &slots_host,
+            Some(node_id),
+            captured_locals.as_ref(),
+            |inner_composer| {
                 let mut scope = SubcomposeMeasureScopeImpl::new(SubcomposeMeasureScopeInit {
                     composer: inner_composer.clone(),
                     state: &mut state,
@@ -1327,7 +1343,8 @@ impl SubcomposeLayoutNodeHandle {
                 });
                 let result = (policy)(&mut scope, constraints_copy);
                 (result, scope.into_placement_scratch())
-            })?;
+            },
+        )?;
 
         state.finish_pass();
 
@@ -1393,6 +1410,11 @@ struct SubcomposeLayoutNodeInner {
     last_placements: Vec<NodeId>,
     placement_scratch: Vec<Placement>,
     measured_children_scratch: Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>>,
+    /// Composition locals in scope where this `SubcomposeLayout` was composed,
+    /// replayed while subcomposing off the measure pass so subcomposed content
+    /// observes the same composition locals as the call site (see
+    /// `cranpose_core::Composer::capture_composition_locals`).
+    captured_locals: Option<cranpose_core::CapturedCompositionLocals>,
 }
 
 impl SubcomposeLayoutNodeInner {
@@ -1411,6 +1433,7 @@ impl SubcomposeLayoutNodeInner {
             last_placements: Vec::new(),
             placement_scratch: Vec::new(),
             measured_children_scratch: Rc::new(RefCell::new(HashMap::default())),
+            captured_locals: None,
         }
     }
 

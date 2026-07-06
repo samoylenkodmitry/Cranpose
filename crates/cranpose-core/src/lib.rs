@@ -35,7 +35,7 @@ pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
 pub use callbacks::{CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot};
-pub use composer::{Composer, ValueSlotHandle};
+pub use composer::{CapturedCompositionLocals, Composer, ValueSlotHandle};
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{

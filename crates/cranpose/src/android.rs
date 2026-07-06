@@ -127,6 +127,47 @@ fn push_pending_input_from_android_key_event(
     true
 }
 
+thread_local! {
+    /// Current soft-keyboard (IME) insets in *logical* px, shared between the
+    /// shell content wrapper (which provides them to composition via
+    /// [`cranpose_ui::local_ime_insets`]) and the IME event loop (which updates
+    /// them from Java-forwarded keyboard heights).
+    static ANDROID_IME_INSETS: Rc<Cell<cranpose_ui::EdgeInsets>> =
+        Rc::new(Cell::new(cranpose_ui::EdgeInsets::default()));
+    /// Density used to convert Java's physical keyboard height to logical px.
+    static ANDROID_IME_DENSITY: Cell<f32> = const { Cell::new(1.0) };
+}
+
+/// Shared handle to the current IME insets (logical px), read by the shell
+/// content wrapper on every recomposition.
+fn android_ime_insets_handle() -> Rc<Cell<cranpose_ui::EdgeInsets>> {
+    ANDROID_IME_INSETS.with(Rc::clone)
+}
+
+/// Records the density used to convert the Java keyboard height to logical px.
+fn set_android_ime_density(density: f32) {
+    ANDROID_IME_DENSITY.with(|cell| cell.set(density.max(f32::EPSILON)));
+}
+
+/// Stores the keyboard's covered height (physical px, `0` when hidden) as
+/// bottom IME insets in logical px. Returns whether the value changed.
+fn set_android_ime_bottom_px(bottom_px: i32) -> bool {
+    let density = ANDROID_IME_DENSITY.with(|cell| cell.get());
+    let bottom = (bottom_px.max(0) as f32) / density;
+    let insets = cranpose_ui::EdgeInsets {
+        bottom,
+        ..cranpose_ui::EdgeInsets::default()
+    };
+    ANDROID_IME_INSETS.with(|cell| {
+        if cell.get() == insets {
+            false
+        } else {
+            cell.set(insets);
+            true
+        }
+    })
+}
+
 /// `EditorInfo.IME_ACTION_DONE`: the user tapped the keyboard's Done action.
 const IME_ACTION_DONE: i32 = 6;
 
@@ -202,6 +243,14 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
                     );
                     let _ = shell.on_key_event(&key);
                 }
+            }
+        }
+        AndroidImeEvent::ImeInsetsChanged { bottom_px } => {
+            // Publish the keyboard height as IME insets and force a root render
+            // so the content wrapper re-provides `local_ime_insets` (a plain
+            // shared cell is not itself reactive).
+            if set_android_ime_bottom_px(bottom_px) {
+                shell.request_root_render();
             }
         }
     }
@@ -668,10 +717,21 @@ where
 
         let content_clone = content.clone();
         let density = density.max(f32::EPSILON);
+        let ime_insets = android_ime_insets_handle();
         let shell = AppShell::new_with_size_and_density(
             renderer,
             default_root_key(),
-            move || content_clone.borrow_mut()(),
+            move || {
+                // Provide the current soft-keyboard insets to composition so the
+                // app can keep the focused field above the keyboard. Read on
+                // every recomposition; the IME loop forces a root render when the
+                // height changes (see `dispatch_android_ime_event`).
+                let insets = ime_insets.get();
+                cranpose_core::CompositionLocalProvider(
+                    [cranpose_ui::local_ime_insets().provides(insets)],
+                    || content_clone.borrow_mut()(),
+                );
+            },
             (width, height),
             (width as f32 / density, height as f32 / density),
             density,
@@ -701,6 +761,7 @@ where
     if let Some(shell) = app_shell {
         shell.renderer().set_root_scale(density);
         shell.set_density(density);
+        set_android_ime_density(density);
     }
 
     let actual_size = app_shell.as_mut().and_then(|shell| {

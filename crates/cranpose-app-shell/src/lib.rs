@@ -642,6 +642,7 @@ where
             || peek_focus_invalidation()
             || peek_layout_invalidation()
             || cranpose_ui::has_pending_layout_repasses()
+            || cranpose_ui::has_pending_measure_repasses()
             || cranpose_ui::has_pending_draw_repasses()
             || has_pending_pointer_repasses()
             || has_pending_focus_invalidations()

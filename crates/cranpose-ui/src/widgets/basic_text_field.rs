@@ -462,6 +462,85 @@ mod tests {
         HeadlessRenderer::new().render(&layout)
     }
 
+    /// Like [`render_range_menu`], but the metrics + `SelectionHandles` are
+    /// composed inside a `BoxWithConstraints` (which subcomposes its content off
+    /// the measure pass), mirroring a real app where text fields live inside
+    /// `BoxWithConstraints`/`LazyColumn`. The overlay `Popup`s must still reach
+    /// the enclosing `PopupHost` across the subcomposition boundary.
+    fn render_range_menu_subcomposed(touch: bool) -> crate::renderer::RecordedRenderScene {
+        use crate::layout::LayoutEngine;
+        use crate::renderer::HeadlessRenderer;
+        use crate::widgets::{BoxWithConstraints, PopupHost};
+        use cranpose_ui_graphics::Size;
+
+        let mut composition = Composition::new(MemoryApplier::new());
+        let key = location_key(file!(), line!(), column!());
+        let state = TextFieldState::new("hello world");
+
+        let mut content = {
+            let state = state.clone();
+            move || {
+                let state = state.clone();
+                PopupHost(move || {
+                    let state = state.clone();
+                    BoxWithConstraints(
+                        Modifier::empty().size(Size {
+                            width: 300.0,
+                            height: 300.0,
+                        }),
+                        move |_scope| {
+                            let controller = TextFieldHandleController::new();
+                            if state.selection() != TextRange::new(0, 5) {
+                                state.set_selection(TextRange::new(0, 5));
+                            }
+                            controller.publish(TextFieldHandleMetrics {
+                                focused: true,
+                                touch,
+                                node_origin: Point { x: 0.0, y: 40.0 },
+                                padding_left: 0.0,
+                                padding_top: 0.0,
+                                scroll_offset: 0.0,
+                                line_height: 18.0,
+                            });
+                            SelectionHandles(state.clone(), TextStyle::default(), controller);
+                        },
+                    );
+                });
+            }
+        };
+
+        composition.render(key, &mut content).expect("render");
+        let root = composition.root().expect("root");
+        let handle = composition.runtime_handle();
+        let mut scene = None;
+        // The Popups register during the measure-pass subcomposition, so a
+        // follow-up frame (reconcile + layout) is needed for the host to render
+        // them. Alternate the two a few times, as real frames do.
+        for _ in 0..8 {
+            for _ in 0..16 {
+                if !composition.should_render() {
+                    break;
+                }
+                composition.reconcile(key, &mut content).expect("reconcile");
+            }
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle.clone());
+            let layout = applier
+                .compute_layout(
+                    root,
+                    Size {
+                        width: 400.0,
+                        height: 400.0,
+                    },
+                )
+                .expect("layout");
+            applier.clear_runtime_handle();
+            drop(applier);
+            scene = Some(HeadlessRenderer::new().render(&layout));
+        }
+        scene.expect("scene")
+    }
+
     fn text_values(scene: &crate::renderer::RecordedRenderScene) -> Vec<String> {
         use crate::renderer::RenderOp;
         scene
@@ -496,6 +575,34 @@ mod tests {
         assert!(
             !mouse.iter().any(|t| t == "Copy"),
             "mouse selection must not show the finger contextual menu, got {mouse:?}"
+        );
+    }
+
+    #[test]
+    fn selection_handles_and_menu_survive_subcomposition() {
+        // Regression: the selection handles and the contextual menu (all drawn
+        // through `Popup`) must reach the enclosing `PopupHost` even when the
+        // text field lives inside a `BoxWithConstraints`/`LazyColumn`, which
+        // subcomposes its content off the measure pass. Both the two teardrop
+        // handles and the menu items are expected.
+        let _app_context = crate::render_state::app_context_test_scope();
+        let scene = render_range_menu_subcomposed(true);
+
+        let texts = text_values(&scene);
+        assert!(
+            texts.iter().any(|t| t == "Copy"),
+            "a touch selection inside a subcomposition should show the Copy menu \
+             item through the host, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "Select all"),
+            "expected Select all inside a subcomposition, got {texts:?}"
+        );
+        assert_eq!(
+            image_count(&scene),
+            2,
+            "a touch range selection should show two finger teardrop handles in \
+             the overlay across the subcomposition boundary"
         );
     }
 

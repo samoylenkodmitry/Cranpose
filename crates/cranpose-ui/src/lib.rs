@@ -65,7 +65,7 @@ pub use interaction::{
     MutableInteractionSource, PressInteraction, PressInteractionCancel, PressInteractionPress,
     PressInteractionRelease,
 };
-pub use safe_area::local_safe_area_insets;
+pub use safe_area::{local_ime_insets, local_safe_area_insets};
 // Re-export FocusManager from cranpose-foundation to avoid duplication
 pub use cranpose_foundation::nodes::input::focus::FocusManager;
 pub use cranpose_foundation::{
@@ -118,12 +118,13 @@ pub use render_state::reset_render_state_for_tests;
 pub use render_state::{
     clear_transient_scroll_motion_contexts, current_density, debug_last_fling_velocity,
     debug_reset_last_fling_velocity, has_current_app_context, has_pending_draw_repasses,
-    has_pending_layout_repasses, peek_focus_invalidation, peek_layout_invalidation,
-    peek_pointer_invalidation, peek_render_invalidation, pending_layout_repass_nodes_snapshot,
-    request_focus_invalidation, request_layout_invalidation, request_pointer_invalidation,
-    request_render_invalidation, schedule_draw_repass, schedule_layout_repass, set_density,
-    take_draw_repass_nodes, take_focus_invalidation, take_layout_invalidation,
-    take_layout_repass_nodes, take_pointer_invalidation, take_render_invalidation, AppContext,
+    has_pending_layout_repasses, has_pending_measure_repasses, peek_focus_invalidation,
+    peek_layout_invalidation, peek_pointer_invalidation, peek_render_invalidation,
+    pending_layout_repass_nodes_snapshot, request_focus_invalidation, request_layout_invalidation,
+    request_pointer_invalidation, request_render_invalidation, schedule_draw_repass,
+    schedule_layout_repass, schedule_measure_repass, set_density, take_draw_repass_nodes,
+    take_focus_invalidation, take_layout_invalidation, take_layout_repass_nodes,
+    take_measure_repass_nodes, take_pointer_invalidation, take_render_invalidation, AppContext,
     AppContextScope,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
@@ -150,7 +151,7 @@ pub use text_modifier_node::{TextModifierElement, TextModifierNode};
 pub use widgets::clickable_text::ClickableText;
 pub use widgets::lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec};
 pub use widgets::linked_text::LinkedText;
-pub use widgets::swipe_to_dismiss::{SwipeToDismiss, SwipeToDismissSpec};
+pub use widgets::swipe_to_dismiss::{SwipeDismissSide, SwipeToDismiss, SwipeToDismissSpec};
 
 // Debug utilities
 pub use debug::{

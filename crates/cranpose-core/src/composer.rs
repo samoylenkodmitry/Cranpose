@@ -457,6 +457,12 @@ pub(crate) struct ComposerCore {
     pub(crate) _not_send: PhantomData<*const ()>,
 }
 
+/// An opaque snapshot of the composition-local values in scope at the point it
+/// was captured (see [`Composer::capture_composition_locals`]). Cheap to clone
+/// (an `Rc` internally); replayed by [`Composer::subcompose_slot_with_locals`].
+#[derive(Clone)]
+pub struct CapturedCompositionLocals(LocalStackSnapshot);
+
 fn take_subcompose_frame(core: &ComposerCore, operation: &str) -> SubcomposeFrame {
     match core.subcompose_stack.borrow_mut().pop() {
         Some(frame) => frame,
@@ -1504,6 +1510,21 @@ impl Composer {
         Ok(result)
     }
 
+    /// Captures the composition-local values in scope at the current point of
+    /// composition, as an opaque snapshot that can later be replayed with
+    /// [`Composer::subcompose_slot_with_locals`].
+    ///
+    /// A `SubcomposeLayout` captures this while it is being composed and replays
+    /// it while subcomposing off the measure pass, so content that is
+    /// subcomposed during layout observes the same composition locals as the
+    /// `SubcomposeLayout` call site — matching Jetpack Compose, where a
+    /// subcomposition inherits the composition locals of the layout that
+    /// created it rather than whatever happens to be in scope during measure
+    /// (which, after composition unwinds, no longer carries ancestor providers).
+    pub fn capture_composition_locals(&self) -> CapturedCompositionLocals {
+        CapturedCompositionLocals(self.current_local_stack())
+    }
+
     /// Subcomposes content using an isolated SlotsHost without resetting it.
     /// Unlike `subcompose_in`, this preserves existing slot state across calls,
     /// allowing efficient reuse during measurement passes. This is critical for
@@ -1514,9 +1535,26 @@ impl Composer {
         root: Option<NodeId>,
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
+        self.subcompose_slot_with_locals(slots, root, None, f)
+    }
+
+    /// Like [`Composer::subcompose_slot`], but seeds the subcomposition with a
+    /// composition-local snapshot captured earlier (see
+    /// [`Composer::capture_composition_locals`]). When `locals` is `None` the
+    /// locals in scope right now are used, preserving the plain behavior.
+    pub fn subcompose_slot_with_locals<R>(
+        &self,
+        slots: &Rc<SlotsHost>,
+        root: Option<NodeId>,
+        locals: Option<&CapturedCompositionLocals>,
+        f: impl FnOnce(&Composer) -> R,
+    ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
         let runtime_handle = self.runtime_handle();
         let phase = self.phase();
-        let locals = self.current_local_stack();
+        let locals = match locals {
+            Some(captured) => captured.0.clone(),
+            None => self.current_local_stack(),
+        };
         let shared_state = slots
             .runtime_state()
             .unwrap_or_else(|| Rc::clone(&self.core.shared_state));

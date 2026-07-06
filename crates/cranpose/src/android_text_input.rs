@@ -87,6 +87,11 @@ pub(crate) enum AndroidImeEvent {
     },
     /// `performEditorAction` with an `EditorInfo.IME_ACTION_*` code.
     EditorAction { action: i32 },
+    /// The on-screen keyboard's height (physical px) at the bottom of the
+    /// window changed. `0` when the keyboard is hidden. Forwarded from a Java
+    /// `View.OnApplyWindowInsetsListener` / visible-frame listener so the shell
+    /// can expose it as IME insets to composition.
+    ImeInsetsChanged { bottom_px: i32 },
 }
 
 /// Cross-thread queue for IME events (pushed on the Android UI thread,
@@ -462,6 +467,20 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImePerf
     action: jint,
 ) {
     push_ime_event_for_handle(queue_handle, AndroidImeEvent::EditorAction { action });
+}
+
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeInsetsChanged(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    queue_handle: jlong,
+    bottom_px: jint,
+) {
+    push_ime_event_for_handle(
+        queue_handle,
+        AndroidImeEvent::ImeInsetsChanged { bottom_px },
+    );
 }
 
 #[doc(hidden)]

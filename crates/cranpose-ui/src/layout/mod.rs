@@ -1068,9 +1068,15 @@ fn process_pending_layout_repasses(
             }
         }
     }
+    // Measure repasses re-*size* a subtree (and its ancestors), so an enclosing
+    // LazyColumn re-measures the node instead of reusing its cached item slot.
+    let measure_repass_nodes = crate::take_measure_repass_nodes();
     let repass_nodes = crate::take_layout_repass_nodes();
-    if repass_nodes.is_empty() {
+    if measure_repass_nodes.is_empty() && repass_nodes.is_empty() {
         return Ok(());
+    }
+    for node_id in measure_repass_nodes {
+        cranpose_core::bubble_measure_dirty(applier as &mut dyn Applier, node_id);
     }
     for node_id in repass_nodes {
         cranpose_core::bubble_layout_dirty(applier as &mut dyn Applier, node_id);
