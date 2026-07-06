@@ -9,6 +9,7 @@ mod android_file_picker;
 pub use android_file_picker::open_content_uri;
 #[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
 mod android_host_window;
+mod android_input;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_jni;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]

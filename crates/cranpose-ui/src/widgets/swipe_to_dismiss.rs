@@ -23,19 +23,27 @@
 
 use crate::composable;
 use crate::modifier::{GraphicsLayer, Modifier, PointerEvent, PointerEventKind};
+use crate::subcompose_layout::{Constraints, SubcomposeLayoutScope, SubcomposeMeasureScope};
 use crate::widgets::box_widget::{Box, BoxSpec};
-use crate::widgets::layout::BoxWithConstraints;
+use crate::widgets::layout::{BoxWithConstraints, SubcomposeLayout};
 use crate::widgets::scopes::BoxWithConstraintsScope;
 use cranpose_animation::{spring, Animatable, AnimationType, Spring};
 use cranpose_core::internal::FrameCallbackRegistration;
-use cranpose_core::{with_current_composer, Owned, OwnedMutableState, RuntimeHandle};
+use cranpose_core::{
+    with_current_composer, NodeId, Owned, OwnedMutableState, RuntimeHandle, SlotId,
+};
 use cranpose_foundation::DRAG_THRESHOLD;
+use cranpose_ui_layout::Placement;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Offset (logical px) within which a dismiss animation counts as settled.
 const DISMISS_SETTLE_EPSILON: f32 = 0.5;
+
+/// Height-scale (fraction of the natural height) at or below which the
+/// post-dismiss collapse is considered complete.
+const COLLAPSE_SETTLE_EPSILON: f32 = 0.01;
 
 /// Spring used both for the dismissal fling and the spring-back.
 fn swipe_spring() -> AnimationType {
@@ -159,6 +167,11 @@ struct SwipeToDismissController {
     /// than on every drag frame. Without gating, the always-composed background
     /// flashes through content that fades in with alpha < 1 during an entrance.
     revealed: OwnedMutableState<bool>,
+    /// Height scale of the row (fraction of its natural height). `1.0` at rest;
+    /// after a successful dismiss it animates to `0.0` so the row collapses and
+    /// leaves no gap — and no red background strip — even if the host removes
+    /// the item a few frames later.
+    collapse: RefCell<Animatable<f32>>,
     phase: Cell<SwipePhase>,
     /// Content width in logical px, refreshed from the incoming constraints.
     width_px: Cell<f32>,
@@ -167,8 +180,13 @@ struct SwipeToDismissController {
     on_dismiss: RefCell<Option<Rc<dyn Fn()>>>,
     /// `on_dismiss` fired for the current dismissal (fires at most once).
     dismissed: Cell<bool>,
+    /// The row's layout node, so the collapse watcher can force a re-measure
+    /// each frame as the height shrinks. Set on every recomposition.
+    node_id: Cell<Option<NodeId>>,
     /// Frame callback watching the dismiss animation for completion.
     settle_watcher: RefCell<Option<FrameCallbackRegistration>>,
+    /// Frame callback driving the post-dismiss height collapse.
+    collapse_watcher: RefCell<Option<FrameCallbackRegistration>>,
 }
 
 impl SwipeToDismissController {
@@ -177,18 +195,26 @@ impl SwipeToDismissController {
             id: NEXT_SWIPE_ID.fetch_add(1, Ordering::Relaxed),
             offset: RefCell::new(Animatable::new(0.0, runtime.clone())),
             revealed: OwnedMutableState::with_runtime(false, runtime.clone()),
+            collapse: RefCell::new(Animatable::new(1.0, runtime.clone())),
             runtime,
             phase: Cell::new(SwipePhase::Idle),
             width_px: Cell::new(f32::NAN),
             threshold_fraction: Cell::new(0.5),
             on_dismiss: RefCell::new(None),
             dismissed: Cell::new(false),
+            node_id: Cell::new(None),
             settle_watcher: RefCell::new(None),
+            collapse_watcher: RefCell::new(None),
         })
     }
 
     fn current_offset(&self) -> f32 {
         self.offset.borrow().state().value()
+    }
+
+    /// Current row height scale (`1.0` at rest, `0.0` fully collapsed).
+    fn collapse_fraction(&self) -> f32 {
+        self.collapse.borrow().state().value()
     }
 
     /// Reactive read of the revealed flag; subscribes the reading scope (the
@@ -386,11 +412,17 @@ fn watch_settle(controller: &Rc<SwipeToDismissController>, dismissing: bool) {
                 let target = controller.offset.borrow().target();
                 let value = controller.current_offset();
                 if (value - target).abs() <= DISMISS_SETTLE_EPSILON {
-                    // The row has settled: reveal iff it rests displaced (a
-                    // dismissal rests off-screen, a spring-back rests at 0).
-                    controller.set_revealed(target != 0.0);
+                    // The row has settled. Stop drawing the background in every
+                    // case: a spring-back rests at 0 (nothing revealed), and a
+                    // dismissal must *not* leave the red strip behind while it
+                    // waits for the host to drop the item.
+                    controller.set_revealed(false);
                     if dismissing && !controller.dismissed.get() {
                         controller.dismissed.set(true);
+                        // Collapse the row to zero height so no empty gap (or
+                        // background strip) lingers if the host removes the item
+                        // a frame or two later, then notify the host.
+                        start_collapse(&controller);
                         let on_dismiss = controller.on_dismiss.borrow().clone();
                         if let Some(on_dismiss) = on_dismiss {
                             on_dismiss();
@@ -401,6 +433,42 @@ fn watch_settle(controller: &Rc<SwipeToDismissController>, dismissing: bool) {
                 }
             });
     *controller.settle_watcher.borrow_mut() = Some(registration);
+}
+
+/// Animates the row's height scale to `0.0` and watches the animation so the
+/// list re-measures the shrinking row each frame. Runs after a dismiss settles.
+fn start_collapse(controller: &Rc<SwipeToDismissController>) {
+    controller
+        .collapse
+        .borrow_mut()
+        .animateTo(0.0, swipe_spring());
+    watch_collapse(controller);
+}
+
+/// Frame-by-frame watcher for the post-dismiss collapse: the row height is a
+/// layout output, so a plain animated value would not reach the parent list on
+/// its own — each frame this forces a scoped re-measure of the row and a redraw
+/// until the height scale reaches zero.
+fn watch_collapse(controller: &Rc<SwipeToDismissController>) {
+    let weak = Rc::downgrade(controller);
+    let registration =
+        controller
+            .runtime
+            .frame_clock()
+            .with_frame_nanos(move |_frame_time_nanos| {
+                let Some(controller) = weak.upgrade() else {
+                    return;
+                };
+                controller.collapse_watcher.borrow_mut().take();
+                if let Some(node_id) = controller.node_id.get() {
+                    crate::schedule_layout_repass(node_id);
+                }
+                crate::request_render_invalidation();
+                if controller.collapse_fraction() > COLLAPSE_SETTLE_EPSILON {
+                    watch_collapse(&controller);
+                }
+            });
+    *controller.collapse_watcher.borrow_mut() = Some(registration);
 }
 
 /// Wraps `content` so it can be swiped away horizontally.
@@ -449,45 +517,96 @@ where
     // content slides away.
     let gesture_modifier = swipe_gesture_modifier(modifier, Rc::clone(&controller));
 
+    // Outer collapsing layout: it measures the row and reports the row's height
+    // scaled by the collapse fraction, so a dismissed row shrinks to nothing —
+    // even when the row has a fixed height. It carries no user modifier: the
+    // user modifier, the gesture handler and any fixed size stay on the *row*
+    // (below), so the hit region and layout still belong to the row while only
+    // the reported height is scaled here.
     let controller_for_layout = Rc::clone(&controller);
-    BoxWithConstraints(gesture_modifier, move |scope| {
-        controller_for_layout
-            .width_px
-            .set(scope.constraints().max_width);
+    let node = SubcomposeLayout(Modifier::empty(), move |scope, constraints| {
+        // Height scale for the post-dismiss collapse (1.0 until dismissed), read
+        // before measuring so the reported height tracks the animation.
+        let collapse = controller_for_layout.collapse_fraction().clamp(0.0, 1.0);
 
-        // Only draw the background while the row is displaced. Reading the
-        // reveal flag inside the subcompose subscribes this slot, so it
-        // recomposes when the row leaves/returns to rest. At rest (offset 0)
-        // the background is not composed at all, so it cannot flash through
-        // content that fades in with alpha < 1 during an entrance animation.
-        let revealed = controller_for_layout.revealed();
-        if revealed {
-            if let Some(background) = &background {
-                let background = Rc::clone(background);
-                Box(Modifier::empty(), BoxSpec::new(), move || {
-                    (background.borrow_mut())();
-                });
-            }
-        }
-
-        // Translate the content with the finger via a graphics-layer resolver.
-        // The resolver re-reads the live offset on every draw pass, and an
-        // offset write schedules a draw repass for this node, so the content
-        // follows the finger 1:1 in real time and settles with the spring on
-        // release — without needing a re-measure of the subcompose each frame.
+        let gesture_modifier = gesture_modifier.clone();
+        let background = background.clone();
         let content = Rc::clone(&content);
-        let controller_for_layer = Rc::clone(&controller_for_layout);
-        Box(
-            Modifier::empty().graphics_layer(move || GraphicsLayer {
-                translation_x: controller_for_layer.current_offset(),
-                ..GraphicsLayer::default()
-            }),
-            BoxSpec::new(),
-            move || {
-                (content.borrow_mut())();
-            },
-        );
-    })
+        let controller_for_row = Rc::clone(&controller_for_layout);
+        let measurables = scope.subcompose(SlotId::new(0), move || {
+            // The row itself: a `BoxWithConstraints` (so it can read its own
+            // width for the dismiss threshold) carrying the user modifier + the
+            // swipe pointer handler, overlaying the optional background and the
+            // finger-translated content.
+            let background = background.clone();
+            let content = Rc::clone(&content);
+            let controller_for_row = Rc::clone(&controller_for_row);
+            BoxWithConstraints(gesture_modifier.clone(), move |row_scope| {
+                controller_for_row
+                    .width_px
+                    .set(row_scope.constraints().max_width);
+
+                // Only compose the background while the row is displaced (and
+                // never once dismissed — the reveal flag is cleared on settle).
+                // Reading it inside the subcompose subscribes this slot, so it
+                // recomposes when the row leaves/returns to rest. At rest the
+                // background is not composed at all, so it cannot flash through
+                // content that fades in with alpha < 1 during an entrance.
+                if controller_for_row.revealed() {
+                    if let Some(background) = &background {
+                        let background = Rc::clone(background);
+                        Box(Modifier::empty(), BoxSpec::new(), move || {
+                            (background.borrow_mut())();
+                        });
+                    }
+                }
+
+                // Translate the content with the finger via a graphics-layer
+                // resolver. The resolver re-reads the live offset on every draw
+                // pass, and an offset write schedules a draw repass for this
+                // node, so the content follows the finger 1:1 in real time and
+                // settles with the spring on release — without re-measuring the
+                // subcompose each frame.
+                let content = Rc::clone(&content);
+                let controller_for_layer = Rc::clone(&controller_for_row);
+                Box(
+                    Modifier::empty().graphics_layer(move || GraphicsLayer {
+                        translation_x: controller_for_layer.current_offset(),
+                        ..GraphicsLayer::default()
+                    }),
+                    BoxSpec::new(),
+                    move || {
+                        (content.borrow_mut())();
+                    },
+                );
+            });
+        });
+
+        let child_constraints = Constraints {
+            min_width: constraints.min_width,
+            max_width: constraints.max_width,
+            min_height: 0.0,
+            max_height: constraints.max_height,
+        };
+        let mut width = 0.0_f32;
+        let mut natural_height = 0.0_f32;
+        let mut placements = Vec::with_capacity(measurables.len());
+        for measurable in measurables {
+            let placeable = scope.measure(measurable, child_constraints);
+            width = width.max(placeable.width());
+            natural_height = natural_height.max(placeable.height());
+            placeable.place(0.0, 0.0);
+            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+        }
+        width = width.clamp(constraints.min_width, constraints.max_width);
+        // Collapse the row height after a dismiss so the slot shrinks to
+        // nothing: the content is already translated off-screen and the
+        // background hidden, so scaling the reported height just closes the gap.
+        let height = (natural_height * collapse).clamp(0.0, constraints.max_height);
+        scope.layout(width, height, placements)
+    });
+    controller.node_id.set(Some(node));
+    node
 }
 
 #[cfg(test)]
