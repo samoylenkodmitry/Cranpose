@@ -1053,12 +1053,23 @@ fn LazyColumnImpl(
             })
         })
     });
+    // Capture the composition locals in scope at this call site so the
+    // measure-pass subcomposition can replay them for each item. Without this,
+    // item content subcomposed off the measure pass (e.g. a text field's
+    // selection-handle / context-menu `Popup`) resolves the detached default
+    // composition-local values instead of the ancestor providers in scope here
+    // (such as the shell's `PopupHost` registry) and never renders. The
+    // `SubcomposeLayout` widget does the same; `LazyColumn` builds its
+    // `SubcomposeLayoutNode` directly and would otherwise skip it.
+    let captured_locals =
+        cranpose_core::with_current_composer(|composer| composer.capture_composition_locals());
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
         if refresh_content || config_changed || modifier_changed {
             node.set_modifier(scroll_modifier.clone());
         }
         node.set_measure_policy(Rc::clone(&policy));
+        node.set_captured_locals(captured_locals);
         if refresh_content || config_changed || modifier_changed {
             measured_item_cache.borrow_mut().clear();
             node.request_measure_recompose();
@@ -1158,12 +1169,19 @@ fn LazyRowImpl(
             })
         })
     });
+    // See `LazyColumnImpl`: capture the call-site composition locals so the
+    // measure-pass subcomposition replays them for each item, keeping overlay
+    // `Popup`s (selection handles / context menu) wired to the enclosing
+    // `PopupHost` across the subcomposition boundary.
+    let captured_locals =
+        cranpose_core::with_current_composer(|composer| composer.capture_composition_locals());
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
         if refresh_content || config_changed || modifier_changed {
             node.set_modifier(scroll_modifier.clone());
         }
         node.set_measure_policy(Rc::clone(&policy));
+        node.set_captured_locals(captured_locals);
         if refresh_content || config_changed || modifier_changed {
             measured_item_cache.borrow_mut().clear();
             node.request_measure_recompose();
