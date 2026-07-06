@@ -50,6 +50,20 @@ fn swipe_spring() -> AnimationType {
     spring(Spring::DampingRatioNoBouncy, Spring::StiffnessMediumLow)
 }
 
+/// Which edge the dismiss background is revealed on, i.e. the side the row is
+/// being swiped away from. Passed to the [`SwipeToDismissSpec::with_background`]
+/// closure so its label/icon can follow the swipe direction instead of being
+/// pinned to one side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwipeDismissSide {
+    /// The row is moving right (offset > 0); the background shows on the leading
+    /// (start / left-in-LTR) edge.
+    Start,
+    /// The row is moving left (offset < 0); the background shows on the trailing
+    /// (end / right-in-LTR) edge.
+    End,
+}
+
 /// Configuration for [`SwipeToDismiss`].
 #[derive(Clone)]
 pub struct SwipeToDismissSpec {
@@ -57,8 +71,9 @@ pub struct SwipeToDismissSpec {
     /// the row to dismiss (default `0.5`). Clamped to `(0, 1]`.
     pub threshold_fraction: f32,
     /// Optional content drawn behind the swiped row (e.g. a delete bin),
-    /// revealed as the row slides away.
-    background: Option<Rc<RefCell<dyn FnMut()>>>,
+    /// revealed as the row slides away. Receives the [`SwipeDismissSide`] the
+    /// row is being swiped toward so the reveal can follow the swipe direction.
+    background: Option<Rc<RefCell<dyn FnMut(SwipeDismissSide)>>>,
 }
 
 impl SwipeToDismissSpec {
@@ -75,8 +90,10 @@ impl SwipeToDismissSpec {
         self
     }
 
-    /// Sets the background content revealed behind the swiped row.
-    pub fn with_background(mut self, background: impl FnMut() + 'static) -> Self {
+    /// Sets the background content revealed behind the swiped row. The closure
+    /// receives the [`SwipeDismissSide`] the row is currently being swiped
+    /// toward, so it can align its label/icon to the revealed edge.
+    pub fn with_background(mut self, background: impl FnMut(SwipeDismissSide) + 'static) -> Self {
         self.background = Some(Rc::new(RefCell::new(background)));
         self
     }
@@ -210,6 +227,16 @@ impl SwipeToDismissController {
 
     fn current_offset(&self) -> f32 {
         self.offset.borrow().state().value()
+    }
+
+    /// The edge the background is revealed on, from the current displacement:
+    /// a rightward offset reveals the start edge, a leftward offset the end.
+    fn revealed_side(&self) -> SwipeDismissSide {
+        if self.current_offset() >= 0.0 {
+            SwipeDismissSide::Start
+        } else {
+            SwipeDismissSide::End
+        }
     }
 
     /// Current row height scale (`1.0` at rest, `0.0` fully collapsed).
@@ -461,7 +488,16 @@ fn watch_collapse(controller: &Rc<SwipeToDismissController>) {
                 };
                 controller.collapse_watcher.borrow_mut().take();
                 if let Some(node_id) = controller.node_id.get() {
-                    crate::schedule_layout_repass(node_id);
+                    // Re-measure the row as it collapses. A plain layout repass
+                    // only bubbles *layout* (placement) dirtiness up the tree,
+                    // which does not set the row node's own `needs_measure` flag —
+                    // and that flag is exactly what an enclosing `LazyColumn`
+                    // consults (`children_need_measure`) before reusing a cached
+                    // item slot. `schedule_measure_repass` bubbles *measure*
+                    // dirtiness so the list actually re-measures the shrinking
+                    // row; otherwise the pre-dismiss height and the still-composed
+                    // red background linger until the whole list is rebuilt.
+                    crate::schedule_measure_repass(node_id);
                 }
                 crate::request_render_invalidation();
                 if controller.collapse_fraction() > COLLAPSE_SETTLE_EPSILON {
@@ -555,8 +591,9 @@ where
                 if controller_for_row.revealed() {
                     if let Some(background) = &background {
                         let background = Rc::clone(background);
+                        let side = controller_for_row.revealed_side();
                         Box(Modifier::empty(), BoxSpec::new(), move || {
-                            (background.borrow_mut())();
+                            (background.borrow_mut())(side);
                         });
                     }
                 }

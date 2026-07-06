@@ -2,6 +2,7 @@ package dev.cranpose.android;
 
 import android.app.Activity;
 import android.content.Context;
+import android.graphics.Rect;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.Selection;
@@ -10,6 +11,7 @@ import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -85,6 +87,7 @@ public final class CranposeTextInput {
                         return;
                     }
                     content.addView(view, new ViewGroup.LayoutParams(1, 1));
+                    attachKeyboardListener(state, content);
                     current = state;
                 } else {
                     // The session already owns a queue handle; drop the new one.
@@ -128,6 +131,7 @@ public final class CranposeTextInput {
                     return;
                 }
                 current = null;
+                detachKeyboardListener(state);
                 InputMethodManager imm = inputMethodManager(activity);
                 if (imm != null && state.view != null) {
                     imm.hideSoftInputFromWindow(state.view.getWindowToken(), 0);
@@ -231,6 +235,10 @@ public final class CranposeTextInput {
         volatile boolean disposed;
         volatile boolean singleLine;
         Editable editable;
+        /** Content view the keyboard-height listener is attached to. */
+        View insetsView;
+        ViewTreeObserver.OnGlobalLayoutListener keyboardListener;
+        int lastKeyboardHeightPx = -1;
 
         SessionState(long queueHandle) {
             this.queueHandle = queueHandle;
@@ -243,6 +251,52 @@ public final class CranposeTextInput {
                 nativeImeReleaseQueue(queueHandle);
             }
         }
+    }
+
+    /**
+     * Attaches a global-layout listener that reports the on-screen keyboard's
+     * height (physical px, 0 when hidden) via {@link #nativeImeInsetsChanged}.
+     *
+     * <p>Uses the visible-display-frame heuristic (the portion of the window not
+     * covered by the keyboard), which works on every supported API level — the
+     * {@code WindowInsets.Type.ime()} API only exists on API 30+. The reported
+     * height is the distance from the visible frame's bottom to the window
+     * bottom, i.e. how much the keyboard covers; small values (system bars with
+     * no keyboard) are treated as hidden.
+     */
+    private static void attachKeyboardListener(SessionState state, final ViewGroup content) {
+        final View root = content.getRootView();
+        ViewTreeObserver.OnGlobalLayoutListener listener = () -> {
+            if (state.disposed) {
+                return;
+            }
+            Rect frame = new Rect();
+            root.getWindowVisibleDisplayFrame(frame);
+            int windowHeight = root.getHeight();
+            int covered = windowHeight - frame.bottom;
+            // Ignore small margins (navigation bar / rounding) that are not the
+            // keyboard, so a hidden keyboard reports zero.
+            int keyboardHeight = covered > windowHeight / 6 ? covered : 0;
+            if (keyboardHeight != state.lastKeyboardHeightPx) {
+                state.lastKeyboardHeightPx = keyboardHeight;
+                nativeImeInsetsChanged(state.queueHandle, keyboardHeight);
+            }
+        };
+        root.getViewTreeObserver().addOnGlobalLayoutListener(listener);
+        state.insetsView = root;
+        state.keyboardListener = listener;
+    }
+
+    private static void detachKeyboardListener(SessionState state) {
+        if (state.insetsView != null && state.keyboardListener != null) {
+            state.insetsView.getViewTreeObserver()
+                    .removeOnGlobalLayoutListener(state.keyboardListener);
+        }
+        if (state.lastKeyboardHeightPx != 0 && !state.disposed) {
+            nativeImeInsetsChanged(state.queueHandle, 0);
+        }
+        state.insetsView = null;
+        state.keyboardListener = null;
     }
 
     /** Invisible focusable view whose InputConnection feeds the native pipeline. */
@@ -453,6 +507,8 @@ public final class CranposeTextInput {
             long queueHandle, int action, int keyCode, int metaState, int unicodeChar);
 
     private static native void nativeImePerformEditorAction(long queueHandle, int actionCode);
+
+    private static native void nativeImeInsetsChanged(long queueHandle, int bottomPx);
 
     private static native void nativeImeReleaseQueue(long queueHandle);
 }

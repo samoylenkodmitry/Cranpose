@@ -167,8 +167,11 @@ where
     }
 
     fn run_layout_phase_in_context(&mut self) {
-        let has_scoped_repasses = cranpose_ui::has_pending_layout_repasses();
-        let scoped_layout_nodes = if has_scoped_repasses {
+        // Both scoped layout repasses (re-placement) and scoped measure repasses
+        // (re-sizing, e.g. a collapsing swipe-dismissed row) drive a layout pass.
+        let has_scoped_repasses = cranpose_ui::has_pending_layout_repasses()
+            || cranpose_ui::has_pending_measure_repasses();
+        let scoped_layout_nodes = if cranpose_ui::has_pending_layout_repasses() {
             cranpose_ui::pending_layout_repass_nodes_snapshot()
         } else {
             Vec::new()

@@ -12,6 +12,12 @@ pub(crate) type ModifierChainTraceCallback =
 
 struct RenderState {
     layout_repasses: Mutex<LayoutRepassManager>,
+    /// Scoped re-*measure* requests (see [`schedule_measure_repass`]). Unlike
+    /// `layout_repasses`, processing these bubbles *measure* dirtiness up the
+    /// tree so a subtree is re-measured (not just re-placed) — needed when a
+    /// node's own size changes off a frame callback (e.g. a collapsing row) and
+    /// an ancestor `LazyColumn` would otherwise reuse its cached item slot.
+    measure_repasses: Mutex<LayoutRepassManager>,
     draw_repasses: Mutex<DrawRepassManager>,
     modifier_slice_repasses: Mutex<LayoutRepassManager>,
     render_invalidated: AtomicBool,
@@ -99,6 +105,7 @@ impl RenderState {
     fn new_with_density(density: f32) -> Self {
         Self {
             layout_repasses: Mutex::new(LayoutRepassManager::new()),
+            measure_repasses: Mutex::new(LayoutRepassManager::new()),
             draw_repasses: Mutex::new(DrawRepassManager::new()),
             modifier_slice_repasses: Mutex::new(LayoutRepassManager::new()),
             render_invalidated: AtomicBool::new(false),
@@ -689,6 +696,34 @@ pub fn pending_layout_repass_nodes_snapshot() -> Vec<NodeId> {
 /// The caller should iterate over these and call `bubble_layout_dirty` for each.
 pub fn take_layout_repass_nodes() -> Vec<NodeId> {
     with_render_state(|state| lock_repass_manager(&state.layout_repasses).take_dirty_nodes())
+}
+
+/// Schedules a scoped re-*measure* of `node_id` on the next frame.
+///
+/// Like [`schedule_layout_repass`], but processing bubbles *measure* dirtiness
+/// (not just layout/placement) up the tree, so the node and its ancestors are
+/// re-measured. Use this when a node's own measured size changes off a frame
+/// callback (e.g. a row collapsing after a swipe dismiss): a plain layout
+/// repass would leave the node's `needs_measure` flag unset, and an enclosing
+/// `LazyColumn` would reuse its cached, full-height item slot.
+pub fn schedule_measure_repass(node_id: NodeId) {
+    with_render_state(|state| {
+        lock_repass_manager(&state.measure_repasses).schedule_repass(node_id);
+        state.layout_invalidated.store(true, Ordering::Relaxed);
+    });
+    request_render_invalidation();
+}
+
+/// Returns true if any measure repasses are pending.
+pub fn has_pending_measure_repasses() -> bool {
+    with_render_state(|state| lock_repass_manager(&state.measure_repasses).has_pending_repass())
+}
+
+/// Takes all pending measure repass node IDs.
+///
+/// The caller should iterate over these and call `bubble_measure_dirty` for each.
+pub fn take_measure_repass_nodes() -> Vec<NodeId> {
+    with_render_state(|state| lock_repass_manager(&state.measure_repasses).take_dirty_nodes())
 }
 
 pub(crate) fn take_modifier_slice_repass_nodes() -> Vec<NodeId> {

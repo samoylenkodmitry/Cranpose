@@ -91,6 +91,11 @@ impl Harness {
         self.controller.collapse_fraction()
     }
 
+    /// The edge the background is revealed on for the current displacement.
+    fn side(&self) -> SwipeDismissSide {
+        self.controller.revealed_side()
+    }
+
     /// Advances the frame clock, driving springs and the settle watcher.
     fn pump_frames(&mut self, frames: usize) {
         let handle = self._runtime.handle();
@@ -272,6 +277,25 @@ fn leftward_swipe_dismisses_to_the_left() {
     harness.pump_frames(300);
     assert_eq!(harness.dismiss_count.get(), 1);
     assert!((harness.offset() + 200.0).abs() <= 0.5);
+}
+
+#[test]
+fn revealed_side_follows_the_swipe_direction() {
+    let mut harness = Harness::new(200.0, 0.5);
+
+    // Swipe right: the row moves right, revealing the leading (start) edge.
+    harness.send(&down(20.0, 10.0));
+    harness.send(&move_to(120.0, 10.0)); // offset +100
+    assert!(harness.offset() > 0.0);
+    assert_eq!(harness.side(), SwipeDismissSide::Start);
+    harness.send(&cancel());
+    harness.pump_frames(300);
+
+    // Swipe left: the row moves left, revealing the trailing (end) edge.
+    harness.send(&down(180.0, 10.0));
+    harness.send(&move_to(60.0, 10.0)); // offset -120
+    assert!(harness.offset() < 0.0);
+    assert_eq!(harness.side(), SwipeDismissSide::End);
 }
 
 #[test]

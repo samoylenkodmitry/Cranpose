@@ -212,3 +212,84 @@ fn popup_is_removed_from_overlay_when_no_longer_composed() {
         "popup removed from overlay after it stops being composed"
     );
 }
+
+#[test]
+fn popup_inside_subcomposition_still_reaches_the_host() {
+    use crate::widgets::BoxWithConstraints;
+
+    // Regression: a `Popup` composed inside a `BoxWithConstraints` (which
+    // subcomposes its content off the measure pass) must still register into
+    // the enclosing `PopupHost`. The registry travels down as a composition
+    // local, and the subcomposition has to inherit the locals in scope where
+    // the `BoxWithConstraints` was composed — otherwise the `Popup` resolves
+    // the detached default registry and never renders. This is exactly the
+    // shape of a real app (screens wrapped in `BoxWithConstraints`/`LazyColumn`
+    // whose text fields show selection handles through `Popup`).
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+
+    let mut content = || {
+        PopupHost(|| {
+            BoxWithConstraints(
+                Modifier::empty().size(Size {
+                    width: 200.0,
+                    height: 200.0,
+                }),
+                |_scope| {
+                    Popup(
+                        Rect {
+                            x: 120.0,
+                            y: 90.0,
+                            width: 0.0,
+                            height: 0.0,
+                        },
+                        Point { x: 0.0, y: 0.0 },
+                        || {
+                            Column(
+                                Modifier::empty()
+                                    .size(Size {
+                                        width: 15.0,
+                                        height: 15.0,
+                                    })
+                                    .background(MARKER),
+                                ColumnSpec::default(),
+                                || {},
+                            );
+                        },
+                    );
+                },
+            );
+        });
+    };
+
+    composition.render(key, &mut content).expect("render");
+    // The Popup registers during the measure-pass subcomposition, which runs in
+    // `compute_layout`; the enclosing `PopupHost` then needs a follow-up frame
+    // (reconcile + layout) to render the newly registered entry. Alternate the
+    // two a few times, as real frames do, before sampling the scene.
+    let scene = {
+        let mut scene = None;
+        for _ in 0..6 {
+            settle(&mut composition, key, &mut content);
+            let root = composition.root().expect("root");
+            let layout = compute_layout(&mut composition, root);
+            scene = Some(HeadlessRenderer::new().render(&layout));
+        }
+        scene.expect("scene")
+    };
+
+    let rects = marker_rects(&scene);
+    assert_eq!(
+        rects.len(),
+        1,
+        "a Popup composed inside a BoxWithConstraints subcomposition must reach \
+         the enclosing PopupHost, got {rects:?}"
+    );
+    // And it lands at its anchor in window space, not clamped to the origin.
+    assert!(
+        (rects[0].x - 120.0).abs() <= 0.5 && (rects[0].y - 90.0).abs() <= 0.5,
+        "overlay marker should paint at the anchor (120,90), was {:?}",
+        rects[0]
+    );
+}
