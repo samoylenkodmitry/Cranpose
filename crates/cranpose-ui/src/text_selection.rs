@@ -133,16 +133,23 @@ pub fn handle_path_data(kind: HandleKind, tip_x: f32, tip_y: f32, radius: f32) -
             )
         }
         HandleKind::SelectionStart => {
-            // Tip at the endpoint, bulb hanging down and to the LEFT.
+            // Android start (left) handle: the point sits at the TOP-RIGHT
+            // (touching the selection start) with a straight vertical right edge,
+            // and the round bulb hangs down and to the LEFT. Traced tip → straight
+            // down the right edge → arc round to the left → back to the tip.
             format!(
                 "M {tip_x} {tip_y} L {tip_x} {cy} A {r} {r} 0 1 0 {left} {tip_y} Z",
                 left = tip_x - r,
             )
         }
         HandleKind::SelectionEnd => {
-            // Tip at the endpoint, bulb hanging down and to the RIGHT.
+            // Android end (right) handle: the exact mirror of the start handle —
+            // the point sits at the TOP-LEFT (touching the selection end) with a
+            // straight vertical left edge, and the round bulb hangs down and to
+            // the RIGHT. Same trace as the start handle with the arc swept the
+            // other way so it is a true reflection (not rotated).
             format!(
-                "M {tip_x} {tip_y} L {right} {tip_y} A {r} {r} 0 1 0 {tip_x} {cy} Z",
+                "M {tip_x} {tip_y} L {tip_x} {cy} A {r} {r} 0 1 1 {right} {tip_y} Z",
                 right = tip_x + r,
             )
         }

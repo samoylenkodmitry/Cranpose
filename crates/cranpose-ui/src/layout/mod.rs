@@ -781,6 +781,18 @@ pub fn build_layout_tree_from_applier(
             });
         }
 
+        // Publish a scroll container's composited viewport rect (window
+        // coordinates) for its `BringIntoViewResponder`, so a focused
+        // descendant field can be scrolled above the soft keyboard.
+        if let Some(sink) = modifier_slices.viewport_window_rect() {
+            sink.set(GeometryRect {
+                x: top_left.x + layer_translation.x,
+                y: top_left.y + layer_translation.y,
+                width: state.size.width,
+                height: state.size.height,
+            });
+        }
+
         let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
         let child_origin = Point {
             x: top_left.x + state.content_offset.x,
@@ -3304,6 +3316,17 @@ fn build_layout_tree(
             sink.set(Point {
                 x: top_left.x + layer_translation.x,
                 y: top_left.y + layer_translation.y,
+            });
+        }
+
+        // Publish a scroll container's composited viewport rect (window
+        // coordinates) for its `BringIntoViewResponder`.
+        if let Some(sink) = modifier_slices.viewport_window_rect() {
+            sink.set(GeometryRect {
+                x: top_left.x + layer_translation.x,
+                y: top_left.y + layer_translation.y,
+                width: node.size.width,
+                height: node.size.height,
             });
         }
 

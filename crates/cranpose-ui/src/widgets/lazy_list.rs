@@ -1202,7 +1202,56 @@ fn LazyColumnNode(
     content: LazyListContentHandle,
 ) -> NodeId {
     cranpose_core::debug_label_current_scope("LazyColumnNode");
-    LazyColumnImpl(modifier, state, spec, content)
+
+    // Expose this list as the nearest scroll container so a focused descendant
+    // text field can scroll its caret above the soft keyboard. `report_window_rect`
+    // fills `viewport` with the list's window rect each layout pass; the responder
+    // maps a caret window rect to a scroll delta (pure `scroll_delta_to_reveal`).
+    let viewport: Rc<Cell<cranpose_ui_graphics::Rect>> = cranpose_core::remember(|| {
+        Rc::new(Cell::new(cranpose_ui_graphics::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }))
+    })
+    .with(Rc::clone);
+    let responder = {
+        let viewport = Rc::clone(&viewport);
+        cranpose_core::remember(move || {
+            let viewport = Rc::clone(&viewport);
+            crate::bring_into_view::BringIntoViewResponder::new(move |caret, ime_bottom| {
+                let vp = viewport.get();
+                if vp.width <= 0.0 || vp.height <= 0.0 {
+                    return;
+                }
+                let delta = crate::bring_into_view::scroll_delta_to_reveal(caret, vp, ime_bottom);
+                if delta.abs() > 0.5 {
+                    // `scroll_delta_to_reveal` returns a positive delta to reveal
+                    // content lower down (scroll forward); `LazyListState` scrolls
+                    // forward on a NEGATIVE `dispatch_scroll_delta` (see
+                    // `pushing_forward = delta < 0`), so negate.
+                    state.dispatch_scroll_delta(-delta);
+                }
+            })
+        })
+        .with(|r| r.clone())
+    };
+    let modifier = modifier.report_window_rect(Rc::clone(&viewport));
+
+    let mut node: Option<NodeId> = None;
+    {
+        let node_slot = &mut node;
+        cranpose_core::CompositionLocalProvider(
+            vec![
+                crate::bring_into_view::local_bring_into_view_responder().provides(Some(responder))
+            ],
+            move || {
+                *node_slot = Some(LazyColumnImpl(modifier, state, spec, content));
+            },
+        );
+    }
+    node.expect("LazyColumnImpl emits a node")
 }
 
 #[composable]

@@ -189,6 +189,8 @@ mod tests {
             motion_context_animated: false,
             translated_content_context: false,
             translated_content_offset: cranpose_ui_graphics::Point::default(),
+            scene_children_origin: cranpose_ui_graphics::Point::default(),
+            scene_children_layer_translation: cranpose_ui_graphics::Point::default(),
             graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
             clip_to_bounds: true,
             shadow_clip: None,

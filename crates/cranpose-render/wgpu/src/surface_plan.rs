@@ -508,6 +508,8 @@ mod tests {
             translated_content_context: false,
             translated_content_offset: cranpose_ui_graphics::Point::default(),
             content_offset: cranpose_ui_graphics::Point::default(),
+            scene_children_origin: cranpose_ui_graphics::Point::default(),
+            scene_children_layer_translation: cranpose_ui_graphics::Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,

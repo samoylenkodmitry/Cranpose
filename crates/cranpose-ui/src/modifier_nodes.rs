@@ -1501,6 +1501,121 @@ impl ModifierNodeElement for ClipToBoundsElement {
 }
 
 // ============================================================================
+// Window Rect Reporter Modifier Node
+// ============================================================================
+
+/// Node that publishes its layout node's composited window rect into a shared
+/// cell. The layout `place` pass writes the node's true on-screen rect (window
+/// coordinates, resolved through ancestor scroll placement + graphics-layer
+/// translation) here every pass. Scroll containers use it to expose their
+/// viewport bounds to a `BringIntoViewResponder`. Draws nothing.
+pub struct WindowRectReporterNode {
+    sink: Rc<Cell<cranpose_ui_graphics::Rect>>,
+    state: NodeState,
+}
+
+impl WindowRectReporterNode {
+    pub fn new(sink: Rc<Cell<cranpose_ui_graphics::Rect>>) -> Self {
+        Self {
+            sink,
+            state: NodeState::new(),
+        }
+    }
+
+    /// The cell the layout pass writes this node's window rect into.
+    pub(crate) fn window_rect_sink(&self) -> Rc<Cell<cranpose_ui_graphics::Rect>> {
+        self.sink.clone()
+    }
+}
+
+impl DelegatableNode for WindowRectReporterNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for WindowRectReporterNode {
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+impl LayoutModifierNode for WindowRectReporterNode {
+    /// Transparent pass-through: measure the wrapped content with the same
+    /// constraints and place it at the origin. The reporter only exists so the
+    /// layout `place` pass can publish this node's window rect into its sink.
+    fn measure(
+        &self,
+        _context: &mut dyn ModifierNodeContext,
+        measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
+        let placeable = measurable.measure(constraints);
+        cranpose_ui_layout::LayoutModifierMeasureResult::new(
+            Size {
+                width: placeable.width(),
+                height: placeable.height(),
+            },
+            0.0,
+            0.0,
+        )
+    }
+}
+
+/// Element that creates [`WindowRectReporterNode`] instances. Reuses the node
+/// across recompositions, swapping the sink cell when it changes.
+#[derive(Clone)]
+pub struct WindowRectReporterElement {
+    sink: Rc<Cell<cranpose_ui_graphics::Rect>>,
+}
+
+impl WindowRectReporterElement {
+    pub fn new(sink: Rc<Cell<cranpose_ui_graphics::Rect>>) -> Self {
+        Self { sink }
+    }
+}
+
+impl std::fmt::Debug for WindowRectReporterElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowRectReporterElement").finish()
+    }
+}
+
+impl PartialEq for WindowRectReporterElement {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.sink, &other.sink)
+    }
+}
+
+impl Eq for WindowRectReporterElement {}
+
+impl Hash for WindowRectReporterElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(Rc::as_ptr(&self.sink), state);
+    }
+}
+
+impl ModifierNodeElement for WindowRectReporterElement {
+    type Node = WindowRectReporterNode;
+
+    fn create(&self) -> Self::Node {
+        WindowRectReporterNode::new(self.sink.clone())
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.sink = self.sink.clone();
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
+}
+
+// ============================================================================
 // Draw Command Modifier Node
 // ============================================================================
 

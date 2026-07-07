@@ -26,6 +26,8 @@ fn test_layer(
         translated_content_context: false,
         translated_content_offset: Point::default(),
         content_offset: Point::default(),
+        scene_children_origin: cranpose_ui_graphics::Point::default(),
+        scene_children_layer_translation: cranpose_ui_graphics::Point::default(),
         graphics_layer: GraphicsLayer::default(),
         clip_to_bounds: false,
         shadow_clip: None,
