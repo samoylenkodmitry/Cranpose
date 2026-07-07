@@ -135,17 +135,23 @@ pub fn notify_app_paused() {
 /// Notifies the framework that the host app resumed (foregrounded — e.g.
 /// Android `onResume`).
 ///
-/// Re-requests the soft keyboard **only** when a text field is actually
-/// focused, so an app that comes back with nothing focused does not have the
-/// keyboard pop open. Returns whether the keyboard was re-requested.
+/// The soft keyboard is **never** auto-shown on resume, even when a text field
+/// is still focused. A warm resume (return from HOME / task switch / back-exit
+/// then relaunch) restores the process with the field's focus and caret intact,
+/// but the framework must not resurrect the keyboard for it: the platform's
+/// `InputMethodManager` remembers the last editor and would otherwise pop the
+/// keyboard back open on its own. The user brings it back by tapping the field
+/// (which re-requests it through [`notify_text_input_focus_gained`]).
+///
+/// Always returns `false` so the platform runtime force-hides the OS-restored
+/// keyboard. Pruning stale focus here keeps the keyboard-request bookkeeping
+/// consistent (a focused-but-detached field is dropped and its outstanding
+/// request withdrawn) without ever calling `show`.
 pub fn notify_app_resumed() -> bool {
-    // Read focus first (this also prunes stale focus), then decide — do not
-    // hold the session borrow across the focus query.
-    if !crate::text_field_focus::has_focused_field() {
-        return false;
-    }
-    notify_text_input_focus_gained();
-    true
+    // Prune stale focus (a detached field withdraws its keyboard request), but
+    // never re-request the keyboard: resume must leave it hidden.
+    let _ = crate::text_field_focus::has_focused_field();
+    false
 }
 
 #[cfg(test)]
@@ -283,21 +289,36 @@ mod tests {
     }
 
     #[test]
-    fn pause_hides_and_resume_restores_the_keyboard_for_a_focused_field() {
+    fn resume_never_reshows_the_keyboard_even_for_a_focused_field() {
         let _app_context = crate::render_state::app_context_test_scope();
         let handler = install_recording_handler();
 
         // A focused field shows the keyboard.
-        let _focus = focus_a_field();
+        let focus = focus_a_field();
         assert_eq!(*handler.calls.borrow(), vec!["show"]);
 
         // Pause withdraws it.
         notify_app_paused();
         assert_eq!(*handler.calls.borrow(), vec!["show", "hide"]);
 
-        // Resume with the field still focused brings it back.
-        assert!(notify_app_resumed());
-        assert_eq!(*handler.calls.borrow(), vec!["show", "hide", "show"]);
+        // Resume must NOT bring it back even though the field is still focused
+        // (the reported warm-resume bug): the keyboard stays hidden until the
+        // user taps the field again. Resume reports `false` so the platform
+        // force-hides the OS-restored keyboard.
+        assert!(!notify_app_resumed());
+        assert_eq!(
+            *handler.calls.borrow(),
+            vec!["show", "hide"],
+            "resume must leave the keyboard hidden"
+        );
+
+        // Tapping the still-focused field re-requests the keyboard.
+        crate::text_field_focus::request_focus(Rc::clone(&focus), Rc::new(NoopFocusHandler));
+        assert_eq!(
+            *handler.calls.borrow(),
+            vec!["show", "hide", "show"],
+            "tapping the field after resume re-shows the keyboard"
+        );
 
         crate::text_field_focus::clear_focus();
     }

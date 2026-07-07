@@ -711,6 +711,71 @@ pub fn layout_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> Te
     crate::render_state::with_text_service(|service| service.layout(text, style))
 }
 
+/// Returns the source-text byte range covered by each **visual** (wrapped) line
+/// when `text` is laid out at `max_width` with `options`, matching the wrapping
+/// the renderer performs. Each range excludes the trailing `\n`. With
+/// `max_width == None` (or soft-wrap disabled) this is just the logical
+/// `\n`-delimited lines.
+///
+/// The text field uses this to place its caret and selection handles on the
+/// correct visual line for wrapped text: the in-content caret otherwise counts
+/// only logical `\n` lines, so a caret on a wrapped line's second visual line is
+/// drawn on the first (and its x, being the whole logical-line prefix width,
+/// runs off the right edge and is clipped), while typing and the magnifier land
+/// on the correct spot.
+pub fn wrapped_line_ranges(
+    node_id: Option<NodeId>,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+) -> Vec<Range<usize>> {
+    crate::render_state::with_text_measurer(|m| {
+        wrapped_line_ranges_with_measurer(m, node_id, text, style, options, max_width)
+    })
+}
+
+fn wrapped_line_ranges_with_measurer<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    _node_id: Option<NodeId>,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+) -> Vec<Range<usize>> {
+    let opts = options.normalized();
+    let max_width = normalize_max_width(max_width);
+    // Mirror the wrap decision in `prepare_text_layout_with_measurer_for_node`.
+    let wrap_width = (opts.soft_wrap && opts.overflow != TextOverflow::Visible)
+        .then_some(max_width)
+        .flatten();
+    let line_break_mode = style
+        .paragraph_style
+        .line_break
+        .take_or_else(|| LineBreak::Simple);
+    let hyphens_mode = style.paragraph_style.hyphens.take_or_else(|| Hyphens::None);
+
+    let line_ranges = split_line_ranges(text.text.as_str());
+    let Some(width_limit) = wrap_width else {
+        return line_ranges;
+    };
+    let mut ranges = Vec::with_capacity(line_ranges.len());
+    for line_range in line_ranges {
+        for display_line in wrap_line_to_width(
+            measurer,
+            text,
+            line_range,
+            style,
+            width_limit,
+            line_break_mode,
+            hyphens_mode,
+        ) {
+            ranges.push(display_line.source_range.clone());
+        }
+    }
+    ranges
+}
+
 fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     measurer: &M,
     text: &crate::text::AnnotatedString,

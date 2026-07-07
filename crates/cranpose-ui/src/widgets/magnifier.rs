@@ -217,6 +217,7 @@ mod tests {
             padding_top: 0.0,
             scroll_offset: 0.0,
             line_height: 18.0,
+            wrap_width: None,
         };
         let mut content = move || {
             PopupHost(move || {
@@ -363,6 +364,7 @@ mod tests {
             padding_top: 0.0,
             scroll_offset: 0.0,
             line_height: 18.0,
+            wrap_width: None,
         };
         let line_for_content = wide_line.clone();
         // Caret far to the right of the wide line — the case that used to blank.

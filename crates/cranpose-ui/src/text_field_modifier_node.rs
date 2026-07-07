@@ -43,6 +43,9 @@ pub struct TextFieldHandleMetrics {
     pub padding_top: f32,
     pub scroll_offset: f32,
     pub line_height: f32,
+    /// Width the field wrapped its text at (`None` for single-line fields).
+    /// Lets the handles resolve the same visual (wrapped) lines the caret does.
+    pub wrap_width: Option<f32>,
 }
 
 /// Shared channel by which a `TextFieldModifierNode` publishes its live handle
@@ -170,6 +173,44 @@ pub(crate) fn intersect_rect(
 /// text field given the current content viewport width in px.
 pub type TextPanResolver = Rc<dyn Fn(f32) -> f32>;
 
+/// Resolves the caret's visual `(line_index, line_start_byte)` for byte
+/// `offset`.
+///
+/// For a wrapping (multi-line) field this lays the text out at the same wrap
+/// width the field measured and returns the VISUAL line the caret sits on, so
+/// the drawn caret lands on the same glyph the renderer draws. For a
+/// non-wrapping field (single line, or when no wrap width is known yet) it falls
+/// back to counting logical `\n` lines. Shared by the in-content caret and the
+/// overlay selection handles so both agree.
+pub(crate) fn caret_visual_line_for_offset(
+    text: &str,
+    style: &TextStyle,
+    node_id: Option<cranpose_core::NodeId>,
+    wrap_width: Option<f32>,
+    offset: usize,
+) -> (usize, usize) {
+    let offset = offset.min(text.len());
+    match wrap_width {
+        Some(width) if width.is_finite() && width > 0.0 => {
+            let annotated = crate::text::AnnotatedString::from(text);
+            let ranges = crate::text::wrapped_line_ranges(
+                node_id,
+                &annotated,
+                style,
+                crate::text::TextLayoutOptions::default(),
+                Some(width),
+            );
+            crate::text_selection::caret_visual_line(&ranges, offset)
+        }
+        _ => {
+            let before = &text[..offset];
+            let line_index = before.matches('\n').count();
+            let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            (line_index, line_start)
+        }
+    }
+}
+
 /// Shared references for text field input handling.
 ///
 /// This struct bundles the shared state references passed to the pointer input handler,
@@ -256,6 +297,12 @@ pub struct TextFieldModifierNode {
     measured_size: Rc<Cell<Size>>,
     /// Cached line height from last measurement (shared with draw closure)
     measured_line_height: Rc<Cell<f32>>,
+    /// Wrap width the last measurement laid the text out at (`None` for
+    /// single-line fields, which pan instead of wrapping). Shared with the draw
+    /// closure so the caret and selection handles resolve the same *visual*
+    /// (wrapped) lines the renderer draws, instead of counting only logical
+    /// `\n` lines.
+    measured_wrap_width: Rc<Cell<Option<f32>>>,
     /// Cached pointer input handler
     cached_handler: Rc<dyn Fn(PointerEvent)>,
     /// Cached horizontal pan resolver (recomputes + stores the scroll offset)
@@ -305,6 +352,7 @@ impl TextFieldModifierNode {
                 height: 0.0,
             })),
             measured_line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
+            measured_wrap_width: Rc::new(Cell::new(None)),
             cached_handler,
             cached_pan_resolver,
             handle_controller: None,
@@ -402,8 +450,8 @@ impl TextFieldModifierNode {
         // multi-tap selection granularity gestures.
         use crate::text_selection::{
             classify_tap_count, find_line_boundaries, find_paragraph_boundaries,
-            tap_selection_granularity, SelectionGranularity, MULTI_TAP_SLOP_PX,
-            MULTI_TAP_TIMEOUT_MS,
+            resolve_selection_tap_count, tap_selection_granularity, SelectionGranularity,
+            MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS,
         };
         use crate::word_boundaries::find_word_boundaries;
 
@@ -471,20 +519,31 @@ impl TextFieldModifierNode {
 
                     // A lone tap that lands INSIDE an existing (non-collapsed)
                     // selection selects the word under the finger (Android/iOS
-                    // "tap the selection to re-grab a word"), and seeds the
-                    // progression at "word" so the next in-place tap escalates to
-                    // line then paragraph. A lone tap elsewhere just places the
-                    // caret.
+                    // "tap the selection to re-grab a word"). Tapping the SAME
+                    // spot again grows the granularity word → line → paragraph →
+                    // word …, keyed on location so it keeps escalating even when
+                    // the taps arrive too slowly to count as a rapid multi-tap.
+                    // A lone tap elsewhere just places the caret.
                     let selection = state.selection();
-                    let effective_count = if tap_count == 1
-                        && !selection.collapsed()
-                        && pos >= selection.min()
-                        && pos <= selection.max()
-                    {
-                        2
-                    } else {
-                        tap_count
-                    };
+                    let tap_in_selection =
+                        !selection.collapsed() && pos >= selection.min() && pos <= selection.max();
+                    // Same-spot repeat, independent of the multi-tap timeout:
+                    // within slop of the previous press.
+                    let repeat_in_place = refs
+                        .last_click_pos
+                        .get()
+                        .map(|(px, py)| {
+                            let dx = event.position.x - px;
+                            let dy = event.position.y - py;
+                            dx * dx + dy * dy <= MULTI_TAP_SLOP_PX * MULTI_TAP_SLOP_PX
+                        })
+                        .unwrap_or(false);
+                    let effective_count = resolve_selection_tap_count(
+                        tap_count,
+                        refs.click_count.get(),
+                        tap_in_selection,
+                        repeat_in_place,
+                    );
 
                     match tap_selection_granularity(effective_count) {
                         SelectionGranularity::Paragraph => {
@@ -817,7 +876,11 @@ impl LayoutModifierNode for TextFieldModifierNode {
         // Measure the text content, wrapping multi-line fields at the available
         // width so the field grows to fit every wrapped line instead of
         // clipping content past the first line.
-        let text_size = self.measure_text_content(self.wrap_width(constraints.max_width));
+        let wrap_width = self.wrap_width(constraints.max_width);
+        // Remember the wrap width so the draw closure can resolve the same
+        // visual (wrapped) lines when placing the caret and selection handles.
+        self.measured_wrap_width.set(wrap_width);
+        let text_size = self.measure_text_content(wrap_width);
 
         // Add minimum height for empty text (cursor needs space)
         let min_height = if text_size.height < 1.0 {
@@ -889,6 +952,8 @@ impl DrawModifierNode for TextFieldModifierNode {
         let style = self.style.clone();
         let cached_line_height = self.measured_line_height.clone();
         let measured_size = self.measured_size.clone();
+        let measured_wrap_width = self.measured_wrap_width.clone();
+        let node_id = self.refs.node_id.clone();
         let pan_resolver = self.cached_pan_resolver.clone();
         let handle_controller = self.handle_controller.clone();
         let node_origin = self.refs.node_origin.clone();
@@ -908,6 +973,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                         padding_top: 0.0,
                         scroll_offset: 0.0,
                         line_height: cached_line_height.get(),
+                        wrap_width: measured_wrap_width.get(),
                     });
                 }
                 return vec![];
@@ -950,6 +1016,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                     padding_top,
                     scroll_offset: pan,
                     line_height,
+                    wrap_width: measured_wrap_width.get(),
                 });
             }
             // Everything the field draws (selection, IME underline, cursor)
@@ -1091,11 +1158,20 @@ impl DrawModifierNode for TextFieldModifierNode {
             // Draw cursor - check visibility at DRAW time for blinking
             if crate::cursor_animation::is_cursor_visible() {
                 let pos = selection.start.min(text.len());
-                let text_before = &text[..pos];
-                let line_index = text_before.matches('\n').count();
-                let line_start = text_before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                // Resolve the caret's VISUAL (wrapped) line so it lands on the
+                // same glyph the renderer draws — the field wraps long lines, and
+                // counting only logical `\n` lines would draw the caret on the
+                // wrong line (and, with the full logical-line-prefix width, off
+                // the right edge) while typing/the magnifier stay correct.
+                let (line_index, line_start) = caret_visual_line_for_offset(
+                    &text,
+                    &style,
+                    node_id.get(),
+                    measured_wrap_width.get(),
+                    pos,
+                );
                 let cursor_x = crate::text::measure_text(
-                    &crate::text::AnnotatedString::from(&text_before[line_start..]),
+                    &crate::text::AnnotatedString::from(&text[line_start..pos]),
                     &style,
                 )
                 .width
@@ -1593,6 +1669,82 @@ mod tests {
                 &state.text()[selection.min()..selection.max()],
                 "hello",
                 "a tap inside a selection re-selects the word under the finger"
+            );
+
+            crate::text_field_focus::clear_focus();
+        });
+    }
+
+    /// Bug (c) at the handler level: repeated taps at the SAME spot inside an
+    /// existing selection climb the granularity ladder word → line → paragraph →
+    /// word even when each tap arrives after the multi-tap timeout has lapsed
+    /// (the growth is keyed on location, not the double-tap timer). Forcing a
+    /// timeout between taps (clearing `last_click_time`) makes the raw tap count
+    /// reset to 1 each time, so this exercises the location-based path rather
+    /// than the rapid-multi-tap path.
+    #[test]
+    fn slow_taps_inside_selection_cycle_word_line_paragraph_by_location() {
+        use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
+        use cranpose_ui_graphics::Point;
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let text = "alpha beta\ngamma delta\n\nsecond para";
+            let state = TextFieldState::new(text);
+            let node = TextFieldModifierNode::new(state.clone(), TextStyle::default())
+                .with_line_limits(TextFieldLineLimits::MultiLine {
+                    min_lines: 1,
+                    max_lines: usize::MAX,
+                });
+            node.measured_size.set(Size {
+                width: 400.0,
+                height: 80.0,
+            });
+            let handler = node
+                .pointer_input_handler()
+                .expect("field exposes a pointer handler");
+
+            // A broad pre-existing selection over the whole text.
+            state.edit(|buffer| buffer.select(TextRange::new(0, text.len())));
+
+            let at = Point { x: 2.0, y: 4.0 };
+            let selected = |state: &TextFieldState| {
+                let s = state.selection();
+                state.text()[s.min()..s.max()].to_string()
+            };
+            // Each call forces the multi-tap timer to look expired, so the raw
+            // tap count resets to 1 while the tap position stays put.
+            let slow_tap = || {
+                node.refs.last_click_time.set(None);
+                handler(
+                    PointerEvent::new(PointerEventKind::Down, at, at)
+                        .with_source(PointerSource::Touch),
+                );
+            };
+
+            slow_tap(); // inside selection → word
+            assert_eq!(
+                selected(&state),
+                "alpha",
+                "tap inside selection grabs the word"
+            );
+            slow_tap(); // same spot → line
+            assert_eq!(
+                selected(&state),
+                "alpha beta",
+                "same-spot tap grows to the line even after the timeout"
+            );
+            slow_tap(); // same spot → paragraph
+            assert_eq!(
+                selected(&state),
+                "alpha beta\ngamma delta",
+                "same-spot tap grows to the paragraph"
+            );
+            slow_tap(); // same spot → cycles back to word
+            assert_eq!(
+                selected(&state),
+                "alpha",
+                "same-spot tap cycles back to the word"
             );
 
             crate::text_field_focus::clear_focus();

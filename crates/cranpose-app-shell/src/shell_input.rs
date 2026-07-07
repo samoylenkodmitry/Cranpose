@@ -640,9 +640,11 @@ where
 
     /// Notifies the framework that the host app resumed/foregrounded.
     ///
-    /// Re-requests the soft keyboard only when a text field is actually focused.
-    /// Returns whether the keyboard was re-requested. Platform runtimes call
-    /// this from their resume lifecycle event.
+    /// Never auto-shows the soft keyboard, even for a still-focused field: a
+    /// warm resume keeps the caret but must not resurrect the keyboard (the user
+    /// taps the field to bring it back). Always returns `false` so the platform
+    /// runtime force-hides the OS-restored keyboard. Platform runtimes call this
+    /// from their resume lifecycle event.
     pub fn notify_app_resumed(&mut self) -> bool {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(cranpose_ui::text_input_session::notify_app_resumed)

@@ -86,6 +86,7 @@ fn selection_handle_renders_in_overlay_at_its_tip() {
                 |_pos| {},
                 || {},
                 || {},
+                || {},
             );
         });
     };
@@ -163,6 +164,7 @@ mod long_press {
         drags: Rc<Cell<usize>>,
         drag_ends: Rc<Cell<usize>>,
         long_presses: Rc<Cell<usize>>,
+        taps: Rc<Cell<usize>>,
     }
 
     impl Harness {
@@ -171,6 +173,7 @@ mod long_press {
             let drags = Rc::new(Cell::new(0));
             let drag_ends = Rc::new(Cell::new(0));
             let long_presses = Rc::new(Cell::new(0));
+            let taps = Rc::new(Cell::new(0));
 
             let on_drag: Rc<dyn Fn(Point)> = {
                 let drags = Rc::clone(&drags);
@@ -184,12 +187,17 @@ mod long_press {
                 let long_presses = Rc::clone(&long_presses);
                 Rc::new(move || long_presses.set(long_presses.get() + 1))
             };
+            let on_tap: Rc<dyn Fn()> = {
+                let taps = Rc::clone(&taps);
+                Rc::new(move || taps.set(taps.get() + 1))
+            };
 
             let modifier: Modifier = selection_handle_pointer_input(
                 HandleKind::SelectionStart,
                 on_drag,
                 on_drag_end,
                 on_long_press,
+                on_tap,
             );
             let elements = modifier.elements();
             let mut chain = ModifierNodeChain::new();
@@ -209,6 +217,7 @@ mod long_press {
                 drags,
                 drag_ends,
                 long_presses,
+                taps,
             }
         }
 
@@ -301,6 +310,27 @@ mod long_press {
             0,
             "a quick tap on the handle must not be treated as a long-press"
         );
+        assert_eq!(h.drag_ends.get(), 1);
+        // Bug (b): a quick press→release that did not drag the handle is a tap,
+        // so the handle reports one tap (the cursor handle opens its popup).
+        assert_eq!(
+            h.taps.get(),
+            1,
+            "a quick tap on the handle must report exactly one tap"
+        );
+    }
+
+    #[test]
+    fn dragging_a_handle_is_not_a_tap() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let h = Harness::new();
+
+        // Press, travel well past the tap slop, then lift: a drag, not a tap.
+        h.send(event(PointerEventKind::Down, 100.0, 100.0, 0));
+        h.send(event(PointerEventKind::Move, 160.0, 130.0, 40));
+        h.send(event(PointerEventKind::Up, 160.0, 130.0, 60));
+
+        assert_eq!(h.taps.get(), 0, "dragging the handle must not report a tap");
         assert_eq!(h.drag_ends.get(), 1);
     }
 
@@ -396,7 +426,8 @@ mod kind_restart {
     fn handle_modifier(kind: HandleKind, on_drag: Rc<dyn Fn(Point)>) -> Modifier {
         let noop_end: Rc<dyn Fn()> = Rc::new(|| {});
         let noop_lp: Rc<dyn Fn()> = Rc::new(|| {});
-        selection_handle_pointer_input(kind, on_drag, noop_end, noop_lp)
+        let noop_tap: Rc<dyn Fn()> = Rc::new(|| {});
+        selection_handle_pointer_input(kind, on_drag, noop_end, noop_lp, noop_tap)
     }
 
     fn active_handler(chain: &ModifierNodeChain) -> Rc<dyn Fn(PointerEvent)> {

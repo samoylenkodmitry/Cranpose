@@ -29,6 +29,11 @@ pub(crate) const HANDLE_LONG_PRESS_TIMEOUT_MS: i64 = 500;
 /// Movement (px) tolerated during a long-press before it is treated as a drag
 /// instead. Keeps a resting finger a long-press even with minor jitter.
 pub(crate) const HANDLE_LONG_PRESS_SLOP_PX: f32 = 12.0;
+/// Movement (px) tolerated between a handle's press and release for the gesture
+/// to count as a tap (a quick press→release that did not drag the handle). A tap
+/// on the collapsed cursor handle opens its action popup (Paste / Select all /
+/// Undo / Redo).
+pub(crate) const HANDLE_TAP_SLOP_PX: f32 = 12.0;
 
 /// Geometry of a handle's drawable teardrop for a bulb `radius`: the box the
 /// teardrop occupies (which doubles as its finger grab region) and where the tip
@@ -132,6 +137,10 @@ pub(crate) fn handle_grab_rect(kind: HandleKind, tip: Point, radius: f32) -> Rec
 /// * `on_long_press` — invoked once when the finger rests on the handle past the
 ///   long-press timeout without dragging it, so the field can (re)open the
 ///   contextual menu even when the selection range has not changed.
+/// * `on_tap` — invoked when the finger lifts after a quick press that did not
+///   drag the handle beyond [`HANDLE_TAP_SLOP_PX`] (and was not a long-press),
+///   so the collapsed cursor handle can open its action popup.
+#[allow(clippy::too_many_arguments)]
 #[composable]
 pub fn SelectionHandle(
     kind: HandleKind,
@@ -141,6 +150,7 @@ pub fn SelectionHandle(
     on_drag: impl Fn(Point) + 'static,
     on_drag_end: impl Fn() + 'static,
     on_long_press: impl Fn() + 'static,
+    on_tap: impl Fn() + 'static,
 ) {
     let shape = handle_shape(kind, radius);
     let anchor = Rect {
@@ -154,12 +164,14 @@ pub fn SelectionHandle(
     let on_drag: Rc<dyn Fn(Point)> = Rc::new(on_drag);
     let on_drag_end: Rc<dyn Fn()> = Rc::new(on_drag_end);
     let on_long_press: Rc<dyn Fn()> = Rc::new(on_long_press);
+    let on_tap: Rc<dyn Fn()> = Rc::new(on_tap);
 
     Popup(anchor, Point { x: 0.0, y: 0.0 }, move || {
         let path_data = path_data.clone();
         let on_drag = Rc::clone(&on_drag);
         let on_drag_end = Rc::clone(&on_drag_end);
         let on_long_press = Rc::clone(&on_long_press);
+        let on_tap = Rc::clone(&on_tap);
         Box(
             Modifier::empty()
                 .size(box_size)
@@ -173,6 +185,7 @@ pub fn SelectionHandle(
                     Rc::clone(&on_drag),
                     Rc::clone(&on_drag_end),
                     Rc::clone(&on_long_press),
+                    Rc::clone(&on_tap),
                 )),
             BoxSpec::default(),
             || {},
@@ -200,11 +213,13 @@ pub(crate) fn selection_handle_pointer_input(
     on_drag: Rc<dyn Fn(Point)>,
     on_drag_end: Rc<dyn Fn()>,
     on_long_press: Rc<dyn Fn()>,
+    on_tap: Rc<dyn Fn()>,
 ) -> Modifier {
     Modifier::empty().pointer_input(kind, move |scope: PointerInputScope| {
         let on_drag = Rc::clone(&on_drag);
         let on_drag_end = Rc::clone(&on_drag_end);
         let on_long_press = Rc::clone(&on_long_press);
+        let on_tap = Rc::clone(&on_tap);
         async move {
             scope
                 .await_pointer_event_scope(|await_scope| async move {
@@ -215,6 +230,9 @@ pub(crate) fn selection_handle_pointer_input(
                     let mut down_time: Option<i64> = None;
                     let mut down_pos = Point { x: 0.0, y: 0.0 };
                     let mut long_press_fired = false;
+                    // Whether the finger has strayed beyond the tap slop since it
+                    // went down — a stray means a drag, not a tap.
+                    let mut dragged = false;
                     loop {
                         let event = await_scope.await_pointer_event().await;
                         match event.kind {
@@ -222,10 +240,15 @@ pub(crate) fn selection_handle_pointer_input(
                                 down_time = event.time_ms;
                                 down_pos = event.global_position;
                                 long_press_fired = false;
+                                dragged = false;
                                 on_drag(event.global_position);
                                 event.consume();
                             }
                             PointerEventKind::Move => {
+                                if moved_beyond(down_pos, event.global_position, HANDLE_TAP_SLOP_PX)
+                                {
+                                    dragged = true;
+                                }
                                 on_drag(event.global_position);
                                 maybe_fire_long_press(
                                     &event,
@@ -244,7 +267,17 @@ pub(crate) fn selection_handle_pointer_input(
                                     &mut long_press_fired,
                                     &on_long_press,
                                 );
+                                if moved_beyond(down_pos, event.global_position, HANDLE_TAP_SLOP_PX)
+                                {
+                                    dragged = true;
+                                }
                                 on_drag_end();
+                                // A quick press→release that neither dragged the
+                                // handle nor became a long-press is a tap: open
+                                // the handle's action popup.
+                                if !dragged && !long_press_fired {
+                                    on_tap();
+                                }
                                 down_time = None;
                                 event.consume();
                             }
@@ -260,6 +293,14 @@ pub(crate) fn selection_handle_pointer_input(
                 .await;
         }
     })
+}
+
+/// Whether `now` is more than `slop` px from `origin` (used to tell a tap from a
+/// drag on a selection handle).
+fn moved_beyond(origin: Point, now: Point, slop: f32) -> bool {
+    let dx = now.x - origin.x;
+    let dy = now.y - origin.y;
+    dx * dx + dy * dy > slop * slop
 }
 
 /// Fires `on_long_press` at most once per press when the finger has rested on

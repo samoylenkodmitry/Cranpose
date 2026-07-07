@@ -1476,8 +1476,12 @@ pub fn run(
                     }
                     MainEvent::Resume { .. } => {
                         log::info!("App resumed");
-                        // Only re-open the keyboard if a field is still focused;
-                        // otherwise make sure it stays hidden.
+                        // Never auto-reopen the soft keyboard on resume, even if a
+                        // field is still focused: a warm resume keeps the field's
+                        // caret/focus but must not resurrect the keyboard (the OS
+                        // InputMethodManager would otherwise pop it back). The user
+                        // taps the field to bring it back. `notify_app_resumed`
+                        // always returns false, so we force the keyboard hidden.
                         let reopened = app_shell
                             .as_mut()
                             .map(|shell| shell.notify_app_resumed())
