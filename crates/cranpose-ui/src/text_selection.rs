@@ -68,6 +68,52 @@ pub fn classify_tap_count(
     prev_count.saturating_add(1)
 }
 
+/// Resolves the effective tap count for a press, folding in the "tap inside an
+/// existing selection" gesture so it drives the same word → line → paragraph
+/// granularity ladder ([`tap_selection_granularity`]) as a rapid multi-tap.
+///
+/// Inputs:
+/// * `raw_tap_count` — the time-and-slop-gated multi-tap count from
+///   [`classify_tap_count`] (2+ means a genuine rapid multi-tap in progress);
+/// * `previous_count` — the effective count the *previous* press resolved to
+///   (the field remembers it as its click count);
+/// * `tap_in_selection` — the press landed inside the current, non-collapsed
+///   selection;
+/// * `repeat_in_place` — the press landed within the multi-tap slop of the
+///   previous press, **independent of timing** (the same spot, tapped again).
+///
+/// Behavior:
+/// * a rapid multi-tap (`raw_tap_count >= 2`) uses its own running count, so
+///   double→word, triple→line, … keep working exactly as before;
+/// * a lone tap inside a selection selects the word under the finger, and each
+///   further tap at the *same spot* climbs the ladder (word → line → paragraph →
+///   word …) even when it arrives slowly (the multi-tap timeout has lapsed) —
+///   users tap-then-look-then-tap, so the growth is keyed on location, not time;
+/// * a lone tap at a *new* spot inside the selection re-grabs that word (resets
+///   to word); and
+/// * a lone tap outside any selection is left as-is (a single tap → caret).
+pub fn resolve_selection_tap_count(
+    raw_tap_count: u8,
+    previous_count: u8,
+    tap_in_selection: bool,
+    repeat_in_place: bool,
+) -> u8 {
+    if raw_tap_count >= 2 {
+        raw_tap_count
+    } else if tap_in_selection {
+        if repeat_in_place {
+            // Keep climbing the granularity ladder at the same spot.
+            previous_count.max(1).saturating_add(1)
+        } else {
+            // First tap inside the selection (or a tap on a different word):
+            // grab the word under the finger.
+            2
+        }
+    } else {
+        raw_tap_count
+    }
+}
+
 /// Maps a 1-based tap count to the granularity it selects.
 ///
 /// A single tap places the caret; two taps select the word, three the line,
@@ -129,6 +175,32 @@ pub fn find_paragraph_boundaries(text: &str, pos: usize) -> (usize, usize) {
         .map(|i| pos + i)
         .unwrap_or(text.len());
     (start.min(end), end)
+}
+
+/// Given the source byte ranges of the **visual** (wrapped) lines and a caret
+/// byte `offset`, returns the `(visual_line_index, line_start_byte)` the caret
+/// sits on.
+///
+/// The caret belongs to the last visual line whose start is at or before
+/// `offset`, so:
+/// * a caret in the middle of a visual line resolves to that line;
+/// * a caret at a soft-wrap boundary sits at the start of the lower line;
+/// * a caret at the very end of the text sits on the last visual line.
+///
+/// This is the wrap-aware replacement for counting logical `\n` lines: without
+/// it, a caret on a wrapped line's second visual line is drawn on the first (and
+/// its x runs off the right edge), even though typing and the magnifier place it
+/// correctly. Returns `(0, 0)` when there are no ranges.
+pub fn caret_visual_line(ranges: &[std::ops::Range<usize>], offset: usize) -> (usize, usize) {
+    let mut result = (0usize, 0usize);
+    for (index, range) in ranges.iter().enumerate() {
+        if range.start <= offset {
+            result = (index, range.start);
+        } else {
+            break;
+        }
+    }
+    result
 }
 
 /// Which selection handle a teardrop represents.
@@ -279,6 +351,55 @@ mod tests {
             classify_tap_count(Some((3, 10.0, 10.0)), 600, 10.0, 10.0, 500, 24.0),
             1
         );
+    }
+
+    /// The tap-inside-selection ladder (bug c): a lone tap inside an existing
+    /// selection grabs the word, and every further tap AT THE SAME SPOT grows
+    /// the granularity word → line → paragraph, then cycles back to word — even
+    /// when the taps arrive too slowly to count as a rapid multi-tap (the growth
+    /// is keyed on location, not the double-tap timeout). Tapping a NEW spot
+    /// resets to word.
+    #[test]
+    fn tap_inside_selection_cycles_word_line_paragraph_by_location() {
+        use SelectionGranularity::*;
+
+        // Start: a lone (slow) tap inside a selection. raw_tap_count == 1
+        // (the timeout lapsed), but it still grabs the word.
+        let mut count = resolve_selection_tap_count(1, 0, true, false);
+        assert_eq!(count, 2);
+        assert_eq!(tap_selection_granularity(count), Word);
+
+        // Same spot again, still slow (raw == 1): grow to the line.
+        count = resolve_selection_tap_count(1, count, true, true);
+        assert_eq!(count, 3);
+        assert_eq!(tap_selection_granularity(count), Line);
+
+        // Same spot again: grow to the paragraph.
+        count = resolve_selection_tap_count(1, count, true, true);
+        assert_eq!(count, 4);
+        assert_eq!(tap_selection_granularity(count), Paragraph);
+
+        // Same spot again: cycle back to the word.
+        count = resolve_selection_tap_count(1, count, true, true);
+        assert_eq!(count, 5);
+        assert_eq!(tap_selection_granularity(count), Word);
+
+        // A tap at a NEW spot inside the selection resets to word.
+        let reset = resolve_selection_tap_count(1, count, true, false);
+        assert_eq!(reset, 2);
+        assert_eq!(tap_selection_granularity(reset), Word);
+    }
+
+    /// A genuine rapid multi-tap keeps using its own running count, so
+    /// [`resolve_selection_tap_count`] does not disturb the double→word,
+    /// triple→line ladder, and a lone tap outside a selection stays a caret.
+    #[test]
+    fn resolve_tap_count_preserves_rapid_multitap_and_caret() {
+        // Rapid multi-tap: pass the classify count straight through.
+        assert_eq!(resolve_selection_tap_count(2, 1, false, false), 2);
+        assert_eq!(resolve_selection_tap_count(3, 2, true, true), 3);
+        // Lone tap outside any selection: caret (count 1).
+        assert_eq!(resolve_selection_tap_count(1, 4, false, true), 1);
     }
 
     #[test]
@@ -439,6 +560,37 @@ mod tests {
                 && cursor.iter().any(|p| p.x >= tip_x + r - eps),
             "cursor handle must be symmetric about the tip"
         );
+    }
+
+    /// The wrap-aware caret line lookup (bug d): a caret on a wrapped line's
+    /// later visual line must resolve to that visual line (not the logical
+    /// line's first visual line), with the correct line-start byte so its x is
+    /// measured from the start of the visual line.
+    #[test]
+    fn caret_visual_line_resolves_wrapped_visual_lines() {
+        // "aaaa bbbb" wrapped into ["aaaa " (0..5), "bbbb" (5..9)], then a hard
+        // newline to a short line "cc" (10..12).
+        let ranges = vec![0..5usize, 5..9, 10..12];
+
+        // Start of the first visual line.
+        assert_eq!(caret_visual_line(&ranges, 0), (0, 0));
+        // Middle of the first visual line.
+        assert_eq!(caret_visual_line(&ranges, 3), (0, 0));
+        // Start of the second (wrapped) visual line.
+        assert_eq!(caret_visual_line(&ranges, 5), (1, 5));
+        // Middle of the second visual line — must NOT resolve to line 0.
+        assert_eq!(caret_visual_line(&ranges, 7), (1, 5));
+        // End of the wrapped logical line.
+        assert_eq!(caret_visual_line(&ranges, 9), (1, 5));
+        // The line after the hard newline.
+        assert_eq!(caret_visual_line(&ranges, 11), (2, 10));
+        // End of text.
+        assert_eq!(caret_visual_line(&ranges, 12), (2, 10));
+    }
+
+    #[test]
+    fn caret_visual_line_handles_empty_ranges() {
+        assert_eq!(caret_visual_line(&[], 5), (0, 0));
     }
 
     #[test]

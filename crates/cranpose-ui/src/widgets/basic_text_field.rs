@@ -17,7 +17,9 @@ use crate::text_field_modifier_node::{
     TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics,
 };
 use crate::text_selection::{selection_after_handle_drag, HandleKind, HANDLE_RADIUS};
-use crate::widgets::{CursorMagnifier, Layout, SelectionHandle, TextSelectionMenu};
+use crate::widgets::{
+    CaretActionMenu, CursorMagnifier, Layout, SelectionHandle, TextSelectionMenu,
+};
 use cranpose_core::{mutableStateOf, remember, MutableState, NodeId, SideEffect};
 use cranpose_foundation::modifier_element;
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
@@ -37,10 +39,17 @@ fn handle_tip_window_pos(
     offset: usize,
 ) -> Point {
     let offset = offset.min(text.len());
-    let before = &text[..offset];
-    let line_index = before.matches('\n').count();
-    let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let caret_x = measure_text(&AnnotatedString::from(&before[line_start..]), style).width;
+    // Resolve the caret's VISUAL (wrapped) line so the handle tip anchors on the
+    // same glyph as the drawn caret (the field wraps long lines; counting only
+    // logical `\n` lines would place the handle on the wrong line, far right).
+    let (line_index, line_start) = crate::text_field_modifier_node::caret_visual_line_for_offset(
+        text,
+        style,
+        None,
+        metrics.wrap_width,
+        offset,
+    );
+    let caret_x = measure_text(&AnnotatedString::from(&text[line_start..offset]), style).width;
     Point {
         x: metrics.node_origin.x + metrics.padding_left + caret_x - metrics.scroll_offset,
         y: metrics.node_origin.y
@@ -266,6 +275,15 @@ fn SelectionHandles(
     // changes (a fresh selection), so tapping an action dismisses it until the
     // next selection.
     let menu_open = remember(|| mutableStateOf(true)).with(|state| *state);
+    // Whether the collapsed-caret action popup (Paste / Select all / Undo /
+    // Redo) is open. Opened by tapping the cursor handle; closed by an action or
+    // when the caret leaves the offset it was opened at (typing / tapping
+    // elsewhere). Kept out of the range branch so hook order stays stable.
+    let caret_menu_open = remember(|| mutableStateOf(false)).with(|state| *state);
+    // The caret offset the popup was opened at, so it auto-dismisses once the
+    // caret moves away.
+    let caret_menu_offset: Rc<Cell<usize>> =
+        remember(|| Rc::new(Cell::new(0usize))).with(Rc::clone);
     let previous_range: Rc<Cell<(usize, usize)>> =
         remember(|| Rc::new(Cell::new(current_range))).with(Rc::clone);
     {
@@ -274,6 +292,19 @@ fn SelectionHandles(
             if previous_range.get() != current_range {
                 previous_range.set(current_range);
                 menu_open.set(true);
+            }
+        });
+    }
+    // Auto-dismiss the caret popup once the caret moves off the offset it was
+    // opened at (the user typed or tapped elsewhere), matching Android.
+    {
+        let caret_menu_offset = Rc::clone(&caret_menu_offset);
+        let caret_start = selection.start;
+        SideEffect(move || {
+            if caret_menu_open.value()
+                && (!selection.collapsed() || caret_start != caret_menu_offset.get())
+            {
+                caret_menu_open.set(false);
             }
         });
     }
@@ -297,6 +328,18 @@ fn SelectionHandles(
         // Collapsed caret: a single symmetric cursor handle.
         let tip = handle_tip_window_pos(&text, &style, &metrics, selection.start);
         let on_drag = drag_caret_closure(state.clone(), style.clone(), controller.clone());
+        // Tapping the cursor handle opens the caret action popup, anchored at
+        // the caret's current offset so it auto-dismisses when the caret moves.
+        let open_caret_menu = {
+            let caret_menu_offset = Rc::clone(&caret_menu_offset);
+            let state = state.clone();
+            move || {
+                caret_menu_offset.set(state.selection().start);
+                caret_menu_open.set(true);
+            }
+        };
+        let on_tap = open_caret_menu.clone();
+        let on_long_press = open_caret_menu;
         SelectionHandle(
             HandleKind::Cursor,
             tip,
@@ -307,8 +350,49 @@ fn SelectionHandles(
                 on_drag(pos);
             },
             move || drag_pos.set(None),
-            || {},
+            on_long_press,
+            on_tap,
         );
+
+        // The caret action popup (Paste / Select all / Undo / Redo), floating
+        // just above the caret.
+        if caret_menu_open.value() {
+            let caret_anchor = Point {
+                x: tip.x,
+                y: tip.y - metrics.line_height,
+            };
+            let can_paste = clipboard_read_text().is_some();
+            let can_undo = state.can_undo();
+            let can_redo = state.can_redo();
+            let undo_state = state.clone();
+            let redo_state = state.clone();
+            CaretActionMenu(
+                caret_anchor,
+                can_paste,
+                can_undo,
+                can_redo,
+                move || {
+                    if let Some(text) = clipboard_read_text() {
+                        dispatch_paste(&text);
+                    }
+                    caret_menu_open.set(false);
+                },
+                move || {
+                    dispatch_select_all();
+                    caret_menu_open.set(false);
+                },
+                move || {
+                    undo_state.undo();
+                    crate::request_render_invalidation();
+                    caret_menu_open.set(false);
+                },
+                move || {
+                    redo_state.redo();
+                    crate::request_render_invalidation();
+                    caret_menu_open.set(false);
+                },
+            );
+        }
     } else {
         // Range selection: start (leftmost) and end (rightmost) teardrops.
         let start = selection.min();
@@ -336,6 +420,8 @@ fn SelectionHandles(
             // selection range has not changed (e.g. after it was dismissed by a
             // previous action), so the text actions stay reachable.
             move || menu_open.set(true),
+            // A tap on a selection-edge handle also re-opens the menu.
+            move || menu_open.set(true),
         );
 
         let on_drag_end = drag_edge_closure(
@@ -354,6 +440,7 @@ fn SelectionHandles(
                 on_drag_end(pos);
             },
             move || drag_pos.set(None),
+            move || menu_open.set(true),
             move || menu_open.set(true),
         );
 
@@ -491,6 +578,7 @@ mod tests {
                         padding_top: 0.0,
                         scroll_offset: 0.0,
                         line_height: 18.0,
+                        wrap_width: None,
                     });
                     SelectionHandles(state.clone(), TextStyle::default(), controller);
                 });
@@ -551,6 +639,7 @@ mod tests {
                         padding_top: 0.0,
                         scroll_offset: 0.0,
                         line_height: 18.0,
+                        wrap_width: None,
                     });
                     SelectionHandles(state.clone(), TextStyle::default(), controller);
                 });
@@ -621,6 +710,7 @@ mod tests {
                                 padding_top: 0.0,
                                 scroll_offset: 0.0,
                                 line_height: 18.0,
+                                wrap_width: None,
                             });
                             SelectionHandles(state.clone(), TextStyle::default(), controller);
                         },
@@ -712,6 +802,7 @@ mod tests {
                                         padding_top: 0.0,
                                         scroll_offset: 0.0,
                                         line_height: 18.0,
+                                        wrap_width: None,
                                     });
                                     SelectionHandles(
                                         state.clone(),
@@ -953,6 +1044,7 @@ mod tests {
                 padding_top: 3.0,
                 scroll_offset: 0.0,
                 line_height: 18.0,
+                wrap_width: None,
             };
             for offset in 0..=text.len() {
                 if !text.is_char_boundary(offset) {
@@ -979,6 +1071,91 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Composes the caret action popup directly inside a `PopupHost` (as the
+    /// cursor-handle tap does once `caret_menu_open` is set) and returns the
+    /// rendered scene, so the item labels can be asserted.
+    fn render_caret_action_menu(
+        can_paste: bool,
+        can_undo: bool,
+        can_redo: bool,
+    ) -> crate::renderer::RecordedRenderScene {
+        use crate::layout::LayoutEngine;
+        use crate::renderer::HeadlessRenderer;
+        use crate::widgets::PopupHost;
+        use cranpose_ui_graphics::Size;
+
+        let mut composition = Composition::new(MemoryApplier::new());
+        let key = location_key(file!(), line!(), column!());
+
+        let mut content = move || {
+            PopupHost(move || {
+                CaretActionMenu(
+                    Point { x: 40.0, y: 60.0 },
+                    can_paste,
+                    can_undo,
+                    can_redo,
+                    || {},
+                    || {},
+                    || {},
+                    || {},
+                );
+            });
+        };
+
+        composition.render(key, &mut content).expect("render");
+        for _ in 0..16 {
+            if !composition.should_render() {
+                break;
+            }
+            composition.reconcile(key, &mut content).expect("reconcile");
+        }
+        let root = composition.root().expect("root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let layout = applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 400.0,
+                    height: 400.0,
+                },
+            )
+            .expect("layout");
+        applier.clear_runtime_handle();
+        drop(applier);
+        HeadlessRenderer::new().render(&layout)
+    }
+
+    /// Bug (b): the caret action popup offers Paste / Select all / Undo / Redo.
+    /// Paste is hidden when the clipboard is empty, and Undo/Redo when the
+    /// field's history has nothing to undo/redo.
+    #[test]
+    fn caret_action_menu_shows_paste_select_all_undo_redo() {
+        let _app_context = crate::render_state::app_context_test_scope();
+
+        let all = text_values(&render_caret_action_menu(true, true, true));
+        for label in ["Paste", "Select all", "Undo", "Redo"] {
+            assert!(
+                all.iter().any(|t| t == label),
+                "caret menu should show {label:?}, got {all:?}"
+            );
+        }
+
+        // Nothing on the clipboard and an empty history: only Select all.
+        let bare = text_values(&render_caret_action_menu(false, false, false));
+        assert!(
+            bare.iter().any(|t| t == "Select all"),
+            "Select all is always available, got {bare:?}"
+        );
+        assert!(
+            !bare
+                .iter()
+                .any(|t| t == "Paste" || t == "Undo" || t == "Redo"),
+            "Paste/Undo/Redo must be hidden when unavailable, got {bare:?}"
+        );
     }
 
     #[test]

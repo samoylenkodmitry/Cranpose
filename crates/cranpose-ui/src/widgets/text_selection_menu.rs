@@ -152,6 +152,69 @@ pub fn TextSelectionMenu(
     });
 }
 
+/// A floating Paste / Select all / Undo / Redo menu shown near the collapsed
+/// caret at `anchor` (window coordinates of the caret's top). Opened by tapping
+/// the cursor handle (there is no selection to Copy/Cut, so this offers the
+/// caret-relevant actions instead).
+///
+/// `can_paste` hides Paste when the clipboard is empty; `can_undo`/`can_redo`
+/// hide those items when the field's history has nothing to undo/redo. Each
+/// action runs against the focused field; the caller dismisses the menu.
+#[allow(clippy::too_many_arguments)]
+#[composable]
+pub fn CaretActionMenu(
+    anchor: Point,
+    can_paste: bool,
+    can_undo: bool,
+    can_redo: bool,
+    on_paste: impl Fn() + 'static,
+    on_select_all: impl Fn() + 'static,
+    on_undo: impl Fn() + 'static,
+    on_redo: impl Fn() + 'static,
+) {
+    // Float the bar above the caret; keep it on-screen at the top edge.
+    let popup_anchor = Rect {
+        x: (anchor.x - 8.0).max(0.0),
+        y: (anchor.y - MENU_HEIGHT).max(0.0),
+        width: 0.0,
+        height: 0.0,
+    };
+
+    let on_paste: Rc<dyn Fn()> = Rc::new(on_paste);
+    let on_select_all: Rc<dyn Fn()> = Rc::new(on_select_all);
+    let on_undo: Rc<dyn Fn()> = Rc::new(on_undo);
+    let on_redo: Rc<dyn Fn()> = Rc::new(on_redo);
+
+    Popup(popup_anchor, Point { x: 0.0, y: 0.0 }, move || {
+        let on_paste = Rc::clone(&on_paste);
+        let on_select_all = Rc::clone(&on_select_all);
+        let on_undo = Rc::clone(&on_undo);
+        let on_redo = Rc::clone(&on_redo);
+        Box(
+            Modifier::empty().background(MENU_BG).rounded_corners(6.0),
+            BoxSpec::default(),
+            move || {
+                let on_paste = Rc::clone(&on_paste);
+                let on_select_all = Rc::clone(&on_select_all);
+                let on_undo = Rc::clone(&on_undo);
+                let on_redo = Rc::clone(&on_redo);
+                Row(Modifier::empty(), RowSpec::default(), move || {
+                    if can_paste {
+                        menu_item("Paste", Rc::clone(&on_paste));
+                    }
+                    menu_item("Select all", Rc::clone(&on_select_all));
+                    if can_undo {
+                        menu_item("Undo", Rc::clone(&on_undo));
+                    }
+                    if can_redo {
+                        menu_item("Redo", Rc::clone(&on_redo));
+                    }
+                });
+            },
+        );
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
