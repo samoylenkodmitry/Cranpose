@@ -1465,9 +1465,26 @@ pub fn run(
                     }
                     MainEvent::Pause => {
                         log::info!("App paused");
+                        // Withdraw any outstanding soft-keyboard request and
+                        // close the IME editor session so the OS cannot restore
+                        // the keyboard on resume for an editor view the
+                        // framework no longer considers focused.
+                        if let Some(shell) = &mut app_shell {
+                            shell.notify_app_paused();
+                        }
+                        ime_session.ensure_hidden();
                     }
                     MainEvent::Resume { .. } => {
                         log::info!("App resumed");
+                        // Only re-open the keyboard if a field is still focused;
+                        // otherwise make sure it stays hidden.
+                        let reopened = app_shell
+                            .as_mut()
+                            .map(|shell| shell.notify_app_resumed())
+                            .unwrap_or(false);
+                        if !reopened {
+                            ime_session.ensure_hidden();
+                        }
                     }
                     MainEvent::Start => {
                         log::info!("App started");

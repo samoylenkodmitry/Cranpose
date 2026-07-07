@@ -627,6 +627,27 @@ where
         app_context.enter(cranpose_ui::text_input_session::clear_platform_text_input_handler);
     }
 
+    /// Notifies the framework that the host app was paused/backgrounded.
+    ///
+    /// Withdraws any outstanding soft-keyboard request (and hides the keyboard)
+    /// so the "keyboard shown" state does not survive across the pause and get
+    /// restored on resume with no focused field. Platform runtimes call this
+    /// from their pause lifecycle event.
+    pub fn notify_app_paused(&mut self) {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::text_input_session::notify_app_paused);
+    }
+
+    /// Notifies the framework that the host app resumed/foregrounded.
+    ///
+    /// Re-requests the soft keyboard only when a text field is actually focused.
+    /// Returns whether the keyboard was re-requested. Platform runtimes call
+    /// this from their resume lifecycle event.
+    pub fn notify_app_resumed(&mut self) -> bool {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::text_input_session::notify_app_resumed)
+    }
+
     /// Routes a keyboard event to the focused text field, if any.
     ///
     /// Returns `true` if the event was consumed by a text field.

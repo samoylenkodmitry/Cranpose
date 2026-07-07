@@ -726,6 +726,12 @@ pub fn build_layout_tree_from_applier(
         applier: &mut MemoryApplier,
         node_id: NodeId,
         parent_content_origin: Point,
+        // Accumulated ancestor graphics-layer translation (window px). A node's
+        // drawn content is offset by every ancestor layer's translation on top
+        // of its layout position, so a text field's true on-screen origin must
+        // add this. Scroll offsets are already baked into `parent_content_origin`
+        // via placement; this carries the extra translation-transform component.
+        parent_layer_translation: Point,
     ) -> Result<Option<LayoutBox>, NodeError> {
         let Some((state, child_ids)) = snapshot(applier, node_id)? else {
             return Ok(None);
@@ -752,6 +758,29 @@ pub fn build_layout_tree_from_applier(
             modifier_slices,
             ..
         } = info;
+
+        // Add this node's own graphics-layer translation to the accumulated
+        // ancestor translation: it shifts where this node (and its subtree) is
+        // drawn relative to its layout box. (Scale/rotation are not folded in —
+        // handle positioning under a zoom/rotation layer is a documented gap.)
+        let layer_translation = match modifier_slices.graphics_layer() {
+            Some(layer) => Point {
+                x: parent_layer_translation.x + layer.translation_x,
+                y: parent_layer_translation.y + layer.translation_y,
+            },
+            None => parent_layer_translation,
+        };
+
+        // Publish the field's TRUE composited window origin for its selection
+        // handles: layout position (scroll already baked in) + accumulated layer
+        // translation. Re-read every layout pass so handles track live scrolling.
+        if let Some(sink) = modifier_slices.text_field_window_origin() {
+            sink.set(Point {
+                x: top_left.x + layer_translation.x,
+                y: top_left.y + layer_translation.y,
+            });
+        }
+
         let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
         let child_origin = Point {
             x: top_left.x + state.content_offset.x,
@@ -759,7 +788,7 @@ pub fn build_layout_tree_from_applier(
         };
         let mut children = Vec::with_capacity(child_ids.len());
         for child_id in child_ids {
-            if let Some(child) = place(applier, child_id, child_origin)? {
+            if let Some(child) = place(applier, child_id, child_origin, layer_translation)? {
                 children.push(child);
             }
         }
@@ -773,7 +802,7 @@ pub fn build_layout_tree_from_applier(
         )))
     }
 
-    place(applier, root, Point::default()).map(|root| root.map(LayoutTree::new))
+    place(applier, root, Point::default(), Point::default()).map(|root| root.map(LayoutTree::new))
 }
 
 /// Builds a semantics snapshot from retained layout state in the live applier tree.
@@ -3229,6 +3258,14 @@ fn build_layout_tree(
         applier: &mut MemoryApplier,
         node: &MeasuredNode,
         origin: Point,
+        // Accumulated ancestor graphics-layer translation (window px): a node's
+        // drawn content is shifted by every ancestor layer's translation on top
+        // of its layout position, so a text field's TRUE on-screen origin adds
+        // this. Scroll offsets are already baked into `origin` via placement;
+        // this carries the extra translation-transform component. Scale/rotation
+        // are not folded in (handle placement under a zoom layer is a documented
+        // gap).
+        parent_layer_translation: Point,
     ) -> Result<LayoutBox, NodeError> {
         // Include the node's own offset (from OffsetNode) in its position
         let top_left = Point {
@@ -3249,6 +3286,27 @@ fn build_layout_tree(
             modifier_slices,
             ..
         } = info;
+
+        let layer_translation = match modifier_slices.graphics_layer() {
+            Some(layer) => Point {
+                x: parent_layer_translation.x + layer.translation_x,
+                y: parent_layer_translation.y + layer.translation_y,
+            },
+            None => parent_layer_translation,
+        };
+
+        // Publish the field's TRUE composited window origin for its finger
+        // selection handles: layout position (ancestor scroll already baked in
+        // via placement) + accumulated graphics-layer translation. Re-read every
+        // layout pass so the handles (and their window→offset inverse mapping)
+        // track the field live as an enclosing list scrolls.
+        if let Some(sink) = modifier_slices.text_field_window_origin() {
+            sink.set(Point {
+                x: top_left.x + layer_translation.x,
+                y: top_left.y + layer_translation.y,
+            });
+        }
+
         let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
         let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
@@ -3256,7 +3314,12 @@ fn build_layout_tree(
                 x: top_left.x + child.offset.x,
                 y: top_left.y + child.offset.y,
             };
-            children.push(place(applier, &child.node, child_origin)?);
+            children.push(place(
+                applier,
+                &child.node,
+                child_origin,
+                layer_translation,
+            )?);
         }
         Ok(LayoutBox::new(
             node.node_id,
@@ -3270,6 +3333,7 @@ fn build_layout_tree(
     Ok(LayoutTree::new(place(
         applier,
         node,
+        Point { x: 0.0, y: 0.0 },
         Point { x: 0.0, y: 0.0 },
     )?))
 }

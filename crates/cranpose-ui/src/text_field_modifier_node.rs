@@ -406,9 +406,12 @@ impl TextFieldModifierNode {
         use crate::word_boundaries::find_word_boundaries;
 
         Rc::new(move |event: PointerEvent| {
-            // Track the field node's window-space origin so selection handles
-            // (rendered in the top-level overlay, which is in window space) can
-            // be positioned relative to the field.
+            // Seed the field node's window-space origin from this pointer event
+            // so the very first handle placement after a tap has a value even
+            // before the next layout pass runs. The layout pass
+            // (`window_origin_sink`) is the authoritative source that keeps it
+            // fresh as the field scrolls; both agree (`global - local` equals
+            // the composited window origin at rest).
             refs.node_origin.set(Point {
                 x: event.global_position.x - event.position.x,
                 y: event.global_position.y - event.position.y,
@@ -559,6 +562,22 @@ impl TextFieldModifierNode {
     /// Returns the content_y_offset Rc for closure capture.
     pub fn content_y_offset_rc(&self) -> Rc<Cell<f32>> {
         self.refs.content_y_offset.clone()
+    }
+
+    /// Returns the shared cell the field's composited window origin is written
+    /// into (window coordinates of the field node's top-left).
+    ///
+    /// The layout pass writes the field's TRUE on-screen origin here every frame
+    /// — resolved through all ancestor placements (a scrolling `LazyColumn` /
+    /// `vertical_scroll` offsets its items via placement, which the layout tree
+    /// bakes into each node's absolute rect) plus ancestor graphics-layer
+    /// translations. The draw closure reads it back to publish handle metrics,
+    /// so the finger selection/cursor handles anchor at (and their window→offset
+    /// inverse mapping agrees with) the field's real glyphs even while the list
+    /// scrolls. Without this the origin was only ever sampled from the last
+    /// pointer event and went stale the moment the field scrolled.
+    pub(crate) fn window_origin_sink(&self) -> Rc<Cell<Point>> {
+        self.refs.node_origin.clone()
     }
 
     /// Returns the current text.
@@ -1384,6 +1403,55 @@ mod tests {
             assert!(
                 !metrics.touch,
                 "a mouse tap must publish touch = false (clean caret, no finger handle)"
+            );
+
+            crate::text_field_focus::clear_focus();
+        });
+    }
+
+    /// A double tap on a word must select that word. This regressed after
+    /// selection handles began appearing inside `LazyColumn` items in 0.1.39:
+    /// the cursor handle shown by the first tap overlapped the text line and
+    /// consumed the second tap. The field's own gesture classification (proven
+    /// here) is correct — two quick taps at the same spot escalate to a word
+    /// selection — so the fix is geometric (keep the handle's touch box off the
+    /// text line; see `selection_handle::handle_shape`).
+    #[test]
+    fn double_tap_selects_the_word_under_the_finger() {
+        use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
+        use cranpose_ui_graphics::Point;
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let state = TextFieldState::new("hello world");
+            let node = TextFieldModifierNode::new(state.clone(), TextStyle::default());
+            node.measured_size.set(Size {
+                width: 200.0,
+                height: 20.0,
+            });
+            let handler = node
+                .pointer_input_handler()
+                .expect("field exposes a pointer handler");
+
+            // Two touch taps at the same spot, back to back (well within the
+            // multi-tap timeout and slop): near the start of "hello".
+            let at = Point { x: 2.0, y: 8.0 };
+            handler(
+                PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
+            );
+            handler(
+                PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
+            );
+
+            let selection = state.selection();
+            assert!(
+                !selection.collapsed(),
+                "a double tap must produce a (word) selection, got {selection:?}"
+            );
+            let selected = &state.text()[selection.min()..selection.max()];
+            assert_eq!(
+                selected, "hello",
+                "double tap should select the whole word under the finger"
             );
 
             crate::text_field_focus::clear_focus();

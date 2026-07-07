@@ -56,15 +56,25 @@ fn handle_shape(kind: HandleKind, radius: f32) -> HandleShape {
             width: 2.0 * radius,
             height: 2.0 * radius,
         });
-    // Place the tip so the whole shape (plus padding) fits at non-negative
-    // coordinates inside the box.
+    // Place the tip so the whole shape fits at non-negative coordinates inside
+    // the box. Padding is added on the sides and BELOW the tip for a comfortable
+    // finger target on the bulb (which hangs below the line), but NOT above the
+    // tip: the tip sits at the caret line's bottom, so any upward padding would
+    // put the handle's touch region over the glyphs on that line. That overlap
+    // is what made a double-tap regress after selection handles started
+    // appearing inside `LazyColumn` items — the second tap landed on the newly
+    // shown cursor handle (which moves the caret and consumes the event) instead
+    // of reaching the field to escalate into a word selection. Keeping the touch
+    // box strictly at/below the tip lets taps on the text through, so double-tap
+    // word-select and long-press both work, while dragging the handle (grabbing
+    // the bulb below the line) is unaffected.
     let tip_in_box = Point {
         x: pad - bounds.x,
-        y: pad - bounds.y,
+        y: -bounds.y,
     };
     let box_size = Size {
         width: bounds.width + 2.0 * pad,
-        height: bounds.height + 2.0 * pad,
+        height: bounds.height + pad,
     };
     let path_data = handle_path_data(kind, tip_in_box.x, tip_in_box.y, radius);
     HandleShape {
@@ -241,4 +251,70 @@ pub(crate) fn is_handle_long_press(
     let dy = now_pos.y - down_pos.y;
     let moved = (dx * dx + dy * dy).sqrt();
     now_ms - down_ms >= HANDLE_LONG_PRESS_TIMEOUT_MS && moved <= HANDLE_LONG_PRESS_SLOP_PX
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::text_selection::HANDLE_RADIUS;
+
+    /// Regression for the double-tap-to-select-word regression. The cursor
+    /// handle — the one a single tap shows — must place its tip at the very top
+    /// of its touch box, so the box does not overlap the glyphs on the caret's
+    /// line. Otherwise a double-tap's second tap lands on the handle (which just
+    /// moves the caret and consumes the event) instead of reaching the field to
+    /// escalate into a word selection.
+    #[test]
+    fn cursor_handle_touch_box_sits_at_or_below_the_tip() {
+        let shape = handle_shape(HandleKind::Cursor, HANDLE_RADIUS);
+        // The box is anchored at `tip - tip_in_box`; `tip_in_box.y == 0` means
+        // its top edge coincides with the tip (the caret line's bottom).
+        assert!(
+            shape.tip_in_box.y.abs() < 0.01,
+            "cursor handle tip must sit at the top edge of its touch box \
+             (tip_in_box.y = {}), so it never overlaps the text line above",
+            shape.tip_in_box.y
+        );
+        // The bulb still hangs below the tip with room for a finger.
+        assert!(
+            shape.box_size.height >= 2.0 * HANDLE_RADIUS,
+            "cursor handle box must extend below the tip so the bulb is grabbable"
+        );
+    }
+
+    /// No handle keeps the old comfort padding *above* the tip: the box top is
+    /// exactly the shape's own topmost point (no extra empty pad over the text
+    /// line), while side/below padding for the finger is retained.
+    #[test]
+    fn handles_have_no_padding_above_the_tip() {
+        let pad = HANDLE_TOUCH_PADDING.max(0.0);
+        for kind in [
+            HandleKind::Cursor,
+            HandleKind::SelectionStart,
+            HandleKind::SelectionEnd,
+        ] {
+            let shape = handle_shape(kind, HANDLE_RADIUS);
+            let bounds = cranpose_ui_graphics::VectorPath::parse(&handle_path_data(
+                kind,
+                0.0,
+                0.0,
+                HANDLE_RADIUS,
+            ))
+            .map(|p| p.bounds())
+            .expect("valid handle path");
+            // Box top coincides with the shape's own topmost point: no upward
+            // padding beyond the teardrop geometry itself.
+            assert!(
+                (shape.tip_in_box.y - (-bounds.y)).abs() < 0.01,
+                "{kind:?}: expected no padding above the tip, tip_in_box.y = {} vs shape top {}",
+                shape.tip_in_box.y,
+                -bounds.y
+            );
+            // Side padding is preserved for a comfortable grab.
+            assert!(
+                shape.box_size.width >= bounds.width + 2.0 * pad - 0.01,
+                "{kind:?}: side padding must be retained"
+            );
+        }
+    }
 }

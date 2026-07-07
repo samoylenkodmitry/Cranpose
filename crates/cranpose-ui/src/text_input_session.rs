@@ -115,6 +115,39 @@ pub(crate) fn notify_text_input_focus_lost() {
     }
 }
 
+/// Notifies the framework that the host app was paused (backgrounded — e.g.
+/// Android `onPause`).
+///
+/// Any outstanding soft-keyboard request is withdrawn and the platform is told
+/// to hide its keyboard, clearing the "keyboard shown" state so it cannot
+/// survive into the next resume. Without this, a platform that remembers the
+/// last editor view (Android's `InputMethodManager`) re-shows the keyboard when
+/// the app returns to the foreground even though the framework no longer has a
+/// focused field. Gated on an outstanding request, so it is a no-op when the
+/// keyboard was not showing.
+pub fn notify_app_paused() {
+    // Same effect as losing focus, but semantically "the app went away": the
+    // field may still be focused, we simply must not leave a shown-keyboard
+    // request dangling across the pause.
+    notify_text_input_focus_lost();
+}
+
+/// Notifies the framework that the host app resumed (foregrounded — e.g.
+/// Android `onResume`).
+///
+/// Re-requests the soft keyboard **only** when a text field is actually
+/// focused, so an app that comes back with nothing focused does not have the
+/// keyboard pop open. Returns whether the keyboard was re-requested.
+pub fn notify_app_resumed() -> bool {
+    // Read focus first (this also prunes stale focus), then decide — do not
+    // hold the session borrow across the focus query.
+    if !crate::text_field_focus::has_focused_field() {
+        return false;
+    }
+    notify_text_input_focus_gained();
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +238,79 @@ mod tests {
         notify_text_input_focus_lost();
 
         assert_eq!(*handler.calls.borrow(), vec!["show"]);
+    }
+
+    struct NoopFocusHandler;
+    impl crate::text_field_focus::FocusedTextFieldHandler for NoopFocusHandler {
+        fn handle_key(&self, _: &crate::key_event::KeyEvent) -> bool {
+            false
+        }
+        fn insert_text(&self, _: &str) {}
+        fn delete_surrounding(&self, _: usize, _: usize) {}
+        fn copy_selection(&self) -> Option<String> {
+            None
+        }
+        fn cut_selection(&self) -> Option<String> {
+            None
+        }
+        fn set_composition(&self, _: &str, _: Option<(usize, usize)>) {}
+    }
+
+    fn focus_a_field() -> Rc<std::cell::RefCell<bool>> {
+        let focus = Rc::new(std::cell::RefCell::new(false));
+        crate::text_field_focus::request_focus(Rc::clone(&focus), Rc::new(NoopFocusHandler));
+        focus
+    }
+
+    #[test]
+    fn resume_without_a_focused_field_does_not_show_the_keyboard() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let handler = install_recording_handler();
+
+        // The soft keyboard was shown earlier and the app was paused (hidden).
+        // Coming back to the foreground with nothing focused must NOT re-show
+        // it — this is the reported "keyboard re-opens on resume" bug.
+        notify_text_input_focus_gained();
+        notify_app_paused();
+        assert_eq!(*handler.calls.borrow(), vec!["show", "hide"]);
+
+        assert!(!notify_app_resumed());
+        assert_eq!(
+            *handler.calls.borrow(),
+            vec!["show", "hide"],
+            "resume with no focused field must not re-show the keyboard"
+        );
+    }
+
+    #[test]
+    fn pause_hides_and_resume_restores_the_keyboard_for_a_focused_field() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let handler = install_recording_handler();
+
+        // A focused field shows the keyboard.
+        let _focus = focus_a_field();
+        assert_eq!(*handler.calls.borrow(), vec!["show"]);
+
+        // Pause withdraws it.
+        notify_app_paused();
+        assert_eq!(*handler.calls.borrow(), vec!["show", "hide"]);
+
+        // Resume with the field still focused brings it back.
+        assert!(notify_app_resumed());
+        assert_eq!(*handler.calls.borrow(), vec!["show", "hide", "show"]);
+
+        crate::text_field_focus::clear_focus();
+    }
+
+    #[test]
+    fn pause_is_a_noop_when_the_keyboard_was_not_showing() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let handler = install_recording_handler();
+
+        notify_app_paused();
+        assert!(
+            handler.calls.borrow().is_empty(),
+            "pausing without a shown keyboard must not call the platform"
+        );
     }
 }
