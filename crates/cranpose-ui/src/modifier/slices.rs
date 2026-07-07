@@ -34,6 +34,12 @@ pub struct ModifierNodeSlices {
     text_layout_options: Option<TextLayoutOptions>,
     prepared_text_layout: Option<TextPreparedLayoutHandle>,
     text_pan: Option<TextPanResolver>,
+    /// Write target for a text field's composited window origin. The layout
+    /// `place` pass writes the field node's true on-screen top-left here (window
+    /// coordinates, resolved through ancestor scroll placement + graphics-layer
+    /// translation) so the field's finger selection handles follow the field as
+    /// a `LazyColumn`/`vertical_scroll` scrolls. `None` for non-text-field nodes.
+    text_field_window_origin: Option<Rc<std::cell::Cell<Point>>>,
     graphics_layer: Option<GraphicsLayer>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     corner_shape: Option<RoundedCornerShape>,
@@ -77,6 +83,7 @@ impl Clone for ModifierNodeSlices {
             text_layout_options: self.text_layout_options,
             prepared_text_layout: self.prepared_text_layout.clone(),
             text_pan: self.text_pan.clone(),
+            text_field_window_origin: self.text_field_window_origin.clone(),
             graphics_layer: self.graphics_layer.clone(),
             graphics_layer_resolver: self.graphics_layer_resolver.clone(),
             corner_shape: self.corner_shape,
@@ -214,6 +221,14 @@ impl ModifierNodeSlices {
     /// with the cursor and selection.
     pub fn text_pan_resolver(&self) -> Option<TextPanResolver> {
         self.text_pan.clone()
+    }
+
+    /// The write target for a text field's composited window origin, if this
+    /// node is a `BasicTextField`. The layout pass writes the field's true
+    /// on-screen top-left here so its finger selection handles track the field
+    /// across scroll. See [`ModifierNodeSlices::text_field_window_origin`].
+    pub fn text_field_window_origin(&self) -> Option<Rc<std::cell::Cell<Point>>> {
+        self.text_field_window_origin.clone()
     }
 
     pub fn prepare_text_layout(
@@ -493,6 +508,10 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                     slices.text_layout_options = Some(TextLayoutOptions::default());
                     slices.prepared_text_layout = None;
                     slices.text_pan = text_field_node.text_pan_resolver();
+                    // Give the layout pass a handle to write the field's true
+                    // composited window origin into, so its finger selection
+                    // handles follow the field as an ancestor list scrolls.
+                    slices.text_field_window_origin = Some(text_field_node.window_origin_sink());
 
                     text_field_node.set_content_offset(padding.left);
                     text_field_node.set_content_y_offset(padding.top);

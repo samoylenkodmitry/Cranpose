@@ -15,8 +15,8 @@ use crate::text_field_modifier_node::{
     TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics,
 };
 use crate::text_selection::{selection_after_handle_drag, HandleKind, HANDLE_RADIUS};
-use crate::widgets::{Layout, SelectionHandle, TextSelectionMenu};
-use cranpose_core::{mutableStateOf, remember, NodeId, SideEffect};
+use crate::widgets::{CursorMagnifier, Layout, SelectionHandle, TextSelectionMenu};
+use cranpose_core::{mutableStateOf, remember, MutableState, NodeId, SideEffect};
 use cranpose_foundation::modifier_element;
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
 use cranpose_ui_graphics::{Color, Point};
@@ -199,6 +199,12 @@ fn SelectionHandles(
 
     let text = state.text();
 
+    // Window position of an in-progress handle drag (touch), or `None` when no
+    // handle is being dragged. Drives the magnifier loupe (below) so it floats
+    // above the finger while the caret/selection edge is being placed.
+    let drag_pos: MutableState<Option<Point>> =
+        remember(|| mutableStateOf(None::<Point>)).with(|state| *state);
+
     if selection.collapsed() {
         // Collapsed caret: a single symmetric cursor handle.
         let tip = handle_tip_window_pos(&text, &style, &metrics, selection.start);
@@ -208,8 +214,11 @@ fn SelectionHandles(
             tip,
             HANDLE_RADIUS,
             HANDLE_COLOR,
-            move |pos| on_drag(pos),
-            || {},
+            move |pos| {
+                drag_pos.set(Some(pos));
+                on_drag(pos);
+            },
+            move || drag_pos.set(None),
             || {},
         );
     } else {
@@ -230,8 +239,11 @@ fn SelectionHandles(
             start_tip,
             HANDLE_RADIUS,
             HANDLE_COLOR,
-            move |pos| on_drag_start(pos),
-            || {},
+            move |pos| {
+                drag_pos.set(Some(pos));
+                on_drag_start(pos);
+            },
+            move || drag_pos.set(None),
             // Long-pressing a handle re-opens the contextual menu even when the
             // selection range has not changed (e.g. after it was dismissed by a
             // previous action), so the text actions stay reachable.
@@ -249,8 +261,11 @@ fn SelectionHandles(
             end_tip,
             HANDLE_RADIUS,
             HANDLE_COLOR,
-            move |pos| on_drag_end(pos),
-            || {},
+            move |pos| {
+                drag_pos.set(Some(pos));
+                on_drag_end(pos);
+            },
+            move || drag_pos.set(None),
             move || menu_open.set(true),
         );
 
@@ -290,6 +305,17 @@ fn SelectionHandles(
                 },
             );
         }
+    }
+
+    // Magnifier loupe: while a handle is being dragged, float a magnified slice
+    // of the text above the finger so it does not obscure the caret it is
+    // placing. Touch-only (a drag position is only ever set from a finger
+    // handle drag). The magnified offset is resolved from the finger's window
+    // position through the SAME live composited metrics the handles use, so the
+    // loupe stays centered on the character under the finger even mid-scroll.
+    if let Some(finger) = drag_pos.value() {
+        let offset = window_pos_to_offset(&text, &style, &metrics, finger);
+        CursorMagnifier(text.clone(), style.clone(), metrics, offset, finger);
     }
 }
 
@@ -639,6 +665,220 @@ mod tests {
             scene = Some(HeadlessRenderer::new().render(&layout));
         }
         scene.expect("scene")
+    }
+
+    /// Regression for the core device bug: a `BasicTextField` inside a
+    /// vertically-scrolled container must publish its TRUE composited window
+    /// origin so the finger selection/cursor handles anchor on the glyphs and
+    /// follow the list as it scrolls. Before the fix the field origin was only
+    /// ever sampled from the last pointer event, so it went stale on scroll —
+    /// the handles rendered offset from the text, did not move while scrolling,
+    /// and the window→offset inverse mapping (drag → text offset, and the
+    /// handle-grab hit region) pointed at the wrong character.
+    #[test]
+    fn field_window_origin_follows_vertical_scroll() {
+        use crate::layout::policies::EmptyMeasurePolicy;
+        use crate::layout::{LayoutBox, LayoutEngine};
+        use crate::renderer::HeadlessRenderer;
+        use crate::scroll::ScrollState;
+        use crate::widgets::{Column, ColumnSpec, Layout, PopupHost, Spacer};
+        use cranpose_core::{remember, Key};
+        use cranpose_foundation::modifier_element;
+        use cranpose_ui_graphics::Size;
+        use std::cell::RefCell;
+
+        let _app_context = crate::render_state::app_context_test_scope();
+
+        // `Composition::new` installs the runtime `TextFieldState`/`ScrollState`
+        // need, so build it before allocating any state.
+        let mut composition = Composition::new(MemoryApplier::new());
+        let state = TextFieldState::new("hello world");
+        let controller_slot: Rc<RefCell<Option<TextFieldHandleController>>> =
+            Rc::new(RefCell::new(None));
+        // `ScrollState` allocates a `MutableState`, so it must be created inside
+        // the composition's runtime; publish it out through a slot to drive it.
+        let scroll_slot: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+
+        let spacer_before = 200.0_f32;
+        let mut content = {
+            let state = state.clone();
+            let controller_slot = Rc::clone(&controller_slot);
+            let scroll_slot = Rc::clone(&scroll_slot);
+            move || {
+                let state = state.clone();
+                let controller_slot = Rc::clone(&controller_slot);
+                let scroll_slot = Rc::clone(&scroll_slot);
+                PopupHost(move || {
+                    let controller = remember(TextFieldHandleController::new)
+                        .with(TextFieldHandleController::clone);
+                    *controller_slot.borrow_mut() = Some(controller.clone());
+                    let scroll = remember(|| ScrollState::new(0.0)).with(ScrollState::clone);
+                    *scroll_slot.borrow_mut() = Some(scroll.clone());
+                    let state = state.clone();
+                    let controller = controller.clone();
+                    Column(
+                        Modifier::empty()
+                            .size(Size {
+                                width: 300.0,
+                                height: 150.0,
+                            })
+                            .vertical_scroll(scroll.clone(), false),
+                        ColumnSpec::default(),
+                        move || {
+                            Spacer(Size {
+                                width: 300.0,
+                                height: spacer_before,
+                            });
+                            let element =
+                                TextFieldElement::new(state.clone(), TextStyle::default())
+                                    .with_handle_controller(controller.clone());
+                            let field_modifier =
+                                Modifier::from_parts(vec![modifier_element(element)]);
+                            Layout(field_modifier, EmptyMeasurePolicy, || {});
+                            Spacer(Size {
+                                width: 300.0,
+                                height: 400.0,
+                            });
+                        },
+                    );
+                });
+            }
+        };
+
+        // The field node is the only one carrying a window-origin sink.
+        fn find_field_rect(node: &LayoutBox) -> Option<cranpose_ui_graphics::Rect> {
+            if node
+                .node_data
+                .modifier_slices()
+                .text_field_window_origin()
+                .is_some()
+            {
+                return Some(node.rect);
+            }
+            node.children.iter().find_map(find_field_rect)
+        }
+
+        fn layout_and_read(
+            composition: &mut Composition<MemoryApplier>,
+            key: Key,
+            content: &mut dyn FnMut(),
+            controller_slot: &Rc<RefCell<Option<TextFieldHandleController>>>,
+        ) -> (Point, f32) {
+            for _ in 0..16 {
+                if !composition.should_render() {
+                    break;
+                }
+                composition
+                    .reconcile(key, &mut *content)
+                    .expect("reconcile");
+            }
+            let root = composition.root().expect("root");
+            let handle = composition.runtime_handle();
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle);
+            let layout = applier
+                .compute_layout(
+                    root,
+                    cranpose_ui_graphics::Size {
+                        width: 400.0,
+                        height: 600.0,
+                    },
+                )
+                .expect("layout");
+            applier.clear_runtime_handle();
+            drop(applier);
+            let _ = HeadlessRenderer::new().render(&layout);
+            let field_y = find_field_rect(layout.root()).expect("field placed").y;
+            let node_origin = controller_slot
+                .borrow()
+                .as_ref()
+                .expect("controller")
+                .metrics()
+                .expect("metrics published")
+                .node_origin;
+            (node_origin, field_y)
+        }
+
+        let key = location_key(file!(), line!(), column!());
+        composition.render(key, &mut content).expect("render");
+
+        let (origin0, field_y0) =
+            layout_and_read(&mut composition, key, &mut content, &controller_slot);
+        // The published origin must equal the field's real placed window rect
+        // (not a stale pointer sample), and start below the leading spacer.
+        assert!(
+            (origin0.y - field_y0).abs() < 0.5,
+            "published node_origin.y {} must equal the field's placed window-y {}",
+            origin0.y,
+            field_y0
+        );
+        assert!(
+            origin0.y >= spacer_before - 0.5,
+            "field should start at/after the {spacer_before}px leading spacer, got {}",
+            origin0.y
+        );
+
+        // Scroll the list down by 50px; the field must move up by exactly 50px
+        // and the published origin must track it live.
+        let scroll = scroll_slot.borrow().as_ref().expect("scroll state").clone();
+        scroll.scroll_to(50.0);
+        assert!(
+            scroll.value() >= 49.5,
+            "test setup: content must be tall enough to scroll 50px (got {})",
+            scroll.value()
+        );
+        let (origin1, field_y1) =
+            layout_and_read(&mut composition, key, &mut content, &controller_slot);
+        assert!(
+            (origin1.y - field_y1).abs() < 0.5,
+            "after scroll, node_origin.y {} must still equal the field's placed window-y {}",
+            origin1.y,
+            field_y1
+        );
+        assert!(
+            (origin1.y - (origin0.y - 50.0)).abs() < 0.5,
+            "scrolling 50px must shift the published field origin up by 50px: \
+             before {}, after {} (expected {})",
+            origin0.y,
+            origin1.y,
+            origin0.y - 50.0
+        );
+    }
+
+    /// After a scroll, the window→offset inverse mapping must still resolve the
+    /// character the finger is over, because it reads the same live composited
+    /// origin the handles are placed at. Uses the published post-scroll metrics
+    /// to round-trip every caret offset through
+    /// `handle_tip_window_pos` → `window_pos_to_offset`.
+    #[test]
+    fn window_offset_roundtrip_holds_under_scroll_offset() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let text = "hello world";
+        let style = TextStyle::default();
+        // Two different composited origins (as if the list scrolled between them).
+        for node_origin in [Point { x: 12.0, y: 240.0 }, Point { x: 12.0, y: 190.0 }] {
+            let metrics = TextFieldHandleMetrics {
+                focused: true,
+                touch: true,
+                node_origin,
+                padding_left: 4.0,
+                padding_top: 3.0,
+                scroll_offset: 0.0,
+                line_height: 18.0,
+            };
+            for offset in 0..=text.len() {
+                if !text.is_char_boundary(offset) {
+                    continue;
+                }
+                let tip = handle_tip_window_pos(text, &style, &metrics, offset);
+                let resolved = window_pos_to_offset(text, &style, &metrics, tip);
+                assert_eq!(
+                    resolved, offset,
+                    "finger at the tip of offset {offset} must map back to it \
+                     under origin {node_origin:?}, got {resolved}"
+                );
+            }
+        }
     }
 
     fn text_values(scene: &crate::renderer::RecordedRenderScene) -> Vec<String> {
