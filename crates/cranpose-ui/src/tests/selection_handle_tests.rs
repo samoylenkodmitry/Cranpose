@@ -128,6 +128,7 @@ fn selection_handle_renders_in_overlay_at_its_tip() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 mod long_press {
+    use crate::text_selection::HandleKind;
     use crate::widgets::selection_handle::{
         is_handle_long_press, selection_handle_pointer_input, HANDLE_LONG_PRESS_TIMEOUT_MS,
     };
@@ -184,8 +185,12 @@ mod long_press {
                 Rc::new(move || long_presses.set(long_presses.get() + 1))
             };
 
-            let modifier: Modifier =
-                selection_handle_pointer_input(on_drag, on_drag_end, on_long_press);
+            let modifier: Modifier = selection_handle_pointer_input(
+                HandleKind::SelectionStart,
+                on_drag,
+                on_drag_end,
+                on_long_press,
+            );
             let elements = modifier.elements();
             let mut chain = ModifierNodeChain::new();
             let mut context = BasicModifierNodeContext::new();
@@ -351,5 +356,139 @@ mod long_press {
             point(10.0, 10.0),
             point(60.0, 10.0),
         ));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Handle-kind restart — the start-vs-end grab asymmetry regression
+//
+// When a field's selection collapses to a caret and then re-expands into a
+// range, the composition reuses the single cursor handle's positional slot for
+// the range's START handle. The handle's gesture task is a `pointer_input`; if
+// it is keyed by a constant it does NOT restart when the slot's kind changes, so
+// the start handle keeps running the cursor handle's caret-placement drag and
+// COLLAPSES the selection on grab (while the end handle, a fresh slot, works) —
+// the exact start-vs-end asymmetry seen on device. Keying the task by handle
+// kind restarts it with the correct drag closure. These drive the real gesture
+// modifier through the modifier-node reconciliation the way a recomposition does.
+// ─────────────────────────────────────────────────────────────────────────────
+mod kind_restart {
+    use crate::text_selection::HandleKind;
+    use crate::widgets::selection_handle::selection_handle_pointer_input;
+    use crate::{collect_modifier_slices, Modifier};
+    use cranpose_core::{DefaultScheduler, Runtime};
+    use cranpose_foundation::{
+        BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons, PointerEvent,
+        PointerEventKind,
+    };
+    use cranpose_ui_graphics::Point;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    fn down() -> PointerEvent {
+        let p = Point { x: 100.0, y: 100.0 };
+        PointerEvent::new(PointerEventKind::Down, p, p)
+            .with_buttons(PointerButtons::new().with(PointerButton::Primary))
+            .with_time_ms(Some(0))
+    }
+
+    fn handle_modifier(kind: HandleKind, on_drag: Rc<dyn Fn(Point)>) -> Modifier {
+        let noop_end: Rc<dyn Fn()> = Rc::new(|| {});
+        let noop_lp: Rc<dyn Fn()> = Rc::new(|| {});
+        selection_handle_pointer_input(kind, on_drag, noop_end, noop_lp)
+    }
+
+    fn active_handler(chain: &ModifierNodeChain) -> Rc<dyn Fn(PointerEvent)> {
+        collect_modifier_slices(chain)
+            .pointer_inputs()
+            .first()
+            .cloned()
+            .expect("handle provides a pointer input handler")
+    }
+
+    /// Regression for the start-handle collapse: a slot first composed as the
+    /// cursor handle (caret-collapse drag) and then re-composed as the range
+    /// START handle (edge drag) must run the START handle's drag on grab, not
+    /// the stale caret one — otherwise grabbing the start handle collapses the
+    /// selection.
+    #[test]
+    fn reusing_the_cursor_slot_as_the_start_handle_runs_the_edge_drag_not_the_caret_drag() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let _runtime = Runtime::new(Arc::new(DefaultScheduler));
+
+        let caret_drags = Rc::new(Cell::new(0usize));
+        let edge_drags = Rc::new(Cell::new(0usize));
+
+        let caret_drag: Rc<dyn Fn(Point)> = {
+            let c = Rc::clone(&caret_drags);
+            Rc::new(move |_| c.set(c.get() + 1))
+        };
+        let edge_drag: Rc<dyn Fn(Point)> = {
+            let e = Rc::clone(&edge_drags);
+            Rc::new(move |_| e.set(e.get() + 1))
+        };
+
+        let mut chain = ModifierNodeChain::new();
+        let mut context = BasicModifierNodeContext::new();
+
+        // Frame 1: the collapsed caret shows a single CURSOR handle.
+        chain.update_from_slice(
+            &handle_modifier(HandleKind::Cursor, Rc::clone(&caret_drag)).elements(),
+            &mut context,
+        );
+
+        // Frame 2: the selection re-expands; the same slot is now the range
+        // START handle with the edge-drag closure.
+        chain.update_from_slice(
+            &handle_modifier(HandleKind::SelectionStart, Rc::clone(&edge_drag)).elements(),
+            &mut context,
+        );
+
+        // A grab now must drive the START handle's edge drag, never the stale
+        // cursor caret drag.
+        active_handler(&chain)(down());
+
+        assert_eq!(
+            edge_drags.get(),
+            1,
+            "after the slot's kind changed to SelectionStart, grabbing it must run the \
+             edge drag (which keeps the selection), got {} edge / {} caret",
+            edge_drags.get(),
+            caret_drags.get()
+        );
+        assert_eq!(
+            caret_drags.get(),
+            0,
+            "the stale cursor caret-collapse drag must not run once the kind changed"
+        );
+    }
+
+    /// The end handle was never affected (fresh slot) — assert it too runs its
+    /// own drag, so the fix keeps both edges independent.
+    #[test]
+    fn end_handle_runs_its_own_edge_drag() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let _runtime = Runtime::new(Arc::new(DefaultScheduler));
+
+        let end_drags = Rc::new(Cell::new(0usize));
+        let end_drag: Rc<dyn Fn(Point)> = {
+            let e = Rc::clone(&end_drags);
+            Rc::new(move |_| e.set(e.get() + 1))
+        };
+
+        let mut chain = ModifierNodeChain::new();
+        let mut context = BasicModifierNodeContext::new();
+        chain.update_from_slice(
+            &handle_modifier(HandleKind::SelectionEnd, Rc::clone(&end_drag)).elements(),
+            &mut context,
+        );
+        active_handler(&chain)(down());
+
+        assert_eq!(
+            end_drags.get(),
+            1,
+            "the end handle must run its edge drag on grab"
+        );
     }
 }

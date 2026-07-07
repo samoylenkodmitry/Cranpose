@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use crate::composable;
 use crate::modifier::Modifier;
-use crate::text_selection::{handle_path_data, HandleKind, HANDLE_TOUCH_PADDING};
+use crate::text_selection::{handle_path_data, HandleKind, HANDLE_GRAB_SLOP};
 use crate::widgets::box_widget::{Box, BoxSpec};
 use crate::widgets::popup::Popup;
 use crate::PointerInputScope;
@@ -31,21 +31,31 @@ pub(crate) const HANDLE_LONG_PRESS_TIMEOUT_MS: i64 = 500;
 pub(crate) const HANDLE_LONG_PRESS_SLOP_PX: f32 = 12.0;
 
 /// Geometry of a handle's drawable teardrop for a bulb `radius`: the box the
-/// teardrop occupies and where the tip sits inside that box, so the caller can
-/// anchor the box at `tip_endpoint - tip_in_box` to land the tip on the text.
+/// teardrop occupies (which doubles as its finger grab region) and where the tip
+/// sits inside that box, so the caller can anchor the box at
+/// `tip_endpoint - tip_in_box` to land the tip on the text.
 struct HandleShape {
     /// SVG path of the teardrop in the box's local coordinates.
     path_data: String,
-    /// The full box size including the finger touch padding.
+    /// The full box size including the finger grab slop. The box's own pointer
+    /// input is the handle's grab region, so this must be finger-sized.
     box_size: Size,
     /// The tip position within the (padded) box.
     tip_in_box: Point,
 }
 
-/// Computes the teardrop path, box size and tip offset for a handle, padding
-/// the box for a comfortable finger touch target.
+/// Computes the teardrop path, box size and tip offset for a handle, expanding
+/// the box by a finger-sized grab slop so the handle is easy to grab.
+///
+/// The box is the handle's grab region (its `Box` carries the drag pointer
+/// input). A bare teardrop is far smaller than a fingertip, so without slop a
+/// touch-DOWN aimed at the handle lands a few px off it and falls through to the
+/// field below, which places a caret and collapses the selection. The slop is
+/// applied symmetrically on the sides and BELOW the tip — never above it — so
+/// the grab region stays generous for both the start and end handles yet keeps
+/// off the glyph line above the tip.
 fn handle_shape(kind: HandleKind, radius: f32) -> HandleShape {
-    let pad = HANDLE_TOUCH_PADDING.max(0.0);
+    let slop = HANDLE_GRAB_SLOP.max(0.0);
     // Measure the teardrop with its tip at the origin to learn its bounds
     // (the bulb may extend left/right/below the tip depending on the kind).
     let bounds = VectorPath::parse(&handle_path_data(kind, 0.0, 0.0, radius))
@@ -57,30 +67,54 @@ fn handle_shape(kind: HandleKind, radius: f32) -> HandleShape {
             height: 2.0 * radius,
         });
     // Place the tip so the whole shape fits at non-negative coordinates inside
-    // the box. Padding is added on the sides and BELOW the tip for a comfortable
-    // finger target on the bulb (which hangs below the line), but NOT above the
-    // tip: the tip sits at the caret line's bottom, so any upward padding would
-    // put the handle's touch region over the glyphs on that line. That overlap
-    // is what made a double-tap regress after selection handles started
+    // the box. Grab slop is added on the sides and BELOW the tip for a
+    // finger-sized target on the bulb (which hangs below the line), but NOT
+    // above the tip: the tip sits at the caret line's bottom, so any upward slop
+    // would put the handle's grab region over the glyphs on that line. That
+    // overlap is what made a double-tap regress after selection handles started
     // appearing inside `LazyColumn` items — the second tap landed on the newly
     // shown cursor handle (which moves the caret and consumes the event) instead
-    // of reaching the field to escalate into a word selection. Keeping the touch
+    // of reaching the field to escalate into a word selection. Keeping the grab
     // box strictly at/below the tip lets taps on the text through, so double-tap
-    // word-select and long-press both work, while dragging the handle (grabbing
-    // the bulb below the line) is unaffected.
+    // word-select and long-press both work, while grabbing the handle (anywhere
+    // within a finger's reach of the bulb below the line) now works reliably.
+    //
+    // Because the slop is the same on the left and the right of the drawn shape,
+    // the start and end handles — whose teardrops are mirror images (the bulb
+    // points opposite ways) — get grab regions that are mirror-symmetric about
+    // their respective tips, so neither handle is harder to grab than the other.
     let tip_in_box = Point {
-        x: pad - bounds.x,
+        x: slop - bounds.x,
         y: -bounds.y,
     };
     let box_size = Size {
-        width: bounds.width + 2.0 * pad,
-        height: bounds.height + pad,
+        width: bounds.width + 2.0 * slop,
+        height: bounds.height + slop,
     };
     let path_data = handle_path_data(kind, tip_in_box.x, tip_in_box.y, radius);
     HandleShape {
         path_data,
         box_size,
         tip_in_box,
+    }
+}
+
+/// The window-space axis-aligned grab region for a handle whose tip sits at
+/// `tip` (window coords). This is exactly the region covered by the handle's
+/// `Box` pointer input, expressed in window coordinates, so a touch-DOWN within
+/// it grabs the handle (the overlay `Popup` is hit-tested above the field, so a
+/// grab always wins over the field's caret placement).
+///
+/// Exposed so the arbitration can be asserted in tests without a full
+/// compose/layout/hit-test round-trip.
+#[cfg(test)]
+pub(crate) fn handle_grab_rect(kind: HandleKind, tip: Point, radius: f32) -> Rect {
+    let shape = handle_shape(kind, radius);
+    Rect {
+        x: tip.x - shape.tip_in_box.x,
+        y: tip.y - shape.tip_in_box.y,
+        width: shape.box_size.width,
+        height: shape.box_size.height,
     }
 }
 
@@ -135,6 +169,7 @@ pub fn SelectionHandle(
                     }
                 })
                 .then(selection_handle_pointer_input(
+                    kind,
                     Rc::clone(&on_drag),
                     Rc::clone(&on_drag_end),
                     Rc::clone(&on_long_press),
@@ -150,12 +185,23 @@ pub fn SelectionHandle(
 /// held in place past [`HANDLE_LONG_PRESS_TIMEOUT_MS`]). Shared by
 /// [`SelectionHandle`] and exercised directly in tests so the gesture semantics
 /// stay pinned without a full compose/layout/hit-test round-trip.
+///
+/// The gesture task is keyed by the handle `kind`. This is load-bearing: when a
+/// field's selection collapses to a caret and then re-expands into a range, the
+/// composition reuses the single cursor handle's positional slot for the range's
+/// **start** handle. A constant key would keep the running gesture task (and the
+/// `on_drag` closure it captured) from the previous frame, so the start handle
+/// would still execute the *cursor* handle's caret-placement drag and COLLAPSE
+/// the selection on grab — while the end handle (a fresh slot) worked fine, the
+/// exact start-vs-end asymmetry users hit. Keying by `kind` restarts the task
+/// with the correct `on_drag` when the slot's kind changes.
 pub(crate) fn selection_handle_pointer_input(
+    kind: HandleKind,
     on_drag: Rc<dyn Fn(Point)>,
     on_drag_end: Rc<dyn Fn()>,
     on_long_press: Rc<dyn Fn()>,
 ) -> Modifier {
-    Modifier::empty().pointer_input((), move |scope: PointerInputScope| {
+    Modifier::empty().pointer_input(kind, move |scope: PointerInputScope| {
         let on_drag = Rc::clone(&on_drag);
         let on_drag_end = Rc::clone(&on_drag_end);
         let on_long_press = Rc::clone(&on_long_press);
@@ -282,12 +328,12 @@ mod tests {
         );
     }
 
-    /// No handle keeps the old comfort padding *above* the tip: the box top is
-    /// exactly the shape's own topmost point (no extra empty pad over the text
-    /// line), while side/below padding for the finger is retained.
+    /// No handle keeps any grab slop *above* the tip: the box top is exactly the
+    /// shape's own topmost point (no extra empty slop over the text line), while
+    /// the side/below finger slop is retained.
     #[test]
     fn handles_have_no_padding_above_the_tip() {
-        let pad = HANDLE_TOUCH_PADDING.max(0.0);
+        let slop = HANDLE_GRAB_SLOP.max(0.0);
         for kind in [
             HandleKind::Cursor,
             HandleKind::SelectionStart,
@@ -303,17 +349,117 @@ mod tests {
             .map(|p| p.bounds())
             .expect("valid handle path");
             // Box top coincides with the shape's own topmost point: no upward
-            // padding beyond the teardrop geometry itself.
+            // slop beyond the teardrop geometry itself.
             assert!(
                 (shape.tip_in_box.y - (-bounds.y)).abs() < 0.01,
-                "{kind:?}: expected no padding above the tip, tip_in_box.y = {} vs shape top {}",
+                "{kind:?}: expected no slop above the tip, tip_in_box.y = {} vs shape top {}",
                 shape.tip_in_box.y,
                 -bounds.y
             );
-            // Side padding is preserved for a comfortable grab.
+            // Side slop is applied for a finger-sized grab.
             assert!(
-                shape.box_size.width >= bounds.width + 2.0 * pad - 0.01,
-                "{kind:?}: side padding must be retained"
+                shape.box_size.width >= bounds.width + 2.0 * slop - 0.01,
+                "{kind:?}: side grab slop must be applied"
+            );
+        }
+    }
+
+    /// The grab region must be finger-sized: at least a fingertip across so a
+    /// touch-DOWN aimed at the handle reliably lands inside it instead of
+    /// falling through to the field (which would collapse the selection). A
+    /// fingertip is ~24-32dp; the drawn teardrop alone (~2·radius) is far too
+    /// small, so the box must add a generous slop.
+    #[test]
+    fn grab_region_is_finger_sized() {
+        for kind in [
+            HandleKind::Cursor,
+            HandleKind::SelectionStart,
+            HandleKind::SelectionEnd,
+        ] {
+            let rect = handle_grab_rect(kind, Point { x: 100.0, y: 100.0 }, HANDLE_RADIUS);
+            assert!(
+                rect.width >= 48.0,
+                "{kind:?}: grab region must be at least a fingertip wide, got {}",
+                rect.width
+            );
+            assert!(
+                rect.height >= 32.0,
+                "{kind:?}: grab region must be at least a fingertip tall, got {}",
+                rect.height
+            );
+        }
+    }
+
+    /// Reproduces the reported start-vs-end asymmetry as a guard: the start and
+    /// end selection handles point in opposite directions, so a bug that offset
+    /// one hit-box the wrong way would make that handle harder to grab. Their
+    /// grab regions must be mirror images about their (shared-x) tips — i.e.
+    /// each tip sits at the horizontal centre of its own grab box, and the two
+    /// boxes are the same size — so neither handle collapses the selection on a
+    /// near-miss while the other drags fine.
+    #[test]
+    fn start_and_end_grab_regions_are_symmetric_about_their_tips() {
+        let tip = Point { x: 100.0, y: 100.0 };
+        let start = handle_grab_rect(HandleKind::SelectionStart, tip, HANDLE_RADIUS);
+        let end = handle_grab_rect(HandleKind::SelectionEnd, tip, HANDLE_RADIUS);
+
+        // Same-size boxes.
+        assert!(
+            (start.width - end.width).abs() < 0.01 && (start.height - end.height).abs() < 0.01,
+            "start {start:?} and end {end:?} grab boxes must be the same size"
+        );
+        // Each tip is horizontally centred in its own box, so the box extends
+        // equally toward and away from the bulb — the left extent of one mirrors
+        // the right extent of the other.
+        for (kind, rect) in [
+            (HandleKind::SelectionStart, start),
+            (HandleKind::SelectionEnd, end),
+        ] {
+            let left = tip.x - rect.x;
+            let right = (rect.x + rect.width) - tip.x;
+            assert!(
+                (left - right).abs() < 0.01,
+                "{kind:?}: tip must sit at the horizontal centre of its grab box \
+                 (left extent {left}, right extent {right})"
+            );
+        }
+    }
+
+    /// A touch-DOWN a finger's width to either side of, and below, a handle tip
+    /// must still land inside the handle's grab region (so it grabs the handle),
+    /// while a press a finger's reach up on the glyph line above the tip must NOT
+    /// — that belongs to the field so double-tap word-select keeps working. This
+    /// is the geometric heart of the fix: the overlay handle `Box` is hit-tested
+    /// above the field, so any DOWN inside this region grabs the handle instead
+    /// of collapsing the selection.
+    #[test]
+    fn grab_region_covers_a_fingers_reach_but_not_the_glyph_line() {
+        let tip = Point { x: 100.0, y: 100.0 };
+        let contains = |r: Rect, x: f32, y: f32| {
+            x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height
+        };
+        for kind in [
+            HandleKind::Cursor,
+            HandleKind::SelectionStart,
+            HandleKind::SelectionEnd,
+        ] {
+            let r = handle_grab_rect(kind, tip, HANDLE_RADIUS);
+            // A press ~a finger-half to the sides / below the tip grabs it.
+            assert!(
+                contains(r, tip.x - 16.0, tip.y + 12.0),
+                "{kind:?}: a press below-left of the tip must grab the handle"
+            );
+            assert!(
+                contains(r, tip.x + 16.0, tip.y + 12.0),
+                "{kind:?}: a press below-right of the tip must grab the handle"
+            );
+            // A press a finger's reach ABOVE the tip (on the previous glyph
+            // line) must miss: no grab slop is added above the tip, so it
+            // reaches the field for caret placement / double-tap word-select.
+            assert!(
+                !contains(r, tip.x, tip.y - HANDLE_GRAB_SLOP),
+                "{kind:?}: a press a finger's reach above the tip must not grab \
+                 the handle (it belongs to the field)"
             );
         }
     }
