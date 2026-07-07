@@ -25,11 +25,11 @@
 
 use crate::composable;
 use crate::modifier::Modifier;
-use crate::text::{measure_text, AnnotatedString, TextStyle};
+use crate::text::{measure_text, AnnotatedString, TextOptions, TextOverflow, TextStyle};
 use crate::text_field_modifier_node::TextFieldHandleMetrics;
 use crate::widgets::box_widget::{Box, BoxSpec};
 use crate::widgets::popup::Popup;
-use crate::widgets::Text;
+use crate::widgets::TextWithOptions;
 use cranpose_ui_graphics::{Color, GraphicsLayer, Point, Rect, Size, TransformOrigin};
 
 /// Magnification factor for the loupe (Android uses ~1.25–1.5×).
@@ -78,6 +78,13 @@ pub fn CursorMagnifier(
 ) {
     let (line, caret_x) = caret_line(&text, &style, caret_offset);
     let line_height = metrics.line_height.max(1.0);
+    // Full intrinsic width of the caret's line (content px, unscaled). The
+    // magnified text is forced to lay out at exactly this width (see the
+    // `required_size` below), so every glyph up to the caret exists in the layer
+    // before the graphics-layer translation slides the caret slice into view.
+    let line_width = measure_text(&AnnotatedString::from(line.as_str()), &style)
+        .width
+        .max(1.0);
 
     // Float the loupe above the finger, clamped on-screen at the top edge.
     let anchor = Rect {
@@ -139,10 +146,38 @@ pub fn CursorMagnifier(
                     BoxSpec::default(),
                     move || {
                         // Magnified slice of the caret's text line.
-                        Text(
+                        //
+                        // The loupe frame is only ~150px wide, but a wide line's
+                        // caret can sit thousands of px to the right. Two things
+                        // make the far-right glyphs render:
+                        //
+                        // 1. `required_size` forces the text to lay out at the
+                        //    line's FULL intrinsic width, ignoring the loupe box's
+                        //    narrow (~148px) incoming constraint. Without it the
+                        //    text's placeable is clamped to the frame width, so
+                        //    only the leftmost glyphs exist in the layer and the
+                        //    graphics-layer translation slides an empty strip into
+                        //    view — the reported blank loupe on long lines.
+                        // 2. `Visible` overflow (soft-wrap OFF) keeps the text a
+                        //    single unwrapped line and skips the per-node clip.
+                        //
+                        // The graphics layer then translates the caret slice to
+                        // the frame centre and the outer box's `clip_to_bounds`
+                        // trims everything outside the loupe.
+                        TextWithOptions(
                             line.clone(),
-                            Modifier::empty().graphics_layer_value(text_layer.clone()),
+                            Modifier::empty()
+                                .required_size(Size {
+                                    width: line_width,
+                                    height: line_height,
+                                })
+                                .graphics_layer_value(text_layer.clone()),
                             style.clone(),
+                            TextOptions {
+                                overflow: TextOverflow::Visible,
+                                soft_wrap: false,
+                                ..TextOptions::default()
+                            },
                         );
                         // Caret indicator through the loupe center.
                         Box(
@@ -249,6 +284,134 @@ mod tests {
             "the magnified text {} must render above the finger at y={}",
             line.1.y,
             finger.y
+        );
+    }
+
+    #[test]
+    fn magnifier_lays_out_the_full_line_under_the_loupe_width() {
+        // Regression for the "loupe blanks on wide lines" bug. The magnifier
+        // draws the caret's line inside a ~150px frame and slides it with a
+        // graphics-layer translation. If the text is measured against the frame's
+        // narrow max-width (the old behaviour), glyphs past ~150px are never laid
+        // out, so a far-right caret shows only the background. The magnifier now
+        // lays the line out with `TextOverflow::Visible` + no soft-wrap, so it
+        // keeps its FULL intrinsic width no matter how narrow the frame is.
+        use crate::text::{measure_text_with_options, AnnotatedString, TextLayoutOptions};
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        let wide_line = "abcdefghij ".repeat(30); // thousands of px wide
+        let text = AnnotatedString::from(wide_line.as_str());
+        let style = TextStyle::default();
+        let loupe_max = Some(LOUPE_WIDTH);
+
+        // Baseline: clamping to the loupe width (soft-wrap/clip) bounds the line
+        // to the frame — this is exactly the state that blanked far-right glyphs.
+        let clamped = measure_text_with_options(
+            &text,
+            &style,
+            TextLayoutOptions {
+                overflow: TextOverflow::Clip,
+                soft_wrap: true,
+                max_lines: 1,
+                min_lines: 1,
+            },
+            loupe_max,
+        );
+        assert!(
+            clamped.width <= LOUPE_WIDTH + 1.0,
+            "sanity: a clamped line is bounded by the loupe width, got {}",
+            clamped.width
+        );
+
+        // The magnifier's options lay the whole line out regardless of the frame.
+        let full = measure_text_with_options(
+            &text,
+            &style,
+            TextLayoutOptions {
+                overflow: TextOverflow::Visible,
+                soft_wrap: false,
+                max_lines: 1,
+                min_lines: 1,
+            },
+            loupe_max,
+        );
+        assert!(
+            full.width > LOUPE_WIDTH * 3.0,
+            "magnifier text must keep its full intrinsic width under the narrow \
+             loupe max-width so far-right glyphs exist to draw (got {} vs loupe {LOUPE_WIDTH})",
+            full.width
+        );
+    }
+
+    #[test]
+    fn magnifier_text_node_lays_out_at_full_width_in_the_scene() {
+        // The real layout pipeline: the magnified line's Text node must lay out
+        // at its full intrinsic width (via `required_size`), NOT clamped to the
+        // loupe frame — otherwise only the leftmost glyphs exist in the layer and
+        // a far-right caret shows an empty loupe. The recorded Text op's rect
+        // width is the node's laid-out width, so it must exceed the loupe frame.
+        let _app_context = crate::render_state::app_context_test_scope();
+        let wide_line = "abcdefghij ".repeat(30);
+
+        let mut composition = Composition::new(MemoryApplier::new());
+        let key = location_key(file!(), line!(), column!());
+        let metrics = TextFieldHandleMetrics {
+            focused: true,
+            touch: true,
+            node_origin: Point { x: 0.0, y: 40.0 },
+            padding_left: 0.0,
+            padding_top: 0.0,
+            scroll_offset: 0.0,
+            line_height: 18.0,
+        };
+        let line_for_content = wide_line.clone();
+        // Caret far to the right of the wide line — the case that used to blank.
+        let caret_offset = wide_line.len() - 4;
+        let mut content = move || {
+            let line_for_content = line_for_content.clone();
+            PopupHost(move || {
+                CursorMagnifier(
+                    line_for_content.clone(),
+                    TextStyle::default(),
+                    metrics,
+                    caret_offset,
+                    Point { x: 700.0, y: 400.0 },
+                );
+            });
+        };
+        composition.render(key, &mut content).expect("render");
+        for _ in 0..16 {
+            if !composition.should_render() {
+                break;
+            }
+            composition.reconcile(key, &mut content).expect("reconcile");
+        }
+        let root = composition.root().expect("root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let layout = applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 1080.0,
+                    height: 800.0,
+                },
+            )
+            .expect("layout");
+        applier.clear_runtime_handle();
+        drop(applier);
+        let scene = HeadlessRenderer::new().render(&layout);
+
+        let line = text_ops(&scene)
+            .into_iter()
+            .find(|(value, _)| value == &wide_line)
+            .expect("magnifier renders the caret's line");
+        assert!(
+            line.1.width > LOUPE_WIDTH,
+            "the magnified line's Text node must lay out at full width (got {} vs \
+             loupe {LOUPE_WIDTH}); a clamped width means far-right glyphs are missing",
+            line.1.width
         );
     }
 

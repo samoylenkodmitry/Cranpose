@@ -14,6 +14,8 @@ use crate::text::TextStyle;
 use crate::widgets::box_widget::{Box, BoxSpec};
 use crate::widgets::popup::Popup;
 use crate::widgets::{Row, RowSpec, Text};
+use crate::PointerInputScope;
+use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{Point, Rect};
 
 /// Background of the menu bar.
@@ -30,15 +32,71 @@ fn menu_text_style() -> TextStyle {
     style
 }
 
-/// A single clickable menu label.
+/// A single tappable menu label.
+///
+/// The button drives its own [`pointer_input`](Modifier::pointer_input) gesture
+/// rather than `clickable`. This is load-bearing: `clickable` only *consumes*
+/// the pointer on the release (and never the press), so a `Down` on the menu
+/// fell through to the text field below — which placed a caret and collapsed the
+/// selection — before the release could run the action (worse after a scroll,
+/// once the finger landed straight on the field). Consuming the whole
+/// press→release gesture here keeps the tap on the menu: the field never sees
+/// it, the selection survives, and the action runs on release.
 fn menu_item(label: &str, action: Rc<dyn Fn()>) {
     Text(
         label.to_string(),
         Modifier::empty()
             .padding(10.0)
-            .clickable(move |_point| action()),
+            .then(menu_item_pointer_input(label, action)),
         menu_text_style(),
     );
+}
+
+/// Builds the consuming tap gesture for a menu button: it swallows the press,
+/// any moves, and the release, and fires `action` when the finger lifts after a
+/// press that started on this button. Every event is consumed so the tap can
+/// never fall through to the text field beneath the overlay. Keyed by the button
+/// label so recomposition reuses the running gesture task.
+pub(crate) fn menu_item_pointer_input(label: &str, action: Rc<dyn Fn()>) -> Modifier {
+    let key = label.to_string();
+    Modifier::empty().pointer_input(key, move |scope: PointerInputScope| {
+        let action = Rc::clone(&action);
+        async move {
+            scope
+                .await_pointer_event_scope(|await_scope| async move {
+                    // Only a release that follows a press *on this button* runs
+                    // the action; a stray release without a press is ignored. The
+                    // Down capture keeps the whole gesture on the button, so the
+                    // field never sees it.
+                    let mut pressed = false;
+                    loop {
+                        let event = await_scope.await_pointer_event().await;
+                        match event.kind {
+                            PointerEventKind::Down => {
+                                pressed = true;
+                                event.consume();
+                            }
+                            PointerEventKind::Move => {
+                                event.consume();
+                            }
+                            PointerEventKind::Up => {
+                                if pressed {
+                                    action();
+                                }
+                                pressed = false;
+                                event.consume();
+                            }
+                            PointerEventKind::Cancel => {
+                                pressed = false;
+                                event.consume();
+                            }
+                            _ => {}
+                        }
+                    }
+                })
+                .await;
+        }
+    })
 }
 
 /// A floating Copy / Cut / Paste / Select-all menu shown just above the text
@@ -92,4 +150,89 @@ pub fn TextSelectionMenu(
             },
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modifier::{collect_slices_from_modifier, ModifierNodeSlices};
+    use cranpose_foundation::PointerEvent;
+    use cranpose_ui_graphics::Point;
+    use std::cell::Cell;
+
+    /// Collects the button's live pointer-input handler. Returns the owning
+    /// [`ModifierNodeSlices`] too: it keeps the attached node (and its running
+    /// coroutine) alive — dropping it would cancel the gesture and swallow the
+    /// events.
+    fn button_handler(modifier: &Modifier) -> (Rc<dyn Fn(PointerEvent)>, ModifierNodeSlices) {
+        let slices = collect_slices_from_modifier(modifier);
+        assert_eq!(
+            slices.pointer_inputs().len(),
+            1,
+            "menu button must install exactly one pointer-input gesture"
+        );
+        let handler = slices.pointer_inputs()[0].clone();
+        (handler, slices)
+    }
+
+    fn down(x: f32, y: f32) -> PointerEvent {
+        PointerEvent::new(PointerEventKind::Down, Point { x, y }, Point { x, y })
+    }
+    fn up(x: f32, y: f32) -> PointerEvent {
+        PointerEvent::new(PointerEventKind::Up, Point { x, y }, Point { x, y })
+    }
+
+    /// Bug 7: a tap (press then release) on a menu button consumes BOTH the
+    /// press and the release — so the tap can never fall through to the text
+    /// field below (which would collapse the selection) — and runs the action on
+    /// release.
+    #[test]
+    fn menu_button_consumes_the_tap_and_runs_the_action() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let ran = Rc::new(Cell::new(false));
+        let action: Rc<dyn Fn()> = {
+            let ran = Rc::clone(&ran);
+            Rc::new(move || ran.set(true))
+        };
+        let modifier = menu_item_pointer_input("Copy", action);
+        let (handler, _slices) = button_handler(&modifier);
+
+        let press = down(5.0, 5.0);
+        handler(press.clone());
+        assert!(
+            press.is_consumed(),
+            "the press must be consumed so it never reaches the field and collapses the selection"
+        );
+        assert!(!ran.get(), "the action fires on release, not on press");
+
+        let release = up(6.0, 6.0);
+        handler(release.clone());
+        assert!(release.is_consumed(), "the release must be consumed too");
+        assert!(
+            ran.get(),
+            "releasing after a press on the button runs the action"
+        );
+    }
+
+    /// A stray release with no preceding press on this button is still consumed
+    /// (never reaches the field) but does not run the action.
+    #[test]
+    fn menu_button_release_without_press_is_consumed_but_inert() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let ran = Rc::new(Cell::new(false));
+        let action: Rc<dyn Fn()> = {
+            let ran = Rc::clone(&ran);
+            Rc::new(move || ran.set(true))
+        };
+        let modifier = menu_item_pointer_input("Cut", action);
+        let (handler, _slices) = button_handler(&modifier);
+
+        let release = up(5.0, 5.0);
+        handler(release.clone());
+        assert!(
+            release.is_consumed(),
+            "a release on the menu is consumed so it never hits the field"
+        );
+        assert!(!ran.get(), "a release with no matching press must not act");
+    }
 }

@@ -154,18 +154,24 @@ impl AndroidImeSession {
         self.app.show_soft_input(true);
     }
 
-    /// Closes the IME editor session and hides the keyboard if either is still
-    /// live. Called on app pause (and defensively on resume with no focused
-    /// field) so the invisible editor view is detached and the OS cannot
-    /// restore the soft keyboard when the activity returns to the foreground.
-    /// Idempotent: a no-op once the session is already closed.
+    /// Ensures the soft keyboard is hidden. Called on app pause, on resume with
+    /// no focused field, and once at startup so a relaunch never resurrects the
+    /// keyboard.
+    ///
+    /// When a Java editor session is open it is closed (detaching the invisible
+    /// editor view so the OS cannot restore the IME for it). When none is open
+    /// the keyboard is still force-hidden via `hide_soft_input`: on a COLD start
+    /// the OS may restore the soft keyboard from the previous process even though
+    /// no editor session or focused field exists yet, and only an explicit hide
+    /// dismisses it. Idempotent.
     pub(crate) fn ensure_hidden(&self) {
-        if self.bridge_failed.get() {
-            self.app.hide_soft_input(false);
-            return;
-        }
-        if self.active.get() {
+        if !self.bridge_failed.get() && self.active.get() {
             self.hide();
+        } else {
+            // No live Java editor session (cold start, or the `show_soft_input`
+            // fallback path). Force the IME hidden directly. `false` = do not
+            // restrict to implicitly-shown keyboards; always hide.
+            self.app.hide_soft_input(false);
         }
     }
 }

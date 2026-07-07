@@ -398,10 +398,12 @@ impl TextFieldModifierNode {
         line_limits: TextFieldLineLimits,
         style: TextStyle, // Add style
     ) -> Rc<dyn Fn(PointerEvent)> {
-        // Word boundaries for double-tap; selection classification/line
-        // boundaries for the tap-count-driven selection gestures.
+        // Tap-count classification plus word/line/paragraph boundaries drive the
+        // multi-tap selection granularity gestures.
         use crate::text_selection::{
-            classify_tap, find_line_boundaries, TapCount, MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS,
+            classify_tap_count, find_line_boundaries, find_paragraph_boundaries,
+            tap_selection_granularity, SelectionGranularity, MULTI_TAP_SLOP_PX,
+            MULTI_TAP_TIMEOUT_MS,
         };
         use crate::word_boundaries::find_word_boundaries;
 
@@ -445,20 +447,20 @@ impl TextFieldModifierNode {
                         click_y,
                     );
 
-                    // Classify the press into single/double/triple by both the
+                    // Classify the press into a 1-based tap count by both the
                     // time since and the distance from the previous press (a tap
                     // far from the last one starts a fresh single tap, matching
                     // Android's double-tap slop).
-                    let previous = refs.click_count.get().try_into().ok().and_then(|count| {
-                        let (px, py) = refs.last_click_pos.get()?;
-                        Some((count, px, py))
+                    let previous = refs.last_click_pos.get().and_then(|(px, py)| {
+                        let count = refs.click_count.get();
+                        (count > 0).then_some((count, px, py))
                     });
                     let elapsed_ms = refs
                         .last_click_time
                         .get()
                         .map(|last| now.duration_since(last).as_millis())
                         .unwrap_or(u128::MAX);
-                    let tap = classify_tap(
+                    let tap_count = classify_tap_count(
                         previous,
                         elapsed_ms,
                         event.position.x,
@@ -467,25 +469,51 @@ impl TextFieldModifierNode {
                         MULTI_TAP_SLOP_PX,
                     );
 
-                    match tap {
-                        TapCount::Triple => {
-                            // Triple tap/click: select the line/paragraph.
+                    // A lone tap that lands INSIDE an existing (non-collapsed)
+                    // selection selects the word under the finger (Android/iOS
+                    // "tap the selection to re-grab a word"), and seeds the
+                    // progression at "word" so the next in-place tap escalates to
+                    // line then paragraph. A lone tap elsewhere just places the
+                    // caret.
+                    let selection = state.selection();
+                    let effective_count = if tap_count == 1
+                        && !selection.collapsed()
+                        && pos >= selection.min()
+                        && pos <= selection.max()
+                    {
+                        2
+                    } else {
+                        tap_count
+                    };
+
+                    match tap_selection_granularity(effective_count) {
+                        SelectionGranularity::Paragraph => {
+                            // Fourth tap: grow to the whole paragraph.
+                            let (start, end) = find_paragraph_boundaries(&text, pos);
+                            state.edit(|buffer| {
+                                buffer.select(TextRange::new(start, end));
+                            });
+                            refs.drag_anchor.set(Some(start));
+                        }
+                        SelectionGranularity::Line => {
+                            // Triple tap: select the line.
                             let (line_start, line_end) = find_line_boundaries(&text, pos);
                             state.edit(|buffer| {
                                 buffer.select(TextRange::new(line_start, line_end));
                             });
                             refs.drag_anchor.set(Some(line_start));
                         }
-                        TapCount::Double => {
-                            // Double tap/click: select the word.
+                        SelectionGranularity::Word => {
+                            // Double tap (or a tap inside an existing selection):
+                            // select the word.
                             let (word_start, word_end) = find_word_boundaries(&text, pos);
                             state.edit(|buffer| {
                                 buffer.select(TextRange::new(word_start, word_end));
                             });
                             refs.drag_anchor.set(Some(word_start));
                         }
-                        TapCount::Single => {
-                            // Single tap/click: place the cursor.
+                        SelectionGranularity::Caret => {
+                            // Single tap: place the cursor.
                             refs.drag_anchor.set(Some(pos));
                             state.edit(|buffer| {
                                 buffer.place_cursor_before_char(pos);
@@ -493,7 +521,7 @@ impl TextFieldModifierNode {
                         }
                     }
 
-                    refs.click_count.set(tap.as_u8());
+                    refs.click_count.set(effective_count);
                     refs.last_click_time.set(Some(now));
                     refs.last_click_pos
                         .set(Some((event.position.x, event.position.y)));
@@ -1452,6 +1480,119 @@ mod tests {
             assert_eq!(
                 selected, "hello",
                 "double tap should select the whole word under the finger"
+            );
+
+            crate::text_field_focus::clear_focus();
+        });
+    }
+
+    /// The multi-tap selection granularity ladder (bug 8): repeated in-place taps
+    /// escalate word → line → paragraph, then cycle back to word. Mirrors mature
+    /// editors (Android `TextView`, iOS, VS Code).
+    #[test]
+    fn repeated_taps_escalate_word_line_paragraph_then_cycle() {
+        use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
+        use cranpose_ui_graphics::Point;
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            // Two lines in the first paragraph, a blank line, then a second
+            // paragraph — so line and paragraph selections differ.
+            let text = "alpha beta\ngamma delta\n\nsecond para";
+            let state = TextFieldState::new(text);
+            let node = TextFieldModifierNode::new(state.clone(), TextStyle::default())
+                .with_line_limits(TextFieldLineLimits::MultiLine {
+                    min_lines: 1,
+                    max_lines: usize::MAX,
+                });
+            node.measured_size.set(Size {
+                width: 400.0,
+                height: 80.0,
+            });
+            let handler = node
+                .pointer_input_handler()
+                .expect("field exposes a pointer handler");
+
+            // Tap in place on the first line ("alpha").
+            let at = Point { x: 2.0, y: 4.0 };
+            let tap = || {
+                handler(
+                    PointerEvent::new(PointerEventKind::Down, at, at)
+                        .with_source(PointerSource::Touch),
+                );
+            };
+            let selected = |state: &TextFieldState| {
+                let s = state.selection();
+                state.text()[s.min()..s.max()].to_string()
+            };
+
+            tap(); // 1 → caret
+            assert!(state.selection().collapsed(), "first tap places the caret");
+            tap(); // 2 → word
+            assert_eq!(selected(&state), "alpha", "double tap selects the word");
+            tap(); // 3 → line
+            assert_eq!(
+                selected(&state),
+                "alpha beta",
+                "triple tap selects the line"
+            );
+            tap(); // 4 → paragraph
+            assert_eq!(
+                selected(&state),
+                "alpha beta\ngamma delta",
+                "fourth tap grows to the paragraph"
+            );
+            tap(); // 5 → cycles back to word
+            assert_eq!(
+                selected(&state),
+                "alpha",
+                "fifth tap cycles back to the word"
+            );
+
+            crate::text_field_focus::clear_focus();
+        });
+    }
+
+    /// A single tap that lands inside an existing selection re-grabs the word
+    /// under the finger (Android/iOS behaviour), rather than collapsing to a
+    /// caret (bug 8).
+    #[test]
+    fn single_tap_inside_selection_selects_the_word() {
+        use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
+        use cranpose_ui_graphics::Point;
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let state = TextFieldState::new("hello world");
+            let node = TextFieldModifierNode::new(state.clone(), TextStyle::default());
+            node.measured_size.set(Size {
+                width: 200.0,
+                height: 20.0,
+            });
+            let handler = node
+                .pointer_input_handler()
+                .expect("field exposes a pointer handler");
+
+            // Pre-existing broad selection over the whole text.
+            state.edit(|buffer| buffer.select(TextRange::new(0, 11)));
+            assert!(!state.selection().collapsed());
+
+            // A lone tap over "hello" (fresh tap count) must select that word,
+            // not drop the selection.
+            let at = Point { x: 2.0, y: 8.0 };
+            handler(
+                PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
+            );
+
+            let selection = state.selection();
+            assert!(
+                !selection.collapsed(),
+                "a tap inside a selection must not collapse it, got {selection:?}"
+            );
+            assert_eq!(
+                &state.text()[selection.min()..selection.max()],
+                "hello",
+                "a tap inside a selection re-selects the word under the finger"
             );
 
             crate::text_field_focus::clear_focus();
