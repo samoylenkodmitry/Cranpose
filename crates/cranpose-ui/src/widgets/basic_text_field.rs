@@ -5,10 +5,12 @@
 
 #![allow(non_snake_case)]
 
+use crate::bring_into_view::local_bring_into_view_responder;
 use crate::clipboard_session::{clipboard_read_text, clipboard_write_text};
 use crate::composable;
 use crate::layout::policies::EmptyMeasurePolicy;
 use crate::modifier::Modifier;
+use crate::safe_area::local_ime_insets;
 use crate::text::{measure_text, AnnotatedString, TextStyle};
 use crate::text_field_focus::{dispatch_copy, dispatch_cut, dispatch_paste, dispatch_select_all};
 use crate::text_field_modifier_node::{
@@ -19,7 +21,7 @@ use crate::widgets::{CursorMagnifier, Layout, SelectionHandle, TextSelectionMenu
 use cranpose_core::{mutableStateOf, remember, MutableState, NodeId, SideEffect};
 use cranpose_foundation::modifier_element;
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
-use cranpose_ui_graphics::{Color, Point};
+use cranpose_ui_graphics::{Color, Point, Rect};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -153,6 +155,16 @@ pub fn BasicTextFieldWithOptions(
         || {}, // No children
     );
 
+    // Scroll the focused field's caret above the soft keyboard (bug 2): asks the
+    // nearest scroll container's `BringIntoViewResponder` to reveal the caret on
+    // focus / caret move / keyboard animation. No-op without a scrollable
+    // ancestor or when the caret already fits.
+    BringCaretIntoView(
+        state.clone(),
+        options.text_style.clone(),
+        controller.clone(),
+    );
+
     // Finger selection handles (touch only): a caret handle for a collapsed
     // selection, start/end teardrops for a range. Rendered in the top-level
     // overlay via `Popup` so they escape the field's clip and hang below the
@@ -161,6 +173,82 @@ pub fn BasicTextFieldWithOptions(
     SelectionHandles(state, options.text_style, controller);
 
     node
+}
+
+/// Window-space rect of the field's caret (the cursor line at byte `offset`),
+/// derived from the field's published handle [`TextFieldHandleMetrics`]. Its top
+/// is the top of the caret's visual line; its height is one line.
+fn caret_window_rect(
+    text: &str,
+    style: &TextStyle,
+    metrics: &TextFieldHandleMetrics,
+    offset: usize,
+) -> Rect {
+    // `handle_tip_window_pos` returns the BOTTOM of the caret line (the handle
+    // tip); the caret rect starts one line-height above it.
+    let tip = handle_tip_window_pos(text, style, metrics, offset);
+    Rect {
+        x: tip.x,
+        y: tip.y - metrics.line_height,
+        width: 2.0,
+        height: metrics.line_height,
+    }
+}
+
+/// Consumer half of bug 2: while the field is focused, asks the nearest scroll
+/// container (via [`local_bring_into_view_responder`]) to scroll the caret clear
+/// of the on-screen keyboard ([`local_ime_insets`]).
+///
+/// The request is triggered only by focus, caret movement, or a change in the
+/// keyboard inset — never by scrolling — so the user is never yanked back while
+/// deliberately scrolling the field out of view. The caret rect handed to the
+/// responder is always recomputed from the live metrics, so the scroll delta is
+/// correct even as the keyboard animates in.
+#[composable]
+fn BringCaretIntoView(
+    state: TextFieldState,
+    style: TextStyle,
+    controller: TextFieldHandleController,
+) {
+    let Some(metrics) = controller.metrics() else {
+        return;
+    };
+    // Read the keyboard inset and responder unconditionally so the composable
+    // re-runs when either changes even before the field is focused.
+    let ime_bottom = local_ime_insets().current().bottom;
+    let responder = local_bring_into_view_responder().current();
+
+    let previous: Rc<Cell<Option<(usize, usize, i64)>>> =
+        remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
+
+    if !metrics.focused {
+        // Reset so the next focus re-requests even if the caret/keyboard match a
+        // previous request.
+        previous.set(None);
+        return;
+    }
+    let Some(responder) = responder else {
+        return;
+    };
+
+    let text = state.text();
+    let selection = state.selection();
+    let caret = caret_window_rect(&text, &style, &metrics, selection.start);
+
+    // Trigger key: caret position + keyboard inset (quantised). Deliberately
+    // excludes the field's scroll-driven window origin so scrolling does not
+    // re-fire the request.
+    let key = (
+        selection.start,
+        selection.end,
+        (ime_bottom * 4.0).round() as i64,
+    );
+    SideEffect(move || {
+        if previous.get() != Some(key) {
+            previous.set(Some(key));
+            responder.bring_into_view(caret, ime_bottom);
+        }
+    });
 }
 
 /// Emits the finger selection/cursor handles for the field when it is focused
@@ -1039,5 +1127,169 @@ mod tests {
 
             assert_eq!(state.text(), "Hello!");
         });
+    }
+
+    /// Bug 2 end-to-end (headless): a `LazyColumn` provides a
+    /// `BringIntoViewResponder`; its viewport rect is filled by the layout pass;
+    /// asking it to reveal a caret hidden behind the keyboard scrolls the list
+    /// FORWARD (revealing lower content), while asking it to reveal an
+    /// already-visible caret does nothing. This pins the whole responder path:
+    /// provision through the item subcomposition, the `report_window_rect`
+    /// viewport sink, `scroll_delta_to_reveal`, and the `dispatch_scroll_delta`
+    /// sign.
+    #[test]
+    fn lazy_column_responder_scrolls_a_hidden_caret_into_view() {
+        use crate::bring_into_view::local_bring_into_view_responder;
+        use crate::layout::LayoutEngine;
+        use crate::renderer::HeadlessRenderer;
+        use crate::widgets::{Box, BoxSpec, PopupHost};
+        use crate::{LazyColumn, LazyColumnSpec};
+        use cranpose_core::Key;
+        use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+        use cranpose_ui_graphics::Size;
+        use std::cell::RefCell;
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        let mut composition = Composition::new(MemoryApplier::new());
+        let responder_slot: Rc<RefCell<Option<crate::bring_into_view::BringIntoViewResponder>>> =
+            Rc::new(RefCell::new(None));
+        let state_slot: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
+
+        // Viewport 300x400 at window origin (0,0); 30 items of 80px each = 2400px
+        // of content, so the list can scroll far forward.
+        let mut content = {
+            let responder_slot = Rc::clone(&responder_slot);
+            let state_slot = Rc::clone(&state_slot);
+            move || {
+                let responder_slot = Rc::clone(&responder_slot);
+                let state_slot = Rc::clone(&state_slot);
+                PopupHost(move || {
+                    let list_state = remember_lazy_list_state();
+                    *state_slot.borrow_mut() = Some(list_state);
+                    let responder_slot = Rc::clone(&responder_slot);
+                    LazyColumn(
+                        Modifier::empty().size(Size {
+                            width: 300.0,
+                            height: 400.0,
+                        }),
+                        list_state,
+                        LazyColumnSpec::default(),
+                        move |scope| {
+                            let responder_slot = Rc::clone(&responder_slot);
+                            scope.items(
+                                30,
+                                None::<fn(usize) -> u64>,
+                                None::<fn(usize) -> u64>,
+                                move |_index| {
+                                    if responder_slot.borrow().is_none() {
+                                        if let Some(r) = local_bring_into_view_responder().current()
+                                        {
+                                            *responder_slot.borrow_mut() = Some(r);
+                                        }
+                                    }
+                                    Box(
+                                        Modifier::empty().size(Size {
+                                            width: 300.0,
+                                            height: 80.0,
+                                        }),
+                                        BoxSpec::default(),
+                                        || {},
+                                    );
+                                },
+                            );
+                        },
+                    );
+                });
+            }
+        };
+
+        fn run_layout(
+            composition: &mut Composition<MemoryApplier>,
+            key: Key,
+            content: &mut dyn FnMut(),
+        ) {
+            for _ in 0..16 {
+                if !composition.should_render() {
+                    break;
+                }
+                composition
+                    .reconcile(key, &mut *content)
+                    .expect("reconcile");
+            }
+            let root = composition.root().expect("root");
+            let handle = composition.runtime_handle();
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle);
+            let layout = applier
+                .compute_layout(
+                    root,
+                    Size {
+                        width: 400.0,
+                        height: 600.0,
+                    },
+                )
+                .expect("layout");
+            applier.clear_runtime_handle();
+            drop(applier);
+            let _ = HeadlessRenderer::new().render(&layout);
+        }
+
+        let key = location_key(file!(), line!(), column!());
+        composition.render(key, &mut content).expect("render");
+        run_layout(&mut composition, key, &mut content);
+
+        let responder = responder_slot
+            .borrow()
+            .clone()
+            .expect("LazyColumn provides a bring-into-view responder to its items");
+        let list_state = state_slot.borrow().expect("list state captured");
+        let offset0 = list_state.first_visible_item_scroll_offset();
+        let index0 = list_state.first_visible_item_index();
+
+        // A caret already inside the viewport (y=100, above the fold) must not
+        // scroll the list.
+        responder.bring_into_view(
+            Rect {
+                x: 10.0,
+                y: 100.0,
+                width: 2.0,
+                height: 20.0,
+            },
+            0.0,
+        );
+        run_layout(&mut composition, key, &mut content);
+        assert_eq!(
+            list_state.first_visible_item_index(),
+            index0,
+            "an already-visible caret must not scroll the list"
+        );
+        assert!(
+            (list_state.first_visible_item_scroll_offset() - offset0).abs() < 0.5,
+            "an already-visible caret must not scroll the list"
+        );
+
+        // A caret hidden behind a keyboard covering the bottom 250px (usable
+        // region 0..150) sitting at y=360 must scroll the list forward.
+        responder.bring_into_view(
+            Rect {
+                x: 10.0,
+                y: 360.0,
+                width: 2.0,
+                height: 20.0,
+            },
+            250.0,
+        );
+        run_layout(&mut composition, key, &mut content);
+        let scrolled_forward = list_state.first_visible_item_index() > index0
+            || list_state.first_visible_item_scroll_offset() > offset0 + 0.5;
+        assert!(
+            scrolled_forward,
+            "a caret behind the keyboard must scroll the list forward \
+             (index {} -> {}, offset {:.1} -> {:.1})",
+            index0,
+            list_state.first_visible_item_index(),
+            offset0,
+            list_state.first_visible_item_scroll_offset(),
+        );
     }
 }

@@ -186,6 +186,15 @@ fn replace_dirty_layers_from_applier(
                     .expect("dirty layer must have a node id"),
                 parent.motion_context_animated,
                 child_inherited_translated_content_context,
+                // Resolve live window origins in the dirty subtree from the (clean)
+                // parent's remembered child origin, so a `BasicTextField`'s
+                // `node_origin` — and thus its overlay selection-handle / menu
+                // `Popup`s — stay glued to the glyphs during a fling (which
+                // rebuilds only the scrolling subtree, not the whole tree).
+                Some(AbsOrigin {
+                    content_origin: parent.scene_children_origin,
+                    layer_translation: parent.scene_children_layer_translation,
+                }),
             )?;
             if parent.content_offset != Point::default() {
                 replacement.transform_to_parent =
@@ -379,6 +388,12 @@ fn build_layer_node_internal(
         } else {
             Point::default()
         },
+        // The `LayoutBox` snapshot path does not carry live window origins (the
+        // app runtime uses the applier path instead), so leave these at the
+        // identity — origin sinks in this path are written by the layout `place`
+        // pass.
+        scene_children_origin: Point::default(),
+        scene_children_layer_translation: Point::default(),
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -392,6 +407,29 @@ fn build_layer_node_internal(
     }
 }
 
+/// The composited window-space origin accumulated for a node while walking the
+/// render graph. `content_origin` is where this node's own top-left sits before
+/// its graphics-layer translation; `layer_translation` is the accumulated
+/// ancestor graphics-layer translation. Mirrors the layout `place` pass, but is
+/// computed during the per-frame scene build (which is the only pass that runs
+/// in the app runtime — `build_layout_tree` is disabled there) so a scrolling
+/// field's window-origin / a scroll container's viewport-rect sinks stay live
+/// even during a fling (no re-layout, no pointer events). `None` in the partial
+/// (dirty-subtree) rebuild path, where the ancestor origin is not known — the
+/// sinks then keep their last full-build value rather than being corrupted.
+#[derive(Clone, Copy)]
+struct AbsOrigin {
+    content_origin: Point,
+    layer_translation: Point,
+}
+
+impl AbsOrigin {
+    const ROOT: AbsOrigin = AbsOrigin {
+        content_origin: Point { x: 0.0, y: 0.0 },
+        layer_translation: Point { x: 0.0, y: 0.0 },
+    };
+}
+
 fn build_layer_node_from_applier(
     applier: &mut MemoryApplier,
     node_id: NodeId,
@@ -403,6 +441,7 @@ fn build_layer_node_from_applier(
         node_id,
         inherited_motion_context_animated,
         false,
+        Some(AbsOrigin::ROOT),
     )
 }
 
@@ -411,6 +450,7 @@ fn build_layer_node_from_applier_internal(
     node_id: NodeId,
     inherited_motion_context_animated: bool,
     inherited_translated_content_context: bool,
+    parent_abs: Option<AbsOrigin>,
 ) -> Option<LayerNode> {
     if let Ok(data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
         let state = node.layout_state();
@@ -429,6 +469,7 @@ fn build_layer_node_from_applier_internal(
             data,
             inherited_motion_context_animated,
             inherited_translated_content_context,
+            parent_abs,
         );
     }
 
@@ -449,6 +490,7 @@ fn build_layer_node_from_applier_internal(
             data,
             inherited_motion_context_animated,
             inherited_translated_content_context,
+            parent_abs,
         );
     }
 
@@ -461,6 +503,7 @@ fn build_layer_node_from_data(
     data: SnapshotNodeData,
     inherited_motion_context_animated: bool,
     inherited_translated_content_context: bool,
+    parent_abs: Option<AbsOrigin>,
 ) -> Option<LayerNode> {
     let SnapshotNodeData {
         layout_state,
@@ -512,6 +555,67 @@ fn build_layer_node_from_data(
     let child_translated_content_context =
         inherited_translated_content_context || local_translated_content_context;
 
+    // Publish this node's LIVE composited window origin during the per-frame
+    // scene build. This is the only pass that runs in the app runtime
+    // (`build_layout_tree` is disabled there), and it uses `local_translated_
+    // content_offset` — the SAME live scroll/graphics-layer translation the
+    // renderer applies to the content — so:
+    //  * a `BasicTextField`'s `node_origin` (read by its draw closure to anchor
+    //    the overlay selection-handle / context-menu `Popup`s) tracks the field
+    //    through a fling, even though the in-content caret/highlight already
+    //    follow via the layer transform; and
+    //  * a scroll container's viewport rect is known for its
+    //    `BringIntoViewResponder`.
+    // `parent_abs` is `None` in the partial (dirty-subtree) rebuild path where
+    // the ancestor origin is unknown; the sinks then keep their last full-build
+    // value instead of being written wrong.
+    let this_abs = parent_abs.map(|parent| {
+        let (tx, ty) = modifier_slices
+            .graphics_layer()
+            .map(|layer| (layer.translation_x, layer.translation_y))
+            .unwrap_or((0.0, 0.0));
+        let top_left = Point {
+            x: parent.content_origin.x + layout_state.position.x,
+            y: parent.content_origin.y + layout_state.position.y,
+        };
+        let layer_translation = Point {
+            x: parent.layer_translation.x + tx,
+            y: parent.layer_translation.y + ty,
+        };
+        (top_left, layer_translation)
+    });
+    if let Some((top_left, layer_translation)) = this_abs {
+        let window_origin = Point {
+            x: top_left.x + layer_translation.x,
+            y: top_left.y + layer_translation.y,
+        };
+        if let Some(sink) = modifier_slices.text_field_window_origin() {
+            sink.set(window_origin);
+        }
+        if let Some(sink) = modifier_slices.viewport_window_rect() {
+            sink.set(Rect {
+                x: window_origin.x,
+                y: window_origin.y,
+                width: layout_state.size.width,
+                height: layout_state.size.height,
+            });
+        }
+    }
+    // Children inherit this node's content origin plus its `content_offset` —
+    // the SAME translation this build applies to child layer transforms below
+    // (a `LazyColumn`/`vertical_scroll` bakes the live scroll into its children's
+    // placement, so this tracks the scroll frame-to-frame). Using the layout
+    // content offset (not the snap-anchor `translated_content_offset`, which is
+    // a raster pixel-snap detail) keeps `node_origin` exactly on the rendered
+    // glyphs, so the overlay handle/menu `Popup`s stay glued to the text.
+    let child_abs = this_abs.map(|(top_left, layer_translation)| AbsOrigin {
+        content_origin: Point {
+            x: top_left.x + layout_state.content_offset.x,
+            y: top_left.y + layout_state.content_offset.y,
+        },
+        layer_translation,
+    });
+
     let mut render_children = draw_nodes(
         modifier_slices.draw_commands(),
         DrawPlacement::Behind,
@@ -545,6 +649,7 @@ fn build_layer_node_from_data(
             child_id,
             child_motion_context_animated,
             child_translated_content_context,
+            child_abs,
         ) else {
             continue;
         };
@@ -583,6 +688,13 @@ fn build_layer_node_from_data(
         } else {
             Point::default()
         },
+        // Remember where this layer places its children so a later partial
+        // rebuild of a dirty descendant subtree can resolve live window origins
+        // without re-walking from the root (see `AbsOrigin`).
+        scene_children_origin: child_abs.map(|c| c.content_origin).unwrap_or_default(),
+        scene_children_layer_translation: child_abs
+            .map(|c| c.layer_translation)
+            .unwrap_or_default(),
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -1520,6 +1632,90 @@ mod tests {
                 .transform_to_parent,
             initial_transform,
             "draw-only child replacement must preserve the retained parent placement transform"
+        );
+    }
+
+    /// The per-frame scene build must publish a node's LIVE composited window
+    /// rect into its `report_window_rect` sink — even when the layout tree is
+    /// NOT built (`build_layout_tree: false`, exactly how the app runtime
+    /// measures). This is the mechanism both bug 2 (a scroll container's
+    /// `BringIntoViewResponder` viewport rect) and bug 3 (a text field's live
+    /// `node_origin`, which anchors the overlay selection-handle / menu popups)
+    /// rely on, since the layout `place` pass never runs in the runtime.
+    #[test]
+    fn scene_build_publishes_live_window_rect_without_layout_tree() {
+        use cranpose_ui::{measure_layout_with_options, Box, BoxSpec, MeasureLayoutOptions};
+        use std::cell::Cell;
+
+        let spacer_before = 120.0_f32;
+        let sink: Rc<Cell<Rect>> = Rc::new(Cell::new(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }));
+        let sink_for_comp = sink.clone();
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let sink = sink_for_comp.clone();
+            Column(
+                Modifier::empty().size_points(200.0, 400.0),
+                ColumnSpec::default(),
+                move || {
+                    Spacer(Size {
+                        width: 200.0,
+                        height: spacer_before,
+                    });
+                    Box(
+                        Modifier::empty()
+                            .size_points(200.0, 50.0)
+                            .report_window_rect(sink.clone()),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 200.0,
+            height: 400.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        // Measure like the runtime: DO NOT build the layout tree, so the layout
+        // `place` pass never writes the sink. Only the scene build can.
+        measure_layout_with_options(
+            &mut applier,
+            root,
+            viewport,
+            MeasureLayoutOptions {
+                collect_semantics: false,
+                build_layout_tree: false,
+            },
+        )
+        .expect("layout");
+        // Sanity: nothing has written the sink yet.
+        assert_eq!(
+            sink.get().height,
+            0.0,
+            "sink must start empty (place disabled)"
+        );
+
+        let _graph = build_graph_from_applier(&mut applier, root, 1.0).expect("scene graph");
+        applier.clear_runtime_handle();
+
+        let rect = sink.get();
+        assert!(
+            (rect.y - spacer_before).abs() < 0.5,
+            "scene build must publish the box's live window-y (below the {spacer_before}px \
+             spacer), got {}",
+            rect.y
+        );
+        assert!(
+            rect.width > 0.0 && rect.height > 0.0,
+            "scene build must publish a non-empty window rect, got {rect:?}"
         );
     }
 

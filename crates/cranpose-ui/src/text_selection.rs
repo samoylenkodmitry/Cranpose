@@ -9,8 +9,6 @@
 //! Keeping these as free functions makes the touch behavior testable without a
 //! renderer and keeps `TextFieldModifierNode` focused on wiring.
 
-use cranpose_ui_graphics::Rect;
-
 /// How many consecutive taps a press represents, mirroring the platform text
 /// selection gestures: one tap places the cursor, two select the word, three
 /// select the line/paragraph.
@@ -103,7 +101,7 @@ pub fn find_line_boundaries(text: &str, pos: usize) -> (usize, usize) {
 }
 
 /// Which selection handle a teardrop represents.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HandleKind {
     /// The blinking-cursor handle shown for a collapsed selection: a teardrop
     /// whose tip points up at the cursor, centered under it.
@@ -116,9 +114,6 @@ pub enum HandleKind {
 
 /// Radius of a selection/cursor handle bulb in px (Android uses ~11dp).
 pub const HANDLE_RADIUS: f32 = 8.0;
-
-/// Extra hit-test slop (px) around a handle so it is easy to grab with a finger.
-pub const HANDLE_TOUCH_SLOP: f32 = 12.0;
 
 /// SVG path data for a handle teardrop whose tip sits at `(tip_x, tip_y)`.
 ///
@@ -138,76 +133,39 @@ pub fn handle_path_data(kind: HandleKind, tip_x: f32, tip_y: f32, radius: f32) -
             )
         }
         HandleKind::SelectionStart => {
-            // Tip at the endpoint, bulb hanging down and to the LEFT.
+            // Android start (left) handle: the point sits at the TOP-RIGHT
+            // (touching the selection start) with a straight vertical right edge,
+            // and the round bulb hangs down and to the LEFT. Traced tip → straight
+            // down the right edge → arc round to the left → back to the tip.
             format!(
                 "M {tip_x} {tip_y} L {tip_x} {cy} A {r} {r} 0 1 0 {left} {tip_y} Z",
                 left = tip_x - r,
             )
         }
         HandleKind::SelectionEnd => {
-            // Tip at the endpoint, bulb hanging down and to the RIGHT.
+            // Android end (right) handle: the exact mirror of the start handle —
+            // the point sits at the TOP-LEFT (touching the selection end) with a
+            // straight vertical left edge, and the round bulb hangs down and to
+            // the RIGHT. Same trace as the start handle with the arc swept the
+            // other way so it is a true reflection (not rotated).
             format!(
-                "M {tip_x} {tip_y} L {right} {tip_y} A {r} {r} 0 1 0 {tip_x} {cy} Z",
+                "M {tip_x} {tip_y} L {tip_x} {cy} A {r} {r} 0 1 1 {right} {tip_y} Z",
                 right = tip_x + r,
             )
         }
     }
 }
 
-/// Extra padding (px) added around a handle's drawn teardrop to enlarge the
-/// finger touch target, matching Android's generous handle hit area.
-pub const HANDLE_TOUCH_PADDING: f32 = 12.0;
-
-/// The axis-aligned hit region for a handle, expanded by touch slop, used to
-/// decide whether a pointer-down grabbed a handle.
-pub fn handle_hit_rect(kind: HandleKind, tip_x: f32, tip_y: f32, radius: f32, slop: f32) -> Rect {
-    let r = radius.max(0.0);
-    let slop = slop.max(0.0);
-    // Horizontal span of the bulb relative to the tip depends on the handle side.
-    let (left, right) = match kind {
-        HandleKind::Cursor => (tip_x - r, tip_x + r),
-        HandleKind::SelectionStart => (tip_x - 2.0 * r, tip_x + r),
-        HandleKind::SelectionEnd => (tip_x - r, tip_x + 2.0 * r),
-    };
-    Rect {
-        x: left - slop,
-        y: tip_y - slop,
-        width: (right - left) + 2.0 * slop,
-        height: 2.0 * r + 2.0 * slop,
-    }
-}
-
-/// Returns the handle nearest to `(x, y)` whose slop-expanded hit region
-/// contains the point, or `None` when the point misses every handle.
-///
-/// `handles` lists the currently drawn handles as `(kind, tip_x, tip_y)`.
-pub fn hit_test_handles(
-    handles: &[(HandleKind, f32, f32)],
-    x: f32,
-    y: f32,
-    radius: f32,
-    slop: f32,
-) -> Option<HandleKind> {
-    let mut best: Option<(HandleKind, f32)> = None;
-    for &(kind, tip_x, tip_y) in handles {
-        let rect = handle_hit_rect(kind, tip_x, tip_y, radius, slop);
-        let inside =
-            x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
-        if !inside {
-            continue;
-        }
-        let cx = tip_x;
-        let cy = tip_y + radius;
-        let dist_sq = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-        if best
-            .map(|(_, best_dist)| dist_sq < best_dist)
-            .unwrap_or(true)
-        {
-            best = Some((kind, dist_sq));
-        }
-    }
-    best.map(|(kind, _)| kind)
-}
+/// Finger-sized grab slop (px) added around a handle's drawn teardrop to enlarge
+/// its touch target, matching Android's generous handle hit area. A bare
+/// teardrop (~2·[`HANDLE_RADIUS`] across) is far smaller than a fingertip, so a
+/// touch-DOWN aimed at a handle routinely lands a few px off it; without this
+/// slop the press falls through to the field below and places a caret, which
+/// collapses the selection. The slop is applied to the sides and BELOW the tip
+/// (where the bulb and the grabbing finger sit) but never ABOVE the tip — see
+/// [`crate::widgets::selection_handle`], which keeps the box off the glyph line
+/// so a double-tap still reaches the field to escalate into a word selection.
+pub const HANDLE_GRAB_SLOP: f32 = 24.0;
 
 /// Computes the selection `(min, max)` that results from dragging one handle to
 /// a new text `offset`, keeping the opposite (fixed) edge anchored.
@@ -351,45 +309,6 @@ mod tests {
             // The bulb hangs below the tip.
             assert!(bounds.y + bounds.height >= 20.0 + HANDLE_RADIUS);
         }
-    }
-
-    #[test]
-    fn handle_hit_rect_covers_tip_and_bulb_with_slop() {
-        let rect = handle_hit_rect(
-            HandleKind::Cursor,
-            40.0,
-            20.0,
-            HANDLE_RADIUS,
-            HANDLE_TOUCH_SLOP,
-        );
-        // Tip and bulb center are inside.
-        assert!(rect.x <= 40.0 && 40.0 <= rect.x + rect.width);
-        assert!(rect.y <= 20.0 && 20.0 + HANDLE_RADIUS <= rect.y + rect.height);
-        // Slop widens the region beyond the bulb radius.
-        assert!(rect.width >= 2.0 * HANDLE_RADIUS + 2.0 * HANDLE_TOUCH_SLOP - 0.01);
-    }
-
-    #[test]
-    fn hit_test_prefers_the_nearest_handle() {
-        let handles = [
-            (HandleKind::SelectionStart, 20.0, 20.0),
-            (HandleKind::SelectionEnd, 120.0, 20.0),
-        ];
-        // Near the start handle bulb.
-        assert_eq!(
-            hit_test_handles(&handles, 20.0, 28.0, HANDLE_RADIUS, HANDLE_TOUCH_SLOP),
-            Some(HandleKind::SelectionStart)
-        );
-        // Near the end handle bulb.
-        assert_eq!(
-            hit_test_handles(&handles, 120.0, 28.0, HANDLE_RADIUS, HANDLE_TOUCH_SLOP),
-            Some(HandleKind::SelectionEnd)
-        );
-        // Far from both.
-        assert_eq!(
-            hit_test_handles(&handles, 300.0, 300.0, HANDLE_RADIUS, HANDLE_TOUCH_SLOP),
-            None
-        );
     }
 
     #[test]

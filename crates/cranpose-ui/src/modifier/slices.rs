@@ -11,7 +11,7 @@ use crate::modifier::scroll::{MotionContextAnimatedNode, TranslatedContentContex
 use crate::modifier::Modifier;
 use crate::modifier_nodes::{
     BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
-    PaddingNode,
+    PaddingNode, WindowRectReporterNode,
 };
 use crate::text::{TextLayoutOptions, TextStyle};
 use crate::text_field_modifier_node::{TextFieldModifierNode, TextPanResolver};
@@ -40,6 +40,12 @@ pub struct ModifierNodeSlices {
     /// translation) so the field's finger selection handles follow the field as
     /// a `LazyColumn`/`vertical_scroll` scrolls. `None` for non-text-field nodes.
     text_field_window_origin: Option<Rc<std::cell::Cell<Point>>>,
+    /// Write target for a scroll container's composited window rect (viewport
+    /// bounds in window coordinates). The layout `place` pass writes the node's
+    /// true on-screen rect here so a `BringIntoViewResponder` can scroll a
+    /// focused descendant field's caret above the soft keyboard. `None` for
+    /// nodes without a `report_window_rect` modifier.
+    viewport_window_rect: Option<Rc<std::cell::Cell<cranpose_ui_graphics::Rect>>>,
     graphics_layer: Option<GraphicsLayer>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     corner_shape: Option<RoundedCornerShape>,
@@ -84,6 +90,7 @@ impl Clone for ModifierNodeSlices {
             prepared_text_layout: self.prepared_text_layout.clone(),
             text_pan: self.text_pan.clone(),
             text_field_window_origin: self.text_field_window_origin.clone(),
+            viewport_window_rect: self.viewport_window_rect.clone(),
             graphics_layer: self.graphics_layer.clone(),
             graphics_layer_resolver: self.graphics_layer_resolver.clone(),
             corner_shape: self.corner_shape,
@@ -229,6 +236,14 @@ impl ModifierNodeSlices {
     /// across scroll. See [`ModifierNodeSlices::text_field_window_origin`].
     pub fn text_field_window_origin(&self) -> Option<Rc<std::cell::Cell<Point>>> {
         self.text_field_window_origin.clone()
+    }
+
+    /// The write target for a scroll container's composited window rect, if this
+    /// node carries a `report_window_rect` modifier. The layout pass writes the
+    /// node's true on-screen viewport rect here so a `BringIntoViewResponder`
+    /// can scroll a focused field's caret above the soft keyboard.
+    pub fn viewport_window_rect(&self) -> Option<Rc<std::cell::Cell<cranpose_ui_graphics::Rect>>> {
+        self.viewport_window_rect.clone()
     }
 
     pub fn prepare_text_layout(
@@ -482,6 +497,13 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
                 if let Some(motion_context_node) = any.downcast_ref::<MotionContextAnimatedNode>() {
                     slices.motion_context_animated = motion_context_node.is_active();
+                }
+
+                if let Some(reporter) = any.downcast_ref::<WindowRectReporterNode>() {
+                    // Scroll container's viewport-rect sink: the layout `place`
+                    // pass fills it so a `BringIntoViewResponder` knows the
+                    // visible bounds (window coordinates).
+                    slices.viewport_window_rect = Some(reporter.window_rect_sink());
                 }
 
                 if let Some(translated_content_node) =

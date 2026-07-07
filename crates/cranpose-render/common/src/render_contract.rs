@@ -469,6 +469,8 @@ fn graph_layer(
         motion_context_animated: false,
         translated_content_context: false,
         translated_content_offset: Point::default(),
+        scene_children_origin: Point::default(),
+        scene_children_layer_translation: Point::default(),
         graphics_layer: GraphicsLayer::default(),
         clip_to_bounds: false,
         shadow_clip: None,

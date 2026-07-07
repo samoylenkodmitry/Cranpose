@@ -8,6 +8,7 @@ pub use cranpose_macros::composable;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
+pub mod bring_into_view;
 pub mod clipboard_session;
 mod cursor_animation;
 mod debug;
@@ -53,6 +54,9 @@ pub use cursor_animation::{
     stop_cursor_blink, tick_cursor_blink,
 };
 
+pub use bring_into_view::{
+    local_bring_into_view_responder, scroll_delta_to_reveal, BringIntoViewResponder,
+};
 pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap, ImageSampling};
 pub use cranpose_ui_layout::IntrinsicSize;
 pub use draw::{execute_draw_commands, DrawCacheBuilder, DrawCommand};
