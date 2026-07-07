@@ -303,6 +303,26 @@ mod tests {
     }
 
     #[test]
+    fn cold_start_with_no_focus_does_not_show_the_keyboard() {
+        // Bug 5: on a fresh launch the platform runtime calls `notify_app_resumed`
+        // once and only re-shows the keyboard when a field is actually focused.
+        // With nothing focused (a brand-new app context, e.g. a cold restart) it
+        // must return false and never call `show`, so the runtime knows to force
+        // the OS-restored keyboard hidden instead.
+        let _app_context = crate::render_state::app_context_test_scope();
+        let handler = install_recording_handler();
+
+        assert!(
+            !notify_app_resumed(),
+            "a launch with no focused field must not re-open the keyboard"
+        );
+        assert!(
+            handler.calls.borrow().is_empty(),
+            "no platform show/hide should be requested for an unfocused cold start"
+        );
+    }
+
+    #[test]
     fn pause_is_a_noop_when_the_keyboard_was_not_showing() {
         let _app_context = crate::render_state::app_context_test_scope();
         let handler = install_recording_handler();

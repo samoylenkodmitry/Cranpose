@@ -1663,6 +1663,17 @@ pub fn run(
                 ))));
                 soft_keyboard_installed = true;
                 log::info!("Android soft keyboard focus hook installed");
+
+                // Cold-start guard (bug 5): on a fresh launch the OS can restore
+                // the soft keyboard left over from the previous process — even on
+                // a screen with no text field. Re-request it only if a field is
+                // genuinely focused this launch; otherwise force it hidden so the
+                // keyboard does not resurrect on relaunch. `notify_app_resumed`
+                // returns whether a focused field re-opened it.
+                if !shell.notify_app_resumed() {
+                    ime_session.ensure_hidden();
+                    log::info!("No focused field at launch; ensured soft keyboard hidden");
+                }
             }
         }
 

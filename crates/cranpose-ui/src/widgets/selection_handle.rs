@@ -391,14 +391,15 @@ mod tests {
     }
 
     /// Reproduces the reported start-vs-end asymmetry as a guard: the start and
-    /// end selection handles point in opposite directions, so a bug that offset
-    /// one hit-box the wrong way would make that handle harder to grab. Their
-    /// grab regions must be mirror images about their (shared-x) tips — i.e.
-    /// each tip sits at the horizontal centre of its own grab box, and the two
-    /// boxes are the same size — so neither handle collapses the selection on a
+    /// end selection handles point in opposite directions (their bulbs hang to
+    /// opposite sides of the shared tip), so a bug that offset one hit-box the
+    /// wrong way would make that handle harder to grab. Their grab regions must
+    /// be mirror images **of each other** about the tip — the start box reaches
+    /// as far LEFT of the tip as the end box reaches RIGHT (over the bulb), and
+    /// both are the same size — so neither handle collapses the selection on a
     /// near-miss while the other drags fine.
     #[test]
-    fn start_and_end_grab_regions_are_symmetric_about_their_tips() {
+    fn start_and_end_grab_regions_are_mirror_images() {
         let tip = Point { x: 100.0, y: 100.0 };
         let start = handle_grab_rect(HandleKind::SelectionStart, tip, HANDLE_RADIUS);
         let end = handle_grab_rect(HandleKind::SelectionEnd, tip, HANDLE_RADIUS);
@@ -408,21 +409,26 @@ mod tests {
             (start.width - end.width).abs() < 0.01 && (start.height - end.height).abs() < 0.01,
             "start {start:?} and end {end:?} grab boxes must be the same size"
         );
-        // Each tip is horizontally centred in its own box, so the box extends
-        // equally toward and away from the bulb — the left extent of one mirrors
-        // the right extent of the other.
-        for (kind, rect) in [
-            (HandleKind::SelectionStart, start),
-            (HandleKind::SelectionEnd, end),
-        ] {
-            let left = tip.x - rect.x;
-            let right = (rect.x + rect.width) - tip.x;
-            assert!(
-                (left - right).abs() < 0.01,
-                "{kind:?}: tip must sit at the horizontal centre of its grab box \
-                 (left extent {left}, right extent {right})"
-            );
-        }
+
+        let start_left = tip.x - start.x;
+        let start_right = (start.x + start.width) - tip.x;
+        let end_left = tip.x - end.x;
+        let end_right = (end.x + end.width) - tip.x;
+
+        // Each box extends toward its bulb (start left, end right) by the same
+        // amount, and away from it by the same smaller amount — the boxes are
+        // reflections of one another.
+        assert!(
+            (start_left - end_right).abs() < 0.01 && (start_right - end_left).abs() < 0.01,
+            "start (l={start_left}, r={start_right}) and end (l={end_left}, r={end_right}) \
+             grab boxes must be horizontal mirror images"
+        );
+        // Sanity: the box genuinely reaches over the bulb (a full diameter to the
+        // handle's own side) so the bulb is grabbable.
+        assert!(
+            start_left >= 2.0 * HANDLE_RADIUS && end_right >= 2.0 * HANDLE_RADIUS,
+            "each grab box must extend a full bulb-diameter toward its bulb"
+        );
     }
 
     /// A touch-DOWN a finger's width to either side of, and below, a handle tip
