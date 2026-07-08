@@ -438,6 +438,8 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     crate::ios_file_picker::register();
     crate::ios_uri_handler::register();
     crate::ios_share_sheet::register();
+    crate::ios_image_picker::register();
+    crate::ios_notifier::register();
 
     let event_loop = EventLoop::builder()
         .build()
