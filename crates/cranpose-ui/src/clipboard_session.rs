@@ -58,6 +58,10 @@ impl ClipboardSessionState {
             self.fallback.borrow().clone()
         }
     }
+
+    fn has_platform(&self) -> bool {
+        self.platform.borrow().is_some()
+    }
 }
 
 /// Installs the platform OS clipboard for the current app context, replacing any
@@ -81,4 +85,110 @@ pub fn clipboard_write_text(text: &str) {
 /// Reads the clipboard's text, or `None` when empty/unavailable.
 pub fn clipboard_read_text() -> Option<String> {
     crate::render_state::with_clipboard_session(|state| state.read())
+}
+
+/// Whether a real OS clipboard is installed for the current app context (as
+/// opposed to the in-process fallback used in headless tests or on platforms
+/// with no clipboard backend registered).
+pub fn has_platform_clipboard() -> bool {
+    crate::render_state::with_clipboard_session(|state| state.has_platform())
+}
+
+/// A Compose-style handle to the system clipboard — the framework analogue of
+/// Jetpack Compose's `LocalClipboardManager`. Obtain it from
+/// [`local_clipboard`] during composition, then read/write it (typically from an
+/// event handler):
+///
+/// ```ignore
+/// let clipboard = local_clipboard().current();
+/// Button(Modifier::empty(), move || clipboard.set_text("copied!"), || Text("Copy"));
+/// ```
+///
+/// It reads and writes through the app's clipboard session, so it targets the
+/// installed platform clipboard (UIPasteboard, arboard, …) when present and an
+/// in-process fallback otherwise.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub struct ClipboardManager;
+
+impl ClipboardManager {
+    /// Writes `text` to the clipboard.
+    pub fn set_text(&self, text: &str) {
+        clipboard_write_text(text);
+    }
+
+    /// Reads the clipboard's text, or `None` when empty/unavailable.
+    pub fn text(&self) -> Option<String> {
+        clipboard_read_text()
+    }
+
+    /// Whether writes reach a real OS clipboard (vs the in-process fallback).
+    pub fn has_system_clipboard(&self) -> bool {
+        has_platform_clipboard()
+    }
+}
+
+/// CompositionLocal carrying the [`ClipboardManager`]. The same instance is
+/// returned on every call (cached per thread), matching `local_uri_handler` and
+/// the insets locals.
+pub fn local_clipboard() -> cranpose_core::CompositionLocal<ClipboardManager> {
+    thread_local! {
+        static LOCAL_CLIPBOARD: RefCell<Option<cranpose_core::CompositionLocal<ClipboardManager>>> =
+            const { RefCell::new(None) };
+    }
+
+    LOCAL_CLIPBOARD.with(|cell| {
+        cell.borrow_mut()
+            .get_or_insert_with(|| cranpose_core::compositionLocalOf(ClipboardManager::default))
+            .clone()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    struct RecordingClipboard {
+        value: RefCell<Option<String>>,
+    }
+
+    impl PlatformClipboard for RecordingClipboard {
+        fn write_text(&self, text: &str) {
+            *self.value.borrow_mut() = Some(text.to_string());
+        }
+        fn read_text(&self) -> Option<String> {
+            self.value.borrow().clone()
+        }
+    }
+
+    #[test]
+    fn manager_uses_in_process_fallback_without_a_platform_clipboard() {
+        let context = crate::render_state::AppContext::new();
+        context.enter(|| {
+            let clipboard = ClipboardManager;
+            assert!(!clipboard.has_system_clipboard());
+            clipboard.set_text("hello");
+            assert_eq!(clipboard.text().as_deref(), Some("hello"));
+        });
+    }
+
+    #[test]
+    fn manager_routes_through_the_installed_platform_clipboard() {
+        let context = crate::render_state::AppContext::new();
+        context.enter(|| {
+            let recorder = Rc::new(RecordingClipboard {
+                value: RefCell::new(None),
+            });
+            set_platform_clipboard(recorder.clone());
+
+            let clipboard = ClipboardManager;
+            assert!(clipboard.has_system_clipboard());
+            clipboard.set_text("world");
+            assert_eq!(recorder.value.borrow().as_deref(), Some("world"));
+            assert_eq!(clipboard.text().as_deref(), Some("world"));
+
+            clear_platform_clipboard();
+            assert!(!clipboard.has_system_clipboard());
+        });
+    }
 }

@@ -491,6 +491,14 @@ where
         shell
     }
 
+    /// The shell's [`AppContext`](cranpose_ui::AppContext). Platform backends
+    /// use it to register per-context services (such as the OS clipboard) that
+    /// need UIKit/JNI access the shell itself does not have: enter the context
+    /// and call the relevant `set_platform_*` installer.
+    pub fn app_context(&self) -> &Rc<cranpose_ui::AppContext> {
+        &self.app_context
+    }
+
     /// Set development options for debugging and performance monitoring.
     ///
     /// The FPS counter and other overlays are rendered directly by the renderer

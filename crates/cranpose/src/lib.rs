@@ -132,6 +132,15 @@ pub mod ios;
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_file_picker;
 
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_uri_handler;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_clipboard;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_share_sheet;
+
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub mod recorder;
 

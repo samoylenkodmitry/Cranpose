@@ -9,6 +9,7 @@ pub mod file_picker;
 pub mod http;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer;
+pub mod share_sheet;
 pub mod theme;
 pub mod uri_handler;
 pub mod writable_folder;
@@ -28,12 +29,16 @@ pub use peer::{
     content_length, fetch_range, fetch_to_writer, ByteSource, BytesSource, FetchResult, PeerError,
     PeerServer, SourceResolver,
 };
+pub use share_sheet::{
+    clear_platform_share_sheet, default_share_sheet, local_share_sheet, set_platform_share_sheet,
+    ProvideShareSheet, ShareContent, ShareError, ShareSheet, ShareSheetRef,
+};
 pub use theme::{
     default_system_theme, isSystemInDarkTheme, local_system_theme, ProvideSystemTheme, SystemTheme,
 };
 pub use uri_handler::{
-    default_uri_handler, local_uri_handler, ProvideUriHandler, UriHandler, UriHandlerError,
-    UriHandlerRef,
+    clear_platform_uri_handler, default_uri_handler, local_uri_handler, set_platform_uri_handler,
+    ProvideUriHandler, UriHandler, UriHandlerError, UriHandlerRef,
 };
 pub use writable_folder::{
     clear_platform_writable_folder_picker, open_writable_folder, pick_writable_folder,

@@ -278,6 +278,14 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             density,
         );
 
+        // Route the selection menu's Copy/Cut/Paste through the iOS pasteboard.
+        // The clipboard is per-AppContext, so register it inside the shell's
+        // context (the global picker/URI handlers are registered before the
+        // event loop instead).
+        shell
+            .app_context()
+            .enter(|| crate::ios_clipboard::register());
+
         // Drive runtime-requested frames (animations, async results) through the
         // event-loop proxy. Calling `request_redraw` directly from the waker is
         // re-entrant with the in-progress redraw and winit-uikit coalesces it
@@ -426,9 +434,12 @@ fn ios_surface_config(
 ///
 /// Called by [`crate::AppLauncher::try_run`] on iOS.
 pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
-    // Register the iOS document picker as the platform file picker. Runs on the
-    // UIKit main thread, before any pick request can be issued.
+    // Register the iOS document picker as the platform file picker, and the
+    // UIApplication-based URI opener as the platform URI handler. Both run on
+    // the UIKit main thread, before any request can be issued.
     crate::ios_file_picker::register();
+    crate::ios_uri_handler::register();
+    crate::ios_share_sheet::register();
 
     let event_loop = EventLoop::builder()
         .build()
