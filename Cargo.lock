@@ -544,6 +544,7 @@ version = "0.1.44"
 dependencies = [
  "android-activity",
  "android_logger",
+ "block2",
  "console_error_panic_hook",
  "cranpose-app-shell",
  "cranpose-core",
@@ -562,6 +563,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-ui-kit",
  "objc2-uniform-type-identifiers",
+ "objc2-user-notifications",
  "pollster",
  "raw-window-handle",
  "thiserror 2.0.18",
@@ -2140,6 +2142,18 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7902ac02859fc1f7045f8b598c63f1ae0cc7efeaa06a9bc9f3d9a3c955974fa4"
 dependencies = [
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-user-notifications"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
+dependencies = [
+ "bitflags",
+ "block2",
  "objc2",
  "objc2-foundation",
 ]

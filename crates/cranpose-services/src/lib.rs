@@ -8,6 +8,7 @@ use cranpose_core::{location_key, Composition, MemoryApplier};
 pub mod file_picker;
 pub mod http;
 pub mod image_picker;
+pub mod notifier;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer;
 pub mod share_sheet;
@@ -29,6 +30,10 @@ pub use image_picker::{
     clear_platform_image_picker, default_image_picker, local_image_picker,
     set_platform_image_picker, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
     ProvideImagePicker, IMAGE_EXTENSIONS,
+};
+pub use notifier::{
+    clear_platform_notifier, default_notifier, local_notifier, set_platform_notifier, Notifier,
+    NotifierRef, NotifyRequest, ProvideNotifier,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use peer::{

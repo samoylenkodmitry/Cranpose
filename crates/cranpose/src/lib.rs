@@ -144,6 +144,9 @@ mod ios_share_sheet;
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_image_picker;
 
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_notifier;
+
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub mod recorder;
 

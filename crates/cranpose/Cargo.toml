@@ -60,6 +60,8 @@ ios = [
     "dep:objc2-foundation",
     "dep:objc2-ui-kit",
     "dep:objc2-uniform-type-identifiers",
+    "dep:objc2-user-notifications",
+    "dep:block2",
 ]
 android = [
     "cranpose-platform-android",
@@ -209,6 +211,17 @@ objc2-uniform-type-identifiers = { version = "0.3", default-features = false, op
     "std",
     "UTCoreTypes",
     "UTType",
+] }
+block2 = { version = "0.6", optional = true }
+objc2-user-notifications = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "UNUserNotificationCenter",
+    "UNNotificationRequest",
+    "UNNotificationContent",
+    "UNNotificationSound",
+    "UNNotificationTrigger",
+    "UNError",
 ] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos"), not(target_os = "ios")))'.dependencies]
