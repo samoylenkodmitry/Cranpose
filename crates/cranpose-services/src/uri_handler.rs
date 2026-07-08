@@ -28,10 +28,38 @@ pub trait UriHandler {
 
 pub type UriHandlerRef = Rc<dyn UriHandler>;
 
+thread_local! {
+    static PLATFORM_URI_HANDLER: RefCell<Option<UriHandlerRef>> = const { RefCell::new(None) };
+}
+
+/// Installs a platform URI handler, replacing any previously installed one.
+///
+/// Registered handlers take precedence over the built-in per-platform opener,
+/// so a backend with main-thread UIKit access can open links the app sandbox
+/// forbids launching through a subprocess. The iOS backend registers a
+/// `UIApplication`-based opener this way (see `cranpose::ios`), because
+/// spawning `open`/`xdg-open` is not available inside the iOS sandbox.
+pub fn set_platform_uri_handler(handler: UriHandlerRef) {
+    PLATFORM_URI_HANDLER.with(|cell| *cell.borrow_mut() = Some(handler));
+}
+
+/// Removes any registered platform URI handler (tests and teardown).
+pub fn clear_platform_uri_handler() {
+    PLATFORM_URI_HANDLER.with(|cell| *cell.borrow_mut() = None);
+}
+
+fn registered_platform_uri_handler() -> Option<UriHandlerRef> {
+    PLATFORM_URI_HANDLER.with(|cell| cell.borrow().clone())
+}
+
 struct PlatformUriHandler;
 
 impl UriHandler for PlatformUriHandler {
     fn open_uri(&self, uri: &str) -> Result<(), UriHandlerError> {
+        if let Some(handler) = registered_platform_uri_handler() {
+            return handler.open_uri(uri);
+        }
+
         #[cfg(all(
             not(target_arch = "wasm32"),
             not(target_os = "android"),

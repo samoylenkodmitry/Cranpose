@@ -179,7 +179,7 @@ fn content_types(kind: PickedKind) -> Retained<NSArray<UTType>> {
     NSArray::from_slice(&[ty])
 }
 
-fn root_view_controller(mtm: MainThreadMarker) -> Option<Retained<UIViewController>> {
+pub(crate) fn root_view_controller(mtm: MainThreadMarker) -> Option<Retained<UIViewController>> {
     let app = UIApplication::sharedApplication(mtm);
     let scenes = app.connectedScenes();
     for scene in scenes.iter() {
