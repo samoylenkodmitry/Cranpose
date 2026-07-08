@@ -32,9 +32,8 @@ impl UriHandler for IosUriHandler {
         };
 
         let string = NSString::from_str(uri);
-        // SAFETY: `URLWithString:` is a pure constructor over the immutable
-        // string; it returns nil for an unparseable URL, handled below.
-        let url = unsafe { NSURL::URLWithString(&string) }
+        // `URLWithString:` returns nil for an unparseable URL, handled below.
+        let url = NSURL::URLWithString(&string)
             .ok_or_else(|| UriHandlerError::OpenFailed(format!("invalid URL: {uri}")))?;
 
         let app = UIApplication::sharedApplication(mtm);

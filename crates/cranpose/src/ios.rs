@@ -282,9 +282,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         // The clipboard is per-AppContext, so register it inside the shell's
         // context (the global picker/URI handlers are registered before the
         // event loop instead).
-        shell
-            .app_context()
-            .enter(|| crate::ios_clipboard::register());
+        shell.app_context().enter(crate::ios_clipboard::register);
 
         // Drive runtime-requested frames (animations, async results) through the
         // event-loop proxy. Calling `request_redraw` directly from the waker is

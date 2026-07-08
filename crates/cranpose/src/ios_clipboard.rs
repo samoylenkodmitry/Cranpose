@@ -22,15 +22,14 @@ struct IosClipboard;
 impl PlatformClipboard for IosClipboard {
     fn write_text(&self, text: &str) {
         let string = NSString::from_str(text);
-        // SAFETY: the general pasteboard is process-wide; writing a string is a
-        // simple property set with no aliasing concerns.
-        let pasteboard = unsafe { UIPasteboard::generalPasteboard() };
+        let pasteboard = UIPasteboard::generalPasteboard();
+        // SAFETY: writing a string to the process-wide general pasteboard.
         unsafe { pasteboard.setString(Some(&string)) };
     }
 
     fn read_text(&self) -> Option<String> {
+        let pasteboard = UIPasteboard::generalPasteboard();
         // SAFETY: reading the general pasteboard's string property.
-        let pasteboard = unsafe { UIPasteboard::generalPasteboard() };
         let string = unsafe { pasteboard.string() }?;
         Some(string.to_string())
     }

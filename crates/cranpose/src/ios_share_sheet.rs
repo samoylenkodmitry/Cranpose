@@ -9,7 +9,7 @@
 use cranpose_services::{set_platform_share_sheet, ShareContent, ShareError, ShareSheet};
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_foundation::{NSArray, NSString, NSURL};
+use objc2_foundation::{NSArray, NSString, NSTemporaryDirectory, NSURL};
 use objc2_ui_kit::{UIActivityViewController, UIViewController};
 use std::rc::Rc;
 
@@ -28,13 +28,14 @@ impl ShareSheet for IosShareSheet {
             ));
         };
 
-        // Stage the payload to a temp file whose name the receiving app sees.
-        let path = std::env::temp_dir().join(&content.file_name);
+        // Stage the payload in the app's temporary directory under a name the
+        // receiving app sees.
+        let tmp_dir = NSTemporaryDirectory().to_string();
+        let path = std::path::Path::new(&tmp_dir).join(&content.file_name);
         std::fs::write(&path, &content.bytes)
             .map_err(|error| ShareError::Failed(format!("staging shared file: {error}")))?;
         let ns_path = NSString::from_str(&path.to_string_lossy());
-        // SAFETY: `fileURLWithPath:` wraps an immutable path string.
-        let url = unsafe { NSURL::fileURLWithPath(&ns_path) };
+        let url = NSURL::fileURLWithPath(&ns_path);
 
         let url_item: &AnyObject = &url;
         let items = match &content.text {
