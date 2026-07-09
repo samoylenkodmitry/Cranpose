@@ -130,19 +130,20 @@ impl<F: FnMut() + 'static> IosApp<F> {
             return;
         };
 
-        // Drain soft-keyboard edits into the focused text field before updating.
-        for input in crate::ios_keyboard::take_key_inputs() {
-            match input {
-                crate::ios_keyboard::KeyInput::Insert(text) => {
+        // Apply queued soft-keyboard edits, then refresh the keyboard mirror.
+        for op in crate::ios_keyboard::take_ime_ops() {
+            match op {
+                crate::ios_keyboard::ImeOp::Replace(start, end, text) => {
+                    shell.on_ime_set_selection(start, end);
                     shell.on_paste(&text);
                 }
-                crate::ios_keyboard::KeyInput::Backspace => {
-                    shell.on_key_event(&cranpose_ui::KeyEvent::key_down(
-                        cranpose_ui::KeyCode::Backspace,
-                        "",
-                    ));
+                crate::ios_keyboard::ImeOp::SetSelection(start, end) => {
+                    shell.on_ime_set_selection(start, end);
                 }
             }
+        }
+        if let Some(state) = shell.ime_editor_state() {
+            crate::ios_keyboard::set_mirror(state.text, state.selection_start, state.selection_end);
         }
 
         let dirty_before = gpu.surface_dirty;

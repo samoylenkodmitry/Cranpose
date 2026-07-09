@@ -66,6 +66,7 @@ ios = [
     "dep:objc2-av-foundation",
     "dep:objc2-core-media",
     "dep:objc2-core-video",
+    "dep:objc2-core-foundation",
 ]
 android = [
     "cranpose-platform-android",
@@ -205,6 +206,7 @@ objc2-ui-kit = { version = "0.3", default-features = false, optional = true, fea
     "UIImpactFeedbackGenerator",
     "UINavigationController",
     "UINotificationFeedbackGenerator",
+    "NSText",
     "UIPasteboard",
     "UIPopoverPresentationController",
     "UIPresentationController",
@@ -216,6 +218,7 @@ objc2-ui-kit = { version = "0.3", default-features = false, optional = true, fea
     "UIScene",
     "UISceneSession",
     "UISelectionFeedbackGenerator",
+    "UITextInput",
     "UITextInput",
     "UITextInputTraits",
     "UIView",
@@ -230,6 +233,7 @@ objc2-uniform-type-identifiers = { version = "0.3", default-features = false, op
 ] }
 block2 = { version = "0.6", optional = true }
 dispatch2 = { version = "0.3", optional = true }
+objc2-core-foundation = { version = "0.3", default-features = false, optional = true, features = ["std", "CFCGTypes"] }
 objc2-av-foundation = { version = "0.3", default-features = false, optional = true, features = [
     "dispatch2",
     "std",
