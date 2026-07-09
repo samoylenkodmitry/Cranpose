@@ -15,8 +15,12 @@ use objc2::runtime::{AnyObject, Bool, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread};
 use objc2_av_foundation::{
     AVCaptureAutoFocusRangeRestriction, AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceInput,
-    AVCaptureFocusMode, AVCaptureOutput, AVCaptureSession, AVCaptureSessionPreset1280x720,
-    AVCaptureVideoDataOutput, AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaTypeVideo,
+    AVCaptureDevicePosition, AVCaptureDeviceType, AVCaptureDeviceTypeBuiltInDualWideCamera,
+    AVCaptureDeviceTypeBuiltInTripleCamera, AVCaptureFocusMode, AVCaptureOutput,
+    AVCapturePrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions,
+    AVCapturePrimaryConstituentDeviceSwitchingBehavior, AVCaptureSession,
+    AVCaptureSessionPreset1280x720, AVCaptureVideoDataOutput,
+    AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaType, AVMediaTypeVideo,
 };
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{
@@ -162,6 +166,31 @@ fn frame_from_sample(sample: &CMSampleBuffer) -> Option<CameraFrame> {
     })
 }
 
+/// Picks the back camera, preferring an auto-switching virtual multi-camera
+/// (triple, then dual-wide) so the system can drop to the ultra-wide constituent
+/// for macro (close-up receipts, below the wide lens's minimum focus distance).
+/// Falls back to the plain wide-angle camera on devices without a virtual one.
+fn select_camera_device(media_type: &AVMediaType) -> Option<Retained<AVCaptureDevice>> {
+    let virtual_types: [&AVCaptureDeviceType; 2] = unsafe {
+        [
+            AVCaptureDeviceTypeBuiltInTripleCamera,
+            AVCaptureDeviceTypeBuiltInDualWideCamera,
+        ]
+    };
+    for device_type in virtual_types {
+        if let Some(device) = unsafe {
+            AVCaptureDevice::defaultDeviceWithDeviceType_mediaType_position(
+                device_type,
+                Some(media_type),
+                AVCaptureDevicePosition::Back,
+            )
+        } {
+            return Some(device);
+        }
+    }
+    unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media_type) }
+}
+
 fn start_session() -> Result<String, CameraError> {
     let media_type = unsafe { AVMediaTypeVideo }
         .ok_or_else(|| CameraError::Failed("AVMediaTypeVideo unavailable".into()))?;
@@ -170,15 +199,16 @@ fn start_session() -> Result<String, CameraError> {
     let handler = RcBlock::new(|_granted: Bool| {});
     unsafe { AVCaptureDevice::requestAccessForMediaType_completionHandler(media_type, &handler) };
 
-    let device = unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media_type) }
-        .ok_or(CameraError::Unsupported)?;
+    let device = select_camera_device(media_type).ok_or(CameraError::Unsupported)?;
     let name = unsafe { device.localizedName() }.to_string();
 
     // Enable continuous autofocus so the viewfinder keeps documents sharp as the
     // user moves the phone (the default is a fixed lens position -> blurry
     // preview). Restrict the scan range to "near" when supported, since receipts
-    // and pages are held close. Any of these calls throw if focus isn't
-    // supported, so they are all guarded.
+    // and pages are held close. On a virtual multi-camera device, allow the
+    // system to auto-switch to the ultra-wide constituent so very close subjects
+    // (macro, below the wide lens's minimum focus distance) stay sharp. Any of
+    // these calls throw if unsupported, so they are all guarded.
     if unsafe { device.lockForConfiguration() }.is_ok() {
         if unsafe { device.isAutoFocusRangeRestrictionSupported() } {
             unsafe {
@@ -187,6 +217,16 @@ fn start_session() -> Result<String, CameraError> {
         }
         if unsafe { device.isFocusModeSupported(AVCaptureFocusMode::ContinuousAutoFocus) } {
             unsafe { device.setFocusMode(AVCaptureFocusMode::ContinuousAutoFocus) };
+        }
+        if unsafe { device.primaryConstituentDeviceSwitchingBehavior() }
+            != AVCapturePrimaryConstituentDeviceSwitchingBehavior::Unsupported
+        {
+            unsafe {
+                device.setPrimaryConstituentDeviceSwitchingBehavior_restrictedSwitchingBehaviorConditions(
+                    AVCapturePrimaryConstituentDeviceSwitchingBehavior::Auto,
+                    AVCapturePrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions(0),
+                )
+            };
         }
         unsafe { device.unlockForConfiguration() };
     }

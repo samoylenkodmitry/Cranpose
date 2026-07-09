@@ -382,3 +382,93 @@ fn popup_inside_lazy_column_item_still_reaches_the_host() {
         rects[0]
     );
 }
+
+/// Regression (device repro): a `Popup` composed inside a `LazyColumn` item that
+/// stops being composed (e.g. a text field editor closes, removing its selection
+/// handles) must be removed from the overlay. The lazy list subcomposes each
+/// item, so the `Popup`'s `DisposableEffect` unregistration has to fire across
+/// that boundary — otherwise the handles stay on screen after the editor closes.
+#[test]
+fn popup_inside_lazy_column_item_is_removed_when_no_longer_composed() {
+    use cranpose_core::mutableStateOf;
+
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+
+    let show = mutableStateOf(true);
+    let mut content = move || {
+        PopupHost(move || {
+            let state = remember_lazy_list_state();
+            LazyColumn(
+                Modifier::empty().size(Size {
+                    width: 200.0,
+                    height: 200.0,
+                }),
+                state,
+                LazyColumnSpec::default(),
+                move |scope| {
+                    scope.items(
+                        1,
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        move |_index| {
+                            if show.value() {
+                                Popup(
+                                    Rect {
+                                        x: 120.0,
+                                        y: 90.0,
+                                        width: 0.0,
+                                        height: 0.0,
+                                    },
+                                    Point { x: 0.0, y: 0.0 },
+                                    || {
+                                        Column(
+                                            Modifier::empty()
+                                                .size(Size {
+                                                    width: 15.0,
+                                                    height: 15.0,
+                                                })
+                                                .background(MARKER),
+                                            ColumnSpec::default(),
+                                            || {},
+                                        );
+                                    },
+                                );
+                            }
+                        },
+                    );
+                },
+            );
+        });
+    };
+
+    let render_scene = |composition: &mut Composition<MemoryApplier>, content: &mut dyn FnMut()| {
+        let mut scene = None;
+        for _ in 0..8 {
+            settle(composition, key, content);
+            let root = composition.root().expect("root");
+            let layout = compute_layout(composition, root);
+            scene = Some(HeadlessRenderer::new().render(&layout));
+        }
+        scene.expect("scene")
+    };
+
+    composition.render(key, &mut content).expect("render");
+    let scene = render_scene(&mut composition, &mut content);
+    assert_eq!(
+        marker_rects(&scene).len(),
+        1,
+        "popup visible while composed inside the lazy item"
+    );
+
+    // The editor closes: the item stops composing the Popup — it must clear.
+    show.set(false);
+    let scene = render_scene(&mut composition, &mut content);
+    assert_eq!(
+        marker_rects(&scene).len(),
+        0,
+        "popup removed from the overlay after the lazy item stops composing it \
+         (regression: selection handles persisted after the editor closed)"
+    );
+}
