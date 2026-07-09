@@ -28,9 +28,10 @@ use objc2_foundation::{
 };
 use objc2_ui_kit::{
     NSValueUIGeometryExtensions, NSWritingDirection, UIKeyInput, UIKeyboardFrameEndUserInfoKey,
-    UIKeyboardWillChangeFrameNotification, UIResponder, UIScreen, UITextInput,
-    UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits, UITextLayoutDirection,
-    UITextPosition, UITextRange, UITextSelectionRect, UITextStorageDirection, UIView,
+    UIKeyboardWillChangeFrameNotification, UIKeyboardWillHideNotification, UIResponder, UIScreen,
+    UITextInput, UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits,
+    UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
+    UITextStorageDirection, UIView,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -715,10 +716,21 @@ pub(crate) fn register() {
 }
 
 thread_local! {
-    /// Keeps the keyboard-frame observer registration alive for the app's
-    /// lifetime (removing it would stop the notifications).
-    static KEYBOARD_OBSERVER: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>> =
-        const { RefCell::new(None) };
+    /// Keeps the keyboard notification observers registered for the app's
+    /// lifetime (dropping the tokens would stop the notifications).
+    static KEYBOARD_OBSERVER: RefCell<Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Publishes `bottom` as the soft-keyboard inset, waking a redraw only when it
+/// actually changed (the notifications fire repeatedly during the animation).
+fn apply_keyboard_inset(insets: &Cell<EdgeInsets>, wake: &dyn Fn(), bottom: f32) {
+    let mut current = insets.get();
+    if (current.bottom - bottom).abs() > 0.5 {
+        current.bottom = bottom;
+        insets.set(current);
+        wake();
+    }
 }
 
 /// Bottom inset, in points, that the soft keyboard covers in the given
@@ -746,25 +758,46 @@ pub(crate) fn observe_keyboard_insets(insets: Rc<Cell<EdgeInsets>>, wake: Rc<dyn
         return;
     };
     let center = NSNotificationCenter::defaultCenter();
-    let block = RcBlock::new(move |note: NonNull<NSNotification>| {
+
+    // Frame changes (show, interactive drag, height changes): publish the
+    // covered height.
+    let change_insets = Rc::clone(&insets);
+    let change_wake = Rc::clone(&wake);
+    let change_block = RcBlock::new(move |note: NonNull<NSNotification>| {
         let note = unsafe { note.as_ref() };
         let bottom = keyboard_bottom_inset(note, mtm).unwrap_or(0.0);
-        let mut current = insets.get();
-        if (current.bottom - bottom).abs() > 0.5 {
-            current.bottom = bottom;
-            insets.set(current);
-            wake();
-        }
+        apply_keyboard_inset(&change_insets, &*change_wake, bottom);
     });
+
+    // Hide: force the inset back to zero. Some dismissals (notably force-resign
+    // via `-endEditing:`, used to hide the keyboard on focus loss) don't post a
+    // change-frame that resets to zero, which would otherwise leave an empty gap
+    // where the keyboard was.
+    let hide_block = RcBlock::new(move |_note: NonNull<NSNotification>| {
+        apply_keyboard_inset(&insets, &*wake, 0.0);
+    });
+
     // Keyboard notifications are posted on the main thread; a nil queue delivers
-    // the block synchronously there, so the non-Send captured state is safe.
-    let token = unsafe {
+    // the blocks synchronously there, so the non-Send captured state is safe.
+    let change_token = unsafe {
         center.addObserverForName_object_queue_usingBlock(
             Some(UIKeyboardWillChangeFrameNotification),
             None,
             None,
-            &block,
+            &change_block,
         )
     };
-    KEYBOARD_OBSERVER.with(|cell| *cell.borrow_mut() = Some(token));
+    let hide_token = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(UIKeyboardWillHideNotification),
+            None,
+            None,
+            &hide_block,
+        )
+    };
+    KEYBOARD_OBSERVER.with(|cell| {
+        let mut observers = cell.borrow_mut();
+        observers.push(change_token);
+        observers.push(hide_token);
+    });
 }
