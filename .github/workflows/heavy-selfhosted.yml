@@ -45,6 +45,12 @@ jobs:
           sccache --start-server || true
           sccache --zero-stats || true
 
+      # gradle's :app:buildRustRelease shells out to `cargo ndk`; the runner
+      # doesn't ship it globally, so install it here. `cargo install` is a no-op
+      # when the pinned version is already present, keeping warm runs fast.
+      - name: Install cargo-ndk (idempotent)
+        run: cargo install cargo-ndk --locked
+
       - name: Install Android NDK (idempotent)
         run: bash scripts/ci/install_android_ndk.sh 27.0.12077973
 
