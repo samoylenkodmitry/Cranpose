@@ -14,9 +14,9 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread};
 use objc2_av_foundation::{
-    AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceInput, AVCaptureOutput, AVCaptureSession,
-    AVCaptureSessionPreset1280x720, AVCaptureVideoDataOutput,
-    AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaTypeVideo,
+    AVCaptureAutoFocusRangeRestriction, AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceInput,
+    AVCaptureFocusMode, AVCaptureOutput, AVCaptureSession, AVCaptureSessionPreset1280x720,
+    AVCaptureVideoDataOutput, AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaTypeVideo,
 };
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{
@@ -173,6 +173,24 @@ fn start_session() -> Result<String, CameraError> {
     let device = unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media_type) }
         .ok_or(CameraError::Unsupported)?;
     let name = unsafe { device.localizedName() }.to_string();
+
+    // Enable continuous autofocus so the viewfinder keeps documents sharp as the
+    // user moves the phone (the default is a fixed lens position -> blurry
+    // preview). Restrict the scan range to "near" when supported, since receipts
+    // and pages are held close. Any of these calls throw if focus isn't
+    // supported, so they are all guarded.
+    if unsafe { device.lockForConfiguration() }.is_ok() {
+        if unsafe { device.isAutoFocusRangeRestrictionSupported() } {
+            unsafe {
+                device.setAutoFocusRangeRestriction(AVCaptureAutoFocusRangeRestriction::Near)
+            };
+        }
+        if unsafe { device.isFocusModeSupported(AVCaptureFocusMode::ContinuousAutoFocus) } {
+            unsafe { device.setFocusMode(AVCaptureFocusMode::ContinuousAutoFocus) };
+        }
+        unsafe { device.unlockForConfiguration() };
+    }
+
     let input = unsafe { AVCaptureDeviceInput::deviceInputWithDevice_error(&device) }
         .map_err(|_| CameraError::Failed("could not open camera input".into()))?;
 

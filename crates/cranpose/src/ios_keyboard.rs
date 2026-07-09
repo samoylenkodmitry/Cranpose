@@ -577,6 +577,14 @@ impl PlatformTextInputHandler for IosKeyboard {
 
     fn hide_keyboard(&self) {
         self.view.resignFirstResponder();
+        // Resigning our proxy view isn't enough: the winit content view is also
+        // in the responder chain and keeps the software keyboard up (our resign
+        // returns true and `isFirstResponder` is false, yet the keyboard stays).
+        // `-[UIView endEditing:]` on the window force-resigns *whatever* is the
+        // first responder in the window, which reliably dismisses the keyboard.
+        if let Some(window) = self.view.window() {
+            let _: bool = unsafe { msg_send![&*window, endEditing: true] };
+        }
     }
 }
 
