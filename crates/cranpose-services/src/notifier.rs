@@ -63,6 +63,32 @@ pub trait Notifier {
 
 pub type NotifierRef = Rc<dyn Notifier>;
 
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+fn pending_deeplink_slot() -> &'static Mutex<Option<String>> {
+    static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// Record the deep-link payload of a notification the user just tapped. Called
+/// by the platform backend's notification delegate; the app drains it via
+/// [`take_notification_deeplink`].
+pub fn push_notification_deeplink(link: String) {
+    if let Ok(mut slot) = pending_deeplink_slot().lock() {
+        *slot = Some(link);
+    }
+}
+
+/// Take (and clear) the deep-link payload of the most recently tapped
+/// notification, if any. Polled by the app's deep-link handling.
+pub fn take_notification_deeplink() -> Option<String> {
+    pending_deeplink_slot()
+        .lock()
+        .ok()
+        .and_then(|mut s| s.take())
+}
+
 struct NoopNotifier;
 
 impl Notifier for NoopNotifier {

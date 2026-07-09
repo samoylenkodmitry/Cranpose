@@ -46,8 +46,9 @@ pub use network_status::{
     NetworkMonitor, NetworkMonitorRef, NetworkStatus,
 };
 pub use notifier::{
-    clear_platform_notifier, default_notifier, local_notifier, set_platform_notifier, Notifier,
-    NotifierRef, NotifyRequest, ProvideNotifier,
+    clear_platform_notifier, default_notifier, local_notifier, push_notification_deeplink,
+    set_platform_notifier, take_notification_deeplink, Notifier, NotifierRef, NotifyRequest,
+    ProvideNotifier,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use peer::{
