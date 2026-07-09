@@ -5,6 +5,7 @@
 #[cfg(test)]
 use cranpose_core::{location_key, Composition, MemoryApplier};
 
+pub mod camera;
 pub mod device_info;
 pub mod file_picker;
 pub mod haptics;
@@ -19,6 +20,9 @@ pub mod theme;
 pub mod uri_handler;
 pub mod writable_folder;
 
+pub use camera::{
+    camera, clear_platform_camera, set_platform_camera, Camera, CameraError, CameraFrame, CameraRef,
+};
 pub use device_info::{
     clear_platform_device_info, device_info, set_platform_device_info, DeviceInfo, DeviceInfoRef,
 };

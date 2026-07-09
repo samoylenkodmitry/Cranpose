@@ -62,6 +62,10 @@ ios = [
     "dep:objc2-uniform-type-identifiers",
     "dep:objc2-user-notifications",
     "dep:block2",
+    "dep:dispatch2",
+    "dep:objc2-av-foundation",
+    "dep:objc2-core-media",
+    "dep:objc2-core-video",
 ]
 android = [
     "cranpose-platform-android",
@@ -219,6 +223,34 @@ objc2-uniform-type-identifiers = { version = "0.3", default-features = false, op
     "UTType",
 ] }
 block2 = { version = "0.6", optional = true }
+dispatch2 = { version = "0.3", optional = true }
+objc2-av-foundation = { version = "0.3", default-features = false, optional = true, features = [
+    "dispatch2",
+    "std",
+    "block2",
+    "objc2-core-media",
+    "AVCaptureSession",
+    "AVCaptureSessionPreset",
+    "AVCaptureDevice",
+    "AVCaptureInput",
+    "AVCaptureOutput",
+    "AVCaptureOutputBase",
+    "AVCaptureVideoDataOutput",
+    "AVMediaFormat",
+] }
+objc2-core-media = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "objc2-core-video",
+    "CMSampleBuffer",
+] }
+objc2-core-video = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "CVBase",
+    "CVPixelBuffer",
+    "CVImageBuffer",
+    "CVBuffer",
+    "CVReturn",
+] }
 objc2-user-notifications = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "block2",

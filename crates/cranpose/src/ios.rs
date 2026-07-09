@@ -443,6 +443,7 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     crate::ios_haptics::register();
     crate::ios_device_info::register();
     crate::ios_writable_folder::register();
+    crate::ios_camera::register();
 
     let event_loop = EventLoop::builder()
         .build()
