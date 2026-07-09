@@ -1012,6 +1012,7 @@ fn unsafe_code_stays_in_android_boundary_modules() {
         "ios_writable_folder.rs",
         "ios_camera.rs",
         "ios_keyboard.rs",
+        "ios_back_gesture.rs",
         "ios_background.rs",
     ];
     let mut offenders = Vec::new();
@@ -1186,6 +1187,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/ios_writable_folder.rs",
         "crates/cranpose/src/ios_camera.rs",
         "crates/cranpose/src/ios_keyboard.rs",
+        "crates/cranpose/src/ios_back_gesture.rs",
         "crates/cranpose/src/ios_background.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",

@@ -12,6 +12,7 @@ pub mod file_picker;
 pub mod haptics;
 pub mod http;
 pub mod image_picker;
+pub mod navigation;
 pub mod network_status;
 pub mod notifier;
 #[cfg(not(target_arch = "wasm32"))]
@@ -50,6 +51,7 @@ pub use image_picker::{
     set_platform_image_picker, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
     ProvideImagePicker, IMAGE_EXTENSIONS,
 };
+pub use navigation::{push_back_request, take_back_requests};
 pub use network_status::{
     clear_platform_network_monitor, network_monitor, network_status, set_platform_network_monitor,
     NetworkMonitor, NetworkMonitorRef, NetworkStatus,

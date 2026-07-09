@@ -299,6 +299,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         // event loop instead).
         shell.app_context().enter(crate::ios_clipboard::register);
         shell.app_context().enter(crate::ios_keyboard::register);
+        shell.app_context().enter(crate::ios_back_gesture::register);
 
         // Drive runtime-requested frames (animations, async results) through the
         // event-loop proxy. Calling `request_redraw` directly from the waker is
