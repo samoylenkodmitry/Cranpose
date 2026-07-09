@@ -212,18 +212,14 @@ fn replace_dirty_layers_from_applier(
             continue;
         }
 
-        match replace_dirty_layers_from_applier(
+        let child_report = replace_dirty_layers_from_applier(
             applier,
             child_layer,
             dirty_nodes,
             child_inherited_translated_content_context,
-        ) {
-            Some(child_report) => {
-                report.updated |= child_report.updated;
-                report.hit_graph_dirty |= child_report.hit_graph_dirty;
-            }
-            None => return None,
-        }
+        )?;
+        report.updated |= child_report.updated;
+        report.hit_graph_dirty |= child_report.hit_graph_dirty;
     }
 
     if report.updated {

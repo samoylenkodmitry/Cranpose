@@ -42,7 +42,10 @@ jobs:
         run: cargo test --profile ci --workspace
 
       - name: Run workspace clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # `question_mark` is an opinionated style lint that newer clippy (1.97+)
+        # flags on pre-existing code; allow it so a floating-stable toolchain bump
+        # doesn't break the gate. Everything else stays `-D warnings`.
+        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::question_mark
 
   architecture-budget:
     name: linux / stable / architecture budgets
@@ -221,7 +224,7 @@ jobs:
           -p desktop-app --bin cranpose-ios
           --target aarch64-apple-ios-sim
           --no-default-features --features ios
-          -- -D warnings
+          -- -D warnings -A clippy::question_mark
 
       - name: Build iOS device binary
         run: >
