@@ -130,6 +130,21 @@ impl<F: FnMut() + 'static> IosApp<F> {
             return;
         };
 
+        // Drain soft-keyboard edits into the focused text field before updating.
+        for input in crate::ios_keyboard::take_key_inputs() {
+            match input {
+                crate::ios_keyboard::KeyInput::Insert(text) => {
+                    shell.on_paste(&text);
+                }
+                crate::ios_keyboard::KeyInput::Backspace => {
+                    shell.on_key_event(&cranpose_ui::KeyEvent::key_down(
+                        cranpose_ui::KeyCode::Backspace,
+                        "",
+                    ));
+                }
+            }
+        }
+
         let dirty_before = gpu.surface_dirty;
         let update_result = shell.update();
         if !surface_present_required(
@@ -283,6 +298,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         // context (the global picker/URI handlers are registered before the
         // event loop instead).
         shell.app_context().enter(crate::ios_clipboard::register);
+        shell.app_context().enter(crate::ios_keyboard::register);
 
         // Drive runtime-requested frames (animations, async results) through the
         // event-loop proxy. Calling `request_redraw` directly from the waker is

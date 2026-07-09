@@ -212,6 +212,8 @@ objc2-ui-kit = { version = "0.3", default-features = false, optional = true, fea
     "UIScene",
     "UISceneSession",
     "UISelectionFeedbackGenerator",
+    "UITextInput",
+    "UITextInputTraits",
     "UIView",
     "UIViewController",
     "UIWindow",

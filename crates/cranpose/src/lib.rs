@@ -159,6 +159,9 @@ mod ios_writable_folder;
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_camera;
 
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_keyboard;
+
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub mod recorder;
 
