@@ -71,6 +71,9 @@ struct IosApp<F: FnMut() + 'static> {
     /// [`cranpose_ui::local_ime_insets`], updated from UIKit keyboard-frame
     /// notifications so content scrolls clear of the keyboard.
     keyboard_insets: Rc<Cell<EdgeInsets>>,
+    /// Last keyboard bottom inset applied to composition, to detect async
+    /// keyboard-frame changes and force a recompose (a redraw re-reads nothing).
+    last_ime_bottom: f32,
     /// Wakes the event loop for runtime-driven frames (animations, async work).
     event_proxy: EventLoopProxy,
     launch_error: Rc<RefCell<Option<LaunchError>>>,
@@ -92,6 +95,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             platform: DesktopWinitPlatform::default(),
             safe_area: Rc::new(Cell::new(EdgeInsets::default())),
             keyboard_insets: Rc::new(Cell::new(EdgeInsets::default())),
+            last_ime_bottom: 0.0,
             event_proxy,
             launch_error,
         }
@@ -131,9 +135,21 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
     /// Renders a single frame, presenting only when work is pending.
     fn render(&mut self) {
+        // The soft-keyboard inset changes asynchronously (keyboard-frame
+        // notifications). Its value is provided to composition through
+        // `local_ime_insets`, but a plain redraw re-reads nothing, so a change
+        // must force a recompose or the content keeps its old padding (e.g. a
+        // blank gap left after the keyboard hides).
+        let ime_bottom = self.keyboard_insets.get().bottom;
+        let ime_inset_changed = (ime_bottom - self.last_ime_bottom).abs() > 0.5;
+        self.last_ime_bottom = ime_bottom;
+
         let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
             return;
         };
+        if ime_inset_changed {
+            shell.mark_dirty();
+        }
 
         // Apply queued soft-keyboard edits, then refresh the keyboard mirror.
         for op in crate::ios_keyboard::take_ime_ops() {
