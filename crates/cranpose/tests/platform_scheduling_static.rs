@@ -1009,6 +1009,7 @@ fn unsafe_code_stays_in_android_boundary_modules() {
         "ios_share_sheet.rs",
         "ios_image_picker.rs",
         "ios_notifier.rs",
+        "ios_writable_folder.rs",
     ];
     let mut offenders = Vec::new();
 
@@ -1179,6 +1180,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/ios_share_sheet.rs",
         "crates/cranpose/src/ios_image_picker.rs",
         "crates/cranpose/src/ios_notifier.rs",
+        "crates/cranpose/src/ios_writable_folder.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];
