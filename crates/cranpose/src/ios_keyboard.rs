@@ -14,18 +14,25 @@
 //! what makes swipe-the-spacebar cursor movement and selection work.
 #![allow(unsafe_code)]
 
+use block2::RcBlock;
+use core::ptr::NonNull;
 use cranpose_ui::text_input_session::{set_platform_text_input_handler, PlatformTextInputHandler};
+use cranpose_ui::EdgeInsets;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_foundation::{NSArray, NSComparisonResult, NSObjectProtocol, NSRange, NSString};
-use objc2_ui_kit::{
-    NSWritingDirection, UIKeyInput, UIResponder, UITextInput, UITextInputStringTokenizer,
-    UITextInputTokenizer, UITextInputTraits, UITextLayoutDirection, UITextPosition, UITextRange,
-    UITextSelectionRect, UITextStorageDirection, UIView,
+use objc2_foundation::{
+    NSArray, NSComparisonResult, NSNotification, NSNotificationCenter, NSObjectProtocol, NSRange,
+    NSString, NSValue,
 };
-use std::cell::RefCell;
+use objc2_ui_kit::{
+    NSValueUIGeometryExtensions, NSWritingDirection, UIKeyInput, UIKeyboardFrameEndUserInfoKey,
+    UIKeyboardWillChangeFrameNotification, UIResponder, UIScreen, UITextInput,
+    UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits, UITextLayoutDirection,
+    UITextPosition, UITextRange, UITextSelectionRect, UITextStorageDirection, UIView,
+};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -603,4 +610,59 @@ pub(crate) fn register() {
     set_platform_text_input_handler(
         Rc::new(IosKeyboard { view }) as Rc<dyn PlatformTextInputHandler>
     );
+}
+
+thread_local! {
+    /// Keeps the keyboard-frame observer registration alive for the app's
+    /// lifetime (removing it would stop the notifications).
+    static KEYBOARD_OBSERVER: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>> =
+        const { RefCell::new(None) };
+}
+
+/// Bottom inset, in points, that the soft keyboard covers in the given
+/// `UIKeyboardWillChangeFrame` notification. The end frame is in screen
+/// coordinates; when the keyboard is fully off-screen (hidden) its top is at
+/// the screen bottom, so this returns 0.
+fn keyboard_bottom_inset(note: &NSNotification, mtm: MainThreadMarker) -> Option<f32> {
+    let info = note.userInfo()?;
+    let value = info.objectForKey(unsafe { UIKeyboardFrameEndUserInfoKey })?;
+    let value: &NSValue = value.downcast_ref()?;
+    let frame: CGRect = unsafe { value.CGRectValue() };
+    // Single-window phone app: the main screen is the keyboard's reference space.
+    #[allow(deprecated)]
+    let screen_height = UIScreen::mainScreen(mtm).bounds().size.height;
+    Some((screen_height - frame.origin.y).max(0.0) as f32)
+}
+
+/// Observes soft-keyboard frame changes and publishes the covered height as the
+/// bottom [`EdgeInsets`] the shell exposes through `local_ime_insets`. Without
+/// this the keyboard overlaps the focused field and the bottom of scrollable
+/// content stays unreachable (the framework's bring-into-view / content padding
+/// keys off these insets). `wake` schedules a redraw so the new inset lays out.
+pub(crate) fn observe_keyboard_insets(insets: Rc<Cell<EdgeInsets>>, wake: Rc<dyn Fn()>) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let center = NSNotificationCenter::defaultCenter();
+    let block = RcBlock::new(move |note: NonNull<NSNotification>| {
+        let note = unsafe { note.as_ref() };
+        let bottom = keyboard_bottom_inset(note, mtm).unwrap_or(0.0);
+        let mut current = insets.get();
+        if (current.bottom - bottom).abs() > 0.5 {
+            current.bottom = bottom;
+            insets.set(current);
+            wake();
+        }
+    });
+    // Keyboard notifications are posted on the main thread; a nil queue delivers
+    // the block synchronously there, so the non-Send captured state is safe.
+    let token = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(UIKeyboardWillChangeFrameNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+    KEYBOARD_OBSERVER.with(|cell| *cell.borrow_mut() = Some(token));
 }

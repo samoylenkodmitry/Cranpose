@@ -16,7 +16,7 @@ use cranpose_app_shell::{default_root_key, AppShell, PointerSource};
 use cranpose_core::CompositionLocalProvider;
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
-use cranpose_ui::{local_safe_area_insets, EdgeInsets};
+use cranpose_ui::{local_ime_insets, local_safe_area_insets, EdgeInsets};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -67,6 +67,10 @@ struct IosApp<F: FnMut() + 'static> {
     /// [`local_safe_area_insets`]. Shared with the content closure so rotation
     /// and notch changes flow to the UI without rebuilding the shell.
     safe_area: Rc<Cell<EdgeInsets>>,
+    /// Soft-keyboard bottom inset (logical pixels) published through
+    /// [`cranpose_ui::local_ime_insets`], updated from UIKit keyboard-frame
+    /// notifications so content scrolls clear of the keyboard.
+    keyboard_insets: Rc<Cell<EdgeInsets>>,
     /// Wakes the event loop for runtime-driven frames (animations, async work).
     event_proxy: EventLoopProxy,
     launch_error: Rc<RefCell<Option<LaunchError>>>,
@@ -87,6 +91,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             shell: None,
             platform: DesktopWinitPlatform::default(),
             safe_area: Rc::new(Cell::new(EdgeInsets::default())),
+            keyboard_insets: Rc::new(Cell::new(EdgeInsets::default())),
             event_proxy,
             launch_error,
         }
@@ -280,14 +285,20 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         };
         let content_for_shell = Rc::clone(&content);
         let safe_area_for_shell = Rc::clone(&self.safe_area);
+        let keyboard_insets_for_shell = Rc::clone(&self.keyboard_insets);
         let mut shell = AppShell::new_with_size_and_density(
             renderer,
             default_root_key(),
             move || {
                 let insets = safe_area_for_shell.get();
-                CompositionLocalProvider(vec![local_safe_area_insets().provides(insets)], || {
-                    content_for_shell.borrow_mut()()
-                });
+                let ime = keyboard_insets_for_shell.get();
+                CompositionLocalProvider(
+                    vec![
+                        local_safe_area_insets().provides(insets),
+                        local_ime_insets().provides(ime),
+                    ],
+                    || content_for_shell.borrow_mut()(),
+                );
             },
             (width, height),
             (width as f32 / density, height as f32 / density),
@@ -315,6 +326,15 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         // (into the focused field) on the next frame, not the cursor-blink tick.
         let keyboard_proxy = self.event_proxy.clone();
         crate::ios_keyboard::set_wake(Box::new(move || keyboard_proxy.wake_up()));
+
+        // Publish the soft-keyboard height as `local_ime_insets` so content
+        // scrolls clear of the keyboard (bring-into-view / bottom padding read
+        // it). Waking the loop lays the new inset out immediately.
+        let ime_inset_proxy = self.event_proxy.clone();
+        crate::ios_keyboard::observe_keyboard_insets(
+            Rc::clone(&self.keyboard_insets),
+            Rc::new(move || ime_inset_proxy.wake_up()),
+        );
 
         self.gpu = Some(GpuResources {
             surface,
