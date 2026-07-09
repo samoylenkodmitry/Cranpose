@@ -66,6 +66,85 @@ fn read_mirror() -> Mirror {
     mirror().lock().map(|m| m.clone()).unwrap_or_default()
 }
 
+// ---------------------------------------------- caret geometry mirror
+
+/// Window-space caret geometry of the focused single-line field, refreshed each
+/// frame from `AppShell::ime_caret_geometry`. `caret_xs[k]` is the caret x (in
+/// the view's coordinate space, which matches the window) after `k` characters,
+/// so `caret_xs.len() == chars + 1`. Read by the `UITextInput` geometry methods
+/// so the iOS spacebar-trackpad cursor and tap-to-position can place the caret.
+#[derive(Default, Clone)]
+struct CaretGeom {
+    caret_xs: Vec<f32>,
+    top: f32,
+    line_height: f32,
+}
+
+fn caret_geom() -> &'static Mutex<CaretGeom> {
+    static G: OnceLock<Mutex<CaretGeom>> = OnceLock::new();
+    G.get_or_init(|| Mutex::new(CaretGeom::default()))
+}
+
+/// Refresh the caret geometry from the composition (called each frame in `ios.rs`).
+pub(crate) fn set_caret_geometry(caret_xs: Vec<f32>, top: f32, line_height: f32) {
+    if let Ok(mut g) = caret_geom().lock() {
+        g.caret_xs = caret_xs;
+        g.top = top;
+        g.line_height = line_height;
+    }
+}
+
+fn read_caret_geom() -> CaretGeom {
+    caret_geom().lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// Height to draw the caret at, guarding against an unmeasured (zero) line.
+fn caret_height(geom: &CaretGeom) -> f64 {
+    if geom.line_height > 0.5 {
+        geom.line_height as f64
+    } else {
+        16.0
+    }
+}
+
+/// Caret x (window space) for a byte offset: map the byte to a character index
+/// into `caret_xs`. Falls back to the last known x when geometry is unavailable.
+fn caret_x_for_byte(geom: &CaretGeom, text: &str, byte: usize) -> f32 {
+    if geom.caret_xs.is_empty() {
+        return 0.0;
+    }
+    let byte = byte.min(text.len());
+    let char_index = text[..byte].chars().count();
+    geom.caret_xs
+        .get(char_index)
+        .or_else(|| geom.caret_xs.last())
+        .copied()
+        .unwrap_or(0.0)
+}
+
+/// Byte offset whose caret x is closest to `x` (window space) — the inverse of
+/// [`caret_x_for_byte`], used for tap-to-position and trackpad cursor movement.
+fn byte_for_x(geom: &CaretGeom, text: &str, x: f32) -> usize {
+    if geom.caret_xs.is_empty() {
+        return text.len();
+    }
+    let mut best_k = 0usize;
+    let mut best_d = f32::INFINITY;
+    for (k, cx) in geom.caret_xs.iter().enumerate() {
+        let d = (cx - x).abs();
+        if d < best_d {
+            best_d = d;
+            best_k = k;
+        }
+    }
+    // `caret_xs[k]` is the caret after `k` characters, i.e. the start byte of the
+    // k-th character (or the text end when `k == chars`).
+    text.char_indices()
+        .nth(best_k)
+        .map(|(b, _)| b)
+        .unwrap_or(text.len())
+}
+
 /// An edit forwarded to the composition, applied on the next frame.
 pub(crate) enum ImeOp {
     /// Replace `start..end` (bytes) with `text`.
@@ -496,13 +575,27 @@ define_class!(
         fn set_base_writing_direction(&self, _dir: NSWritingDirection, _range: &UITextRange) {}
 
         #[unsafe(method(firstRectForRange:))]
-        fn first_rect_for_range(&self, _range: &UITextRange) -> CGRect {
-            CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(1.0, 16.0))
+        fn first_rect_for_range(&self, range: &UITextRange) -> CGRect {
+            let (s, e) = TextRange::bounds(range);
+            let geom = read_caret_geom();
+            let text = read_mirror().text;
+            let x1 = caret_x_for_byte(&geom, &text, s);
+            let x2 = caret_x_for_byte(&geom, &text, e);
+            CGRect::new(
+                CGPoint::new(x1 as f64, geom.top as f64),
+                CGSize::new((x2 - x1).max(0.0) as f64, caret_height(&geom)),
+            )
         }
 
         #[unsafe(method(caretRectForPosition:))]
-        fn caret_rect_for_position(&self, _position: &UITextPosition) -> CGRect {
-            CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(2.0, 16.0))
+        fn caret_rect_for_position(&self, position: &UITextPosition) -> CGRect {
+            let geom = read_caret_geom();
+            let text = read_mirror().text;
+            let x = caret_x_for_byte(&geom, &text, TextPosition::offset(position));
+            CGRect::new(
+                CGPoint::new(x as f64, geom.top as f64),
+                CGSize::new(2.0, caret_height(&geom)),
+            )
         }
 
         #[unsafe(method_id(selectionRectsForRange:))]
@@ -514,23 +607,32 @@ define_class!(
         }
 
         #[unsafe(method_id(closestPositionToPoint:))]
-        fn closest_position_to_point(&self, _point: CGPoint) -> Option<Retained<UITextPosition>> {
-            Some(upos(TextPosition::make(read_mirror().sel.1, self.mtm())))
+        fn closest_position_to_point(&self, point: CGPoint) -> Option<Retained<UITextPosition>> {
+            let geom = read_caret_geom();
+            let text = read_mirror().text;
+            let byte = byte_for_x(&geom, &text, point.x as f32);
+            Some(upos(TextPosition::make(byte, self.mtm())))
         }
 
         #[unsafe(method_id(closestPositionToPoint:withinRange:))]
         fn closest_position_to_point_within(
             &self,
-            _point: CGPoint,
+            point: CGPoint,
             range: &UITextRange,
         ) -> Option<Retained<UITextPosition>> {
-            let (_, e) = TextRange::bounds(range);
-            Some(upos(TextPosition::make(e, self.mtm())))
+            let (s, e) = TextRange::bounds(range);
+            let geom = read_caret_geom();
+            let text = read_mirror().text;
+            let byte = byte_for_x(&geom, &text, point.x as f32).clamp(s, e);
+            Some(upos(TextPosition::make(byte, self.mtm())))
         }
 
         #[unsafe(method_id(characterRangeAtPoint:))]
-        fn character_range_at_point(&self, _point: CGPoint) -> Option<Retained<UITextRange>> {
-            None
+        fn character_range_at_point(&self, point: CGPoint) -> Option<Retained<UITextRange>> {
+            let geom = read_caret_geom();
+            let text = read_mirror().text;
+            let byte = byte_for_x(&geom, &text, point.x as f32);
+            Some(urange(TextRange::make(byte, byte, self.mtm())))
         }
 
         #[unsafe(method_id(inputDelegate))]

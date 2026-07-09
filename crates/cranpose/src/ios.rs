@@ -150,6 +150,9 @@ impl<F: FnMut() + 'static> IosApp<F> {
         if let Some(state) = shell.ime_editor_state() {
             crate::ios_keyboard::set_mirror(state.text, state.selection_start, state.selection_end);
         }
+        if let Some(geom) = shell.ime_caret_geometry() {
+            crate::ios_keyboard::set_caret_geometry(geom.caret_xs, geom.top, geom.line_height);
+        }
 
         let dirty_before = gpu.surface_dirty;
         let update_result = shell.update();

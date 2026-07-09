@@ -32,6 +32,21 @@ pub struct ImeEditorState {
     pub single_line: bool,
 }
 
+/// Window-space caret geometry for the focused field, used by platforms whose
+/// native text input positions the caret by coordinates rather than key events
+/// (iOS `UITextInput`: spacebar-trackpad cursor movement and tap-to-position).
+/// All values are logical pixels in window space.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImeCaretGeometry {
+    /// Caret x for each character-boundary offset, in text order: entry `k` is
+    /// the caret after `k` characters, so `caret_xs.len() == chars + 1`.
+    pub caret_xs: Vec<f32>,
+    /// Top y of the (single) caret line.
+    pub top: f32,
+    /// Height of one line (the caret's height).
+    pub line_height: f32,
+}
+
 /// Handler trait for focused text field operations.
 /// Stored in focus module for O(1) key/clipboard dispatch.
 pub trait FocusedTextFieldHandler {
@@ -75,6 +90,12 @@ pub trait FocusedTextFieldHandler {
     /// (`InputConnection` text queries, session seeding). `None` when the
     /// handler cannot expose its state.
     fn editor_state(&self) -> Option<ImeEditorState> {
+        None
+    }
+    /// Window-space caret geometry (see [`ImeCaretGeometry`]) for coordinate-based
+    /// platform text input. `None` when the handler cannot expose it (e.g. the
+    /// field has not been laid out yet).
+    fn caret_geometry(&self) -> Option<ImeCaretGeometry> {
         None
     }
 }
@@ -228,6 +249,11 @@ impl TextFieldFocusState {
         self.focused_handler()
             .and_then(|handler| handler.editor_state())
     }
+
+    fn focused_caret_geometry(&self) -> Option<ImeCaretGeometry> {
+        self.focused_handler()
+            .and_then(|handler| handler.caret_geometry())
+    }
 }
 
 /// Requests focus for a text field.
@@ -356,6 +382,12 @@ pub fn dispatch_ime_set_selection(start_bytes: usize, end_bytes: usize) -> bool 
 /// not expose its state).
 pub fn focused_editor_state() -> Option<ImeEditorState> {
     crate::render_state::with_text_field_focus(|state| state.focused_editor_state())
+}
+
+/// Window-space caret geometry of the focused field (see [`ImeCaretGeometry`]),
+/// or `None` when no field is focused or it exposes no geometry.
+pub fn focused_caret_geometry() -> Option<ImeCaretGeometry> {
+    crate::render_state::with_text_field_focus(|state| state.focused_caret_geometry())
 }
 
 #[cfg(test)]

@@ -970,6 +970,16 @@ where
         app_context.enter(cranpose_ui::text_field_focus::focused_editor_state)
     }
 
+    /// Window-space caret geometry of the focused field for coordinate-based
+    /// platform text input (iOS trackpad cursor + tap-to-position), or `None`
+    /// when no text field is focused.
+    pub fn ime_caret_geometry(
+        &mut self,
+    ) -> Option<cranpose_ui::text_field_focus::ImeCaretGeometry> {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::text_field_focus::focused_caret_geometry)
+    }
+
     /// Clears text-field focus (used by platform IME actions such as
     /// Android's Done). The focus-loss notification hides the soft keyboard.
     pub fn clear_text_field_focus(&mut self) {

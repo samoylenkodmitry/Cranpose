@@ -5,9 +5,25 @@
 //! avoiding O(N) tree scans.
 
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState};
+use cranpose_ui_graphics::Point;
+use std::cell::Cell;
 use std::rc::Rc;
 
+use crate::text::{measure_text, AnnotatedString, TextStyle};
+use crate::text_field_focus::ImeCaretGeometry;
 use crate::text_field_input::handle_key_event_impl;
+
+/// Live window-space geometry the field's layout keeps fresh (shared `Rc<Cell>`s),
+/// plus the text style — enough to compute caret coordinates for coordinate-based
+/// platform text input (iOS `UITextInput`) without holding a layout node.
+#[derive(Clone)]
+pub(crate) struct CaretGeometryRefs {
+    pub node_origin: Rc<Cell<Point>>,
+    pub content_offset: Rc<Cell<f32>>,
+    pub content_y_offset: Rc<Cell<f32>>,
+    pub scroll_offset: Rc<Cell<f32>>,
+    pub style: TextStyle,
+}
 
 /// Handler wrapper for O(1) focus dispatch.
 /// Implements FocusedTextFieldHandler by delegating to TextFieldState operations.
@@ -17,6 +33,8 @@ pub(crate) struct TextFieldHandler {
     node_id: Option<cranpose_core::NodeId>,
     /// Line limits configuration
     line_limits: TextFieldLineLimits,
+    /// Live geometry for coordinate-based platform text input.
+    geometry: CaretGeometryRefs,
 }
 
 impl TextFieldHandler {
@@ -24,11 +42,13 @@ impl TextFieldHandler {
         state: TextFieldState,
         node_id: Option<cranpose_core::NodeId>,
         line_limits: TextFieldLineLimits,
+        geometry: CaretGeometryRefs,
     ) -> Rc<Self> {
         Rc::new(Self {
             state,
             node_id,
             line_limits,
+            geometry,
         })
     }
 
@@ -226,6 +246,41 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             single_line: matches!(self.line_limits, TextFieldLineLimits::SingleLine),
         })
     }
+
+    fn caret_geometry(&self) -> Option<ImeCaretGeometry> {
+        let value = self.state.value();
+        let text = value.text.as_str();
+        // The caret geometry here models one visual line of x positions. Text
+        // that spans multiple lines (a newline) needs per-line layout not
+        // modelled here, so expose nothing and let the platform fall back. This
+        // covers single-line fields always and short multi-line fields that fit
+        // on one line (the common coordinate-cursor case).
+        if text.contains('\n') {
+            return None;
+        }
+        let g = &self.geometry;
+        let origin = g.node_origin.get();
+        // Invert the field's click mapping (local_text_x = local_node_x -
+        // padding + scroll): the caret's window x is the node origin plus the
+        // content padding, minus the horizontal pan, plus the glyph advance.
+        let base_x = origin.x + g.content_offset.get() - g.scroll_offset.get();
+        let top = origin.y + g.content_y_offset.get();
+        let line_height = measure_text(&AnnotatedString::from("Ag"), &g.style).line_height;
+
+        let mut caret_xs = Vec::with_capacity(text.len() + 1);
+        caret_xs.push(base_x);
+        let mut byte = 0usize;
+        for ch in text.chars() {
+            byte += ch.len_utf8();
+            let advance = measure_text(&AnnotatedString::from(&text[..byte]), &g.style).width;
+            caret_xs.push(base_x + advance);
+        }
+        Some(ImeCaretGeometry {
+            caret_xs,
+            top,
+            line_height,
+        })
+    }
 }
 
 /// Largest byte index `<= index` that lies on a `char` boundary of `text`.
@@ -265,7 +320,18 @@ mod tests {
         line_limits: TextFieldLineLimits,
     ) -> (TextFieldState, Rc<RefCell<bool>>) {
         let state = TextFieldState::new(initial);
-        let handler = TextFieldHandler::new(state.clone(), None, line_limits);
+        let handler = TextFieldHandler::new(
+            state.clone(),
+            None,
+            line_limits,
+            CaretGeometryRefs {
+                node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
+                content_offset: Rc::new(Cell::new(0.0)),
+                content_y_offset: Rc::new(Cell::new(0.0)),
+                scroll_offset: Rc::new(Cell::new(0.0)),
+                style: TextStyle::default(),
+            },
+        );
         let focus = Rc::new(RefCell::new(false));
         text_field_focus::request_focus(focus.clone(), handler);
         (state, focus)
@@ -274,6 +340,43 @@ mod tests {
     /// Headless commit path for soft-keyboard input on Android:
     /// `NativeActivity` IMEs without an `InputConnection` deliver characters
     /// as key events whose text comes from `KeyCharacterMap`. Framework key
+    /// Coordinate-based platform text input (iOS) reads per-character caret
+    /// geometry for text on a single visual line (one caret x per character
+    /// boundary), and gets none for text that spans multiple lines.
+    #[test]
+    fn caret_geometry_exposed_for_single_visual_line() {
+        // Single-visual-line text (no newline) exposes geometry, even for a
+        // multi-line-capable field — the common search/tag input case.
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (_state, focus) = focused_state(
+                "abc",
+                TextFieldLineLimits::MultiLine {
+                    min_lines: 1,
+                    max_lines: 3,
+                },
+            );
+            let geom = text_field_focus::focused_caret_geometry().expect("caret geometry");
+            // One caret position per character boundary: before each char + end.
+            assert_eq!(geom.caret_xs.len(), "abc".chars().count() + 1);
+            drop(focus);
+        });
+
+        // Text spanning multiple lines needs per-line layout: expose nothing.
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let (_state, focus) = focused_state(
+                "a\nb",
+                TextFieldLineLimits::MultiLine {
+                    min_lines: 1,
+                    max_lines: 3,
+                },
+            );
+            assert!(text_field_focus::focused_caret_geometry().is_none());
+            drop(focus);
+        });
+    }
+
     /// codes may be `Unknown` for layout-specific keys; the text must still
     /// commit.
     #[test]

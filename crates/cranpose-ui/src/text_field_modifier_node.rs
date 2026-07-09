@@ -481,9 +481,22 @@ impl TextFieldModifierNode {
                     // clean caret for a mouse.
                     refs.last_pointer_source.set(event.source);
 
-                    // Request focus with O(1) handler, passing node_id and line_limits for key handling
-                    let handler =
-                        TextFieldHandler::new(state.clone(), refs.node_id.get(), line_limits);
+                    // Request focus with O(1) handler, passing node_id and line
+                    // limits for key handling plus the live geometry cells the
+                    // layout keeps fresh, so coordinate-based platform text input
+                    // (iOS caret positioning) can read the caret's window rect.
+                    let handler = TextFieldHandler::new(
+                        state.clone(),
+                        refs.node_id.get(),
+                        line_limits,
+                        crate::text_field_handler::CaretGeometryRefs {
+                            node_origin: refs.node_origin.clone(),
+                            content_offset: refs.content_offset.clone(),
+                            content_y_offset: refs.content_y_offset.clone(),
+                            scroll_offset: refs.scroll_offset.clone(),
+                            style: style.clone(),
+                        },
+                    );
                     crate::text_field_focus::request_focus(refs.is_focused.clone(), handler);
 
                     let now = web_time::Instant::now();
