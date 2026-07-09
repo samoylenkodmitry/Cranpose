@@ -174,6 +174,22 @@ where
         let measured_visible_items = visible_items.len();
         let hit_time_budget = start_time.elapsed() > DEFAULT_TIME_BUDGET;
 
+        // Scroll back to fill if the forward pass reached the end of the list
+        // but left spare space (e.g. the viewport grew because the soft keyboard
+        // hid): pull earlier items in so the content bottom aligns with the
+        // viewport end instead of leaving an over-scroll blank gap.
+        let effective_first_index = self
+            .fill_end_gap(
+                &mut visible_items,
+                current_index,
+                current_offset,
+                viewport_end,
+                first_item_index,
+                start_time,
+            )
+            .unwrap_or(first_item_index);
+        let backfilled = effective_first_index != first_item_index;
+
         // Measure beyond-bounds items after visible.
         self.measure_beyond_after(
             current_index,
@@ -183,9 +199,12 @@ where
         );
 
         // Measure beyond-bounds items before visible.
-        if self.include_before_beyond_bounds && first_item_index > 0 && !visible_items.is_empty() {
+        if self.include_before_beyond_bounds
+            && effective_first_index > 0
+            && !visible_items.is_empty()
+        {
             let before_items = self.measure_beyond_before(
-                first_item_index,
+                effective_first_index,
                 visible_items[0].offset,
                 visible_items.len(),
                 start_time,
@@ -197,10 +216,11 @@ where
             }
         }
 
-        let viewport_filled = current_offset >= viewport_end || current_index >= self.items_count;
+        let viewport_filled =
+            backfilled || current_offset >= viewport_end || current_index >= self.items_count;
         let pass = ItemMeasurePass {
             items: visible_items,
-            start_index: first_item_index,
+            start_index: effective_first_index,
             start_offset,
             next_index: current_index,
             next_offset: current_offset,
@@ -224,6 +244,63 @@ where
             );
         }
         pass
+    }
+
+    /// Scrolls back to fill a viewport that the forward pass could not fill.
+    ///
+    /// When the forward measurement runs off the end of the list (its item index
+    /// reaches `items_count`) but stops before the viewport end (spare space
+    /// below), the stored scroll position is too far down for the current
+    /// viewport — typically because the viewport just grew (the soft keyboard
+    /// hid, e.g.). This
+    /// shifts the measured items down so the last item's bottom aligns with the
+    /// viewport end, then measures earlier items into the freed top space,
+    /// preventing an over-scroll blank gap. Returns the new first visible index
+    /// when it backfilled.
+    fn fill_end_gap(
+        &mut self,
+        visible_items: &mut Vec<LazyListMeasuredItem>,
+        current_index: usize,
+        current_offset: f32,
+        viewport_end: f32,
+        first_item_index: usize,
+        start_time: Instant,
+    ) -> Option<usize> {
+        if current_index < self.items_count || first_item_index == 0 || visible_items.is_empty() {
+            return None;
+        }
+        let spare = viewport_end - current_offset;
+        if spare <= 0.5 {
+            return None;
+        }
+        // Align the content bottom with the viewport end.
+        for item in visible_items.iter_mut() {
+            item.offset += spare;
+        }
+        // Fill the freed space at the top with the preceding items.
+        let mut top = visible_items[0].offset;
+        let mut idx = first_item_index;
+        while idx > 0 && top > self.config.before_content_padding + 0.5 {
+            if start_time.elapsed() > DEFAULT_TIME_BUDGET {
+                break;
+            }
+            idx -= 1;
+            let mut item = self
+                .take_pre_measured(idx)
+                .unwrap_or_else(|| (self.measure_fn)(idx));
+            top -= item.main_axis_size + self.config.spacing;
+            item.offset = top;
+            visible_items.insert(0, item);
+        }
+        // If the list start was reached, clamp the top to the content padding.
+        let first = &visible_items[0];
+        if first.index == 0 && first.offset > self.config.before_content_padding {
+            let adjustment = first.offset - self.config.before_content_padding;
+            for item in visible_items.iter_mut() {
+                item.offset -= adjustment;
+            }
+        }
+        Some(visible_items[0].index)
     }
 
     /// Measures visible items starting from `start_index`.

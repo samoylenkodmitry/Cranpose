@@ -924,3 +924,80 @@ fn unbounded_lazy_column_with_tall_item_reports_true_content_height() {
         *cell.borrow_mut() = None;
     });
 }
+
+/// Regression (device repro): the soft keyboard shrinks the list viewport; the
+/// user scrolls to the end; then the keyboard hides and the viewport grows
+/// back. The list MUST scroll back to fill the freed space instead of leaving a
+/// blank gap where the keyboard was (an over-scroll: content ending above the
+/// grown viewport's bottom).
+#[test]
+fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
+    // 10 items x 100 = 1000 tall content.
+    let heights: &'static [f32] = &[
+        100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0,
+    ];
+    let mut composition = run_test_composition(move || {
+        let list_state = remember_lazy_list_state();
+        LAST_LAZY_STATE.with(|cell| {
+            *cell.borrow_mut() = Some(list_state);
+        });
+        LazyColumn(
+            Modifier::empty(),
+            list_state,
+            LazyColumnSpec::default(),
+            move |scope| {
+                scope.items(
+                    heights.len(),
+                    None::<fn(usize) -> u64>,
+                    None::<fn(usize) -> u64>,
+                    move |index| {
+                        Spacer(Size {
+                            width: 100.0,
+                            height: heights[index],
+                        });
+                    },
+                );
+            },
+        );
+    });
+    let root = composition.root().expect("lazy column root");
+    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+
+    let small = ViewportSize {
+        width: 320.0,
+        height: 400.0,
+    }; // keyboard up
+    let large = ViewportSize {
+        width: 320.0,
+        height: 800.0,
+    }; // keyboard hidden
+
+    // Scroll to the end with the shrunk (keyboard-up) viewport.
+    measure_tree(&mut composition, root, small);
+    for _ in 0..50 {
+        list_state.dispatch_scroll_delta(-280.0);
+        composition.process_invalid_scopes().expect("recompose");
+        measure_tree(&mut composition, root, small);
+    }
+
+    // Keyboard hides -> the viewport grows back.
+    measure_tree(&mut composition, root, large);
+
+    let idx = list_state.first_visible_item_index_non_reactive();
+    let off = list_state.first_visible_item_scroll_offset_non_reactive();
+    // Uniform 100-tall items: total scroll distance from the top.
+    let effective = idx as f32 * 100.0 + off;
+    // content 1000, viewport 800 => max scroll 200; content must fill the
+    // viewport, so the list re-anchors to offset 200 (not the stale ~600 from
+    // the small viewport, which would leave a ~400 blank gap).
+    let blank_gap = large.height - (1000.0 - effective);
+    assert!(
+        (effective - 200.0).abs() < 1.0,
+        "after the viewport grew from 400 to 800, the list must re-anchor so \
+         content fills it (offset 200), but it stayed at effective offset \
+         {effective}, leaving a {blank_gap}px blank gap"
+    );
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+}
