@@ -5,9 +5,12 @@
 #[cfg(test)]
 use cranpose_core::{location_key, Composition, MemoryApplier};
 
+pub mod device_info;
 pub mod file_picker;
+pub mod haptics;
 pub mod http;
 pub mod image_picker;
+pub mod network_status;
 pub mod notifier;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer;
@@ -16,11 +19,18 @@ pub mod theme;
 pub mod uri_handler;
 pub mod writable_folder;
 
+pub use device_info::{
+    clear_platform_device_info, device_info, set_platform_device_info, DeviceInfo, DeviceInfoRef,
+};
 pub use file_picker::{
     clear_platform_file_picker, default_file_picker, local_file_picker, set_platform_file_picker,
     FileFilter, FilePicker, FilePickerError, FilePickerOptions, FilePickerRef, FolderStream,
     FolderStreamRef, PickedEntry, PickedEntryRef, PickedKind, PickerFuture, ProvideFilePicker,
     ResumedPick,
+};
+pub use haptics::{
+    clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics, HapticFeedback,
+    Haptics, HapticsRef, ProvideHaptics,
 };
 pub use http::{
     default_http_client, local_http_client, map_ordered_concurrent, HttpClient, HttpClientRef,
@@ -30,6 +40,10 @@ pub use image_picker::{
     clear_platform_image_picker, default_image_picker, local_image_picker,
     set_platform_image_picker, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
     ProvideImagePicker, IMAGE_EXTENSIONS,
+};
+pub use network_status::{
+    clear_platform_network_monitor, network_monitor, network_status, set_platform_network_monitor,
+    NetworkMonitor, NetworkMonitorRef, NetworkStatus,
 };
 pub use notifier::{
     clear_platform_notifier, default_notifier, local_notifier, set_platform_notifier, Notifier,
