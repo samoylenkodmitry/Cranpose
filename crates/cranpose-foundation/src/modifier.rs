@@ -2254,12 +2254,8 @@ impl<'a> ModifierChainNodeRef<'a> {
                     // Navigate to the delegate node
                     let mut current: &dyn ModifierNode = &**node_borrow;
                     for &delegate_index in path.delegates() {
-                        if let Some(delegate) = nth_delegate(current, delegate_index as usize) {
-                            current = delegate;
-                        } else {
-                            // Return None if delegate path is invalid
-                            return None;
-                        }
+                        // `?`: bail out with None if the delegate path is invalid.
+                        current = nth_delegate(current, delegate_index as usize)?;
                     }
                     Some(f(current))
                 }
