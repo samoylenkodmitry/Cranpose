@@ -309,6 +309,11 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         let waker_proxy = self.event_proxy.clone();
         shell.set_frame_waker(move || waker_proxy.wake_up());
 
+        // Wake the loop when a soft-keyboard keystroke is queued so it drains
+        // (into the focused field) on the next frame, not the cursor-blink tick.
+        let keyboard_proxy = self.event_proxy.clone();
+        crate::ios_keyboard::set_wake(Box::new(move || keyboard_proxy.wake_up()));
+
         self.gpu = Some(GpuResources {
             surface,
             device,

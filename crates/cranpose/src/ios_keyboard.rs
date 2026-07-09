@@ -31,9 +31,29 @@ fn queue() -> &'static Mutex<Vec<KeyInput>> {
     Q.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+type WakeFn = Box<dyn Fn() + Send + Sync>;
+
+fn wake_slot() -> &'static Mutex<Option<WakeFn>> {
+    static W: OnceLock<Mutex<Option<WakeFn>>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(None))
+}
+
+/// Installs a callback that wakes the iOS event loop so a queued keystroke is
+/// drained on the next frame instead of waiting for the cursor-blink timer.
+pub(crate) fn set_wake(wake: WakeFn) {
+    if let Ok(mut w) = wake_slot().lock() {
+        *w = Some(wake);
+    }
+}
+
 fn push(input: KeyInput) {
     if let Ok(mut q) = queue().lock() {
         q.push(input);
+    }
+    if let Ok(w) = wake_slot().lock() {
+        if let Some(wake) = w.as_ref() {
+            wake();
+        }
     }
 }
 
@@ -100,6 +120,17 @@ struct IosKeyboard {
 
 impl PlatformTextInputHandler for IosKeyboard {
     fn show_keyboard(&self) {
+        // Attach to the current key window's view (idempotent) so the view is in
+        // the responder chain — the window may not have existed at registration.
+        if let Some(mtm) = MainThreadMarker::new() {
+            if self.view.superview().is_none() {
+                if let Some(root) = crate::ios_file_picker::root_view_controller(mtm) {
+                    if let Some(root_view) = root.view() {
+                        root_view.addSubview(&self.view);
+                    }
+                }
+            }
+        }
         self.view.becomeFirstResponder();
     }
 
@@ -116,8 +147,8 @@ pub(crate) fn register() {
         return;
     };
     let view = KeyInputView::new(mtm);
-    // Attach the (zero-size, invisible) view to the key window so it is in the
-    // responder chain and can become first responder.
+    // Attach to the key window up front so the view is in the responder chain
+    // (show_keyboard re-attaches lazily if the window was not ready yet).
     if let Some(root) = crate::ios_file_picker::root_view_controller(mtm) {
         if let Some(root_view) = root.view() {
             root_view.addSubview(&view);
