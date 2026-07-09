@@ -131,15 +131,20 @@ fn frame_from_sample(sample: &CMSampleBuffer) -> Option<CameraFrame> {
     let bytes_per_row = CVPixelBufferGetBytesPerRow(pixel_buffer);
     let base = CVPixelBufferGetBaseAddress(pixel_buffer) as *const u8;
 
-    let mut rgba = vec![0u8; width * height * 4];
+    // The sensor delivers landscape buffers; rotate 90° clockwise so the
+    // in-app viewfinder is upright in portrait. Output is `height` x `width`.
+    let out_w = height;
+    let out_h = width;
+    let mut rgba = vec![0u8; out_w * out_h * 4];
     if !base.is_null() && bytes_per_row >= width * 4 {
-        for y in 0..height {
-            let src_row = unsafe { base.add(y * bytes_per_row) };
-            let dst_row = y * width * 4;
-            for x in 0..width {
-                let src = unsafe { src_row.add(x * 4) };
+        for sy in 0..height {
+            let src_row = unsafe { base.add(sy * bytes_per_row) };
+            let dx = height - 1 - sy;
+            for sx in 0..width {
+                let src = unsafe { src_row.add(sx * 4) };
                 let (b, g, r, a) = unsafe { (*src, *src.add(1), *src.add(2), *src.add(3)) };
-                let dst = dst_row + x * 4;
+                // 90° clockwise: src(sx, sy) -> dst(height-1-sy, sx).
+                let dst = (sx * out_w + dx) * 4;
                 rgba[dst] = r;
                 rgba[dst + 1] = g;
                 rgba[dst + 2] = b;
@@ -151,8 +156,8 @@ fn frame_from_sample(sample: &CMSampleBuffer) -> Option<CameraFrame> {
     unsafe { CVPixelBufferUnlockBaseAddress(pixel_buffer, flags) };
 
     Some(CameraFrame {
-        width: width as u32,
-        height: height as u32,
+        width: out_w as u32,
+        height: out_h as u32,
         rgba,
     })
 }
