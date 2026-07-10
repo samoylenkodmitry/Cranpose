@@ -699,6 +699,54 @@ pub fn get_offset_for_position(
     crate::render_state::with_text_measurer(|m| m.get_offset_for_position(text, style, x, y))
 }
 
+/// Byte offset nearest the local content position (`x`, `y`), **wrap-aware** —
+/// the single hit-test every editable-text pointer path uses (tap-to-place,
+/// drag-select, and selection-handle drag).
+///
+/// It is the inverse of the drawn caret and [`wrapped_line_ranges`]: `y` selects
+/// the VISUAL (wrapped) line (`floor(y / line_height)`), then `x` picks the
+/// nearest char boundary WITHIN that line (delegated to the measurer with `y`
+/// forced to 0). `x`/`y` must already be in text space (padding- and
+/// pan-adjusted). The plain [`get_offset_for_position`] maps `y` through the
+/// measurer's logical `\n` layout, so on wrapped text it lands on the wrong line
+/// (an error that grows with each wrapped line above the finger). With
+/// `wrap_width == None` (single-line fields) this reduces to the one logical
+/// line.
+pub fn offset_for_position_wrapped(
+    text: &str,
+    style: &TextStyle,
+    node_id: Option<NodeId>,
+    wrap_width: Option<f32>,
+    line_height: f32,
+    x: f32,
+    y: f32,
+) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    let annotated = crate::text::AnnotatedString::from(text);
+    let line_ranges = wrapped_line_ranges(
+        node_id,
+        &annotated,
+        style,
+        TextLayoutOptions::default(),
+        wrap_width,
+    );
+    if line_ranges.is_empty() {
+        return 0;
+    }
+    let line_idx = if line_height > 0.0 {
+        (y / line_height).floor().max(0.0) as usize
+    } else {
+        0
+    }
+    .min(line_ranges.len() - 1);
+    let range = &line_ranges[line_idx];
+    let line = &text[range.start..range.end];
+    let within = get_offset_for_position(&crate::text::AnnotatedString::from(line), style, x, 0.0);
+    range.start + within.min(line.len())
+}
+
 pub fn get_cursor_x_for_offset(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,

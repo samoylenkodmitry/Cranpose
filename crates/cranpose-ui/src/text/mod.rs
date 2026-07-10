@@ -19,8 +19,9 @@ pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
 pub use measure::{
     get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
     measure_text_for_node, measure_text_with_options, measure_text_with_options_for_node,
-    prepare_text_layout, prepare_text_layout_for_node, set_text_measurer, wrapped_line_ranges,
-    PreparedTextLayout, TextLinePrefixWidths, TextMeasurer, TextMetrics,
+    offset_for_position_wrapped, prepare_text_layout, prepare_text_layout_for_node,
+    set_text_measurer, wrapped_line_ranges, PreparedTextLayout, TextLinePrefixWidths, TextMeasurer,
+    TextMetrics,
 };
 pub use paragraph::{
     resolve_text_direction, Hyphens, LineBreak, ResolvedTextDirection, TextAlign, TextDirection,

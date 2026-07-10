@@ -73,7 +73,19 @@ fn window_pos_to_offset(
     // to select the line the tip points at rather than the one below it.
     let local_y =
         (window_pos.y - metrics.node_origin.y - metrics.padding_top - metrics.line_height).max(0.0);
-    crate::text::get_offset_for_position(&AnnotatedString::from(text), style, local_x, local_y)
+    // Resolve the VISUAL (wrapped) line the same way the drawn caret and
+    // `handle_tip_window_pos` do. The plain measurer maps `y` through logical
+    // `\n` lines only, so on wrapped text a handle drag lands on the wrong line
+    // (an offset that grows with each wrapped line above the finger).
+    crate::text::offset_for_position_wrapped(
+        text,
+        style,
+        None,
+        metrics.wrap_width,
+        metrics.line_height,
+        local_x,
+        local_y,
+    )
 }
 ///
 /// # When to use

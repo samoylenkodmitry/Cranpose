@@ -315,6 +315,14 @@ pub(crate) struct TextFieldRefs {
     /// pointer event (`global_position - position`). Used to place selection
     /// handles in the top-level overlay, which is in window space.
     pub node_origin: Rc<Cell<Point>>,
+    /// Line height from the last measurement. Shared with the node's
+    /// `measured_line_height` so the pointer handler maps a tap's `y` to the
+    /// correct VISUAL (wrapped) line.
+    pub line_height: Rc<Cell<f32>>,
+    /// Wrap width the last measurement laid the text out at (`None` for
+    /// single-line fields). Shared with the node's `measured_wrap_width` so the
+    /// pointer handler resolves the same wrapped lines the renderer draws.
+    pub wrap_width: Rc<Cell<Option<f32>>>,
 }
 
 impl TextFieldRefs {
@@ -332,6 +340,8 @@ impl TextFieldRefs {
             scroll_offset: Rc::new(Cell::new(0.0_f32)),
             last_pointer_source: Rc::new(Cell::new(PointerSource::Unknown)),
             node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
+            line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
+            wrap_width: Rc::new(Cell::new(None::<f32>)),
         }
     }
 }
@@ -401,6 +411,8 @@ impl TextFieldModifierNode {
     pub fn new(state: TextFieldState, style: TextStyle) -> Self {
         let value = state.value();
         let refs = TextFieldRefs::new();
+        let refs_line_height = refs.line_height.clone();
+        let refs_wrap_width = refs.wrap_width.clone();
         let line_limits = TextFieldLineLimits::default();
         let cached_handler =
             Self::create_handler(state.clone(), refs.clone(), line_limits, style.clone());
@@ -421,8 +433,11 @@ impl TextFieldModifierNode {
                 width: 0.0,
                 height: 0.0,
             })),
-            measured_line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
-            measured_wrap_width: Rc::new(Cell::new(None)),
+            // Alias the refs cells so the pointer handler reads the same live
+            // line-height / wrap-width the layout writes here — a tap's `y` must
+            // resolve to the same VISUAL line the renderer draws.
+            measured_line_height: refs_line_height,
+            measured_wrap_width: refs_wrap_width,
             cached_handler,
             cached_pan_resolver,
             handle_controller: None,
@@ -571,9 +586,12 @@ impl TextFieldModifierNode {
 
                     let now = web_time::Instant::now();
                     let text = state.text();
-                    let pos = crate::text::get_offset_for_position(
-                        &crate::text::AnnotatedString::from(text.as_str()),
+                    let pos = crate::text::offset_for_position_wrapped(
+                        &text,
                         &style,
+                        refs.node_id.get(),
+                        refs.wrap_width.get(),
+                        refs.line_height.get(),
                         click_x,
                         click_y,
                     );
@@ -674,9 +692,12 @@ impl TextFieldModifierNode {
                     if let Some(anchor) = refs.drag_anchor.get() {
                         if *refs.is_focused.borrow() {
                             let text = state.text();
-                            let current_pos = crate::text::get_offset_for_position(
-                                &crate::text::AnnotatedString::from(text.as_str()),
+                            let current_pos = crate::text::offset_for_position_wrapped(
+                                &text,
                                 &style,
+                                refs.node_id.get(),
+                                refs.wrap_width.get(),
+                                refs.line_height.get(),
                                 click_x,
                                 click_y,
                             );
@@ -1495,6 +1516,64 @@ mod tests {
         assert_eq!(spanning.len(), 2, "wrapped line spans two visual rows");
         assert_eq!(spanning[0].y, 0.0);
         assert_eq!(spanning[1].y, line_height);
+    }
+
+    // Regression: a finger tap must resolve to the byte offset on the VISUAL
+    // (wrapped) line under the finger. The measurer's plain get_offset_for_position
+    // maps `y` through logical `\n` lines only, so on wrapped text the caret
+    // landed below the finger — the reported "taps miss the y coordinate" bug.
+    #[test]
+    fn tap_resolves_offset_on_wrapped_visual_line() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        // Same fixture: wrap width 30 splits "aaaaa" into "aaa"/"aa"; "bb" is the
+        // third visual line. line_height 10 → line 2 spans y in [20, 30).
+        let text = "aaaaa\nbb";
+        let style = TextStyle::default();
+        let line_height = 10.0_f32;
+
+        // Tap on visual line 2 ("bb") must land in bytes 6..=8, not in the
+        // wrapped first logical line.
+        let off = crate::text::offset_for_position_wrapped(
+            text,
+            &style,
+            None,
+            Some(30.0),
+            line_height,
+            8.0,
+            22.0,
+        );
+        assert!(
+            (6..=8).contains(&off),
+            "tap on visual line 'bb' resolved to {off}, expected 6..=8"
+        );
+
+        // Tap on visual line 1 (the "aa" continuation of the first logical line)
+        // must land in bytes 3..=5.
+        let off1 = crate::text::offset_for_position_wrapped(
+            text,
+            &style,
+            None,
+            Some(30.0),
+            line_height,
+            4.0,
+            12.0,
+        );
+        assert!(
+            (3..=5).contains(&off1),
+            "tap on wrapped 'aa' resolved to {off1}, expected 3..=5"
+        );
+
+        // Single-line (no wrap width): degrades to the one logical line.
+        let off2 = crate::text::offset_for_position_wrapped(
+            "hello",
+            &style,
+            None,
+            None,
+            line_height,
+            0.0,
+            0.0,
+        );
+        assert_eq!(off2, 0);
     }
 
     #[test]
