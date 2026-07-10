@@ -211,6 +211,76 @@ pub(crate) fn caret_visual_line_for_offset(
     }
 }
 
+/// Window-space (pre-clip) rects covering byte range `start..end`, one per
+/// VISUAL (wrapped) line the range touches, each spanning the full
+/// `line_height`.
+///
+/// Shared by the selection highlight and the composition-preedit underline so
+/// both track soft-wrapping exactly as the renderer and caret do. Splitting on
+/// logical `\n` alone draws the rect on the wrong line whenever a line above
+/// the range soft-wraps (the x stays right, the y lands one visual line too
+/// high). Iterating the same wrapped ranges the renderer lays out keeps them in
+/// sync.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn range_visual_line_rects(
+    text: &str,
+    style: &TextStyle,
+    node_id: Option<cranpose_core::NodeId>,
+    wrap_width: Option<f32>,
+    padding_left: f32,
+    padding_top: f32,
+    pan: f32,
+    line_height: f32,
+    start: usize,
+    end: usize,
+) -> Vec<cranpose_ui_graphics::Rect> {
+    if start >= end {
+        return Vec::new();
+    }
+    let annotated = crate::text::AnnotatedString::from(text);
+    let line_ranges = crate::text::wrapped_line_ranges(
+        node_id,
+        &annotated,
+        style,
+        crate::text::TextLayoutOptions::default(),
+        wrap_width,
+    );
+    let mut rects = Vec::new();
+    for (line_idx, line_range) in line_ranges.iter().enumerate() {
+        let line_start = line_range.start;
+        let line_end = line_range.end;
+        if end <= line_start || start >= line_end {
+            continue;
+        }
+        let seg_start = start.max(line_start);
+        let seg_end = end.min(line_end);
+        let x0 = crate::text::measure_text(
+            &crate::text::AnnotatedString::from(&text[line_start..seg_start]),
+            style,
+        )
+        .width
+            + padding_left
+            - pan;
+        let x1 = crate::text::measure_text(
+            &crate::text::AnnotatedString::from(&text[line_start..seg_end]),
+            style,
+        )
+        .width
+            + padding_left
+            - pan;
+        let width = x1 - x0;
+        if width > 0.0 {
+            rects.push(cranpose_ui_graphics::Rect {
+                x: x0,
+                y: padding_top + line_idx as f32 * line_height,
+                width,
+                height: line_height,
+            });
+        }
+    }
+    rects
+}
+
 /// Shared references for text field input handling.
 ///
 /// This struct bundles the shared state references passed to the pointer input handler,
@@ -1047,49 +1117,26 @@ impl DrawModifierNode for TextFieldModifierNode {
                 let sel_start = selection.min();
                 let sel_end = selection.max();
 
-                let lines: Vec<&str> = text.split('\n').collect();
-                let mut byte_offset: usize = 0;
-
-                for (line_idx, line) in lines.iter().enumerate() {
-                    let line_start = byte_offset;
-                    let line_end = byte_offset + line.len();
-
-                    if sel_end > line_start && sel_start < line_end {
-                        let sel_start_in_line = sel_start.saturating_sub(line_start);
-                        let sel_end_in_line = (sel_end - line_start).min(line.len());
-
-                        let sel_start_x = crate::text::measure_text(
-                            &crate::text::AnnotatedString::from(&line[..sel_start_in_line]),
-                            &style,
-                        )
-                        .width
-                            + padding_left
-                            - pan;
-                        let sel_end_x = crate::text::measure_text(
-                            &crate::text::AnnotatedString::from(&line[..sel_end_in_line]),
-                            &style,
-                        )
-                        .width
-                            + padding_left
-                            - pan;
-                        let sel_width = sel_end_x - sel_start_x;
-
-                        if sel_width > 0.0 {
-                            let sel_rect = cranpose_ui_graphics::Rect {
-                                x: sel_start_x,
-                                y: padding_top + line_idx as f32 * line_height,
-                                width: sel_width,
-                                height: line_height,
-                            };
-                            if let Some(clipped) = intersect_rect(sel_rect, clip_bounds) {
-                                primitives.push(DrawPrimitive::Rect {
-                                    rect: clipped,
-                                    brush: selection_brush.clone(),
-                                });
-                            }
-                        }
+                // Highlight per VISUAL (wrapped) line so it lands on the same
+                // glyphs the renderer draws.
+                for sel_rect in range_visual_line_rects(
+                    &text,
+                    &style,
+                    node_id.get(),
+                    measured_wrap_width.get(),
+                    padding_left,
+                    padding_top,
+                    pan,
+                    line_height,
+                    sel_start,
+                    sel_end,
+                ) {
+                    if let Some(clipped) = intersect_rect(sel_rect, clip_bounds) {
+                        primitives.push(DrawPrimitive::Rect {
+                            rect: clipped,
+                            brush: selection_brush.clone(),
+                        });
                     }
-                    byte_offset = line_end + 1;
                 }
             }
 
@@ -1100,70 +1147,38 @@ impl DrawModifierNode for TextFieldModifierNode {
                 let comp_end = comp_range.max();
 
                 if comp_start < comp_end && comp_end <= text.len() {
-                    let lines: Vec<&str> = text.split('\n').collect();
-                    let mut byte_offset: usize = 0;
-
                     // Underline color: slightly transparent white/gray
                     let underline_brush = cranpose_ui_graphics::Brush::solid(
                         cranpose_ui_graphics::Color(0.8, 0.8, 0.8, 0.8),
                     );
                     let underline_height: f32 = 2.0;
 
-                    for (line_idx, line) in lines.iter().enumerate() {
-                        let line_start = byte_offset;
-                        let line_end = byte_offset + line.len();
-
-                        // Check if composition overlaps this line
-                        if comp_end > line_start && comp_start < line_end {
-                            let comp_start_in_line = comp_start.saturating_sub(line_start);
-                            let comp_end_in_line = (comp_end - line_start).min(line.len());
-
-                            // Clamp to valid UTF-8 boundaries
-                            let comp_start_in_line = if line.is_char_boundary(comp_start_in_line) {
-                                comp_start_in_line
-                            } else {
-                                0
-                            };
-                            let comp_end_in_line = if line.is_char_boundary(comp_end_in_line) {
-                                comp_end_in_line
-                            } else {
-                                line.len()
-                            };
-
-                            let comp_start_x = crate::text::measure_text(
-                                &crate::text::AnnotatedString::from(&line[..comp_start_in_line]),
-                                &style,
-                            )
-                            .width
-                                + padding_left
-                                - pan;
-                            let comp_end_x = crate::text::measure_text(
-                                &crate::text::AnnotatedString::from(&line[..comp_end_in_line]),
-                                &style,
-                            )
-                            .width
-                                + padding_left
-                                - pan;
-                            let comp_width = comp_end_x - comp_start_x;
-
-                            if comp_width > 0.0 {
-                                // Draw underline at the bottom of the text line
-                                let underline_rect = cranpose_ui_graphics::Rect {
-                                    x: comp_start_x,
-                                    y: padding_top + (line_idx as f32 + 1.0) * line_height
-                                        - underline_height,
-                                    width: comp_width,
-                                    height: underline_height,
-                                };
-                                if let Some(clipped) = intersect_rect(underline_rect, clip_bounds) {
-                                    primitives.push(DrawPrimitive::Rect {
-                                        rect: clipped,
-                                        brush: underline_brush.clone(),
-                                    });
-                                }
-                            }
+                    // Per-visual-line rects, shrunk to a strip at the bottom of
+                    // each line — same wrap-aware layout as the selection.
+                    for line_rect in range_visual_line_rects(
+                        &text,
+                        &style,
+                        node_id.get(),
+                        measured_wrap_width.get(),
+                        padding_left,
+                        padding_top,
+                        pan,
+                        line_height,
+                        comp_start,
+                        comp_end,
+                    ) {
+                        let underline_rect = cranpose_ui_graphics::Rect {
+                            x: line_rect.x,
+                            y: line_rect.y + line_height - underline_height,
+                            width: line_rect.width,
+                            height: underline_height,
+                        };
+                        if let Some(clipped) = intersect_rect(underline_rect, clip_bounds) {
+                            primitives.push(DrawPrimitive::Rect {
+                                rect: clipped,
+                                brush: underline_brush.clone(),
+                            });
                         }
-                        byte_offset = line_end + 1;
                     }
                 }
             }
@@ -1426,6 +1441,60 @@ mod tests {
             assert_eq!(node.text(), "Hello");
             assert!(!node.is_focused());
         });
+    }
+
+    // Regression: a selection (or preedit) whose logical line sits *below* a
+    // soft-wrapped line must highlight on the correct VISUAL line. The old
+    // logical-`\n` split placed it one line too high whenever a line above
+    // wrapped — the reported "correct x, wrong y line" iOS selection bug.
+    #[test]
+    fn selection_rects_follow_wrapped_visual_lines() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        // Monospaced test measurer: 14.0 * 0.6 = 8.4 px per char. Wrap width 30
+        // fits 3 chars (25.2) but not 4 (33.6), so "aaaaa" wraps to "aaa"/"aa".
+        let text = "aaaaa\nbb";
+        let style = TextStyle::default();
+        let line_height = 10.0_f32;
+
+        // Select "bb" — logical line 1, but VISUAL line 2 (two visual lines
+        // above it: "aaa", "aa").
+        let rects = range_visual_line_rects(
+            text,
+            &style,
+            None,
+            Some(30.0),
+            0.0,
+            0.0,
+            0.0,
+            line_height,
+            6,
+            8,
+        );
+        assert_eq!(rects.len(), 1, "one visual line touched, got {rects:?}");
+        assert_eq!(
+            rects[0].y,
+            2.0 * line_height,
+            "highlight must land on visual line 2, not logical line 1"
+        );
+        assert!(rects[0].width > 0.0);
+
+        // A selection spanning the wrap boundary produces one rect per visual
+        // line, at consecutive y positions.
+        let spanning = range_visual_line_rects(
+            text,
+            &style,
+            None,
+            Some(30.0),
+            0.0,
+            0.0,
+            0.0,
+            line_height,
+            0,
+            5,
+        );
+        assert_eq!(spanning.len(), 2, "wrapped line spans two visual rows");
+        assert_eq!(spanning[0].y, 0.0);
+        assert_eq!(spanning[1].y, line_height);
     }
 
     #[test]

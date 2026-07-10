@@ -14,27 +14,20 @@
 //! what makes swipe-the-spacebar cursor movement and selection work.
 #![allow(unsafe_code)]
 
-use block2::RcBlock;
-use core::ptr::NonNull;
 use cranpose_ui::text_input_session::{set_platform_text_input_handler, PlatformTextInputHandler};
-use cranpose_ui::EdgeInsets;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_foundation::{
-    NSArray, NSComparisonResult, NSNotification, NSNotificationCenter, NSObjectProtocol, NSRange,
-    NSString, NSValue,
-};
+use objc2_foundation::{NSArray, NSComparisonResult, NSObjectProtocol, NSRange, NSString};
 use objc2_ui_kit::{
-    NSValueUIGeometryExtensions, NSWritingDirection, UIKeyInput, UIKeyboardFrameEndUserInfoKey,
-    UIKeyboardWillChangeFrameNotification, UIKeyboardWillHideNotification, UIResponder, UIScreen,
-    UITextInput, UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits,
-    UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
-    UITextStorageDirection, UIView,
+    NSWritingDirection, UIKeyInput, UIResponder, UITextInput, UITextInputStringTokenizer,
+    UITextInputTokenizer, UITextInputTraits, UITextLayoutDirection, UITextPosition, UITextRange,
+    UITextSelectionRect, UITextStorageDirection, UIView,
 };
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
@@ -186,11 +179,7 @@ fn queue_op(op: ImeOp) {
     if let Ok(mut q) = ops().lock() {
         q.push(op);
     }
-    if let Ok(w) = wake_slot().lock() {
-        if let Some(wake) = w.as_ref() {
-            wake();
-        }
-    }
+    wake();
 }
 
 /// Apply an optimistic edit to the mirror and queue it for the composition.
@@ -683,9 +672,13 @@ impl PlatformTextInputHandler for IosKeyboard {
             }
         }
         self.view.becomeFirstResponder();
+        // Track the keyboard rising: poll the layout guide over the animation.
+        KEYBOARD_HIDING.store(false, Ordering::Relaxed);
+        kick_keyboard_poll();
     }
 
     fn hide_keyboard(&self) {
+        KEYBOARD_HIDING.store(true, Ordering::Relaxed);
         self.view.resignFirstResponder();
         // Resigning our proxy view isn't enough: the winit content view is also
         // in the responder chain and keeps the software keyboard up (our resign
@@ -695,6 +688,8 @@ impl PlatformTextInputHandler for IosKeyboard {
         if let Some(window) = self.view.window() {
             let _: bool = unsafe { msg_send![&*window, endEditing: true] };
         }
+        // Track the keyboard falling: poll the layout guide back down to zero.
+        kick_keyboard_poll();
     }
 }
 
@@ -715,89 +710,67 @@ pub(crate) fn register() {
     );
 }
 
-thread_local! {
-    /// Keeps the keyboard notification observers registered for the app's
-    /// lifetime (dropping the tokens would stop the notifications).
-    static KEYBOARD_OBSERVER: RefCell<Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>> =
-        const { RefCell::new(Vec::new()) };
-}
+// --------------------------------------------------- soft-keyboard inset (poll)
 
-/// Publishes `bottom` as the soft-keyboard inset, waking a redraw only when it
-/// actually changed (the notifications fire repeatedly during the animation).
-fn apply_keyboard_inset(insets: &Cell<EdgeInsets>, wake: &dyn Fn(), bottom: f32) {
-    let mut current = insets.get();
-    if (current.bottom - bottom).abs() > 0.5 {
-        current.bottom = bottom;
-        insets.set(current);
-        wake();
+/// Frames of polling a show/hide kicks off — 45 (~0.75s at 60fps) covers the
+/// keyboard rise/fall animation with margin.
+const KEYBOARD_POLL_BURST: u32 = 45;
+
+/// Frames still owed in the current keyboard-inset poll burst.
+static POLL_FRAMES: AtomicU32 = AtomicU32::new(0);
+
+/// True between a hide request and the next show. The layout guide reliably
+/// tracks the keyboard *rising* (reads its docked height) but does not reliably
+/// fall back to zero when the keyboard is force-dismissed in the winit run loop
+/// — the guide's frame stays at the old docked height, so the inset would keep a
+/// blank gap where the keyboard was. A dismissal is deterministic (target is
+/// zero), so the poll reports zero directly while this is set.
+static KEYBOARD_HIDING: AtomicBool = AtomicBool::new(false);
+
+/// Wakes the iOS event loop (if a waker is installed) so the next frame runs.
+fn wake() {
+    if let Ok(w) = wake_slot().lock() {
+        if let Some(wake) = w.as_ref() {
+            wake();
+        }
     }
 }
 
-/// Bottom inset, in points, that the soft keyboard covers in the given
-/// `UIKeyboardWillChangeFrame` notification. The end frame is in screen
-/// coordinates; when the keyboard is fully off-screen (hidden) its top is at
-/// the screen bottom, so this returns 0.
-fn keyboard_bottom_inset(note: &NSNotification, mtm: MainThreadMarker) -> Option<f32> {
-    let info = note.userInfo()?;
-    let value = info.objectForKey(unsafe { UIKeyboardFrameEndUserInfoKey })?;
-    let value: &NSValue = value.downcast_ref()?;
-    let frame: CGRect = unsafe { value.CGRectValue() };
-    // Single-window phone app: the main screen is the keyboard's reference space.
-    #[allow(deprecated)]
-    let screen_height = UIScreen::mainScreen(mtm).bounds().size.height;
-    Some((screen_height - frame.origin.y).max(0.0) as f32)
+/// Starts a per-frame keyboard-inset poll burst. Called synchronously the moment
+/// the keyboard is asked to show or hide, so the render loop tracks the whole
+/// animation. The keyboard-frame *notifications* are delivered late and batched
+/// by the winit run loop — driving the inset off them lags a full show/hide
+/// behind reality and leaves a blank gap after the keyboard hides — so the inset
+/// is polled from the layout guide instead (see [`poll_keyboard_bottom_inset`]).
+pub(crate) fn kick_keyboard_poll() {
+    POLL_FRAMES.store(KEYBOARD_POLL_BURST, Ordering::Relaxed);
+    wake();
 }
 
-/// Observes soft-keyboard frame changes and publishes the covered height as the
-/// bottom [`EdgeInsets`] the shell exposes through `local_ime_insets`. Without
-/// this the keyboard overlaps the focused field and the bottom of scrollable
-/// content stays unreachable (the framework's bring-into-view / content padding
-/// keys off these insets). `wake` schedules a redraw so the new inset lays out.
-pub(crate) fn observe_keyboard_insets(insets: Rc<Cell<EdgeInsets>>, wake: Rc<dyn Fn()>) {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return;
-    };
-    let center = NSNotificationCenter::defaultCenter();
+/// Whether the render loop should poll the keyboard inset this frame, consuming
+/// one frame of the burst. Returns false once the burst is spent so the loop can
+/// go idle.
+pub(crate) fn keyboard_poll_active() -> bool {
+    let remaining = POLL_FRAMES.load(Ordering::Relaxed);
+    if remaining == 0 {
+        return false;
+    }
+    POLL_FRAMES.store(remaining - 1, Ordering::Relaxed);
+    true
+}
 
-    // Frame changes (show, interactive drag, height changes): publish the
-    // covered height.
-    let change_insets = Rc::clone(&insets);
-    let change_wake = Rc::clone(&wake);
-    let change_block = RcBlock::new(move |note: NonNull<NSNotification>| {
-        let note = unsafe { note.as_ref() };
-        let bottom = keyboard_bottom_inset(note, mtm).unwrap_or(0.0);
-        apply_keyboard_inset(&change_insets, &*change_wake, bottom);
-    });
-
-    // Hide: force the inset back to zero. Some dismissals (notably force-resign
-    // via `-endEditing:`, used to hide the keyboard on focus loss) don't post a
-    // change-frame that resets to zero, which would otherwise leave an empty gap
-    // where the keyboard was.
-    let hide_block = RcBlock::new(move |_note: NonNull<NSNotification>| {
-        apply_keyboard_inset(&insets, &*wake, 0.0);
-    });
-
-    // Keyboard notifications are posted on the main thread; a nil queue delivers
-    // the blocks synchronously there, so the non-Send captured state is safe.
-    let change_token = unsafe {
-        center.addObserverForName_object_queue_usingBlock(
-            Some(UIKeyboardWillChangeFrameNotification),
-            None,
-            None,
-            &change_block,
-        )
-    };
-    let hide_token = unsafe {
-        center.addObserverForName_object_queue_usingBlock(
-            Some(UIKeyboardWillHideNotification),
-            None,
-            None,
-            &hide_block,
-        )
-    };
-    KEYBOARD_OBSERVER.with(|cell| {
-        let mut observers = cell.borrow_mut();
-        observers.push(change_token);
-        observers.push(hide_token);
-    });
+/// Reads the soft-keyboard's covered height (points) straight from the root
+/// view's `keyboardLayoutGuide` (iOS 15+), whose frame UIKit keeps current, so
+/// polling it each frame is exact. Returns `None` before the root view exists.
+/// The guide's top edge is the keyboard's top when docked, and collapses to the
+/// view's bottom (reading ~0) when the keyboard is hidden.
+pub(crate) fn poll_keyboard_bottom_inset() -> Option<f32> {
+    if KEYBOARD_HIDING.load(Ordering::Relaxed) {
+        return Some(0.0);
+    }
+    let mtm = MainThreadMarker::new()?;
+    let root_view = crate::ios_file_picker::root_view_controller(mtm)?.view()?;
+    let frame = root_view.keyboardLayoutGuide().layoutFrame();
+    let view_height = root_view.bounds().size.height;
+    Some((view_height - frame.origin.y).max(0.0) as f32)
 }

@@ -71,9 +71,6 @@ struct IosApp<F: FnMut() + 'static> {
     /// [`cranpose_ui::local_ime_insets`], updated from UIKit keyboard-frame
     /// notifications so content scrolls clear of the keyboard.
     keyboard_insets: Rc<Cell<EdgeInsets>>,
-    /// Last keyboard bottom inset applied to composition, to detect async
-    /// keyboard-frame changes and force a recompose (a redraw re-reads nothing).
-    last_ime_bottom: f32,
     /// Wakes the event loop for runtime-driven frames (animations, async work).
     event_proxy: EventLoopProxy,
     launch_error: Rc<RefCell<Option<LaunchError>>>,
@@ -95,7 +92,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
             platform: DesktopWinitPlatform::default(),
             safe_area: Rc::new(Cell::new(EdgeInsets::default())),
             keyboard_insets: Rc::new(Cell::new(EdgeInsets::default())),
-            last_ime_bottom: 0.0,
             event_proxy,
             launch_error,
         }
@@ -135,20 +131,37 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
     /// Renders a single frame, presenting only when work is pending.
     fn render(&mut self) {
-        // The soft-keyboard inset changes asynchronously (keyboard-frame
-        // notifications). Its value is provided to composition through
-        // `local_ime_insets`, but a plain redraw re-reads nothing, so a change
-        // must force a recompose or the content keeps its old padding (e.g. a
-        // blank gap left after the keyboard hides).
-        let ime_bottom = self.keyboard_insets.get().bottom;
-        let ime_inset_changed = (ime_bottom - self.last_ime_bottom).abs() > 0.5;
-        self.last_ime_bottom = ime_bottom;
+        // The soft keyboard's inset is published to composition through
+        // `local_ime_insets`. Its keyboard-frame *notifications* are delivered
+        // too late and batched by the winit run loop (the inset would lag a full
+        // show/hide and leave a blank gap after the keyboard hides), so during a
+        // show/hide burst it is polled straight from the layout guide, which
+        // UIKit keeps current. A change forces a recompose (a plain redraw
+        // re-reads nothing); the loop is kept spinning until the burst ends so
+        // the whole rise/fall animation is tracked.
+        let mut ime_changed = false;
+        if crate::ios_keyboard::keyboard_poll_active() {
+            if let Some(bottom) = crate::ios_keyboard::poll_keyboard_bottom_inset() {
+                let mut insets = self.keyboard_insets.get();
+                if (insets.bottom - bottom).abs() > 0.5 {
+                    insets.bottom = bottom;
+                    self.keyboard_insets.set(insets);
+                    ime_changed = true;
+                }
+            }
+            self.event_proxy.wake_up();
+        }
 
         let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
             return;
         };
-        if ime_inset_changed {
-            shell.mark_dirty();
+        if ime_changed {
+            // The inset is provided by the root composition closure (it reads the
+            // shared keyboard-insets cell). `mark_dirty` only invalidates
+            // layout/draw, so the provider keeps its stale value; a root render
+            // re-runs the closure so `local_ime_insets` re-provides the new inset
+            // and consumers (content padding) re-lay out.
+            shell.request_root_render();
         }
 
         // Apply queued soft-keyboard edits, then refresh the keyboard mirror.
@@ -346,14 +359,10 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         let keyboard_proxy = self.event_proxy.clone();
         crate::ios_keyboard::set_wake(Box::new(move || keyboard_proxy.wake_up()));
 
-        // Publish the soft-keyboard height as `local_ime_insets` so content
-        // scrolls clear of the keyboard (bring-into-view / bottom padding read
-        // it). Waking the loop lays the new inset out immediately.
-        let ime_inset_proxy = self.event_proxy.clone();
-        crate::ios_keyboard::observe_keyboard_insets(
-            Rc::clone(&self.keyboard_insets),
-            Rc::new(move || ime_inset_proxy.wake_up()),
-        );
+        // The soft-keyboard inset (published as `local_ime_insets` so content
+        // scrolls clear of the keyboard) is polled from the layout guide in
+        // `render` during the show/hide burst that `ios_keyboard` kicks off
+        // through the wake set above — no keyboard-frame notification observer.
 
         self.gpu = Some(GpuResources {
             surface,

@@ -582,7 +582,7 @@ impl App {
             window_graph: WindowGraphState::default(),
             next_native_window_position_poll_at: Instant::now()
                 + NATIVE_WINDOW_POSITION_POLL_INTERVAL,
-            native_window_platform_probe: NativeWindowPlatformProbe::default(),
+            native_window_platform_probe: NativeWindowPlatformProbe,
             native_global_primary_down: false,
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
