@@ -582,7 +582,13 @@ impl App {
             window_graph: WindowGraphState::default(),
             next_native_window_position_poll_at: Instant::now()
                 + NATIVE_WINDOW_POSITION_POLL_INTERVAL,
-            native_window_platform_probe: NativeWindowPlatformProbe,
+            // `NativeWindowPlatformProbe` is a unit struct on macOS but carries an
+            // x11 client field on Linux, so `::default()` is required there. The
+            // `default_constructed_unit_structs` lint only fires on the macOS
+            // shape (a local-only false positive; Linux sees the field form and
+            // the allow is simply unfulfilled there).
+            #[allow(clippy::default_constructed_unit_structs)]
+            native_window_platform_probe: NativeWindowPlatformProbe::default(),
             native_global_primary_down: false,
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
