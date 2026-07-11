@@ -115,26 +115,35 @@ fn main() -> ExitCode {
                 // One keyframe per grab. A rare event-ordering race can void
                 // a cycle (the previous release racing this press through the
                 // robot pipe); keyframes past the bubble's birth verify the
-                // bubble actually rendered and retry the cycle once.
-                for attempt in 0..2 {
+                // bubble actually rendered and retry the cycle.
+                let mut saved = false;
+                for attempt in 0..3 {
                     robot.touch_down(end_x, line1_mid).expect("grab end handle");
-                    std::thread::sleep(Duration::from_millis(offset_ms));
-                    let shot = robot.screenshot_with_scale(3.0).expect(name);
+                    // The headless loop renders on demand: kick one frame so
+                    // the birth gate / grow animation actually STARTS at the
+                    // grab, then sleep to the offset and sample one frame.
+                    // The kick itself advances the frame clock ~16.7ms, so
+                    // compensate the sleep to keep the label honest.
+                    robot.pump_frames(1).expect("kick");
+                    std::thread::sleep(Duration::from_millis(offset_ms.saturating_sub(17)));
+                    let shot = robot.capture_frame_now(3.0).expect(name);
                     let born = offset_ms >= 155;
                     let present = !born
                         || region_has_structure(
                             &shot,
                             (end_x - 70.0, line1_mid - 125.0, end_x + 70.0, line1_mid - 8.0),
                         );
-                    if present || attempt == 1 {
-                        save(&shot, &shot_dir, name);
-                    }
                     robot.touch_up(end_x, line1_mid).expect("release grab");
-                    settle(&robot, 500);
+                    settle(&robot, 800);
                     if present {
+                        save(&shot, &shot_dir, name);
+                        saved = true;
                         break;
                     }
-                    println!("retrying {name}: bubble missing (event-order race)");
+                    println!("retrying {name}: bubble missing (event-order race, attempt {attempt})");
+                }
+                if !saved {
+                    fail(&robot, &format!("{name}: bubble never rendered across retries"));
                 }
             }
             // The bubble must exist while held: the region above the line
@@ -181,17 +190,51 @@ fn main() -> ExitCode {
                 (25, "10-dissolve-b"),
                 (42, "10b-dissolve-c"),
                 (55, "11-after-release"),
+                (90, "11d-gone"),
                 (300, "11b-menu-materializing"),
                 (360, "11c-menu-materializing-2"),
             ];
             for (offset_ms, name) in dissolve_shots {
-                robot.touch_down(drag_to_x, line1_mid).expect("regrab");
-                std::thread::sleep(Duration::from_millis(500));
-                robot.touch_up(drag_to_x, line1_mid).expect("release");
-                std::thread::sleep(Duration::from_millis(offset_ms));
-                let shot = robot.screenshot_with_scale(3.0).expect(name);
-                save(&shot, &shot_dir, name);
-                settle(&robot, 600);
+                // Verify the bubble is actually up BEFORE releasing (a voided
+                // regrab otherwise photographs the ambient menu fade and
+                // nothing else), retrying the whole cycle on a race.
+                let mut saved = false;
+                for attempt in 0..3 {
+                    robot.touch_down(drag_to_x, line1_mid).expect("regrab");
+                    std::thread::sleep(Duration::from_millis(500));
+                    let held = robot.screenshot_with_scale(1.0).expect("held probe");
+                    let present = region_has_structure(
+                        &held,
+                        (
+                            drag_to_x - 70.0,
+                            line1_mid - 125.0,
+                            drag_to_x + 70.0,
+                            line1_mid - 8.0,
+                        ),
+                    );
+                    if !present {
+                        robot.touch_up(drag_to_x, line1_mid).expect("release");
+                        settle(&robot, 800);
+                        println!("retrying {name}: regrab raced (attempt {attempt})");
+                        continue;
+                    }
+                    robot.touch_up(drag_to_x, line1_mid).expect("release");
+                    // Kick one frame so the deflate STARTS at the release
+                    // (on-demand rendering), then sample one frame at the
+                    // offset — the regular pump drains multiple frames and
+                    // fast-forwarded the ~55ms deflate to completion.
+                    robot.pump_frames(1).expect("kick");
+                    // The kick advances the frame clock ~16.7ms — compensate.
+                    std::thread::sleep(Duration::from_millis(offset_ms.saturating_sub(17)));
+                    let shot = robot.capture_frame_now(3.0).expect(name);
+                    save(&shot, &shot_dir, name);
+                    saved = true;
+                    settle(&robot, 800);
+                    break;
+                }
+                if !saved {
+                    fail(&robot, &format!("{name}: bubble never held across retries"));
+                }
             }
             let after = robot.screenshot_with_scale(3.0).expect("after");
             save(&after, &shot_dir, "12-menu-returned");

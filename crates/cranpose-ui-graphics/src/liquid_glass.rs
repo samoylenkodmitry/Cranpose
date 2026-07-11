@@ -233,7 +233,7 @@ impl Default for LiquidLoupeSpec {
             fold_peak: 0.80,
             // The reference fringes are tight (3-5 px at 3x) and live only in
             // the fold band.
-            dispersion: 0.22,
+            dispersion: 0.15,
             // The reference rim reads as a clear bright line around the whole
             // capsule (peak ~+127 luminance over the backdrop); the
             // interactive-lens rim gain is a whisper, so the loupe drives it
@@ -251,18 +251,19 @@ impl Default for LiquidLoupeSpec {
 /// at 1.0, fractional desktop scales).
 pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> RenderEffect {
     let (w, h) = (node_size.0.max(1.0), node_size.1.max(1.0));
-    let progress = spec.progress.clamp(0.0, 1.0);
-    // The reference bubble is a fixed-optic lens whose SHAPE grows: it is
-    // born already ~85% magnified with a visible rim, and only the residue
-    // ramps in with the inflation.
-    let magnification = 1.0 + (spec.magnification - 1.0) * (0.85 + 0.15 * progress);
+    let _ = spec.progress;
+    // The reference bubble is a fixed-optic lens whose SHAPE grows: from its
+    // first visible frame it carries FULL magnification, rim and dispersion
+    // — only the geometry animates. (Optic ramps made the newborn bubble
+    // near-invisible, which the reference never is.)
+    let magnification = spec.magnification;
     let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
     shader.set_float2(0, w, h); // container = node size dp
     shader.set_float2(2, w * 0.5, h * 0.5); // capsule centered in the node
     shader.set_float2(4, w, h);
     shader.set_float(6, -1.0); // capsule radius sentinel
     shader.set_float(7, 0.5 * h.min(w)); // bezel = inradius (sheen falloff)
-    shader.set_float(11, spec.highlight * (0.45 + 0.55 * progress));
+    shader.set_float(11, spec.highlight);
     shader.set_float4(14, 1.0, 1.0, 1.0, 0.0); // no tint
     shader.set_float(18, 1.0); // saturation neutral
     shader.set_float(20, 0.0); // no lift
@@ -281,7 +282,7 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     shader.set_float(83, magnification);
     shader.set_float(84, spec.band_start);
     shader.set_float(85, spec.fold_peak);
-    shader.set_float(86, spec.dispersion * (0.35 + 0.65 * progress));
+    shader.set_float(86, spec.dispersion);
     // The capture must cover the farthest sample: the focus offset plus the
     // fold reach past the bubble edge (in dp; paddings are logical units).
     let r_in = 0.5 * w.min(h);
@@ -316,17 +317,16 @@ pub fn liquid_menu_glass_effect(
                                   // menu barely bends what grazes its edge)
     shader.set_float(9, 1.4);
     shader.set_float(10, 0.6);
-    shader.set_float(11, 0.18 * p); // top rim highlight (calibrated: the
-                                    // reference top spike is a subtle +33
-                                    // luminance over the body)
+    shader.set_float(11, 0.30 * p); // top rim highlight (the top edge must
+                                    // unambiguously carry the emphasis)
     shader.set_float4(14, 0.0, 0.0, 0.0, 0.15 * p); // dark tint (reference
                                                     // dims backdrop ~24%)
     shader.set_float(18, 1.0 + 0.25 * p); // mild vibrancy
     shader.set_float(19, 0.0); // no dispersion on the menu
     shader.set_float(20, -0.09 * p); // dim bright backdrop content like the
                                      // reference (ghosts stay smudges)
-    shader.set_float(88, 0.97); // bottom rim ~equal to the top (measured)
-    shader.set_float(89, 0.6); // rim holds ~60% strength at the side tangents
+    shader.set_float(88, 0.7); // bottom rim clearly softer than the top
+    shader.set_float(89, 0.45); // rim holds ~45% strength off the lit arc
     shader.set_float(21, 0.5);
     // Measured on captures: (0,1) puts the crisp arc on the TOP edge with
     // the 0.45x counter on the bottom — the reference hierarchy.

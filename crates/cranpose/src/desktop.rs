@@ -4618,6 +4618,20 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                    RobotCommand::CaptureFrameNow(scale) => {
+                        // Exactly one frame: sample a live animation at the
+                        // moment of the command instead of fast-forwarding it
+                        // through the multi-frame drain.
+                        update_app_with_native_window_registry(app, &registry);
+                        match capture_screenshot_with_scale(app, scale) {
+                            Ok(screenshot) => {
+                                let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
+                            }
+                            Err(err) => {
+                                let _ = controller.tx.send(RobotResponse::Error(err));
+                            }
+                        }
+                    }
                     RobotCommand::GetRenderStats => {
                         let _ = controller.tx.send(RobotResponse::RenderStats(Box::new(
                             app.renderer().last_frame_stats(),

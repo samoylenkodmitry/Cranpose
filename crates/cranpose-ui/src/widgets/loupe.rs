@@ -191,9 +191,12 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     let Some(shown) = *state.shown.borrow() else {
         return;
     };
-    if p <= 0.001 {
+    let born = active && state.gate.borrow().state().value() >= 1.0;
+    if p <= 0.001 && !born {
         // Not yet born (birth delay) — or a grab released inside the delay,
-        // which never shows a loupe at all.
+        // which never shows a loupe at all. Once BORN, p = 0 is the birth
+        // pose itself (half size, full optics) and must render — the
+        // reference's first frame is clearly visible.
         if !active {
             state.shown.replace(None);
         }
@@ -227,10 +230,10 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
             // materializes near its floating position, clear of the line),
             // with the remaining rise done within ~90 ms — well before the
             // size finishes inflating.
-            0.75 + 0.25 * ((1.0 - (1.0 - pc).powi(4)) + (p - pc)),
+            0.85 + 0.15 * ((1.0 - (1.0 - pc).powi(4)) + (p - pc)),
         )
     } else {
-        (0.72 + 0.28 * p, 1.0, 0.94 + 0.06 * p)
+        (0.72 + 0.28 * p, 1.0, 0.97 + 0.03 * p)
     };
     let height = LOUPE_HEIGHT * scale;
     let aspect = 1.08 + (LOUPE_WIDTH / LOUPE_HEIGHT - 1.08) * aspect_t;
@@ -303,9 +306,9 @@ mod tests {
 
     #[test]
     fn loupe_effect_scales_its_optics_with_grow_progress() {
-        // The reference bubble is a fixed-optic lens whose SHAPE grows: it is
-        // born already mostly magnified with a visible rim and dispersion,
-        // and only the residue ramps in with the inflation.
+        // The reference bubble is a fixed-optic lens whose SHAPE grows: from
+        // its first visible frame it carries FULL magnification, rim and
+        // dispersion — only the geometry animates.
         let newborn = LiquidLoupeSpec {
             progress: 0.0,
             ..LiquidLoupeSpec::default()
@@ -315,10 +318,9 @@ mod tests {
             panic!("loupe must be a bare shader effect");
         };
         let u = shader.uniforms();
-        let newborn_mag = 1.0 + (LOUPE_MAGNIFICATION - 1.0) * 0.85;
         assert!(
-            (u[83] - newborn_mag).abs() < 1e-3,
-            "newborn magnification is ~85% of full, got {}",
+            (u[83] - LOUPE_MAGNIFICATION).abs() < 1e-3,
+            "the newborn lens already carries full magnification, got {}",
             u[83]
         );
         assert!(u[86] > 0.0, "newborn dispersion already visible");

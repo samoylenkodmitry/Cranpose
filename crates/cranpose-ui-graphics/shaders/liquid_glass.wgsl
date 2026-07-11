@@ -354,14 +354,16 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         let vert_weight = mix(0.12, 1.0, vert) * below;
         if xr > band_start {
             let tau = clamp((xr - band_start) / max(1.0 - band_start, 0.001), 0.0, 1.0);
-            // Rise to the reach by mid-band, then a SHALLOW fall (to 85%):
-            // the descending branch is the inversion, and its gentleness is
-            // what keeps the mirrored glyphs legible.
-            let g = smoothstep(0.0, 0.5, tau) - 0.15 * smoothstep(0.5, 1.0, tau);
+            // A fast reach-out (first ~30% of the band) followed by a LONG
+            // descending branch — the inversion. The descent's slope is what
+            // sets the mirrored image's scale: the reference fold shows the
+            // next line at essentially MAIN-TEXT scale, so the descent walks
+            // back through the content at ~1 content-dp per display-dp.
+            let g = smoothstep(0.0, 0.3, tau) - 0.74 * smoothstep(0.3, 1.0, tau);
             let s_band0 = band_start / m;
             let s_units = s_band0 + (fold_peak - s_band0) * g;
             disp_c = outward_normal * (s_units - xr) * r_in * vert_weight;
-            spread = band_chroma * smoothstep(0.0, 0.35, tau) * vert_weight;
+            spread = band_chroma * smoothstep(0.0, 0.25, tau) * vert_weight;
         }
     } else {
         // The interactive lens (rim_style 1) drops the dome term:

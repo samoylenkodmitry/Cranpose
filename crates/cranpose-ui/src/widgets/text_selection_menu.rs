@@ -373,11 +373,14 @@ pub fn LiquidTextMenu(center_x: f32, line_top_y: f32, visible: bool, items: Vec<
                 )
                 .graphics_layer(move || GraphicsLayer {
                     alpha: p,
-                    backdrop_effect: Some(liquid_menu_glass_effect(
-                        (width, MENU_HEIGHT),
-                        MENU_BLUR_DP * density,
-                        p,
-                    )),
+                    // No material during the return-delay window (p≈0): a
+                    // composed backdrop blur ignores layer alpha and would
+                    // smear the content behind the pill a quarter-second
+                    // before anything fades in — the reference shows nothing
+                    // until the fade starts.
+                    backdrop_effect: (p > 0.001).then(|| {
+                        liquid_menu_glass_effect((width, MENU_HEIGHT), MENU_BLUR_DP * density, p)
+                    }),
                     shape: LayerShape::Rounded(RoundedCornerShape::uniform(1.0e6)),
                     clip: true,
                     ..Default::default()
@@ -411,9 +414,15 @@ pub fn LiquidTextMenu(center_x: f32, line_top_y: f32, visible: bool, items: Vec<
                             }
                             Text(
                                 item.label.clone(),
-                                Modifier::empty().padding_horizontal(ITEM_PADDING).then(
-                                    menu_item_pointer_input(&item.label, Rc::clone(&item.action)),
-                                ),
+                                Modifier::empty()
+                                    // The glyphs sit low in this stack's line
+                                    // box; the reference centers them to a
+                                    // pixel, so bias 2dp onto the bottom.
+                                    .padding_each(ITEM_PADDING, 0.0, ITEM_PADDING, 2.0)
+                                    .then(menu_item_pointer_input(
+                                        &item.label,
+                                        Rc::clone(&item.action),
+                                    )),
                                 menu_text_style(),
                             );
                         }

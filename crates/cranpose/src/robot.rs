@@ -153,6 +153,11 @@ pub(crate) enum RobotCommand {
     },
     GetScreenshot,
     GetScreenshotWithScale(f32),
+    /// Advance EXACTLY ONE app frame, then capture at the given scale.
+    /// The regular screenshot pump drains up to three frames, advancing any
+    /// live animation ~30-180 ms before sampling — fatal for keyframing a
+    /// ~55 ms transition.
+    CaptureFrameNow(f32),
     #[cfg(feature = "renderer-wgpu")]
     GetRenderStats,
     GetFpsStats,
@@ -804,6 +809,21 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetScreenshotWithScale(scale))
             .map_err(|e| format!("Failed to send screenshot command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Screenshot(image)) => Ok(image),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Capture after advancing exactly ONE app frame — the honest way to
+    /// keyframe a live animation (the regular screenshot pump drains up to
+    /// three frames before sampling, fast-forwarding short transitions).
+    pub fn capture_frame_now(&self, scale: f32) -> Result<RobotScreenshot, String> {
+        self.tx
+            .send(RobotCommand::CaptureFrameNow(scale))
+            .map_err(|e| format!("Failed to send capture command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Screenshot(image)) => Ok(image),
             Ok(RobotResponse::Error(e)) => Err(e),
