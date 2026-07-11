@@ -223,3 +223,36 @@ AFTER the last code change, and crop generously around the component
     diagnostics are invisible; build robot profile with
     `--features desktop,logging` or use eprintln-based env-gated diags
     (`CRANPOSE_BACKDROP_DIAG`).
+
+## 2026-07-11: Visual judge-loop traps (text-selection chrome match)
+
+- **Eyeballed calibration cost three judge rounds.** The loupe's
+  magnification was first read off a 160%-scaled crop as "1.7x" and the
+  whole optic (dome profile, fold reach, knob plateau) was engineered
+  around it. Precise glyph-height measurement on the raw frame gave a
+  UNIFORM ~1.25x — at which point the dome, the plateau and the baseline
+  arc all became unnecessary and the fold placement fell out naturally.
+  Rule: never calibrate a shader to an eyeballed number; measure glyph
+  extents pixel-precise on the raw reference before writing the first
+  uniform.
+- **`screenshot_with_scale(3.0)` stalls the driver ~200 ms.** In-flight
+  animation keyframes sampled through it are all ~200 ms late; a judged
+  "no grow animation" verdict was purely this. Capture motion sequences
+  as one-capture-per-repeated-gesture (press → sleep to offset → capture
+  once → release), never several captures inside one gesture.
+- **Vision-judge reports need pixel arbitration.** Across six rounds,
+  judges (a) measured a shadow halo as capsule height, (b) inverted the
+  prose spec ("bottom ~90% of top" → "bottom should be brighter"),
+  (c) called a risen bubble "glued to the baseline" from a crop framing,
+  and (d) flip-flopped between rounds on birth aspect. Every MISMATCH
+  that survived was confirmed by scripted pixel measurement first; every
+  fix applied on a judge's word alone was wasted. Judges find WHERE to
+  look; numbers decide WHAT is true.
+- **Robot touch events carried no PointerSource.** Touch-gated UI
+  (finger handles, loupe) silently never armed under the robot until
+  desktop.rs tagged `PointerSource::Touch` on the Touch* commands.
+- **Handle gestures ate hover moves.** `PointerEventKind::Move` without
+  a preceding press drove `on_drag` — a hovering mouse moved the caret,
+  and the post-release synthesized hover re-armed the loupe (bubble
+  reappearing ~140 ms after release). Gesture loops must gate Move/Up on
+  a live press.
