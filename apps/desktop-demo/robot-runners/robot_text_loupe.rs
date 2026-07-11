@@ -10,7 +10,7 @@
 //!
 //! Screenshots land in `ROBOT_SHOT_DIR` (default `target/text-loupe`).
 
-use cranpose::widgets::{BasicTextFieldWithOptions, BasicTextFieldOptions, Box as CBox, BoxSpec};
+use cranpose::widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec};
 use cranpose::{AppLauncher, Color, Modifier, Size};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
@@ -33,7 +33,8 @@ const FIELD_X: f32 = 20.0;
 const FIELD_Y: f32 = 170.0;
 const FIELD_WIDTH: f32 = 420.0;
 
-const TEXT: &str = "Silence. Melody. Then beats. Subtle electronic beats goaantra trance pp ulsy catching melody";
+const TEXT: &str =
+    "Silence. Melody. Then beats. Subtle electronic beats goaantra trance pp ulsy catching melody";
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
@@ -81,85 +82,74 @@ fn main() -> ExitCode {
             let line1_bottom = line1_top + line_height;
             let line1_mid = line1_top + 0.5 * line_height;
 
-            let melody_center = FIELD_X + 0.5 * (width_of("Silence. ") + width_of("Silence. Melody"));
+            let melody_center =
+                FIELD_X + 0.5 * (width_of("Silence. ") + width_of("Silence. Melody"));
             let end_x = FIELD_X + width_of("Silence. Melody");
             let drag_to_x = FIELD_X + width_of("Silence. Melody. Then");
 
             // Focus with a touch tap, then a second tap on the same word to
             // select it (touch is what arms the finger handles).
-            robot.drag(melody_center, line1_mid, melody_center, line1_mid).expect("tap 1");
+            robot
+                .drag(melody_center, line1_mid, melody_center, line1_mid)
+                .expect("tap 1");
             std::thread::sleep(Duration::from_millis(120));
-            robot.drag(melody_center, line1_mid, melody_center, line1_mid).expect("tap 2");
+            robot
+                .drag(melody_center, line1_mid, melody_center, line1_mid)
+                .expect("tap 2");
             settle(&robot, 700);
             let idle = robot.screenshot_with_scale(3.0).expect("idle");
             save(&idle, &shot_dir, "01-idle-selection");
 
-            // ---- Grow-in keyframes: a high-resolution capture stalls the
-            // driver for ~200 ms, so one in-flight sequence would sample the
-            // animation far later than intended. Instead each keyframe gets
-            // its OWN grab: press → sleep to the offset → capture once →
-            // release → settle. The capture cost lands after the moment of
-            // interest, keeping the sampled time honest.
-            // Offsets mirror the reference sheet frames exactly: the bubble
-            // is born ~120 ms after the grab, and the reference grow frames
-            // sit at birth +0/+35/+90/+180/+380 ms.
-            let grow_shots = [
-                (20u64, "01b-menu-dissolving"),
-                (120, "02-grow-a"),
-                (155, "02b-grow-b"),
-                (210, "03-grow-c"),
-                (300, "04-grow-peak"),
-                (500, "05-grow-settled"),
+            // ---- Grow-in keyframes: one grab, exact clock steps. The
+            // headless loop free-runs and high-resolution captures stall
+            // unpredictably, so wall-clock sleeps cannot keyframe the ~120 ms
+            // birth + inflate honestly; capture_keyframes advances the
+            // animation clock deterministically instead. Offsets mirror the
+            // reference sheet frames: birth ~120 ms after the grab, grow
+            // frames at birth +0/+35/+90/+180/+380 ms, plus a mid-delay
+            // probe (+60) that must show NO bubble yet.
+            robot.touch_down(end_x, line1_mid).expect("grab end handle");
+            let grow_steps = [
+                (0.0, false),  // process the grab; the birth gate starts here
+                (60.0, true),  // mid birth-delay: menu dissolving, no bubble
+                (60.0, true),  // +120: the birth pose
+                (35.0, true),  // +155
+                (55.0, true),  // +210
+                (90.0, true),  // +300: near the width peak
+                (200.0, true), // +500: settled
             ];
-            for (offset_ms, name) in grow_shots {
-                // One keyframe per grab. A rare event-ordering race can void
-                // a cycle (the previous release racing this press through the
-                // robot pipe); keyframes past the bubble's birth verify the
-                // bubble actually rendered and retry the cycle.
-                let mut saved = false;
-                for attempt in 0..3 {
-                    robot.touch_down(end_x, line1_mid).expect("grab end handle");
-                    // The headless loop renders on demand: kick one frame so
-                    // the birth gate / grow animation actually STARTS at the
-                    // grab, then sleep to the offset and sample one frame.
-                    // The kick itself advances the frame clock ~16.7ms, so
-                    // compensate the sleep to keep the label honest.
-                    robot.pump_frames(1).expect("kick");
-                    std::thread::sleep(Duration::from_millis(offset_ms.saturating_sub(17)));
-                    let shot = robot.capture_frame_now(3.0).expect(name);
-                    let born = offset_ms >= 155;
-                    let present = !born
-                        || region_has_structure(
-                            &shot,
-                            (end_x - 70.0, line1_mid - 125.0, end_x + 70.0, line1_mid - 8.0),
-                        );
-                    robot.touch_up(end_x, line1_mid).expect("release grab");
-                    settle(&robot, 800);
-                    if present {
-                        save(&shot, &shot_dir, name);
-                        saved = true;
-                        break;
-                    }
-                    println!("retrying {name}: bubble missing (event-order race, attempt {attempt})");
+            let grow_names = [
+                "01b-menu-dissolving",
+                "02-grow-a",
+                "02b-grow-b",
+                "03-grow-c",
+                "04-grow-peak",
+                "05-grow-settled",
+            ];
+            let shots = robot
+                .capture_keyframes(3.0, &grow_steps)
+                .expect("grow keyframes");
+            // Presence band: strictly ABOVE the edit menu's capsule+halo and
+            // the line's own glyphs/handles — only a bubble reaches up here
+            // (the grown top sits ~116dp over the line mid, the birth pose
+            // ~100dp).
+            let loupe_region_at =
+                |x: f32| (x - 70.0, line1_mid - 125.0, x + 70.0, line1_mid - 75.0);
+            for (i, (shot, name)) in shots.iter().zip(grow_names).enumerate() {
+                save(shot, &shot_dir, name);
+                let present = region_has_structure(shot, loupe_region_at(end_x));
+                if i == 0 && present {
+                    fail(&robot, "a bubble appeared during the birth delay");
                 }
-                if !saved {
-                    fail(&robot, &format!("{name}: bubble never rendered across retries"));
+                if i > 0 && !present {
+                    fail(&robot, &format!("{name}: bubble missing at its keyframe"));
                 }
             }
-            // The bubble must exist while held: the region above the line
-            // must differ from the idle frame there.
-            robot.touch_down(end_x, line1_mid).expect("grab for presence");
-            std::thread::sleep(Duration::from_millis(400));
-            let grown = robot.screenshot_with_scale(3.0).expect("grown");
-            let loupe_region = (
-                end_x - 70.0,
-                line1_mid - 120.0,
-                end_x + 70.0,
-                line1_mid - 30.0,
-            );
-            if !regions_differ(&idle, &grown, loupe_region, 8) {
-                fail(&robot, "no loupe appeared above the grabbed line");
-            }
+            // The exact-clock steps ran the animation clock ~620 ms ahead of
+            // wall time; let wall catch up so the real-time drag below
+            // animates normally (updates clamp to the advanced clock until
+            // then).
+            std::thread::sleep(Duration::from_millis(700));
 
             // ---- Slow drag right: the bubble follows with its lag ----
             let steps = 30;
@@ -169,73 +159,70 @@ fn main() -> ExitCode {
                 robot.touch_move(x, line1_mid).expect("drag move");
                 std::thread::sleep(Duration::from_millis(16));
                 if i == steps / 3 {
-                    save(&robot.screenshot_with_scale(3.0).expect("f1"), &shot_dir, "06-follow-a");
+                    save(
+                        &robot.screenshot_with_scale(3.0).expect("f1"),
+                        &shot_dir,
+                        "06-follow-a",
+                    );
                 }
                 if i == 2 * steps / 3 {
-                    save(&robot.screenshot_with_scale(3.0).expect("f2"), &shot_dir, "07-follow-b");
+                    save(
+                        &robot.screenshot_with_scale(3.0).expect("f2"),
+                        &shot_dir,
+                        "07-follow-b",
+                    );
                 }
             }
             std::thread::sleep(Duration::from_millis(320));
-            save(&robot.screenshot_with_scale(3.0).expect("steady"), &shot_dir, "08-steady");
+            save(
+                &robot.screenshot_with_scale(3.0).expect("steady"),
+                &shot_dir,
+                "08-steady",
+            );
 
-            // ---- Release: the bubble deflates back into the line. Same
-            // one-capture-per-gesture scheme as the grow keyframes: re-grab,
-            // settle, release, sleep to the offset, capture once.
+            // ---- Release: the bubble deflates back into the line, then the
+            // menu rematerializes — ONE release, exact clock steps at the
+            // reference offsets (+8/+25/+42/+55/+90 for the fade, +300/+360
+            // for the menu's 250 ms-delay + 140 ms materialize window).
             robot.touch_up(drag_to_x, line1_mid).expect("release");
-            settle(&robot, 500);
-            // Dissolve offsets mirror the reference frames (+8/+25/+42/+55
-            // after release), plus the menu-materialize window.
-            let dissolve_shots = [
-                (8u64, "09-dissolve-a"),
-                (25, "10-dissolve-b"),
-                (42, "10b-dissolve-c"),
-                (55, "11-after-release"),
-                (90, "11d-gone"),
-                (300, "11b-menu-materializing"),
-                (360, "11c-menu-materializing-2"),
+            let dissolve_steps = [
+                (0.0, false), // process the release; the fade starts here
+                (8.0, true),
+                (17.0, true),  // +25
+                (17.0, true),  // +42
+                (13.0, true),  // +55
+                (35.0, true),  // +90
+                (210.0, true), // +300
+                (60.0, true),  // +360
             ];
-            for (offset_ms, name) in dissolve_shots {
-                // Verify the bubble is actually up BEFORE releasing (a voided
-                // regrab otherwise photographs the ambient menu fade and
-                // nothing else), retrying the whole cycle on a race.
-                let mut saved = false;
-                for attempt in 0..3 {
-                    robot.touch_down(drag_to_x, line1_mid).expect("regrab");
-                    std::thread::sleep(Duration::from_millis(500));
-                    let held = robot.screenshot_with_scale(1.0).expect("held probe");
-                    let present = region_has_structure(
-                        &held,
-                        (
-                            drag_to_x - 70.0,
-                            line1_mid - 125.0,
-                            drag_to_x + 70.0,
-                            line1_mid - 8.0,
-                        ),
-                    );
-                    if !present {
-                        robot.touch_up(drag_to_x, line1_mid).expect("release");
-                        settle(&robot, 800);
-                        println!("retrying {name}: regrab raced (attempt {attempt})");
-                        continue;
-                    }
-                    robot.touch_up(drag_to_x, line1_mid).expect("release");
-                    // Kick one frame so the deflate STARTS at the release
-                    // (on-demand rendering), then sample one frame at the
-                    // offset — the regular pump drains multiple frames and
-                    // fast-forwarded the ~55ms deflate to completion.
-                    robot.pump_frames(1).expect("kick");
-                    // The kick advances the frame clock ~16.7ms — compensate.
-                    std::thread::sleep(Duration::from_millis(offset_ms.saturating_sub(17)));
-                    let shot = robot.capture_frame_now(3.0).expect(name);
-                    save(&shot, &shot_dir, name);
-                    saved = true;
-                    settle(&robot, 800);
-                    break;
-                }
-                if !saved {
-                    fail(&robot, &format!("{name}: bubble never held across retries"));
-                }
+            let dissolve_names = [
+                "09-dissolve-a",
+                "10-dissolve-b",
+                "10b-dissolve-c",
+                "11-after-release",
+                "11d-gone",
+                "11b-menu-materializing",
+                "11c-menu-materializing-2",
+            ];
+            let shots = robot
+                .capture_keyframes(3.0, &dissolve_steps)
+                .expect("dissolve keyframes");
+            for (shot, name) in shots.iter().zip(dissolve_names) {
+                save(shot, &shot_dir, name);
             }
+            // The fade must actually be a fade: clearly present at +8 and
+            // +25, gone by +90 (the 55 ms tween unmounts at ~54 ms).
+            let fade_region = loupe_region_at(drag_to_x);
+            if !region_has_structure(&shots[0], fade_region) {
+                fail(&robot, "dissolve +8: bubble already gone");
+            }
+            if !region_has_structure(&shots[1], fade_region) {
+                fail(&robot, "dissolve +25: bubble already gone");
+            }
+            if region_has_structure(&shots[4], fade_region) {
+                fail(&robot, "dissolve +90: bubble residue never unmounted");
+            }
+            std::thread::sleep(Duration::from_millis(500));
             let after = robot.screenshot_with_scale(3.0).expect("after");
             save(&after, &shot_dir, "12-menu-returned");
 
@@ -262,7 +249,11 @@ fn main() -> ExitCode {
             }
             robot.touch_move(end2_x + 40.0, dot_y).expect("dot move");
             std::thread::sleep(Duration::from_millis(200));
-            save(&robot.screenshot_with_scale(3.0).expect("dot2"), &shot_dir, "14-dot-drag-moved");
+            save(
+                &robot.screenshot_with_scale(3.0).expect("dot2"),
+                &shot_dir,
+                "14-dot-drag-moved",
+            );
             robot.touch_up(end2_x + 40.0, dot_y).expect("dot release");
             settle(&robot, 400);
 
@@ -305,8 +296,8 @@ fn content() {
                 Modifier::empty().absolute_offset(34.0, 122.0),
                 ghost_style,
             );
-            let state = cranpose_core::remember(|| TextFieldState::new(TEXT))
-                .with(TextFieldState::clone);
+            let state =
+                cranpose_core::remember(|| TextFieldState::new(TEXT)).with(TextFieldState::clone);
             BasicTextFieldWithOptions(
                 state,
                 Modifier::empty()
@@ -338,45 +329,6 @@ fn save(shot: &cranpose::RobotScreenshot, dir: &Path, name: &str) {
     println!("saved {}", path.display());
 }
 
-/// Whether more than `tolerance_px` pixels differ noticeably (channel delta
-/// > 12) between the two screenshots inside the logical-region rect.
-fn regions_differ(
-    a: &cranpose::RobotScreenshot,
-    b: &cranpose::RobotScreenshot,
-    region: (f32, f32, f32, f32),
-    tolerance_px: usize,
-) -> bool {
-    let scale_a = a.width as f32 / WINDOW_WIDTH as f32;
-    let scale_b = b.width as f32 / WINDOW_WIDTH as f32;
-    let mut differing = 0usize;
-    let (l, t, r, btm) = region;
-    let mut y = t;
-    while y < btm {
-        let mut x = l;
-        while x < r {
-            let pa = sample(a, x * scale_a, y * scale_a);
-            let pb = sample(b, x * scale_b, y * scale_b);
-            if let (Some(pa), Some(pb)) = (pa, pb) {
-                let d = pa
-                    .iter()
-                    .zip(pb.iter())
-                    .map(|(u, v)| (*u as i16 - *v as i16).unsigned_abs() as u16)
-                    .max()
-                    .unwrap_or(0);
-                if d > 12 {
-                    differing += 1;
-                }
-            }
-            x += 1.0;
-        }
-        y += 1.0;
-    }
-    differing > tolerance_px
-}
-
-/// Whether the region contains any visual structure (luminance span > 26):
-/// an empty patch of the flat backdrop stays under it; a bubble's magnified
-/// text/rim or a menu immediately exceeds it.
 fn region_has_structure(shot: &cranpose::RobotScreenshot, region: (f32, f32, f32, f32)) -> bool {
     let scale = shot.width as f32 / WINDOW_WIDTH as f32;
     let (l, t, r, b) = region;

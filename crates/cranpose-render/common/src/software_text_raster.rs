@@ -724,6 +724,17 @@ impl TextMeasurer for SoftwareTextMeasurer {
         max_line_height_for_annotated_text_with_resolver(text, style, font_size, &self.fonts)
     }
 
+    fn glyph_line_box(&self, style: &TextStyle) -> Option<(f32, f32)> {
+        let font = self.fonts.resolve(style)?;
+        let font_size = resolve_font_size(style);
+        let metrics = crate::font_layout::vertical_metrics(&font.font, font_size);
+        let line_height = line_height_for_render_style(style, font_size);
+        // Glyph rows sit centered in the slot (see `baseline_y_for_line_box`);
+        // the tight box is the font's natural ascent+descent extent.
+        let height = metrics.natural_line_height.min(line_height).max(1.0);
+        Some((((line_height - height) * 0.5).max(0.0), height))
+    }
+
     fn get_offset_for_position(
         &self,
         text: &cranpose_ui::text::AnnotatedString,

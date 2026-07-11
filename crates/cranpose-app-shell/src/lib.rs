@@ -805,6 +805,21 @@ where
         self.update_at_frame_time_nanos(frame_time)
     }
 
+    /// Advance the frame clock by EXACTLY `frame_interval` past the last
+    /// frame — no wall anchoring — and run one update there. Robot keyframe
+    /// captures ride this to sample animations deterministically: while the
+    /// advanced clock is ahead of wall time, interleaved wall-clocked
+    /// updates clamp to it (dt 0) instead of fast-forwarding animations.
+    pub fn update_after_exact_interval(
+        &mut self,
+        frame_interval: std::time::Duration,
+    ) -> FrameUpdateResult {
+        let frame_time = self
+            .last_frame_time_nanos
+            .saturating_add(frame_interval.as_nanos().min(u128::from(u64::MAX)) as u64);
+        self.update_at_frame_time_nanos(frame_time)
+    }
+
     pub fn update_at_frame_time_nanos(&mut self, frame_time: u64) -> FrameUpdateResult {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(|| {

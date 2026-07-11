@@ -47,7 +47,7 @@ const ITEM_PADDING: f32 = 20.0;
 /// Hairline separator between labels: 1×17 dp, white at 0.07.
 const SEPARATOR_WIDTH: f32 = 1.0;
 const SEPARATOR_HEIGHT: f32 = 17.0;
-const SEPARATOR_COLOR: Color = Color(1.0, 1.0, 1.0, 0.09);
+const SEPARATOR_COLOR: Color = Color(1.0, 1.0, 1.0, 0.07);
 /// Label color and size.
 const MENU_FG: Color = Color(0.96, 0.96, 0.98, 1.0);
 const MENU_FONT_SP: f32 = 15.0;
@@ -55,7 +55,7 @@ const MENU_FONT_SP: f32 = 15.0;
 const DISC_COLOR: Color = Color(1.0, 1.0, 1.0, 0.19);
 const DISC_PRESSED_COLOR: Color = Color(1.0, 1.0, 1.0, 0.9);
 /// Backdrop blur behind the capsule, dp.
-const MENU_BLUR_DP: f32 = 13.0;
+const MENU_BLUR_DP: f32 = 15.0;
 
 /// Motion (measured): ~70 ms dissolve, ~140 ms materialize arriving ~250 ms
 /// after the release.

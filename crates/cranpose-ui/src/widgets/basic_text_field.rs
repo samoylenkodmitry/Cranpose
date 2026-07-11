@@ -56,9 +56,13 @@ fn handle_tip_window_pos(
     let caret_x = measure_text(&AnnotatedString::from(&text[line_start..offset]), style).width;
     Point {
         x: metrics.node_origin.x + metrics.padding_left + caret_x - metrics.scroll_offset,
+        // The tip rides the TIGHT glyph box bottom, not the slot bottom —
+        // handles (and the caret) anchor on the glyphs like the reference.
         y: metrics.node_origin.y
             + metrics.padding_top
-            + (line_index as f32 + 1.0) * metrics.line_height,
+            + line_index as f32 * metrics.line_height
+            + metrics.glyph_box.0
+            + metrics.glyph_box.1,
     }
 }
 
@@ -219,14 +223,14 @@ fn caret_window_rect(
     metrics: &TextFieldHandleMetrics,
     offset: usize,
 ) -> Rect {
-    // `handle_tip_window_pos` returns the BOTTOM of the caret line (the handle
-    // tip); the caret rect starts one line-height above it.
+    // `handle_tip_window_pos` returns the tight glyph-box BOTTOM (the handle
+    // tip); the caret rect spans that box.
     let tip = handle_tip_window_pos(text, style, metrics, offset);
     Rect {
         x: tip.x,
-        y: tip.y - metrics.line_height,
+        y: tip.y - metrics.glyph_box.1,
         width: 2.0,
-        height: metrics.line_height,
+        height: metrics.glyph_box.1,
     }
 }
 
@@ -385,7 +389,7 @@ fn SelectionHandles(
         SelectionHandle(
             HandleKind::Cursor,
             tip,
-            metrics.line_height,
+            metrics.glyph_box.1,
             HANDLE_RADIUS,
             accent,
             move |pos| {
@@ -415,7 +419,7 @@ fn SelectionHandles(
             let redo_state = state.clone();
             CaretActionMenu(
                 tip.x,
-                tip.y - metrics.line_height,
+                tip.y - metrics.glyph_box.1,
                 drag_pos.value().is_none(),
                 can_paste,
                 can_undo,
@@ -462,7 +466,7 @@ fn SelectionHandles(
         SelectionHandle(
             HandleKind::SelectionStart,
             start_tip,
-            metrics.line_height,
+            metrics.glyph_box.1,
             HANDLE_RADIUS,
             accent,
             move |pos| {
@@ -497,7 +501,7 @@ fn SelectionHandles(
         SelectionHandle(
             HandleKind::SelectionEnd,
             end_tip,
-            metrics.line_height,
+            metrics.glyph_box.1,
             HANDLE_RADIUS,
             accent,
             move |pos| {
@@ -525,7 +529,7 @@ fn SelectionHandles(
             TextSelectionMenu(
                 // Centered over the selection, above its first line.
                 (start_tip.x + end_tip.x) * 0.5,
-                start_tip.y - metrics.line_height,
+                start_tip.y - metrics.glyph_box.1,
                 drag_pos.value().is_none(),
                 can_paste,
                 move || {
@@ -564,7 +568,7 @@ fn SelectionHandles(
         let bias = drag_bias.get().unwrap_or(0.0);
         let offset = window_pos_to_offset(&text, &style, &metrics, finger, bias);
         let line_bottom = handle_tip_window_pos(&text, &style, &metrics, offset).y;
-        loupe_target_for_drag(finger, line_bottom, metrics.line_height)
+        loupe_target_for_drag(finger, line_bottom, metrics.glyph_box.1)
     });
     SelectionLoupe(loupe_target);
 }
@@ -658,6 +662,7 @@ mod tests {
                         padding_top: 0.0,
                         scroll_offset: 0.0,
                         line_height: 18.0,
+                        glyph_box: (0.0, 18.0),
                         wrap_width: None,
                     });
                     SelectionHandles(
@@ -724,6 +729,7 @@ mod tests {
                         padding_top: 0.0,
                         scroll_offset: 0.0,
                         line_height: 18.0,
+                        glyph_box: (0.0, 18.0),
                         wrap_width: None,
                     });
                     SelectionHandles(
@@ -800,6 +806,7 @@ mod tests {
                                 padding_top: 0.0,
                                 scroll_offset: 0.0,
                                 line_height: 18.0,
+                                glyph_box: (0.0, 18.0),
                                 wrap_width: None,
                             });
                             SelectionHandles(
@@ -897,6 +904,7 @@ mod tests {
                                         padding_top: 0.0,
                                         scroll_offset: 0.0,
                                         line_height: 18.0,
+                                        glyph_box: (0.0, 18.0),
                                         wrap_width: None,
                                     });
                                     SelectionHandles(
@@ -1140,6 +1148,7 @@ mod tests {
                 padding_top: 3.0,
                 scroll_offset: 0.0,
                 line_height: 18.0,
+                glyph_box: (0.0, 18.0),
                 wrap_width: None,
             };
             for offset in 0..=text.len() {

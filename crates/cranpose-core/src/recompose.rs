@@ -90,6 +90,16 @@ impl Composer {
             if !callback_ran {
                 if let Some(ancestor_scope) = scope.callback_promotion_target() {
                     ancestor_scope.invalidate();
+                    // Keep this scope PENDING: the guard below clears its
+                    // invalid flag, and the (arg-equal) ancestor visit would
+                    // otherwise skip the group, silently swallowing the
+                    // invalidation that got us here — mark_recomposed
+                    // re-invalidates pending scopes, so the healing visit
+                    // finds the scope invalid and re-runs its body. Only the
+                    // ancestor path re-arms the callback; the root-render
+                    // fallback must NOT spin (an unreachable scope would
+                    // re-invalidate forever).
+                    scope.request_pending_recompose();
                 } else {
                     self.request_root_render();
                 }

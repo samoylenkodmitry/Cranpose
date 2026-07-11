@@ -1218,8 +1218,17 @@ impl<T: Clone + 'static> MutableStateInner<T> {
 
     pub(crate) fn unregister_scope(&self, scope_id: ScopeId) {
         let mut watchers = self.watchers.borrow_mut();
-        watchers.remove(&scope_id);
-        shrink_watchers_if_sparse(&mut watchers);
+        // Only prune a DEAD entry. Scope ids are derived from the scope
+        // allocation's address, so a dropped scope's id can already belong
+        // to a live replacement — its Drop-time unregister must not wipe
+        // the new scope's registration.
+        if watchers
+            .get(&scope_id)
+            .is_some_and(|weak| weak.upgrade().is_none())
+        {
+            watchers.remove(&scope_id);
+            shrink_watchers_if_sparse(&mut watchers);
+        }
     }
 
     fn state_id(&self) -> Option<StateId> {

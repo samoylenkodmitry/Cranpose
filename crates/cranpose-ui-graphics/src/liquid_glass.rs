@@ -211,8 +211,14 @@ pub struct LiquidLoupeSpec {
     /// Sampling reach at the fold crest, in inradius units (>1 reaches past
     /// the bubble edge before folding back — the inversion).
     pub fold_peak: f32,
-    /// Dispersion strength inside the band (RGB fringes on the folded rim).
+    /// Dispersion strength inside the band (RGB fringes on the folded rim)
+    /// and across the rim ring's side arcs.
     pub dispersion: f32,
+    /// How far past the seamless continuation the fold's mirror starts, in
+    /// inradius units. The reference mirror skips a small strip below the
+    /// seam — exactly where the dragged handle's dot bottom sits — so the
+    /// dot never re-displays in the fold.
+    pub seam_lift: f32,
     /// Specular rim intensity.
     pub highlight: f32,
     /// Progress of the grow-in (0..1): scales magnification toward 1 and
@@ -234,6 +240,7 @@ impl Default for LiquidLoupeSpec {
             // The reference fringes are tight (3-5 px at 3x) and live only in
             // the fold band.
             dispersion: 0.15,
+            seam_lift: 0.08,
             // The reference rim reads as a clear bright line around the whole
             // capsule (peak ~+127 luminance over the backdrop); the
             // interactive-lens rim gain is a whisper, so the loupe drives it
@@ -251,19 +258,20 @@ impl Default for LiquidLoupeSpec {
 /// at 1.0, fractional desktop scales).
 pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> RenderEffect {
     let (w, h) = (node_size.0.max(1.0), node_size.1.max(1.0));
-    let _ = spec.progress;
-    // The reference bubble is a fixed-optic lens whose SHAPE grows: from its
-    // first visible frame it carries FULL magnification, rim and dispersion
-    // — only the geometry animates. (Optic ramps made the newborn bubble
-    // near-invisible, which the reference never is.)
-    let magnification = spec.magnification;
+    let optic = spec.progress.clamp(0.0, 1.0);
+    // GROW is fixed-optic (the widget passes progress 1.0: from the first
+    // visible frame the lens carries full power — only geometry animates).
+    // DISSOLVE fades THROUGH the optic: as progress falls, magnification
+    // converges to 1 and the rim/dispersion die out, which reads as the
+    // reference's translucent fade — a backdrop lens has no alpha to fade.
+    let magnification = 1.0 + (spec.magnification - 1.0) * optic;
     let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
     shader.set_float2(0, w, h); // container = node size dp
     shader.set_float2(2, w * 0.5, h * 0.5); // capsule centered in the node
     shader.set_float2(4, w, h);
     shader.set_float(6, -1.0); // capsule radius sentinel
     shader.set_float(7, 0.5 * h.min(w)); // bezel = inradius (sheen falloff)
-    shader.set_float(11, spec.highlight);
+    shader.set_float(11, spec.highlight * optic);
     shader.set_float4(14, 1.0, 1.0, 1.0, 0.0); // no tint
     shader.set_float(18, 1.0); // saturation neutral
     shader.set_float(20, 0.0); // no lift
@@ -282,7 +290,8 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     shader.set_float(83, magnification);
     shader.set_float(84, spec.band_start);
     shader.set_float(85, spec.fold_peak);
-    shader.set_float(86, spec.dispersion);
+    shader.set_float(86, spec.dispersion * optic);
+    shader.set_float(87, spec.seam_lift);
     // The capture must cover the farthest sample: the focus offset plus the
     // fold reach past the bubble edge (in dp; paddings are logical units).
     let r_in = 0.5 * w.min(h);

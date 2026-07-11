@@ -618,11 +618,27 @@ impl RecomposeScope {
 
     /// Returns true if a callback was found and executed, false if no callback was registered.
     fn run_recompose(&self, composer: &Composer) -> bool {
+        // Take the callback for the duration of the run (it may re-enter
+        // `set_recompose` on this scope), but RE-ARM it afterwards if the
+        // run didn't install a fresh one: a skipped body leaves the slot
+        // empty, and a scope whose callback is lost can only recompose
+        // again through ancestor promotion — which swallows invalidations
+        // when the ancestor skips the (arg-equal) group.
         let callback = self.inner.recompose.borrow_mut().take();
         if let Some(callback) = callback {
-            match callback {
-                RecomposeCallback::Static(callback) => callback(composer),
-                RecomposeCallback::Dynamic(mut callback) => callback(composer),
+            let callback = match callback {
+                RecomposeCallback::Static(callback) => {
+                    callback(composer);
+                    RecomposeCallback::Static(callback)
+                }
+                RecomposeCallback::Dynamic(mut callback) => {
+                    callback(composer);
+                    RecomposeCallback::Dynamic(callback)
+                }
+            };
+            let mut slot = self.inner.recompose.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(callback);
             }
             true
         } else {
@@ -716,6 +732,13 @@ impl RecomposeScope {
     pub fn force_reuse(&self) {
         self.inner.force_reuse.set(true);
         self.inner.force_recompose.set(false);
+        self.inner.pending_recompose.set(true);
+    }
+
+    /// Ask for another recomposition of this scope as soon as the current
+    /// one finishes: `mark_recomposed` re-invalidates pending scopes instead
+    /// of letting the invalid flag drop.
+    pub(crate) fn request_pending_recompose(&self) {
         self.inner.pending_recompose.set(true);
     }
 

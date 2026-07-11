@@ -177,6 +177,19 @@ pub trait TextMeasurer: 'static {
         self.measure(text, style).line_height
     }
 
+    /// The tight glyph box of a text line inside its `line_height` slot:
+    /// `(top_offset, height)` in logical units, where `height` is the font's
+    /// natural ascent+descent extent and `top_offset` positions it within the
+    /// slot (glyph rows are vertically centered). Selection chrome — the
+    /// highlight, the caret and the finger handles — anchors to THIS box,
+    /// not the full slot: with a paragraph line height above the natural one
+    /// the reference shows gaps between highlighted lines and handles riding
+    /// the glyphs. `None` means the box fills the slot.
+    fn glyph_line_box(&self, style: &TextStyle) -> Option<(f32, f32)> {
+        let _ = style;
+        None
+    }
+
     fn line_height_for_node(
         &self,
         node_id: Option<NodeId>,
@@ -649,6 +662,17 @@ pub(crate) fn current_text_generation() -> u64 {
 
 pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
     crate::render_state::with_text_service(|service| service.measure(None, text, style))
+}
+
+/// The tight glyph box `(top_offset, height)` of a `style` text line inside
+/// its line slot (see [`TextMeasurer::glyph_line_box`]). Falls back to the
+/// full slot when the active measurer has no font metrics.
+pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
+    crate::render_state::with_text_service(|service| {
+        service.with_measurer(|m| m.glyph_line_box(style))
+    })
+    .map(|(off, h)| (off.min(line_height), h.min(line_height)))
+    .unwrap_or((0.0, line_height))
 }
 
 pub fn measure_text_for_node(

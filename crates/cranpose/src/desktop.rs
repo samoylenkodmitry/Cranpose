@@ -4618,19 +4618,33 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
-                    RobotCommand::CaptureFrameNow(scale) => {
-                        // Exactly one frame: sample a live animation at the
-                        // moment of the command instead of fast-forwarding it
-                        // through the multi-frame drain.
-                        update_app_with_native_window_registry(app, &registry);
-                        match capture_screenshot_with_scale(app, scale) {
-                            Ok(screenshot) => {
-                                let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
-                            }
-                            Err(err) => {
-                                let _ = controller.tx.send(RobotResponse::Error(err));
+                    RobotCommand::CaptureKeyframes { scale, steps } => {
+                        // The whole sequence is atomic: each step advances
+                        // the animation clock EXACTLY, then samples — no
+                        // free-running frame can slip between the samples,
+                        // and capture stalls cannot skew the timeline.
+                        let mut shots = Vec::new();
+                        let mut capture_err = None;
+                        for (advance_ms, capture) in steps {
+                            native_window::with_native_window_registry(&registry, || {
+                                app.update_after_exact_interval(Duration::from_secs_f64(
+                                    f64::from(advance_ms.max(0.0)) / 1000.0,
+                                ))
+                            });
+                            if capture {
+                                match capture_screenshot_with_scale(app, scale) {
+                                    Ok(shot) => shots.push(shot),
+                                    Err(err) => {
+                                        capture_err = Some(err);
+                                        break;
+                                    }
+                                }
                             }
                         }
+                        let _ = controller.tx.send(match capture_err {
+                            Some(err) => RobotResponse::Error(err),
+                            None => RobotResponse::Screenshots(shots),
+                        });
                     }
                     RobotCommand::GetRenderStats => {
                         let _ = controller.tx.send(RobotResponse::RenderStats(Box::new(

@@ -43,6 +43,10 @@ pub struct TextFieldHandleMetrics {
     pub padding_top: f32,
     pub scroll_offset: f32,
     pub line_height: f32,
+    /// Tight glyph box `(top_offset, height)` inside each line slot — what
+    /// the caret, highlight and finger handles anchor to (the reference
+    /// selection chrome rides the glyphs, not the paragraph slot).
+    pub glyph_box: (f32, f32),
     /// Width the field wrapped its text at (`None` for single-line fields).
     /// Lets the handles resolve the same visual (wrapped) lines the caret does.
     pub wrap_width: Option<f32>,
@@ -1104,6 +1108,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                         padding_top: 0.0,
                         scroll_offset: 0.0,
                         line_height: cached_line_height.get(),
+                        glyph_box: crate::text::glyph_line_box(&style, cached_line_height.get()),
                         wrap_width: measured_wrap_width.get(),
                     });
                 }
@@ -1136,6 +1141,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                     padding_top,
                     scroll_offset: pan,
                     line_height,
+                    glyph_box: crate::text::glyph_line_box(&style, line_height),
                     wrap_width: measured_wrap_width.get(),
                 });
             }
@@ -1222,13 +1228,16 @@ impl DrawModifierNode for TextFieldModifierNode {
                 .width
                     + padding_left
                     - pan;
-                let cursor_y = padding_top + line_index as f32 * line_height;
+                // The caret spans the tight glyph box, not the paragraph
+                // slot — the reference caret's ends ride the glyph extents.
+                let (box_off, box_h) = crate::text::glyph_line_box(&style, line_height);
+                let cursor_y = padding_top + line_index as f32 * line_height + box_off;
 
                 let cursor_rect = cranpose_ui_graphics::Rect {
                     x: cursor_x,
                     y: cursor_y,
                     width: CURSOR_WIDTH,
-                    height: line_height,
+                    height: box_h,
                 };
 
                 if let Some(clipped) = intersect_rect(cursor_rect, clip_bounds) {
@@ -1287,6 +1296,10 @@ impl DrawModifierNode for TextFieldModifierNode {
             // glyphs the renderer draws — BENEATH them (the reference keeps
             // selected glyphs unblended white over the tint).
             let mut primitives = Vec::new();
+            // Highlight rects hug the tight glyph box of each line — the
+            // reference selection shows GAPS between lines when the
+            // paragraph line height exceeds the natural text height.
+            let (box_off, box_h) = crate::text::glyph_line_box(&style, line_height);
             for sel_rect in range_visual_line_rects(
                 &text,
                 &style,
@@ -1299,6 +1312,11 @@ impl DrawModifierNode for TextFieldModifierNode {
                 selection.min(),
                 selection.max(),
             ) {
+                let sel_rect = cranpose_ui_graphics::Rect {
+                    y: sel_rect.y + box_off,
+                    height: box_h,
+                    ..sel_rect
+                };
                 if let Some(clipped) = intersect_rect(sel_rect, clip_bounds) {
                     primitives.push(DrawPrimitive::Rect {
                         rect: clipped,

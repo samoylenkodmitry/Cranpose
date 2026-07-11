@@ -266,6 +266,10 @@ mod anchor_async_tests;
 mod animated_visibility_tests;
 
 #[cfg(test)]
+#[path = "tests/animation_frame_pump_tests.rs"]
+mod animation_frame_pump_tests;
+
+#[cfg(test)]
 #[path = "tests/crossfade_tests.rs"]
 mod crossfade_tests;
 

@@ -153,11 +153,18 @@ pub(crate) enum RobotCommand {
     },
     GetScreenshot,
     GetScreenshotWithScale(f32),
-    /// Advance EXACTLY ONE app frame, then capture at the given scale.
-    /// The regular screenshot pump drains up to three frames, advancing any
-    /// live animation ~30-180 ms before sampling — fatal for keyframing a
-    /// ~55 ms transition.
-    CaptureFrameNow(f32),
+    /// Keyframe a live transition: advance the animation clock by EXACT
+    /// intervals — wall-time independent — capturing after each step that
+    /// asks for one. The whole sequence runs atomically inside one command:
+    /// the headless loop free-runs and captures stall unpredictably, so
+    /// wall-clock sleeps cannot sample a ~55 ms transition honestly.
+    CaptureKeyframes {
+        scale: f32,
+        /// `(advance_ms, capture)` per step; a 0 ms first step processes
+        /// pending input (starting e.g. a release-triggered transition)
+        /// without advancing the clock.
+        steps: Vec<(f32, bool)>,
+    },
     #[cfg(feature = "renderer-wgpu")]
     GetRenderStats,
     GetFpsStats,
@@ -188,6 +195,7 @@ pub(crate) enum RobotResponse {
     Semantics(Vec<SemanticElement>),
     SemanticQuery(Option<SemanticQueryResult>),
     Screenshot(RobotScreenshot),
+    Screenshots(Vec<RobotScreenshot>),
     #[cfg(feature = "renderer-wgpu")]
     RenderStats(Box<Option<RenderStatsSnapshot>>),
     FpsStats(cranpose_app_shell::FpsStats),
@@ -817,15 +825,23 @@ impl Robot {
         }
     }
 
-    /// Capture after advancing exactly ONE app frame — the honest way to
-    /// keyframe a live animation (the regular screenshot pump drains up to
-    /// three frames before sampling, fast-forwarding short transitions).
-    pub fn capture_frame_now(&self, scale: f32) -> Result<RobotScreenshot, String> {
+    /// Keyframe a live transition: advance the animation clock by the exact
+    /// `(advance_ms, capture)` steps, atomically, returning one screenshot
+    /// per capturing step. Wall-time independent — the only honest way to
+    /// sample a sub-100 ms animation on the free-running headless loop.
+    pub fn capture_keyframes(
+        &self,
+        scale: f32,
+        steps: &[(f32, bool)],
+    ) -> Result<Vec<RobotScreenshot>, String> {
         self.tx
-            .send(RobotCommand::CaptureFrameNow(scale))
+            .send(RobotCommand::CaptureKeyframes {
+                scale,
+                steps: steps.to_vec(),
+            })
             .map_err(|e| format!("Failed to send capture command: {}", e))?;
         match self.rx.recv() {
-            Ok(RobotResponse::Screenshot(image)) => Ok(image),
+            Ok(RobotResponse::Screenshots(shots)) => Ok(shots),
             Ok(RobotResponse::Error(e)) => Err(e),
             Ok(_) => Err("Unexpected response".to_string()),
             Err(e) => Err(format!("Failed to receive response: {}", e)),

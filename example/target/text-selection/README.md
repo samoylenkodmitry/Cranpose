@@ -67,12 +67,18 @@ measurement on `loupe-steady/h_030.png`:
 Motion:
 - Birth: ~120 ms after the grab (the menu dissolves first); a grab
   released within the delay never shows a loupe.
-- Grow-in (`loupe-grow/`): born near its floating position (~3/4
-  risen, clear of the line) at ~half size, already magnified with a
-  visible rim; finishes rising within ~90 ms; width peaks (+8%
-  overshoot) ~180–200 ms after birth and settles (underdamped spring).
-- Dissolve (`loupe-dissolve/`): ~55 ms linear; mild shrink toward ~75%
-  with a slight sink, then a terminal vanish cliff.
+- Grow-in (`loupe-grow/`, re-measured frame-by-frame on a_066–a_108):
+  born a near-square squircle — ~63% of the final WIDTH but already
+  ~93% of the HEIGHT — low over the line (~82% risen), with FULL
+  optics from the first visible frame (magnified text, displayed dot
+  and rim all present). The width springs out with a ~+6% overshoot
+  peaking ~200 ms after birth (ζ≈0.5); the rise eases out with no
+  overshoot (half done ~65 ms, τ≈95 ms). NOTE: supersedes an earlier
+  "born at ~half size uniformly" read — only the width starts small.
+- Dissolve (`loupe-dissolve/`): ~55 ms total; pixel-still through the
+  first ~8 ms, then a fast shrink (to ~3/4 of the released size by
+  +25 ms) with a slight sink, fading through the optics — clearly
+  visible at +25, translucent at +42, gone by ~55.
 
 ## Edit menu (Cut / Copy / ✦ / AutoFill / Look Up / ›)
 
