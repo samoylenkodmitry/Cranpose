@@ -539,6 +539,16 @@ pub trait DrawModifierNode: ModifierNode {
     ) -> Option<Rc<dyn Fn(Size) -> Vec<cranpose_ui_graphics::DrawPrimitive>>> {
         None
     }
+
+    /// Like [`create_draw_closure`](Self::create_draw_closure), but the
+    /// primitives render BEHIND the node's content — e.g. a text field's
+    /// selection highlight, which must sit under the glyphs (a highlight
+    /// drawn over them tints the text with its translucent fill).
+    fn create_behind_draw_closure(
+        &self,
+    ) -> Option<Rc<dyn Fn(Size) -> Vec<cranpose_ui_graphics::DrawPrimitive>>> {
+        None
+    }
 }
 
 /// Marker trait for pointer input modifier nodes.

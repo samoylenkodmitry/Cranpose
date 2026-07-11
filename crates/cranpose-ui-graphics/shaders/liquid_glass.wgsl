@@ -330,13 +330,16 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
         // 0 deep inside → 1 at the rim.
         let xr = 1.0 - clamp(-d / r_in, 0.0, 1.0);
-        // Dome magnification m(xr) = m0·(1 − k·xr²), with k tied to
-        // (m0, band_start) so magnification is exactly 1 where the band
-        // begins — one smooth curve through the measured profile (1.7× at
-        // the center, ~1.29× at 60% radius, unity at the fold).
-        let k = (1.0 - 1.0 / max(m0, 1.0001)) / max(band_start * band_start, 0.001);
-        let xd = min(xr, band_start);
-        let m = max(m0 * (1.0 - k * xd * xd), 0.2);
+        // Magnification profile: FLAT m0 across the interior, easing to
+        // exactly 1 in a tight zone just before the fold band. A dome that
+        // falls from the very center arced the magnified baseline and
+        // squashed the handle dot; the reference keeps the primary line
+        // ruler-flat and confines all distortion to the near-rim zone
+        // (the dot at ~60% radius still reads compressed — it sits in the
+        // easing zone).
+        let flat_end = band_start * 0.45;
+        let ease = smoothstep(flat_end, band_start, xr);
+        let m = max(m0 + (1.0 - m0) * ease, 0.2);
         // Magnify about the shape center, looking at the offset focus. The
         // whole interior shows the focus neighbourhood (the loupe displays
         // content from under the finger, offset up).
@@ -448,7 +451,17 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let contour_gain = 0.10 * mix(1.0, 0.5, rim_style);
     rgb = rgb * (1.0 - inner_contour * contour_gain * highlight);
     rgb = rgb * (1.0 - rim_dark * rim_dark_gain * highlight);
-    rgb = rgb + vec3<f32>((spec_line * spec_gain + sheen * 0.22) * highlight);
+    var spec_rgb = vec3<f32>(spec_line * spec_gain + sheen * 0.22);
+    if loupe_mode > 0.5 {
+        // The reference loupe's rim line itself splits into a faint
+        // continuous rainbow (a prism edge hugging the whole silhouette),
+        // beyond the content fringes in the fold band. Phase the spectrum
+        // across the line's ~2px width: violet just inside, red just
+        // outside.
+        let phase = clamp(0.5 + d * 0.45, 0.0, 1.0);
+        spec_rgb = spec_line * spec_gain * mix(vec3<f32>(1.0), spectrum_weight(phase) * 1.6, 0.35);
+    }
+    rgb = rgb + spec_rgb * highlight;
 
     // Ordered-noise dither hides banding in the blurred gradients behind the
     // glass (±0.5/255 at dither_amount = 1).

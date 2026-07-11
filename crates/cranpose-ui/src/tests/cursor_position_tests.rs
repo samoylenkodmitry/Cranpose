@@ -115,12 +115,16 @@ fn cursor_x_position_matches_text_width() {
         let draw_commands = slices.draw_commands();
         assert!(!draw_commands.is_empty());
 
-        // Get the first Overlay command and execute it
-        let primitives = match &draw_commands[0] {
-            crate::DrawCommand::Overlay(func) => func(size),
-            crate::DrawCommand::WithContent(func) => func(size),
-            _ => panic!("Expected Overlay draw command for cursor"),
-        };
+        // Execute the field's OVERLAY command (the caret layer): the field
+        // now also registers a Behind command for the selection highlight,
+        // so pick the overlay explicitly instead of assuming index 0.
+        let primitives = draw_commands
+            .iter()
+            .find_map(|command| match command {
+                crate::DrawCommand::Overlay(func) => Some(func(size)),
+                _ => None,
+            })
+            .expect("Expected Overlay draw command for cursor");
 
         assert!(!primitives.is_empty(), "Expected cursor primitive");
 
@@ -158,11 +162,14 @@ fn cursor_at_start_for_empty_text() {
             height: 40.0,
         };
 
-        let primitives = match &slices.draw_commands()[0] {
-            crate::DrawCommand::Overlay(func) => func(size),
-            crate::DrawCommand::WithContent(func) => func(size),
-            _ => panic!("Expected Overlay"),
-        };
+        let primitives = slices
+            .draw_commands()
+            .iter()
+            .find_map(|command| match command {
+                crate::DrawCommand::Overlay(func) => Some(func(size)),
+                _ => None,
+            })
+            .expect("Expected Overlay");
 
         let cursor_rect = match &primitives[0] {
             cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. } => rect,

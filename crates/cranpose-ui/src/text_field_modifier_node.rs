@@ -1039,6 +1039,28 @@ impl LayoutModifierNode for TextFieldModifierNode {
     }
 }
 
+/// Content viewport (excludes padding), falling back to the node size when
+/// measurement has not run yet. Shared by the field's behind (selection
+/// highlight) and overlay (caret, IME underline) draw closures.
+fn content_viewport(
+    measured: cranpose_ui_graphics::Size,
+    size: cranpose_foundation::Size,
+    padding_left: f32,
+    padding_top: f32,
+) -> (f32, f32) {
+    let width = if measured.width > 0.0 {
+        measured.width
+    } else {
+        (size.width - padding_left).max(0.0)
+    };
+    let height = if measured.height > 0.0 {
+        measured.height
+    } else {
+        (size.height - padding_top).max(0.0)
+    };
+    (width, height)
+}
+
 impl DrawModifierNode for TextFieldModifierNode {
     fn draw(&self, _draw_scope: &mut dyn DrawScope) {
         // No-op: Cursor and selection are rendered via create_draw_closure() which
@@ -1058,7 +1080,6 @@ impl DrawModifierNode for TextFieldModifierNode {
         let content_offset = self.refs.content_offset.clone();
         let content_y_offset = self.refs.content_y_offset.clone();
         let cursor_brush = self.cursor_brush.clone();
-        let selection_brush = self.selection_brush.clone();
         let style = self.style.clone();
         let cached_line_height = self.measured_line_height.clone();
         let measured_size = self.measured_size.clone();
@@ -1099,19 +1120,8 @@ impl DrawModifierNode for TextFieldModifierNode {
             // instead of re-measuring the full text.
             let line_height = cached_line_height.get();
 
-            // Content viewport (excludes padding). Fall back to the node size
-            // when measurement has not run yet.
-            let measured = measured_size.get();
-            let viewport_width = if measured.width > 0.0 {
-                measured.width
-            } else {
-                (size.width - padding_left).max(0.0)
-            };
-            let viewport_height = if measured.height > 0.0 {
-                measured.height
-            } else {
-                (size.height - padding_top).max(0.0)
-            };
+            let (viewport_width, viewport_height) =
+                content_viewport(measured_size.get(), size, padding_left, padding_top);
             // Horizontal pan that keeps the cursor visible (0 for multi-line).
             let pan = pan_resolver(viewport_width);
 
@@ -1139,33 +1149,9 @@ impl DrawModifierNode for TextFieldModifierNode {
                 height: viewport_height,
             };
 
-            // Draw selection highlight
-            if !selection.collapsed() {
-                let sel_start = selection.min();
-                let sel_end = selection.max();
-
-                // Highlight per VISUAL (wrapped) line so it lands on the same
-                // glyphs the renderer draws.
-                for sel_rect in range_visual_line_rects(
-                    &text,
-                    &style,
-                    node_id.get(),
-                    measured_wrap_width.get(),
-                    padding_left,
-                    padding_top,
-                    pan,
-                    line_height,
-                    sel_start,
-                    sel_end,
-                ) {
-                    if let Some(clipped) = intersect_rect(sel_rect, clip_bounds) {
-                        primitives.push(DrawPrimitive::Rect {
-                            rect: clipped,
-                            brush: selection_brush.clone(),
-                        });
-                    }
-                }
-            }
+            // (The selection highlight renders BEHIND the glyphs — see
+            // create_behind_draw_closure; a translucent fill over the text
+            // tinted the selected glyphs.)
 
             // Draw composition (IME preedit) underline
             // This shows the user which text is being composed by the input method
@@ -1210,8 +1196,12 @@ impl DrawModifierNode for TextFieldModifierNode {
                 }
             }
 
-            // Draw cursor - check visibility at DRAW time for blinking
-            if crate::cursor_animation::is_cursor_visible() {
+            // Draw cursor - check visibility at DRAW time for blinking. The
+            // caret exists only for a collapsed selection: with a range
+            // selected the edges are marked by the finger handles, and a
+            // caret drawn at the range start just thickens the start
+            // handle's stem.
+            if selection.collapsed() && crate::cursor_animation::is_cursor_visible() {
                 let pos = selection.start.min(text.len());
                 // Resolve the caret's VISUAL (wrapped) line so it lands on the
                 // same glyph the renderer draws — the field wraps long lines, and
@@ -1249,6 +1239,73 @@ impl DrawModifierNode for TextFieldModifierNode {
                 }
             }
 
+            primitives
+        }))
+    }
+
+    fn create_behind_draw_closure(
+        &self,
+    ) -> Option<Rc<dyn Fn(cranpose_foundation::Size) -> Vec<cranpose_ui_graphics::DrawPrimitive>>>
+    {
+        use cranpose_ui_graphics::DrawPrimitive;
+
+        let is_focused = self.refs.is_focused.clone();
+        let state = self.state.clone();
+        let content_offset = self.refs.content_offset.clone();
+        let content_y_offset = self.refs.content_y_offset.clone();
+        let selection_brush = self.selection_brush.clone();
+        let style = self.style.clone();
+        let cached_line_height = self.measured_line_height.clone();
+        let measured_size = self.measured_size.clone();
+        let measured_wrap_width = self.measured_wrap_width.clone();
+        let node_id = self.refs.node_id.clone();
+        let pan_resolver = self.cached_pan_resolver.clone();
+
+        Some(Rc::new(move |size| {
+            if !*is_focused.borrow() {
+                return vec![];
+            }
+            let selection = state.selection();
+            if selection.collapsed() {
+                return vec![];
+            }
+            let text = state.text();
+            let padding_left = content_offset.get();
+            let padding_top = content_y_offset.get();
+            let line_height = cached_line_height.get();
+            let (viewport_width, viewport_height) =
+                content_viewport(measured_size.get(), size, padding_left, padding_top);
+            let pan = pan_resolver(viewport_width);
+            let clip_bounds = cranpose_ui_graphics::Rect {
+                x: padding_left,
+                y: padding_top,
+                width: viewport_width,
+                height: viewport_height,
+            };
+
+            // Highlight per VISUAL (wrapped) line so it lands on the same
+            // glyphs the renderer draws — BENEATH them (the reference keeps
+            // selected glyphs unblended white over the tint).
+            let mut primitives = Vec::new();
+            for sel_rect in range_visual_line_rects(
+                &text,
+                &style,
+                node_id.get(),
+                measured_wrap_width.get(),
+                padding_left,
+                padding_top,
+                pan,
+                line_height,
+                selection.min(),
+                selection.max(),
+            ) {
+                if let Some(clipped) = intersect_rect(sel_rect, clip_bounds) {
+                    primitives.push(DrawPrimitive::Rect {
+                        rect: clipped,
+                        brush: selection_brush.clone(),
+                    });
+                }
+            }
             primitives
         }))
     }

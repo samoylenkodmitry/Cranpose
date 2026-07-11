@@ -254,8 +254,12 @@ pub fn handle_path_data(
         format!("M {left} {top} L {right} {top} L {right} {bottom} L {left} {bottom} Z")
     };
     let dot = |cy: f32| {
+        // Sweep flag 1 keeps the circle CLOCKWISE like the stem rectangle:
+        // with the NonZero fill rule, same-direction subpaths union; opposite
+        // windings cancel where dot and stem overlap, punching a notch at
+        // the joint.
         format!(
-            "M {x0} {cy} A {r} {r} 0 1 0 {x1} {cy} A {r} {r} 0 1 0 {x0} {cy} Z",
+            "M {x0} {cy} A {r} {r} 0 1 1 {x1} {cy} A {r} {r} 0 1 1 {x0} {cy} Z",
             x0 = anchor_x - r,
             x1 = anchor_x + r,
         )

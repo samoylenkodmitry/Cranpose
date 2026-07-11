@@ -455,6 +455,9 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 }
 
                 if let Some(draw_node) = node.as_draw_node() {
+                    if let Some(closure) = draw_node.create_behind_draw_closure() {
+                        slices.draw_commands.push(DrawCommand::Behind(closure));
+                    }
                     if let Some(closure) = draw_node.create_draw_closure() {
                         slices.draw_commands.push(DrawCommand::Overlay(closure));
                     } else {

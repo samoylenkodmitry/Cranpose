@@ -87,31 +87,35 @@ fn main() -> ExitCode {
             std::thread::sleep(Duration::from_millis(120));
             robot.drag(melody_center, line1_mid, melody_center, line1_mid).expect("tap 2");
             settle(&robot, 700);
-            let idle = robot.screenshot().expect("idle");
+            let idle = robot.screenshot_with_scale(3.0).expect("idle");
             save(&idle, &shot_dir, "01-idle-selection");
 
-            // ---- Grab the end handle ON the line: the loupe grows in ----
-            robot.touch_down(end_x, line1_mid).expect("grab end handle");
-            std::thread::sleep(Duration::from_millis(20));
-            save(
-                &robot.screenshot().expect("menu fade"),
-                &shot_dir,
-                "01b-menu-dissolving",
-            );
+            // ---- Grow-in keyframes: a high-resolution capture stalls the
+            // driver for ~200 ms, so one in-flight sequence would sample the
+            // animation far later than intended. Instead each keyframe gets
+            // its OWN grab: press → sleep to the offset → capture once →
+            // release → settle. The capture cost lands after the moment of
+            // interest, keeping the sampled time honest.
             let grow_shots = [
-                (30u64, "02-grow-a"),
-                (70, "03-grow-b"),
-                (80, "04-grow-peak"),
-                (180, "05-grow-settled"),
+                (20u64, "01b-menu-dissolving"),
+                (55, "02-grow-a"),
+                (110, "03-grow-b"),
+                (200, "04-grow-peak"),
+                (400, "05-grow-settled"),
             ];
-            for (wait_ms, name) in grow_shots {
-                std::thread::sleep(Duration::from_millis(wait_ms));
-                let shot = robot.screenshot().expect(name);
+            for (offset_ms, name) in grow_shots {
+                robot.touch_down(end_x, line1_mid).expect("grab end handle");
+                std::thread::sleep(Duration::from_millis(offset_ms));
+                let shot = robot.screenshot_with_scale(3.0).expect(name);
                 save(&shot, &shot_dir, name);
+                robot.touch_up(end_x, line1_mid).expect("release grab");
+                settle(&robot, 500);
             }
-            // The bubble must exist: the region above the line must differ
-            // from the idle frame there.
-            let grown = robot.screenshot().expect("grown");
+            // The bubble must exist while held: the region above the line
+            // must differ from the idle frame there.
+            robot.touch_down(end_x, line1_mid).expect("grab for presence");
+            std::thread::sleep(Duration::from_millis(400));
+            let grown = robot.screenshot_with_scale(3.0).expect("grown");
             let loupe_region = (
                 end_x - 70.0,
                 line1_mid - 120.0,
@@ -130,31 +134,37 @@ fn main() -> ExitCode {
                 robot.touch_move(x, line1_mid).expect("drag move");
                 std::thread::sleep(Duration::from_millis(16));
                 if i == steps / 3 {
-                    save(&robot.screenshot().expect("f1"), &shot_dir, "06-follow-a");
+                    save(&robot.screenshot_with_scale(3.0).expect("f1"), &shot_dir, "06-follow-a");
                 }
                 if i == 2 * steps / 3 {
-                    save(&robot.screenshot().expect("f2"), &shot_dir, "07-follow-b");
+                    save(&robot.screenshot_with_scale(3.0).expect("f2"), &shot_dir, "07-follow-b");
                 }
             }
             std::thread::sleep(Duration::from_millis(320));
-            save(&robot.screenshot().expect("steady"), &shot_dir, "08-steady");
+            save(&robot.screenshot_with_scale(3.0).expect("steady"), &shot_dir, "08-steady");
 
-            // ---- Release: the bubble deflates back into the line ----
+            // ---- Release: the bubble deflates back into the line. Same
+            // one-capture-per-gesture scheme as the grow keyframes: re-grab,
+            // settle, release, sleep to the offset, capture once.
             robot.touch_up(drag_to_x, line1_mid).expect("release");
-            let dissolve_shots = [(25u64, "09-dissolve-a"), (45, "10-dissolve-b"), (140, "11-after-release")];
-            for (wait_ms, name) in dissolve_shots {
-                std::thread::sleep(Duration::from_millis(wait_ms));
-                let shot = robot.screenshot().expect(name);
-                save(&shot, &shot_dir, name);
-            }
-            std::thread::sleep(Duration::from_millis(120));
-            save(
-                &robot.screenshot().expect("menu mat"),
-                &shot_dir,
-                "11b-menu-materializing",
-            );
             settle(&robot, 500);
-            let after = robot.screenshot().expect("after");
+            let dissolve_shots = [
+                (18u64, "09-dissolve-a"),
+                (40, "10-dissolve-b"),
+                (140, "11-after-release"),
+                (300, "11b-menu-materializing"),
+                (360, "11c-menu-materializing-2"),
+            ];
+            for (offset_ms, name) in dissolve_shots {
+                robot.touch_down(drag_to_x, line1_mid).expect("regrab");
+                std::thread::sleep(Duration::from_millis(500));
+                robot.touch_up(drag_to_x, line1_mid).expect("release");
+                std::thread::sleep(Duration::from_millis(offset_ms));
+                let shot = robot.screenshot_with_scale(3.0).expect(name);
+                save(&shot, &shot_dir, name);
+                settle(&robot, 600);
+            }
+            let after = robot.screenshot_with_scale(3.0).expect("after");
             save(&after, &shot_dir, "12-menu-returned");
 
             // ---- Dot-grab drag: NO loupe ----
@@ -162,23 +172,25 @@ fn main() -> ExitCode {
             let dot_y = line1_bottom + 6.0; // end dot center
             robot.touch_down(end2_x, dot_y).expect("grab end dot");
             std::thread::sleep(Duration::from_millis(240));
-            let dot_drag = robot.screenshot().expect("dot drag");
+            let dot_drag = robot.screenshot_with_scale(3.0).expect("dot drag");
             save(&dot_drag, &shot_dir, "13-dot-grab-no-loupe");
             // While a dot-drag is in flight the band above the line must be
             // EMPTY: the menu is hidden and no bubble may appear — plain
             // backdrop only (structure there means a loupe wrongly grew).
+            // Band strictly ABOVE the ghost toolbar text (which lives at
+            // y≈122..138): only a wrongly-grown bubble reaches up here.
             let dot_loupe_region = (
                 end2_x - 70.0,
                 line1_mid - 120.0,
                 end2_x + 70.0,
-                line1_mid - 34.0,
+                line1_mid - 72.0,
             );
             if region_has_structure(&dot_drag, dot_loupe_region) {
                 fail(&robot, "a loupe appeared for a dot grab below the line");
             }
             robot.touch_move(end2_x + 40.0, dot_y).expect("dot move");
             std::thread::sleep(Duration::from_millis(200));
-            save(&robot.screenshot().expect("dot2"), &shot_dir, "14-dot-drag-moved");
+            save(&robot.screenshot_with_scale(3.0).expect("dot2"), &shot_dir, "14-dot-drag-moved");
             robot.touch_up(end2_x + 40.0, dot_y).expect("dot release");
             settle(&robot, 400);
 
@@ -205,6 +217,21 @@ fn content() {
             .background(BACKDROP),
         BoxSpec::default(),
         || {
+            // Page content BEHIND the edit menu's anchor band (like the
+            // reference's toolbar row): the menu's glass body must show it
+            // ghosting through — a flat empty backdrop would make the
+            // material's transparency unjudgeable.
+            let ghost_style = {
+                let mut style = TextStyle::default();
+                style.span_style.color = Some(Color(0.62, 0.58, 0.56, 1.0));
+                style.span_style.font_size = TextUnit::Sp(15.0);
+                style
+            };
+            cranpose::widgets::Text(
+                "Styles  •  cinematic  •  anime  •  catchy".to_string(),
+                Modifier::empty().absolute_offset(34.0, 122.0),
+                ghost_style,
+            );
             let state = cranpose_core::remember(|| TextFieldState::new(TEXT))
                 .with(TextFieldState::clone);
             BasicTextFieldWithOptions(

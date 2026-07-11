@@ -31,7 +31,7 @@ use crate::composable;
 use crate::modifier::Modifier;
 use crate::widgets::box_widget::{Box, BoxSpec};
 use crate::widgets::popup::Popup;
-use cranpose_animation::{spring, Animatable, AnimationType};
+use cranpose_animation::{spring, Animatable, AnimationSpec, AnimationType};
 use cranpose_core::{remember, with_current_composer};
 use cranpose_ui_graphics::{
     liquid_loupe_effect, GraphicsLayer, LayerShape, LiquidLoupeSpec, Point, Rect,
@@ -46,19 +46,28 @@ pub const LOUPE_HEIGHT: f32 = 82.0;
 pub const LOUPE_RISE: f32 = 75.0;
 /// Center magnification of the lens.
 pub const LOUPE_MAGNIFICATION: f32 = 1.7;
-/// Scale of the bubble at the very start of the grow-in (reference: first
-/// visible frame is ~90 px wide of the 350 px steady state).
-const LOUPE_MIN_SCALE: f32 = 0.26;
+/// Scale of the bubble at its birth (reference: the first visible frame is
+/// already ~half the steady size).
+const LOUPE_MIN_SCALE: f32 = 0.5;
+/// Delay between the grab and the bubble's birth (reference: the menu
+/// dissolves first; the bubble appears ~120 ms after the touch-down). A grab
+/// released within the delay never shows a loupe.
+const LOUPE_BIRTH_DELAY_MS: u64 = 120;
 /// How far below the line bottom (in line heights) the finger still counts
 /// as covering the line. The end/cursor dot's center sits ~0.29 line heights
 /// below the bottom (16 dp dot on a 20 dp line), so a dot-center grab falls
 /// outside this margin and shows no loupe — the measured behavior.
 const LOUPE_LINE_GRAB_MARGIN: f32 = 0.15;
 
-/// Grow-in: ζ≈0.63, ω₀≈20 → +8% overshoot peaking at ~200 ms, settled in
-/// ~350 ms — the measured inflate.
+/// Grow-in: ζ≈0.63 → +8% overshoot peaking at ~190 ms after the birth,
+/// settled in ~340 ms — the measured inflate.
 fn loupe_grow_spring() -> AnimationType {
-    spring(0.63, 410.0)
+    spring(0.63, 440.0)
+}
+
+/// The birth-delay gate: a linear timer from the grab to the bubble's birth.
+fn loupe_birth_gate() -> AnimationType {
+    AnimationType::Tween(AnimationSpec::linear(LOUPE_BIRTH_DELAY_MS))
 }
 
 /// Release: critically damped, ~55 ms to deflate into the line (ω≈95 puts
@@ -105,6 +114,9 @@ pub fn loupe_target_for_drag(
 /// plus the horizontal follow, and the frozen target while dissolving.
 struct LoupeState {
     progress: RefCell<Animatable<f32>>,
+    /// Birth-delay timer: runs 0→1 over [`LOUPE_BIRTH_DELAY_MS`] from the
+    /// grab; the grow starts only once it completes.
+    gate: RefCell<Animatable<f32>>,
     follow_x: RefCell<Animatable<f32>>,
     /// The last target shown; kept while the bubble deflates after release.
     shown: RefCell<Option<LoupeTarget>>,
@@ -122,6 +134,7 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
         let runtime = with_current_composer(|composer| composer.runtime_handle());
         Rc::new(LoupeState {
             progress: RefCell::new(Animatable::new(0.0, runtime.clone())),
+            gate: RefCell::new(Animatable::new(0.0, runtime.clone())),
             follow_x: RefCell::new(Animatable::new(0.0, runtime)),
             shown: RefCell::new(None),
             was_active: std::cell::Cell::new(false),
@@ -143,12 +156,21 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
             }
         }
         state.shown.replace(Some(t));
-        let mut progress = state.progress.borrow_mut();
         if fresh_grab {
-            progress.snapTo(0.0);
+            let mut gate = state.gate.borrow_mut();
+            gate.snapTo(0.0);
+            gate.animateTo(1.0, loupe_birth_gate());
+            state.progress.borrow_mut().snapTo(0.0);
         }
-        if (progress.target() - 1.0).abs() > f32::EPSILON {
-            progress.animateTo(1.0, loupe_grow_spring());
+        // The grow starts only once the birth gate elapses (reading the gate
+        // state subscribes this composition to its frames, so the flip
+        // recomposes even during a motionless hold).
+        let born = state.gate.borrow().state().value() >= 1.0;
+        if born {
+            let mut progress = state.progress.borrow_mut();
+            if (progress.target() - 1.0).abs() > f32::EPSILON {
+                progress.animateTo(1.0, loupe_grow_spring());
+            }
         }
     } else {
         let mut progress = state.progress.borrow_mut();
@@ -164,7 +186,15 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     let Some(shown) = *state.shown.borrow() else {
         return;
     };
-    if !active && p <= 0.02 {
+    if p <= 0.001 {
+        // Not yet born (birth delay) — or a grab released inside the delay,
+        // which never shows a loupe at all.
+        if !active {
+            state.shown.replace(None);
+        }
+        return;
+    }
+    if !active && p <= 0.05 {
         // Fully deflated: unmount until the next grab.
         state.shown.replace(None);
         return;
@@ -173,12 +203,20 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     // Geometry driven by the grow progress: the bubble inflates out of the
     // grab point on the line, rising to its floating offset. The overshoot
     // (p briefly > 1) carries both the size and the rise, like the
-    // reference's 378-px peak.
+    // reference's 378-px peak. Two reference details on top of the raw
+    // spring: the newborn bubble is nearly ROUND and widens into the capsule
+    // as it grows, and the rise outruns the inflation (the bubble is at
+    // floating height while still filling out).
     let scale = LOUPE_MIN_SCALE + (1.0 - LOUPE_MIN_SCALE) * p;
-    let width = LOUPE_WIDTH * scale;
     let height = LOUPE_HEIGHT * scale;
+    let aspect_t = ((p.min(1.0)) / 0.65).clamp(0.0, 1.0);
+    let aspect_t = aspect_t * aspect_t * (3.0 - 2.0 * aspect_t);
+    let aspect = 1.08 + (LOUPE_WIDTH / LOUPE_HEIGHT - 1.08) * aspect_t;
+    let width = height * aspect;
     let center_x = follow_state.value();
-    let center_y = shown.line_mid_y - LOUPE_RISE * p;
+    let rise_t = 1.0 - (1.0 - p.min(1.0)).powi(2);
+    let rise_t = rise_t + (p - p.min(1.0)); // keep the spring overshoot
+    let center_y = shown.line_mid_y - LOUPE_RISE * rise_t;
     // The lens looks at the line (the focus), which sits below the risen
     // center — at p=0 the focus is the bubble itself, so the newborn bubble
     // shows the unmagnified text it grows out of.
@@ -245,9 +283,9 @@ mod tests {
 
     #[test]
     fn loupe_effect_scales_its_optics_with_grow_progress() {
-        // At progress 0 the lens is optically inert (magnification 1, no
-        // dispersion, no rim) — the newborn bubble is invisible over the text
-        // it grows out of; at 1 it carries the full measured optics.
+        // The reference bubble is a fixed-optic lens whose SHAPE grows: it is
+        // born already mostly magnified with a visible rim and dispersion,
+        // and only the residue ramps in with the inflation.
         let newborn = LiquidLoupeSpec {
             progress: 0.0,
             ..LiquidLoupeSpec::default()
@@ -257,8 +295,13 @@ mod tests {
             panic!("loupe must be a bare shader effect");
         };
         let u = shader.uniforms();
-        assert_eq!(u[83], 1.0, "newborn magnification is 1");
-        assert_eq!(u[86], 0.0, "newborn dispersion is 0");
+        let newborn_mag = 1.0 + (LOUPE_MAGNIFICATION - 1.0) * 0.85;
+        assert!(
+            (u[83] - newborn_mag).abs() < 1e-3,
+            "newborn magnification is ~85% of full, got {}",
+            u[83]
+        );
+        assert!(u[86] > 0.0, "newborn dispersion already visible");
 
         let grown = LiquidLoupeSpec::default();
         let effect = liquid_loupe_effect((LOUPE_WIDTH, LOUPE_HEIGHT), &grown);

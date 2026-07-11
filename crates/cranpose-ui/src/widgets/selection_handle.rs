@@ -112,7 +112,7 @@ fn handle_shape(kind: HandleKind, radius: f32, line_height: f32) -> HandleShape 
         // Dot tangent below the line bottom, overlap folded in.
         let cy = line_bottom_local + radius - HANDLE_DOT_LINE_OVERLAP;
         format!(
-            "M {x0} {cy} A {r} {r} 0 1 0 {x1} {cy} A {r} {r} 0 1 0 {x0} {cy} Z",
+            "M {x0} {cy} A {r} {r} 0 1 1 {x1} {cy} A {r} {r} 0 1 1 {x0} {cy} Z",
             x0 = tip_in_box.x - radius,
             x1 = tip_in_box.x + radius,
             r = radius,
