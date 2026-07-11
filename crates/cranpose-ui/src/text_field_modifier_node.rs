@@ -721,9 +721,15 @@ impl TextFieldModifierNode {
         })
     }
 
-    /// Creates a node with custom cursor color.
+    /// Creates a node with a custom accent: the caret is drawn solid in
+    /// `color` and the selection highlight is derived from it at
+    /// [`crate::widgets::SELECTION_HIGHLIGHT_ALPHA`] — the reference field
+    /// tints caret, handles and highlight from the one accent.
     pub fn with_cursor_color(mut self, color: Color) -> Self {
         self.cursor_brush = Brush::solid(color);
+        self.selection_brush = Brush::solid(
+            color.with_alpha(crate::widgets::basic_text_field::SELECTION_HIGHLIGHT_ALPHA),
+        );
         self
     }
 

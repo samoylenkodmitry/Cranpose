@@ -1,13 +1,15 @@
-//! Draggable text-selection handles (finger teardrops) drawn in the top-level
+//! Draggable text-selection handles (accent lollipops) drawn in the top-level
 //! overlay.
 //!
-//! A [`SelectionHandle`] renders one of the teardrop shapes from
+//! A [`SelectionHandle`] renders one of the lollipop shapes from
 //! [`crate::text_selection`] at a text endpoint (the caret, or a selection
-//! start/end) and lets a finger drag it. It is composed inside a [`Popup`] so
-//! it draws above the field and is not clipped when it hangs below the last
-//! line. Positioning and drag→text-offset mapping are the caller's job (see
-//! `BasicTextField`); this widget only draws the teardrop and reports the
-//! window-space position of an in-progress drag.
+//! start/end) and lets a finger drag it: a 2 dp stem spanning the line box
+//! with a 16 dp dot tangent just outside it — above the line for the start
+//! handle, below it for the end and cursor handles. It is composed inside a
+//! [`Popup`] so it draws above the field and is not clipped when it hangs
+//! outside the line. Positioning and drag→text-offset mapping are the
+//! caller's job (see `BasicTextField`); this widget only draws the lollipop
+//! and reports the window-space position of an in-progress drag.
 
 #![allow(non_snake_case)]
 
@@ -15,7 +17,9 @@ use std::rc::Rc;
 
 use crate::composable;
 use crate::modifier::Modifier;
-use crate::text_selection::{handle_path_data, HandleKind, HANDLE_GRAB_SLOP};
+use crate::text_selection::{
+    handle_path_data, HandleKind, HANDLE_DOT_LINE_OVERLAP, HANDLE_GRAB_SLOP, HANDLE_STEM_WIDTH,
+};
 use crate::widgets::box_widget::{Box, BoxSpec};
 use crate::widgets::popup::Popup;
 use crate::PointerInputScope;
@@ -35,68 +39,93 @@ pub(crate) const HANDLE_LONG_PRESS_SLOP_PX: f32 = 12.0;
 /// Undo / Redo).
 pub(crate) const HANDLE_TAP_SLOP_PX: f32 = 12.0;
 
-/// Geometry of a handle's drawable teardrop for a bulb `radius`: the box the
-/// teardrop occupies (which doubles as its finger grab region) and where the tip
-/// sits inside that box, so the caller can anchor the box at
-/// `tip_endpoint - tip_in_box` to land the tip on the text.
+/// Geometry of a handle's drawable lollipop: the box it occupies (which
+/// doubles as its finger grab region) and where the anchor — the text edge at
+/// the line BOTTOM — sits inside that box, so the caller can anchor the box at
+/// `tip_endpoint - tip_in_box` to land the stem on the text edge.
 struct HandleShape {
-    /// SVG path of the teardrop in the box's local coordinates.
+    /// SVG path of the lollipop in the box's local coordinates.
     path_data: String,
     /// The full box size including the finger grab slop. The box's own pointer
     /// input is the handle's grab region, so this must be finger-sized.
     box_size: Size,
-    /// The tip position within the (padded) box.
+    /// The anchor position (text edge at the line bottom) within the box.
     tip_in_box: Point,
 }
 
-/// Computes the teardrop path, box size and tip offset for a handle, expanding
-/// the box by a finger-sized grab slop so the handle is easy to grab.
+/// Computes the lollipop path, box size and anchor offset for a handle,
+/// expanding the box by a finger-sized grab slop so the handle is easy to
+/// grab. `line_height` is the line box the stem spans, ending at the anchor
+/// (the line bottom).
 ///
 /// The box is the handle's grab region (its `Box` carries the drag pointer
-/// input). A bare teardrop is far smaller than a fingertip, so without slop a
-/// touch-DOWN aimed at the handle lands a few px off it and falls through to the
-/// field below, which places a caret and collapses the selection. The slop is
-/// applied symmetrically on the sides and BELOW the tip — never above it — so
-/// the grab region stays generous for both the start and end handles yet keeps
-/// off the glyph line above the tip.
-fn handle_shape(kind: HandleKind, radius: f32) -> HandleShape {
+/// input) and the slop rules are per kind:
+///
+/// * the CURSOR handle covers only its dot below the line (sides/below slop,
+///   nothing above the line bottom). Its stem is the field's own caret, and
+///   any grab region over the glyph line would swallow the second tap of a
+///   double-tap (which must reach the field to escalate into a word
+///   selection) — the exact regression this shape used to pin as a teardrop;
+/// * the START handle covers its dot above the line (slop above/sides) plus
+///   the stem column across the line box, with no slop below the line bottom
+///   (the next line's glyphs belong to the field);
+/// * the END handle mirrors it: the stem column from the line top (no slop
+///   above — the line's own glyphs stay tappable) down over its dot with
+///   slop below.
+///
+/// Grabbing an edge ON the line (the stem column) is what the reference does:
+/// a drag starting there rides the handle with the loupe up; a drag on the
+/// dot below drags without the loupe.
+fn handle_shape(kind: HandleKind, radius: f32, line_height: f32) -> HandleShape {
     let slop = HANDLE_GRAB_SLOP.max(0.0);
-    // Measure the teardrop with its tip at the origin to learn its bounds
-    // (the bulb may extend left/right/below the tip depending on the kind).
-    let bounds = VectorPath::parse(&handle_path_data(kind, 0.0, 0.0, radius))
-        .map(|p| p.bounds())
-        .unwrap_or(Rect {
-            x: -radius,
-            y: 0.0,
-            width: 2.0 * radius,
-            height: 2.0 * radius,
-        });
-    // Place the tip so the whole shape fits at non-negative coordinates inside
-    // the box. Grab slop is added on the sides and BELOW the tip for a
-    // finger-sized target on the bulb (which hangs below the line), but NOT
-    // above the tip: the tip sits at the caret line's bottom, so any upward slop
-    // would put the handle's grab region over the glyphs on that line. That
-    // overlap is what made a double-tap regress after selection handles started
-    // appearing inside `LazyColumn` items — the second tap landed on the newly
-    // shown cursor handle (which moves the caret and consumes the event) instead
-    // of reaching the field to escalate into a word selection. Keeping the grab
-    // box strictly at/below the tip lets taps on the text through, so double-tap
-    // word-select and long-press both work, while grabbing the handle (anywhere
-    // within a finger's reach of the bulb below the line) now works reliably.
-    //
-    // Because the slop is the same on the left and the right of the drawn shape,
-    // the start and end handles — whose teardrops are mirror images (the bulb
-    // points opposite ways) — get grab regions that are mirror-symmetric about
-    // their respective tips, so neither handle is harder to grab than the other.
+    let line_height = line_height.max(1.0);
+    let half_width = radius.max(HANDLE_STEM_WIDTH * 0.5);
+    // Vertical extent of the drawable relative to the anchor (line bottom).
+    let (draw_top, draw_bottom) = match kind {
+        // Dot above the line top (dipping HANDLE_DOT_LINE_OVERLAP into it).
+        HandleKind::SelectionStart => (-line_height - 2.0 * radius + HANDLE_DOT_LINE_OVERLAP, 0.0),
+        // Stem across the line, dot hanging below.
+        HandleKind::SelectionEnd => (-line_height, 2.0 * radius - HANDLE_DOT_LINE_OVERLAP),
+        // Dot below the line only (the field's caret is the stem).
+        HandleKind::Cursor => (0.0, 2.0 * radius - HANDLE_DOT_LINE_OVERLAP),
+    };
+    // Grab slop: sides always; above only where the handle's dot is above
+    // (start), below only where it hangs below (end/cursor).
+    let (slop_above, slop_below) = match kind {
+        HandleKind::SelectionStart => (slop, 0.0),
+        HandleKind::SelectionEnd | HandleKind::Cursor => (0.0, slop),
+    };
+    let box_top = draw_top - slop_above;
+    let box_bottom = draw_bottom + slop_below;
     let tip_in_box = Point {
-        x: slop - bounds.x,
-        y: -bounds.y,
+        x: half_width + slop,
+        y: -box_top,
     };
     let box_size = Size {
-        width: bounds.width + 2.0 * slop,
-        height: bounds.height + slop,
+        width: 2.0 * half_width + 2.0 * slop,
+        height: box_bottom - box_top,
     };
-    let path_data = handle_path_data(kind, tip_in_box.x, tip_in_box.y, radius);
+    // The path in box-local coordinates. The cursor handle draws only its dot
+    // (its stem is the field's caret); start/end draw stem + dot.
+    let (line_top_local, line_bottom_local) = (tip_in_box.y - line_height, tip_in_box.y);
+    let path_data = if kind == HandleKind::Cursor {
+        // Dot tangent below the line bottom, overlap folded in.
+        let cy = line_bottom_local + radius - HANDLE_DOT_LINE_OVERLAP;
+        format!(
+            "M {x0} {cy} A {r} {r} 0 1 0 {x1} {cy} A {r} {r} 0 1 0 {x0} {cy} Z",
+            x0 = tip_in_box.x - radius,
+            x1 = tip_in_box.x + radius,
+            r = radius,
+        )
+    } else {
+        handle_path_data(
+            kind,
+            tip_in_box.x,
+            line_top_local,
+            line_bottom_local,
+            radius,
+        )
+    };
     HandleShape {
         path_data,
         box_size,
@@ -104,17 +133,23 @@ fn handle_shape(kind: HandleKind, radius: f32) -> HandleShape {
     }
 }
 
-/// The window-space axis-aligned grab region for a handle whose tip sits at
-/// `tip` (window coords). This is exactly the region covered by the handle's
-/// `Box` pointer input, expressed in window coordinates, so a touch-DOWN within
-/// it grabs the handle (the overlay `Popup` is hit-tested above the field, so a
-/// grab always wins over the field's caret placement).
+/// The window-space axis-aligned grab region for a handle whose anchor (text
+/// edge at the line bottom) sits at `tip` (window coords). This is exactly the
+/// region covered by the handle's `Box` pointer input, expressed in window
+/// coordinates, so a touch-DOWN within it grabs the handle (the overlay
+/// `Popup` is hit-tested above the field, so a grab always wins over the
+/// field's caret placement).
 ///
 /// Exposed so the arbitration can be asserted in tests without a full
 /// compose/layout/hit-test round-trip.
 #[cfg(test)]
-pub(crate) fn handle_grab_rect(kind: HandleKind, tip: Point, radius: f32) -> Rect {
-    let shape = handle_shape(kind, radius);
+pub(crate) fn handle_grab_rect(
+    kind: HandleKind,
+    tip: Point,
+    radius: f32,
+    line_height: f32,
+) -> Rect {
+    let shape = handle_shape(kind, radius, line_height);
     Rect {
         x: tip.x - shape.tip_in_box.x,
         y: tip.y - shape.tip_in_box.y,
@@ -125,10 +160,11 @@ pub(crate) fn handle_grab_rect(kind: HandleKind, tip: Point, radius: f32) -> Rec
 
 /// A finger-draggable selection/cursor handle rendered in the overlay.
 ///
-/// * `kind` — which teardrop to draw (cursor caret, selection start/end).
-/// * `tip` — window-space position of the text endpoint the tip points at
-///   (typically the bottom of the line at the caret/selection edge).
-/// * `radius` / `color` — bulb radius and fill.
+/// * `kind` — which lollipop to draw (cursor dot, selection start/end).
+/// * `tip` — window-space position of the text edge at the line BOTTOM (the
+///   caret/selection endpoint).
+/// * `line_height` — the line box the stem spans (up from `tip`).
+/// * `radius` / `color` — dot radius and accent fill.
 /// * `on_drag` — invoked with the current drag position (window space) on every
 ///   pointer down/move so the field can map it to a text offset and move the
 ///   caret / extend the selection.
@@ -145,6 +181,7 @@ pub(crate) fn handle_grab_rect(kind: HandleKind, tip: Point, radius: f32) -> Rec
 pub fn SelectionHandle(
     kind: HandleKind,
     tip: Point,
+    line_height: f32,
     radius: f32,
     color: Color,
     on_drag: impl Fn(Point) + 'static,
@@ -152,7 +189,7 @@ pub fn SelectionHandle(
     on_long_press: impl Fn() + 'static,
     on_tap: impl Fn() + 'static,
 ) {
-    let shape = handle_shape(kind, radius);
+    let shape = handle_shape(kind, radius, line_height);
     let anchor = Rect {
         x: tip.x - shape.tip_in_box.x,
         y: tip.y - shape.tip_in_box.y,
@@ -345,70 +382,43 @@ mod tests {
     use super::*;
     use crate::text_selection::HANDLE_RADIUS;
 
-    /// Regression for the double-tap-to-select-word regression. The cursor
-    /// handle — the one a single tap shows — must place its tip at the very top
-    /// of its touch box, so the box does not overlap the glyphs on the caret's
-    /// line. Otherwise a double-tap's second tap lands on the handle (which just
-    /// moves the caret and consumes the event) instead of reaching the field to
-    /// escalate into a word selection.
+    const LINE_HEIGHT: f32 = 20.0;
+
+    /// Regression guard for double-tap-to-select-word. The cursor handle — the
+    /// one a single tap shows — must keep its whole touch box AT OR BELOW the
+    /// line bottom (its dot hangs under the line; its stem is the field's own
+    /// caret). Any grab region over the glyph line would swallow the second
+    /// tap of a double-tap (which must reach the field to escalate into a word
+    /// selection).
     #[test]
-    fn cursor_handle_touch_box_sits_at_or_below_the_tip() {
-        let shape = handle_shape(HandleKind::Cursor, HANDLE_RADIUS);
+    fn cursor_handle_touch_box_sits_at_or_below_the_line_bottom() {
+        let shape = handle_shape(HandleKind::Cursor, HANDLE_RADIUS, LINE_HEIGHT);
         // The box is anchored at `tip - tip_in_box`; `tip_in_box.y == 0` means
-        // its top edge coincides with the tip (the caret line's bottom).
+        // its top edge coincides with the anchor (the caret line's bottom).
         assert!(
             shape.tip_in_box.y.abs() < 0.01,
-            "cursor handle tip must sit at the top edge of its touch box \
+            "cursor handle anchor must sit at the top edge of its touch box \
              (tip_in_box.y = {}), so it never overlaps the text line above",
             shape.tip_in_box.y
         );
-        // The bulb still hangs below the tip with room for a finger.
+        // The dot still hangs below the anchor with room for a finger.
         assert!(
             shape.box_size.height >= 2.0 * HANDLE_RADIUS,
-            "cursor handle box must extend below the tip so the bulb is grabbable"
+            "cursor handle box must extend below the anchor so the dot is grabbable"
         );
-    }
-
-    /// No handle keeps any grab slop *above* the tip: the box top is exactly the
-    /// shape's own topmost point (no extra empty slop over the text line), while
-    /// the side/below finger slop is retained.
-    #[test]
-    fn handles_have_no_padding_above_the_tip() {
-        let slop = HANDLE_GRAB_SLOP.max(0.0);
-        for kind in [
-            HandleKind::Cursor,
-            HandleKind::SelectionStart,
-            HandleKind::SelectionEnd,
-        ] {
-            let shape = handle_shape(kind, HANDLE_RADIUS);
-            let bounds = cranpose_ui_graphics::VectorPath::parse(&handle_path_data(
-                kind,
-                0.0,
-                0.0,
-                HANDLE_RADIUS,
-            ))
-            .map(|p| p.bounds())
-            .expect("valid handle path");
-            // Box top coincides with the shape's own topmost point: no upward
-            // slop beyond the teardrop geometry itself.
-            assert!(
-                (shape.tip_in_box.y - (-bounds.y)).abs() < 0.01,
-                "{kind:?}: expected no slop above the tip, tip_in_box.y = {} vs shape top {}",
-                shape.tip_in_box.y,
-                -bounds.y
-            );
-            // Side slop is applied for a finger-sized grab.
-            assert!(
-                shape.box_size.width >= bounds.width + 2.0 * slop - 0.01,
-                "{kind:?}: side grab slop must be applied"
-            );
-        }
+        // And it draws ONLY the dot — the stem is the field's caret, which
+        // keeps blinking; a drawn stem would paint over it.
+        assert!(
+            !shape.path_data.contains('L'),
+            "cursor handle must draw only its dot (no stem rectangle): {}",
+            shape.path_data
+        );
     }
 
     /// The grab region must be finger-sized: at least a fingertip across so a
     /// touch-DOWN aimed at the handle reliably lands inside it instead of
     /// falling through to the field (which would collapse the selection). A
-    /// fingertip is ~24-32dp; the drawn teardrop alone (~2·radius) is far too
+    /// fingertip is ~24-32dp; the drawn dot alone (~2·radius) is far too
     /// small, so the box must add a generous slop.
     #[test]
     fn grab_region_is_finger_sized() {
@@ -417,7 +427,12 @@ mod tests {
             HandleKind::SelectionStart,
             HandleKind::SelectionEnd,
         ] {
-            let rect = handle_grab_rect(kind, Point { x: 100.0, y: 100.0 }, HANDLE_RADIUS);
+            let rect = handle_grab_rect(
+                kind,
+                Point { x: 100.0, y: 100.0 },
+                HANDLE_RADIUS,
+                LINE_HEIGHT,
+            );
             assert!(
                 rect.width >= 48.0,
                 "{kind:?}: grab region must be at least a fingertip wide, got {}",
@@ -431,83 +446,93 @@ mod tests {
         }
     }
 
-    /// Reproduces the reported start-vs-end asymmetry as a guard: the start and
-    /// end selection handles point in opposite directions (their bulbs hang to
-    /// opposite sides of the shared tip), so a bug that offset one hit-box the
-    /// wrong way would make that handle harder to grab. Their grab regions must
-    /// be mirror images **of each other** about the tip — the start box reaches
-    /// as far LEFT of the tip as the end box reaches RIGHT (over the bulb), and
-    /// both are the same size — so neither handle collapses the selection on a
-    /// near-miss while the other drags fine.
+    /// The start and end grab regions are vertical mirror images of each other
+    /// about the line box: the start covers its dot ABOVE the line (plus the
+    /// stem column across the line), the end covers the stem column and its dot
+    /// BELOW — so neither handle is harder to grab than the other.
     #[test]
-    fn start_and_end_grab_regions_are_mirror_images() {
+    fn start_and_end_grab_regions_mirror_about_the_line() {
         let tip = Point { x: 100.0, y: 100.0 };
-        let start = handle_grab_rect(HandleKind::SelectionStart, tip, HANDLE_RADIUS);
-        let end = handle_grab_rect(HandleKind::SelectionEnd, tip, HANDLE_RADIUS);
+        let line_top = tip.y - LINE_HEIGHT;
+        let start = handle_grab_rect(HandleKind::SelectionStart, tip, HANDLE_RADIUS, LINE_HEIGHT);
+        let end = handle_grab_rect(HandleKind::SelectionEnd, tip, HANDLE_RADIUS, LINE_HEIGHT);
 
         // Same-size boxes.
         assert!(
             (start.width - end.width).abs() < 0.01 && (start.height - end.height).abs() < 0.01,
             "start {start:?} and end {end:?} grab boxes must be the same size"
         );
-
-        let start_left = tip.x - start.x;
-        let start_right = (start.x + start.width) - tip.x;
-        let end_left = tip.x - end.x;
-        let end_right = (end.x + end.width) - tip.x;
-
-        // Each box extends toward its bulb (start left, end right) by the same
-        // amount, and away from it by the same smaller amount — the boxes are
-        // reflections of one another.
+        // Start reaches above the line top as far as end reaches below the
+        // line bottom (dot + slop), and each stops at the opposite line edge.
+        let start_above = line_top - start.y;
+        let end_below = (end.y + end.height) - tip.y;
         assert!(
-            (start_left - end_right).abs() < 0.01 && (start_right - end_left).abs() < 0.01,
-            "start (l={start_left}, r={start_right}) and end (l={end_left}, r={end_right}) \
-             grab boxes must be horizontal mirror images"
+            (start_above - end_below).abs() < 0.01,
+            "start reach above the line ({start_above}) must equal end reach below ({end_below})"
         );
-        // Sanity: the box genuinely reaches over the bulb (a full diameter to the
-        // handle's own side) so the bulb is grabbable.
         assert!(
-            start_left >= 2.0 * HANDLE_RADIUS && end_right >= 2.0 * HANDLE_RADIUS,
-            "each grab box must extend a full bulb-diameter toward its bulb"
+            ((start.y + start.height) - tip.y).abs() < 0.01,
+            "start grab box must stop at the line bottom (no slop below)"
+        );
+        assert!(
+            (end.y - line_top).abs() < 0.01,
+            "end grab box must start at the line top (no slop above)"
         );
     }
 
-    /// A touch-DOWN a finger's width to either side of, and below, a handle tip
-    /// must still land inside the handle's grab region (so it grabs the handle),
-    /// while a press a finger's reach up on the glyph line above the tip must NOT
-    /// — that belongs to the field so double-tap word-select keeps working. This
-    /// is the geometric heart of the fix: the overlay handle `Box` is hit-tested
-    /// above the field, so any DOWN inside this region grabs the handle instead
-    /// of collapsing the selection.
+    /// Per-kind grab arbitration: a press on a handle's dot (or a finger-width
+    /// beside it) grabs the handle; a press one line AWAY from the handle's
+    /// extent — the neighbouring glyph line — must fall through to the field
+    /// so taps/double-taps there keep working. Start and end handles also
+    /// cover their stem column ON the line (the reference grabs an edge on the
+    /// line and rides it with the loupe up); the cursor handle never covers
+    /// the line (double-tap protection).
     #[test]
-    fn grab_region_covers_a_fingers_reach_but_not_the_glyph_line() {
+    fn grab_regions_cover_the_dot_and_stem_but_not_neighbouring_lines() {
         let tip = Point { x: 100.0, y: 100.0 };
+        let line_top = tip.y - LINE_HEIGHT;
         let contains = |r: Rect, x: f32, y: f32| {
             x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height
         };
-        for kind in [
-            HandleKind::Cursor,
-            HandleKind::SelectionStart,
-            HandleKind::SelectionEnd,
-        ] {
-            let r = handle_grab_rect(kind, tip, HANDLE_RADIUS);
-            // A press ~a finger-half to the sides / below the tip grabs it.
-            assert!(
-                contains(r, tip.x - 16.0, tip.y + 12.0),
-                "{kind:?}: a press below-left of the tip must grab the handle"
-            );
-            assert!(
-                contains(r, tip.x + 16.0, tip.y + 12.0),
-                "{kind:?}: a press below-right of the tip must grab the handle"
-            );
-            // A press a finger's reach ABOVE the tip (on the previous glyph
-            // line) must miss: no grab slop is added above the tip, so it
-            // reaches the field for caret placement / double-tap word-select.
-            assert!(
-                !contains(r, tip.x, tip.y - HANDLE_GRAB_SLOP),
-                "{kind:?}: a press a finger's reach above the tip must not grab \
-                 the handle (it belongs to the field)"
-            );
-        }
+
+        // Cursor: dot below the line is grabbable; the line above is not.
+        let cursor = handle_grab_rect(HandleKind::Cursor, tip, HANDLE_RADIUS, LINE_HEIGHT);
+        assert!(contains(cursor, tip.x - 16.0, tip.y + 12.0));
+        assert!(contains(cursor, tip.x + 16.0, tip.y + 12.0));
+        assert!(
+            !contains(cursor, tip.x, tip.y - 2.0),
+            "cursor: a press on the glyph line belongs to the field"
+        );
+
+        // Start: dot above the line and the stem column on the line grab it;
+        // the line BELOW (next line's glyphs) does not.
+        let start = handle_grab_rect(HandleKind::SelectionStart, tip, HANDLE_RADIUS, LINE_HEIGHT);
+        assert!(
+            contains(start, tip.x, line_top - HANDLE_RADIUS),
+            "start: a press on the dot above the line must grab the handle"
+        );
+        assert!(
+            contains(start, tip.x, tip.y - LINE_HEIGHT * 0.5),
+            "start: a press on the stem column (on the line) must grab the handle"
+        );
+        assert!(
+            !contains(start, tip.x, tip.y + 4.0),
+            "start: a press below the line belongs to the field"
+        );
+
+        // End: stem column and dot below grab it; the line ABOVE does not.
+        let end = handle_grab_rect(HandleKind::SelectionEnd, tip, HANDLE_RADIUS, LINE_HEIGHT);
+        assert!(
+            contains(end, tip.x, tip.y + HANDLE_RADIUS),
+            "end: a press on the dot below the line must grab the handle"
+        );
+        assert!(
+            contains(end, tip.x, tip.y - LINE_HEIGHT * 0.5),
+            "end: a press on the stem column (on the line) must grab the handle"
+        );
+        assert!(
+            !contains(end, tip.x, line_top - 4.0),
+            "end: a press above the line belongs to the field"
+        );
     }
 }

@@ -27,8 +27,11 @@ use cranpose_ui_graphics::{Color, Point, Rect};
 use std::cell::Cell;
 use std::rc::Rc;
 
-/// Fill color of the finger selection/cursor handles (Android accent blue).
-const HANDLE_COLOR: Color = Color(0.26, 0.52, 0.96, 1.0);
+/// Alpha of the selection highlight relative to the field's accent
+/// ([`TextFieldOptions::cursor_color`]): the reference highlight is the tint
+/// at ~0.28 opacity, while the caret and both selection handles carry it
+/// solid — one accent drives all three.
+pub const SELECTION_HIGHLIGHT_ALPHA: f32 = 0.28;
 
 /// Window-space position where a handle's tip should sit for the caret/selection
 /// endpoint at byte `offset`: the bottom of that offset's visual line.
@@ -131,7 +134,9 @@ impl Default for BasicTextFieldOptions {
     fn default() -> Self {
         Self {
             text_style: TextStyle::default(),
-            cursor_color: Color(0.0, 0.0, 0.0, 1.0), // Black
+            // The field accent: caret + selection handles solid, selection
+            // highlight at [`SELECTION_HIGHLIGHT_ALPHA`] (the reference blue).
+            cursor_color: Color(0.0, 0.478, 1.0, 1.0),
             line_limits: TextFieldLineLimits::default(),
         }
     }
@@ -187,11 +192,11 @@ pub fn BasicTextFieldWithOptions(
     );
 
     // Finger selection handles (touch only): a caret handle for a collapsed
-    // selection, start/end teardrops for a range. Rendered in the top-level
-    // overlay via `Popup` so they escape the field's clip and hang below the
-    // last line. A `PopupHost` at the app root (installed by the shell) is
+    // selection, start/end lollipops for a range. Rendered in the top-level
+    // overlay via `Popup` so they escape the field's clip and hang outside the
+    // line. A `PopupHost` at the app root (installed by the shell) is
     // required for them to appear.
-    SelectionHandles(state, options.text_style, controller);
+    SelectionHandles(state, options.text_style, controller, options.cursor_color);
 
     node
 }
@@ -274,11 +279,14 @@ fn BringCaretIntoView(
 
 /// Emits the finger selection/cursor handles for the field when it is focused
 /// and was last touched (never for mouse input, which keeps a clean caret).
+/// `accent` is the field's tint (its cursor color): handles are drawn solid in
+/// it, matching the caret and the highlight derived from it.
 #[composable]
 fn SelectionHandles(
     state: TextFieldState,
     style: TextStyle,
     controller: TextFieldHandleController,
+    accent: Color,
 ) {
     let selection = state.selection();
     let current_range = (selection.min(), selection.max());
@@ -355,8 +363,9 @@ fn SelectionHandles(
         SelectionHandle(
             HandleKind::Cursor,
             tip,
+            metrics.line_height,
             HANDLE_RADIUS,
-            HANDLE_COLOR,
+            accent,
             move |pos| {
                 drag_pos.set(Some(pos));
                 on_drag(pos);
@@ -421,8 +430,9 @@ fn SelectionHandles(
         SelectionHandle(
             HandleKind::SelectionStart,
             start_tip,
+            metrics.line_height,
             HANDLE_RADIUS,
-            HANDLE_COLOR,
+            accent,
             move |pos| {
                 drag_pos.set(Some(pos));
                 on_drag_start(pos);
@@ -445,8 +455,9 @@ fn SelectionHandles(
         SelectionHandle(
             HandleKind::SelectionEnd,
             end_tip,
+            metrics.line_height,
             HANDLE_RADIUS,
-            HANDLE_COLOR,
+            accent,
             move |pos| {
                 drag_pos.set(Some(pos));
                 on_drag_end(pos);
@@ -592,7 +603,12 @@ mod tests {
                         line_height: 18.0,
                         wrap_width: None,
                     });
-                    SelectionHandles(state.clone(), TextStyle::default(), controller);
+                    SelectionHandles(
+                        state.clone(),
+                        TextStyle::default(),
+                        controller,
+                        Color(0.0, 0.478, 1.0, 1.0),
+                    );
                 });
             }
         };
@@ -653,7 +669,12 @@ mod tests {
                         line_height: 18.0,
                         wrap_width: None,
                     });
-                    SelectionHandles(state.clone(), TextStyle::default(), controller);
+                    SelectionHandles(
+                        state.clone(),
+                        TextStyle::default(),
+                        controller,
+                        Color(0.0, 0.478, 1.0, 1.0),
+                    );
                 });
             }
         };
@@ -724,7 +745,12 @@ mod tests {
                                 line_height: 18.0,
                                 wrap_width: None,
                             });
-                            SelectionHandles(state.clone(), TextStyle::default(), controller);
+                            SelectionHandles(
+                                state.clone(),
+                                TextStyle::default(),
+                                controller,
+                                Color(0.0, 0.478, 1.0, 1.0),
+                            );
                         },
                     );
                 });
@@ -820,6 +846,7 @@ mod tests {
                                         state.clone(),
                                         TextStyle::default(),
                                         controller,
+                                        Color(0.0, 0.478, 1.0, 1.0),
                                     );
                                 },
                             );

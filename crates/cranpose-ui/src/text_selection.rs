@@ -203,67 +203,73 @@ pub fn caret_visual_line(ranges: &[std::ops::Range<usize>], offset: usize) -> (u
     result
 }
 
-/// Which selection handle a teardrop represents.
+/// Which selection handle a lollipop represents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HandleKind {
-    /// The blinking-cursor handle shown for a collapsed selection: a teardrop
-    /// whose tip points up at the cursor, centered under it.
+    /// The cursor handle shown for a collapsed selection: the caret stem with a
+    /// round grab dot hanging below the line (like the end handle).
     Cursor,
-    /// The start (leftmost) selection handle: tip at the top-right, bulb below-left.
+    /// The start (leftmost) selection handle: dot ON TOP of the line, stem
+    /// spanning the line box below it.
     SelectionStart,
-    /// The end (rightmost) selection handle: tip at the top-left, bulb below-right.
+    /// The end (rightmost) selection handle: stem spanning the line box, dot
+    /// hanging BELOW it.
     SelectionEnd,
 }
 
-/// Radius of a selection/cursor handle bulb in px (Android uses ~11dp).
+/// Radius of a selection/cursor handle dot in dp (the reference dot is
+/// 16.2 physical px at 3x ≈ a 16 dp circle).
 pub const HANDLE_RADIUS: f32 = 8.0;
 
-/// SVG path data for a handle teardrop whose tip sits at `(tip_x, tip_y)`.
+/// Width of the handle stem in dp (measured 6 px at 3x = 2 dp — the same
+/// weight as the caret).
+pub const HANDLE_STEM_WIDTH: f32 = 2.0;
+
+/// How far the dot dips INTO the line box (dp): the reference start dot's
+/// bottom sits ~5 px (1.7 dp) below the line-box top, the end dot's top ~6 px
+/// above the line-box bottom, so dot and stem read as one continuous shape.
+pub const HANDLE_DOT_LINE_OVERLAP: f32 = 2.0;
+
+/// SVG path data for a handle lollipop at a text edge.
 ///
-/// The tip is anchored at the text edge (the cursor position or a selection
-/// endpoint at the line's bottom) and the rounded bulb hangs below it, so the
-/// caller positions the handle by passing the on-screen anchor point.
-pub fn handle_path_data(kind: HandleKind, tip_x: f32, tip_y: f32, radius: f32) -> String {
+/// `anchor_x` is the text edge (caret / selection endpoint) x; the line box
+/// spans `line_top .. line_bottom`. The stem (width
+/// [`HANDLE_STEM_WIDTH`]) always spans the line box, centered on `anchor_x`;
+/// the dot (radius `radius`) sits tangent just outside the line box — above it
+/// for [`SelectionStart`](HandleKind::SelectionStart), below it for
+/// [`SelectionEnd`](HandleKind::SelectionEnd) and
+/// [`Cursor`](HandleKind::Cursor) — overlapping the box edge by
+/// [`HANDLE_DOT_LINE_OVERLAP`] so the two read as one shape.
+pub fn handle_path_data(
+    kind: HandleKind,
+    anchor_x: f32,
+    line_top: f32,
+    line_bottom: f32,
+    radius: f32,
+) -> String {
     let r = radius.max(0.0);
-    let cy = tip_y + r; // bulb center y
+    let half_stem = HANDLE_STEM_WIDTH * 0.5;
+    let (left, right) = (anchor_x - half_stem, anchor_x + half_stem);
+    let stem = |top: f32, bottom: f32| {
+        format!("M {left} {top} L {right} {top} L {right} {bottom} L {left} {bottom} Z")
+    };
+    let dot = |cy: f32| {
+        format!(
+            "M {x0} {cy} A {r} {r} 0 1 0 {x1} {cy} A {r} {r} 0 1 0 {x0} {cy} Z",
+            x0 = anchor_x - r,
+            x1 = anchor_x + r,
+        )
+    };
     match kind {
-        HandleKind::Cursor => {
-            // Symmetric teardrop: tip up, full circular bulb below.
-            format!(
-                "M {tip_x} {tip_y} L {left} {cy} A {r} {r} 0 1 0 {right} {cy} Z",
-                left = tip_x - r,
-                right = tip_x + r,
-            )
-        }
         HandleKind::SelectionStart => {
-            // Android start (left) handle: the point sits at the TOP-RIGHT
-            // (touching the selection start) with a straight vertical right edge,
-            // and the round bulb hangs down and to the LEFT. Traced tip → straight
-            // down the right edge → 270° arc round the bulb (whose centre sits at
-            // `(tip_x - r, cy)`, down-left of the tip) → back along the top edge to
-            // the tip.
-            //
-            // The sweep flag is `1` (clockwise, y-down): together with the
-            // large-arc flag this centres the arc on the bulb below-left of the
-            // tip. Sweep `0` would instead centre the arc on the tip itself,
-            // drawing an upward pac-man wedge that overlaps the glyph line — the
-            // reported "inverted teardrop".
-            format!(
-                "M {tip_x} {tip_y} L {tip_x} {cy} A {r} {r} 0 1 1 {left} {tip_y} Z",
-                left = tip_x - r,
-            )
+            // Dot on top: center a radius above the line top, minus the overlap.
+            let cy = line_top - r + HANDLE_DOT_LINE_OVERLAP;
+            format!("{} {}", stem(line_top, line_bottom), dot(cy))
         }
-        HandleKind::SelectionEnd => {
-            // Android end (right) handle: the exact mirror of the start handle —
-            // the point sits at the TOP-LEFT (touching the selection end) with a
-            // straight vertical left edge, and the round bulb hangs down and to
-            // the RIGHT. Same trace as the start handle with the arc swept the
-            // other way (sweep `0`) so it is a true reflection (not rotated): the
-            // bulb centre sits at `(tip_x + r, cy)`, down-right of the tip.
-            format!(
-                "M {tip_x} {tip_y} L {tip_x} {cy} A {r} {r} 0 1 0 {right} {tip_y} Z",
-                right = tip_x + r,
-            )
+        HandleKind::SelectionEnd | HandleKind::Cursor => {
+            // Dot below: center a radius under the line bottom, minus overlap.
+            let cy = line_bottom + r - HANDLE_DOT_LINE_OVERLAP;
+            format!("{} {}", stem(line_top, line_bottom), dot(cy))
         }
     }
 }
@@ -471,95 +477,75 @@ mod tests {
     }
 
     #[test]
-    fn handle_path_is_non_empty_and_contains_the_tip() {
+    fn handle_path_is_valid_and_spans_the_line_box() {
+        let (x, top, bottom) = (40.0_f32, 20.0_f32, 40.0_f32);
         for kind in [
             HandleKind::Cursor,
             HandleKind::SelectionStart,
             HandleKind::SelectionEnd,
         ] {
-            let data = handle_path_data(kind, 40.0, 20.0, HANDLE_RADIUS);
+            let data = handle_path_data(kind, x, top, bottom, HANDLE_RADIUS);
             let path = cranpose_ui_graphics::VectorPath::parse(&data)
                 .expect("handle path must be valid SVG");
             assert!(!path.is_empty(), "{kind:?} handle must have geometry");
             let bounds = path.bounds();
-            // The tip (40, 20) must lie within the shape's bounds.
-            assert!(bounds.x <= 40.0 + 0.5 && bounds.x + bounds.width >= 40.0 - 0.5);
-            assert!(bounds.y <= 20.0 + 0.5);
-            // The bulb hangs below the tip.
-            assert!(bounds.y + bounds.height >= 20.0 + HANDLE_RADIUS);
+            // The stem spans the line box, so the shape covers top..bottom.
+            assert!(bounds.y <= top + 0.5, "{kind:?} must reach the line top");
+            assert!(
+                bounds.y + bounds.height >= bottom - 0.5,
+                "{kind:?} must reach the line bottom"
+            );
+            // Horizontally centered on the anchor, a dot-radius each way.
+            assert!((bounds.x - (x - HANDLE_RADIUS)).abs() <= 0.5);
+            assert!((bounds.x + bounds.width - (x + HANDLE_RADIUS)).abs() <= 0.5);
         }
     }
 
-    /// Regression for the inverted-teardrop bug: the drawn selection handles
-    /// must have the correct Android orientation — the whole teardrop sits AT OR
-    /// BELOW the tip line (never above it, into the glyphs), and each handle's
-    /// bulb hangs to the correct side of its tip:
-    ///
-    /// * start (left) handle — point top-right, bulb down-LEFT (all geometry at
-    ///   or left of the tip's x);
-    /// * end (right) handle — point top-left, bulb down-RIGHT (all geometry at or
-    ///   right of the tip's x);
-    /// * cursor handle — symmetric, centred on the tip.
-    ///
-    /// A sweep-flag mistake used to centre the arc on the tip, producing an
-    /// upward pac-man wedge that extended ABOVE the tip and to the wrong side —
-    /// exactly what this guards against.
+    /// The reference lollipop orientation: the start handle's dot rides ON TOP
+    /// of the line (center ~a radius above the line top), the end and cursor
+    /// dots hang BELOW it, and every dot dips [`HANDLE_DOT_LINE_OVERLAP`] into
+    /// the line box so dot + stem read as one continuous shape.
     #[test]
-    fn selection_handles_point_at_the_tip_with_the_bulb_below() {
-        let (tip_x, tip_y, r) = (40.0_f32, 20.0_f32, HANDLE_RADIUS);
+    fn selection_handle_dots_sit_on_the_correct_side_of_the_line() {
+        let (x, top, bottom, r) = (40.0_f32, 20.0_f32, 40.0_f32, HANDLE_RADIUS);
         let eps = 0.5_f32;
 
-        let sample_points = |kind: HandleKind| -> Vec<cranpose_ui_graphics::Point> {
-            let data = handle_path_data(kind, tip_x, tip_y, r);
-            let path = cranpose_ui_graphics::VectorPath::parse(&data).expect("valid handle path");
-            path.subpaths().iter().flatten().copied().collect()
+        let bounds = |kind: HandleKind| {
+            let data = handle_path_data(kind, x, top, bottom, r);
+            cranpose_ui_graphics::VectorPath::parse(&data)
+                .expect("valid handle path")
+                .bounds()
         };
 
-        // No handle draws any geometry ABOVE the tip line — that region belongs to
-        // the glyphs, and a handle poking up into it is the inverted-teardrop bug.
-        for kind in [
-            HandleKind::Cursor,
-            HandleKind::SelectionStart,
-            HandleKind::SelectionEnd,
-        ] {
-            for p in sample_points(kind) {
-                assert!(
-                    p.y >= tip_y - eps,
-                    "{kind:?}: point {p:?} is above the tip line y={tip_y} (teardrop inverted)"
-                );
-            }
+        // Start: the shape extends a dot-diameter ABOVE the line top (minus the
+        // overlap), and not below the line bottom.
+        let start = bounds(HandleKind::SelectionStart);
+        assert!(
+            (start.y - (top - 2.0 * r + HANDLE_DOT_LINE_OVERLAP)).abs() <= eps,
+            "start dot must ride on top of the line (top at {}, expected {})",
+            start.y,
+            top - 2.0 * r + HANDLE_DOT_LINE_OVERLAP
+        );
+        assert!(
+            start.y + start.height <= bottom + eps,
+            "start handle must not extend below the line box"
+        );
+
+        // End and cursor: the shape extends a dot-diameter BELOW the line
+        // bottom (minus the overlap), and not above the line top.
+        for kind in [HandleKind::SelectionEnd, HandleKind::Cursor] {
+            let b = bounds(kind);
+            assert!(
+                (b.y + b.height - (bottom + 2.0 * r - HANDLE_DOT_LINE_OVERLAP)).abs() <= eps,
+                "{kind:?} dot must hang below the line (bottom at {}, expected {})",
+                b.y + b.height,
+                bottom + 2.0 * r - HANDLE_DOT_LINE_OVERLAP
+            );
+            assert!(
+                b.y >= top - eps,
+                "{kind:?} handle must not extend above the line box"
+            );
         }
-
-        // Start bulb hangs down-LEFT: every point is at or left of the tip's x,
-        // and the shape reaches a full bulb-width to the left.
-        let start = sample_points(HandleKind::SelectionStart);
-        assert!(
-            start.iter().all(|p| p.x <= tip_x + eps),
-            "start handle must not extend right of its tip"
-        );
-        assert!(
-            start.iter().any(|p| p.x <= tip_x - 2.0 * r + eps),
-            "start handle bulb must reach a full diameter to the LEFT of the tip"
-        );
-
-        // End bulb hangs down-RIGHT: mirror image of the start handle.
-        let end = sample_points(HandleKind::SelectionEnd);
-        assert!(
-            end.iter().all(|p| p.x >= tip_x - eps),
-            "end handle must not extend left of its tip"
-        );
-        assert!(
-            end.iter().any(|p| p.x >= tip_x + 2.0 * r - eps),
-            "end handle bulb must reach a full diameter to the RIGHT of the tip"
-        );
-
-        // Cursor handle is symmetric about the tip: it reaches ~r to each side.
-        let cursor = sample_points(HandleKind::Cursor);
-        assert!(
-            cursor.iter().any(|p| p.x <= tip_x - r + eps)
-                && cursor.iter().any(|p| p.x >= tip_x + r - eps),
-            "cursor handle must be symmetric about the tip"
-        );
     }
 
     /// The wrap-aware caret line lookup (bug d): a caret on a wrapped line's

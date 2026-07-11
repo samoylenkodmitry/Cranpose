@@ -81,6 +81,7 @@ fn selection_handle_renders_in_overlay_at_its_tip() {
             SelectionHandle(
                 HandleKind::Cursor,
                 tip,
+                20.0,
                 8.0,
                 Color(0.2, 0.5, 0.9, 1.0),
                 |_pos| {},
