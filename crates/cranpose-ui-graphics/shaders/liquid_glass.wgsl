@@ -430,8 +430,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // Rim style (uniform 28, read above): 0 = surface glass (soft white
     // spec), 1 = the interactive lens (THIN bright line, stronger dark
     // outline — the chromatic fringe from the spectral taps does the color).
-    let edge_width = mix(1.6, 1.1, rim_style);
-    let edge_line = 1.0 - smoothstep(0.0, edge_width, abs(d) - 0.2);
+    // The loupe's rim is a ~2.5px bright line fully INSIDE the silhouette
+    // (straddling the AA edge halves it and reads as absent); other glass
+    // keeps the thin straddling line.
+    let edge_width = mix(1.6, select(1.1, 2.6, loupe_mode > 0.5), rim_style);
+    let edge_center = select(0.0, 1.6, loupe_mode > 0.5);
+    let edge_line = 1.0 - smoothstep(0.0, edge_width, abs(d + edge_center) - 0.2);
     let facing_light = max(dot(inward_normal, light_dir), 0.0);
     let facing_away = max(dot(inward_normal, -light_dir), 0.0);
     let spec_line = edge_line * (pow(facing_light, 1.4) + pow(facing_away, 2.0) * 0.45);

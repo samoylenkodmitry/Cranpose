@@ -225,15 +225,19 @@ impl Default for LiquidLoupeSpec {
         Self {
             magnification: 1.7,
             focus_offset: (0.0, 75.0),
-            band_start: 0.78,
-            fold_peak: 1.25,
+            // The reference band is a thin strip hugging the rim; a wider
+            // band pulled whole neighbouring glyphs in at the end caps and
+            // shattered them into rainbow blocks.
+            band_start: 0.82,
+            fold_peak: 1.18,
             // The reference fringes are tight (3-5 px at 3x) and live only in
             // the fold band.
-            dispersion: 0.6,
-            // The reference rim reads as a clear thin bright line around the
-            // whole capsule; the interactive-lens rim gain is a whisper, so
-            // the loupe drives it through its highlight.
-            highlight: 2.0,
+            dispersion: 0.35,
+            // The reference rim reads as a clear bright line around the whole
+            // capsule (peak ~+127 luminance over the backdrop); the
+            // interactive-lens rim gain is a whisper, so the loupe drives it
+            // through its highlight (calibrated on captures).
+            highlight: 4.8,
             progress: 1.0,
         }
     }
@@ -262,9 +266,10 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     shader.set_float(18, 1.0); // saturation neutral
     shader.set_float(20, 0.0); // no lift
     shader.set_float(21, 0.5); // dither
-                               // Empirically (0,-1) lights the TOP arc in the effect coordinate stack;
-                               // the reference rim is brightest top-left with a softer counter arc.
-    shader.set_float2(22, 0.0, -1.0);
+                               // Measured on captures: the main specular arc lands on the edge facing
+                               // the light vector's tip — (0,1) is the TOP. The reference loupe rim is
+                               // brightest on top with a softer bottom counter arc.
+    shader.set_float2(22, 0.0, 1.0);
     shader.set_float(24, 1.0); // contrast neutral
     shader.set_float(28, 1.0); // interactive-lens rim style
     shader.set_float(29, 0.05); // near-zero sheen: crisp interior
@@ -304,18 +309,21 @@ pub fn liquid_menu_glass_effect(
     shader.set_float2(4, w, h);
     shader.set_float(6, -1.0); // capsule
     shader.set_float(7, 8.0); // bezel dp
-    shader.set_float(8, 5.0 * p); // gentle edge refraction
+    shader.set_float(8, 2.5 * p); // subtle edge refraction (the reference
+                                  // menu barely bends what grazes its edge)
     shader.set_float(9, 1.4);
     shader.set_float(10, 0.6);
-    shader.set_float(11, 1.15 * p); // top rim highlight
+    shader.set_float(11, 0.18 * p); // top rim highlight (calibrated: the
+                                    // reference top spike is a subtle +33
+                                    // luminance over the body)
     shader.set_float4(14, 0.0, 0.0, 0.0, 0.045 * p); // whisper-dark tint
     shader.set_float(18, 1.0 + 0.25 * p); // mild vibrancy
     shader.set_float(19, 0.0); // no dispersion on the menu
     shader.set_float(20, -0.015 * p); // barely-there dark lift
     shader.set_float(21, 0.5);
-    // Empirically (0,-1) lights the TOP edge (the reference menu's crisp
-    // top rim with faint sides).
-    shader.set_float2(22, 0.0, -1.0);
+    // Measured on captures: (0,1) puts the crisp arc on the TOP edge with
+    // the 0.45x counter on the bottom — the reference hierarchy.
+    shader.set_float2(22, 0.0, 1.0);
     shader.set_float(24, 1.0);
     shader.set_float(25, 0.5);
     shader.set_input_padding(12.0);

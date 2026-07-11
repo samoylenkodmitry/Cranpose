@@ -55,7 +55,7 @@ const MENU_FONT_SP: f32 = 15.0;
 const DISC_COLOR: Color = Color(1.0, 1.0, 1.0, 0.19);
 const DISC_PRESSED_COLOR: Color = Color(1.0, 1.0, 1.0, 0.9);
 /// Backdrop blur behind the capsule, dp.
-const MENU_BLUR_DP: f32 = 8.0;
+const MENU_BLUR_DP: f32 = 13.0;
 
 /// Motion (measured): ~70 ms dissolve, ~140 ms materialize arriving ~250 ms
 /// after the release.

@@ -10,9 +10,12 @@
 //! `liquid_glass.wgsl` loupe mode). The widget itself draws nothing.
 //!
 //! Motion, all measured from the 120 fps reference:
-//! * grow-in: the bubble inflates OUT of the grab point on the line —
-//!   scale from ~26%, magnification ramping 1→1.7, rising to its offset —
-//!   with an ~8% overshoot peaking at ~200 ms (underdamped spring);
+//! * birth: ~120 ms after the grab (the menu dissolves first); a grab
+//!   released within the delay never shows a loupe;
+//! * grow-in: born ON the line at ~half size, nearly round and already
+//!   ~85% magnified with a visible rim — a fixed-optic lens whose shape
+//!   grows — widening into the capsule with an ~8% overshoot peaking
+//!   ~190 ms after birth, the rise outrunning the inflation;
 //! * follow: the center trails the finger x with a ~80 ms critically damped
 //!   lag (the magnified handle rides ahead of the bubble center mid-drag);
 //!   the y is LOCKED to the grabbed line, never the finger;
@@ -59,10 +62,10 @@ const LOUPE_BIRTH_DELAY_MS: u64 = 120;
 /// outside this margin and shows no loupe — the measured behavior.
 const LOUPE_LINE_GRAB_MARGIN: f32 = 0.15;
 
-/// Grow-in: ζ≈0.63 → +8% overshoot peaking at ~190 ms after the birth,
-/// settled in ~340 ms — the measured inflate.
+/// Grow-in: ζ≈0.63 → +8% overshoot peaking at ~200 ms after the birth,
+/// settled in ~360 ms — the measured inflate.
 fn loupe_grow_spring() -> AnimationType {
-    spring(0.63, 440.0)
+    spring(0.63, 310.0)
 }
 
 /// The birth-delay gate: a linear timer from the grab to the bubble's birth.
@@ -70,10 +73,11 @@ fn loupe_birth_gate() -> AnimationType {
     AnimationType::Tween(AnimationSpec::linear(LOUPE_BIRTH_DELAY_MS))
 }
 
-/// Release: critically damped, ~55 ms to deflate into the line (ω≈95 puts
-/// the tail below 5% within the measured window).
-fn loupe_collapse_spring() -> AnimationType {
-    spring(1.0, 9000.0)
+/// Release: the measured dissolve is a ~55 ms linear ramp — the bubble
+/// shrinks mildly (to ~72%) and sinks a touch, then vanishes on a terminal
+/// alpha cliff (the unmount below).
+fn loupe_collapse_tween() -> AnimationType {
+    AnimationType::Tween(AnimationSpec::linear(55))
 }
 
 /// Horizontal follow: critically damped, τ≈80 ms — the bubble trails a
@@ -175,7 +179,7 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     } else {
         let mut progress = state.progress.borrow_mut();
         if progress.target() != 0.0 {
-            progress.animateTo(0.0, loupe_collapse_spring());
+            progress.animateTo(0.0, loupe_collapse_tween());
         }
     }
     state.was_active.set(active);
@@ -194,7 +198,7 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
         }
         return;
     }
-    if !active && p <= 0.05 {
+    if !active && p <= 0.1 {
         // Fully deflated: unmount until the next grab.
         state.shown.replace(None);
         return;
@@ -207,15 +211,26 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     // spring: the newborn bubble is nearly ROUND and widens into the capsule
     // as it grows, and the rise outruns the inflation (the bubble is at
     // floating height while still filling out).
-    let scale = LOUPE_MIN_SCALE + (1.0 - LOUPE_MIN_SCALE) * p;
+    // Two phases share the progress value but map it differently — the
+    // measured grow and dissolve are different curves, not mirrors:
+    // * grow: inflate from ~half size (round → capsule as it fills out),
+    //   the rise outrunning the inflation;
+    // * dissolve: a mild shrink toward ~72% with a slight sink, vanishing
+    //   on the terminal cliff (the unmount above) like the reference.
+    let (scale, aspect_t, rise_t) = if active {
+        let pc = p.min(1.0);
+        (
+            LOUPE_MIN_SCALE + (1.0 - LOUPE_MIN_SCALE) * p,
+            pc * pc,
+            (1.0 - (1.0 - pc).powi(2)) + (p - pc), // ease-out + spring overshoot
+        )
+    } else {
+        (0.72 + 0.28 * p, 1.0, 0.76 + 0.24 * p)
+    };
     let height = LOUPE_HEIGHT * scale;
-    let aspect_t = ((p.min(1.0)) / 0.65).clamp(0.0, 1.0);
-    let aspect_t = aspect_t * aspect_t * (3.0 - 2.0 * aspect_t);
     let aspect = 1.08 + (LOUPE_WIDTH / LOUPE_HEIGHT - 1.08) * aspect_t;
     let width = height * aspect;
     let center_x = follow_state.value();
-    let rise_t = 1.0 - (1.0 - p.min(1.0)).powi(2);
-    let rise_t = rise_t + (p - p.min(1.0)); // keep the spring overshoot
     let center_y = shown.line_mid_y - LOUPE_RISE * rise_t;
     // The lens looks at the line (the focus), which sits below the risen
     // center — at p=0 the focus is the bubble itself, so the newborn bubble

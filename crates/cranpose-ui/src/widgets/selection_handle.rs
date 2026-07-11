@@ -190,9 +190,13 @@ pub fn SelectionHandle(
     on_tap: impl Fn() + 'static,
 ) {
     let shape = handle_shape(kind, radius, line_height);
+    // Snap the box to whole logical pixels: the stem is a 2dp bar whose
+    // box-local coordinates are integral, so a fractional anchor gives one
+    // handle a 7px stem and the other a 6px one at 3x (anti-aliased
+    // asymmetry the reference never shows).
     let anchor = Rect {
-        x: tip.x - shape.tip_in_box.x,
-        y: tip.y - shape.tip_in_box.y,
+        x: (tip.x - shape.tip_in_box.x).round(),
+        y: (tip.y - shape.tip_in_box.y).round(),
         width: 0.0,
         height: 0.0,
     };
