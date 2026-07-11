@@ -249,6 +249,49 @@ impl Robot {
         }
     }
 
+    /// Press a touch pointer down at the specified coordinates (logical
+    /// pixels). Touch events drive the touch-only affordances (finger
+    /// selection handles, the glass loupe); pair with
+    /// [`touch_move`](Self::touch_move) / [`touch_up`](Self::touch_up) for
+    /// step-by-step gestures with captures between steps.
+    pub fn touch_down(&self, x: f32, y: f32) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::TouchDown { x, y })
+            .map_err(|e| format!("Failed to send touch down: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Move the active touch pointer (after [`touch_down`](Self::touch_down)).
+    pub fn touch_move(&self, x: f32, y: f32) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::TouchMove { x, y })
+            .map_err(|e| format!("Failed to send touch move: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Lift the active touch pointer at the specified coordinates.
+    pub fn touch_up(&self, x: f32, y: f32) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::TouchUp { x, y })
+            .map_err(|e| format!("Failed to send touch up: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
     /// Move cursor to the specified coordinates (logical pixels)
     ///
     /// # Example

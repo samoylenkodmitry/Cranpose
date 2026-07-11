@@ -4424,6 +4424,7 @@ impl ApplicationHandler for App {
             while let Ok(cmd) = controller.rx.try_recv() {
                 match cmd {
                     RobotCommand::Click { x, y } => {
+                        app.set_pointer_source(PointerSource::Mouse);
                         let cursor_dirty = app.set_cursor(x, y);
                         controller.begin_synthetic_primary_gesture();
                         let press_dirty = app.pointer_pressed();
@@ -4529,6 +4530,10 @@ impl ApplicationHandler for App {
                     }
 
                     RobotCommand::TouchDown { x, y } => {
+                        // Robot touch gestures ARE touch: tag the source so
+                        // touch-gated affordances (finger selection handles,
+                        // the glass loupe) arm exactly as on a device.
+                        app.set_pointer_source(PointerSource::Touch);
                         let cursor_dirty = app.set_cursor(x, y);
                         controller.begin_synthetic_primary_gesture();
                         let press_dirty = app.pointer_pressed();
@@ -4536,10 +4541,12 @@ impl ApplicationHandler for App {
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::TouchMove { x, y } => {
+                        app.set_pointer_source(PointerSource::Touch);
                         robot_visual_dirty |= app.set_cursor(x, y);
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::TouchMoveAndWaitForFrame { x, y } => {
+                        app.set_pointer_source(PointerSource::Touch);
                         let visual_dirty = app.set_cursor(x, y);
                         if visual_dirty {
                             robot_visual_dirty = true;
@@ -4567,6 +4574,7 @@ impl ApplicationHandler for App {
                         }
                     }
                     RobotCommand::TouchUp { x, y } => {
+                        app.set_pointer_source(PointerSource::Touch);
                         let cursor_dirty = app.set_cursor(x, y);
                         let release_dirty = app.pointer_released();
                         controller.end_synthetic_primary_gesture();

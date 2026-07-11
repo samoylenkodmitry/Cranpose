@@ -727,6 +727,11 @@ path = "examples/ghost_presented_probe.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
+name = "robot_text_loupe"
+path = "robot-runners/robot_text_loupe.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
 name = "robot_liquid_motion_contract"
 path = "robot-runners/robot_liquid_motion_contract.rs"
 required-features = ["desktop", "robot-app"]

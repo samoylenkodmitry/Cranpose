@@ -37,6 +37,12 @@ use crate::{Color, RenderEffect, RuntimeShader};
 ///  22,23: specular light direction ((0,1) lights the top edge)
 ///  24: contrast (1.0 = neutral; ≤0 treated as 1.0)
 ///  25: edge-band fraction of the bezel carrying the strong lens + CA
+///  80: loupe mode (>0.5 replaces the lens terms with the drop optic)
+///  81,82: loupe focus offset from the shape center (dp)
+///  83: loupe center magnification (m0)
+///  84: loupe band start (depth fraction 0..1 where the rim fold begins)
+///  85: loupe fold peak (sampling reach at the fold crest, in inradius units)
+///  86: loupe band dispersion strength
 pub const LIQUID_GLASS_WGSL: &str = include_str!("../shaders/liquid_glass.wgsl");
 
 /// Configuration for the LiquidGlass effect.
@@ -184,6 +190,87 @@ fn liquid_glass_input_padding(spec: &LiquidGlassSpec) -> f32 {
 fn liquid_glass_max_lens_slope(profile: f32) -> f32 {
     let p = profile.clamp(0.0, 1.0);
     4.0 + 0.35 * (2.0 + 2.0 * p)
+}
+
+/// The text-drag loupe material: a solid glass drop magnifying an offset
+/// focus (the grab point under the finger), displayed inside a capsule
+/// floating above it. Measured against the reference recording:
+/// dome magnification (`magnification` at the center easing to exactly 1
+/// where the rim band starts), a rim FOLD that paints an inverted compressed
+/// image of the content just beyond the bubble, chromatic dispersion confined
+/// to that band, and the thin interactive-lens rim line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiquidLoupeSpec {
+    /// Center magnification (the reference loupe measures 1.7×).
+    pub magnification: f32,
+    /// Focus offset from the bubble center, dp (the reference samples 75 dp
+    /// below its center: content from under the finger, displayed above).
+    pub focus_offset: (f32, f32),
+    /// Depth fraction (0..1 of the inradius) where the rim fold band begins.
+    pub band_start: f32,
+    /// Sampling reach at the fold crest, in inradius units (>1 reaches past
+    /// the bubble edge before folding back — the inversion).
+    pub fold_peak: f32,
+    /// Dispersion strength inside the band (RGB fringes on the folded rim).
+    pub dispersion: f32,
+    /// Specular rim intensity.
+    pub highlight: f32,
+    /// Progress of the grow-in (0..1): scales magnification toward 1 and
+    /// softens the rim so the bubble inflates out of the text.
+    pub progress: f32,
+}
+
+impl Default for LiquidLoupeSpec {
+    fn default() -> Self {
+        Self {
+            magnification: 1.7,
+            focus_offset: (0.0, 75.0),
+            band_start: 0.78,
+            fold_peak: 1.25,
+            dispersion: 1.8,
+            highlight: 1.0,
+            progress: 1.0,
+        }
+    }
+}
+
+/// Builds the loupe backdrop effect for a capsule node of `node_size` dp.
+/// Explicit-rect mode: the container carries the node size in dp and the
+/// shader derives px-per-dp from the renderer-injected pixel rect, so the
+/// bubble lands correctly at ANY render scale (live density, robot captures
+/// at 1.0, fractional desktop scales).
+pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> RenderEffect {
+    let (w, h) = (node_size.0.max(1.0), node_size.1.max(1.0));
+    let progress = spec.progress.clamp(0.0, 1.0);
+    let magnification = 1.0 + (spec.magnification - 1.0) * progress;
+    let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+    shader.set_float2(0, w, h); // container = node size dp
+    shader.set_float2(2, w * 0.5, h * 0.5); // capsule centered in the node
+    shader.set_float2(4, w, h);
+    shader.set_float(6, -1.0); // capsule radius sentinel
+    shader.set_float(7, 0.5 * h.min(w)); // bezel = inradius (sheen falloff)
+    shader.set_float(11, spec.highlight * progress);
+    shader.set_float4(14, 1.0, 1.0, 1.0, 0.0); // no tint
+    shader.set_float(18, 1.0); // saturation neutral
+    shader.set_float(20, 0.0); // no lift
+    shader.set_float(21, 0.5); // dither
+    shader.set_float2(22, 0.0, 1.0); // light from the top
+    shader.set_float(24, 1.0); // contrast neutral
+    shader.set_float(28, 1.0); // interactive-lens rim style
+    shader.set_float(29, 0.05); // near-zero sheen: crisp interior
+    shader.set_float(80, 1.0); // loupe mode
+    shader.set_float2(81, spec.focus_offset.0, spec.focus_offset.1);
+    shader.set_float(83, magnification);
+    shader.set_float(84, spec.band_start);
+    shader.set_float(85, spec.fold_peak);
+    shader.set_float(86, spec.dispersion * progress);
+    // The capture must cover the farthest sample: the focus offset plus the
+    // fold reach past the bubble edge (in dp; paddings are logical units).
+    let r_in = 0.5 * w.min(h);
+    let focus_reach = (spec.focus_offset.0.powi(2) + spec.focus_offset.1.powi(2)).sqrt();
+    let fold_reach = (spec.fold_peak.max(1.0) - 1.0) * r_in;
+    shader.set_input_padding((focus_reach + fold_reach + 8.0).ceil());
+    RenderEffect::runtime_shader(shader)
 }
 
 /// Build a chained `RenderEffect` for multiple liquid glass rects.

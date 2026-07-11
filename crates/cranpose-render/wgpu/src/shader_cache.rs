@@ -305,9 +305,11 @@ fn fullscreen_vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> 
             ("liquid_glass", LIQUID_GLASS_WGSL),
             ("gpu_text_brush_effect", GPU_TEXT_BRUSH_EFFECT_SHADER),
         ] {
+            let result = validate_runtime_shader_source(source, wgpu::Backend::Gl);
             assert!(
-                validate_runtime_shader_source(source, wgpu::Backend::Gl).is_ok(),
-                "{name} should remain GL-portable"
+                result.is_ok(),
+                "{name} should remain GL-portable: {}",
+                result.err().map(|e| e.to_string()).unwrap_or_default()
             );
         }
     }

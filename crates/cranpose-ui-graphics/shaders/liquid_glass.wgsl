@@ -285,43 +285,99 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let grad_len = length(grad);
     let outward_normal = select(vec2<f32>(0.0), grad / grad_len, grad_len > 0.001);
 
-    // Refraction. Two lens terms along the surface normal:
-    // - a narrow, steep EDGE band (squircle slope — strongest right at the
-    //   rim, exactly where iOS glass visibly stretches what's under the
-    //   edge), carrying the chromatic aberration;
-    // - a broad gentle dome over the whole bezel for the liquid interior.
-    // Plus the motion/tilt term fed by gestures.
+    // Refraction — two regimes sharing the sampling/dispersion machinery via
+    // an achromatic displacement (disp_a) plus a chromatic one (disp_c, the
+    // only part the spectral taps re-scale):
+    //
+    // - LOUPE mode (uniform 80): the text-drag magnifier — a solid glass
+    //   drop over an offset focus. Dome magnification (strongest at the
+    //   center, easing to exactly 1 where the rim band starts) and a rim
+    //   FOLD: the sampling distance overshoots past the rim then walks back,
+    //   painting an inverted, compressed image of what lies just beyond
+    //   (the next text line upside-down at the bubble's bottom edge), with
+    //   the dispersion fringes confined to that band.
+    // - Legacy glass/lens: edge band + dome + tilt, exactly as before.
     let x_full = clamp(-d / bezel, 0.0, 1.0);
     let x_edge = clamp(-d / (bezel * edge_band), 0.0, 1.0);
     let bend = 1.0 - 1.0 / max(ri, 1.0001);
     let slope_edge = d_height_dx(x_edge, 1.0);
     let slope_dome = d_height_dx(x_full, profile);
-    // The interactive lens (rim_style 1) drops the dome term: magnification
-    // owns its interior, and an opposing dome slope inside the rim band
-    // double-imaged whatever sat under the lens.
     let rim_style = clamp(get_float(28u), 0.0, 1.0);
-    let lens =
-        (slope_edge + dome_dir * slope_dome * 0.35 * (1.0 - rim_style)) * bend * disp_scale;
+    let loupe_mode = get_float(80u);
     let tilt = vec2<f32>(tilt_angle, tilt_pitch);
-    var disp = outward_normal * lens + tilt * slope_dome * bend * disp_scale;
-    if magnify != 1.0 {
-        // Near-uniform interior magnification: the reference lens is FILLED
-        // with a CRISP magnified image edge to edge (the toggle lens shows
-        // track color across its whole face; the tab lens keeps its icon
-        // legible). Keeping the profile nearly flat confines distortion to
-        // the refractive rim; samples pull inward, so full-strength
-        // magnification at the rim stays inside the capture.
-        let interior = mix(0.97, 1.0, height_profile(x_full, profile));
-        disp = disp + p * (1.0 / magnify - 1.0) * interior;
+
+    var disp_a = vec2<f32>(0.0);
+    var disp_c = vec2<f32>(0.0);
+    var spread = 0.0;
+    if loupe_mode > 0.5 {
+        // The bubble's inradius: capsule half-height (the SDF's deepest
+        // point), the natural unit of the drop optic.
+        let r_in = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
+        let focus_px = get_vec2(81u) * dp_scale;
+        var m0 = get_float(83u);
+        if m0 <= 0.0 {
+            m0 = 1.0;
+        }
+        var band_start = get_float(84u);
+        if band_start <= 0.0 {
+            band_start = 0.78;
+        }
+        var fold_peak = get_float(85u);
+        if fold_peak <= 0.0 {
+            fold_peak = 1.25;
+        }
+        let band_chroma = get_float(86u);
+
+        // 0 deep inside → 1 at the rim.
+        let xr = 1.0 - clamp(-d / r_in, 0.0, 1.0);
+        // Dome magnification m(xr) = m0·(1 − k·xr²), with k tied to
+        // (m0, band_start) so magnification is exactly 1 where the band
+        // begins — one smooth curve through the measured profile (1.7× at
+        // the center, ~1.29× at 60% radius, unity at the fold).
+        let k = (1.0 - 1.0 / max(m0, 1.0001)) / max(band_start * band_start, 0.001);
+        let xd = min(xr, band_start);
+        let m = max(m0 * (1.0 - k * xd * xd), 0.2);
+        // Magnify about the shape center, looking at the offset focus. The
+        // whole interior shows the focus neighbourhood (the loupe displays
+        // content from under the finger, offset up).
+        disp_a = focus_px + p * (1.0 / m - 1.0);
+        if xr > band_start {
+            let tau = clamp((xr - band_start) / max(1.0 - band_start, 0.001), 0.0, 1.0);
+            // sin(5πτ/6): rises to its peak at τ = 0.6, falls to half by the
+            // rim — the descending branch is the inversion.
+            let g = sin(3.1415926 * tau * 0.8333);
+            let s_units = band_start + (fold_peak - band_start) * g;
+            disp_c = outward_normal * (s_units - xr) * r_in;
+            spread = band_chroma * smoothstep(0.0, 0.35, tau);
+        }
+    } else {
+        // The interactive lens (rim_style 1) drops the dome term:
+        // magnification owns its interior, and an opposing dome slope inside
+        // the rim band double-imaged whatever sat under the lens.
+        let lens =
+            (slope_edge + dome_dir * slope_dome * 0.35 * (1.0 - rim_style)) * bend * disp_scale;
+        var disp = outward_normal * lens + tilt * slope_dome * bend * disp_scale;
+        if magnify != 1.0 {
+            // Near-uniform interior magnification: the reference lens is
+            // FILLED with a CRISP magnified image edge to edge (the toggle
+            // lens shows track color across its whole face; the tab lens
+            // keeps its icon legible). Keeping the profile nearly flat
+            // confines distortion to the refractive rim; samples pull
+            // inward, so full-strength magnification at the rim stays
+            // inside the capture.
+            let interior = mix(0.97, 1.0, height_profile(x_full, profile));
+            disp = disp + p * (1.0 / magnify - 1.0) * interior;
+        }
+        disp_c = disp;
+        spread = chroma * (slope_edge / 4.0);
     }
 
-    // Spectral dispersion rides the edge band: six taps across the
-    // refraction-scale range, each weighted by an approximate rainbow
-    // spectrum (short wavelengths bend most). This is what draws the
-    // green/yellow/magenta fringes the iOS lens shows at its rim; away from
-    // the rim it converges to a single tap.
-    let spread = chroma * (slope_edge / 4.0);
-    let uv_c = clamp(uv + disp / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
+    // Spectral dispersion: six taps across the refraction-scale range, each
+    // weighted by an approximate rainbow spectrum (short wavelengths bend
+    // most) — the green/yellow/magenta fringes the iOS lens shows at its
+    // rim. Only the chromatic displacement re-scales per tap; away from the
+    // rim the taps converge to one.
+    let uv_c = clamp(uv + (disp_a + disp_c) / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
     let sample_c = textureSampleLevel(input_texture, input_sampler, uv_c, 0.0);
     var rgb = sample_c.rgb;
     let alpha = sample_c.a;
@@ -333,7 +389,11 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             let w = spectrum_weight(t);
             // Red (t→1) bends least, violet (t→0) most.
             let scale = 1.0 + (0.5 - t) * spread;
-            let uv_i = clamp(uv + disp * scale / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
+            let uv_i = clamp(
+                uv + (disp_a + disp_c * scale) / tex_size,
+                vec2<f32>(0.0),
+                vec2<f32>(1.0),
+            );
             acc = acc + w * textureSampleLevel(input_texture, input_sampler, uv_i, 0.0).rgb;
             wsum = wsum + w;
         }

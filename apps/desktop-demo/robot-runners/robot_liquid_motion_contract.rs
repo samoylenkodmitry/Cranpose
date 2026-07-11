@@ -511,7 +511,8 @@ fn main() -> ExitCode {
             println!("PASS: liquid motion contract");
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .try_run(app::combined_app)
+        .expect("launch liquid motion runner");
     if FAILED.load(Ordering::Relaxed) {
         ExitCode::FAILURE
     } else {

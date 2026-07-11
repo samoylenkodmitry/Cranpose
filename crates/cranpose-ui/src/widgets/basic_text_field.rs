@@ -18,7 +18,8 @@ use crate::text_field_modifier_node::{
 };
 use crate::text_selection::{selection_after_handle_drag, HandleKind, HANDLE_RADIUS};
 use crate::widgets::{
-    CaretActionMenu, CursorMagnifier, Layout, SelectionHandle, TextSelectionMenu,
+    loupe_target_for_drag, CaretActionMenu, Layout, SelectionHandle, SelectionLoupe,
+    TextSelectionMenu,
 };
 use cranpose_core::{mutableStateOf, remember, MutableState, NodeId, SideEffect};
 use cranpose_foundation::modifier_element;
@@ -61,21 +62,29 @@ fn handle_tip_window_pos(
     }
 }
 
-/// Maps a window-space drag position (finger on the handle bulb) back to the
-/// nearest text byte offset in the field.
+/// Maps a window-space drag position back to the nearest text byte offset in
+/// the field. `y_bias` is the finger-to-line offset captured when the handle
+/// was grabbed (`grab line bottom − finger y`): adding it back keeps the drag
+/// targeting the line the finger means, whether the grab was on the line
+/// itself (stem/edge) or on the dot hanging outside it — the reference drags
+/// preserve the initial finger-to-line relationship.
 fn window_pos_to_offset(
     text: &str,
     style: &TextStyle,
     metrics: &TextFieldHandleMetrics,
     window_pos: Point,
+    y_bias: f32,
 ) -> usize {
     let local_x = (window_pos.x - metrics.node_origin.x - metrics.padding_left
         + metrics.scroll_offset)
         .max(0.0);
-    // The bulb hangs one line below its tip, so bias the sampled y up by a line
-    // to select the line the tip points at rather than the one below it.
-    let local_y =
-        (window_pos.y - metrics.node_origin.y - metrics.padding_top - metrics.line_height).max(0.0);
+    // The biased y lands on the grabbed line's bottom; sample half a line up
+    // to hit the line's middle.
+    let local_y = (window_pos.y + y_bias
+        - 0.5 * metrics.line_height
+        - metrics.node_origin.y
+        - metrics.padding_top)
+        .max(0.0);
     // Resolve the VISUAL (wrapped) line the same way the drawn caret and
     // `handle_tip_window_pos` do. The plain measurer maps `y` through logical
     // `\n` lines only, so on wrapped text a handle drag lands on the wrong line
@@ -339,15 +348,25 @@ fn SelectionHandles(
     let text = state.text();
 
     // Window position of an in-progress handle drag (touch), or `None` when no
-    // handle is being dragged. Drives the magnifier loupe (below) so it floats
+    // handle is being dragged. Drives the glass loupe (below) so it floats
     // above the finger while the caret/selection edge is being placed.
     let drag_pos: MutableState<Option<Point>> =
         remember(|| mutableStateOf(None::<Point>)).with(|state| *state);
+    // The finger-to-line offset captured at the grab (grab line bottom −
+    // finger y): drags keep targeting the line the finger means whether the
+    // handle was grabbed on the line or by its dot outside it. One cell
+    // serves all handles — only one drags at a time.
+    let drag_bias: Rc<Cell<Option<f32>>> = remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
 
     if selection.collapsed() {
-        // Collapsed caret: a single symmetric cursor handle.
+        // Collapsed caret: a single cursor handle (a dot below the caret).
         let tip = handle_tip_window_pos(&text, &style, &metrics, selection.start);
-        let on_drag = drag_caret_closure(state.clone(), style.clone(), controller.clone());
+        let on_drag = drag_caret_closure(
+            state.clone(),
+            style.clone(),
+            controller.clone(),
+            Rc::clone(&drag_bias),
+        );
         // Tapping the cursor handle opens the caret action popup, anchored at
         // the caret's current offset so it auto-dismisses when the caret moves.
         let open_caret_menu = {
@@ -360,6 +379,9 @@ fn SelectionHandles(
         };
         let on_tap = open_caret_menu.clone();
         let on_long_press = open_caret_menu;
+        let grab_bias = Rc::clone(&drag_bias);
+        let end_bias = Rc::clone(&drag_bias);
+        let tip_y = tip.y;
         SelectionHandle(
             HandleKind::Cursor,
             tip,
@@ -367,17 +389,24 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
+                if grab_bias.get().is_none() {
+                    grab_bias.set(Some(tip_y - pos.y));
+                }
                 drag_pos.set(Some(pos));
                 on_drag(pos);
             },
-            move || drag_pos.set(None),
+            move || {
+                drag_pos.set(None);
+                end_bias.set(None);
+            },
             on_long_press,
             on_tap,
         );
 
         // The caret action popup (Paste / Select all / Undo / Redo), floating
-        // just above the caret.
-        if caret_menu_open.value() {
+        // just above the caret. Hidden while a drag is in flight — the
+        // reference dismisses the menu the moment a handle is grabbed.
+        if caret_menu_open.value() && drag_pos.value().is_none() {
             let caret_anchor = Point {
                 x: tip.x,
                 y: tip.y - metrics.line_height,
@@ -415,7 +444,7 @@ fn SelectionHandles(
             );
         }
     } else {
-        // Range selection: start (leftmost) and end (rightmost) teardrops.
+        // Range selection: start (leftmost) and end (rightmost) lollipops.
         let start = selection.min();
         let end = selection.max();
         let start_tip = handle_tip_window_pos(&text, &style, &metrics, start);
@@ -426,7 +455,11 @@ fn SelectionHandles(
             state.clone(),
             style.clone(),
             controller.clone(),
+            Rc::clone(&drag_bias),
         );
+        let grab_bias = Rc::clone(&drag_bias);
+        let end_bias = Rc::clone(&drag_bias);
+        let start_tip_y = start_tip.y;
         SelectionHandle(
             HandleKind::SelectionStart,
             start_tip,
@@ -434,10 +467,16 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
+                if grab_bias.get().is_none() {
+                    grab_bias.set(Some(start_tip_y - pos.y));
+                }
                 drag_pos.set(Some(pos));
                 on_drag_start(pos);
             },
-            move || drag_pos.set(None),
+            move || {
+                drag_pos.set(None);
+                end_bias.set(None);
+            },
             // Long-pressing a handle re-opens the contextual menu even when the
             // selection range has not changed (e.g. after it was dismissed by a
             // previous action), so the text actions stay reachable.
@@ -451,7 +490,11 @@ fn SelectionHandles(
             state.clone(),
             style.clone(),
             controller.clone(),
+            Rc::clone(&drag_bias),
         );
+        let grab_bias = Rc::clone(&drag_bias);
+        let end_bias = Rc::clone(&drag_bias);
+        let end_tip_y = end_tip.y;
         SelectionHandle(
             HandleKind::SelectionEnd,
             end_tip,
@@ -459,17 +502,26 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
+                if grab_bias.get().is_none() {
+                    grab_bias.set(Some(end_tip_y - pos.y));
+                }
                 drag_pos.set(Some(pos));
                 on_drag_end(pos);
             },
-            move || drag_pos.set(None),
+            move || {
+                drag_pos.set(None);
+                end_bias.set(None);
+            },
             move || menu_open.set(true),
             move || menu_open.set(true),
         );
 
         // Contextual menu (Copy / Cut / Paste / Select all) floating above the
-        // selection. Actions run against the focused field and dismiss the menu.
-        if menu_open.value() {
+        // selection. Actions run against the focused field and dismiss the
+        // menu. Hidden while a handle drag is in flight — the reference
+        // dismisses the menu the moment a handle is grabbed and brings it
+        // back only after release.
+        if menu_open.value() && drag_pos.value().is_none() {
             // Top-center of the selection's first line.
             let menu_anchor = Point {
                 x: (start_tip.x + end_tip.x) * 0.5,
@@ -505,51 +557,59 @@ fn SelectionHandles(
         }
     }
 
-    // Magnifier loupe: while a handle is being dragged, float a magnified slice
-    // of the text above the finger so it does not obscure the caret it is
-    // placing. Touch-only (a drag position is only ever set from a finger
-    // handle drag). The magnified offset is resolved from the finger's window
-    // position through the SAME live composited metrics the handles use, so the
-    // loupe stays centered on the character under the finger even mid-scroll.
-    if let Some(finger) = drag_pos.value() {
-        let offset = window_pos_to_offset(&text, &style, &metrics, finger);
-        CursorMagnifier(text.clone(), style.clone(), metrics, offset, finger);
-    }
+    // The glass loupe: while a handle drag covers the text line, a liquid
+    // glass bubble floats over the dragged line magnifying the live scene
+    // under the finger (text, highlight, the handle itself — it is a backdrop
+    // lens). Dragging by the dot below the line magnifies nothing. Emitted
+    // unconditionally so the bubble stays mounted through its release
+    // deflation.
+    let loupe_target = drag_pos.value().and_then(|finger| {
+        let bias = drag_bias.get().unwrap_or(0.0);
+        let offset = window_pos_to_offset(&text, &style, &metrics, finger, bias);
+        let line_bottom = handle_tip_window_pos(&text, &style, &metrics, offset).y;
+        loupe_target_for_drag(finger, line_bottom, metrics.line_height)
+    });
+    SelectionLoupe(loupe_target);
 }
 
 /// Builds the drag handler for the collapsed cursor handle: moves the caret to
-/// the dragged position.
+/// the dragged position. `drag_bias` is the finger-to-line offset captured at
+/// the grab (see [`window_pos_to_offset`]).
 fn drag_caret_closure(
     state: TextFieldState,
     style: TextStyle,
     controller: TextFieldHandleController,
+    drag_bias: Rc<Cell<Option<f32>>>,
 ) -> Rc<dyn Fn(Point)> {
     Rc::new(move |window_pos: Point| {
         let Some(metrics) = controller.metrics() else {
             return;
         };
         let text = state.text();
-        let offset = window_pos_to_offset(&text, &style, &metrics, window_pos);
+        let bias = drag_bias.get().unwrap_or(0.0);
+        let offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
         state.set_selection(TextRange::new(offset, offset));
         crate::request_render_invalidation();
     })
 }
 
-/// Builds the drag handler for a selection start/end teardrop: extends the
+/// Builds the drag handler for a selection start/end handle: extends the
 /// selection to the dragged position while keeping the opposite edge fixed and
-/// never letting the edges cross.
+/// never letting the edges cross. `drag_bias` as in [`drag_caret_closure`].
 fn drag_edge_closure(
     dragged: HandleKind,
     state: TextFieldState,
     style: TextStyle,
     controller: TextFieldHandleController,
+    drag_bias: Rc<Cell<Option<f32>>>,
 ) -> Rc<dyn Fn(Point)> {
     Rc::new(move |window_pos: Point| {
         let Some(metrics) = controller.metrics() else {
             return;
         };
         let text = state.text();
-        let dragged_offset = window_pos_to_offset(&text, &style, &metrics, window_pos);
+        let bias = drag_bias.get().unwrap_or(0.0);
+        let dragged_offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
         let selection = state.selection();
         let fixed_edge = match dragged {
             HandleKind::SelectionStart => selection.max(),
@@ -1089,8 +1149,10 @@ mod tests {
                 if !text.is_char_boundary(offset) {
                     continue;
                 }
+                // A grab exactly at the tip (the line bottom) captures a zero
+                // bias; the mapping still resolves the grabbed line's offset.
                 let tip = handle_tip_window_pos(text, &style, &metrics, offset);
-                let resolved = window_pos_to_offset(text, &style, &metrics, tip);
+                let resolved = window_pos_to_offset(text, &style, &metrics, tip, 0.0);
                 assert_eq!(
                     resolved, offset,
                     "finger at the tip of offset {offset} must map back to it \
