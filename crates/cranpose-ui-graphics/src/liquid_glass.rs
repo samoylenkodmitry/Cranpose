@@ -229,8 +229,8 @@ impl Default for LiquidLoupeSpec {
             // long edges; its sampling starts fully PAST the handle dot's
             // zone (band through the dot mirrored its bottom into a skirt)
             // and reaches the next text line's x-band, mirrored near 1:1.
-            band_start: 0.74,
-            fold_peak: 0.78,
+            band_start: 0.78,
+            fold_peak: 0.80,
             // The reference fringes are tight (3-5 px at 3x) and live only in
             // the fold band.
             dispersion: 0.22,
@@ -325,7 +325,7 @@ pub fn liquid_menu_glass_effect(
     shader.set_float(19, 0.0); // no dispersion on the menu
     shader.set_float(20, -0.09 * p); // dim bright backdrop content like the
                                      // reference (ghosts stay smudges)
-    shader.set_float(88, 0.9); // bottom rim ~89% of the top (measured)
+    shader.set_float(88, 0.97); // bottom rim ~equal to the top (measured)
     shader.set_float(89, 0.6); // rim holds ~60% strength at the side tangents
     shader.set_float(21, 0.5);
     // Measured on captures: (0,1) puts the crisp arc on the TOP edge with

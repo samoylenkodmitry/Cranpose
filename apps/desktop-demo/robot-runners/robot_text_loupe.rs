@@ -251,7 +251,8 @@ fn content() {
                 style
             };
             cranpose::widgets::Text(
-                "Styles  •  cinematic  •  anime  •  catchy".to_string(),
+                "Styles  •  cinematic  •  anime  •  catchy  •  beats  •  trance  •  lo-fi  •  vocal"
+                    .to_string(),
                 Modifier::empty().absolute_offset(34.0, 122.0),
                 ghost_style,
             );
