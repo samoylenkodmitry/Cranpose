@@ -201,7 +201,7 @@ fn liquid_glass_max_lens_slope(profile: f32) -> f32 {
 /// to that band, and the thin interactive-lens rim line.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidLoupeSpec {
-    /// Center magnification (the reference loupe measures 1.7×).
+    /// Magnification (the reference loupe measures a uniform ~1.25×).
     pub magnification: f32,
     /// Focus offset from the bubble center, dp (the reference samples 75 dp
     /// below its center: content from under the finger, displayed above).
@@ -223,13 +223,14 @@ pub struct LiquidLoupeSpec {
 impl Default for LiquidLoupeSpec {
     fn default() -> Self {
         Self {
-            magnification: 1.7,
+            magnification: 1.25,
             focus_offset: (0.0, 75.0),
-            // The reference band is a thin strip hugging the rim; a wider
-            // band pulled whole neighbouring glyphs in at the end caps and
-            // shattered them into rainbow blocks.
-            band_start: 0.82,
-            fold_peak: 1.18,
+            // Measured: the fold owns the outer ~42% of the depth on the
+            // long edges and starts just BELOW the displayed handle dot (a
+            // band through the dot's zone mirrored it into a double blob);
+            // its reach lands on the next text line, mirrored near 1:1.
+            band_start: 0.58,
+            fold_peak: 0.75,
             // The reference fringes are tight (3-5 px at 3x) and live only in
             // the fold band.
             dispersion: 0.35,
@@ -316,12 +317,13 @@ pub fn liquid_menu_glass_effect(
     shader.set_float(11, 0.18 * p); // top rim highlight (calibrated: the
                                     // reference top spike is a subtle +33
                                     // luminance over the body)
-    shader.set_float4(14, 0.0, 0.0, 0.0, 0.07 * p); // whisper-dark tint
+    shader.set_float4(14, 0.0, 0.0, 0.0, 0.12 * p); // dark tint (reference
+                                                    // dims backdrop ~24%)
     shader.set_float(18, 1.0 + 0.25 * p); // mild vibrancy
     shader.set_float(19, 0.0); // no dispersion on the menu
-    shader.set_float(20, -0.05 * p); // dim bright backdrop content like the
+    shader.set_float(20, -0.09 * p); // dim bright backdrop content like the
                                      // reference (ghosts stay smudges)
-    shader.set_float(88, 0.8); // bottom rim ~70-80% of the top (measured)
+    shader.set_float(88, 0.9); // bottom rim ~89% of the top (measured)
     shader.set_float(21, 0.5);
     // Measured on captures: (0,1) puts the crisp arc on the TOP edge with
     // the 0.45x counter on the bottom — the reference hierarchy.

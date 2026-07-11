@@ -5,17 +5,18 @@
 //! (`example/target/text-selection/`): a 117×82 dp glass capsule whose center
 //! rides [`LOUPE_RISE`] dp above the grabbed line's vertical mid. It is a
 //! pure backdrop lens — the shader magnifies the live scene (text, selection
-//! highlight, the handle itself) 1.7× at the center with a dome falloff,
+//! highlight, the handle itself) a uniform ~1.25×,
 //! folding into an inverted, chromatically dispersed band at the rim (see
 //! `liquid_glass.wgsl` loupe mode). The widget itself draws nothing.
 //!
 //! Motion, all measured from the 120 fps reference:
 //! * birth: ~120 ms after the grab (the menu dissolves first); a grab
 //!   released within the delay never shows a loupe;
-//! * grow-in: born ON the line at ~half size, nearly round and already
-//!   ~85% magnified with a visible rim — a fixed-optic lens whose shape
-//!   grows — widening into the capsule with an ~8% overshoot peaking
-//!   ~190 ms after birth, the rise outrunning the inflation;
+//! * grow-in: born near its floating position (~3/4 risen, clear of the
+//!   line) at ~half size, already magnified with a visible rim — a
+//!   fixed-optic lens whose shape grows — finishing its rise within
+//!   ~90 ms and widening into the capsule with an ~8% overshoot peaking
+//!   ~190 ms after birth;
 //! * follow: the center trails the finger x with a ~80 ms critically damped
 //!   lag (the magnified handle rides ahead of the bubble center mid-drag);
 //!   the y is LOCKED to the grabbed line, never the finger;
@@ -47,8 +48,8 @@ pub const LOUPE_HEIGHT: f32 = 82.0;
 /// Bubble center height above the grabbed line's vertical mid (dp;
 /// reference: 226 px @3x).
 pub const LOUPE_RISE: f32 = 75.0;
-/// Center magnification of the lens.
-pub const LOUPE_MAGNIFICATION: f32 = 1.7;
+/// Magnification of the lens (uniform; measured on the reference).
+pub const LOUPE_MAGNIFICATION: f32 = 1.25;
 /// Scale of the bubble at its birth (reference: the first visible frame is
 /// already ~half the steady size).
 const LOUPE_MIN_SCALE: f32 = 0.5;
@@ -222,10 +223,14 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
         (
             LOUPE_MIN_SCALE + (1.0 - LOUPE_MIN_SCALE) * p,
             pc * pc,
-            (1.0 - (1.0 - pc).powi(2)) + (p - pc), // ease-out + spring overshoot
+            // Born already ~3/4 of the way up (the reference bubble
+            // materializes near its floating position, clear of the line),
+            // with the remaining rise done within ~90 ms — well before the
+            // size finishes inflating.
+            0.75 + 0.25 * ((1.0 - (1.0 - pc).powi(4)) + (p - pc)),
         )
     } else {
-        (0.72 + 0.28 * p, 1.0, 0.76 + 0.24 * p)
+        (0.72 + 0.28 * p, 1.0, 0.94 + 0.06 * p)
     };
     let height = LOUPE_HEIGHT * scale;
     let aspect = 1.08 + (LOUPE_WIDTH / LOUPE_HEIGHT - 1.08) * aspect_t;

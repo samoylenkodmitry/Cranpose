@@ -330,30 +330,33 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
         // 0 deep inside → 1 at the rim.
         let xr = 1.0 - clamp(-d / r_in, 0.0, 1.0);
-        // Magnification profile: a STEP — m0 flat across the text band
-        // (|depth| < ~0.3, the primary line stays ruler-flat), a fast drop
-        // across 0.30..0.44 (hidden in the inter-line gap), then a ~1.25
-        // PLATEAU through the handle-dot zone (any gradient across the dot
-        // squashes it — the reference dot is a round ~1.27x), joining the
-        // fold band at the rim.
-        let m_edge = 1.0 + (m0 - 1.0) * 0.36;
-        let ease = smoothstep(0.30, 0.44, xr);
-        let m = max(m0 + (m_edge - m0) * ease, 0.2);
+        // Magnification: UNIFORM m0 across the whole interior (the measured
+        // reference is a flat ~1.25x — the primary line, the handle dot and
+        // everything between share one scale; any profile gradient arced the
+        // baseline or squashed the dot).
+        let m = max(m0, 0.2);
         // Magnify about the shape center, looking at the offset focus. The
         // whole interior shows the focus neighbourhood (the loupe displays
         // content from under the finger, offset up).
         disp_a = focus_px + p * (1.0 / m - 1.0);
+        // The FOLD: an anisotropic vertical mirror — measured on the
+        // reference, the band starts ~45% of the depth in on the long edges
+        // (showing the NEXT text line inverted, near 1:1 and legible) and
+        // barely exists at the end caps (weighting by the normal's
+        // verticality also kills the rainbow bullseyes the caps produced
+        // under a radial fold).
+        let vert = outward_normal.y * outward_normal.y;
+        let vert_weight = mix(0.12, 1.0, vert);
         if xr > band_start {
             let tau = clamp((xr - band_start) / max(1.0 - band_start, 0.001), 0.0, 1.0);
-            // sin(5πτ/6): rises to its peak at τ = 0.6, falls to half by the
-            // rim — the descending branch is the inversion.
-            let g = sin(3.1415926 * tau * 0.8333);
-            // The curve starts from the eased interior's landing point
-            // (band_start / m_edge) so the band joins without a seam.
-            let s_band0 = band_start / m_edge;
+            // Rise to the reach by mid-band, then a SHALLOW fall (to 85%):
+            // the descending branch is the inversion, and its gentleness is
+            // what keeps the mirrored glyphs legible.
+            let g = smoothstep(0.0, 0.5, tau) - 0.15 * smoothstep(0.5, 1.0, tau);
+            let s_band0 = band_start / m;
             let s_units = s_band0 + (fold_peak - s_band0) * g;
-            disp_c = outward_normal * (s_units - xr) * r_in;
-            spread = band_chroma * smoothstep(0.0, 0.35, tau);
+            disp_c = outward_normal * (s_units - xr) * r_in * vert_weight;
+            spread = band_chroma * smoothstep(0.0, 0.35, tau) * vert_weight;
         }
     } else {
         // The interactive lens (rim_style 1) drops the dome term:
@@ -471,10 +474,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // sides where a purely directional spec vanishes — without a floor
         // the sides read as a vesica), with only a faint prismatic tint
         // phased across the line's width.
-        let facing = pow(facing_light, 1.4) + pow(facing_away, 2.0) * 0.45;
-        let ring = edge_line * (0.3 + 0.7 * facing);
-        let phase = clamp(0.5 + (d + 1.6) * 0.35, 0.0, 1.0);
-        spec_rgb = ring * spec_gain * mix(vec3<f32>(1.0), spectrum_weight(phase) * 1.6, 0.15);
+        let facing = pow(facing_light, 1.4) + pow(facing_away, 2.0) * 0.3;
+        let ring = edge_line * (0.25 + 0.75 * facing);
+        spec_rgb = vec3<f32>(ring * spec_gain);
     }
     rgb = rgb + spec_rgb * highlight;
 

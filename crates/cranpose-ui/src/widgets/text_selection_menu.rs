@@ -357,6 +357,20 @@ pub fn LiquidTextMenu(center_x: f32, line_top_y: f32, visible: bool, items: Vec<
                     width,
                     height: MENU_HEIGHT,
                 })
+                // The reference capsule floats on a soft elevation shadow
+                // (~a 45px halo). Knocked out of its own silhouette — glass
+                // samples the backdrop behind itself and must not refract
+                // its own shadow.
+                .drop_shadow(
+                    LayerShape::Rounded(RoundedCornerShape::uniform(1.0e6)),
+                    move |scope| {
+                        scope.radius = 18.0;
+                        scope.spread = -2.0;
+                        scope.offset.y = 6.0;
+                        scope.color = Color(0.0, 0.0, 0.0, 0.35 * p);
+                        scope.cutout = true;
+                    },
+                )
                 .graphics_layer(move || GraphicsLayer {
                     alpha: p,
                     backdrop_effect: Some(liquid_menu_glass_effect(
