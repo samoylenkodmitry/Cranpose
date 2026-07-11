@@ -44,28 +44,35 @@ Shape and placement (`loupe-steady/h_030.png`):
 - Horizontal: follows the touch with a first-order lag τ ≈ 70–90 ms
   (measured 20–35 px trail at ~356 px/s drag; no oscillation).
 
-Optics (dome lens, all sampled from the live scene = backdrop lens):
-- Magnification at center 1.7×, monotonically decreasing dome profile:
-  a 48 px dot displayed at ~60% radius measures 61 px (1.27×).
+Optics (all sampled from the live scene = backdrop lens). NOTE: these
+supersede an earlier mis-read (1.7× dome) — verified by glyph-height
+measurement on `loupe-steady/h_030.png`:
+- Magnification is a UNIFORM ~1.25× ('b' ascender 48–50 px inside vs
+  38–40 px on the real line; x-height 35 vs 28). The 48 px handle dot
+  displays 61 px (1.27 ≈ the same uniform scale); the primary baseline
+  stays ruler-flat.
 - Focus point = (smoothed touch x, line mid y): the loupe displays
   content from under the finger, offset up.
-- Outer ~18–20% band: refraction fold — sampling distance peaks past the
-  loupe edge then reverses ⇒ an INVERTED, compressed image of content
-  just beyond (next line renders upside-down at the bottom rim).
-- Chromatic dispersion in the band: per-channel refraction offsets,
-  visible 3–5 px RGB fringes on rim glyphs.
-- Bright rim stroke ~2–3 px, brightest top-left and bottom-right arcs;
-  subtle dark ring just inside the rim; no drop shadow.
+- The FOLD is an anisotropic vertical mirror on the long edges only
+  (the end caps barely fold): it owns roughly the outer 40% of the
+  depth, starts just below the displayed handle dot, and shows the NEXT
+  text line inverted near 1:1 and legible ("y catchi" upside-down).
+- Chromatic dispersion rides the fold: per-channel offsets, 3–5 px RGB
+  fringes on mirrored glyphs; the rim line itself stays near-white.
+- Bright rim stroke ~2–3 px hugging the whole silhouette (present on
+  the straight sides), brightest top (~+127 luminance), softer bottom
+  counter; subtle dark ring inside; no drop shadow.
 - Magnified content includes highlight and handle (whole-scene lens).
 
 Motion:
-- Grow-in (`loupe-grow/`): starts ~90 px wide AT the grab point on the
-  line, rises to the offset position while inflating; magnification ramps
-  1→1.7; peak width 378 px at ~200 ms (+8% overshoot), settles to 350 px
-  over a further ~150 ms (underdamped spring).
-- Dissolve (`loupe-dissolve/`): ~55 ms; the rim/glass vanishes in 1–2
-  frames while the magnified content deflates back into the line
-  (scale + magnification collapse toward the grab point) with fade.
+- Birth: ~120 ms after the grab (the menu dissolves first); a grab
+  released within the delay never shows a loupe.
+- Grow-in (`loupe-grow/`): born near its floating position (~3/4
+  risen, clear of the line) at ~half size, already magnified with a
+  visible rim; finishes rising within ~90 ms; width peaks (+8%
+  overshoot) ~180–200 ms after birth and settles (underdamped spring).
+- Dissolve (`loupe-dissolve/`): ~55 ms linear; mild shrink toward ~75%
+  with a slight sink, then a terminal vanish cliff.
 
 ## Edit menu (Cut / Copy / ✦ / AutoFill / Look Up / ›)
 
