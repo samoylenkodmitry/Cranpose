@@ -24,7 +24,16 @@ const STEP_EPSILON: f32 = 0.05;
 const COMPARE_TRIM_TOP_PX: u32 = 200;
 const COMPARE_TRIM_BOTTOM_PX: u32 = 200;
 const COMPARE_SEARCH_OFFSET_PX: u32 = 32;
-const COMPARE_MAX_ADJACENT_SCORE: u32 = 4;
+// Summed per-channel budget for how far two re-aligned adjacent frames may
+// drift. The desktop swapchain is a non-sRGB view (the framework's sRGB
+// pass-through color contract, pinned byte-exact by robot_color_fidelity), so
+// alpha compositing lands in sRGB byte space. Software rasterizers — the CI
+// Vulkan path is lavapipe — round the anti-aliased corners of the Text tab's
+// translucent (alpha 0.95) rounded background cards ~1 level differently at
+// different absolute scroll offsets; real GPUs stay exact (this passes on the
+// local RTX 2070 suite). The budget absorbs that imperceptible rounding
+// (observed worst case 5 summed) while any real scroll drift scores far higher.
+const COMPARE_MAX_ADJACENT_SCORE: u32 = 8;
 const COMPARE_STABILIZED_GUARD_PX: u32 = 0;
 const INTERNAL_DIAGNOSTIC_ENV: &str = "CRANPOSE_TEXT_SCROLL_INTERNAL_DIAGNOSTIC";
 const INTERNAL_DIAGNOSTIC_SCALE_ENV: &str = "CRANPOSE_TEXT_SCROLL_INTERNAL_DIAGNOSTIC_SCALE";
