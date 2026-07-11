@@ -485,6 +485,8 @@ impl NativeWindowSurface {
 struct App {
     /// Settings for the application
     settings: AppSettings,
+    /// Live platform environment (system theme, insets) provided to composition.
+    platform_env: Rc<crate::platform_env::PlatformEnvironment>,
     /// Content function to be called (taken on first resume)
     content: Option<Box<dyn FnMut()>>,
     /// Window (created when surfaces can be created)
@@ -564,8 +566,17 @@ impl App {
         let robot_app_hook = settings.robot_app_hook.take();
         let frame_pacing_mode = settings.frame_pacing_mode;
 
+        // Wrap the app content once with the platform environment (system
+        // theme, insets) so every composition — primary or native sub-window —
+        // observes the same live values.
+        let platform_env = crate::platform_env::PlatformEnvironment::new();
+        let env_for_content = Rc::clone(&platform_env);
+        let mut content = content;
+        let content = move || env_for_content.compose_root(&mut content);
+
         Self {
             settings,
+            platform_env,
             content: Some(Box::new(content)),
             window: None,
             surface: None,
@@ -1328,6 +1339,7 @@ impl App {
             create_started.elapsed().as_millis()
         ));
         let content = request.content.clone();
+        let content_env = Rc::clone(&self.platform_env);
         let viewport = (
             surface_config.width as f32 / scale_factor as f32,
             surface_config.height as f32 / scale_factor as f32,
@@ -1338,7 +1350,7 @@ impl App {
                 renderer,
                 default_root_key(),
                 move || {
-                    (content.borrow_mut())();
+                    content_env.compose_root(|| (content.borrow_mut())());
                 },
                 (surface_config.width, surface_config.height),
                 viewport,
@@ -2736,12 +2748,7 @@ fn wgpu_renderer_for_surface(
 fn select_surface_format(
     surface_caps: &wgpu::SurfaceCapabilities,
 ) -> Result<wgpu::TextureFormat, LaunchError> {
-    surface_caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .or_else(|| surface_caps.formats.first().copied())
+    crate::surface_format::select_display_surface_format(&surface_caps.formats)
         .ok_or(LaunchError::NoSurfaceFormat)
 }
 
@@ -3650,6 +3657,13 @@ fn default_vsync_interval() -> Duration {
     Duration::from_nanos(16_666_667)
 }
 
+fn system_theme_from_winit(theme: winit::window::Theme) -> cranpose_services::SystemTheme {
+    match theme {
+        winit::window::Theme::Dark => cranpose_services::SystemTheme::Dark,
+        winit::window::Theme::Light => cranpose_services::SystemTheme::Light,
+    }
+}
+
 fn monitor_refresh_interval(window: &Arc<dyn Window>) -> Duration {
     window
         .current_monitor()
@@ -3926,6 +3940,14 @@ impl ApplicationHandler for App {
             self.settings.headless,
         );
 
+        // Seed the system theme from the window manager when it reports one;
+        // otherwise the cached environment detection in cranpose-services
+        // stands. Live changes arrive as `WindowEvent::ThemeChanged`.
+        if let Some(theme) = window.theme() {
+            self.platform_env
+                .set_system_theme(system_theme_from_winit(theme));
+        }
+
         self.window = Some(window);
         self.surface = Some(surface);
         self.surface_config = Some(surface_config);
@@ -4041,6 +4063,15 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Moved(_) => {
                 self.vsync_interval = monitor_refresh_interval(window);
+            }
+            WindowEvent::ThemeChanged(theme)
+                if self
+                    .platform_env
+                    .set_system_theme(system_theme_from_winit(theme)) =>
+            {
+                app.request_root_render();
+                self.primary_surface_dirty = true;
+                request_redraw_once(window, &mut self.primary_redraw_pending);
             }
             WindowEvent::PointerMoved {
                 position, source, ..

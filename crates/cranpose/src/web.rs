@@ -90,6 +90,19 @@ pub async fn run(
     // Set up console logging
     console_error_panic_hook::set_once();
 
+    // Platform environment (system theme; insets stay zero on the web) wrapped
+    // around the root content so composition observes live values.
+    let platform_env = crate::platform_env::PlatformEnvironment::new();
+    let mut content = content;
+    let content = {
+        let env = Rc::clone(&platform_env);
+        move || env.compose_root(|| content())
+    };
+
+    // Browser-backed service implementations (share, notifications, vibration,
+    // online status) registered before the first composition.
+    crate::web_services::register();
+
     // Get the window and document
     let window = web_sys::window().ok_or("no global window exists")?;
     let document = window
@@ -170,13 +183,9 @@ pub async fn run(
         .map_err(|e| format!("failed to create device: {:?}", e))?;
 
     let surface_caps = surface.get_capabilities(&adapter);
-    let surface_format = surface_caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .or_else(|| surface_caps.formats.first().copied())
-        .ok_or_else(|| JsValue::from_str("web surface reports no supported formats"))?;
+    let surface_format =
+        crate::surface_format::select_display_surface_format(&surface_caps.formats)
+            .ok_or_else(|| JsValue::from_str("web surface reports no supported formats"))?;
     let alpha_mode = surface_caps
         .alpha_modes
         .first()
@@ -286,6 +295,33 @@ pub async fn run(
         .set_platform_text_input(Rc::new(WebTextInput {
             textarea: ime_textarea.clone(),
         }));
+
+    // System theme: seed from `prefers-color-scheme` and observe changes so
+    // theme-aware composition reacts live to OS appearance switches.
+    if let Ok(Some(query)) = window.match_media("(prefers-color-scheme: dark)") {
+        let initial = if query.matches() {
+            cranpose_services::SystemTheme::Dark
+        } else {
+            cranpose_services::SystemTheme::Light
+        };
+        platform_env.set_system_theme(initial);
+        let env = Rc::clone(&platform_env);
+        let app_for_theme = app.clone();
+        let request_frame_for_theme = request_frame.clone();
+        let closure = Closure::wrap(Box::new(move |event: web_sys::MediaQueryListEvent| {
+            let theme = if event.matches() {
+                cranpose_services::SystemTheme::Dark
+            } else {
+                cranpose_services::SystemTheme::Light
+            };
+            if env.set_system_theme(theme) {
+                app_for_theme.borrow_mut().request_root_render();
+                request_frame_for_theme();
+            }
+        }) as Box<dyn FnMut(_)>);
+        query.add_event_listener_with_callback("change", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
 
     // Pointer events (below) cover mouse, touch and pen and carry the device
     // type via `pointerType`; the separate `mouse*` listeners are intentionally

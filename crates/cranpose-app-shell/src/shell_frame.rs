@@ -71,6 +71,7 @@ struct RenderPhaseDirtyDiagnostics<'a> {
     draw_repass_pending: bool,
     draw_dirty_nodes: usize,
     layout_dirty_nodes: usize,
+    structural_dirty_nodes: usize,
     partial_dirty_nodes: usize,
     dirty_node_ids: Option<String>,
     render_only_dirty: bool,
@@ -90,6 +91,7 @@ fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'
         draw_repass_pending,
         draw_dirty_nodes,
         layout_dirty_nodes,
+        structural_dirty_nodes,
         partial_dirty_nodes,
         dirty_node_ids,
         render_only_dirty,
@@ -98,11 +100,11 @@ fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'
     } = diagnostics;
     if let Some(dirty_node_ids) = dirty_node_ids {
         log::warn!(
-            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layout_dirty_nodes={layout_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame} ids={dirty_node_ids}",
+            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layout_dirty_nodes={layout_dirty_nodes} structural_dirty_nodes={structural_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame} ids={dirty_node_ids}",
         );
     } else {
         log::warn!(
-            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layout_dirty_nodes={layout_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame}",
+            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layout_dirty_nodes={layout_dirty_nodes} structural_dirty_nodes={structural_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame}",
         );
     }
 }
@@ -450,12 +452,28 @@ where
             draw_dirty_nodes = self.refresh_retained_redraw_nodes();
         }
         let layout_dirty_nodes = std::mem::take(&mut self.scoped_layout_scene_nodes);
+        // Parents whose child lists changed structurally this frame. A scoped
+        // scene update patches only the dirty subtrees, so every structural
+        // parent must be in scope or a removed subtree's layers stay in the
+        // persistent render graph and keep compositing (the cross-tab ghost).
+        let structural_parents = if std::env::var_os("CRANPOSE_DISABLE_STRUCTURAL_DIRT").is_some() {
+            Vec::new()
+        } else if let Some(root) = self.composition.root() {
+            self.composition
+                .applier_mut()
+                .take_structural_change_parents_attached_to(root)
+        } else {
+            Vec::new()
+        };
+        let structural_dirty = !structural_parents.is_empty();
         let mut partial_dirty_nodes = draw_dirty_nodes.clone();
         partial_dirty_nodes.extend(layout_dirty_nodes.iter().copied());
+        partial_dirty_nodes.extend(structural_parents.iter().copied());
         partial_dirty_nodes.sort_unstable();
         partial_dirty_nodes.dedup();
         let draw_dirty_node_count = draw_dirty_nodes.len();
         let layout_dirty_node_count = layout_dirty_nodes.len();
+        let structural_dirty_node_count = structural_parents.len();
         let partial_dirty_node_count = partial_dirty_nodes.len();
         // Detect a focused text field that left the composition this frame:
         // the check clears the stale focus entry and asks the platform to
@@ -465,14 +483,17 @@ where
         // Tick cursor blink timer - only marks dirty when visibility state changes
         let cursor_blink_dirty = cranpose_ui::tick_cursor_blink();
 
-        let render_only_dirty =
-            (render_dirty && partial_dirty_nodes.is_empty() && !draw_repass_pending)
-                || cursor_blink_dirty;
+        let render_only_dirty = (render_dirty
+            && partial_dirty_nodes.is_empty()
+            && !draw_repass_pending
+            && !structural_dirty)
+            || cursor_blink_dirty;
         let scene_dirty = self.scene_dirty;
         let draw_only_partial_dirty = !draw_dirty_nodes.is_empty()
             && layout_dirty_nodes.is_empty()
             && !pointer_dirty
-            && !recomposed_this_frame;
+            && !recomposed_this_frame
+            && !structural_dirty;
         let scoped_scene_dirty = scene_dirty && !layout_dirty_nodes.is_empty();
         let full_scene_dirty = scene_dirty && !scoped_scene_dirty && !draw_only_partial_dirty;
         let partial_scene_dirty = !partial_dirty_nodes.is_empty();
@@ -480,7 +501,8 @@ where
             || scoped_scene_dirty
             || partial_scene_dirty
             || draw_repass_pending
-            || render_only_dirty;
+            || render_only_dirty
+            || structural_dirty;
 
         if !needs_scene_rebuild {
             log_render_phase_dirty_diagnostics(RenderPhaseDirtyDiagnostics {
@@ -490,11 +512,15 @@ where
                 draw_repass_pending,
                 draw_dirty_nodes: draw_dirty_node_count,
                 layout_dirty_nodes: layout_dirty_node_count,
+                structural_dirty_nodes: structural_dirty_node_count,
                 partial_dirty_nodes: partial_dirty_node_count,
                 dirty_node_ids: render_phase_dirty_diagnostics_enabled().then(|| {
                     format!(
-                        "draw={:?} layout={:?} partial={:?}",
-                        draw_dirty_nodes, layout_dirty_nodes, partial_dirty_nodes
+                        "draw={:?} layout={:?} structural={:?} partial={:?}",
+                        draw_dirty_nodes,
+                        layout_dirty_nodes,
+                        structural_parents,
+                        partial_dirty_nodes
                     )
                 }),
                 render_only_dirty,
@@ -526,11 +552,15 @@ where
                 draw_repass_pending,
                 draw_dirty_nodes: draw_dirty_node_count,
                 layout_dirty_nodes: layout_dirty_node_count,
+                structural_dirty_nodes: structural_dirty_node_count,
                 partial_dirty_nodes: partial_dirty_node_count,
                 dirty_node_ids: render_phase_dirty_diagnostics_enabled().then(|| {
                     format!(
-                        "draw={:?} layout={:?} partial={:?}",
-                        draw_dirty_nodes, layout_dirty_nodes, partial_dirty_nodes
+                        "draw={:?} layout={:?} structural={:?} partial={:?}",
+                        draw_dirty_nodes,
+                        layout_dirty_nodes,
+                        structural_parents,
+                        partial_dirty_nodes
                     )
                 }),
                 render_only_dirty,

@@ -3930,6 +3930,177 @@ fn draw_only_scene_dirty_repass_uses_visual_scoped_renderer_update() {
     );
 }
 
+const KEYED_PAGE_A_COLOR: Color = Color(0.9, 0.1, 0.5, 1.0);
+
+#[composable]
+fn keyed_page_switch_app(
+    tab: cranpose_core::MutableState<i32>,
+    width_state: cranpose_core::MutableState<f32>,
+) {
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        draw_observed_width_app(width_state);
+        cranpose_core::with_key(&tab.get(), || {
+            if tab.get() == 0 {
+                // Page A is deliberately larger than page B so the swap can
+                // not recycle every removed node id into the new page: the
+                // uncovered layers are the ones that ghost.
+                Column(Modifier::empty(), ColumnSpec::default(), || {
+                    for index in 0..3 {
+                        Box(
+                            Modifier::empty()
+                                .size(Size {
+                                    width: 80.0,
+                                    height: 40.0,
+                                })
+                                .draw_behind(move |scope| {
+                                    let color = if index == 2 {
+                                        KEYED_PAGE_A_COLOR
+                                    } else {
+                                        Color(0.3, 0.3, 0.3, 1.0)
+                                    };
+                                    scope.draw_rect(Brush::solid(color));
+                                }),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    }
+                });
+            }
+            // tab != 0 composes nothing: the removal is covered by no
+            // insertion, so no dirty id can accidentally patch it away.
+        });
+    });
+}
+
+fn graph_layer_contains_rect_color(
+    layer: &cranpose_render_common::graph::LayerNode,
+    color: Color,
+) -> bool {
+    for child in &layer.children {
+        match child {
+            cranpose_render_common::graph::RenderNode::Primitive(entry) => {
+                if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node {
+                    if let DrawPrimitive::Rect { brush, .. } = &draw.primitive {
+                        if *brush == Brush::solid(color) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            cranpose_render_common::graph::RenderNode::Layer(inner) => {
+                if graph_layer_contains_rect_color(inner, color) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// A keyed subtree swap (tab switch) landing on the same frame as pending
+/// scoped layout repasses must still evict the removed subtree's layers from
+/// the incrementally-updated render graph. This is the presented-path
+/// cross-tab ghost: the scene update was scoped to the repass nodes, the
+/// removed page's layers were never dropped, and they kept compositing every
+/// frame until an unrelated full rebuild (e.g. a window resize).
+#[test]
+fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let tab_holder: Rc<RefCell<Option<cranpose_core::MutableState<i32>>>> =
+        Rc::new(RefCell::new(None));
+    let tab_holder_for_app = Rc::clone(&tab_holder);
+    let width_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let width_holder_for_app = Rc::clone(&width_holder);
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&visual_updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        move || {
+            let tab = useState(|| 0i32);
+            let width_state = useState(|| 24.0f32);
+            *tab_holder_for_app.borrow_mut() = Some(tab);
+            *width_holder_for_app.borrow_mut() = Some(width_state);
+            keyed_page_switch_app(tab, width_state);
+        },
+    );
+
+    shell.update();
+    assert!(
+        graph_layer_contains_rect_color(
+            &shell
+                .renderer()
+                .scene()
+                .graph
+                .as_ref()
+                .expect("initial graph")
+                .root,
+            KEYED_PAGE_A_COLOR,
+        ),
+        "page A must be in the graph after the initial frame"
+    );
+
+    // Learn the sibling's node id from a draw-only repass frame.
+    let width_state = width_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("width state should be captured");
+    width_state.set(120.0);
+    shell.update();
+    let sibling_node = *last_dirty_nodes
+        .borrow()
+        .first()
+        .expect("draw repass should report the sibling node id");
+
+    rebuilds.set(0);
+    updates.set(0);
+    visual_updates.set(0);
+    last_dirty_nodes.borrow_mut().clear();
+
+    // Switch the keyed page while a scoped layout repass is pending on the
+    // sibling — the exact frame shape produced by "scroll (or a text field
+    // measuring) + tab click" in the demo.
+    let tab = tab_holder
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("tab state should be captured");
+    tab.set(1);
+    let app_context = Rc::clone(shell.app_context());
+    app_context.enter(|| cranpose_ui::schedule_layout_repass(sibling_node));
+    shell.update();
+
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "the swap frame must stay on the scoped update path (the structural \
+         parent joins the dirty set instead of forcing a full rebuild)"
+    );
+    assert_eq!(updates.get(), 1, "the swap frame must run a scoped update");
+    let graph = shell
+        .renderer()
+        .scene()
+        .graph
+        .as_ref()
+        .expect("graph after keyed swap");
+    assert!(
+        !graph_layer_contains_rect_color(&graph.root, KEYED_PAGE_A_COLOR),
+        "page A's layers must be evicted from the graph on the swap frame \
+         (cross-tab ghost: stale layers kept compositing on the presented path)"
+    );
+}
+
 #[test]
 fn lazy_column_scroll_repass_uses_scoped_renderer_update_without_stale_rows() {
     let _guard = test_guard();

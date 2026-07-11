@@ -31,17 +31,15 @@ fn get_vec4(index: u32) -> vec4<f32> {
     return vec4<f32>(get_float(index), get_float(index + 1u), get_float(index + 2u), get_float(index + 3u));
 }
 
-// SDF for rounded rectangle — matches Android sdRoundRect
+// SDF for rounded rectangle
 fn sd_round_rect(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
     let q = abs(p) - half_size + vec2<f32>(radius);
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
-// Height profile: glass surface curvature.
-// Matches Android AGSL exactly:
-//   circle:   x * x          (0 at edge, 1 deep inside)
-//   squircle: 1 - pow(1-x,4) (0 at edge, 1 deep inside)
-// `x` is normalized distance from edge inward (0=edge, 1=deep inside).
+// Height profile over the bezel: 0 at the edge, 1 deep inside.
+//   circle:   x²           (gentle at the edge, grows inward)
+//   squircle: 1 − (1−x)⁴   (steep at the edge, flattens inward)
 fn height_profile(x: f32, profile: f32) -> f32 {
     let xc = clamp(x, 0.0, 1.0);
     let h_circle = xc * xc;
@@ -49,14 +47,112 @@ fn height_profile(x: f32, profile: f32) -> f32 {
     return mix(h_circle, h_squircle, clamp(profile, 0.0, 1.0));
 }
 
-// Derivative of height profile — well-behaved, no singularities.
-//   circle':   2 * x
-//   squircle': 4 * pow(1-x, 3)
+// Derivative of the height profile — the bend strength.
 fn d_height_dx(x: f32, profile: f32) -> f32 {
     let xc = clamp(x, 0.0, 1.0);
     let d_circle = 2.0 * xc;
     let d_squircle = 4.0 * pow(1.0 - xc, 3.0);
     return mix(d_circle, d_squircle, clamp(profile, 0.0, 1.0));
+}
+
+// Polynomial smooth minimum — SDF metaball gluing: shapes within `k` of
+// each other neck together like merging droplets.
+fn smin(a: f32, b: f32, k: f32) -> f32 {
+    if k <= 0.0 {
+        return min(a, b);
+    }
+    let h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+// Approximate visible-spectrum weight for a normalized wavelength t in
+// [0,1] (0 = violet-bending end, 1 = red end): three gaussians peaking at
+// blue, green and red. Used for the rim's rainbow dispersion.
+fn spectrum_weight(t: f32) -> vec3<f32> {
+    let r = exp(-pow((t - 0.80) / 0.22, 2.0));
+    let g = exp(-pow((t - 0.50) / 0.22, 2.0));
+    let b = exp(-pow((t - 0.20) / 0.22, 2.0));
+    return vec3<f32>(r, g, b);
+}
+
+// Cheap screen-space hash for the anti-banding dither.
+fn hash12(p: vec2<f32>) -> f32 {
+    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    p3 = p3 + dot(p3, vec3<f32>(p3.y, p3.z, p3.x) + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Extra scene shapes for the liquid field: every glass shape near another
+// GLUES to it via a smooth union — the growing menu bubble necks with a
+// neighboring button simply by passing near it, the drag lens merges with
+// the search circle on approach. Up to 8 extra shapes at 5 floats each
+// (center.xy, size.xy, radius; negative radius = capsule) from float 36 on.
+const MAX_SCENE_SHAPES: u32 = 8u;
+
+fn scene_shape_sdf(coord: vec2<f32>, base: u32, dp_scale: vec2<f32>, s: f32) -> f32 {
+    let center = vec2<f32>(get_float(base), get_float(base + 1u)) * dp_scale;
+    let size = vec2<f32>(get_float(base + 2u), get_float(base + 3u)) * dp_scale;
+    var radius = get_float(base + 4u) * s;
+    if radius < 0.0 {
+        radius = 0.5 * min(size.x, size.y);
+    }
+    return sd_round_rect(coord - center, size * 0.5, radius);
+}
+
+// Smooth subtraction (the carve twin of smin): shapes with the subtract
+// sentinel punch a hole in the field — the growing menu droplet leaves its
+// anchor button un-glassed (crisp, riding ON TOP) until it swallows it.
+fn smax_sub(a: f32, b: f32, k: f32) -> f32 {
+    if k <= 0.0 {
+        return max(a, -b);
+    }
+    let h = clamp(0.5 - 0.5 * (a + b) / k, 0.0, 1.0);
+    return mix(a, -b, h) + k * h * (1.0 - h);
+}
+
+// Combined scene SDF: the primary shape smooth-unioned with every extra
+// scene shape, with a low-frequency angular wobble that makes mid-flight
+// shapes bubble like liquid. Wobble perturbs the distance field itself so
+// coverage, normals and the lens all follow it.
+fn scene_sdf(
+    coord: vec2<f32>,
+    p_a: vec2<f32>,
+    half_a: vec2<f32>,
+    r_a: f32,
+    shape_count: u32,
+    dp_scale: vec2<f32>,
+    s: f32,
+    glue: f32,
+    wobble_amp: f32,
+    wobble_phase: f32,
+    bulge_amp: f32,
+    bulge_dir: f32,
+) -> f32 {
+    var d = sd_round_rect(p_a, half_a, r_a);
+    let count = min(shape_count, MAX_SCENE_SHAPES);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let base = 36u + i * 5u;
+        let d_i = scene_shape_sdf(coord, base, dp_scale, s);
+        // Radius sentinel ≤ -2 marks a SUBTRACT shape (see smax_sub).
+        if get_float(base + 4u) <= -2.0 {
+            d = smax_sub(d, d_i, glue);
+        } else {
+            d = smin(d, d_i, glue);
+        }
+    }
+    if wobble_amp > 0.001 || bulge_amp > 0.001 {
+        let theta = atan2(p_a.y, p_a.x);
+        let lobes = sin(3.0 * theta + wobble_phase)
+            + 0.6 * sin(5.0 * theta - 1.7 * wobble_phase)
+            + 0.35 * sin(2.0 * theta + 2.3 * wobble_phase);
+        d = d - wobble_amp * lobes * 0.5;
+        // Viscous leading-edge bulge: while the shape travels/inflates, its
+        // leading side (along `bulge_dir`) swells like a droplet being
+        // pulled — the trailing side stays put. cos^3 keeps one focused lobe.
+        let align = max(cos(theta - bulge_dir), 0.0);
+        d = d - bulge_amp * align * align * align;
+    }
+    return d;
 }
 
 @fragment
@@ -69,17 +165,43 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let effect_rect = get_vec4(248u);
     let container_dp = get_vec2(0u);
 
-    // dp → pixel scale: effect area pixel size / container dp size
-    let dp_scale = effect_rect.zw / max(container_dp, vec2<f32>(1.0));
-    let s = min(dp_scale.x, dp_scale.y);
+    // Two geometry modes, keyed on the container-size uniform:
+    // - explicit-rect (container > 0): the container is the node/effect area
+    //   size in dp and every geometry uniform is dp — dividing the
+    //   renderer-injected pixel rect by the container yields px-per-dp, so
+    //   geometry lands correctly at ANY render scale (live density, robot
+    //   captures at 1.0, fractional desktop scales). Morphing glass and the
+    //   raw-effect demo API both use this.
+    // - cover (container == 0): the glass covers the whole effect rect —
+    //   geometry uniforms are px at the platform density; used by
+    //   `Modifier::glass_effect`, whose node size is only known at render
+    //   time.
+    let cover_mode = container_dp.x <= 0.0 || container_dp.y <= 0.0;
+    var dp_scale = vec2<f32>(1.0, 1.0);
+    var s = 1.0;
+    if !cover_mode {
+        dp_scale = effect_rect.zw / max(container_dp, vec2<f32>(1.0));
+        s = min(dp_scale.x, dp_scale.y);
+    }
 
     // Fragment position in effect-local pixel coordinates
     let coord = uv * tex_size - effect_rect.xy;
 
-    let center = get_vec2(2u) * dp_scale;
-    let rect_size = get_vec2(4u) * dp_scale;
-    let corner_radius = get_float(6u) * s;
-    let bezel = get_float(7u) * s;
+    var center: vec2<f32>;
+    var rect_size: vec2<f32>;
+    if cover_mode {
+        rect_size = effect_rect.zw;
+        center = rect_size * 0.5;
+    } else {
+        center = get_vec2(2u) * dp_scale;
+        rect_size = get_vec2(4u) * dp_scale;
+    }
+    var corner_radius = get_float(6u) * s;
+    if corner_radius < 0.0 {
+        // Capsule sentinel: the radius follows the smaller half-extent.
+        corner_radius = 0.5 * min(rect_size.x, rect_size.y);
+    }
+    let bezel = max(get_float(7u) * s, 0.001);
     let disp_scale = get_float(8u) * s;
     let ri = get_float(9u);
     let profile = get_float(10u);
@@ -87,56 +209,192 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let tilt_angle = get_float(12u);
     let tilt_pitch = get_float(13u);
     let tint_color = get_vec4(14u);
+    let saturation = get_float(18u);
+    let chroma = get_float(19u);
+    let lift = get_float(20u);
+    let dither_amount = get_float(21u);
+    let light_dir_in = get_vec2(22u);
+    var contrast = get_float(24u);
+    if contrast <= 0.0 {
+        contrast = 1.0;
+    }
+    var edge_band = get_float(25u);
+    if edge_band <= 0.0 {
+        edge_band = 0.5;
+    }
+    // Liquid scene: float 30 = extra shape count (shapes at 36+, 5 floats
+    // each); 31 = glue radius for the smooth union; 32/33 = wobble
+    // amplitude px / phase.
+    let shape_count = u32(max(get_float(30u), 0.0));
+    let glue = get_float(31u) * s;
+    let wobble_amp = get_float(32u) * s;
+    let wobble_phase = get_float(33u);
+    let bulge_amp = get_float(26u) * s;
+    let bulge_dir = get_float(27u);
+    // Dome direction: +1 stretches the backdrop outward at the rim (bars,
+    // menus); -1 pulls samples toward the center — true magnification (the
+    // interactive lens). 0 defaults to +1.
+    var dome_dir = get_float(34u);
+    if dome_dir == 0.0 {
+        dome_dir = 1.0;
+    }
+    // True magnification factor (uniform 35): interior samples pull toward
+    // the shape center by 1/m, enveloped by the height profile so it blends
+    // into the rim band. 0/1 = off.
+    var magnify = get_float(35u);
+    if magnify <= 0.0 {
+        magnify = 1.0;
+    }
+    // Sheen strength (float 29): broad bezel glow toward the light. 0 keeps
+    // the default; the interactive lens dials it near zero for the crisp
+    // interior of the reference frames.
+    var sheen_strength = get_float(29u);
+    if sheen_strength <= 0.0 {
+        sheen_strength = 1.0;
+    }
 
     let half_size = rect_size * 0.5;
 
-    // SDF distance from rounded rect edge (negative = inside)
+    // SDF distance from combined scene (negative = inside)
     let p = coord - center;
-    let d = sd_round_rect(p, half_size, corner_radius);
+    let d = scene_sdf(
+        coord, p, half_size, corner_radius,
+        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+    );
 
-    // If outside the glass rect, pass through original
-    if d > 0.0 {
-        return textureSample(input_texture, input_sampler, uv);
+    // Anti-aliased shape coverage. Output is premultiplied and composited
+    // src-over, so outside the shape the pass emits transparency and the
+    // untouched (sharp) backdrop below shows through — the blur applied to
+    // this pass's input must never leak outside the glass.
+    let coverage = 1.0 - smoothstep(-0.75, 0.75, d);
+    if coverage <= 0.0 {
+        return vec4<f32>(0.0);
     }
 
-    // Normalized distance: 0 at rect edge, 1 at one bezel-width inside
-    let x = clamp(-d / max(bezel, 0.001), 0.0, 1.0);
-
-    // Height and slope from profile (bezel curvature)
-    let slope = d_height_dx(x, profile);
-
-    // Refraction displacement (matches Android AGSL):
-    //   bend = slope * (1 - 1/ri)
-    //   tilt is a raw vec2 (angle, pitch), NOT trigonometric
-    //   displacement = tilt * bend * scale
-    let bend = slope * (1.0 - 1.0 / max(ri, 1.0001));
-    let tilt = vec2<f32>(tilt_angle, tilt_pitch);
-    let disp = tilt * bend * disp_scale;
-    let displaced_uv = clamp(uv + disp / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
-
-    // Sample refracted background
-    var outc = textureSample(input_texture, input_sampler, displaced_uv);
-
-    // Tint color blending (matches Android: mix(outc.rgb, tint.rgb, tint.a))
-    let tint_a = tint_color.a;
-    outc = vec4<f32>(mix(outc.rgb, tint_color.rgb, tint_a), outc.a);
-
-    // SDF gradient for specular normal computation
+    // Outward SDF normal (gradient) — the lens axis at this fragment.
     let eps = 0.5;
-    let d_dx = sd_round_rect(p + vec2<f32>(eps, 0.0), half_size, corner_radius);
-    let d_dy = sd_round_rect(p + vec2<f32>(0.0, eps), half_size, corner_radius);
+    let d_dx = scene_sdf(
+        coord + vec2<f32>(eps, 0.0), p + vec2<f32>(eps, 0.0), half_size, corner_radius,
+        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+    );
+    let d_dy = scene_sdf(
+        coord + vec2<f32>(0.0, eps), p + vec2<f32>(0.0, eps), half_size, corner_radius,
+        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+    );
     let grad = vec2<f32>(d_dx - d, d_dy - d) / eps;
     let grad_len = length(grad);
-    let inward_normal = select(vec2<f32>(0.0), -grad / grad_len, grad_len > 0.001);
+    let outward_normal = select(vec2<f32>(0.0), grad / grad_len, grad_len > 0.001);
 
-    // Specular rim highlight (matches Android AGSL):
-    //   rim = pow(1-x, 3), facing = 0.5 + 0.5 * dot(N, lightDir)
-    //   spec added as: outc + spec * specA * 0.85
-    let light_dir = normalize(tilt + vec2<f32>(0.0, 0.5));
-    let rim = pow(max(1.0 - x, 0.0), 3.0);
-    let facing = 0.5 + 0.5 * dot(inward_normal, light_dir);
-    let spec_a = highlight * rim * facing;
-    outc = vec4<f32>(outc.rgb + vec3<f32>(spec_a * 0.85), outc.a);
+    // Refraction. Two lens terms along the surface normal:
+    // - a narrow, steep EDGE band (squircle slope — strongest right at the
+    //   rim, exactly where iOS glass visibly stretches what's under the
+    //   edge), carrying the chromatic aberration;
+    // - a broad gentle dome over the whole bezel for the liquid interior.
+    // Plus the motion/tilt term fed by gestures.
+    let x_full = clamp(-d / bezel, 0.0, 1.0);
+    let x_edge = clamp(-d / (bezel * edge_band), 0.0, 1.0);
+    let bend = 1.0 - 1.0 / max(ri, 1.0001);
+    let slope_edge = d_height_dx(x_edge, 1.0);
+    let slope_dome = d_height_dx(x_full, profile);
+    // The interactive lens (rim_style 1) drops the dome term: magnification
+    // owns its interior, and an opposing dome slope inside the rim band
+    // double-imaged whatever sat under the lens.
+    let rim_style = clamp(get_float(28u), 0.0, 1.0);
+    let lens =
+        (slope_edge + dome_dir * slope_dome * 0.35 * (1.0 - rim_style)) * bend * disp_scale;
+    let tilt = vec2<f32>(tilt_angle, tilt_pitch);
+    var disp = outward_normal * lens + tilt * slope_dome * bend * disp_scale;
+    if magnify != 1.0 {
+        // Near-uniform interior magnification: the reference lens is FILLED
+        // with a CRISP magnified image edge to edge (the toggle lens shows
+        // track color across its whole face; the tab lens keeps its icon
+        // legible). Keeping the profile nearly flat confines distortion to
+        // the refractive rim; samples pull inward, so full-strength
+        // magnification at the rim stays inside the capture.
+        let interior = mix(0.97, 1.0, height_profile(x_full, profile));
+        disp = disp + p * (1.0 / magnify - 1.0) * interior;
+    }
 
-    return outc;
+    // Spectral dispersion rides the edge band: six taps across the
+    // refraction-scale range, each weighted by an approximate rainbow
+    // spectrum (short wavelengths bend most). This is what draws the
+    // green/yellow/magenta fringes the iOS lens shows at its rim; away from
+    // the rim it converges to a single tap.
+    let spread = chroma * (slope_edge / 4.0);
+    let uv_c = clamp(uv + disp / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
+    let sample_c = textureSampleLevel(input_texture, input_sampler, uv_c, 0.0);
+    var rgb = sample_c.rgb;
+    let alpha = sample_c.a;
+    if spread > 0.02 {
+        var acc = vec3<f32>(0.0);
+        var wsum = vec3<f32>(0.0);
+        for (var i = 0; i < 6; i = i + 1) {
+            let t = (f32(i) + 0.5) / 6.0;
+            let w = spectrum_weight(t);
+            // Red (t→1) bends least, violet (t→0) most.
+            let scale = 1.0 + (0.5 - t) * spread;
+            let uv_i = clamp(uv + disp * scale / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
+            acc = acc + w * textureSampleLevel(input_texture, input_sampler, uv_i, 0.0).rgb;
+            wsum = wsum + w;
+        }
+        rgb = acc / max(wsum, vec3<f32>(0.0001));
+    }
+
+    // Tone pipeline: vibrancy first, then a gentle contrast pivot, then the
+    // scheme lift. The lift is a SCREEN blend toward white (or a multiply
+    // toward black when negative) — unlike an alpha-mix it keeps the ghosts
+    // of what's behind the glass colored, which is what makes the material
+    // read bright yet alive.
+    let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    rgb = mix(vec3<f32>(luma), rgb, max(saturation, 0.0));
+    rgb = (rgb - vec3<f32>(0.5)) * contrast + vec3<f32>(0.5);
+    if lift >= 0.0 {
+        rgb = vec3<f32>(1.0) - (vec3<f32>(1.0) - rgb) * (1.0 - lift);
+    } else {
+        rgb = rgb * (1.0 + lift);
+    }
+
+    // Tint blending (near-neutral for plain glass; carries accent for
+    // prominent buttons).
+    rgb = mix(rgb, tint_color.rgb, tint_color.a);
+
+    // Rim lighting: a crisp ~1.6px specular LINE exactly at the edge, lit
+    // from `light_dir` with a softer counter-reflection on the opposite arc
+    // (the double rim that makes iOS glass edges read as glass), plus a
+    // broad low-power sheen across the bezel toward the light.
+    let inward_normal = -outward_normal;
+    let light_dir = normalize(light_dir_in + tilt * 0.35 + vec2<f32>(0.0, 1e-4));
+    // Rim style (uniform 28, read above): 0 = surface glass (soft white
+    // spec), 1 = the interactive lens (THIN bright line, stronger dark
+    // outline — the chromatic fringe from the spectral taps does the color).
+    let edge_width = mix(1.6, 1.1, rim_style);
+    let edge_line = 1.0 - smoothstep(0.0, edge_width, abs(d) - 0.2);
+    let facing_light = max(dot(inward_normal, light_dir), 0.0);
+    let facing_away = max(dot(inward_normal, -light_dir), 0.0);
+    let spec_line = edge_line * (pow(facing_light, 1.4) + pow(facing_away, 2.0) * 0.45);
+    let sheen =
+        pow(max(1.0 - x_full, 0.0), 3.0) * (0.4 + 0.6 * facing_light) * sheen_strength;
+    // A faint dark contour just inside the bright line keeps the rim legible
+    // when the glass sits on a background as bright as the line itself.
+    let inner_contour = (1.0 - smoothstep(0.8, 4.0, -d)) * smoothstep(0.4, 1.4, -d);
+    // Dark line at the very rim (the lens outline in the reference toggle),
+    // strongest on the shadow side, under the bright specular arc.
+    let rim_dark = (1.0 - smoothstep(0.0, 1.3, abs(d))) * (0.6 + 0.4 * facing_away);
+    // The lens rim must be nearly invisible over uniform background — the
+    // dispersion fringe and displacement do the talking; only a whisper of
+    // specular reads on the lit arc.
+    let spec_gain = mix(0.85, 0.12, rim_style);
+    let rim_dark_gain = mix(0.16, 0.10, rim_style);
+    let contour_gain = 0.10 * mix(1.0, 0.5, rim_style);
+    rgb = rgb * (1.0 - inner_contour * contour_gain * highlight);
+    rgb = rgb * (1.0 - rim_dark * rim_dark_gain * highlight);
+    rgb = rgb + vec3<f32>((spec_line * spec_gain + sheen * 0.22) * highlight);
+
+    // Ordered-noise dither hides banding in the blurred gradients behind the
+    // glass (±0.5/255 at dither_amount = 1).
+    let dither = (hash12(coord) - 0.5) * (dither_amount / 255.0);
+    rgb = rgb + vec3<f32>(dither);
+
+    // Premultiplied output modulated by the shape coverage.
+    return vec4<f32>(rgb, alpha) * coverage;
 }

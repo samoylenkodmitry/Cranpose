@@ -122,6 +122,7 @@ fn normalized_scope(scope: &ShadowScope) -> Option<ShadowScope> {
         brush: scope.brush.clone(),
         alpha: scope.alpha.clamp(0.0, 1.0),
         blend_mode: scope.blend_mode,
+        cutout: scope.cutout,
     })
 }
 
@@ -157,8 +158,25 @@ fn build_drop_shadow_primitives(
         return Vec::new();
     };
 
+    // Knockout for translucent surfaces: erase the element's own (unoffset,
+    // unspread) shape from the silhouette so the blurred shadow exists only
+    // outside it — a backdrop-sampling material must not refract its own
+    // shadow.
+    let cutout = if scope.cutout {
+        let element_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: size.width,
+            height: size.height,
+        };
+        primitive_for_shape(shape, element_rect, Brush::solid(Color::BLACK)).map(Box::new)
+    } else {
+        None
+    };
+
     vec![DrawPrimitive::Shadow(ShadowPrimitive::Drop {
         shape: Box::new(shape_prim),
+        cutout,
         blur_radius: scope.radius,
         blend_mode: scope.blend_mode,
     })]

@@ -29,6 +29,8 @@ web-http = [
 uri-native = ["dep:open"]
 uri-android = ["dep:webbrowser"]
 uri-web = ["dep:web-sys"]
+# Zero-dependency desktop notifications (notify-send / osascript / PowerShell).
+notifier-native = []
 system-theme = []
 system-theme-web = ["dep:web-sys"]
 # Native desktop file/folder picker (rfd; xdg-portal surfaces GVFS/WebDAV mounts).
@@ -60,13 +62,18 @@ wasm-bindgen-futures = { version = "0.4.71", optional = true }
 rfd = { version = "0.17.2", default-features = false, optional = true }
 web-sys = { version = "0.3", features = [
     "Blob",
+    "BlobPropertyBag",
+    "Document",
+    "Element",
     "File",
     "FileList",
+    "HtmlElement",
     "MediaQueryList",
     "Request",
     "RequestInit",
     "RequestMode",
     "Response",
+    "Url",
     "Window",
 ], optional = true }
 

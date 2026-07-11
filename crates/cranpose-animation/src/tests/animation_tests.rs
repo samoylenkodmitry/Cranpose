@@ -366,3 +366,119 @@ fn tween_factory_creates_tween_animation_type() {
         AnimationType::Tween(AnimationSpec::tween(450, Easing::FastOutSlowInEasing))
     );
 }
+
+/// Drives an [`Animatable`] against a standalone composition's frame clock at
+/// ~60 FPS and samples the value after every frame. Returns (time_ns, value)
+/// pairs including the initial state at t=0.
+fn drive_spring(
+    animatable: &Animatable<f32>,
+    composition: &Composition<MemoryApplier>,
+    frames: usize,
+) -> Vec<(u64, f32)> {
+    let runtime = composition.runtime_handle();
+    let mut samples = vec![(0u64, animatable.state().get())];
+    let mut frame_time = 0u64;
+    for _ in 0..frames {
+        frame_time += 16_666_667;
+        runtime.drain_frame_callbacks(frame_time);
+        samples.push((frame_time, animatable.state().get()));
+    }
+    samples
+}
+
+#[test]
+fn spring_integrates_per_frame_delta_not_total_elapsed() {
+    let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+    let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());
+    animatable.animateTo(100.0, AnimationType::Spring(SpringSpec::default_spring()));
+
+    let samples = drive_spring(&animatable, &composition, 30);
+
+    // Critically damped, k=1500 (ω≈38.7): analytically x(50ms) ≈ 57.6 and
+    // x(100ms) ≈ 89.8. The old integrator re-simulated the TOTAL elapsed time
+    // every frame (compounding), reaching ≈90+ by the third frame.
+    let at_50ms = samples
+        .iter()
+        .find(|(t, _)| *t >= 50_000_000)
+        .expect("sample at 50ms")
+        .1;
+    assert!(
+        (30.0..=75.0).contains(&at_50ms),
+        "critically damped spring at 50ms should be mid-flight (analytic ≈57.6), got {at_50ms}"
+    );
+
+    let last = samples.last().expect("samples").1;
+    assert!(
+        (last - 100.0).abs() < 0.5,
+        "spring should settle at the target, got {last}"
+    );
+}
+
+#[test]
+fn spring_retarget_preserves_value_space_velocity() {
+    // A soft spring (ω = √50 ≈ 7 rad/s) keeps its momentum phase long enough
+    // to observe across whole frames after the retarget.
+    let soft = SpringSpec::new(1.0, 50.0);
+    let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+    let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());
+    animatable.animateTo(100.0, AnimationType::Spring(soft));
+
+    drive_spring(&animatable, &composition, 4);
+    let velocity_before = animatable.velocity();
+    assert!(
+        velocity_before > 100.0,
+        "mid-flight spring should carry substantial velocity, got {velocity_before}"
+    );
+
+    // Retarget mid-flight: the physical velocity must carry over exactly.
+    animatable.animateTo(-50.0, AnimationType::Spring(soft));
+    let velocity_after = animatable.velocity();
+    assert_eq!(
+        velocity_before, velocity_after,
+        "retargeting must not rescale the in-flight velocity"
+    );
+
+    // With positive carried velocity the value keeps rising briefly even
+    // though the new target lies below — the droplet overshoot that makes
+    // interrupted springs feel physical.
+    let value_at_retarget = animatable.state().get();
+    let runtime = composition.runtime_handle();
+    runtime.drain_frame_callbacks(5 * 16_666_667);
+    runtime.drain_frame_callbacks(6 * 16_666_667);
+    let value_after = animatable.state().get();
+    assert!(
+        value_after > value_at_retarget,
+        "carried velocity should keep the value moving in its direction first \
+         ({value_at_retarget} -> {value_after})"
+    );
+}
+
+#[test]
+fn animate_to_with_velocity_seeds_gesture_handoff() {
+    let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+    let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());
+
+    // Fling released at 800 units/sec toward a spring anchored at 0: the value
+    // must first travel past the anchor (analytic peak v₀/(ω·e) ≈ 20.8 for
+    // ω = √200), then be pulled back.
+    animatable.animate_to_with_velocity(
+        0.0,
+        800.0,
+        AnimationType::Spring(SpringSpec::new(1.0, 200.0)),
+    );
+
+    let samples = drive_spring(&animatable, &composition, 90);
+    let peak = samples
+        .iter()
+        .map(|(_, value)| *value)
+        .fold(f32::MIN, f32::max);
+    assert!(
+        peak > 15.0,
+        "seeded velocity should carry the value away from the anchor, peak {peak}"
+    );
+    let last = samples.last().expect("samples").1;
+    assert!(
+        last.abs() < 0.5,
+        "spring should return to the anchor, got {last}"
+    );
+}

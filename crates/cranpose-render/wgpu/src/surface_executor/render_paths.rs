@@ -571,6 +571,14 @@ fn axis_aligned_backdrop_snapshot_copy_plan(
     })
 }
 
+/// Env-gated backdrop composite diagnostics (`CRANPOSE_BACKDROP_DIAG=1`):
+/// prints capture/scissor/padding decisions per backdrop layer to stderr —
+/// works in release binaries without a logger.
+fn backdrop_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_BACKDROP_DIAG").is_some())
+}
+
 fn backdrop_capture_rect(
     effect_rect: Rect,
     clip: Option<Rect>,
@@ -578,7 +586,43 @@ fn backdrop_capture_rect(
     root_scale: f32,
     target_size: (u32, u32),
 ) -> Rect {
-    let padding = effect.input_padding();
+    // The capture must cover both the sampling reach (input padding) and
+    // everywhere the effect writes (output padding) — the shader needs real
+    // backdrop texels under every pixel it produces.
+    let padding = effect.input_padding().max(effect.output_padding());
+    if !padding.is_finite() || padding <= 0.0 || !root_scale.is_finite() || root_scale <= 0.0 {
+        return effect_rect;
+    }
+
+    let expanded = Rect {
+        x: effect_rect.x - padding,
+        y: effect_rect.y - padding,
+        width: effect_rect.width + padding * 2.0,
+        height: effect_rect.height + padding * 2.0,
+    };
+    let viewport = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: target_size.0 as f32 / root_scale,
+        height: target_size.1 as f32 / root_scale,
+    };
+    let clipped = expanded.intersect(viewport).unwrap_or(effect_rect);
+    clip.and_then(|clip| clipped.intersect(clip))
+        .unwrap_or(clipped)
+}
+
+/// Where a backdrop effect may WRITE: the tight rect widened by the effect's
+/// declared output padding (SDF coverage past node bounds — rim glow, wobble,
+/// glued neighbor shapes), still clipped to the viewport and the layer clip.
+/// The composite scissor derives from this instead of the tight rect.
+fn backdrop_output_rect(
+    effect_rect: Rect,
+    clip: Option<Rect>,
+    effect: &RenderEffect,
+    root_scale: f32,
+    target_size: (u32, u32),
+) -> Rect {
+    let padding = effect.output_padding();
     if !padding.is_finite() || padding <= 0.0 || !root_scale.is_finite() || root_scale <= 0.0 {
         return effect_rect;
     }
@@ -2237,6 +2281,7 @@ fn hash_retained_render_effect<H: Hasher>(effect: &RenderEffect, state: &mut H) 
             2u8.hash(state);
             shader.source_hash().hash(state);
             hash_f32_bits(shader.input_padding(), state);
+            hash_f32_bits(shader.output_padding(), state);
             shader.uniforms().len().hash(state);
             for uniform in shader.uniforms() {
                 hash_f32_bits(*uniform, state);
@@ -4411,11 +4456,32 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     root_scale: f32,
     input_content_hash: Option<u64>,
 ) -> Result<Option<PreparedBackdropComposite>, String> {
+    let diag = backdrop_diag_enabled();
     let Some(visible_rect) = visible_layer_rect(layer.rect, layer.clip, root_scale, width, height)
     else {
+        if diag {
+            eprintln!(
+                "[backdrop-diag] prepare SKIP: no visible rect for {:?}",
+                layer.rect
+            );
+        }
         return Ok(None);
     };
-    let Some(scissor) = scissor_rect_for_rect(visible_rect, root_scale, width, height) else {
+    let Some(scissor) = scissor_rect_for_rect(
+        backdrop_output_rect(
+            visible_rect,
+            layer.clip,
+            &layer.effect,
+            root_scale,
+            (width, height),
+        ),
+        root_scale,
+        width,
+        height,
+    ) else {
+        if diag {
+            eprintln!("[backdrop-diag] prepare SKIP: empty scissor for {visible_rect:?}");
+        }
         return Ok(None);
     };
     let capture_rect = backdrop_capture_rect(
@@ -4425,6 +4491,14 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
         root_scale,
         (width, height),
     );
+    if diag {
+        eprintln!(
+            "[backdrop-diag] prepare node={:?} visible={visible_rect:?} capture={capture_rect:?} scissor={scissor:?} in_pad={} out_pad={}",
+            layer.node_id,
+            layer.effect.input_padding(),
+            layer.effect.output_padding(),
+        );
+    }
     let backdrop_scale = clamp_effect_surface_scale(
         capture_rect,
         root_scale,
@@ -4488,6 +4562,16 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
         }
 
         let effect_target = backend.acquire_retained_surface(backdrop_width, backdrop_height);
+        if diag {
+            eprintln!(
+                "[backdrop-diag] prepare MISS copied={} plan={:?} backdrop_size=({},{}) scale={}",
+                copied_snapshot,
+                copy_plan.map(|plan| (plan.source_origin, plan.size, plan.effect_pixel_rect)),
+                backdrop_width,
+                backdrop_height,
+                backdrop_scale,
+            );
+        }
         materialize_render_effect_to_target(
             backend,
             &snapshot,
@@ -4542,6 +4626,16 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
     root_scale: f32,
     input_content_hash: Option<u64>,
 ) -> Result<(), String> {
+    if backdrop_diag_enabled() {
+        eprintln!(
+            "[backdrop-diag] apply rect={:?} clip={:?} in_pad={} out_pad={} hash={:?}",
+            layer.rect,
+            layer.clip,
+            layer.effect.input_padding(),
+            layer.effect.output_padding(),
+            input_content_hash.is_some()
+        );
+    }
     if let Some(prepared) = prepare_cached_backdrop_layer_composite(
         backend,
         target,
@@ -4552,6 +4646,12 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
         root_scale,
         input_content_hash,
     )? {
+        if backdrop_diag_enabled() {
+            eprintln!(
+                "[backdrop-diag] cached path dest_quad={:?} scissor={:?}",
+                prepared.dest_quad, prepared.scissor
+            );
+        }
         composite_layer_surface_to_view(
             backend,
             &prepared.surface,
@@ -4567,11 +4667,40 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
 
     let Some(visible_rect) = visible_layer_rect(layer.rect, layer.clip, root_scale, width, height)
     else {
+        if backdrop_diag_enabled() {
+            eprintln!("[backdrop-diag] SKIP: no visible rect");
+        }
         return Ok(());
     };
-    let Some(scissor) = scissor_rect_for_rect(visible_rect, root_scale, width, height) else {
+    let Some(scissor) = scissor_rect_for_rect(
+        backdrop_output_rect(
+            visible_rect,
+            layer.clip,
+            &layer.effect,
+            root_scale,
+            (width, height),
+        ),
+        root_scale,
+        width,
+        height,
+    ) else {
+        if backdrop_diag_enabled() {
+            eprintln!("[backdrop-diag] SKIP: empty scissor");
+        }
         return Ok(());
     };
+    if backdrop_diag_enabled() {
+        eprintln!(
+            "[backdrop-diag] uncached visible={visible_rect:?} scissor={scissor:?} capture={:?}",
+            backdrop_capture_rect(
+                visible_rect,
+                layer.clip,
+                &layer.effect,
+                root_scale,
+                (width, height),
+            )
+        );
+    }
     let capture_rect = backdrop_capture_rect(
         visible_rect,
         layer.clip,

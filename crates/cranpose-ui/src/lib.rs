@@ -132,7 +132,7 @@ pub use render_state::{
     AppContextScope,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
-pub use scroll::{ScrollElement, ScrollNode, ScrollState};
+pub use scroll::{ScrollElement, ScrollNode, ScrollSettlePolicy, ScrollState};
 pub use zoom::ZoomState;
 // Test utilities for fling velocity verification (only with test-helpers feature)
 #[cfg(feature = "test-helpers")]

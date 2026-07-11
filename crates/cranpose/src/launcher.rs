@@ -573,12 +573,7 @@ impl AppLauncher {
         not(target_os = "android")
     ))]
     pub fn try_run(self, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
-        let mut content = content;
-        crate::desktop::try_run(self.settings, move || {
-            crate::ProvideUriHandler(|| {
-                content();
-            });
-        })
+        crate::desktop::try_run(self.settings, content)
     }
 
     /// Run the application (Desktop platform).
@@ -632,12 +627,7 @@ impl AppLauncher {
     /// * `content` - The root composable function of your application.
     #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
     pub fn try_run(self, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
-        let mut content = content;
-        crate::ios::try_run(self.settings, move || {
-            crate::ProvideUriHandler(|| {
-                content();
-            });
-        })
+        crate::ios::try_run(self.settings, content)
     }
 
     /// Run the application (iOS platform).
@@ -658,12 +648,7 @@ impl AppLauncher {
     /// * `content` - The root composable function of your application.
     #[cfg(all(feature = "android", target_os = "android"))]
     pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
-        let mut content = content;
-        crate::android::run(app, self.settings, move || {
-            crate::ProvideUriHandler(|| {
-                content();
-            });
-        });
+        crate::android::run(app, self.settings, content);
     }
 
     /// Run the application (Web platform).
@@ -684,13 +669,7 @@ impl AppLauncher {
         canvas_id: &str,
         content: impl FnMut() + 'static,
     ) -> Result<(), wasm_bindgen::JsValue> {
-        let mut content = content;
-        crate::web::run(canvas_id, self.settings, move || {
-            crate::ProvideUriHandler(|| {
-                content();
-            });
-        })
-        .await
+        crate::web::run(canvas_id, self.settings, content).await
     }
 }
 

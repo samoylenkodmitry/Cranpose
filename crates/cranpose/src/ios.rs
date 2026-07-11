@@ -13,11 +13,10 @@
 use crate::launcher::{AppSettings, LaunchError};
 use crate::wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame};
 use cranpose_app_shell::{default_root_key, AppShell, PointerSource};
-use cranpose_core::CompositionLocalProvider;
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
-use cranpose_ui::{local_ime_insets, local_safe_area_insets, EdgeInsets};
-use std::cell::{Cell, RefCell};
+use cranpose_ui::EdgeInsets;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
@@ -63,14 +62,14 @@ struct IosApp<F: FnMut() + 'static> {
     gpu: Option<GpuResources>,
     shell: Option<AppShell<WgpuRenderer>>,
     platform: DesktopWinitPlatform,
-    /// System safe-area insets (logical pixels) published to composition through
-    /// [`local_safe_area_insets`]. Shared with the content closure so rotation
-    /// and notch changes flow to the UI without rebuilding the shell.
-    safe_area: Rc<Cell<EdgeInsets>>,
-    /// Soft-keyboard bottom inset (logical pixels) published through
-    /// [`cranpose_ui::local_ime_insets`], updated from UIKit keyboard-frame
-    /// notifications so content scrolls clear of the keyboard.
-    keyboard_insets: Rc<Cell<EdgeInsets>>,
+    /// Live platform environment (safe-area/IME insets, system theme) provided
+    /// to composition by the root wrapper. Shared with the content closure so
+    /// rotation, notch, keyboard, and appearance changes flow to the UI
+    /// without rebuilding the shell.
+    platform_env: Rc<crate::platform_env::PlatformEnvironment>,
+    /// Last keyboard bottom inset polled from the layout guide; dampens
+    /// sub-pixel churn before publishing into the environment.
+    last_keyboard_bottom: f32,
     /// Wakes the event loop for runtime-driven frames (animations, async work).
     event_proxy: EventLoopProxy,
     launch_error: Rc<RefCell<Option<LaunchError>>>,
@@ -90,8 +89,8 @@ impl<F: FnMut() + 'static> IosApp<F> {
             gpu: None,
             shell: None,
             platform: DesktopWinitPlatform::default(),
-            safe_area: Rc::new(Cell::new(EdgeInsets::default())),
-            keyboard_insets: Rc::new(Cell::new(EdgeInsets::default())),
+            platform_env: crate::platform_env::PlatformEnvironment::new(),
+            last_keyboard_bottom: 0.0,
             event_proxy,
             launch_error,
         }
@@ -103,9 +102,21 @@ impl<F: FnMut() + 'static> IosApp<F> {
         event_loop.exit();
     }
 
-    /// Refreshes the published safe-area insets from the live window.
-    fn refresh_safe_area(&self, window: &Arc<dyn Window>) {
-        self.safe_area.set(safe_area_insets(window));
+    /// Refreshes the published safe-area insets and system theme from the live
+    /// window, forcing a root render when either changed.
+    fn refresh_environment(&mut self, window: &Arc<dyn Window>) {
+        let mut changed = self.platform_env.set_safe_area(safe_area_insets(window));
+        if let Some(theme) = window.theme() {
+            changed |= self.platform_env.set_system_theme(match theme {
+                winit::window::Theme::Dark => cranpose_services::SystemTheme::Dark,
+                winit::window::Theme::Light => cranpose_services::SystemTheme::Light,
+            });
+        }
+        if changed {
+            if let Some(shell) = self.shell.as_mut() {
+                shell.request_root_render();
+            }
+        }
     }
 
     /// Reconfigures the swapchain to the current surface size and density and
@@ -142,10 +153,12 @@ impl<F: FnMut() + 'static> IosApp<F> {
         let mut ime_changed = false;
         if crate::ios_keyboard::keyboard_poll_active() {
             if let Some(bottom) = crate::ios_keyboard::poll_keyboard_bottom_inset() {
-                let mut insets = self.keyboard_insets.get();
-                if (insets.bottom - bottom).abs() > 0.5 {
-                    insets.bottom = bottom;
-                    self.keyboard_insets.set(insets);
+                if (self.last_keyboard_bottom - bottom).abs() > 0.5 {
+                    self.last_keyboard_bottom = bottom;
+                    self.platform_env.set_ime_insets(EdgeInsets {
+                        bottom,
+                        ..EdgeInsets::default()
+                    });
                     ime_changed = true;
                 }
             }
@@ -299,7 +312,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         let scale_factor = window.scale_factor();
         let density = (scale_factor as f32).max(f32::EPSILON);
         self.platform.set_scale_factor(scale_factor);
-        self.refresh_safe_area(&window);
+        self.refresh_environment(&window);
 
         let fonts: &[&[u8]] = self.settings.fonts.unwrap_or(&[]);
         let mut renderer = WgpuRenderer::new(fonts);
@@ -316,21 +329,12 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             return;
         };
         let content_for_shell = Rc::clone(&content);
-        let safe_area_for_shell = Rc::clone(&self.safe_area);
-        let keyboard_insets_for_shell = Rc::clone(&self.keyboard_insets);
+        let env_for_shell = Rc::clone(&self.platform_env);
         let mut shell = AppShell::new_with_size_and_density(
             renderer,
             default_root_key(),
             move || {
-                let insets = safe_area_for_shell.get();
-                let ime = keyboard_insets_for_shell.get();
-                CompositionLocalProvider(
-                    vec![
-                        local_safe_area_insets().provides(insets),
-                        local_ime_insets().provides(ime),
-                    ],
-                    || content_for_shell.borrow_mut()(),
-                );
+                env_for_shell.compose_root(|| content_for_shell.borrow_mut()());
             },
             (width, height),
             (width as f32 / density, height as f32 / density),
@@ -391,13 +395,13 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         match event {
             WindowEvent::SurfaceResized(size) if size.width > 0 && size.height > 0 => {
                 self.reconfigure(size.width, size.height, window.scale_factor());
-                self.refresh_safe_area(&window);
+                self.refresh_environment(&window);
                 window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 let size = window.surface_size();
                 self.reconfigure(size.width, size.height, window.scale_factor());
-                self.refresh_safe_area(&window);
+                self.refresh_environment(&window);
                 window.request_redraw();
             }
             WindowEvent::PointerMoved {
@@ -474,12 +478,7 @@ fn ios_surface_config(
     height: u32,
 ) -> Result<wgpu::SurfaceConfiguration, LaunchError> {
     let caps = surface.get_capabilities(adapter);
-    let format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|format| format.is_srgb())
-        .or_else(|| caps.formats.first().copied())
+    let format = crate::surface_format::select_display_surface_format(&caps.formats)
         .ok_or(LaunchError::NoSurfaceFormat)?;
     let alpha_mode = caps
         .alpha_modes

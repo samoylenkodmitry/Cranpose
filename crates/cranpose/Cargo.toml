@@ -48,10 +48,17 @@ desktop-wayland = [
 ]
 # Internal: the winit desktop shell shared by the per-backend features. Use
 # desktop / desktop-x11 / desktop-wayland instead of enabling this directly.
+# Enables the desktop service backends (URI opener, file picker, system
+# theme) so apps get working services without re-listing cranpose-services
+# features themselves.
 desktop-shell = [
     "cranpose-app-shell/clipboard-native",
     "cranpose-platform-desktop-winit",
     "dep:winit",
+    "cranpose-services/uri-native",
+    "cranpose-services/file-picker-native",
+    "cranpose-services/system-theme",
+    "cranpose-services/notifier-native",
 ]
 ios = [
     "cranpose-platform-desktop-winit",
@@ -71,8 +78,17 @@ ios = [
 android = [
     "cranpose-platform-android",
     "cranpose-render-wgpu?/backend-gles",
+    "cranpose-services/uri-android",
 ]
-web = ["cranpose-platform-web", "dep:wasm-bindgen", "dep:web-sys"]
+web = [
+    "cranpose-platform-web",
+    "dep:wasm-bindgen",
+    "dep:web-sys",
+    "dep:js-sys",
+    "cranpose-services/uri-web",
+    "cranpose-services/file-picker-web",
+    "cranpose-services/system-theme-web",
+]
 renderer-pixels = ["cranpose-render-pixels"]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
 # App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
@@ -118,8 +134,21 @@ web-sys = { version = "0.3", optional = true, features = [
     "CompositionEvent",
     "HtmlTextAreaElement",
     "Node",
+    # System theme (prefers-color-scheme live updates)
+    "MediaQueryList",
+    "MediaQueryListEvent",
+    # Web Share API
+    "ShareData",
+    "File",
+    "FilePropertyBag",
+    # Notifications API
+    "Notification",
+    "NotificationOptions",
+    "NotificationPermission",
 ] }
+js-sys = { version = "0.3", optional = true }
 log = "0.4"
+cranpose-liquid = { workspace = true }
 cranpose-services = { workspace = true, default-features = false }
 thiserror = "2.0.18"
 web-time = { workspace = true }

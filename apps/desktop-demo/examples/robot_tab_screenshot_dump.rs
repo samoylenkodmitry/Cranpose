@@ -128,6 +128,7 @@ fn tab_slug(tab: DemoTab) -> &'static str {
         DemoTab::Shaders => "shaders",
         DemoTab::ShaderRect => "shader-rect",
         DemoTab::MarkdownViewer => "markdown-viewer",
+        DemoTab::Liquid => "liquid-ui",
         DemoTab::FilePicker => "file-picker",
     }
 }

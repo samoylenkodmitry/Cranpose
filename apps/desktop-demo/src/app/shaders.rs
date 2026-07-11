@@ -1502,6 +1502,7 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                                     )),
                                     alpha: 0.65,
                                     blend_mode: BlendMode::SrcOver,
+                                    cutout: false,
                                 },
                             )
                             .background(Color(0.16, 0.68, 0.95, 1.0))

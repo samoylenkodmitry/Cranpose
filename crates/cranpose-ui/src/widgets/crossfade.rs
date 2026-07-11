@@ -8,8 +8,8 @@
 use crate::composable;
 use crate::modifier::{GraphicsLayer, Modifier};
 use crate::widgets::box_widget::{Box, BoxSpec};
-use cranpose_animation::{Animatable, AnimationType};
-use cranpose_core::{remember, with_current_composer, Owned, State};
+use cranpose_animation::AnimationType;
+use cranpose_core::{remember, State};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -18,29 +18,14 @@ use std::rc::Rc;
 const CROSSFADE_ALPHA_EPSILON: f32 = 0.001;
 
 /// Animate a float towards `target`, starting from `initial` when the value
-/// is first composed.
-///
-/// This is `animateFloatAsState` with an explicit initial value, which lets
-/// newly appearing transition content fade in from 0 instead of snapping to
-/// its target. Internal building block for [`Crossfade`] and
-/// `AnimatedVisibility`.
+/// is first composed. Thin alias over
+/// [`cranpose_animation::animate_float_as_state_with_initial`].
 pub(crate) fn animate_float_with_initial(
     initial: f32,
     target: f32,
     animation: AnimationType,
 ) -> State<f32> {
-    with_current_composer(|composer| {
-        let runtime = composer.runtime_handle();
-        let anim: Owned<Animatable<f32>> = composer.remember(|| Animatable::new(initial, runtime));
-        anim.update(|animatable| {
-            let is_new_target = (animatable.target() - target).abs() > f32::EPSILON;
-            let is_new_animation = animatable.animation_type() != animation;
-            if is_new_target || is_new_animation {
-                animatable.animateTo(target, animation);
-            }
-        });
-        anim.with(|animatable| animatable.state())
-    })
+    cranpose_animation::animate_float_as_state_with_initial(initial, target, animation, "crossfade")
 }
 
 struct CrossfadeEntry<T> {

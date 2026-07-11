@@ -35,40 +35,97 @@ impl Lerp for f64 {
     }
 }
 
-/// Trait for values that can participate in spring animations.
+/// Values springs can animate: fixed-dimension float vectors (at most
+/// [`SPRING_MAX_DIMENSIONS`]), mirroring Compose's `AnimationVector1D..4D`.
+///
+/// The spring integrates each dimension independently **in value space** —
+/// velocity is expressed in value units per second — so retargeting an
+/// animation mid-flight keeps the physical velocity (no hitch), and gestures
+/// can hand their release velocity to [`Animatable::animate_to_with_velocity`].
 pub trait SpringScalar: Lerp + Clone {
-    /// Convert the value to `f32` for physics calculations.
-    fn to_f32(&self) -> f32;
+    /// Number of animated dimensions (1..=4).
+    const DIMENSIONS: usize;
 
-    /// Compute the current progress between the start and target values.
-    fn spring_progress(start: &Self, target: &Self, current: &Self) -> f32 {
-        let start_val = start.to_f32();
-        let target_val = target.to_f32();
-        let current_val = current.to_f32();
+    /// Reads dimension `index` (`index < Self::DIMENSIONS`).
+    fn dimension(&self, index: usize) -> f32;
 
-        if (target_val - start_val).abs() < f32::EPSILON {
-            1.0
-        } else {
-            (current_val - start_val) / (target_val - start_val)
-        }
-    }
+    /// Rebuilds a value from per-dimension floats (indices beyond
+    /// [`Self::DIMENSIONS`] are ignored).
+    fn from_dimensions(dimensions: [f32; SPRING_MAX_DIMENSIONS]) -> Self;
+}
 
-    /// Determine whether the current value is close enough to the target to
-    /// consider the spring finished.
-    fn is_near_target(current: &Self, target: &Self, threshold: f32) -> bool {
-        (current.to_f32() - target.to_f32()).abs() < threshold
+/// Upper bound on [`SpringScalar::DIMENSIONS`].
+pub const SPRING_MAX_DIMENSIONS: usize = 4;
+
+/// Advances one damped-harmonic-oscillator dimension by `dt` seconds using the
+/// closed-form solution for unit mass (`ω = √stiffness`, damping `c = 2ζω`).
+/// Returns the new `(value, velocity)`; exact for any `dt`, so springs stay
+/// correct across dropped frames and long pauses.
+pub fn advance_spring(
+    value: f32,
+    velocity: f32,
+    target: f32,
+    damping_ratio: f32,
+    stiffness: f32,
+    dt: f32,
+) -> (f32, f32) {
+    let omega = stiffness.max(f32::EPSILON).sqrt();
+    let zeta = damping_ratio.max(0.0);
+    let displacement = value - target;
+
+    if (zeta - 1.0).abs() < 1e-4 {
+        // Critically damped: x(t) = (c1 + c2·t)·e^(−ωt)
+        let c1 = displacement;
+        let c2 = velocity + omega * displacement;
+        let decay = (-omega * dt).exp();
+        let next_displacement = (c1 + c2 * dt) * decay;
+        let next_velocity = (c2 - omega * (c1 + c2 * dt)) * decay;
+        (target + next_displacement, next_velocity)
+    } else if zeta < 1.0 {
+        // Underdamped: decaying oscillation at ω_d = ω·√(1−ζ²).
+        let omega_d = omega * (1.0 - zeta * zeta).sqrt();
+        let decay = (-zeta * omega * dt).exp();
+        let (sin, cos) = (omega_d * dt).sin_cos();
+        let a = displacement;
+        let b = (velocity + zeta * omega * displacement) / omega_d;
+        let next_displacement = decay * (a * cos + b * sin);
+        let next_velocity = decay
+            * ((b * omega_d - a * zeta * omega) * cos - (a * omega_d + b * zeta * omega) * sin);
+        (target + next_displacement, next_velocity)
+    } else {
+        // Overdamped: sum of two decaying exponentials.
+        let root = (zeta * zeta - 1.0).sqrt();
+        let r1 = -omega * (zeta - root);
+        let r2 = -omega * (zeta + root);
+        let c2 = (velocity - r1 * displacement) / (r2 - r1);
+        let c1 = displacement - c2;
+        let e1 = (r1 * dt).exp();
+        let e2 = (r2 * dt).exp();
+        (target + c1 * e1 + c2 * e2, c1 * r1 * e1 + c2 * r2 * e2)
     }
 }
 
 impl SpringScalar for f32 {
-    fn to_f32(&self) -> f32 {
+    const DIMENSIONS: usize = 1;
+
+    fn dimension(&self, _index: usize) -> f32 {
         *self
+    }
+
+    fn from_dimensions(dimensions: [f32; SPRING_MAX_DIMENSIONS]) -> Self {
+        dimensions[0]
     }
 }
 
 impl SpringScalar for f64 {
-    fn to_f32(&self) -> f32 {
+    const DIMENSIONS: usize = 1;
+
+    fn dimension(&self, _index: usize) -> f32 {
         *self as f32
+    }
+
+    fn from_dimensions(dimensions: [f32; SPRING_MAX_DIMENSIONS]) -> Self {
+        f64::from(dimensions[0])
     }
 }
 
@@ -299,8 +356,8 @@ impl SpringSpec {
         Self {
             damping_ratio,
             stiffness,
-            velocity_threshold: 0.01,
-            position_threshold: 0.001,
+            velocity_threshold: 0.1,
+            position_threshold: 0.01,
         }
     }
 
@@ -309,8 +366,8 @@ impl SpringSpec {
         Self {
             damping_ratio: 1.0,
             stiffness: 1500.0,
-            velocity_threshold: 0.01,
-            position_threshold: 0.001,
+            velocity_threshold: 0.1,
+            position_threshold: 0.01,
         }
     }
 
@@ -319,8 +376,8 @@ impl SpringSpec {
         Self {
             damping_ratio: 0.5,
             stiffness: 1500.0,
-            velocity_threshold: 0.01,
-            position_threshold: 0.001,
+            velocity_threshold: 0.1,
+            position_threshold: 0.01,
         }
     }
 
@@ -329,8 +386,8 @@ impl SpringSpec {
         Self {
             damping_ratio: 1.0,
             stiffness: 3000.0,
-            velocity_threshold: 0.01,
-            position_threshold: 0.001,
+            velocity_threshold: 0.1,
+            position_threshold: 0.01,
         }
     }
 }
@@ -677,11 +734,16 @@ struct AnimatableInner<T: SpringScalar + 'static> {
     state: OwnedMutableState<T>,
     runtime: RuntimeHandle,
     current: T,
-    velocity: f32,
+    /// Per-dimension velocity in value units per second. Preserved across
+    /// retargets so interrupted springs keep their physical motion.
+    velocity: [f32; SPRING_MAX_DIMENSIONS],
     start: T,
     target: T,
     animation_type: AnimationType,
     start_time_nanos: Option<u64>,
+    /// Previous spring frame timestamp; springs integrate the inter-frame
+    /// delta (tweens use `start_time_nanos` progress instead).
+    last_frame_nanos: Option<u64>,
     registration: Option<FrameCallbackRegistration>,
 }
 
@@ -692,11 +754,12 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             state: OwnedMutableState::with_runtime(initial.clone(), runtime.clone()),
             runtime,
             current: initial.clone(),
-            velocity: 0.0,
+            velocity: [0.0; SPRING_MAX_DIMENSIONS],
             start: initial.clone(),
             target: initial,
             animation_type: AnimationType::default(),
             start_time_nanos: None,
+            last_frame_nanos: None,
             registration: None,
         };
         Self {
@@ -705,8 +768,11 @@ impl<T: SpringScalar + 'static> Animatable<T> {
     }
 
     /// Animate to the target value using the specified animation.
+    ///
+    /// Retargeting mid-flight keeps the in-flight velocity (springs continue
+    /// their physical motion toward the new target).
     pub fn animateTo(&mut self, target: T, animation: AnimationType) {
-        let should_schedule = {
+        {
             let mut inner = self.inner.borrow_mut();
 
             // Cancel existing animation
@@ -718,13 +784,28 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             inner.target = target;
             inner.animation_type = animation;
             inner.start_time_nanos = None;
-
-            true // Always schedule for now
-        };
-
-        if should_schedule {
-            Self::schedule_frame(&self.inner);
+            inner.last_frame_nanos = None;
         }
+
+        Self::schedule_frame(&self.inner);
+    }
+
+    /// Animate to `target`, seeding the spring with `velocity` (value units
+    /// per second, per dimension) — the gesture-handoff entry point: pass the
+    /// release velocity so the animation continues the finger's motion.
+    pub fn animate_to_with_velocity(&mut self, target: T, velocity: T, animation: AnimationType) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            for index in 0..T::DIMENSIONS.min(SPRING_MAX_DIMENSIONS) {
+                inner.velocity[index] = velocity.dimension(index);
+            }
+        }
+        self.animateTo(target, animation);
+    }
+
+    /// The current velocity in value units per second (zero when settled).
+    pub fn velocity(&self) -> T {
+        T::from_dimensions(self.inner.borrow().velocity)
     }
 
     /// Return the current animation target.
@@ -752,6 +833,8 @@ impl<T: SpringScalar + 'static> Animatable<T> {
         inner.start = target.clone();
         inner.target = target.clone();
         inner.start_time_nanos = None;
+        inner.last_frame_nanos = None;
+        inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
         inner.state.set_value(target);
     }
 
@@ -809,67 +892,51 @@ impl<T: SpringScalar + 'static> Animatable<T> {
                     }
                 }
                 AnimationType::Spring(spec) => {
-                    // Implement spring physics using damped harmonic oscillator
-                    let start_time = inner.start_time_nanos.get_or_insert(frame_time_nanos);
-                    let elapsed_nanos = frame_time_nanos.saturating_sub(*start_time);
-                    let dt = elapsed_nanos as f32 / 1_000_000_000.0; // Convert to seconds
+                    // Damped harmonic oscillator advanced per dimension in
+                    // VALUE space using the closed-form solution (exact for
+                    // any frame delta — no integration drift at low frame
+                    // rates). Velocity carries across frames and retargets.
+                    let last = inner.last_frame_nanos.replace(frame_time_nanos);
+                    let dt = last
+                        .map(|last| frame_time_nanos.saturating_sub(last) as f32 / 1_000_000_000.0)
+                        .unwrap_or(0.0);
 
-                    // SpringScalar ensures we have scalar values that support the
-                    // physics calculations below (currently f32 and f64).
-                    if dt == 0.0 {
+                    if dt <= 0.0 {
                         schedule_next = true;
                     } else {
-                        // Spring physics calculations
-                        // Using semi-implicit Euler integration for stability
-                        let stiffness = spec.stiffness;
-                        let damping = 2.0 * spec.damping_ratio * stiffness.sqrt();
-
-                        // Simulate spring from last frame to current frame
-                        let mut prev_time = 0.0f32;
-                        let timestep: f32 = 0.016; // ~60fps timestep for stability
-
-                        while prev_time < dt {
-                            let step = timestep.min(dt - prev_time);
-
-                            // Spring force: F = -k * displacement - damping * velocity
-                            // For interpolation between start and target:
-                            // We treat position as progress from 0 to 1
-                            let current_progress = <T as SpringScalar>::spring_progress(
-                                &inner.start,
-                                &inner.target,
-                                &inner.current,
+                        let dimensions = T::DIMENSIONS.min(SPRING_MAX_DIMENSIONS);
+                        let mut position = [0.0f32; SPRING_MAX_DIMENSIONS];
+                        for (index, slot) in position.iter_mut().enumerate().take(dimensions) {
+                            let value = inner.current.dimension(index);
+                            let target = inner.target.dimension(index);
+                            let (next_value, next_velocity) = advance_spring(
+                                value,
+                                inner.velocity[index],
+                                target,
+                                spec.damping_ratio,
+                                spec.stiffness,
+                                dt,
                             );
-
-                            let displacement = current_progress - 1.0; // Target is at 1.0
-                            let spring_force = -stiffness * displacement - damping * inner.velocity;
-
-                            // Update velocity and position
-                            inner.velocity += spring_force * step;
-                            let new_progress = current_progress + inner.velocity * step;
-
-                            // Update current value
-                            inner.current = inner
-                                .start
-                                .lerp(&inner.target, new_progress.clamp(0.0, 2.0));
-
-                            prev_time += step;
+                            *slot = next_value;
+                            inner.velocity[index] = next_velocity;
                         }
 
+                        inner.current = T::from_dimensions(position);
                         inner.state.set_value(inner.current.clone());
 
-                        // Check if we've settled (velocity and displacement both small)
-                        let at_rest = inner.velocity.abs() < spec.velocity_threshold;
-                        let near_target = <T as SpringScalar>::is_near_target(
-                            &inner.current,
-                            &inner.target,
-                            spec.position_threshold,
-                        );
+                        // Settled when every dimension is at rest near the target.
+                        let settled = (0..dimensions).all(|index| {
+                            inner.velocity[index].abs() < spec.velocity_threshold
+                                && (position[index] - inner.target.dimension(index)).abs()
+                                    < spec.position_threshold
+                        });
 
-                        if at_rest && near_target {
+                        if settled {
                             inner.current = inner.target.clone();
                             inner.start = inner.target.clone();
                             inner.start_time_nanos = None;
-                            inner.velocity = 0.0;
+                            inner.last_frame_nanos = None;
+                            inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
                             inner.state.set_value(inner.target.clone());
                         } else {
                             schedule_next = true;
@@ -883,6 +950,32 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             Self::schedule_frame(this);
         }
     }
+}
+
+/// [`animateFloatAsState`] with an explicit initial value: the first
+/// composition seeds the animation at `initial` and animates toward `target`,
+/// so newly appearing content can enter from 0 instead of snapping. The
+/// building block for enter transitions (`Crossfade`, `AnimatedVisibility`,
+/// morphing popups).
+pub fn animate_float_as_state_with_initial(
+    initial: f32,
+    target: f32,
+    animation: AnimationType,
+    label: &str,
+) -> State<f32> {
+    let _ = label;
+    with_current_composer(|composer| {
+        let runtime = composer.runtime_handle();
+        let anim: Owned<Animatable<f32>> = composer.remember(|| Animatable::new(initial, runtime));
+        anim.update(|animatable| {
+            let is_new_target = (animatable.target() - target).abs() > f32::EPSILON;
+            let is_new_animation = animatable.animation_type() != animation;
+            if is_new_target || is_new_animation {
+                animatable.animateTo(target, animation);
+            }
+        });
+        anim.with(|animatable| animatable.state())
+    })
 }
 
 #[allow(non_snake_case)]

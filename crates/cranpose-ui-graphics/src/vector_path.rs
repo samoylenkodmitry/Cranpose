@@ -106,6 +106,22 @@ impl VectorPath {
         self
     }
 
+    /// Returns a uniformly scaled copy (icon path data drawn at a target
+    /// size: `parse(d)?.scaled(size / view_box)`).
+    pub fn scaled(&self, factor: f32) -> Self {
+        let subpaths = self
+            .subpaths
+            .iter()
+            .map(|subpath| {
+                subpath
+                    .iter()
+                    .map(|point| Point::new(point.x * factor, point.y * factor))
+                    .collect()
+            })
+            .collect();
+        Self::from_subpaths(subpaths, self.fill_rule)
+    }
+
     /// The fill rule used by [`coverage_mask`](Self::coverage_mask).
     pub fn fill_rule(&self) -> PathFillRule {
         self.fill_rule

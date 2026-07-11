@@ -50,21 +50,13 @@ fn sample_rgb(screenshot: &cranpose::RobotScreenshot, x: f32, y: f32) -> Result<
     Ok([rgba[0], rgba[1], rgba[2]])
 }
 
-fn linear_channel_to_srgb_u8(channel: f32) -> u8 {
-    let channel = channel.clamp(0.0, 1.0);
-    let srgb = if channel <= 0.003_130_8 {
-        channel * 12.92
-    } else {
-        1.055 * channel.powf(1.0 / 2.4) - 0.055
-    };
-    (srgb * 255.0).round().clamp(0.0, 255.0) as u8
-}
-
+/// `Color` is sRGB-space and the swapchain is a non-sRGB view, so authored
+/// channel values land on screen byte-for-byte.
 fn expected_screenshot_rgb(color: Color) -> [u8; 3] {
     [
-        linear_channel_to_srgb_u8(color.0),
-        linear_channel_to_srgb_u8(color.1),
-        linear_channel_to_srgb_u8(color.2),
+        (color.0.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.1.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.2.clamp(0.0, 1.0) * 255.0).round() as u8,
     ]
 }
 

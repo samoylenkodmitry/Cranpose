@@ -8,8 +8,44 @@
 
 use super::{
     FilePickerError, FilePickerOptions, PickedEntry, PickedEntryRef, PickedKind, PickerFuture,
+    SaveFileRequest,
 };
 use std::rc::Rc;
+use wasm_bindgen::JsCast;
+
+/// "Saving" on the web is a browser download: the bytes become a Blob object
+/// URL clicked through a transient anchor. The user's browser decides the
+/// destination, so this resolves `Ok(true)` once the download is handed off.
+pub(super) fn save(request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
+    Box::pin(async move {
+        let window =
+            web_sys::window().ok_or_else(|| FilePickerError::Failed("no window".to_string()))?;
+        let document = window
+            .document()
+            .ok_or_else(|| FilePickerError::Failed("no document".to_string()))?;
+
+        let bytes = js_sys::Uint8Array::from(request.bytes.as_slice());
+        let parts = js_sys::Array::new();
+        parts.push(&bytes.buffer());
+        let options = web_sys::BlobPropertyBag::new();
+        options.set_type(&request.mime_type);
+        let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
+            .map_err(|error| FilePickerError::Failed(format!("blob failed: {error:?}")))?;
+        let url = web_sys::Url::create_object_url_with_blob(&blob)
+            .map_err(|error| FilePickerError::Failed(format!("object URL failed: {error:?}")))?;
+
+        let anchor = document
+            .create_element("a")
+            .map_err(|error| FilePickerError::Failed(format!("anchor failed: {error:?}")))?;
+        let _ = anchor.set_attribute("href", &url);
+        let _ = anchor.set_attribute("download", &request.file_name);
+        if let Some(html_anchor) = anchor.dyn_ref::<web_sys::HtmlElement>() {
+            html_anchor.click();
+        }
+        let _ = web_sys::Url::revoke_object_url(&url);
+        Ok(true)
+    })
+}
 
 pub(super) fn pick(
     options: FilePickerOptions,

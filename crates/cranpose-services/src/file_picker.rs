@@ -106,6 +106,28 @@ impl FilePickerOptions {
     }
 }
 
+/// A request to save bytes to a user-chosen destination.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SaveFileRequest {
+    /// Suggested file name (including extension).
+    pub file_name: String,
+    /// MIME type of `bytes` — used by backends that need one (Android's
+    /// `ACTION_CREATE_DOCUMENT`, the web download).
+    pub mime_type: String,
+    /// The file payload.
+    pub bytes: Vec<u8>,
+}
+
+impl SaveFileRequest {
+    pub fn new(file_name: impl Into<String>, mime_type: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            file_name: file_name.into(),
+            mime_type: mime_type.into(),
+            bytes,
+        }
+    }
+}
+
 /// An opaque handle to a picked file or folder.
 ///
 /// This is **not** guaranteed to be a filesystem path. Use [`read_bytes`] to
@@ -269,6 +291,15 @@ pub trait FilePicker {
     fn take_resumed_picks(&self) -> Vec<ResumedPick> {
         Vec::new()
     }
+
+    /// Presents a save destination chooser and writes `request.bytes` there.
+    /// Resolves to `Ok(false)` if the user cancelled, `Ok(true)` once written.
+    /// Backends without a save affordance report
+    /// [`FilePickerError::UnsupportedPlatform`].
+    fn save_file(&self, request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
+        let _ = request;
+        Box::pin(async { Err(FilePickerError::UnsupportedPlatform) })
+    }
 }
 
 /// Shared handle to a [`FilePicker`].
@@ -337,6 +368,13 @@ impl FilePicker for PlatformFilePicker {
         }
         Vec::new()
     }
+
+    fn save_file(&self, request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
+        if let Some(picker) = registered_platform_file_picker() {
+            return picker.save_file(request);
+        }
+        builtin_save(request)
+    }
 }
 
 #[cfg_attr(
@@ -360,6 +398,30 @@ fn builtin_pick(
     #[cfg(all(target_arch = "wasm32", feature = "file-picker-web"))]
     {
         return web::pick(options, kind);
+    }
+
+    #[allow(unreachable_code)]
+    Box::pin(async move { Err(FilePickerError::UnsupportedPlatform) })
+}
+
+#[cfg_attr(
+    not(any(feature = "file-picker-native", feature = "file-picker-web")),
+    allow(unused_variables)
+)]
+fn builtin_save(request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        feature = "file-picker-native"
+    ))]
+    {
+        return desktop::save(request);
+    }
+
+    #[cfg(all(target_arch = "wasm32", feature = "file-picker-web"))]
+    {
+        return web::save(request);
     }
 
     #[allow(unreachable_code)]

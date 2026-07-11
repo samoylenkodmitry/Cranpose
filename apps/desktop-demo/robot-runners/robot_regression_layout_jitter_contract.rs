@@ -105,27 +105,39 @@ fn assert_animation_jitter(robot: &cranpose::Robot) {
         1040,
         38,
     );
-    let alpha_first_path = output_paths::diagnostic_path("layout_jitter_alpha_first.png");
-    let alpha_first = capture_x11_window(&window_id, &alpha_first_path);
-    let alpha_first_stats = feature_stats_rgba(&alpha_first, alpha_crop, is_pulse_bar_pixel)
-        .unwrap_or_else(|| fail(robot, "Pulse Alpha row pixels not found"));
-    let alpha_base_y = alpha_first_stats.centroid_y();
-    println!("alpha visual base stats={alpha_first_stats:?} centroid_y={alpha_base_y:.2}");
-
-    for frame in 0..8 {
+    // The row's alpha pulses, so its pixels sweep through any fixed color
+    // window. The pulse-invariant feature is GEOMETRY: the bar's top edge (a
+    // vertical luma derivative) sits at the same y whenever the row is
+    // visible at all. Frames where the row is too transparent to expose an
+    // edge are skipped — there is nothing to measure.
+    let mut alpha_base_y = None;
+    for frame in 0..12 {
         let _ = robot.wait_for_present_frame();
         let path = output_paths::diagnostic_path(&format!("layout_jitter_alpha_{frame:02}.png"));
         let image = capture_x11_window(&window_id, &path);
-        let stats = feature_stats_rgba(&image, alpha_crop, is_pulse_bar_pixel)
-            .unwrap_or_else(|| fail(robot, "Pulse Alpha row pixels disappeared"));
-        let dy = stats.centroid_y() - alpha_base_y;
-        println!("alpha visual frame={frame} stats={stats:?} centroid_y_delta={dy:.2}");
+        let Some(edge_y) = row_top_edge_y(&image, alpha_crop) else {
+            println!("alpha visual frame={frame}: row too transparent, skipped");
+            continue;
+        };
+        let Some(base_y) = alpha_base_y else {
+            alpha_base_y = Some(edge_y);
+            println!("alpha visual base edge_y={edge_y:.2}");
+            continue;
+        };
+        let dy = edge_y - base_y;
+        println!("alpha visual frame={frame} edge_y={edge_y:.2} delta={dy:.2}");
         if dy.abs() > 1.5 {
             fail(
                 robot,
                 &format!("Pulse Alpha row jumped vertically in presented pixels: delta={dy:.2}"),
             );
         }
+    }
+    if alpha_base_y.is_none() {
+        fail(
+            robot,
+            "Pulse Alpha row edge never became visible across 12 frames",
+        );
     }
 
     let label_bounds = find_text_in_semantics(robot, "Animation sampled inside graphics_layer")
@@ -281,15 +293,31 @@ fn is_orange_box_pixel(pixel: [u8; 4]) -> bool {
         && red > blue.saturating_add(24)
 }
 
-fn is_pulse_bar_pixel(pixel: [u8; 4]) -> bool {
-    let [red, green, blue, alpha] = pixel;
-    let max = red.max(green).max(blue);
-    let min = red.min(green).min(blue);
-    alpha > 170
-        && max.saturating_sub(min) < 36
-        && (55..=248).contains(&red)
-        && (55..=248).contains(&green)
-        && (55..=248).contains(&blue)
+/// Median y of the row's top edge: per column, the first vertical luma step
+/// of ≥ 14 scanning downward. `None` while the row is too transparent for an
+/// edge to exist (fewer than 200 columns yield one).
+fn row_top_edge_y(image: &image::RgbaImage, region: (u32, u32, u32, u32)) -> Option<f64> {
+    let (left, top, width, height) = region;
+    let right = left.saturating_add(width).min(image.width());
+    let bottom = top.saturating_add(height).min(image.height());
+    let luma = |x: u32, y: u32| {
+        let pixel = image.get_pixel(x, y).0;
+        (pixel[0] as i16 + pixel[1] as i16 + pixel[2] as i16) / 3
+    };
+    let mut edge_ys: Vec<u32> = Vec::new();
+    for x in left..right {
+        for y in top + 1..bottom {
+            if (luma(x, y) - luma(x, y - 1)).abs() >= 14 {
+                edge_ys.push(y);
+                break;
+            }
+        }
+    }
+    if edge_ys.len() < 200 {
+        return None;
+    }
+    edge_ys.sort_unstable();
+    Some(edge_ys[edge_ys.len() / 2] as f64)
 }
 
 fn main() {

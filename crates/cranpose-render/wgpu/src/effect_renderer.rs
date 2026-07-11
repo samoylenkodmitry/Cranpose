@@ -1353,6 +1353,12 @@ impl EffectRenderer {
             pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
         }
         pass.draw(0..4, 0..1);
+        // This pass is caller-owned and shared with subsequent fused batches
+        // (text, shapes, more composites): restore the full-target viewport
+        // and scissor, or every later draw inherits this composite's
+        // sub-viewport transform and lands squeezed inside it.
+        pass.set_viewport(0.0, 0.0, viewport.0 as f32, viewport.1 as f32, 0.0, 1.0);
+        pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
     }
 
     #[allow(clippy::too_many_arguments)]

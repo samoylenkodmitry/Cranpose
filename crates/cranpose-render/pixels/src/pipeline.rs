@@ -1196,6 +1196,7 @@ fn push_shadow_primitive(
     match shadow_prim {
         cranpose_ui_graphics::ShadowPrimitive::Drop {
             shape,
+            cutout,
             blur_radius,
             blend_mode,
         } => {
@@ -1204,7 +1205,55 @@ fn push_shadow_primitive(
             else {
                 return;
             };
-            push_blurred_shape_samples(scene, &shape_pair.0, shape_pair.1, clip, blur_radius);
+            let cutout_pair = match cutout {
+                Some(cutout) => {
+                    let Some(pair) =
+                        shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
+                    else {
+                        return;
+                    };
+                    Some(pair)
+                }
+                None => None,
+            };
+            let Some(cutout_pair) = cutout_pair else {
+                push_blurred_shape_samples(scene, &shape_pair.0, shape_pair.1, clip, blur_radius);
+                return;
+            };
+            let samples = blur_samples(blur_radius.max(1.0));
+            if samples.is_empty() {
+                scene.push_shape(
+                    shape_pair.0.rect,
+                    shape_pair.0.brush,
+                    shape_pair.0.shape,
+                    clip,
+                    shape_pair.1,
+                );
+                scene.push_shape(
+                    cutout_pair.0.rect,
+                    cutout_pair.0.brush,
+                    cutout_pair.0.shape,
+                    clip,
+                    cutout_pair.1,
+                );
+                return;
+            }
+            for sample in samples.iter().rev() {
+                scene.push_shape(
+                    expanded_shape_rect(&shape_pair.0, sample.expansion),
+                    scale_brush_alpha(shape_pair.0.brush.clone(), sample.weight),
+                    shape_pair.0.shape,
+                    clip,
+                    shape_pair.1,
+                );
+                scene.push_shape(
+                    expanded_shape_rect(&cutout_pair.0, sample.expansion),
+                    scale_brush_alpha(cutout_pair.0.brush.clone(), sample.weight),
+                    cutout_pair.0.shape,
+                    clip,
+                    cutout_pair.1,
+                );
+            }
         }
         cranpose_ui_graphics::ShadowPrimitive::Inner {
             fill,
@@ -2184,6 +2233,7 @@ mod tests {
                     },
                     brush: Brush::solid(Color::WHITE),
                 }),
+                cutout: None,
                 blur_radius: 6.0,
                 blend_mode: BlendMode::SrcOver,
             },

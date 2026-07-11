@@ -111,12 +111,28 @@ fn android_pointer_source(
 /// Translates one Android `KeyEvent` into a pending framework key event.
 ///
 /// System keys (back, volume, media, ...) are reported as unhandled so the
-/// platform keeps processing them. Returns `true` when the event was consumed.
+/// platform keeps processing them. The back key is special: while the app has
+/// back interception enabled (see [`cranpose_services::set_back_interception`])
+/// it is consumed and forwarded to [`cranpose_services::push_back_request`],
+/// mirroring Compose's `BackHandler`; otherwise it stays with the system so
+/// the default leave-the-activity behavior keeps working. Returns `true` when
+/// the event was consumed.
 fn push_pending_input_from_android_key_event(
     key_event: &android_activity::input::KeyEvent<'_>,
     key_translator: &mut AndroidKeyTranslator,
     pending_inputs: &mut Vec<PendingInput>,
 ) -> bool {
+    if key_event.key_code() == android_activity::input::Keycode::Back {
+        if cranpose_services::back_interception_enabled() {
+            // Act on key-up (Android convention) but consume the whole
+            // down/up pair so the system never sees a half-handled back.
+            if key_event.action() == android_activity::input::KeyAction::Up {
+                cranpose_services::push_back_request();
+            }
+            return true;
+        }
+        return false;
+    }
     if is_system_key(key_event.key_code()) {
         return false;
     }
@@ -128,20 +144,20 @@ fn push_pending_input_from_android_key_event(
 }
 
 thread_local! {
-    /// Current soft-keyboard (IME) insets in *logical* px, shared between the
-    /// shell content wrapper (which provides them to composition via
-    /// [`cranpose_ui::local_ime_insets`]) and the IME event loop (which updates
-    /// them from Java-forwarded keyboard heights).
-    static ANDROID_IME_INSETS: Rc<Cell<cranpose_ui::EdgeInsets>> =
-        Rc::new(Cell::new(cranpose_ui::EdgeInsets::default()));
+    /// Live platform environment (IME/safe-area insets in *logical* px, system
+    /// theme) shared between the shell content wrapper — which provides the
+    /// values to composition — and the event loop, which updates them from
+    /// Java-forwarded keyboard heights, content-rect changes, and
+    /// configuration changes.
+    static ANDROID_PLATFORM_ENV: Rc<crate::platform_env::PlatformEnvironment> =
+        crate::platform_env::PlatformEnvironment::new();
     /// Density used to convert Java's physical keyboard height to logical px.
     static ANDROID_IME_DENSITY: Cell<f32> = const { Cell::new(1.0) };
 }
 
-/// Shared handle to the current IME insets (logical px), read by the shell
-/// content wrapper on every recomposition.
-fn android_ime_insets_handle() -> Rc<Cell<cranpose_ui::EdgeInsets>> {
-    ANDROID_IME_INSETS.with(Rc::clone)
+/// Shared handle to the live platform environment.
+pub(crate) fn android_platform_env() -> Rc<crate::platform_env::PlatformEnvironment> {
+    ANDROID_PLATFORM_ENV.with(Rc::clone)
 }
 
 /// Records the density used to convert the Java keyboard height to logical px.
@@ -158,14 +174,17 @@ fn set_android_ime_bottom_px(bottom_px: i32) -> bool {
         bottom,
         ..cranpose_ui::EdgeInsets::default()
     };
-    ANDROID_IME_INSETS.with(|cell| {
-        if cell.get() == insets {
-            false
-        } else {
-            cell.set(insets);
-            true
-        }
-    })
+    android_platform_env().set_ime_insets(insets)
+}
+
+/// Maps the Android night-mode configuration onto the framework system theme.
+fn system_theme_from_android(
+    night: ndk::configuration::UiModeNight,
+) -> cranpose_services::SystemTheme {
+    match night {
+        ndk::configuration::UiModeNight::Yes => cranpose_services::SystemTheme::Dark,
+        _ => cranpose_services::SystemTheme::Light,
+    }
 }
 
 /// `EditorInfo.IME_ACTION_DONE`: the user tapped the keyboard's Done action.
@@ -717,20 +736,15 @@ where
 
         let content_clone = content.clone();
         let density = density.max(f32::EPSILON);
-        let ime_insets = android_ime_insets_handle();
+        let platform_env = android_platform_env();
         let shell = AppShell::new_with_size_and_density(
             renderer,
             default_root_key(),
             move || {
-                // Provide the current soft-keyboard insets to composition so the
-                // app can keep the focused field above the keyboard. Read on
-                // every recomposition; the IME loop forces a root render when the
-                // height changes (see `dispatch_android_ime_event`).
-                let insets = ime_insets.get();
-                cranpose_core::CompositionLocalProvider(
-                    [cranpose_ui::local_ime_insets().provides(insets)],
-                    || content_clone.borrow_mut()(),
-                );
+                // Provide the live platform environment (IME/safe-area insets,
+                // system theme) to composition. Read on every recomposition;
+                // the event loop forces a root render when a value changes.
+                platform_env.compose_root(|| content_clone.borrow_mut()());
             },
             (width, height),
             (width as f32 / density, height as f32 / density),
@@ -886,13 +900,9 @@ fn create_android_surface_config(
     height: u32,
 ) -> Result<wgpu::SurfaceConfiguration, AndroidSurfaceError> {
     let surface_caps = surface.get_capabilities(&adapter);
-    let surface_format = surface_caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .or_else(|| surface_caps.formats.first().copied())
-        .ok_or(AndroidSurfaceError::NoSurfaceFormat)?;
+    let surface_format =
+        crate::surface_format::select_display_surface_format(&surface_caps.formats)
+            .ok_or(AndroidSurfaceError::NoSurfaceFormat)?;
     let alpha_mode = surface_caps
         .alpha_modes
         .first()
@@ -1121,11 +1131,19 @@ pub fn run(
     use android_activity::{MainEvent, PollEvent};
 
     // Register the SAF document picker as the platform file picker. Requires the
-    // app's activity to be `dev.cranpose.android.CranposeFilePickerActivity`.
+    // app's activity to be `dev.cranpose.android.CranposeActivity`.
     crate::android_file_picker::register(app.clone());
     // Register the SAF writable-folder backend (write-side complement, used for
     // cross-device sync into a user-granted folder).
     crate::android_writable_folder::register(app.clone());
+    // Haptics, share sheet, notifier, network status (JNI backends of the
+    // CranposeActivity capability hooks).
+    crate::android_services::register(app.clone());
+
+    // Seed the system theme from the boot configuration; live switches arrive
+    // as `MainEvent::ConfigChanged`.
+    android_platform_env()
+        .set_system_theme(system_theme_from_android(app.config().ui_mode_night()));
 
     // Install panic hook for better crash logging in Logcat
     std::panic::set_hook(Box::new(|panic_info| {
@@ -1515,6 +1533,16 @@ pub fn run(
                             &mut primary_pointer_id,
                         );
                     }
+                    MainEvent::ConfigChanged { .. } => {
+                        // Follow OS light/dark switches live (uiMode arrives as
+                        // a configuration change).
+                        let theme = system_theme_from_android(app.config().ui_mode_night());
+                        if android_platform_env().set_system_theme(theme) {
+                            if let Some(shell) = &mut app_shell {
+                                shell.request_root_render();
+                            }
+                        }
+                    }
                     _ => {}
                 },
                 _ => {
@@ -1668,6 +1696,15 @@ pub fn run(
                 soft_keyboard_installed = true;
                 log::info!("Android soft keyboard focus hook installed");
 
+                // The system clipboard is per-AppContext (it backs the text
+                // selection menu), so it registers once the shell exists.
+                let clipboard_app = app.clone();
+                shell.app_context().enter(move || {
+                    cranpose_ui::clipboard_session::set_platform_clipboard(Rc::new(
+                        crate::android_services::AndroidClipboard { app: clipboard_app },
+                    ));
+                });
+
                 // Cold-start guard (bug 5): on a fresh launch the OS can restore
                 // the soft keyboard left over from the previous process — even on
                 // a screen with no text field. Re-request it only if a field is
@@ -1688,6 +1725,13 @@ pub fn run(
                 dispatch_android_ime_event(shell, event);
             }
         }
+
+        // Apply capability signals parked by the Java UI thread (window
+        // insets → safe area).
+        crate::android_services::apply_pending_platform_signals(
+            get_display_density(&app),
+            &mut app_shell,
+        );
 
         // Process pending input events outside poll_events to prevent ANR
         if !pending_inputs.is_empty() {

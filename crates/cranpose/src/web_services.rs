@@ -1,0 +1,239 @@
+//! Browser-backed implementations of the cranpose service registry: Web Share
+//! API, Notifications API, vibration haptics, and online/connection status.
+//!
+//! Registered once at web startup (see [`crate::web::run`]). Each backend is
+//! honest about capability: `is_supported` reflects what the browser actually
+//! exposes, and unsupported operations return the service's error type instead
+//! of silently pretending.
+
+use cranpose_services::{
+    set_platform_device_info, set_platform_haptics, set_platform_network_monitor,
+    set_platform_notifier, set_platform_share_sheet, DeviceInfo, HapticFeedback, Haptics,
+    NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, ShareContent, ShareError, ShareSheet,
+};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::{JsCast, JsValue};
+
+pub(crate) fn register() {
+    set_platform_share_sheet(Rc::new(WebShareSheet));
+    set_platform_notifier(Rc::new(WebNotifier::default()));
+    set_platform_haptics(Rc::new(WebHaptics));
+    set_platform_device_info(Rc::new(WebDeviceInfo));
+    register_network_monitor();
+}
+
+fn navigator() -> Option<web_sys::Navigator> {
+    web_sys::window().map(|window| window.navigator())
+}
+
+// --- Share -----------------------------------------------------------------
+
+struct WebShareSheet;
+
+impl WebShareSheet {
+    fn build_share_data(content: &ShareContent) -> Result<web_sys::ShareData, ShareError> {
+        let data = web_sys::ShareData::new();
+        if let Some(text) = &content.text {
+            data.set_text(text);
+        }
+        data.set_title(&content.file_name);
+
+        let bytes = js_sys::Uint8Array::from(content.bytes.as_slice());
+        let parts = js_sys::Array::new();
+        parts.push(&bytes.buffer());
+        let options = web_sys::FilePropertyBag::new();
+        options.set_type(&content.mime_type);
+        let file = web_sys::File::new_with_u8_array_sequence_and_options(
+            &parts,
+            &content.file_name,
+            &options,
+        )
+        .map_err(|error| ShareError::Failed(format!("failed to build File: {error:?}")))?;
+        let files = js_sys::Array::new();
+        files.push(&file);
+        data.set_files(&files);
+        Ok(data)
+    }
+}
+
+impl ShareSheet for WebShareSheet {
+    fn share(&self, content: ShareContent) -> Result<(), ShareError> {
+        let Some(navigator) = navigator() else {
+            return Err(ShareError::Unsupported);
+        };
+        if !self.is_supported() {
+            return Err(ShareError::Unsupported);
+        }
+        let data = Self::build_share_data(&content)?;
+        if !navigator.can_share_with_data(&data) {
+            // The browser supports the Share API but refuses this payload
+            // (typically file sharing on desktop browsers).
+            return Err(ShareError::Failed(
+                "browser cannot share this file payload".to_string(),
+            ));
+        }
+        // Fire and forget, matching the trait contract ("resolves once
+        // presented"); the promise rejects if the user dismisses the sheet,
+        // which is not an error for us.
+        let _ = navigator.share_with_data(&data);
+        Ok(())
+    }
+
+    fn is_supported(&self) -> bool {
+        // `navigator.share` is absent on browsers without the Web Share API;
+        // probe the property instead of calling it.
+        navigator().is_some_and(|navigator| {
+            js_sys::Reflect::get(navigator.as_ref(), &JsValue::from_str("share"))
+                .map(|value| value.is_function())
+                .unwrap_or(false)
+        })
+    }
+}
+
+// --- Notifications ----------------------------------------------------------
+
+#[derive(Default)]
+struct WebNotifier {
+    /// Live notifications by id so `cancel`/replacement can `close()` them.
+    /// The click closure is kept alive alongside its notification.
+    active: RefCell<HashMap<String, (web_sys::Notification, Closure<dyn FnMut()>)>>,
+}
+
+impl WebNotifier {
+    fn granted() -> bool {
+        web_sys::Notification::permission() == web_sys::NotificationPermission::Granted
+    }
+}
+
+impl Notifier for WebNotifier {
+    fn request_permission(&self) {
+        // Fire and forget; the promise resolves with the user's choice and
+        // `Notification::permission()` reflects it from then on.
+        let _ = web_sys::Notification::request_permission();
+    }
+
+    fn notify(&self, request: NotifyRequest) {
+        if !Self::granted() {
+            log::debug!("web notification dropped (permission not granted)");
+            return;
+        }
+        let options = web_sys::NotificationOptions::new();
+        options.set_body(&request.body);
+        // Same tag replaces the previous notification with that tag — this is
+        // exactly the trait's "re-posting with the same id replaces" contract.
+        options.set_tag(&request.id);
+        options.set_require_interaction(request.ongoing);
+        let Ok(notification) = web_sys::Notification::new_with_options(&request.title, &options)
+        else {
+            log::warn!("failed to post web notification");
+            return;
+        };
+
+        let deeplink = request.deeplink.clone();
+        let on_click = Closure::wrap(Box::new(move || {
+            if let Some(link) = &deeplink {
+                cranpose_services::push_notification_deeplink(link.clone());
+            }
+            if let Some(window) = web_sys::window() {
+                let _ = window.focus();
+            }
+        }) as Box<dyn FnMut()>);
+        notification.set_onclick(Some(on_click.as_ref().unchecked_ref()));
+
+        if let Some((previous, _closure)) = self
+            .active
+            .borrow_mut()
+            .insert(request.id.clone(), (notification, on_click))
+        {
+            // Replaced by tag already, but close defensively so the old one
+            // cannot linger on browsers that ignore tags.
+            previous.close();
+        }
+    }
+
+    fn cancel(&self, id: &str) {
+        if let Some((notification, _closure)) = self.active.borrow_mut().remove(id) {
+            notification.close();
+        }
+    }
+}
+
+// --- Haptics ----------------------------------------------------------------
+
+struct WebHaptics;
+
+impl Haptics for WebHaptics {
+    fn perform(&self, feedback: HapticFeedback) {
+        let duration_ms = match feedback {
+            HapticFeedback::ImpactLight | HapticFeedback::Selection => 8,
+            HapticFeedback::ImpactMedium => 15,
+            HapticFeedback::ImpactHeavy => 25,
+            HapticFeedback::Success => 12,
+            HapticFeedback::Warning => 20,
+            HapticFeedback::Error => 35,
+        };
+        if let Some(navigator) = navigator() {
+            // No-ops on browsers/devices without a vibrator (desktop).
+            let _ = navigator.vibrate_with_duration(duration_ms);
+        }
+    }
+}
+
+// --- Device info --------------------------------------------------------------
+
+struct WebDeviceInfo;
+
+impl DeviceInfo for WebDeviceInfo {
+    fn total_memory_bytes(&self) -> Option<u64> {
+        // `navigator.deviceMemory` (Device Memory API): GiB, quantized and
+        // capped by the browser for privacy. Read reflectively — the property
+        // is absent on Firefox/Safari, and web-sys gates its typed accessor
+        // behind unstable APIs.
+        let navigator = navigator()?;
+        let value = js_sys::Reflect::get(navigator.as_ref(), &JsValue::from_str("deviceMemory"))
+            .ok()?
+            .as_f64()?;
+        if value <= 0.0 {
+            return None;
+        }
+        Some((value * 1024.0 * 1024.0 * 1024.0) as u64)
+    }
+}
+
+// --- Network status ----------------------------------------------------------
+
+struct WebNetworkMonitor {
+    online: Rc<Cell<bool>>,
+}
+
+impl NetworkMonitor for WebNetworkMonitor {
+    fn status(&self) -> NetworkStatus {
+        NetworkStatus {
+            online: self.online.get(),
+            // Browsers expose no reliable metered signal on the stable
+            // Network Information API surface; report unmetered.
+            metered: false,
+        }
+    }
+}
+
+fn register_network_monitor() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let online = Rc::new(Cell::new(window.navigator().on_line()));
+
+    for (event, value) in [("online", true), ("offline", false)] {
+        let online = Rc::clone(&online);
+        let closure = Closure::wrap(Box::new(move || {
+            online.set(value);
+        }) as Box<dyn FnMut()>);
+        let _ = window.add_event_listener_with_callback(event, closure.as_ref().unchecked_ref());
+        closure.forget();
+    }
+
+    set_platform_network_monitor(Rc::new(WebNetworkMonitor { online }));
+}

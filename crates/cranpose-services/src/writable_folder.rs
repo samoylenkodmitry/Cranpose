@@ -17,8 +17,9 @@
 //!   touching the UI thread.
 //!
 //! Read-only or unreachable folders surface as [`FolderError::ReadOnly`] /
-//! [`FolderError::Io`] so callers can degrade gracefully. iOS (security-scoped
-//! bookmarks) and the web are not supported yet and return
+//! [`FolderError::Io`] so callers can degrade gracefully. Backends: desktop
+//! (rfd + `std::fs`), Android (SAF tree URIs), iOS (security-scoped
+//! bookmarks). The web has no writable-folder concept and returns
 //! [`FolderError::Unsupported`].
 
 use crate::file_picker::{FilePickerError, PickerFuture};

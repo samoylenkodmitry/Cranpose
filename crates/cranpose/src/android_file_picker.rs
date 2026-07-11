@@ -1,12 +1,12 @@
 //! Android file and folder picker built on the Storage Access Framework.
 //!
 //! `cranposePickFile` / `cranposePickFolder` on
-//! [`CranposeFilePickerActivity`](https://github.com/samoylenkodmitry/cranpose)
+//! [`CranposeActivity`](https://github.com/samoylenkodmitry/cranpose)
 //! launch `ACTION_OPEN_DOCUMENT` / `ACTION_OPEN_DOCUMENT_TREE`, so the user can
 //! choose a file or a folder from any document provider the device exposes
 //! (local storage, cloud, or a mounted WebDAV share). The Java side reports the
 //! chosen `content://` document URIs back through
-//! [`Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFilePicked`];
+//! [`Java_dev_cranpose_android_CranposeActivity_nativeOnFilePicked`];
 //! nothing is copied. A picked file is read on demand by opening a descriptor
 //! from the provider through [`open_content_uri`], so even a multi-gigabyte
 //! folder is selected instantly and each track is streamed only when played.
@@ -19,6 +19,7 @@
 use cranpose_services::{
     set_platform_file_picker, FilePicker, FilePickerError, FilePickerOptions, FolderStream,
     FolderStreamRef, PickedEntry, PickedEntryRef, PickedKind, PickerFuture, ResumedPick,
+    SaveFileRequest,
 };
 use jni::objects::{JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, jlong};
@@ -64,6 +65,30 @@ fn pending() -> &'static Mutex<HashMap<i64, Pending>> {
     PENDING.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// An in-flight ACTION_CREATE_DOCUMENT save awaiting its Java result.
+#[derive(Default)]
+struct PendingSave {
+    /// `(saved, error)` — `saved = false` with no error means cancelled.
+    result: Option<(bool, Option<String>)>,
+    waker: Option<Waker>,
+}
+
+fn pending_saves() -> &'static Mutex<HashMap<i64, PendingSave>> {
+    static PENDING: OnceLock<Mutex<HashMap<i64, PendingSave>>> = OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Delivers an ACTION_CREATE_DOCUMENT result from the Java UI thread.
+pub(crate) fn resolve_pending_save(token: i64, saved: bool, error: Option<String>) {
+    let mut registry = pending_saves().lock().expect("save registry poisoned");
+    if let Some(slot) = registry.get_mut(&token) {
+        slot.result = Some((saved, error));
+        if let Some(waker) = slot.waker.take() {
+            waker.wake();
+        }
+    }
+}
+
 /// Installs the Android picker as the platform file picker.
 pub(crate) fn register(app: android_activity::AndroidApp) {
     let _ = APP.set(app);
@@ -91,6 +116,90 @@ impl FilePicker for AndroidFilePicker {
     fn take_resumed_picks(&self) -> Vec<ResumedPick> {
         take_resumed_file_picks()
     }
+
+    fn save_file(&self, request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
+        present_save(request)
+    }
+}
+
+fn present_save(request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
+    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+    pending_saves()
+        .lock()
+        .expect("save registry poisoned")
+        .insert(token, PendingSave::default());
+
+    let launch = (|| -> Result<(), String> {
+        let app = APP
+            .get()
+            .ok_or_else(|| "Android file picker was not registered".to_string())?;
+        crate::android_jni::with_android_activity_env(app, |env, activity| {
+            let name = env
+                .new_string(&request.file_name)
+                .map_err(|error| error.to_string())?;
+            let mime = env
+                .new_string(&request.mime_type)
+                .map_err(|error| error.to_string())?;
+            let bytes = env
+                .byte_array_from_slice(&request.bytes)
+                .map_err(|error| error.to_string())?;
+            let name_obj: &JObject = name.as_ref();
+            let mime_obj: &JObject = mime.as_ref();
+            let bytes_obj: &JObject = bytes.as_ref();
+            env.call_method(
+                &activity,
+                jni_str!("cranposeSaveFile"),
+                jni_sig!("(JLjava/lang/String;Ljava/lang/String;[B)V"),
+                &[
+                    JValue::Long(token),
+                    JValue::Object(name_obj),
+                    JValue::Object(mime_obj),
+                    JValue::Object(bytes_obj),
+                ],
+            )
+            .map(|_| ())
+            .map_err(|error| format!("failed to launch Android save: {error}"))
+        })
+    })();
+
+    if let Err(error) = launch {
+        pending_saves()
+            .lock()
+            .expect("save registry poisoned")
+            .remove(&token);
+        return Box::pin(async move { Err(FilePickerError::Failed(error)) });
+    }
+
+    Box::pin(SaveFuture { token })
+}
+
+/// Future resolved when the Java callback reports a save result for `token`.
+struct SaveFuture {
+    token: i64,
+}
+
+impl Future for SaveFuture {
+    type Output = Result<bool, FilePickerError>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut registry = pending_saves().lock().expect("save registry poisoned");
+        let Some(slot) = registry.get_mut(&self.token) else {
+            return Poll::Ready(Ok(false));
+        };
+        match slot.result.take() {
+            Some((saved, error)) => {
+                registry.remove(&self.token);
+                match error {
+                    Some(error) => Poll::Ready(Err(FilePickerError::Failed(error))),
+                    None => Poll::Ready(Ok(saved)),
+                }
+            }
+            None => {
+                slot.waker = Some(context.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
 }
 
 // ---- Resume inbox --------------------------------------------------------
@@ -104,7 +213,7 @@ impl FilePicker for AndroidFilePicker {
 // [`FilePicker::take_resumed_picks`]. A normal (live) pick clears the inbox on
 // resolution, so a selection is never replayed.
 
-/// Mirrors the `FLAG_*` request flags in `CranposeFilePickerActivity`.
+/// Mirrors the `FLAG_*` request flags in `CranposeActivity`.
 const FLAG_FOLDER: i32 = 1;
 const FLAG_STREAMING: i32 = 2;
 const FLAG_WRITABLE: i32 = 4;
@@ -227,7 +336,7 @@ fn call_stream_granted_folder(uri: String, token: i64) -> Result<(), String> {
 /// Java callback: records a granted selection in the resume inbox (see above).
 #[doc(hidden)]
 #[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeRecordResumablePick<
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeRecordResumablePick<
     'local,
 >(
     mut env: EnvUnowned<'local>,
@@ -573,9 +682,7 @@ impl Drop for AndroidFolderStream {
 /// [`FolderPickFuture`] so streaming can begin.
 #[doc(hidden)]
 #[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFolderPicked<
-    'local,
->(
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderPicked<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,
@@ -605,9 +712,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nati
 /// enumeration thread can stop walking a huge tree it no longer needs.
 #[doc(hidden)]
 #[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFolderEntries<
-    'local,
->(
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderEntries<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,
@@ -631,9 +736,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nati
 /// Java callback: enumeration finished (with an optional error).
 #[doc(hidden)]
 #[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFolderFinished<
-    'local,
->(
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderFinished<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,
@@ -700,9 +803,7 @@ fn deliver(token: i64, result: RawResult) {
 /// file, every audio descendant for a folder).
 #[doc(hidden)]
 #[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnFilePicked<
-    'local,
->(
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePicked<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,

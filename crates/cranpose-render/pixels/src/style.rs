@@ -129,6 +129,7 @@ pub(crate) fn apply_draw_commands(
             DrawPrimitive::Shadow(shadow_primitive) => match shadow_primitive {
                 ShadowPrimitive::Drop {
                     shape,
+                    cutout,
                     blur_radius: _,
                     blend_mode: shadow_blend_mode,
                 } => {
@@ -142,6 +143,16 @@ pub(crate) fn apply_draw_commands(
                         scene,
                         blend_mode.or(Some(shadow_blend_mode)),
                     );
+                    if let Some(cutout) = cutout {
+                        emit_primitive(
+                            *cutout,
+                            layer_bounds,
+                            layer,
+                            clip,
+                            scene,
+                            Some(BlendMode::DstOut),
+                        );
+                    }
                 }
                 ShadowPrimitive::Inner {
                     fill,

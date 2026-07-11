@@ -25,6 +25,7 @@ mod images;
 mod interactive_anim;
 pub mod lazy_list;
 mod lazy_scrollbar;
+mod liquid_ui;
 mod markdown;
 mod mineswapper2;
 mod shader_rect;
@@ -39,6 +40,7 @@ use hacker_news::{HackerNewsScrollStabilityFixtureTab, HackerNewsTab};
 use images::images_tab;
 use interactive_anim::InteractiveAnimTab;
 use lazy_list::lazy_list_example;
+use liquid_ui::LiquidUiTab;
 use markdown::{
     markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
     MarkdownScrollStressFixtureTabWithState,
@@ -85,6 +87,7 @@ pub enum DemoTab {
     Xkcd,
     Shaders,
     ShaderRect,
+    Liquid,
     MarkdownViewer,
     FilePicker,
 }
@@ -110,6 +113,7 @@ impl DemoTab {
             DemoTab::Xkcd => "XKCD",
             DemoTab::Shaders => "Shaders",
             DemoTab::ShaderRect => "Shader Rect",
+            DemoTab::Liquid => "Liquid UI",
             DemoTab::MarkdownViewer => "Markdown",
             DemoTab::FilePicker => "File Picker",
         }
@@ -144,12 +148,13 @@ impl DemoTab {
             "shaders" => Some(Self::Shaders),
             "shaderrect" => Some(Self::ShaderRect),
             "markdown" | "markdownviewer" => Some(Self::MarkdownViewer),
+            "liquid" | "liquidui" => Some(Self::Liquid),
             _ => None,
         }
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 20] = [
+pub const DEMO_TABS: [DemoTab; 21] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -167,6 +172,7 @@ pub const DEMO_TABS: [DemoTab; 20] = [
     DemoTab::Xkcd,
     DemoTab::Shaders,
     DemoTab::ShaderRect,
+    DemoTab::Liquid,
     DemoTab::MarkdownViewer,
     DemoTab::InteractiveAnim,
     DemoTab::FilePicker,
@@ -495,7 +501,11 @@ pub fn MarkdownScrollStressRobotAppWithState(list_state: LazyListState) {
 fn tab_requires_scroll(tab: DemoTab) -> bool {
     !matches!(
         tab,
-        DemoTab::HackerNews | DemoTab::LazyList | DemoTab::Winamp | DemoTab::MarkdownViewer
+        DemoTab::HackerNews
+            | DemoTab::LazyList
+            | DemoTab::Winamp
+            | DemoTab::MarkdownViewer
+            | DemoTab::Liquid
     )
 }
 
@@ -522,6 +532,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::ShaderRect => ShaderRectTab(),
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
         DemoTab::FilePicker => file_picker_tab(),
+        DemoTab::Liquid => LiquidUiTab(),
     }
 }
 

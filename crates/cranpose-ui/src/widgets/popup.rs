@@ -46,6 +46,10 @@ struct PopupEntry {
     id: u64,
     position: Point,
     content: Rc<dyn Fn()>,
+    /// When set, the host renders a viewport-filling scrim beneath this popup
+    /// that invokes the callback on an outside tap (Compose's
+    /// `onDismissRequest`).
+    on_dismiss: Option<Rc<dyn Fn()>>,
 }
 
 struct PopupRegistryState {
@@ -63,6 +67,12 @@ struct PopupRegistryState {
 #[derive(Clone)]
 pub struct PopupRegistry {
     inner: Rc<PopupRegistryState>,
+}
+
+impl PartialEq for PopupRegistry {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
 }
 
 impl PopupRegistry {
@@ -102,18 +112,28 @@ impl PopupRegistry {
         }
     }
 
-    /// Inserts a new popup or updates an existing one. Only structural changes
-    /// (a new id) or a moved position dirty the host; refreshing the (stable,
-    /// remembered) content closure in place does not, so a resting frame does
-    /// not spin recomposition.
-    fn upsert(&self, id: u64, position: Point, content: Rc<dyn Fn()>) {
+    /// Inserts a new popup or updates an existing one. Structural changes (a
+    /// new id), a moved position, or re-registered content (a new closure —
+    /// the caller recomposed) dirty the host so the overlay re-renders with
+    /// the fresh content. A popup whose caller did not recompose never calls
+    /// this, so resting frames do not spin recomposition.
+    fn upsert(
+        &self,
+        id: u64,
+        position: Point,
+        content: Rc<dyn Fn()>,
+        on_dismiss: Option<Rc<dyn Fn()>>,
+    ) {
         let mut entries = self.inner.entries.borrow_mut();
         if let Some(existing) = entries.iter_mut().find(|entry| entry.id == id) {
             let moved = existing.position != position;
+            let content_changed =
+                !std::ptr::addr_eq(Rc::as_ptr(&existing.content), Rc::as_ptr(&content));
             existing.position = position;
             existing.content = content;
+            existing.on_dismiss = on_dismiss;
             drop(entries);
-            if moved {
+            if moved || content_changed {
                 self.bump();
             }
         } else {
@@ -121,6 +141,7 @@ impl PopupRegistry {
                 id,
                 position,
                 content,
+                on_dismiss,
             });
             drop(entries);
             self.bump();
@@ -185,19 +206,39 @@ where
             CompositionLocalProvider([local_popup_registry().provides(registry.clone())], || {
                 // App content: `Popup` calls inside here register into `registry`.
                 content();
-                // React to add/remove/move, then render the overlay entries.
-                registry.subscribe();
-                for entry in registry.snapshot() {
-                    let content = entry.content;
-                    Box(
-                        Modifier::empty().absolute_offset(entry.position.x, entry.position.y),
-                        BoxSpec::default(),
-                        move || content(),
-                    );
-                }
+                // The overlay is its own recompose scope: registry bumps
+                // re-render the popups without re-running the app content
+                // (which would re-register fresh popup content and spin).
+                PopupOverlay(registry.clone());
             });
         },
     );
+}
+
+/// Renders the registered popups. Isolated in its own composable so registry
+/// changes (add/remove/move/content refresh) recompose only the overlay.
+#[composable]
+fn PopupOverlay(registry: PopupRegistry) {
+    registry.subscribe();
+    for entry in registry.snapshot() {
+        if let Some(on_dismiss) = entry.on_dismiss {
+            // Outside-tap scrim: fills the host (the viewport), beneath the
+            // popup content, so any tap that misses the popup dismisses it.
+            Box(
+                Modifier::empty()
+                    .fill_max_size()
+                    .clickable(move |_point| on_dismiss()),
+                BoxSpec::default(),
+                || {},
+            );
+        }
+        let content = entry.content;
+        Box(
+            Modifier::empty().absolute_offset(entry.position.x, entry.position.y),
+            BoxSpec::default(),
+            move || content(),
+        );
+    }
 }
 
 /// Composes `content` in the top-level overlay layer, positioned at
@@ -215,13 +256,34 @@ pub fn Popup<F>(anchor: Rect, offset: Point, content: F)
 where
     F: Fn() + 'static,
 {
+    popup_impl(anchor, offset, None, Rc::new(content));
+}
+
+/// A [`Popup`] with an outside-tap dismissal: the host renders a
+/// viewport-filling scrim beneath the content that calls `on_dismiss` — the
+/// analogue of Compose's `Popup(onDismissRequest = …)`. Menus and pickers use
+/// this; anchored chrome like selection handles uses plain [`Popup`].
+#[composable]
+pub fn PopupDismissable<F>(anchor: Rect, offset: Point, on_dismiss: impl Fn() + 'static, content: F)
+where
+    F: Fn() + 'static,
+{
+    popup_impl(anchor, offset, Some(Rc::new(on_dismiss)), Rc::new(content));
+}
+
+fn popup_impl(
+    anchor: Rect,
+    offset: Point,
+    on_dismiss: Option<Rc<dyn Fn()>>,
+    content: Rc<dyn Fn()>,
+) {
     let registry = local_popup_registry().current();
     let id = remember(|| registry.allocate_id()).with(|id| *id);
-    let content: Rc<dyn Fn()> = remember(move || {
-        let content: Rc<dyn Fn()> = Rc::new(content);
-        content
-    })
-    .with(Rc::clone);
+    // The freshly captured closure is registered on every recomposition so
+    // popup content follows the caller's state (an animating menu morph, a
+    // changing label). The host is only dirtied when the popup moved or its
+    // content was re-registered — a popup whose caller did not recompose
+    // costs nothing.
     let position = Point {
         x: anchor.x + offset.x,
         y: anchor.y + offset.y,
@@ -229,7 +291,9 @@ where
 
     let sync_registry = registry.clone();
     let sync_content = content.clone();
-    SideEffect(move || sync_registry.upsert(id, position, sync_content.clone()));
+    SideEffect(move || {
+        sync_registry.upsert(id, position, sync_content.clone(), on_dismiss.clone())
+    });
 
     let dispose_registry = registry;
     cranpose_core::DisposableEffect!((), move |scope| {

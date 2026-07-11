@@ -1017,6 +1017,48 @@ fn first_inner_cutout_x(primitives: &[DrawPrimitive]) -> Option<f32> {
 }
 
 #[test]
+fn drop_shadow_cutout_knocks_element_shape_out_of_silhouette() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let modifier = Modifier::empty().drop_shadow_value(
+        LayerShape::Rounded(RoundedCornerShape::uniform(8.0)),
+        Shadow {
+            radius: Dp(12.0),
+            offset: DpOffset::new(Dp(0.0), Dp(4.0)),
+            alpha: 0.8,
+            cutout: true,
+            ..Default::default()
+        },
+    );
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let commands = slices.draw_commands();
+    let DrawCommand::Behind(draw) = &commands[0] else {
+        panic!("drop_shadow should emit a behind draw command");
+    };
+    let primitives = draw(Size {
+        width: 60.0,
+        height: 32.0,
+    });
+    let [cranpose_ui_graphics::DrawPrimitive::Shadow(cranpose_ui_graphics::ShadowPrimitive::Drop {
+        cutout,
+        ..
+    })] = primitives.as_slice()
+    else {
+        panic!("expected a single drop-shadow primitive");
+    };
+    let Some(cutout) = cutout else {
+        panic!("cutout: true must knock the element shape out of the shadow silhouette");
+    };
+    let cranpose_ui_graphics::DrawPrimitive::RoundRect { rect, .. } = cutout.as_ref() else {
+        panic!("cutout must reuse the element's rounded shape");
+    };
+    assert_eq!(
+        (rect.x, rect.y, rect.width, rect.height),
+        (0.0, 0.0, 60.0, 32.0),
+        "cutout covers the unoffset, unspread element bounds"
+    );
+}
+
+#[test]
 fn drop_shadow_static_emits_behind_primitives() {
     let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().drop_shadow_value(

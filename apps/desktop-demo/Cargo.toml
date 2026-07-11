@@ -28,29 +28,19 @@ required-features = ["ios"]
 default = ["renderer-wgpu", "desktop-http"]
 renderer-pixels = ["cranpose/renderer-pixels"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
-desktop = [
-    "cranpose/desktop",
-    "cranpose-services/uri-native",
-    "cranpose-services/file-picker-native",
-]
+desktop = ["cranpose/desktop"]
 desktop-http = ["desktop", "cranpose-services/http-native"]
 ios = [
     "renderer-wgpu",
     "cranpose/ios",
-    "cranpose-services/uri-native",
     "cranpose-services/http-native",
 ]
-system-theme = ["cranpose-services/system-theme"]
 android = [
     "cranpose/android",
     "cranpose-services/http-native",
-    "cranpose-services/uri-android",
 ]
 web = [
     "cranpose/web",
-    "cranpose-services/system-theme-web",
-    "cranpose-services/uri-web",
-    "cranpose-services/file-picker-web",
     "cranpose-services/web-http",
     "dep:wasm-bindgen",
     "dep:wasm-logger",
@@ -725,3 +715,33 @@ required-features = ["robot-app"]
 name = "robot_renderer_micro_contract"
 path = "robot-runners/robot_renderer_micro_contract.rs"
 required-features = ["robot-app"]
+
+[[example]]
+name = "robot_liquid_visual"
+path = "examples/robot_liquid_visual.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "ghost_presented_probe"
+path = "examples/ghost_presented_probe.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "robot_liquid_motion_contract"
+path = "robot-runners/robot_liquid_motion_contract.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "robot_regression_fused_viewport_contract"
+path = "robot-runners/robot_regression_fused_viewport_contract.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "robot_color_fidelity"
+path = "robot-runners/robot_color_fidelity.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "lens_probe"
+path = "examples/lens_probe.rs"
+required-features = ["desktop", "robot-app"]

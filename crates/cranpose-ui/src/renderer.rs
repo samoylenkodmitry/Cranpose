@@ -235,10 +235,12 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
             DrawPrimitive::Shadow(match shadow {
                 ShadowPrimitive::Drop {
                     shape,
+                    cutout,
                     blur_radius,
                     blend_mode,
                 } => ShadowPrimitive::Drop {
                     shape: Box::new(translate_primitive(*shape, dx, dy)),
+                    cutout: cutout.map(|cutout| Box::new(translate_primitive(*cutout, dx, dy))),
                     blur_radius,
                     blend_mode,
                 },

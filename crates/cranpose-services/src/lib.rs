@@ -36,7 +36,7 @@ pub use file_picker::{
     clear_platform_file_picker, default_file_picker, local_file_picker, set_platform_file_picker,
     FileFilter, FilePicker, FilePickerError, FilePickerOptions, FilePickerRef, FolderStream,
     FolderStreamRef, PickedEntry, PickedEntryRef, PickedKind, PickerFuture, ProvideFilePicker,
-    ResumedPick,
+    ResumedPick, SaveFileRequest,
 };
 pub use haptics::{
     clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics, HapticFeedback,
@@ -51,7 +51,9 @@ pub use image_picker::{
     set_platform_image_picker, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
     ProvideImagePicker, IMAGE_EXTENSIONS,
 };
-pub use navigation::{push_back_request, take_back_requests};
+pub use navigation::{
+    back_interception_enabled, push_back_request, set_back_interception, take_back_requests,
+};
 pub use network_status::{
     clear_platform_network_monitor, network_monitor, network_status, set_platform_network_monitor,
     NetworkMonitor, NetworkMonitorRef, NetworkStatus,
@@ -71,7 +73,8 @@ pub use share_sheet::{
     ProvideShareSheet, ShareContent, ShareError, ShareSheet, ShareSheetRef,
 };
 pub use theme::{
-    default_system_theme, isSystemInDarkTheme, local_system_theme, ProvideSystemTheme, SystemTheme,
+    clear_platform_system_theme, default_system_theme, isSystemInDarkTheme, local_system_theme,
+    set_platform_system_theme, ProvideSystemTheme, SystemTheme,
 };
 pub use uri_handler::{
     clear_platform_uri_handler, default_uri_handler, local_uri_handler, set_platform_uri_handler,

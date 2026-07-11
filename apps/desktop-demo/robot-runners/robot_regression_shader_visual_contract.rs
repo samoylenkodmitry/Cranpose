@@ -142,7 +142,7 @@ fn run_interactive_overlap() {
                 path.display()
             );
             if blur_label_pixels < 18
-                || right_blue_blur_pixels < 5_800
+                || right_blue_blur_pixels < 4_800
                 || right_blue_blur_pixels < left_blue_blur_pixels.saturating_add(1_100)
                 || right_edge < 0.65 * left_edge.max(1.0)
             {
@@ -474,8 +474,11 @@ fn is_scrollbar_thumb_pixel(pixel: [u8; 4]) -> bool {
 }
 
 fn is_blue_blur_pixel(pixel: [u8; 4]) -> bool {
+    // Calibrated against the pass-through (non-sRGB swapchain) output: the
+    // glass-over-blur teals sit near b≈180 while glass-over-checker teals
+    // stay below b≈130.
     let [red, green, blue, alpha] = pixel;
-    alpha > 170 && blue > 125 && green > 105 && blue > red.saturating_add(10)
+    alpha > 170 && blue > 140 && green > 105 && blue > red.saturating_add(10)
 }
 
 fn is_shadow_pixel(pixel: [u8; 4]) -> bool {

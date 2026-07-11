@@ -1480,6 +1480,13 @@ pub trait Applier: Any {
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError>;
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError>;
 
+    /// Records that `parent_id`'s child list changed structurally this frame
+    /// (insert, remove, move, or reparent). Incremental scene consumers drain
+    /// the recorded parents and re-patch those subtrees so removed nodes are
+    /// evicted from a persistent render graph even when the frame's scene
+    /// update is otherwise scoped to unrelated dirty nodes.
+    fn record_structural_change(&mut self, _parent_id: NodeId) {}
+
     /// Returns the current generation for a node index.
     /// Generation is incremented when an index is reused from the freelist,
     /// preventing stale slot entries from matching recycled nodes.
@@ -1775,6 +1782,7 @@ impl Command {
                     parent_node.move_child(from_index, to_index);
                 }
                 bubble.apply(applier, parent_id);
+                applier.record_structural_change(parent_id);
                 Ok(())
             }
             Self::RemoveChild {
@@ -2354,12 +2362,14 @@ fn insert_child_with_reparenting(applier: &mut dyn Applier, parent_id: NodeId, c
             }
             bubble_layout_dirty(applier, old_parent_id);
             bubble_measure_dirty(applier, old_parent_id);
+            applier.record_structural_change(old_parent_id);
         }
     }
 
     if let Ok(parent_node) = applier.get_mut(parent_id) {
         parent_node.insert_child(child_id);
     }
+    applier.record_structural_change(parent_id);
     if let Ok(child_node) = applier.get_mut(child_id) {
         child_node.on_attached_to_parent(parent_id);
     }
@@ -2393,6 +2403,7 @@ fn detach_child_from_parent(
     }
     bubble_layout_dirty(applier, parent_id);
     bubble_measure_dirty(applier, parent_id);
+    applier.record_structural_change(parent_id);
 
     if let Ok(node) = applier.get_mut(child_id) {
         match node.parent() {
@@ -2652,6 +2663,9 @@ pub struct MemoryApplier {
     warm_recycled_node_targets: HashMap<TypeId, usize>,
     fresh_recyclable_creations: HashMap<TypeId, usize>,
     recycled_node_prototypes: HashMap<TypeId, Box<dyn Node>>,
+    /// Parents whose child lists changed structurally since the last drain
+    /// (see [`Applier::record_structural_change`]).
+    structural_change_parents: Vec<NodeId>,
 }
 
 struct RemovalFrame {
@@ -2782,11 +2796,45 @@ impl MemoryApplier {
             warm_recycled_node_targets: HashMap::default(),
             fresh_recyclable_creations: HashMap::default(),
             recycled_node_prototypes: HashMap::default(),
+            structural_change_parents: Vec::new(),
         }
     }
 
     pub fn slots(&mut self) -> &mut SlotTable {
         &mut self.slots
+    }
+
+    /// Drains the parents recorded via [`Applier::record_structural_change`],
+    /// keeping only nodes still attached to `root` (a parent that was itself
+    /// removed is covered by its own surviving ancestor's record).
+    pub fn take_structural_change_parents_attached_to(&mut self, root: NodeId) -> Vec<NodeId> {
+        let recorded = std::mem::take(&mut self.structural_change_parents);
+        let mut attached = Vec::with_capacity(recorded.len());
+        for parent_id in recorded {
+            if self.is_attached_to(parent_id, root) && !attached.contains(&parent_id) {
+                attached.push(parent_id);
+            }
+        }
+        attached
+    }
+
+    fn is_attached_to(&mut self, node_id: NodeId, root: NodeId) -> bool {
+        let mut current = node_id;
+        // Parent chains are tree-shaped; the guard only bounds a corrupted
+        // cyclic chain so the walk cannot spin forever.
+        for _ in 0..100_000 {
+            if current == root {
+                return true;
+            }
+            match self.get_mut(current) {
+                Ok(node) => match node.parent() {
+                    Some(parent) => current = parent,
+                    None => return false,
+                },
+                Err(_) => return false,
+            }
+        }
+        false
     }
 
     pub fn with_node<N: Node + 'static, R>(
@@ -3447,6 +3495,12 @@ impl MemoryApplier {
 }
 
 impl Applier for MemoryApplier {
+    fn record_structural_change(&mut self, parent_id: NodeId) {
+        if self.structural_change_parents.last() != Some(&parent_id) {
+            self.structural_change_parents.push(parent_id);
+        }
+    }
+
     fn create(&mut self, node: Box<dyn Node>) -> NodeId {
         let stable_id = self.next_stable_id;
         self.next_stable_id = self.next_stable_id.saturating_add(1);

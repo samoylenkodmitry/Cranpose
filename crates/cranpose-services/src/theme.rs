@@ -1,5 +1,6 @@
 use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
+use std::cell::Cell;
 use std::cell::RefCell;
 #[cfg(all(
     not(target_arch = "wasm32"),
@@ -15,7 +16,49 @@ pub enum SystemTheme {
     Dark,
 }
 
+thread_local! {
+    /// Theme pushed by the platform backend (winit `ThemeChanged`, Android
+    /// `uiMode`, iOS trait collection, web `prefers-color-scheme` listener).
+    static PLATFORM_SYSTEM_THEME: Cell<Option<SystemTheme>> = const { Cell::new(None) };
+}
+
+/// Installs the platform-reported system theme. Platform backends call this at
+/// startup and whenever the OS reports a change (then force a root render so
+/// composition observes it).
+pub fn set_platform_system_theme(theme: SystemTheme) {
+    PLATFORM_SYSTEM_THEME.with(|cell| cell.set(Some(theme)));
+}
+
+/// Removes any platform-reported theme (tests and teardown).
+pub fn clear_platform_system_theme() {
+    PLATFORM_SYSTEM_THEME.with(|cell| cell.set(None));
+}
+
 pub fn default_system_theme() -> SystemTheme {
+    if let Some(theme) = PLATFORM_SYSTEM_THEME.with(|cell| cell.get()) {
+        return theme;
+    }
+    detected_system_theme()
+}
+
+/// One-shot environment detection, cached after the first call — the desktop
+/// probe shells out to `gsettings`/`defaults`/`reg`, which must not run on
+/// every composition-local read.
+fn detected_system_theme() -> SystemTheme {
+    thread_local! {
+        static DETECTED: Cell<Option<SystemTheme>> = const { Cell::new(None) };
+    }
+    DETECTED.with(|cell| {
+        if let Some(theme) = cell.get() {
+            return theme;
+        }
+        let theme = detect_system_theme_uncached();
+        cell.set(Some(theme));
+        theme
+    })
+}
+
+fn detect_system_theme_uncached() -> SystemTheme {
     #[cfg(all(
         not(target_arch = "wasm32"),
         not(target_os = "android"),
@@ -240,6 +283,16 @@ mod tests {
             default_system_theme(),
             SystemTheme::Light | SystemTheme::Dark
         ));
+    }
+
+    #[test]
+    fn platform_pushed_theme_wins_over_detection() {
+        clear_platform_system_theme();
+        set_platform_system_theme(SystemTheme::Dark);
+        assert_eq!(default_system_theme(), SystemTheme::Dark);
+        set_platform_system_theme(SystemTheme::Light);
+        assert_eq!(default_system_theme(), SystemTheme::Light);
+        clear_platform_system_theme();
     }
 
     #[test]

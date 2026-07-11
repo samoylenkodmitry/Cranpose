@@ -999,6 +999,7 @@ fn unsafe_code_stays_in_android_boundary_modules() {
     let source_dir = crate_dir.join("src");
     let allowed = [
         "android_jni.rs",
+        "android_services.rs",
         "android_surface.rs",
         "android_file_picker.rs",
         "android_text_input.rs",
@@ -1174,6 +1175,7 @@ fn workspace_ffi_boundaries_are_explicit() {
     let source_roots = ["crates", "apps", "xtask"];
     let allowed = [
         "crates/cranpose/src/android_jni.rs",
+        "crates/cranpose/src/android_services.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/android_file_picker.rs",
         "crates/cranpose/src/android_text_input.rs",

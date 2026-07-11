@@ -162,14 +162,31 @@ fn main() {
                 }
             }
 
-            for _ in 0..8 {
+            for _ in 0..12 {
                 let tabs = collect_tab_bounds(&robot, &labels);
                 let hacker_news = require_tab(&tabs, "Hacker News");
                 if visible_in_root(hacker_news, root) {
                     break;
                 }
-                let anchor = find_tab(&tabs, "Lazy List").unwrap_or(hacker_news);
-                scroll_tab_row_left(&robot, anchor, 220.0);
+                // Wheel (momentum-free) toward the target from a tab that is
+                // actually on screen: right of the viewport → scroll left;
+                // left of it (the row can overshoot once enough tabs exist,
+                // and a drag's release fling slams it end to end) → scroll
+                // right. Keeps the contract independent of the tab count.
+                let anchor = tabs
+                    .iter()
+                    .find(|(_, bounds)| visible_in_root(*bounds, root))
+                    .map(|(_, bounds)| *bounds)
+                    .unwrap_or(hacker_news);
+                let delta = if hacker_news.0 < root.0 { 220.0 } else { -220.0 };
+                let (anchor_x, anchor_y) = center(anchor);
+                robot.mouse_move(anchor_x, anchor_y).expect("move to tab row");
+                std::thread::sleep(Duration::from_millis(30));
+                robot
+                    .mouse_scroll(delta, 0.0)
+                    .expect("wheel tab row toward target");
+                std::thread::sleep(Duration::from_millis(160));
+                let _ = robot.wait_for_idle();
             }
 
             let before_click = collect_tab_bounds(&robot, &labels);

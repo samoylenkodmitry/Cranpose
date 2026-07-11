@@ -315,11 +315,19 @@ fn hash_shadow_primitive<H: Hasher>(shadow: &ShadowPrimitive, state: &mut H) {
     match shadow {
         ShadowPrimitive::Drop {
             shape,
+            cutout,
             blur_radius,
             blend_mode,
         } => {
             0u8.hash(state);
             hash_draw_primitive(shape, state);
+            match cutout {
+                Some(cutout) => {
+                    1u8.hash(state);
+                    hash_draw_primitive(cutout, state);
+                }
+                None => 0u8.hash(state),
+            }
             hash_f32_bits(*blur_radius, state);
             blend_mode.hash(state);
         }

@@ -34,44 +34,29 @@ impl Lerp for Color {
     }
 }
 
+/// Colors spring as four independent channels, mirroring how Compose animates
+/// `Color` as an `AnimationVector4D`. Channels are clamped back into `[0, 1]`
+/// when the vector is rebuilt, so overshooting springs still produce valid
+/// colors (Compose's gamut coercion).
 impl SpringScalar for Color {
-    /// Magnitude of the RGBA vector.
-    ///
-    /// Only a coarse scalar view: spring progress and settling for colors use
-    /// the 4-channel overrides below, mirroring how Compose animates colors
-    /// as `AnimationVector4D`.
-    fn to_f32(&self) -> f32 {
-        (self.0 * self.0 + self.1 * self.1 + self.2 * self.2 + self.3 * self.3).sqrt()
-    }
+    const DIMENSIONS: usize = 4;
 
-    /// Progress of `current` along the 4D line from `start` to `target`,
-    /// computed as a vector projection so all channels contribute.
-    fn spring_progress(start: &Self, target: &Self, current: &Self) -> f32 {
-        let delta = [
-            target.0 - start.0,
-            target.1 - start.1,
-            target.2 - start.2,
-            target.3 - start.3,
-        ];
-        let len_sq: f32 = delta.iter().map(|d| d * d).sum();
-        if len_sq < f32::EPSILON {
-            1.0
-        } else {
-            let travelled = (current.0 - start.0) * delta[0]
-                + (current.1 - start.1) * delta[1]
-                + (current.2 - start.2) * delta[2]
-                + (current.3 - start.3) * delta[3];
-            travelled / len_sq
+    fn dimension(&self, index: usize) -> f32 {
+        match index {
+            0 => self.0,
+            1 => self.1,
+            2 => self.2,
+            _ => self.3,
         }
     }
 
-    /// Euclidean distance across all four channels.
-    fn is_near_target(current: &Self, target: &Self, threshold: f32) -> bool {
-        let dr = current.0 - target.0;
-        let dg = current.1 - target.1;
-        let db = current.2 - target.2;
-        let da = current.3 - target.3;
-        (dr * dr + dg * dg + db * db + da * da).sqrt() < threshold
+    fn from_dimensions(dimensions: [f32; crate::animation::SPRING_MAX_DIMENSIONS]) -> Self {
+        Color(
+            dimensions[0].clamp(0.0, 1.0),
+            dimensions[1].clamp(0.0, 1.0),
+            dimensions[2].clamp(0.0, 1.0),
+            dimensions[3].clamp(0.0, 1.0),
+        )
     }
 }
 

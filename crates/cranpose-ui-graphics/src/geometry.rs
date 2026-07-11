@@ -416,9 +416,12 @@ pub enum DrawPrimitive {
 /// Describes a shadow to be rendered. Each renderer chooses how to blur.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShadowPrimitive {
-    /// Drop shadow: render shape behind content, blurred.
+    /// Drop shadow: render shape behind content, blurred. `cutout` knocks
+    /// the element's own (unoffset) shape out of the silhouette before the
+    /// blur so translucent surfaces never sample their own shadow.
     Drop {
         shape: Box<DrawPrimitive>,
+        cutout: Option<Box<DrawPrimitive>>,
         blur_radius: f32,
         blend_mode: BlendMode,
     },

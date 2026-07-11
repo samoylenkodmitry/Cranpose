@@ -44,6 +44,11 @@ pub struct Shadow {
     pub brush: Option<Brush>,
     pub alpha: f32,
     pub blend_mode: BlendMode,
+    /// Knocks the unoffset, unspread shape out of the shadow silhouette
+    /// before blurring, leaving shadow only OUTSIDE the element. Required
+    /// for translucent surfaces (glass): a backdrop-sampling material must
+    /// not refract its own shadow.
+    pub cutout: bool,
 }
 
 impl Default for Shadow {
@@ -56,6 +61,7 @@ impl Default for Shadow {
             brush: None,
             alpha: 1.0,
             blend_mode: BlendMode::SrcOver,
+            cutout: false,
         }
     }
 }
@@ -70,6 +76,7 @@ impl Shadow {
             brush: self.brush.clone(),
             alpha: self.alpha,
             blend_mode: self.blend_mode,
+            cutout: self.cutout,
         }
     }
 }
@@ -84,6 +91,9 @@ pub struct ShadowScope {
     pub brush: Option<Brush>,
     pub alpha: f32,
     pub blend_mode: BlendMode,
+    /// See [`Shadow::cutout`]: knock the element's own shape out of the
+    /// silhouette so the shadow exists only outside it.
+    pub cutout: bool,
 }
 
 impl Default for ShadowScope {
@@ -96,6 +106,7 @@ impl Default for ShadowScope {
             brush: None,
             alpha: 1.0,
             blend_mode: BlendMode::SrcOver,
+            cutout: false,
         }
     }
 }
@@ -133,6 +144,7 @@ mod tests {
             brush: None,
             alpha: 0.7,
             blend_mode: BlendMode::Overlay,
+            cutout: false,
         };
         let scope = shadow.to_scope(2.0);
         assert!((scope.radius - 10.0).abs() < 1e-6);

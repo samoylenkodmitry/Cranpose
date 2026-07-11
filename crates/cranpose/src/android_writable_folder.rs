@@ -2,8 +2,8 @@
 //!
 //! The write-side complement of [`crate::android_file_picker`]. The user grants a
 //! persistent read/write tree via `cranposePickWritableFolder` on
-//! [`CranposeFilePickerActivity`]; the chosen tree URI comes back through
-//! [`Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnWritableFolderPicked`].
+//! [`CranposeActivity`]; the chosen tree URI comes back through
+//! [`Java_dev_cranpose_android_CranposeActivity_nativeOnWritableFolderPicked`].
 //! Document I/O (`cranposeFolderWrite`/`List`/`Read`/`Remove`/`Writable`) runs
 //! synchronously over JNI and is safe to call from a background worker thread —
 //! [`crate::android_jni::with_android_activity_env`] attaches the calling thread.
@@ -306,7 +306,7 @@ impl Future for PickFuture {
 /// Java callback delivering the picked writable tree URI (or cancellation/error).
 #[doc(hidden)]
 #[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeFilePickerActivity_nativeOnWritableFolderPicked<
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritableFolderPicked<
     'local,
 >(
     mut env: EnvUnowned<'local>,

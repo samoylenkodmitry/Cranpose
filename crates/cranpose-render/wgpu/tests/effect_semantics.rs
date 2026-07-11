@@ -2145,6 +2145,7 @@ fn shadowed_card_layer(
                             rect: shadow_rect,
                             brush: Brush::solid(Color(0.0, 0.0, 0.0, 0.50)),
                         }),
+                        cutout: None,
                         blur_radius: 5.0,
                         blend_mode: BlendMode::SrcOver,
                     }),

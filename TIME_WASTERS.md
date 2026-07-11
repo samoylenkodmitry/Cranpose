@@ -34,6 +34,8 @@
 - HiDPI perf diagnosis shortcut: `CRANPOSE_GPU_STATS=1` per-60-frame lines immediately exposed why leetcodedaily-style scrolling was slow only on HiDPI: `shadow_cache: shape_miss=15 miss_px=14.20MP` + ~58MB/frame transient offscreen allocations during scroll at scale 1.354, while scale 1 showed zero misses. Shadow raster cache keys were anchored to floored device-pixel bounds, so the device subpixel phase leaked into the content hash at fractional scales (and floor/ceil size flapping multiplied cache entries). Fixed by anchoring the hash to the shapes' own unfloored bounds (quantized at 1/16 device px) and translation-stable surface sizes; shadow LRU budget raised 64→192MB for 4K-class shadow sets.
 - Idle frame-rate trap: when a Cranpose desktop app feels laggy, check idle fps FIRST (`CRANPOSE_GPU_STATS=1`, count `[GPU f#N]` lines per second × 60). leetcodedaily rendered 477fps at idle on a 60Hz panel because (a) an always-mounted `rememberInfiniteTransition` (workaround for long-fixed issue #262) kept animations alive forever, and (b) pre-0.1.14 desktop pacing defaulted to NoVsync so animations rendered uncapped. Both were invisible in robot runs: drivers measure throughput and the fixture idles between injected events. Production-mode verification needs the real binary on a real display: idle must be 0fps, animating content exactly the refresh rate.
 - xdotool wheel-scroll trap: `xdotool click 4/5` (XTEST legacy wheel) does not scroll Cranpose/winit windows on this X11 setup even when `getmouselocation` confirms the pointer is over the app window — clicks and drags work, wheel does not. Don't burn time on it: for scroll measurements use the in-process Robot (`robot.mouse_scroll`) via a test driver, pinning `with_frame_pacing_mode(Vsync)` if production pacing must be preserved.
+- Robot thermal guard resume-knob trap (2026-07-11): the host-capacity guard has TWO knobs — trip `CRANPOSE_HOST_MAX_TEMP_C` (default 90) and `CRANPOSE_HOST_RESUME_TEMP_C` (default 85). Raising only MAX does not help on a host whose ambient sits above RESUME: one momentary spike over MAX arms the wait, which then demands cooling below RESUME that never comes, and the run dies `host_not_ready` after `CRANPOSE_HOST_MAX_WAIT_SECS` (default 300). On this desktop (browser + OBS keep Tctl ≈ 91-93C) run suites with `CRANPOSE_HOST_MAX_TEMP_C=97 CRANPOSE_HOST_RESUME_TEMP_C=93` and a longer max wait; three suite launches were lost to this across July 10-11, 2026.
+- White-on-white robot diff trap (2026-07-11): `robot_liquid_motion_contract` reported "menu did not materialize" while its saved capture showed the menu fully open. The glass menu card is white-on-white over the page (max channel delta ≈ 10, below the d>12 diff threshold), so `diff_area` counted only text/icons/shadow (~2400 sampled px) against a 2500 floor — a coin flip that lost under suite load. Popup presence checks belong in semantics (`find_text_in_semantics` poll), with pixel floors kept only as drew-something sanity. Related: failing robot runners must not `process::exit(1)` from the driver thread — it races main-thread GPU teardown and dumps core (exit 139, masking the real failure); set a flag, call `robot.exit()`, and return the exit code from `main`.
 - Publish-tag trap: `publish.yml` does NOT bump versions — it *verifies* that `main` already carries the release metadata for the tag, then publishes. Tagging `vX.Y.Z` at a commit whose `Cargo.toml`/`Cargo.lock`/`apps/isolated-demo/Cargo.toml` still hold the previous version fails fast with "main must already contain the release metadata for vX.Y.Z". Correct order: commit a `Release vX.Y.Z` bump to `main` first (workspace.package version + every `cranpose*` workspace.dependency + the matching `cranpose*` `version = ` lines in `Cargo.lock` + isolated-demo — a plain `0.1.N`→`0.1.N+1` replace is safe because no third-party dep shares those version strings), THEN create the tag at that `main` HEAD (the workflow also rejects a tag not pointing at `main` HEAD).
 
 ## Vulkan GPU tests hang when run as harness background tasks (2026-07-02)
@@ -105,3 +107,119 @@
   `systemd-run --user --unit=<name> --setenv=DISPLAY=:0 <binary>` (spawns
   from the user manager at nice 0). Diagnose via `ps -o ni` — the 'N' in
   STAT is the tell.
+
+## Robot suite vs. host thermal guard (2026-07-10)
+`run_robot_test.sh` refuses to start while the CPU is above 85°C and gives up
+after 300s. Any concurrent heavy cargo/gradle build keeps the package hot the
+whole window, so the suite "fails" without running a single test. Schedule it
+LAST, after every other build finished — not in parallel.
+
+## Popup content updates (2026-07-10)
+`Popup` content used to be remembered once — anything animated or stateful
+inside popup content silently froze at its first-composition values (and a
+child sized past the popup's bounds is culled from hit-testing, so oversized
+"scrim" children never receive taps). Fixed: popup content re-registers per
+caller recomposition, and outside-tap dismissal is first-class via
+`PopupDismissable` (host-level scrim). Don't reintroduce hand-rolled scrims
+inside popup content.
+
+## "Recomposed value never reaches the screen" — probe ladder (2026-07-10)
+A Text color change updated the modifier element, the measure pass, AND the
+modifier-slices snapshot, yet the screen kept the old color for hours of
+static code reading. The break was the LAST cache before the GPU: TextService
+`prepared_cache` was keyed on `measurement_hash` (deliberately color-blind)
+while storing the full visual style. Lesson: don't trace these top-down by
+reading code — drop eprintln probes at the five stations (element update →
+node measure → modifier_slices_snapshot → scene builder → renderer cache),
+run once, and the first station still printing the OLD value brackets the
+bug. `CRANPOSE_RENDER_PHASE_DIRTY_DIAG=1` prints per-frame rebuild paths
+(skip/visual-update/update/rebuild) and dirty-node ids for free.
+
+## Washed-out colors are a FORMAT bug, not a palette bug (2026-07-10)
+Every color (shapes, gradients, text) rendered pale for the framework's whole
+life: all four shells preferred an sRGB swapchain while the pipeline passes
+sRGB bytes through — hardware re-encoded them (52,199,89)→(125,229,160).
+Sampled images looked right (sRGB-texture decode cancels it), which hid the
+bug and framed it as "gradients look off". If solids sample wrong but images
+look fine, check `surface.get_capabilities().formats` selection FIRST;
+`robot_color_fidelity` now pins byte-exact output. Beware tests that encode
+the bug as truth: the micro-contract's expected_screenshot_rgb used to apply
+linear→sRGB on purpose.
+
+## find_text_in_semantics is a SUBSTRING match (2026-07-10)
+A walkthrough clicked "Discover" and teleported to another demo tab; two
+hours of hit-graph/pointer-capture spelunking later, the truth: the query
+matched "**Discover** updates to Swift…" (a session subtitle that had
+scrolled under the strip), so the click landed on the top tab strip. The
+renderer/hit-testing was innocent. For interactive lookups always use
+`find_button_exact_in_semantics` (exact + role-filtered); reserve substring
+`find_text_in_semantics` for asserting mere presence. Symptom signature:
+"clicks land on a widget nowhere near the coordinates you thought you used"
+— print the resolved bounds BEFORE suspecting dispatch.
+
+## Shader composites leak pass state (fixed, guarded) (2026-07-10)
+`draw_prepared_shader_src_over` draws into a caller-owned fused pass and set
+a sub-viewport for its dest rect without restoring — every later draw in the
+same segment chunk (text after fire-shader boxes) got remapped into that
+sub-rect and vanished at most scroll offsets ("SDF Halo Border" header).
+Restore full viewport+scissor after any composite that shares a pass.
+Guarded by robot_regression_fused_viewport_contract (also covers the
+scrolled-tab-switch ghost).
+
+## Oversize overlay nodes get silently clamped by parent constraints (2026-07-11)
+The toggle's press lens (a 78×59 glass node inside the 63×28 track Box) came
+out "shifted up with its bottom sliced at the track's middle" — hours of
+suspecting the shader/SDF math. Truth: `Modifier::size()` COERCES into the
+incoming constraints, so the node measured 78×28 while the morph geometry
+assumed 59 tall. Any overlay that must exceed its parent (lenses, badges,
+glow halos) needs `Modifier::required_size()`. Symptom signature: an effect
+looks "cropped/mis-anchored on one axis only" and the amount equals the
+parent's max constraint.
+
+## Screenshot-based ghost hunting can't see the presented surface (2026-07-11)
+`robot.screenshot()` re-renders the retained scene offscreen
+(`capture_frame_with_scale`) — it can NEVER show swapchain/present-path
+artifacts the user sees in the real window. For "stale pixels after tab
+switch" reports, capture the REAL window: run the app windowed
+(`examples/ghost_presented_probe.rs`) and grab it externally with
+`import -window $(xdotool search --name …)`. Also remember the demo's tab
+strip SCROLLS: semantics can locate an off-screen strip tab and the click
+lands on whatever is at those coords instead (use the set-tab hook).
+
+## Judging visual work with stale/cropped captures wastes review rounds (2026-07-11)
+Two external-judge rounds were partially spent on artifacts of MY captures:
+a 45px-tall crop cut the lens bottom ("mis-anchored" verdict) and one set
+predated the fix it was judging. Before spending a judge round: re-capture
+AFTER the last code change, and crop generously around the component
+(include full overflow extents).
+
+## 2026-07-11: glass geometry density-vs-render-scale (hours)
+- Symptom: toggle/tab lens rendered as a flat white slab + tiny displaced
+  green blob; user saw it as "glass distorts wrong" and "bubble freezes".
+- Root: `GlassMorph` uniforms were packed as dp×`current_density()` (1.354
+  here via Xft.dpi 130 — even HEADLESS runs get it because DISPLAY=:0.0 is
+  set in every shell) while robot captures render at root_scale 1.0. Geometry
+  landed 1.354× off. It looked correct the previous evening only because those
+  runs matched scale by accident.
+- Debug path that finally worked: minimal `lens_probe` example over a
+  two-tone background + shader-output dumps (`return vec4(uv,0,1)`, dumping
+  uniforms as colors). Pixel-measuring the SDF center/size vs expected gave
+  the ×1.354 ratio immediately. Hours were lost before that on renderer
+  composite-path forensics (backdrop capture/scissor/cache all innocent).
+- Fix: geometry in dp + container = node size dp (shader derives px-per-dp
+  per axis from the injected node pixel rect). Guard test:
+  `morph_glass_packs_dp_geometry_with_node_size_container`.
+- Meta-lessons:
+  - `git stash` on a tree carrying YESTERDAY'S uncommitted session buries the
+    baseline you wanted to compare against (stash swallowed 70 files) AND
+    destroys mtime forensics (pop rewrites files). Diff experiments on a
+    dirty pre-alpha tree need env-var kill-switches, not stashes.
+  - X11 multi-monitor: xdotool getdisplaygeometry lied (1920x1080) vs the
+    real 5760x2160 virtual screen with a DEAD ZONE at top-left where the WM
+    parks windows: grabs "work" there but the pointer CANNOT enter (pinned at
+    x=1920), so clicks silently miss. Always windowmove onto a real monitor
+    (HDMI-0 at +1920+0) before driving input.
+  - The demo release binary has NO logger (`logging` feature off): log::warn
+    diagnostics are invisible; build robot profile with
+    `--features desktop,logging` or use eprintln-based env-gated diags
+    (`CRANPOSE_BACKDROP_DIAG`).

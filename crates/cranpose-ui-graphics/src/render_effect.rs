@@ -91,6 +91,7 @@ pub struct RuntimeShader {
     source_hash: u64,
     uniforms: RuntimeShaderUniforms,
     input_padding: f32,
+    output_padding: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -189,6 +190,7 @@ impl RuntimeShader {
             source_hash,
             uniforms: RuntimeShaderUniforms::new(),
             input_padding: 0.0,
+            output_padding: 0.0,
         }
     }
 
@@ -203,6 +205,7 @@ impl RuntimeShader {
             source_hash,
             uniforms: RuntimeShaderUniforms::new(),
             input_padding: 0.0,
+            output_padding: 0.0,
         }
     }
 
@@ -220,6 +223,23 @@ impl RuntimeShader {
     /// Returns the declared input padding in logical pixels.
     pub fn input_padding(&self) -> f32 {
         self.input_padding
+    }
+
+    /// Declares how far the shader WRITES outside its effect rect, in logical
+    /// pixels. Backdrop compositing widens its scissor by this amount so
+    /// SDF-driven coverage (rim glow, wobble, glued neighbor shapes) can
+    /// extend past the node bounds instead of being clipped to them.
+    pub fn set_output_padding(&mut self, padding: f32) {
+        self.output_padding = if padding.is_finite() {
+            padding.max(0.0)
+        } else {
+            0.0
+        };
+    }
+
+    /// Returns the declared output padding in logical pixels.
+    pub fn output_padding(&self) -> f32 {
+        self.output_padding
     }
 
     /// Set a single float uniform at the given index.
@@ -343,6 +363,7 @@ impl PartialEq for RuntimeShader {
                 || self.source.as_ref() == other.source.as_ref())
             && self.uniforms == other.uniforms
             && self.input_padding.to_bits() == other.input_padding.to_bits()
+            && self.output_padding.to_bits() == other.output_padding.to_bits()
     }
 }
 
@@ -532,6 +553,19 @@ impl RenderEffect {
             RenderEffect::Offset { offset_x, offset_y } => offset_x.abs().max(offset_y.abs()),
             RenderEffect::Shader { shader } => shader.input_padding(),
             RenderEffect::Chain { first, second } => first.input_padding() + second.input_padding(),
+        }
+    }
+
+    /// Maximum logical-pixel distance this effect WRITES outside its rect.
+    /// Only runtime shaders may declare one (SDF coverage past node bounds);
+    /// blur/offset stay confined to their tight rect.
+    pub fn output_padding(&self) -> f32 {
+        match self {
+            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => 0.0,
+            RenderEffect::Shader { shader } => shader.output_padding(),
+            RenderEffect::Chain { first, second } => {
+                first.output_padding() + second.output_padding()
+            }
         }
     }
 }

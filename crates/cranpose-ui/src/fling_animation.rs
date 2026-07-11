@@ -240,6 +240,190 @@ impl Clone for FlingAnimation {
     }
 }
 
+/// Predicts where a fling starting at `initial_value` with `velocity` would
+/// naturally come to rest, using the same decay physics as
+/// [`FlingAnimation::start_fling`]. Settle policies remap this proposed rest
+/// position before the deceleration starts (the `UIScrollView
+/// targetContentOffset` analog).
+pub fn fling_rest_position(initial_value: f32, velocity: f32, density: f32) -> f32 {
+    if velocity.abs() < MIN_FLING_VELOCITY {
+        return initial_value;
+    }
+    let calc = cranpose_animation::FlingCalculator::new(DEFAULT_FLING_FRICTION, density);
+    let spec = SplineBasedDecaySpec::with_calculator(calc);
+    spec.get_target_value(initial_value, velocity)
+}
+
+/// Spring stiffness for settle animations (critically damped ≈ 0.35 s), the
+/// iOS large-title snap feel.
+const SETTLE_STIFFNESS: f32 = 300.0;
+
+/// Position/velocity epsilons below which a settle animation finishes.
+const SETTLE_REST_DISTANCE: f32 = 0.1;
+const SETTLE_REST_VELOCITY: f32 = 4.0;
+
+struct SettleAnimationState {
+    value: Cell<f32>,
+    velocity: Cell<f32>,
+    target: f32,
+    last_frame_time_nanos: Cell<Option<u64>>,
+    registration: Option<FrameCallbackRegistration>,
+    is_running: Cell<bool>,
+}
+
+/// Drives a critically-damped spring toward a settle target on a scroll
+/// container, taking over the gesture's release velocity so a policy-adjusted
+/// rest position still reads as one continuous deceleration.
+pub struct SettleAnimation {
+    state: Rc<RefCell<Option<SettleAnimationState>>>,
+    frame_clock: FrameClock,
+}
+
+impl SettleAnimation {
+    pub fn new(runtime: RuntimeHandle) -> Self {
+        Self {
+            state: Rc::new(RefCell::new(None)),
+            frame_clock: runtime.frame_clock(),
+        }
+    }
+
+    /// Starts settling from `initial_value` (with `initial_velocity`, in
+    /// offset units/sec) toward `target`. `on_scroll` receives per-frame
+    /// deltas and returns the consumed amount; `on_end` fires once when the
+    /// spring rests or the target stops consuming (boundary hit).
+    pub fn start_settle<F, G>(
+        &self,
+        initial_value: f32,
+        initial_velocity: f32,
+        target: f32,
+        on_scroll: F,
+        on_end: G,
+    ) where
+        F: Fn(f32) -> f32 + 'static,
+        G: FnOnce() + 'static,
+    {
+        self.cancel();
+        *self.state.borrow_mut() = Some(SettleAnimationState {
+            value: Cell::new(initial_value),
+            velocity: Cell::new(initial_velocity),
+            target,
+            last_frame_time_nanos: Cell::new(None),
+            registration: None,
+            is_running: Cell::new(true),
+        });
+        schedule_next_settle_frame(
+            self.state.clone(),
+            self.frame_clock.clone(),
+            on_scroll,
+            on_end,
+        );
+    }
+
+    pub fn cancel(&self) {
+        if let Some(state) = self.state.borrow_mut().take() {
+            state.is_running.set(false);
+            drop(state.registration);
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.state
+            .borrow()
+            .as_ref()
+            .is_some_and(|s| s.is_running.get())
+    }
+}
+
+impl Clone for SettleAnimation {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            frame_clock: self.frame_clock.clone(),
+        }
+    }
+}
+
+fn schedule_next_settle_frame<F, G>(
+    state: Rc<RefCell<Option<SettleAnimationState>>>,
+    frame_clock: FrameClock,
+    on_scroll: F,
+    on_end: G,
+) where
+    F: Fn(f32) -> f32 + 'static,
+    G: FnOnce() + 'static,
+{
+    let state_for_closure = state.clone();
+    let frame_clock_for_closure = frame_clock.clone();
+    let on_end = RefCell::new(Some(on_end));
+
+    let registration = frame_clock.with_frame_nanos(move |frame_time_nanos| {
+        let should_continue = {
+            let state_guard = state_for_closure.borrow();
+            let Some(anim_state) = state_guard.as_ref() else {
+                return;
+            };
+            if !anim_state.is_running.get() {
+                return;
+            }
+
+            let dt = match anim_state.last_frame_time_nanos.get() {
+                Some(last) => (frame_time_nanos.saturating_sub(last) as f32) / 1_000_000_000.0,
+                None => 0.0,
+            };
+            anim_state.last_frame_time_nanos.set(Some(frame_time_nanos));
+
+            let (mut next_value, next_velocity) = cranpose_animation::advance_spring(
+                anim_state.value.get(),
+                anim_state.velocity.get(),
+                anim_state.target,
+                1.0,
+                SETTLE_STIFFNESS,
+                dt.max(0.0),
+            );
+
+            let is_finished = (next_value - anim_state.target).abs() < SETTLE_REST_DISTANCE
+                && next_velocity.abs() < SETTLE_REST_VELOCITY;
+            if is_finished {
+                next_value = anim_state.target;
+                anim_state.is_running.set(false);
+            }
+
+            let delta = next_value - anim_state.value.get();
+            anim_state.value.set(next_value);
+            anim_state.velocity.set(next_velocity);
+
+            let consumed = if delta.abs() > 0.0001 {
+                on_scroll(delta)
+            } else {
+                delta
+            };
+            let hit_boundary = (delta - consumed).abs() > BOUNDARY_EPSILON;
+            if hit_boundary {
+                anim_state.is_running.set(false);
+            }
+
+            !is_finished && !hit_boundary
+        };
+
+        if should_continue {
+            if let Some(on_end_fn) = on_end.borrow_mut().take() {
+                schedule_next_settle_frame(
+                    state_for_closure.clone(),
+                    frame_clock_for_closure.clone(),
+                    on_scroll,
+                    on_end_fn,
+                );
+            }
+        } else if let Some(end_fn) = on_end.borrow_mut().take() {
+            end_fn();
+        }
+    });
+
+    if let Some(anim_state) = state.borrow_mut().as_mut() {
+        anim_state.registration = Some(registration);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +436,46 @@ mod tests {
     #[test]
     fn test_min_velocity_threshold() {
         assert_eq!(MIN_FLING_VELOCITY, 1.0);
+    }
+
+    #[test]
+    fn settle_animation_springs_to_target_and_ends() {
+        let runtime = Runtime::new(Arc::new(DefaultScheduler));
+        let handle = runtime.handle();
+        let settle = SettleAnimation::new(handle.clone());
+        let position = Rc::new(Cell::new(30.0f32));
+        let ended = Rc::new(Cell::new(false));
+        let position_for_scroll = Rc::clone(&position);
+        let ended_for_end = Rc::clone(&ended);
+        settle.start_settle(
+            30.0,
+            0.0,
+            52.0,
+            move |delta| {
+                position_for_scroll.set(position_for_scroll.get() + delta);
+                delta
+            },
+            move || ended_for_end.set(true),
+        );
+        for frame in 0..240u64 {
+            handle.drain_frame_callbacks(frame * 16_000_000);
+            if ended.get() {
+                break;
+            }
+        }
+        assert!(ended.get(), "settle animation must finish");
+        assert!(
+            (position.get() - 52.0).abs() < 0.2,
+            "settle must land on the target, got {}",
+            position.get()
+        );
+    }
+
+    #[test]
+    fn fling_rest_position_is_beyond_start_in_fling_direction() {
+        let rest = fling_rest_position(100.0, 900.0, 1.0);
+        assert!(rest > 100.0, "rest {rest} must be past the start");
+        assert_eq!(fling_rest_position(100.0, 0.0, 1.0), 100.0);
     }
 
     #[test]

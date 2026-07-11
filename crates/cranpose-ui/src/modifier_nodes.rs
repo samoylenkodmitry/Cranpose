@@ -933,6 +933,13 @@ impl LayoutModifierNode for SizeNode {
         // Return the target size when both min==max (fixed size), but only if it satisfies
         // the wrapped constraints we passed down. Otherwise return measured size.
         // This handles the case where enforce_incoming=true and incoming constraints are tighter.
+        //
+        // With enforce_incoming=false (`required_size`) the node measures AND
+        // reports the required size: draw rects and effect bounds derive from
+        // the node box, so oversized overlay content (selection magnifier
+        // line, interaction lenses) must keep its full box. Hosts that must
+        // not grow pin their own size (a fixed-size ancestor wins over a
+        // wrap-content one).
         let result_width = if self.min_width.is_some()
             && self.max_width.is_some()
             && self.min_width == self.max_width
@@ -1604,6 +1611,108 @@ impl ModifierNodeElement for WindowRectReporterElement {
 
     fn create(&self) -> Self::Node {
         WindowRectReporterNode::new(self.sink.clone())
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.sink = self.sink.clone();
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
+}
+
+// ============================================================================
+// Size Reporter Modifier Node
+// ============================================================================
+
+/// Node that publishes its measured size (logical px) into a shared cell on
+/// every measure pass — the Compose `onSizeChanged` seam for consumers that
+/// need their node's resolved size outside layout (e.g. shader morph
+/// geometry expressed in node-local pixels). Transparent for layout, draws
+/// nothing.
+pub struct SizeReporterNode {
+    sink: Rc<Cell<Size>>,
+    state: NodeState,
+}
+
+impl SizeReporterNode {
+    pub fn new(sink: Rc<Cell<Size>>) -> Self {
+        Self {
+            sink,
+            state: NodeState::new(),
+        }
+    }
+}
+
+impl DelegatableNode for SizeReporterNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for SizeReporterNode {
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+impl LayoutModifierNode for SizeReporterNode {
+    fn measure(
+        &self,
+        _context: &mut dyn ModifierNodeContext,
+        measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
+        let placeable = measurable.measure(constraints);
+        let size = Size {
+            width: placeable.width(),
+            height: placeable.height(),
+        };
+        self.sink.set(size);
+        cranpose_ui_layout::LayoutModifierMeasureResult::new(size, 0.0, 0.0)
+    }
+}
+
+/// Element for [`SizeReporterNode`]; reuses the node, swapping the sink.
+#[derive(Clone)]
+pub struct SizeReporterElement {
+    sink: Rc<Cell<Size>>,
+}
+
+impl SizeReporterElement {
+    pub fn new(sink: Rc<Cell<Size>>) -> Self {
+        Self { sink }
+    }
+}
+
+impl std::fmt::Debug for SizeReporterElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SizeReporterElement").finish()
+    }
+}
+
+impl PartialEq for SizeReporterElement {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.sink, &other.sink)
+    }
+}
+
+impl Hash for SizeReporterElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (Rc::as_ptr(&self.sink) as usize).hash(state);
+    }
+}
+
+impl ModifierNodeElement for SizeReporterElement {
+    type Node = SizeReporterNode;
+
+    fn create(&self) -> Self::Node {
+        SizeReporterNode::new(self.sink.clone())
     }
 
     fn update(&self, node: &mut Self::Node) {

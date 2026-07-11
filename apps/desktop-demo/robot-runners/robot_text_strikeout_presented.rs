@@ -151,7 +151,10 @@ fn strikeout_row_metrics(
                 count += 1;
             }
         }
-        *bright_slot = count >= 2;
+        // The decoration core is 1px at UI text sizes — with pass-through
+        // colors its anti-aliasing halo sits below the brightness threshold,
+        // so a single lit row within the window is the line.
+        *bright_slot = count >= 1;
     }
 
     let first_x = bright.iter().position(|value| *value)?;

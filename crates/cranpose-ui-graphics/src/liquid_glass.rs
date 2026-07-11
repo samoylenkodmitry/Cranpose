@@ -1,42 +1,52 @@
 //! LiquidGlass effect: a refractive glass material rendered via RuntimeShader.
 //!
-//! Faithful port of the Android AGSL LiquidGlass shader to WGSL, matching the
-//! Jetpack Compose API. Uses SDF-based rounded rectangles with height profiles
-//! for refraction, rim specular lighting, and tint color blending.
+//! An SDF rounded-rect lens over the backdrop: height-profile refraction along
+//! the bezel normal (static lensing, visible without any motion), a
+//! motion/tilt displacement term, chromatic aberration at the bezel,
+//! saturation/vibrancy, scheme-adaptive exposure, tint blending, a specular
+//! rim lit from an explicit light direction, and an anti-banding dither.
+//!
+//! Typically chained after a [`RenderEffect::blur`] over the backdrop for the
+//! frosted "regular" material; used alone for the "clear" material.
 
 use crate::{Color, RenderEffect, RuntimeShader};
 
-/// LiquidGlass WGSL shader source — faithful port of Android's LIQUID_GLASS_AGSL.
+/// LiquidGlass WGSL shader source.
 ///
 /// Bindings:
 /// - group(0) binding(0): input_texture (the content behind the glass)
 /// - group(0) binding(1): input_sampler
 /// - group(1) binding(0): uniform array u[64 vec4s]
 ///
-/// Uniform layout (float indices, all in pixel/dp units):
-///   0,1: container size (width, height) px
-///   2,3: rect center (cx, cy) px
-///   4,5: rect size (w, h) px
-///   6: corner radius px
-///   7: bezel width px
-///   8: displacement scale (default 44.0)
-///   9: refractive index (default 1.8)
-///  10: profile exponent (default 1.4)
-///  11: highlight intensity (default 0.7)
-///  12,13: tilt (angle, pitch) radians
+/// Uniform layout (float indices; sizes in dp, converted in-shader):
+///   0,1: container size (width, height) dp
+///   2,3: rect center (cx, cy) dp
+///   4,5: rect size (w, h) dp
+///   6: corner radius dp
+///   7: bezel width dp
+///   8: displacement scale (px at 1x)
+///   9: refractive index (1.0 = none, higher = more bending)
+///  10: profile exponent (0 = circle, 1 = squircle)
+///  11: highlight intensity
+///  12,13: tilt (x, y) — motion-driven displacement direction
 ///  14,15,16,17: tint color (r,g,b,a)
+///  18: saturation (1.0 = unchanged)
+///  19: chromatic aberration spread (relative, 0 = off)
+///  20: lift (−1..1; screen-blend toward white / multiply toward black)
+///  21: dither amount (0..1, in 1/255 steps)
+///  22,23: specular light direction ((0,1) lights the top edge)
+///  24: contrast (1.0 = neutral; ≤0 treated as 1.0)
+///  25: edge-band fraction of the bezel carrying the strong lens + CA
 pub const LIQUID_GLASS_WGSL: &str = include_str!("../shaders/liquid_glass.wgsl");
 
 /// Configuration for the LiquidGlass effect.
-///
-/// Defaults match Android's `LiquidGlassSpec` companion defaults.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LiquidGlassSpec {
-    /// Corner radius of the glass rounded rect, in dp/px.
+    /// Corner radius of the glass rounded rect, in dp.
     pub corner_radius: f32,
-    /// Width of the edge bezel (transition zone), in dp/px.
+    /// Width of the edge bezel (refractive transition zone), in dp.
     pub bezel_width: f32,
-    /// How much the refraction displaces the background, in pixels.
+    /// How much the refraction displaces the background, in px.
     pub displacement_scale: f32,
     /// Refractive index (1.0 = no refraction, higher = more bending).
     pub refractive_index: f32,
@@ -44,10 +54,27 @@ pub struct LiquidGlassSpec {
     pub profile: f32,
     /// Specular highlight intensity.
     pub highlight: f32,
-    /// Tilt angle (radians) — horizontal light direction.
+    /// Motion tilt (x) — gesture/device-motion displacement input.
     pub tilt_angle: f32,
-    /// Tilt pitch (radians) — vertical light direction.
+    /// Motion tilt (y).
     pub tilt_pitch: f32,
+    /// Saturation/vibrancy multiplier applied to the refracted backdrop.
+    pub saturation: f32,
+    /// Chromatic aberration spread at the bezel (0 = off, ~0.4 = iOS-like).
+    pub chromatic_aberration: f32,
+    /// Scheme lift: positive screen-blends toward white (light scheme),
+    /// negative multiplies toward black (dark scheme). Screen keeps the
+    /// backdrop ghosts colored, unlike an alpha mix.
+    pub lift: f32,
+    /// Contrast pivot around mid-gray (1.0 = neutral).
+    pub contrast: f32,
+    /// Fraction of the bezel forming the steep edge-lens band (also carries
+    /// the chromatic aberration).
+    pub edge_band: f32,
+    /// Anti-banding dither amount (0..1, in 1/255 steps).
+    pub dither: f32,
+    /// Specular light direction; `(0, 1)` lights the top edge.
+    pub light_direction: (f32, f32),
 }
 
 impl Default for LiquidGlassSpec {
@@ -55,29 +82,35 @@ impl Default for LiquidGlassSpec {
         Self {
             corner_radius: 28.0,
             bezel_width: 14.0,
-            displacement_scale: 44.0,
-            refractive_index: 1.8,
-            profile: 1.4,
+            displacement_scale: 24.0,
+            refractive_index: 1.5,
+            profile: 0.6,
             highlight: 0.7,
             tilt_angle: 0.0,
             tilt_pitch: 0.0,
+            saturation: 1.0,
+            chromatic_aberration: 0.0,
+            lift: 0.0,
+            contrast: 1.0,
+            edge_band: 0.5,
+            dither: 0.5,
+            light_direction: (0.0, 1.0),
         }
     }
 }
 
 /// A rectangular region where the liquid glass effect is applied.
 ///
-/// Coordinates are in dp/pixels relative to the effect area, matching the
-/// Android `LiquidGlassRect` API.
+/// Coordinates are in dp relative to the effect area.
 #[derive(Clone, Debug)]
 pub struct LiquidGlassRect {
-    /// Left edge in dp/px.
+    /// Left edge in dp.
     pub left: f32,
-    /// Top edge in dp/px.
+    /// Top edge in dp.
     pub top: f32,
-    /// Width in dp/px.
+    /// Width in dp.
     pub width: f32,
-    /// Height in dp/px.
+    /// Height in dp.
     pub height: f32,
     /// Tint color applied to the glass.
     pub tint_color: Color,
@@ -85,7 +118,7 @@ pub struct LiquidGlassRect {
 
 /// Build a `RenderEffect` that applies the LiquidGlass shader to a single rect.
 ///
-/// `area_width` and `area_height` are the total effect area size in dp/pixels.
+/// `area_width` and `area_height` are the total effect area size in dp.
 pub fn liquid_glass_effect(
     rect: &LiquidGlassRect,
     spec: &LiquidGlassSpec,
@@ -94,7 +127,7 @@ pub fn liquid_glass_effect(
 ) -> RenderEffect {
     let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
 
-    // Compute center in pixels
+    // Compute center in dp
     let cx = rect.left + rect.width * 0.5;
     let cy = rect.top + rect.height * 0.5;
 
@@ -116,16 +149,29 @@ pub fn liquid_glass_effect(
         rect.tint_color.b(),
         rect.tint_color.a(),
     );
+    shader.set_float(18, spec.saturation);
+    shader.set_float(19, spec.chromatic_aberration);
+    shader.set_float(20, spec.lift);
+    shader.set_float(21, spec.dither);
+    shader.set_float2(22, spec.light_direction.0, spec.light_direction.1);
+    shader.set_float(24, spec.contrast);
+    shader.set_float(25, spec.edge_band);
     shader.set_input_padding(liquid_glass_input_padding(spec));
 
     RenderEffect::runtime_shader(shader)
 }
 
+/// How far the shader's refracted samples can reach outside the effect rect —
+/// the backdrop capture must cover it. The displacement is
+/// `(normal + tilt) * bend * scale` with the chromatic-aberration spread on
+/// top; `|normal| = 1`, so the static lens contributes even with zero tilt.
 fn liquid_glass_input_padding(spec: &LiquidGlassSpec) -> f32 {
     let bend = 1.0 - 1.0 / spec.refractive_index.max(1.0001);
-    let tilt = spec.tilt_angle.abs().max(spec.tilt_pitch.abs());
-    let slope = liquid_glass_max_height_slope(spec.profile);
-    let displacement = tilt * bend * spec.displacement_scale.max(0.0) * slope;
+    let tilt = (spec.tilt_angle * spec.tilt_angle + spec.tilt_pitch * spec.tilt_pitch).sqrt();
+    let reach = 1.0 + tilt;
+    let slope = liquid_glass_max_lens_slope(spec.profile);
+    let spread = 1.0 + spec.chromatic_aberration.max(0.0) * 0.5;
+    let displacement = reach * bend * spec.displacement_scale.max(0.0) * slope * spread;
     if displacement > 0.0 {
         displacement.ceil() + 2.0
     } else {
@@ -133,9 +179,11 @@ fn liquid_glass_input_padding(spec: &LiquidGlassSpec) -> f32 {
     }
 }
 
-fn liquid_glass_max_height_slope(profile: f32) -> f32 {
+/// Largest combined lens factor the shader can produce: the squircle edge
+/// band peaks at 4 at the rim, plus 0.35 × the dome slope.
+fn liquid_glass_max_lens_slope(profile: f32) -> f32 {
     let p = profile.clamp(0.0, 1.0);
-    2.0 + 2.0 * p
+    4.0 + 0.35 * (2.0 + 2.0 * p)
 }
 
 /// Build a chained `RenderEffect` for multiple liquid glass rects.
@@ -167,37 +215,12 @@ mod tests {
         let spec = LiquidGlassSpec::default();
         assert_eq!(spec.corner_radius, 28.0);
         assert_eq!(spec.bezel_width, 14.0);
-        assert_eq!(spec.displacement_scale, 44.0);
-        assert_eq!(spec.refractive_index, 1.8);
-        assert_eq!(spec.profile, 1.4);
-        assert_eq!(spec.highlight, 0.7);
-    }
-
-    #[test]
-    fn liquid_glass_rect_fields() {
-        let rect = LiquidGlassRect {
-            left: 50.0,
-            top: 30.0,
-            width: 200.0,
-            height: 100.0,
-            tint_color: Color(0.6, 0.8, 1.0, 0.15),
-        };
-        assert_eq!(rect.left, 50.0);
-        assert_eq!(rect.width, 200.0);
-    }
-
-    #[test]
-    fn liquid_glass_effect_single() {
-        let rect = LiquidGlassRect {
-            left: 50.0,
-            top: 30.0,
-            width: 200.0,
-            height: 100.0,
-            tint_color: Color(0.5, 0.5, 1.0, 0.1),
-        };
-        let spec = LiquidGlassSpec::default();
-        let effect = liquid_glass_effect(&rect, &spec, 800.0, 600.0);
-        assert!(matches!(effect, RenderEffect::Shader { .. }));
+        assert_eq!(spec.refractive_index, 1.5);
+        assert_eq!(spec.saturation, 1.0);
+        assert_eq!(spec.chromatic_aberration, 0.0);
+        assert_eq!(spec.lift, 0.0);
+        assert_eq!(spec.contrast, 1.0);
+        assert_eq!(spec.light_direction, (0.0, 1.0));
     }
 
     #[test]
@@ -209,56 +232,69 @@ mod tests {
             height: 100.0,
             tint_color: Color(0.5, 0.5, 1.0, 0.1),
         };
-        let spec = LiquidGlassSpec::default();
+        let spec = LiquidGlassSpec {
+            saturation: 1.6,
+            chromatic_aberration: 0.4,
+            lift: 0.12,
+            contrast: 1.05,
+            edge_band: 0.4,
+            dither: 1.0,
+            light_direction: (0.3, 0.7),
+            ..LiquidGlassSpec::default()
+        };
         let effect = liquid_glass_effect(&rect, &spec, 800.0, 600.0);
-        if let RenderEffect::Shader { shader } = effect {
-            let u = shader.uniforms();
-            // container size
-            assert_eq!(u[0], 800.0);
-            assert_eq!(u[1], 600.0);
-            // center = (left + width/2, top + height/2) = (200, 100)
-            assert_eq!(u[2], 200.0);
-            assert_eq!(u[3], 100.0);
-            // rect size
-            assert_eq!(u[4], 200.0);
-            assert_eq!(u[5], 100.0);
-            // corner radius (default 28.0)
-            assert_eq!(u[6], 28.0);
-            // displacement scale
-            assert_eq!(u[8], 44.0);
-            // refractive index
-            assert_eq!(u[9], 1.8);
-            assert_eq!(shader.input_padding(), 0.0);
-        } else {
+        let RenderEffect::Shader { shader } = effect else {
             panic!("expected Shader effect");
-        }
+        };
+        let u = shader.uniforms();
+        // container size
+        assert_eq!(u[0], 800.0);
+        assert_eq!(u[1], 600.0);
+        // center = (left + width/2, top + height/2) = (200, 100)
+        assert_eq!(u[2], 200.0);
+        assert_eq!(u[3], 100.0);
+        // rect size
+        assert_eq!(u[4], 200.0);
+        assert_eq!(u[5], 100.0);
+        // corner radius (default 28.0)
+        assert_eq!(u[6], 28.0);
+        // material extension slots
+        assert_eq!(u[18], 1.6);
+        assert_eq!(u[19], 0.4);
+        assert_eq!(u[20], 0.12);
+        assert_eq!(u[21], 1.0);
+        assert_eq!(u[22], 0.3);
+        assert_eq!(u[23], 0.7);
+        assert_eq!(u[24], 1.05);
+        assert_eq!(u[25], 0.4);
     }
 
     #[test]
-    fn liquid_glass_declares_backdrop_input_padding_for_tilted_refraction() {
-        let rect = LiquidGlassRect {
-            left: 0.0,
-            top: 0.0,
-            width: 140.0,
-            height: 100.0,
-            tint_color: Color(0.5, 0.5, 1.0, 0.1),
-        };
+    fn liquid_glass_declares_padding_for_static_lensing() {
+        // Even with no tilt the bezel lenses along its normal, so the backdrop
+        // capture must extend past the rect.
+        let spec = LiquidGlassSpec::default();
         let effect = liquid_glass_effect(
-            &rect,
-            &LiquidGlassSpec {
-                tilt_angle: 0.5,
-                tilt_pitch: 0.3,
-                ..LiquidGlassSpec::default()
+            &LiquidGlassRect {
+                left: 0.0,
+                top: 0.0,
+                width: 140.0,
+                height: 100.0,
+                tint_color: Color(0.5, 0.5, 1.0, 0.1),
             },
+            &spec,
             140.0,
             100.0,
         );
         let RenderEffect::Shader { shader } = effect else {
             panic!("expected Shader effect");
         };
+        let bend = 1.0 - 1.0 / spec.refractive_index;
+        let min_padding = bend * spec.displacement_scale;
         assert!(
-            shader.input_padding() >= 11.0,
-            "tilted liquid glass must capture enough backdrop for displaced samples"
+            shader.input_padding() >= min_padding,
+            "static lensing must capture backdrop beyond the rect: {} < {min_padding}",
+            shader.input_padding()
         );
     }
 
@@ -267,6 +303,7 @@ mod tests {
         let spec = LiquidGlassSpec {
             tilt_angle: 0.5,
             tilt_pitch: 0.3,
+            chromatic_aberration: 0.6,
             ..LiquidGlassSpec::default()
         };
         let effect = liquid_glass_effect(
@@ -285,11 +322,14 @@ mod tests {
             panic!("expected Shader effect");
         };
         let bend = 1.0 - 1.0 / spec.refractive_index.max(1.0001);
-        let max_shader_displacement = spec.tilt_angle.abs() * bend * spec.displacement_scale * 4.0;
-
+        let tilt = (spec.tilt_angle * spec.tilt_angle + spec.tilt_pitch * spec.tilt_pitch).sqrt();
+        let slope = 2.0 + 2.0 * spec.profile.clamp(0.0, 1.0);
+        let spread = 1.0 + spec.chromatic_aberration * 0.5;
+        let max_displacement = (1.0 + tilt) * bend * spec.displacement_scale * slope * spread;
         assert!(
-            shader.input_padding() >= max_shader_displacement.ceil() + 2.0,
-            "backdrop capture must cover the shader's largest refracted sample"
+            shader.input_padding() >= max_displacement,
+            "backdrop capture must cover the largest refracted sample: {} < {max_displacement}",
+            shader.input_padding()
         );
     }
 

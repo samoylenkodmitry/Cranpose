@@ -933,7 +933,12 @@ fn ink_metrics_in_pixel_rect(
             }
         }
         ink_pixels += row_ink;
-        if row_ink >= 4 {
+        // A row is inked when it shows a glyph core (2+ bright pixels): the
+        // sparsest legitimate code lines ("// i") keep only a couple of
+        // above-threshold pixels once the left inset clips their comment
+        // slashes, and pass-through colors put the anti-aliased glyph body
+        // below the bright cutoff.
+        if row_ink >= 2 {
             ink_rows += 1;
             current_blank_run = 0;
         } else {
@@ -995,7 +1000,9 @@ fn is_code_ink(pixel: [u8; 4]) -> bool {
     if a < 180 {
         return false;
     }
-    let bright_text = r > 165 && g > 165 && b > 175;
+    // Calibrated for pass-through colors: dim comment grays peak near
+    // (185,190,206) with bodies around (150,155,171).
+    let bright_text = r > 150 && g > 150 && b > 160;
     let link_blue = b > 145 && g > 110 && r < 180;
     let math_yellow = r > 165 && g > 160 && b < 110;
     bright_text || link_blue || math_yellow

@@ -278,8 +278,9 @@ fn desktop_demo_default_features_enable_http_for_network_tabs() {
         manifest_feature_value(&manifest, "desktop").expect("desktop feature must be declared");
     assert!(
         desktop.contains("\"cranpose/desktop\"")
-            && desktop.contains("\"cranpose-services/uri-native\""),
-        "desktop feature must keep only the desktop platform and native URI capability"
+            && !desktop.contains("cranpose-services/uri-native")
+            && !desktop.contains("cranpose-services/file-picker-native"),
+        "desktop feature must keep only the desktop platform; service capabilities (URI, file picker, theme, notifier) come centralized through cranpose's own desktop feature"
     );
 
     let desktop_http = manifest_feature_value(&manifest, "desktop-http")
@@ -295,8 +296,8 @@ fn desktop_demo_default_features_enable_http_for_network_tabs() {
     assert!(
         android.contains("\"cranpose/android\"")
             && android.contains("\"cranpose-services/http-native\"")
-            && android.contains("\"cranpose-services/uri-android\""),
-        "Android keeps native HTTP and URI support under the Android app feature"
+            && !android.contains("cranpose-services/uri-android"),
+        "Android keeps native HTTP under the Android app feature; the URI capability comes centralized through cranpose's android feature"
     );
 }
 

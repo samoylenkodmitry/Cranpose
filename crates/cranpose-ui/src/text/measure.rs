@@ -431,6 +431,17 @@ struct TextOptionsCacheKey {
     max_width_bits: Option<u32>,
 }
 
+/// Key for the prepared-layout cache. Prepared layouts carry the full visual
+/// style (color, brush, decoration, shadow), so unlike the metrics caches —
+/// which are keyed on measurement-affecting attributes only — this key must
+/// also distinguish visual attributes or a color-only restyle would be served
+/// a stale layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TextPreparedCacheKey {
+    base: TextOptionsCacheKey,
+    visual_hash: u64,
+}
+
 struct BoundedTextCache<K, V> {
     capacity: usize,
     entries: HashMap<K, V>,
@@ -484,7 +495,7 @@ pub(crate) struct TextService {
     measurer: RefCell<Rc<dyn TextMeasurer>>,
     metrics_cache: RefCell<BoundedTextCache<TextBaseCacheKey, TextMetrics>>,
     options_metrics_cache: RefCell<BoundedTextCache<TextOptionsCacheKey, TextMetrics>>,
-    prepared_cache: RefCell<BoundedTextCache<TextOptionsCacheKey, PreparedTextLayout>>,
+    prepared_cache: RefCell<BoundedTextCache<TextPreparedCacheKey, PreparedTextLayout>>,
     layout_cache: RefCell<BoundedTextCache<TextBaseCacheKey, TextLayoutResult>>,
 }
 
@@ -564,7 +575,11 @@ impl TextService {
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> PreparedTextLayout {
-        let key = text_options_cache_key(text, style, options.normalized(), max_width);
+        let metrics_key = text_options_cache_key(text, style, options.normalized(), max_width);
+        let key = TextPreparedCacheKey {
+            base: metrics_key,
+            visual_hash: style.render_hash(),
+        };
         if let Some(prepared) = self.prepared_cache.borrow().get(&key) {
             return prepared;
         }
@@ -576,7 +591,7 @@ impl TextService {
             .insert(key, prepared.clone());
         self.options_metrics_cache
             .borrow_mut()
-            .insert(key, prepared.metrics);
+            .insert(metrics_key, prepared.metrics);
         prepared
     }
 
@@ -2136,6 +2151,31 @@ mod tests {
         assert!(
             !source.contains(&once_lock) && !source.contains(&cached_init_call),
             "text layout telemetry env flag must be read at the diagnostic boundary"
+        );
+    }
+
+    #[test]
+    fn prepared_layout_cache_distinguishes_visual_styles() {
+        let service = TextService::new();
+        let text = crate::text::AnnotatedString::from("tinted".to_string());
+        let options = TextLayoutOptions::default();
+
+        let mut style = TextStyle::default();
+        style.span_style.color = Some(crate::Color(1.0, 0.0, 0.0, 1.0));
+        let red = service.prepare_with_options(None, &text, &style, options, None);
+
+        style.span_style.color = Some(crate::Color(0.0, 0.0, 1.0, 1.0));
+        let blue = service.prepare_with_options(None, &text, &style, options, None);
+
+        assert_eq!(
+            red.visual_style.span_style.color,
+            Some(crate::Color(1.0, 0.0, 0.0, 1.0)),
+        );
+        assert_eq!(
+            blue.visual_style.span_style.color,
+            Some(crate::Color(0.0, 0.0, 1.0, 1.0)),
+            "a color-only style change must not be served a stale prepared layout \
+             (measurement hashes ignore visual attributes by design)"
         );
     }
 

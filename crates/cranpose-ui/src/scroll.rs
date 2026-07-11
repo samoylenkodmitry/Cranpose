@@ -46,6 +46,26 @@ pub(crate) struct ScrollStateInner {
     next_invalidate_callback_id: Cell<u64>,
     /// Tracks whether we need to invalidate once a callback is registered.
     pending_invalidation: Cell<bool>,
+    /// Optional settle policy consulted when a gesture/fling/wheel interaction
+    /// ends (see [`ScrollSettlePolicy`]).
+    settle_policy: RefCell<Option<ScrollSettlePolicy>>,
+}
+
+/// Remaps where a scroll comes to rest once the user's interaction ends — the
+/// `UIScrollView targetContentOffset` analog. Receives the naturally proposed
+/// rest offset (the fling's predicted end, or the current offset for a plain
+/// release/wheel idle) and the release velocity in offset units/sec; returns
+/// the offset the scroll should settle at. Used e.g. by the liquid nav bar to
+/// snap out of the large-title collapse band so the title never rests
+/// half-faded.
+pub type ScrollSettlePolicy = Rc<dyn Fn(f32, f32) -> f32>;
+
+impl PartialEq for ScrollState {
+    /// Two handles are equal when they share the same underlying state
+    /// (identity, not value — composable-skip semantics).
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
 }
 
 impl ScrollState {
@@ -58,8 +78,19 @@ impl ScrollState {
                 invalidate_callbacks: RefCell::new(HashMap::new()),
                 next_invalidate_callback_id: Cell::new(1),
                 pending_invalidation: Cell::new(false),
+                settle_policy: RefCell::new(None),
             }),
         }
+    }
+
+    /// Installs (or clears) the settle policy consulted when interactions end.
+    pub fn set_settle_policy(&self, policy: Option<ScrollSettlePolicy>) {
+        *self.inner.settle_policy.borrow_mut() = policy;
+    }
+
+    /// The currently installed settle policy, if any.
+    pub fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
+        self.inner.settle_policy.borrow().clone()
     }
 
     /// Get the unique ID of this ScrollState

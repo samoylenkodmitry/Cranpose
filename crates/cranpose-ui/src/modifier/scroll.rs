@@ -25,20 +25,22 @@
 
 use super::{inspector_metadata, Modifier, Point, PointerEventKind};
 use crate::current_density;
-use crate::fling_animation::FlingAnimation;
-use crate::fling_animation::MIN_FLING_VELOCITY;
+use crate::fling_animation::{
+    fling_rest_position, FlingAnimation, SettleAnimation, MIN_FLING_VELOCITY,
+};
 use crate::render_state::schedule_modifier_slices_repass;
 use crate::scroll::{
     scroll_motion_context_for_key, ScrollElement, ScrollMotionContext, ScrollMotionContextKey,
-    ScrollState,
+    ScrollSettlePolicy, ScrollState,
 };
+use cranpose_core::internal::FrameCallbackRegistration;
 use cranpose_core::{current_runtime_handle, NodeId};
 use cranpose_foundation::{
     velocity_tracker::ASSUME_STOPPED_MS, DelegatableNode, ModifierNode, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerButton, PointerButtons, VelocityTracker1D, DRAG_THRESHOLD,
     MAX_FLING_VELOCITY,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use web_time::Instant;
 
@@ -99,6 +101,13 @@ struct ScrollGestureState {
 
     /// Current fling animation (if any).
     fling_animation: Option<FlingAnimation>,
+
+    /// Current settle animation driving toward a policy target (if any).
+    settle_animation: Option<SettleAnimation>,
+
+    /// Frame loop watching for wheel-scroll idleness to run the settle policy
+    /// (wheel gestures have no end event).
+    wheel_settle_watcher: Option<WheelSettleWatcher>,
 }
 
 impl Default for ScrollGestureState {
@@ -113,6 +122,8 @@ impl Default for ScrollGestureState {
             gesture_start_event_time_ms: None,
             last_velocity_sample_ms: None,
             fling_animation: None,
+            settle_animation: None,
+            wheel_settle_watcher: None,
         }
     }
 }
@@ -183,6 +194,12 @@ trait ScrollTarget: Clone {
     fn can_scroll(&self) -> bool {
         true
     }
+
+    /// Settle policy remapping the post-interaction rest offset (see
+    /// [`ScrollSettlePolicy`]). `None` keeps natural rest positions.
+    fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
+        None
+    }
 }
 
 impl ScrollTarget for ScrollState {
@@ -205,6 +222,10 @@ impl ScrollTarget for ScrollState {
 
     fn can_scroll(&self) -> bool {
         self.max_value() > 0.0
+    }
+
+    fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
+        ScrollState::settle_policy(self)
     }
 }
 
@@ -252,6 +273,24 @@ impl ScrollTarget for LazyListState {
 /// This struct provides a clean interface for processing pointer events
 /// and managing scroll interactions. The generic parameter S determines
 /// how scroll deltas are applied.
+/// Wheel/trackpad frame-time idleness after which the settle policy runs
+/// (wheel gestures have no end event to hook).
+const WHEEL_SETTLE_IDLE_NANOS: u64 = 180_000_000;
+
+/// Frame loop that waits for the scroll offset to sit still after wheel input
+/// and then runs the settle policy. Cancelled by any new gesture.
+struct WheelSettleWatcher {
+    is_running: Rc<Cell<bool>>,
+    registration: Rc<RefCell<Option<FrameCallbackRegistration>>>,
+}
+
+impl WheelSettleWatcher {
+    fn cancel(&self) {
+        self.is_running.set(false);
+        self.registration.borrow_mut().take();
+    }
+}
+
 struct ScrollGestureDetector<S: ScrollTarget> {
     /// Shared gesture state (position tracking, drag status).
     gesture_state: Rc<RefCell<ScrollGestureState>>,
@@ -298,9 +337,15 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     fn on_down(&self, position: Point, time_ms: Option<i64>) -> bool {
         let mut gs = self.gesture_state.borrow_mut();
 
-        // Cancel any running fling animation
+        // Cancel any running fling/settle animation and wheel-settle watcher
         if let Some(fling) = gs.fling_animation.take() {
             fling.cancel();
+        }
+        if let Some(settle) = gs.settle_animation.take() {
+            settle.cancel();
+        }
+        if let Some(watcher) = gs.wheel_settle_watcher.take() {
+            watcher.cancel();
         }
         self.motion_context.set_active(false);
 
@@ -465,16 +510,34 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     /// velocity and starts fling animation if velocity is above threshold.
     ///
     /// Returns `true` if we were dragging (event should be consumed).
-    fn finish_gesture(&self, allow_fling: bool) -> bool {
+    fn finish_gesture(&self, allow_fling: bool, release_time_ms: Option<i64>) -> bool {
         let (was_dragging, velocity, start_fling, existing_fling) = {
             let mut gs = self.gesture_state.borrow_mut();
             let was_dragging = gs.is_dragging;
             let mut velocity = 0.0;
 
             if allow_fling && was_dragging && gs.gesture_start_time.is_some() {
-                velocity = gs
-                    .velocity_tracker
-                    .calculate_velocity_with_max(MAX_FLING_VELOCITY);
+                // A finger that rested before lifting must not fling: the
+                // tracker only sees inter-SAMPLE gaps, so a release long
+                // after the last move would otherwise replay the stale
+                // pre-hold velocity (hold-then-release phantom fling).
+                let release_sample_ms = release_time_ms
+                    .zip(gs.gesture_start_event_time_ms)
+                    .map(|(release_ms, start_ms)| release_ms - start_ms)
+                    .or_else(|| {
+                        gs.gesture_start_time
+                            .map(|start| start.elapsed().as_millis() as i64)
+                    });
+                let rested_before_release = release_sample_ms
+                    .zip(gs.last_velocity_sample_ms)
+                    .is_some_and(|(release_ms, last_sample_ms)| {
+                        release_ms - last_sample_ms > ASSUME_STOPPED_MS
+                    });
+                if !rested_before_release {
+                    velocity = gs
+                        .velocity_tracker
+                        .calculate_velocity_with_max(MAX_FLING_VELOCITY);
+                }
             }
 
             let start_fling = allow_fling && was_dragging && velocity.abs() > MIN_FLING_VELOCITY;
@@ -504,8 +567,39 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             set_last_fling_velocity(velocity);
         }
 
-        // Start fling animation if velocity is significant
-        if start_fling {
+        // Convert gesture velocity to scroll-offset velocity (offset units/s).
+        let adjusted_velocity = if self.reverse_scrolling {
+            -velocity
+        } else {
+            velocity
+        };
+        let fling_velocity = -adjusted_velocity;
+
+        // Settle policy: remap where this interaction comes to rest (the
+        // `targetContentOffset` analog). When it moves the rest position, a
+        // spring seeded with the release velocity replaces the decay so the
+        // adjustment still reads as one continuous deceleration.
+        let settle_target = if was_dragging {
+            self.scroll_target.settle_policy().and_then(|policy| {
+                let current = self.scroll_target.current_offset();
+                let proposed = if start_fling {
+                    fling_rest_position(current, fling_velocity, current_density())
+                } else {
+                    current
+                };
+                let target = policy(proposed, fling_velocity);
+                ((target - proposed).abs() > 0.5).then_some(target)
+            })
+        } else {
+            None
+        };
+
+        if let Some(target) = settle_target {
+            if let Some(old_fling) = existing_fling {
+                old_fling.cancel();
+            }
+            self.start_settle_animation(target, fling_velocity);
+        } else if start_fling {
             if let Some(old_fling) = existing_fling {
                 old_fling.cancel();
             }
@@ -514,16 +608,11 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             if let Some(runtime) = current_runtime_handle() {
                 self.motion_context.set_active(true);
                 let scroll_target = self.scroll_target.clone();
-                let reverse = self.reverse_scrolling;
                 let fling = FlingAnimation::new(runtime);
                 let motion_context = self.motion_context.clone();
 
                 // Get current scroll position for fling start
                 let initial_value = scroll_target.current_offset();
-
-                // Convert gesture velocity to scroll velocity.
-                let adjusted_velocity = if reverse { -velocity } else { velocity };
-                let fling_velocity = -adjusted_velocity;
 
                 let scroll_target_for_fling = scroll_target.clone();
                 let scroll_target_for_end = scroll_target.clone();
@@ -555,21 +644,51 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         was_dragging
     }
 
+    /// Springs the scroll offset to `target` (offset units), seeded with the
+    /// release velocity so policy-adjusted rests feel like one deceleration.
+    fn start_settle_animation(&self, target: f32, initial_velocity: f32) {
+        let Some(runtime) = current_runtime_handle() else {
+            self.motion_context.set_active(false);
+            return;
+        };
+        self.motion_context.set_active(true);
+        let settle = SettleAnimation::new(runtime);
+        let scroll_target_for_settle = self.scroll_target.clone();
+        let scroll_target_for_end = self.scroll_target.clone();
+        let motion_context = self.motion_context.clone();
+        settle.start_settle(
+            self.scroll_target.current_offset(),
+            initial_velocity,
+            target,
+            move |delta| {
+                let consumed = scroll_target_for_settle.apply_fling_delta(delta);
+                scroll_target_for_settle.invalidate();
+                consumed
+            },
+            move || {
+                scroll_target_for_end.invalidate();
+                motion_context.set_active(false);
+            },
+        );
+        let mut gs = self.gesture_state.borrow_mut();
+        gs.settle_animation = Some(settle);
+    }
+
     /// Handles pointer up event.
     ///
     /// Cleans up drag state. If we were actively dragging, calculates fling
     /// velocity and starts fling animation if velocity is above threshold.
     ///
     /// Returns `true` if we were dragging (event should be consumed).
-    fn on_up(&self) -> bool {
-        self.finish_gesture(true)
+    fn on_up(&self, time_ms: Option<i64>) -> bool {
+        self.finish_gesture(true, time_ms)
     }
 
     /// Handles pointer cancel event.
     ///
     /// Cleans up state without starting a fling. Returns `true` if we were dragging.
     fn on_cancel(&self) -> bool {
-        self.finish_gesture(false)
+        self.finish_gesture(false, None)
     }
 
     /// Handles mouse wheel / trackpad scroll event.
@@ -585,6 +704,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             let mut gs = self.gesture_state.borrow_mut();
             if let Some(fling) = gs.fling_animation.take() {
                 fling.cancel();
+            }
+            if let Some(settle) = gs.settle_animation.take() {
+                settle.cancel();
             }
             gs.drag_down_position = None;
             gs.last_position = None;
@@ -606,9 +728,144 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         let consumed = self.scroll_target.apply_wheel_delta(delta);
         if consumed.abs() > 0.001 {
             self.scroll_target.invalidate();
+            self.ensure_wheel_settle_watcher();
             true
         } else {
             false
+        }
+    }
+
+    /// Arms (once) a frame loop that runs the settle policy after the wheel
+    /// goes idle. Wheel input has no end event, so idleness — the offset
+    /// sitting still for [`WHEEL_SETTLE_IDLE_NANOS`] of frame time — is the
+    /// gesture end.
+    fn ensure_wheel_settle_watcher(&self) {
+        if self.scroll_target.settle_policy().is_none() {
+            return;
+        }
+        {
+            let gs = self.gesture_state.borrow();
+            if gs
+                .wheel_settle_watcher
+                .as_ref()
+                .is_some_and(|watcher| watcher.is_running.get())
+            {
+                return;
+            }
+        }
+        let Some(runtime) = current_runtime_handle() else {
+            return;
+        };
+
+        let is_running = Rc::new(Cell::new(true));
+        let registration = Rc::new(RefCell::new(None));
+
+        struct WheelSettleLoop<S: ScrollTarget> {
+            detector: ScrollGestureDetector<S>,
+            gesture_state: Rc<RefCell<ScrollGestureState>>,
+            frame_clock: cranpose_core::internal::FrameClock,
+            is_running: Rc<Cell<bool>>,
+            registration: Rc<RefCell<Option<FrameCallbackRegistration>>>,
+            last_offset: Rc<Cell<f32>>,
+            idle_nanos: Rc<Cell<u64>>,
+            last_frame: Rc<Cell<Option<u64>>>,
+        }
+
+        impl<S: ScrollTarget + 'static> WheelSettleLoop<S> {
+            fn next(&self) -> Self {
+                Self {
+                    detector: self.detector.clone_for_watcher(),
+                    gesture_state: Rc::clone(&self.gesture_state),
+                    frame_clock: self.frame_clock.clone(),
+                    is_running: Rc::clone(&self.is_running),
+                    registration: Rc::clone(&self.registration),
+                    last_offset: Rc::clone(&self.last_offset),
+                    idle_nanos: Rc::clone(&self.idle_nanos),
+                    last_frame: Rc::clone(&self.last_frame),
+                }
+            }
+
+            fn schedule(self) {
+                let continuation = self.next();
+                let registration_slot = Rc::clone(&self.registration);
+                let new_registration = self.frame_clock.with_frame_nanos(move |frame_time_nanos| {
+                    let this = &continuation;
+                    if !this.is_running.get() {
+                        return;
+                    }
+                    // A live drag or fling owns the settle decision now.
+                    {
+                        let gs = this.gesture_state.borrow();
+                        let animating = gs.is_dragging
+                            || gs
+                                .fling_animation
+                                .as_ref()
+                                .is_some_and(FlingAnimation::is_running)
+                            || gs
+                                .settle_animation
+                                .as_ref()
+                                .is_some_and(SettleAnimation::is_running);
+                        if animating {
+                            this.is_running.set(false);
+                            return;
+                        }
+                    }
+
+                    let offset = this.detector.scroll_target.current_offset();
+                    let dt = this
+                        .last_frame
+                        .get()
+                        .map_or(0, |last| frame_time_nanos.saturating_sub(last));
+                    this.last_frame.set(Some(frame_time_nanos));
+                    if (offset - this.last_offset.get()).abs() > 0.01 {
+                        this.last_offset.set(offset);
+                        this.idle_nanos.set(0);
+                    } else {
+                        this.idle_nanos.set(this.idle_nanos.get() + dt);
+                    }
+
+                    if this.idle_nanos.get() >= WHEEL_SETTLE_IDLE_NANOS {
+                        this.is_running.set(false);
+                        if let Some(policy) = this.detector.scroll_target.settle_policy() {
+                            let target = policy(offset, 0.0);
+                            if (target - offset).abs() > 0.5 {
+                                this.detector.start_settle_animation(target, 0.0);
+                            }
+                        }
+                        return;
+                    }
+
+                    continuation.next().schedule();
+                });
+                *registration_slot.borrow_mut() = Some(new_registration);
+            }
+        }
+
+        WheelSettleLoop {
+            detector: self.clone_for_watcher(),
+            gesture_state: Rc::clone(&self.gesture_state),
+            frame_clock: runtime.frame_clock(),
+            is_running: Rc::clone(&is_running),
+            registration: Rc::clone(&registration),
+            last_offset: Rc::new(Cell::new(self.scroll_target.current_offset())),
+            idle_nanos: Rc::new(Cell::new(0u64)),
+            last_frame: Rc::new(Cell::new(None::<u64>)),
+        }
+        .schedule();
+
+        self.gesture_state.borrow_mut().wheel_settle_watcher = Some(WheelSettleWatcher {
+            is_running,
+            registration,
+        });
+    }
+
+    fn clone_for_watcher(&self) -> ScrollGestureDetector<S> {
+        ScrollGestureDetector {
+            gesture_state: Rc::clone(&self.gesture_state),
+            scroll_target: self.scroll_target.clone(),
+            is_vertical: self.is_vertical,
+            reverse_scrolling: self.reverse_scrolling,
+            motion_context: self.motion_context.clone(),
         }
     }
 }
@@ -1031,7 +1288,7 @@ fn scroll_impl(
                             PointerEventKind::Move => {
                                 detector.on_move(event.position, event.buttons, event.time_ms)
                             }
-                            PointerEventKind::Up => detector.on_up(),
+                            PointerEventKind::Up => detector.on_up(event.time_ms),
                             PointerEventKind::Cancel => detector.on_cancel(),
                             PointerEventKind::Scroll => detector.on_scroll(if is_vertical {
                                 event.scroll_delta.y
@@ -1174,7 +1431,7 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
                                 PointerEventKind::Move => {
                                     detector.on_move(event.position, event.buttons, event.time_ms)
                                 }
-                                PointerEventKind::Up => detector.on_up(),
+                                PointerEventKind::Up => detector.on_up(event.time_ms),
                                 PointerEventKind::Cancel => detector.on_cancel(),
                                 PointerEventKind::Scroll => detector.on_scroll(if is_vertical {
                                     event.scroll_delta.y

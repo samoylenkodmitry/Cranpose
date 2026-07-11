@@ -1191,3 +1191,166 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
         );
     });
 }
+
+#[test]
+fn drag_release_inside_settle_band_springs_to_policy_edge() {
+    // A settle policy (nav-bar large-title snap) must take over when the
+    // finger lifts inside the band with no fling: the offset springs to the
+    // policy target instead of resting half-collapsed.
+    let _app_context = crate::render_state::app_context_test_scope();
+    let runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let scroll_state = ScrollState::new(0.0);
+    scroll_state.set_max_value(400.0);
+    scroll_state.set_settle_policy(Some(Rc::new(|proposed, _velocity| {
+        if proposed <= 0.0 || proposed >= 52.0 {
+            proposed
+        } else if proposed < 26.0 {
+            0.0
+        } else {
+            52.0
+        }
+    })));
+    let (handler, _chain) =
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+
+    handler(timed_pointer_event(PointerEventKind::Down, 0.0, 200.0, 0));
+    handler(timed_pointer_event(PointerEventKind::Move, 0.0, 168.0, 16));
+    // Long rest before the lift so the release velocity is zero (no fling).
+    handler(timed_pointer_event(PointerEventKind::Up, 0.0, 168.0, 500));
+    assert!(
+        (scroll_state.value_non_reactive() - 32.0).abs() < 0.5,
+        "drag must land mid-band before the settle runs, got {}",
+        scroll_state.value_non_reactive()
+    );
+
+    for frame in 0..600u64 {
+        runtime.handle().drain_frame_callbacks(frame * 16_000_000);
+        if (scroll_state.value_non_reactive() - 52.0).abs() < 0.25 {
+            break;
+        }
+    }
+    assert!(
+        (scroll_state.value_non_reactive() - 52.0).abs() < 0.25,
+        "release at 32 (above half of the 52 band) must spring to 52, got {}",
+        scroll_state.value_non_reactive()
+    );
+}
+
+#[test]
+fn drag_release_below_band_midpoint_springs_back_to_zero() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let scroll_state = ScrollState::new(0.0);
+    scroll_state.set_max_value(400.0);
+    scroll_state.set_settle_policy(Some(Rc::new(|proposed, _velocity| {
+        if proposed <= 0.0 || proposed >= 52.0 {
+            proposed
+        } else if proposed < 26.0 {
+            0.0
+        } else {
+            52.0
+        }
+    })));
+    let (handler, _chain) =
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+
+    handler(timed_pointer_event(PointerEventKind::Down, 0.0, 200.0, 0));
+    handler(timed_pointer_event(PointerEventKind::Move, 0.0, 182.0, 16));
+    handler(timed_pointer_event(PointerEventKind::Up, 0.0, 182.0, 500));
+
+    for frame in 0..600u64 {
+        runtime.handle().drain_frame_callbacks(frame * 16_000_000);
+        if scroll_state.value_non_reactive() < 0.25 {
+            break;
+        }
+    }
+    assert!(
+        scroll_state.value_non_reactive() < 0.25,
+        "release at 18 (below half of the 52 band) must spring back to 0, got {}",
+        scroll_state.value_non_reactive()
+    );
+}
+
+#[test]
+fn fling_release_is_retargeted_by_settle_policy() {
+    // With momentum, the policy receives the fling's PREDICTED rest position
+    // and the deceleration is replaced by a spring straight to the remapped
+    // target (the UIScrollView targetContentOffset behavior).
+    let _app_context = crate::render_state::app_context_test_scope();
+    let runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let scroll_state = ScrollState::new(0.0);
+    scroll_state.set_max_value(10_000.0);
+    scroll_state.set_settle_policy(Some(Rc::new(|proposed, _velocity| {
+        if proposed > 0.0 && proposed < 9_000.0 {
+            123.0
+        } else {
+            proposed
+        }
+    })));
+    let (handler, _chain) =
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+
+    // 8dp every 8ms of upward finger motion = a solid 1000 dp/s fling.
+    handler(timed_pointer_event(PointerEventKind::Down, 0.0, 400.0, 0));
+    let mut y = 400.0;
+    let mut time = 0i64;
+    for _ in 0..12 {
+        y -= 8.0;
+        time += 8;
+        handler(timed_pointer_event(PointerEventKind::Move, 0.0, y, time));
+    }
+    handler(timed_pointer_event(PointerEventKind::Up, 0.0, y, time));
+
+    for frame in 0..900u64 {
+        runtime.handle().drain_frame_callbacks(frame * 16_000_000);
+        if (scroll_state.value_non_reactive() - 123.0).abs() < 0.25 {
+            break;
+        }
+    }
+    assert!(
+        (scroll_state.value_non_reactive() - 123.0).abs() < 0.25,
+        "the fling's predicted rest must be remapped to 123 by the policy, got {}",
+        scroll_state.value_non_reactive()
+    );
+}
+
+#[test]
+fn wheel_idle_inside_settle_band_snaps_to_policy_edge() {
+    // Wheel input has no end event: after the offset sits still for the idle
+    // window, the settle policy must run (nav-bar snap for mouse users).
+    let _app_context = crate::render_state::app_context_test_scope();
+    let runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let scroll_state = ScrollState::new(0.0);
+    scroll_state.set_max_value(400.0);
+    scroll_state.set_settle_policy(Some(Rc::new(|proposed, _velocity| {
+        if proposed <= 0.0 || proposed >= 52.0 {
+            proposed
+        } else if proposed < 26.0 {
+            0.0
+        } else {
+            52.0
+        }
+    })));
+    let (handler, _chain) =
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+
+    handler(scroll_wheel_event(0.0, -30.0));
+    assert!(
+        (scroll_state.value_non_reactive() - 30.0).abs() < 0.5,
+        "wheel must land mid-band before the settle runs, got {}",
+        scroll_state.value_non_reactive()
+    );
+
+    // Idle frames: the watcher accumulates ~16ms of frame time each.
+    for frame in 1..600u64 {
+        runtime.handle().drain_frame_callbacks(frame * 16_000_000);
+        if (scroll_state.value_non_reactive() - 52.0).abs() < 0.25 {
+            break;
+        }
+    }
+    assert!(
+        (scroll_state.value_non_reactive() - 52.0).abs() < 0.25,
+        "wheel idle inside the band must snap to 52, got {}",
+        scroll_state.value_non_reactive()
+    );
+}

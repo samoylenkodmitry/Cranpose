@@ -1,7 +1,21 @@
 package dev.cranpose.android;
 
 import android.app.NativeActivity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.os.Build;
+import android.view.HapticFeedbackConstants;
+import android.view.View;
+import android.view.WindowInsets;
 import android.content.UriPermission;
 import android.database.Cursor;
 import android.net.Uri;
@@ -39,11 +53,12 @@ import java.io.OutputStream;
  * share with thousands of files) therefore no longer freezes the app: the first
  * tracks appear and can be played while the rest keep streaming in.
  */
-public class CranposeFilePickerActivity extends NativeActivity {
+public class CranposeActivity extends NativeActivity {
     private static final int REQUEST_BASE = 0x0C9A0000;
     private static final int FLAG_FOLDER = 1;
     private static final int FLAG_STREAMING = 2;
     private static final int FLAG_WRITABLE = 4;
+    private static final int FLAG_SAVE = 8;
 
     /** A fixed-name probe used by {@link #cranposeFolderWritable}; created and
      * deleted immediately, and ignored by listings. */
@@ -379,6 +394,9 @@ public class CranposeFilePickerActivity extends NativeActivity {
         }
         final long token = pendingToken;
         final int flags = requestCode & 0x0000FFFF;
+        if (handleSaveResult(flags, resultCode, data)) {
+            return;
+        }
         final boolean folder = (flags & FLAG_FOLDER) != 0;
         final boolean streaming = (flags & FLAG_STREAMING) != 0;
         final boolean ok = resultCode == RESULT_OK && data != null && data.getData() != null;
@@ -696,5 +714,375 @@ public class CranposeFilePickerActivity extends NativeActivity {
             return "";
         }
         return name.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ');
+    }
+
+    // ------------------------------------------------------------------
+    // Platform capabilities (share, notifications, clipboard, haptics,
+    // network status, window insets, save-file) — the Android backends of
+    // cranpose_services. Rust calls the cranpose* methods over JNI; the
+    // native* methods push events back into the cdylib.
+    // ------------------------------------------------------------------
+
+    /** Cranpose's single notification channel. */
+    private static final String NOTIFY_CHANNEL = "cranpose";
+    /** Launch-intent extra carrying a notification deep-link payload. */
+    private static final String EXTRA_DEEPLINK = "cranpose_deeplink";
+    private static final int REQ_NOTIFY_PERMISSION = 0x0C9B;
+
+    /** Bytes staged for an in-flight ACTION_CREATE_DOCUMENT save. */
+    private byte[] pendingSaveBytes;
+    private long pendingSaveToken;
+
+    private ConnectivityManager.NetworkCallback cranposeNetworkCallback;
+
+    /** Current network state (online, metered) changed. */
+    private static native void nativeOnNetworkStatus(boolean online, boolean metered);
+
+    /** System-bar/cutout insets changed (physical px). */
+    private static native void nativeOnInsetsChanged(int left, int top, int right, int bottom);
+
+    /** The user tapped a notification carrying a deep-link. */
+    private static native void nativeNotificationAction(String deeplink);
+
+    /** An ACTION_CREATE_DOCUMENT save finished. */
+    private static native void nativeOnFileSaved(long token, boolean ok, String error);
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        installInsetsListener();
+        registerNetworkCallback();
+        dispatchDeeplink(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        dispatchDeeplink(intent);
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (cranposeNetworkCallback != null) {
+            try {
+                ConnectivityManager manager =
+                        (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (manager != null) {
+                    manager.unregisterNetworkCallback(cranposeNetworkCallback);
+                }
+            } catch (Exception ignored) {
+            }
+            cranposeNetworkCallback = null;
+        }
+        super.onDestroy();
+    }
+
+    private void dispatchDeeplink(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        String deeplink = intent.getStringExtra(EXTRA_DEEPLINK);
+        if (deeplink != null && !deeplink.isEmpty()) {
+            intent.removeExtra(EXTRA_DEEPLINK);
+            nativeNotificationAction(deeplink);
+        }
+    }
+
+    private void installInsetsListener() {
+        final View decor = getWindow().getDecorView();
+        decor.setOnApplyWindowInsetsListener((view, insets) -> {
+            pushInsets(insets);
+            return view.onApplyWindowInsets(insets);
+        });
+        decor.post(() -> {
+            WindowInsets current = decor.getRootWindowInsets();
+            if (current != null) {
+                pushInsets(current);
+            }
+        });
+    }
+
+    private void pushInsets(WindowInsets insets) {
+        int left;
+        int top;
+        int right;
+        int bottom;
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.graphics.Insets bars = insets.getInsets(
+                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            left = bars.left;
+            top = bars.top;
+            right = bars.right;
+            bottom = bars.bottom;
+        } else {
+            left = insets.getSystemWindowInsetLeft();
+            top = insets.getSystemWindowInsetTop();
+            right = insets.getSystemWindowInsetRight();
+            bottom = insets.getSystemWindowInsetBottom();
+        }
+        nativeOnInsetsChanged(left, top, right, bottom);
+    }
+
+    private void registerNetworkCallback() {
+        ConnectivityManager manager =
+                (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (manager == null) {
+            return;
+        }
+        pushNetworkStatus(manager);
+        cranposeNetworkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+                pushNetworkStatus(manager);
+            }
+
+            @Override
+            public void onLost(Network network) {
+                pushNetworkStatus(manager);
+            }
+
+            @Override
+            public void onAvailable(Network network) {
+                pushNetworkStatus(manager);
+            }
+        };
+        try {
+            manager.registerDefaultNetworkCallback(cranposeNetworkCallback);
+        } catch (Exception ignored) {
+            cranposeNetworkCallback = null;
+        }
+    }
+
+    private void pushNetworkStatus(ConnectivityManager manager) {
+        boolean online = false;
+        boolean metered = true;
+        try {
+            Network network = manager.getActiveNetwork();
+            NetworkCapabilities capabilities =
+                    network == null ? null : manager.getNetworkCapabilities(network);
+            online = capabilities != null
+                    && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+            metered = online
+                    && !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+        } catch (Exception ignored) {
+        }
+        nativeOnNetworkStatus(online, metered);
+    }
+
+    /** Performs haptic feedback ({@code kind} maps cranpose's HapticFeedback).
+     * Called from Rust over JNI (any thread). */
+    public void cranposeHaptic(final int kind) {
+        runOnUiThread(() -> {
+            View decor = getWindow().getDecorView();
+            int constant;
+            switch (kind) {
+                case 1: constant = HapticFeedbackConstants.KEYBOARD_TAP; break;
+                case 2: constant = HapticFeedbackConstants.LONG_PRESS; break;
+                case 3: constant = Build.VERSION.SDK_INT >= 30
+                        ? HapticFeedbackConstants.CONFIRM
+                        : HapticFeedbackConstants.LONG_PRESS; break;
+                case 4: constant = Build.VERSION.SDK_INT >= 30
+                        ? HapticFeedbackConstants.REJECT
+                        : HapticFeedbackConstants.LONG_PRESS; break;
+                default: constant = Build.VERSION.SDK_INT >= 27
+                        ? HapticFeedbackConstants.TEXT_HANDLE_MOVE
+                        : HapticFeedbackConstants.KEYBOARD_TAP; break;
+            }
+            decor.performHapticFeedback(constant);
+        });
+    }
+
+    /** Writes {@code text} to the system clipboard. Called from Rust over JNI. */
+    public void cranposeClipboardSet(final String text) {
+        runOnUiThread(() -> {
+            ClipboardManager clipboard =
+                    (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("cranpose", text));
+            }
+        });
+    }
+
+    /** Reads the system clipboard's text (empty when unavailable). Blocks the
+     * calling (native) thread briefly for the main-thread hop. */
+    public String cranposeClipboardGet() {
+        final String[] result = {""};
+        final java.util.concurrent.CountDownLatch latch =
+                new java.util.concurrent.CountDownLatch(1);
+        runOnUiThread(() -> {
+            try {
+                ClipboardManager clipboard =
+                        (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard != null && clipboard.hasPrimaryClip()) {
+                    ClipData clip = clipboard.getPrimaryClip();
+                    if (clip != null && clip.getItemCount() > 0) {
+                        CharSequence text = clip.getItemAt(0).coerceToText(CranposeActivity.this);
+                        if (text != null) {
+                            result[0] = text.toString();
+                        }
+                    }
+                }
+            } finally {
+                latch.countDown();
+            }
+        });
+        try {
+            latch.await(250, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+        return result[0];
+    }
+
+    /** Stages {@code bytes} and presents the system share sheet. Called from
+     * Rust over JNI. */
+    public void cranposeShare(final String fileName, final String mimeType,
+            final byte[] bytes, final String text) {
+        new Thread(() -> {
+            try {
+                java.io.File dir = new java.io.File(getCacheDir(), "cranpose_share");
+                //noinspection ResultOfMethodCallIgnored
+                dir.mkdirs();
+                java.io.File staged = new java.io.File(dir, sanitizeFileName(fileName));
+                try (OutputStream out = new java.io.FileOutputStream(staged)) {
+                    out.write(bytes);
+                }
+                final Uri uri = CranposeShareProvider.uriFor(this, staged);
+                runOnUiThread(() -> {
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType(mimeType);
+                    send.putExtra(Intent.EXTRA_STREAM, uri);
+                    if (text != null && !text.isEmpty()) {
+                        send.putExtra(Intent.EXTRA_TEXT, text);
+                        send.putExtra(Intent.EXTRA_SUBJECT, text);
+                    }
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(send, null));
+                });
+            } catch (Exception error) {
+                android.util.Log.w("cranpose", "share failed", error);
+            }
+        }).start();
+    }
+
+    private String sanitizeFileName(String name) {
+        String cleaned = name == null ? "file" : name.replaceAll("[/\\\\ ]", "_");
+        return cleaned.isEmpty() ? "file" : cleaned;
+    }
+
+    /** Asks for POST_NOTIFICATIONS on Android 13+. Called from Rust over JNI. */
+    public void cranposeNotifyRequestPermission() {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            runOnUiThread(() -> requestPermissions(
+                    new String[] {"android.permission.POST_NOTIFICATIONS"},
+                    REQ_NOTIFY_PERMISSION));
+        }
+    }
+
+    /** Posts (or replaces, by {@code tag}) a notification. Called from Rust
+     * over JNI. */
+    public void cranposeNotify(final String tag, final String title, final String body,
+            final boolean ongoing, final String deeplink) {
+        runOnUiThread(() -> {
+            NotificationManager manager =
+                    (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager == null) {
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= 26
+                    && manager.getNotificationChannel(NOTIFY_CHANNEL) == null) {
+                manager.createNotificationChannel(new NotificationChannel(
+                        NOTIFY_CHANNEL, "App", NotificationManager.IMPORTANCE_DEFAULT));
+            }
+            Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                    ? new Notification.Builder(this, NOTIFY_CHANNEL)
+                    : new Notification.Builder(this);
+            builder.setContentTitle(title)
+                    .setContentText(body)
+                    .setSmallIcon(getApplicationInfo().icon)
+                    .setOngoing(ongoing)
+                    .setAutoCancel(!ongoing);
+            if (deeplink != null && !deeplink.isEmpty()) {
+                Intent launch = getPackageManager()
+                        .getLaunchIntentForPackage(getPackageName());
+                if (launch != null) {
+                    launch.putExtra(EXTRA_DEEPLINK, deeplink);
+                    launch.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    builder.setContentIntent(PendingIntent.getActivity(
+                            this,
+                            tag.hashCode(),
+                            launch,
+                            PendingIntent.FLAG_UPDATE_CURRENT
+                                    | PendingIntent.FLAG_IMMUTABLE));
+                }
+            }
+            manager.notify(tag, 1, builder.build());
+        });
+    }
+
+    /** Cancels a notification posted through {@link #cranposeNotify}. */
+    public void cranposeNotifyCancel(final String tag) {
+        runOnUiThread(() -> {
+            NotificationManager manager =
+                    (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.cancel(tag, 1);
+            }
+        });
+    }
+
+    /** Presents ACTION_CREATE_DOCUMENT and writes the staged bytes to the
+     * chosen destination. Called from Rust over JNI. */
+    public void cranposeSaveFile(final long token, final String fileName,
+            final String mimeType, final byte[] bytes) {
+        runOnUiThread(() -> {
+            pendingSaveBytes = bytes;
+            pendingSaveToken = token;
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType(mimeType == null || mimeType.isEmpty()
+                    ? "application/octet-stream"
+                    : mimeType);
+            intent.putExtra(Intent.EXTRA_TITLE, fileName);
+            try {
+                startActivityForResult(intent, REQUEST_BASE | FLAG_SAVE);
+            } catch (Exception error) {
+                pendingSaveBytes = null;
+                nativeOnFileSaved(token, false, error.toString());
+            }
+        });
+    }
+
+    /** Handles the ACTION_CREATE_DOCUMENT result (invoked from
+     * {@link #onActivityResult}). Returns whether the request was a save. */
+    private boolean handleSaveResult(int flags, int resultCode, Intent data) {
+        if ((flags & FLAG_SAVE) == 0) {
+            return false;
+        }
+        final byte[] bytes = pendingSaveBytes;
+        final long token = pendingSaveToken;
+        pendingSaveBytes = null;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            nativeOnFileSaved(token, false, "");
+            return true;
+        }
+        final Uri destination = data.getData();
+        new Thread(() -> {
+            try (OutputStream out = getContentResolver().openOutputStream(destination)) {
+                if (out == null) {
+                    nativeOnFileSaved(token, false, "destination not writable");
+                    return;
+                }
+                out.write(bytes == null ? new byte[0] : bytes);
+                nativeOnFileSaved(token, true, "");
+            } catch (Exception error) {
+                nativeOnFileSaved(token, false, error.toString());
+            }
+        }).start();
+        return true;
     }
 }

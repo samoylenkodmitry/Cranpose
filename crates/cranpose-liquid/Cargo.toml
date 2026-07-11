@@ -1,0 +1,25 @@
+[package]
+name = "cranpose-liquid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Liquid UI — cranpose's first-party glass component library (iOS-26-style materials, spring motion)"
+
+[dependencies]
+cranpose-core = { workspace = true }
+cranpose-macros = { workspace = true }
+cranpose-ui = { workspace = true }
+cranpose-ui-graphics = { workspace = true }
+cranpose-ui-layout = { workspace = true }
+cranpose-animation = { workspace = true }
+cranpose-foundation = { workspace = true }
+cranpose-services = { workspace = true, default-features = false }
+log = "0.4"
+
+[dev-dependencies]
+cranpose-testing = { workspace = true }

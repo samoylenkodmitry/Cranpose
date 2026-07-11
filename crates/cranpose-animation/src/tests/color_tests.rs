@@ -50,20 +50,16 @@ fn color_lerp_clamps_overshoot_to_valid_range() {
 }
 
 #[test]
-fn color_spring_progress_projects_across_all_channels() {
-    let start = Color(0.0, 0.0, 0.0, 0.0);
-    let target = Color(1.0, 1.0, 1.0, 1.0);
-    let halfway = Color(0.5, 0.5, 0.5, 0.5);
+fn color_springs_as_four_clamped_dimensions() {
+    let color = Color(0.25, 0.5, 0.75, 1.0);
+    assert_eq!(<Color as SpringScalar>::DIMENSIONS, 4);
+    for (index, expected) in [0.25, 0.5, 0.75, 1.0].into_iter().enumerate() {
+        assert!((color.dimension(index) - expected).abs() < 1e-6);
+    }
 
-    let progress = <Color as SpringScalar>::spring_progress(&start, &target, &halfway);
-    assert!(
-        (progress - 0.5).abs() < 1e-6,
-        "expected 0.5, got {progress}"
-    );
-
-    // Degenerate span reports finished.
-    let same = <Color as SpringScalar>::spring_progress(&start, &start, &start);
-    assert!((same - 1.0).abs() < 1e-6, "expected 1.0, got {same}");
+    // Overshooting spring dimensions clamp back into the valid gamut.
+    let rebuilt = <Color as SpringScalar>::from_dimensions([1.5, -0.5, 0.5, 2.0]);
+    assert_color_near(rebuilt, Color(1.0, 0.0, 0.5, 1.0), 1e-6);
 }
 
 #[test]

@@ -6,9 +6,25 @@
 
 use super::{
     FilePickerError, FilePickerOptions, PickedEntry, PickedEntryRef, PickedKind, PickerFuture,
+    SaveFileRequest,
 };
 use std::path::PathBuf;
 use std::rc::Rc;
+
+pub(super) fn save(request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
+    Box::pin(async move {
+        let handle = rfd::AsyncFileDialog::new()
+            .set_file_name(&request.file_name)
+            .save_file()
+            .await;
+        let Some(handle) = handle else {
+            return Ok(false);
+        };
+        std::fs::write(handle.path(), &request.bytes)
+            .map_err(|error| FilePickerError::Failed(format!("failed to save file: {error}")))?;
+        Ok(true)
+    })
+}
 
 pub(super) fn pick(
     options: FilePickerOptions,

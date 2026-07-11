@@ -144,6 +144,15 @@ impl Modifier {
             crate::modifier_nodes::WindowRectReporterElement::new(sink),
         ))
     }
+
+    /// Publishes this node's measured size (logical px) into `sink` on every
+    /// measure pass — the `onSizeChanged` seam for consumers that need the
+    /// resolved size outside layout (shader morph geometry, lens overlays).
+    pub fn report_size(self, sink: Rc<Cell<cranpose_ui_graphics::Size>>) -> Self {
+        self.then(Modifier::with_element(
+            crate::modifier_nodes::SizeReporterElement::new(sink),
+        ))
+    }
 }
 
 #[cfg(test)]

@@ -2131,6 +2131,7 @@ fn push_shadow_primitive(
     match shadow_prim {
         cranpose_ui_graphics::ShadowPrimitive::Drop {
             shape,
+            cutout,
             blur_radius,
             blend_mode,
         } => {
@@ -2139,8 +2140,17 @@ fn push_shadow_primitive(
             else {
                 return;
             };
+            let mut shapes = vec![shape_pair];
+            if let Some(cutout) = cutout {
+                let Some(cutout_pair) =
+                    shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
+                else {
+                    return;
+                };
+                shapes.push(cutout_pair);
+            }
             scene.push_shadow_draw(ShadowDraw {
-                shapes: vec![shape_pair],
+                shapes,
                 texts: vec![],
                 blur_radius,
                 clip,
