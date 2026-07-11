@@ -327,10 +327,14 @@ jobs:
 
           remaining = {}
           for name, package in packages.items():
+              # Dev-deps never gate publish order (path-only dev-deps are
+              # stripped from published manifests); counting them creates
+              # false cycles like liquid -> testing -> cranpose -> liquid.
               remaining[name] = {
                   dependency["name"]
                   for dependency in package["dependencies"]
                   if dependency["name"] in packages
+                  and dependency.get("kind") != "dev"
               }
 
           order = []

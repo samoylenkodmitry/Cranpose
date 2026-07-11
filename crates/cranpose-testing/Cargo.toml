@@ -30,7 +30,8 @@ cranpose-ui-graphics = { workspace = true }
 cranpose = { workspace = true, default-features = false }
 
 [dev-dependencies]
-cranpose-macros = { workspace = true }
-cranpose-ui-layout = { workspace = true }
+# Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
+cranpose-macros = { path = "../cranpose-macros" }
+cranpose-ui-layout = { path = "../cranpose-ui-layout" }
 
  

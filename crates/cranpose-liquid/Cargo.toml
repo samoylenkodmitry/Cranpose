@@ -22,4 +22,6 @@ cranpose-services = { workspace = true, default-features = false }
 log = "0.4"
 
 [dev-dependencies]
-cranpose-testing = { workspace = true }
+# Path-only (no version): cargo strips path-only dev-deps from the published
+# manifest, breaking the liquid -> testing -> cranpose -> liquid publish cycle.
+cranpose-testing = { path = "../cranpose-testing" }

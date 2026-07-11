@@ -83,9 +83,10 @@ wgpu = { version = "29.0", default-features = false, features = [
 naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
 
 [dev-dependencies]
-cranpose-app-shell = { workspace = true, features = ["test-support"] }
+# Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
+cranpose-app-shell = { path = "../../cranpose-app-shell", features = ["test-support"] }
 # Unit tests exercise the embedded fallback font and GL portability validation
 # on every platform, independent of the production feature set.
-cranpose-render-common = { workspace = true, features = ["embedded-default-font"] }
+cranpose-render-common = { path = "../common", features = ["embedded-default-font"] }
 naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
 pollster = "0.4.0"

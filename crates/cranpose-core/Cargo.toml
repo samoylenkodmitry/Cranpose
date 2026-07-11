@@ -25,7 +25,8 @@ std-hash = []
 internal = []
 
 [dev-dependencies]
-cranpose-macros = { workspace = true }
+# Path-only dev-dep: stripped from the published manifest (publish order ignores dev edges).
+cranpose-macros = { path = "../cranpose-macros" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
