@@ -404,20 +404,19 @@ fn SelectionHandles(
         );
 
         // The caret action popup (Paste / Select all / Undo / Redo), floating
-        // just above the caret. Hidden while a drag is in flight — the
-        // reference dismisses the menu the moment a handle is grabbed.
-        if caret_menu_open.value() && drag_pos.value().is_none() {
-            let caret_anchor = Point {
-                x: tip.x,
-                y: tip.y - metrics.line_height,
-            };
+        // just above the caret. It dissolves the moment a handle drag starts
+        // and rematerializes after release (the widget runs the measured
+        // timings; it stays composed while fading).
+        if caret_menu_open.value() {
             let can_paste = clipboard_read_text().is_some();
             let can_undo = state.can_undo();
             let can_redo = state.can_redo();
             let undo_state = state.clone();
             let redo_state = state.clone();
             CaretActionMenu(
-                caret_anchor,
+                tip.x,
+                tip.y - metrics.line_height,
+                drag_pos.value().is_none(),
                 can_paste,
                 can_undo,
                 can_redo,
@@ -518,18 +517,16 @@ fn SelectionHandles(
 
         // Contextual menu (Copy / Cut / Paste / Select all) floating above the
         // selection. Actions run against the focused field and dismiss the
-        // menu. Hidden while a handle drag is in flight — the reference
-        // dismisses the menu the moment a handle is grabbed and brings it
-        // back only after release.
-        if menu_open.value() && drag_pos.value().is_none() {
-            // Top-center of the selection's first line.
-            let menu_anchor = Point {
-                x: (start_tip.x + end_tip.x) * 0.5,
-                y: start_tip.y - metrics.line_height,
-            };
+        // menu. It dissolves the moment a handle drag starts and
+        // rematerializes after release (the widget runs the measured timings;
+        // it stays composed while fading).
+        if menu_open.value() {
             let can_paste = clipboard_read_text().is_some();
             TextSelectionMenu(
-                menu_anchor,
+                // Centered over the selection, above its first line.
+                (start_tip.x + end_tip.x) * 0.5,
+                start_tip.y - metrics.line_height,
+                drag_pos.value().is_none(),
                 can_paste,
                 move || {
                     if let Some(text) = dispatch_copy() {
@@ -1193,7 +1190,9 @@ mod tests {
         let mut content = move || {
             PopupHost(move || {
                 CaretActionMenu(
-                    Point { x: 40.0, y: 60.0 },
+                    40.0,
+                    60.0,
+                    true,
                     can_paste,
                     can_undo,
                     can_redo,

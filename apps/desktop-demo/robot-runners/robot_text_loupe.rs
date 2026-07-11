@@ -92,7 +92,18 @@ fn main() -> ExitCode {
 
             // ---- Grab the end handle ON the line: the loupe grows in ----
             robot.touch_down(end_x, line1_mid).expect("grab end handle");
-            let grow_shots = [(50u64, "02-grow-a"), (70, "03-grow-b"), (80, "04-grow-peak"), (180, "05-grow-settled")];
+            std::thread::sleep(Duration::from_millis(20));
+            save(
+                &robot.screenshot().expect("menu fade"),
+                &shot_dir,
+                "01b-menu-dissolving",
+            );
+            let grow_shots = [
+                (30u64, "02-grow-a"),
+                (70, "03-grow-b"),
+                (80, "04-grow-peak"),
+                (180, "05-grow-settled"),
+            ];
             for (wait_ms, name) in grow_shots {
                 std::thread::sleep(Duration::from_millis(wait_ms));
                 let shot = robot.screenshot().expect(name);
@@ -136,7 +147,13 @@ fn main() -> ExitCode {
                 let shot = robot.screenshot().expect(name);
                 save(&shot, &shot_dir, name);
             }
-            settle(&robot, 600);
+            std::thread::sleep(Duration::from_millis(120));
+            save(
+                &robot.screenshot().expect("menu mat"),
+                &shot_dir,
+                "11b-menu-materializing",
+            );
+            settle(&robot, 500);
             let after = robot.screenshot().expect("after");
             save(&after, &shot_dir, "12-menu-returned");
 

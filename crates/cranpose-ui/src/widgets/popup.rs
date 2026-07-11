@@ -185,6 +185,30 @@ fn local_popup_registry() -> StaticCompositionLocal<PopupRegistry> {
     })
 }
 
+/// The [`PopupHost`]'s live measured viewport size (logical px), published on
+/// every measure pass through a shared cell. Overlay content (selection
+/// menus, the loupe) reads it to clamp itself to the window edges;
+/// `Size::ZERO` means "not measured yet" (or no host) — treat as unclamped.
+pub fn local_popup_viewport() -> StaticCompositionLocal<Rc<Cell<cranpose_ui_graphics::Size>>> {
+    type ViewportCell = Rc<Cell<cranpose_ui_graphics::Size>>;
+    thread_local! {
+        static LOCAL: RefCell<Option<StaticCompositionLocal<ViewportCell>>> =
+            const { RefCell::new(None) };
+    }
+    LOCAL.with(|cell| {
+        cell.borrow_mut()
+            .get_or_insert_with(|| {
+                staticCompositionLocalOf(|| {
+                    Rc::new(Cell::new(cranpose_ui_graphics::Size {
+                        width: 0.0,
+                        height: 0.0,
+                    }))
+                })
+            })
+            .clone()
+    })
+}
+
 /// Installs the top-level overlay layer and composes `content` beneath it.
 ///
 /// Wrap an application's root content in a single `PopupHost` so that any
@@ -198,19 +222,34 @@ where
     F: FnMut() + 'static,
 {
     let registry = remember(PopupRegistry::hosted).with(PopupRegistry::clone);
+    let viewport = remember(|| {
+        Rc::new(Cell::new(cranpose_ui_graphics::Size {
+            width: 0.0,
+            height: 0.0,
+        }))
+    })
+    .with(Rc::clone);
+    let report_sink = Rc::clone(&viewport);
     Box(
-        Modifier::empty().fill_max_size(),
+        Modifier::empty().fill_max_size().report_size(report_sink),
         BoxSpec::default(),
         move || {
             let registry = registry.clone();
-            CompositionLocalProvider([local_popup_registry().provides(registry.clone())], || {
-                // App content: `Popup` calls inside here register into `registry`.
-                content();
-                // The overlay is its own recompose scope: registry bumps
-                // re-render the popups without re-running the app content
-                // (which would re-register fresh popup content and spin).
-                PopupOverlay(registry.clone());
-            });
+            let viewport = Rc::clone(&viewport);
+            CompositionLocalProvider(
+                [
+                    local_popup_registry().provides(registry.clone()),
+                    local_popup_viewport().provides(viewport),
+                ],
+                || {
+                    // App content: `Popup` calls inside here register into `registry`.
+                    content();
+                    // The overlay is its own recompose scope: registry bumps
+                    // re-render the popups without re-running the app content
+                    // (which would re-register fresh popup content and spin).
+                    PopupOverlay(registry.clone());
+                },
+            );
         },
     );
 }

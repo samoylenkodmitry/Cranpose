@@ -273,6 +273,48 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     RenderEffect::runtime_shader(shader)
 }
 
+/// The text edit-menu material measured from the reference: a 44 dp glass
+/// capsule of high transparency — weak backdrop blur (text behind stays
+/// readable through the body), a whisper of dark tint, a ~2 px top rim
+/// highlight and faint side rims. `progress` (0..1) materializes the
+/// material: at 0 the glass is optically absent (the menu fades in as a
+/// smudge that sharpens), at 1 it carries the full rim and tint.
+/// `blur_radius_px` is the backdrop blur in physical px (density-scaled by
+/// the caller; everything else is dp in explicit-rect mode).
+pub fn liquid_menu_glass_effect(
+    node_size: (f32, f32),
+    blur_radius_px: f32,
+    progress: f32,
+) -> RenderEffect {
+    let (w, h) = (node_size.0.max(1.0), node_size.1.max(1.0));
+    let p = progress.clamp(0.0, 1.0);
+    let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+    shader.set_float2(0, w, h); // container = node size dp
+    shader.set_float2(2, w * 0.5, h * 0.5);
+    shader.set_float2(4, w, h);
+    shader.set_float(6, -1.0); // capsule
+    shader.set_float(7, 8.0); // bezel dp
+    shader.set_float(8, 5.0 * p); // gentle edge refraction
+    shader.set_float(9, 1.4);
+    shader.set_float(10, 0.6);
+    shader.set_float(11, 0.9 * p); // top rim highlight
+    shader.set_float4(14, 0.0, 0.0, 0.0, 0.10 * p); // whisper-dark tint
+    shader.set_float(18, 1.0 + 0.25 * p); // mild vibrancy
+    shader.set_float(19, 0.0); // no dispersion on the menu
+    shader.set_float(20, -0.05 * p); // slight dark lift
+    shader.set_float(21, 0.5);
+    shader.set_float2(22, 0.0, 1.0);
+    shader.set_float(24, 1.0);
+    shader.set_float(25, 0.5);
+    shader.set_input_padding(12.0);
+    let lens = RenderEffect::runtime_shader(shader);
+    if blur_radius_px > 0.5 {
+        RenderEffect::blur(blur_radius_px * p.max(0.2)).then(lens)
+    } else {
+        lens
+    }
+}
+
 /// Build a chained `RenderEffect` for multiple liquid glass rects.
 ///
 /// Each rect is applied as a separate shader pass chained together.
