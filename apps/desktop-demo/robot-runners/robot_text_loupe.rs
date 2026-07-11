@@ -100,13 +100,16 @@ fn main() -> ExitCode {
             // its OWN grab: press → sleep to the offset → capture once →
             // release → settle. The capture cost lands after the moment of
             // interest, keeping the sampled time honest.
+            // Offsets mirror the reference sheet frames exactly: the bubble
+            // is born ~120 ms after the grab, and the reference grow frames
+            // sit at birth +0/+35/+90/+180/+380 ms.
             let grow_shots = [
                 (20u64, "01b-menu-dissolving"),
-                (140, "02-grow-a"),
-                (160, "02b-grow-b"),
+                (120, "02-grow-a"),
+                (155, "02b-grow-b"),
                 (210, "03-grow-c"),
-                (320, "04-grow-peak"),
-                (520, "05-grow-settled"),
+                (300, "04-grow-peak"),
+                (500, "05-grow-settled"),
             ];
             for (offset_ms, name) in grow_shots {
                 // One keyframe per grab. A rare event-ordering race can void
@@ -117,7 +120,7 @@ fn main() -> ExitCode {
                     robot.touch_down(end_x, line1_mid).expect("grab end handle");
                     std::thread::sleep(Duration::from_millis(offset_ms));
                     let shot = robot.screenshot_with_scale(3.0).expect(name);
-                    let born = offset_ms >= 140;
+                    let born = offset_ms >= 155;
                     let present = !born
                         || region_has_structure(
                             &shot,
@@ -171,10 +174,13 @@ fn main() -> ExitCode {
             // settle, release, sleep to the offset, capture once.
             robot.touch_up(drag_to_x, line1_mid).expect("release");
             settle(&robot, 500);
+            // Dissolve offsets mirror the reference frames (+8/+25/+42/+55
+            // after release), plus the menu-materialize window.
             let dissolve_shots = [
-                (18u64, "09-dissolve-a"),
-                (40, "10-dissolve-b"),
-                (140, "11-after-release"),
+                (8u64, "09-dissolve-a"),
+                (25, "10-dissolve-b"),
+                (42, "10b-dissolve-c"),
+                (55, "11-after-release"),
                 (300, "11b-menu-materializing"),
                 (360, "11c-menu-materializing-2"),
             ];
