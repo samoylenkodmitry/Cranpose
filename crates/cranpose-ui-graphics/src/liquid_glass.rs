@@ -237,7 +237,7 @@ impl Default for LiquidLoupeSpec {
             // capsule (peak ~+127 luminance over the backdrop); the
             // interactive-lens rim gain is a whisper, so the loupe drives it
             // through its highlight (calibrated on captures).
-            highlight: 4.8,
+            highlight: 4.4,
             progress: 1.0,
         }
     }
@@ -316,10 +316,12 @@ pub fn liquid_menu_glass_effect(
     shader.set_float(11, 0.18 * p); // top rim highlight (calibrated: the
                                     // reference top spike is a subtle +33
                                     // luminance over the body)
-    shader.set_float4(14, 0.0, 0.0, 0.0, 0.045 * p); // whisper-dark tint
+    shader.set_float4(14, 0.0, 0.0, 0.0, 0.07 * p); // whisper-dark tint
     shader.set_float(18, 1.0 + 0.25 * p); // mild vibrancy
     shader.set_float(19, 0.0); // no dispersion on the menu
-    shader.set_float(20, -0.015 * p); // barely-there dark lift
+    shader.set_float(20, -0.05 * p); // dim bright backdrop content like the
+                                     // reference (ghosts stay smudges)
+    shader.set_float(88, 0.8); // bottom rim ~70-80% of the top (measured)
     shader.set_float(21, 0.5);
     // Measured on captures: (0,1) puts the crisp arc on the TOP edge with
     // the 0.45x counter on the bottom — the reference hierarchy.

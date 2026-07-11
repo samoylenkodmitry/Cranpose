@@ -270,6 +270,7 @@ pub(crate) fn selection_handle_pointer_input(
                     // (a drag/lift still settles the selection).
                     let mut down_time: Option<i64> = None;
                     let mut down_pos = Point { x: 0.0, y: 0.0 };
+                    let mut pressed = false;
                     let mut long_press_fired = false;
                     // Whether the finger has strayed beyond the tap slop since it
                     // went down — a stray means a drag, not a tap.
@@ -280,12 +281,22 @@ pub(crate) fn selection_handle_pointer_input(
                             PointerEventKind::Down => {
                                 down_time = event.time_ms;
                                 down_pos = event.global_position;
+                                pressed = true;
                                 long_press_fired = false;
                                 dragged = false;
                                 on_drag(event.global_position);
                                 event.consume();
                             }
                             PointerEventKind::Move => {
+                                // Only a move of a PRESSED pointer drags the
+                                // handle. Hover moves (mouse passing over, the
+                                // synthesized hover dispatch after a release)
+                                // must not: treating them as drags moved the
+                                // caret under a hovering mouse and re-armed
+                                // the loupe right after a release.
+                                if !pressed {
+                                    continue;
+                                }
                                 if moved_beyond(down_pos, event.global_position, HANDLE_TAP_SLOP_PX)
                                 {
                                     dragged = true;
@@ -301,6 +312,9 @@ pub(crate) fn selection_handle_pointer_input(
                                 event.consume();
                             }
                             PointerEventKind::Up => {
+                                if !pressed {
+                                    continue;
+                                }
                                 maybe_fire_long_press(
                                     &event,
                                     down_time,
@@ -312,6 +326,7 @@ pub(crate) fn selection_handle_pointer_input(
                                 {
                                     dragged = true;
                                 }
+                                pressed = false;
                                 on_drag_end();
                                 // A quick press→release that neither dragged the
                                 // handle nor became a long-press is a tap: open
@@ -323,7 +338,10 @@ pub(crate) fn selection_handle_pointer_input(
                                 event.consume();
                             }
                             PointerEventKind::Cancel => {
-                                on_drag_end();
+                                if pressed {
+                                    pressed = false;
+                                    on_drag_end();
+                                }
                                 down_time = None;
                                 event.consume();
                             }

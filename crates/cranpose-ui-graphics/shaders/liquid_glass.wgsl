@@ -330,16 +330,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
         // 0 deep inside → 1 at the rim.
         let xr = 1.0 - clamp(-d / r_in, 0.0, 1.0);
-        // Magnification profile: FLAT m0 across the interior, easing to
-        // exactly 1 in a tight zone just before the fold band. A dome that
-        // falls from the very center arced the magnified baseline and
-        // squashed the handle dot; the reference keeps the primary line
-        // ruler-flat and confines all distortion to the near-rim zone
-        // (the dot at ~60% radius still reads compressed — it sits in the
-        // easing zone).
-        let flat_end = band_start * 0.45;
-        let ease = smoothstep(flat_end, band_start, xr);
-        let m = max(m0 + (1.0 - m0) * ease, 0.2);
+        // Magnification profile: a STEP — m0 flat across the text band
+        // (|depth| < ~0.3, the primary line stays ruler-flat), a fast drop
+        // across 0.30..0.44 (hidden in the inter-line gap), then a ~1.25
+        // PLATEAU through the handle-dot zone (any gradient across the dot
+        // squashes it — the reference dot is a round ~1.27x), joining the
+        // fold band at the rim.
+        let m_edge = 1.0 + (m0 - 1.0) * 0.36;
+        let ease = smoothstep(0.30, 0.44, xr);
+        let m = max(m0 + (m_edge - m0) * ease, 0.2);
         // Magnify about the shape center, looking at the offset focus. The
         // whole interior shows the focus neighbourhood (the loupe displays
         // content from under the finger, offset up).
@@ -349,7 +348,10 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             // sin(5πτ/6): rises to its peak at τ = 0.6, falls to half by the
             // rim — the descending branch is the inversion.
             let g = sin(3.1415926 * tau * 0.8333);
-            let s_units = band_start + (fold_peak - band_start) * g;
+            // The curve starts from the eased interior's landing point
+            // (band_start / m_edge) so the band joins without a seam.
+            let s_band0 = band_start / m_edge;
+            let s_units = s_band0 + (fold_peak - s_band0) * g;
             disp_c = outward_normal * (s_units - xr) * r_in;
             spread = band_chroma * smoothstep(0.0, 0.35, tau);
         }
@@ -438,7 +440,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let edge_line = 1.0 - smoothstep(0.0, edge_width, abs(d + edge_center) - 0.2);
     let facing_light = max(dot(inward_normal, light_dir), 0.0);
     let facing_away = max(dot(inward_normal, -light_dir), 0.0);
-    let spec_line = edge_line * (pow(facing_light, 1.4) + pow(facing_away, 2.0) * 0.45);
+    // Counter-arc gain (uniform 88, default 0.45): how strongly the edge
+    // opposite the light reflects. The reference edit menu's bottom rim runs
+    // ~70% of its top; the default keeps every existing material identical.
+    var counter_gain = get_float(88u);
+    if counter_gain <= 0.0 {
+        counter_gain = 0.45;
+    }
+    let spec_line = edge_line * (pow(facing_light, 1.4) + pow(facing_away, 2.0) * counter_gain);
     let sheen =
         pow(max(1.0 - x_full, 0.0), 3.0) * (0.4 + 0.6 * facing_light) * sheen_strength;
     // A faint dark contour just inside the bright line keeps the rim legible
@@ -457,13 +466,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     rgb = rgb * (1.0 - rim_dark * rim_dark_gain * highlight);
     var spec_rgb = vec3<f32>(spec_line * spec_gain + sheen * 0.22);
     if loupe_mode > 0.5 {
-        // The reference loupe's rim line itself splits into a faint
-        // continuous rainbow (a prism edge hugging the whole silhouette),
-        // beyond the content fringes in the fold band. Phase the spectrum
-        // across the line's ~2px width: violet just inside, red just
-        // outside.
-        let phase = clamp(0.5 + d * 0.45, 0.0, 1.0);
-        spec_rgb = spec_line * spec_gain * mix(vec3<f32>(1.0), spectrum_weight(phase) * 1.6, 0.35);
+        // The reference loupe rim is a continuous near-white line around the
+        // WHOLE silhouette (brightest on top, still present on the straight
+        // sides where a purely directional spec vanishes — without a floor
+        // the sides read as a vesica), with only a faint prismatic tint
+        // phased across the line's width.
+        let facing = pow(facing_light, 1.4) + pow(facing_away, 2.0) * 0.45;
+        let ring = edge_line * (0.3 + 0.7 * facing);
+        let phase = clamp(0.5 + (d + 1.6) * 0.35, 0.0, 1.0);
+        spec_rgb = ring * spec_gain * mix(vec3<f32>(1.0), spectrum_weight(phase) * 1.6, 0.15);
     }
     rgb = rgb + spec_rgb * highlight;
 

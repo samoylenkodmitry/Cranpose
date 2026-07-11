@@ -41,6 +41,10 @@ fn text_style() -> TextStyle {
     let mut style = TextStyle::default();
     style.span_style.color = Some(TEXT_COLOR);
     style.span_style.font_size = TextUnit::Sp(16.0);
+    // The reference line pitch is 24pt for 16pt text; the default Noto pitch
+    // (~21dp) leaked the next line into the loupe's interior where the
+    // reference shows the inter-line gap.
+    style.paragraph_style.line_height = TextUnit::Sp(24.0);
     style
 }
 
@@ -98,18 +102,37 @@ fn main() -> ExitCode {
             // interest, keeping the sampled time honest.
             let grow_shots = [
                 (20u64, "01b-menu-dissolving"),
-                (55, "02-grow-a"),
-                (110, "03-grow-b"),
-                (200, "04-grow-peak"),
-                (400, "05-grow-settled"),
+                (140, "02-grow-a"),
+                (160, "02b-grow-b"),
+                (210, "03-grow-c"),
+                (320, "04-grow-peak"),
+                (520, "05-grow-settled"),
             ];
             for (offset_ms, name) in grow_shots {
-                robot.touch_down(end_x, line1_mid).expect("grab end handle");
-                std::thread::sleep(Duration::from_millis(offset_ms));
-                let shot = robot.screenshot_with_scale(3.0).expect(name);
-                save(&shot, &shot_dir, name);
-                robot.touch_up(end_x, line1_mid).expect("release grab");
-                settle(&robot, 500);
+                // One keyframe per grab. A rare event-ordering race can void
+                // a cycle (the previous release racing this press through the
+                // robot pipe); keyframes past the bubble's birth verify the
+                // bubble actually rendered and retry the cycle once.
+                for attempt in 0..2 {
+                    robot.touch_down(end_x, line1_mid).expect("grab end handle");
+                    std::thread::sleep(Duration::from_millis(offset_ms));
+                    let shot = robot.screenshot_with_scale(3.0).expect(name);
+                    let born = offset_ms >= 140;
+                    let present = !born
+                        || region_has_structure(
+                            &shot,
+                            (end_x - 70.0, line1_mid - 125.0, end_x + 70.0, line1_mid - 8.0),
+                        );
+                    if present || attempt == 1 {
+                        save(&shot, &shot_dir, name);
+                    }
+                    robot.touch_up(end_x, line1_mid).expect("release grab");
+                    settle(&robot, 500);
+                    if present {
+                        break;
+                    }
+                    println!("retrying {name}: bubble missing (event-order race)");
+                }
             }
             // The bubble must exist while held: the region above the line
             // must differ from the idle frame there.
