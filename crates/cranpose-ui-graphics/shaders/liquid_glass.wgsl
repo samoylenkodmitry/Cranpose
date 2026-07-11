@@ -346,7 +346,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // verticality also kills the rainbow bullseyes the caps produced
         // under a radial fold).
         let vert = outward_normal.y * outward_normal.y;
-        let vert_weight = mix(0.12, 1.0, vert);
+        // Vertical-edge weighting (caps barely fold), and the drop optic is
+        // asymmetric: the fold below the focus is full strength, the one
+        // above much weaker (the reference's top edge shows only a whisper
+        // of mirrored ascenders).
+        let below = select(0.35, 1.0, outward_normal.y > 0.0);
+        let vert_weight = mix(0.12, 1.0, vert) * below;
         if xr > band_start {
             let tau = clamp((xr - band_start) / max(1.0 - band_start, 0.001), 0.0, 1.0);
             // Rise to the reach by mid-band, then a SHALLOW fall (to 85%):
@@ -450,7 +455,16 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     if counter_gain <= 0.0 {
         counter_gain = 0.45;
     }
-    let spec_line = edge_line * (pow(facing_light, 1.4) + pow(facing_away, 2.0) * counter_gain);
+    // Rim floor (uniform 89, default 0): minimum ring strength on the arcs
+    // perpendicular to the light — the reference menu's rim holds ~60-70% of
+    // its top brightness at 3/9 o'clock instead of pinching to nothing.
+    let rim_floor = clamp(get_float(89u), 0.0, 1.0);
+    let spec_line = edge_line
+        * mix(
+            pow(facing_light, 1.4) + pow(facing_away, 2.0) * counter_gain,
+            1.0,
+            rim_floor,
+        );
     let sheen =
         pow(max(1.0 - x_full, 0.0), 3.0) * (0.4 + 0.6 * facing_light) * sheen_strength;
     // A faint dark contour just inside the bright line keeps the rim legible

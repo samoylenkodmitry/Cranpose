@@ -225,15 +225,15 @@ impl Default for LiquidLoupeSpec {
         Self {
             magnification: 1.25,
             focus_offset: (0.0, 75.0),
-            // Measured: the fold owns the outer ~42% of the depth on the
-            // long edges and starts just BELOW the displayed handle dot (a
-            // band through the dot's zone mirrored it into a double blob);
-            // its reach lands on the next text line, mirrored near 1:1.
-            band_start: 0.58,
-            fold_peak: 0.75,
+            // Measured: the fold owns the outer ~30% of the depth on the
+            // long edges; its sampling starts fully PAST the handle dot's
+            // zone (band through the dot mirrored its bottom into a skirt)
+            // and reaches the next text line's x-band, mirrored near 1:1.
+            band_start: 0.74,
+            fold_peak: 0.78,
             // The reference fringes are tight (3-5 px at 3x) and live only in
             // the fold band.
-            dispersion: 0.35,
+            dispersion: 0.22,
             // The reference rim reads as a clear bright line around the whole
             // capsule (peak ~+127 luminance over the backdrop); the
             // interactive-lens rim gain is a whisper, so the loupe drives it
@@ -273,7 +273,9 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     shader.set_float2(22, 0.0, 1.0);
     shader.set_float(24, 1.0); // contrast neutral
     shader.set_float(28, 1.0); // interactive-lens rim style
-    shader.set_float(29, 0.05); // near-zero sheen: crisp interior
+    shader.set_float(29, 0.45); // soft top glow inside the rim (the
+                                // reference's top edge blooms; a bare thin
+                                // line read as a flat stroke)
     shader.set_float(80, 1.0); // loupe mode
     shader.set_float2(81, spec.focus_offset.0, spec.focus_offset.1);
     shader.set_float(83, magnification);
@@ -317,13 +319,14 @@ pub fn liquid_menu_glass_effect(
     shader.set_float(11, 0.18 * p); // top rim highlight (calibrated: the
                                     // reference top spike is a subtle +33
                                     // luminance over the body)
-    shader.set_float4(14, 0.0, 0.0, 0.0, 0.12 * p); // dark tint (reference
+    shader.set_float4(14, 0.0, 0.0, 0.0, 0.15 * p); // dark tint (reference
                                                     // dims backdrop ~24%)
     shader.set_float(18, 1.0 + 0.25 * p); // mild vibrancy
     shader.set_float(19, 0.0); // no dispersion on the menu
     shader.set_float(20, -0.09 * p); // dim bright backdrop content like the
                                      // reference (ghosts stay smudges)
     shader.set_float(88, 0.9); // bottom rim ~89% of the top (measured)
+    shader.set_float(89, 0.6); // rim holds ~60% strength at the side tangents
     shader.set_float(21, 0.5);
     // Measured on captures: (0,1) puts the crisp arc on the TOP edge with
     // the 0.45x counter on the bottom — the reference hierarchy.
@@ -333,7 +336,10 @@ pub fn liquid_menu_glass_effect(
     shader.set_input_padding(12.0);
     let lens = RenderEffect::runtime_shader(shader);
     if blur_radius_px > 0.5 {
-        RenderEffect::blur(blur_radius_px * p.max(0.2)).then(lens)
+        // Full blur from the first fade frame: scaling the radius with the
+        // fade left raw, crisp backdrop text showing through the half-faded
+        // body — the reference smudges from the start.
+        RenderEffect::blur(blur_radius_px).then(lens)
     } else {
         lens
     }
