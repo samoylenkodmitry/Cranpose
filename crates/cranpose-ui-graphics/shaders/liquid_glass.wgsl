@@ -374,7 +374,13 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                 let sample_dy = p.y + disp_a.y + disp_c.y;
                 let floor_dy = focus_px.y + seam_floor;
                 if sample_dy < floor_dy {
-                    disp_c.y = disp_c.y + (floor_dy - sample_dy);
+                    // COMPRESS toward the floor instead of pinning, and only
+                    // on the truly-bottom arc: the dot lives at the band's
+                    // center (normal straight down), while at the corners the
+                    // weak fold samples shallow dot-free content — pushing
+                    // those deep painted stretched "ribbon" flaps.
+                    let bottom_arc = smoothstep(0.6, 0.95, vert);
+                    disp_c.y = disp_c.y + (floor_dy - sample_dy) * 0.85 * bottom_arc;
                 }
             }
             spread = band_chroma * smoothstep(0.0, 0.25, tau) * vert_weight;
