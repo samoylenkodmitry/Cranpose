@@ -12,6 +12,7 @@ use cranpose::{
     composable, mutableStateOf, remember, Brush, Color, CornerRadii, Modifier, Point, Rect,
     ScrollState,
 };
+use cranpose_animation::{animateFloatAsState, tween, AnimationSpec, AnimationType, Easing};
 use cranpose_ui::{Alignment, HorizontalAlignment, VerticalAlignment};
 
 const PAGE_PADDING: f32 = 18.0;
@@ -592,27 +593,76 @@ pub fn LiquidUiTab() {
                                 RowSpec::default()
                                     .vertical_alignment(VerticalAlignment::CenterVertically),
                                 move || {
-                                    // The filter neighbor the menu bubble
-                                    // glues past while growing (reference
-                                    // keyframes 4-6): a blue prominent
-                                    // circle like the reference filter.
-                                    GlassIconButton(
-                                        Modifier::empty()
-                                            .report_window_rect(std::rc::Rc::clone(&filter_sink)),
-                                        GlassButtonSpec::prominent(),
-                                        44.0,
-                                        || {},
-                                        icons::FILTER,
+                                    // The buttons the menu swallows fade out
+                                    // as the droplet covers them (the settled
+                                    // reference card shows ZERO trace of the
+                                    // buttons beneath — a lingering blur
+                                    // smudge reads as a glitch); they return
+                                    // quickly on dismiss.
+                                    let covered = animateFloatAsState(
+                                        if menu.get() { 0.0 } else { 1.0 },
+                                        if menu.get() {
+                                            AnimationType::Tween(
+                                                AnimationSpec::tween(180, Easing::EaseOut)
+                                                    .with_delay(160),
+                                            )
+                                        } else {
+                                            tween(140, Easing::EaseOut)
+                                        },
+                                        "nav-covered",
                                     );
-                                    Box(Modifier::empty().width(8.0), BoxSpec::default(), || {});
-                                    GlassIconButton(
-                                        Modifier::empty()
-                                            .report_window_rect(std::rc::Rc::clone(&anchor_sink)),
-                                        GlassButtonSpec::glass(),
-                                        44.0,
-                                        move || menu.set(true),
-                                        icons::MORE_HORIZ,
-                                    );
+                                    let covered_alpha = move || covered.get().clamp(0.0, 1.0);
+                                    // Their GLASS is a backdrop effect and
+                                    // ignores layer alpha, so once faded the
+                                    // buttons UNMOUNT entirely (a fixed box
+                                    // keeps the layout) — anything less
+                                    // leaves the prominent button's blue
+                                    // glass glowing through the card.
+                                    if covered_alpha() > 0.02 {
+                                        // The filter neighbor the menu bubble
+                                        // glues past while growing (reference
+                                        // keyframes 4-6): a blue prominent
+                                        // circle like the reference filter.
+                                        GlassIconButton(
+                                            Modifier::empty()
+                                                .report_window_rect(std::rc::Rc::clone(
+                                                    &filter_sink,
+                                                ))
+                                                .graphics_layer(move || cranpose::GraphicsLayer {
+                                                    alpha: covered_alpha(),
+                                                    ..Default::default()
+                                                }),
+                                            GlassButtonSpec::prominent(),
+                                            44.0,
+                                            || {},
+                                            icons::FILTER,
+                                        );
+                                        Box(
+                                            Modifier::empty().width(8.0),
+                                            BoxSpec::default(),
+                                            || {},
+                                        );
+                                        GlassIconButton(
+                                            Modifier::empty()
+                                                .report_window_rect(std::rc::Rc::clone(
+                                                    &anchor_sink,
+                                                ))
+                                                .graphics_layer(move || cranpose::GraphicsLayer {
+                                                    alpha: covered_alpha(),
+                                                    ..Default::default()
+                                                }),
+                                            GlassButtonSpec::glass(),
+                                            44.0,
+                                            move || menu.set(true),
+                                            icons::MORE_HORIZ,
+                                        );
+                                    } else {
+                                        Box(
+                                            Modifier::empty().width(44.0 + 8.0 + 44.0).height(44.0),
+                                            BoxSpec::default(),
+                                            || {},
+                                        );
+                                    }
                                 },
                             );
                         },
