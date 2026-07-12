@@ -742,6 +742,11 @@ path = "robot-runners/robot_liquid_bubble_physics.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
+name = "robot_menu_slide"
+path = "robot-runners/robot_menu_slide.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
 name = "robot_regression_fused_viewport_contract"
 path = "robot-runners/robot_regression_fused_viewport_contract.rs"
 required-features = ["desktop", "robot-app"]

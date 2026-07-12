@@ -25,14 +25,94 @@ use cranpose_core::{mutableStateOf, remember, MutableState, NodeId, SideEffect};
 use cranpose_foundation::modifier_element;
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
 use cranpose_ui_graphics::{Color, Point, Rect};
-use std::cell::Cell;
-use std::rc::Rc;
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
 
 /// Alpha of the selection highlight relative to the field's accent
 /// ([`TextFieldOptions::cursor_color`]): the reference highlight is the tint
 /// at ~0.32 opacity, while the caret and both selection handles carry it
 /// solid — one accent drives all three.
 pub const SELECTION_HIGHLIGHT_ALPHA: f32 = 0.32;
+
+/// Hold duration before a stationary touch press on the text claims the
+/// gesture (word-select + menu while the finger is still down).
+const TEXT_LONG_PRESS_MS: u64 = 500;
+/// Travel beyond this (dp) before the hold elapses is a drag, not a
+/// long-press.
+const TEXT_LONG_PRESS_SLOP: f32 = 12.0;
+
+/// Frame-clock watcher for the long-press → slide-to-menu gesture: armed by
+/// the composition when the field node publishes a fresh touch press, it
+/// claims the gesture after the hold threshold (selecting the word under
+/// the press; the range-change side effect opens the menu). The composition
+/// slot holds the only strong reference — dropping it (press ended, field
+/// recomposed away) cancels the pending frame callback.
+struct LongPressWatcher {
+    controller: TextFieldHandleController,
+    state: TextFieldState,
+    style: TextStyle,
+    start: Point,
+    start_nanos: Cell<Option<u64>>,
+    registration: RefCell<Option<cranpose_core::internal::FrameCallbackRegistration>>,
+    frame_clock: cranpose_core::internal::FrameClock,
+}
+
+impl LongPressWatcher {
+    fn arm(self: &Rc<Self>) {
+        let weak: Weak<LongPressWatcher> = Rc::downgrade(self);
+        let registration = self.frame_clock.with_frame_nanos(move |now| {
+            let Some(watcher) = weak.upgrade() else {
+                return;
+            };
+            watcher.tick(now);
+        });
+        *self.registration.borrow_mut() = Some(registration);
+        // The watcher only advances while frames run; keep them coming for
+        // the (otherwise idle) stationary hold.
+        crate::request_render_invalidation();
+    }
+
+    fn tick(self: Rc<Self>, now: u64) {
+        self.registration.borrow_mut().take();
+        let Some(press) = self.controller.metrics().and_then(|m| m.press) else {
+            return; // press ended — the composition slot will drop us
+        };
+        let moved = (press.position.x - self.start.x)
+            .abs()
+            .max((press.position.y - self.start.y).abs());
+        if (press.start.x - self.start.x).abs() > 0.5
+            || (press.start.y - self.start.y).abs() > 0.5
+            || moved > TEXT_LONG_PRESS_SLOP
+        {
+            return; // a different/dragging gesture
+        }
+        let start = match self.start_nanos.get() {
+            Some(value) => value,
+            None => {
+                self.start_nanos.set(Some(now));
+                now
+            }
+        };
+        if now.saturating_sub(start) < TEXT_LONG_PRESS_MS * 1_000_000 {
+            self.arm();
+            return;
+        }
+        // Hold elapsed: claim the gesture and select the word under the
+        // press. The selection-range side effect opens the menu; the node
+        // stops drag-selecting under the claim.
+        self.controller.claim_gesture();
+        let Some(metrics) = self.controller.metrics() else {
+            return;
+        };
+        let text = self.state.text();
+        let offset = window_pos_to_offset(&text, &self.style, &metrics, self.start, 0.0);
+        let (word_start, word_end) = crate::word_boundaries::find_word_boundaries(&text, offset);
+        self.state.edit(|buffer| {
+            buffer.select(TextRange::new(word_start, word_end));
+        });
+        crate::request_render_invalidation();
+    }
+}
 
 /// Window-space position where a handle's tip should sit for the caret/selection
 /// endpoint at byte `offset`: the bottom of that offset's visual line.
@@ -355,6 +435,42 @@ fn SelectionHandles(
     }
 
     let text = state.text();
+
+    // Long-press → slide-to-menu: when the field node publishes a fresh touch
+    // press, arm a frame-clock watcher that claims the gesture after the hold
+    // threshold (word select; the range-change side effect opens the menu
+    // while the finger is still down). The slot holds the watcher's only
+    // strong reference: replacing/clearing it cancels the pending callback.
+    let press_watcher: Rc<Cell<Option<(u32, u32)>>> =
+        remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
+    let press_watcher_ref: Rc<RefCell<Option<Rc<LongPressWatcher>>>> =
+        remember(|| Rc::new(RefCell::new(None))).with(Rc::clone);
+    match metrics.press {
+        Some(press) => {
+            let key = (press.start.x.to_bits(), press.start.y.to_bits());
+            if press_watcher.get() != Some(key) {
+                press_watcher.set(Some(key));
+                let watcher = Rc::new(LongPressWatcher {
+                    controller: controller.clone(),
+                    state: state.clone(),
+                    style: style.clone(),
+                    start: press.start,
+                    start_nanos: Cell::new(None),
+                    registration: RefCell::new(None),
+                    frame_clock: cranpose_core::with_current_composer(|composer| {
+                        composer.runtime_handle()
+                    })
+                    .frame_clock(),
+                });
+                watcher.arm();
+                *press_watcher_ref.borrow_mut() = Some(watcher);
+            }
+        }
+        None => {
+            press_watcher.set(None);
+            press_watcher_ref.borrow_mut().take();
+        }
+    }
 
     // Window position of an in-progress handle drag (touch), or `None` when no
     // handle is being dragged. Drives the glass loupe (below) so it floats
