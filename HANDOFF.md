@@ -20,11 +20,65 @@ when the goal is closed.
 11. Each of the above is a **separate out-of-context judge** whose verdict is **binding** and re-run fresh each time.
 12. All `example/target` reproduced precisely in `desktop-demo`, working on all platforms.
 
-## Judge-loop method (MANDATORY — user directive #11)
+## Project orientation (fresh checkout)
 
-- Fresh **out-of-context sonnet** judge per round (`Agent`, `model: sonnet`, `general-purpose`), column A = ground truth, column B = ours, native-resolution tiles.
-- Verdicts are **binding** — but **pixel-arbitrate every claim before acting** (judges mis-measure halos, invert prose specs, flip-flop, and read distorted downscaled sheets as "opaque"). When a claim is refuted by measurement, document the refutation and rebuild the sheet with a caveat, then re-judge fresh. Never overrule a *confirmed* verdict.
-- Motion sampled with `robot.capture_keyframes(scale, &[(advance_ms, capture)])` on the **animation clock** — wall-clock sleeps flake under host load (they "confirmed" three innocent subsystems in a bisect this session). See `crates/cranpose/src/robot.rs`.
+**cranpose** is a Jetpack-Compose-style declarative UI framework in Rust: `#[composable]` functions, `remember`/`mutableStateOf`/`State`, modifier chains, closed-form value-space spring animation, rendered by wgpu (Vulkan on this Linux/X11 host) with a software text raster. Targets: desktop (winit), wasm/WebGL2, android, ios. There is a headless **robot** test harness that drives real gestures and captures screenshots.
+
+Crate map (`crates/`):
+- `cranpose-core` — runtime, recompose scheduler, state/snapshot, frame clock.
+- `cranpose-ui` — widgets, text (measure/layout/wrap), layout engine, modifiers, `basic_text_field.rs`, `text_selection.rs`, `text_field_modifier_node.rs`.
+- `cranpose-ui-graphics` — `Color`, draw primitives, **`shaders/liquid_glass.wgsl`** (the glass shader; uniform accessors `get_float(N)`/`get_vec*`), `liquid_glass.rs`.
+- `cranpose-liquid` — the **Liquid Glass** component library (`Glass` material, `dynamics.rs`, `widgets/{tab_bar,toggle,segmented,slider,menu,button,card,nav_bar,search_field}.rs`, `motion.rs`, `theme.rs`).
+- `cranpose-render/{common,wgpu}`, `cranpose-app-shell`, `cranpose-foundation`, `cranpose-animation`, `cranpose-testing` (robot assertions/helpers), `cranpose-macros`.
+- `cranpose` — top-level crate + platform entry points: `src/{desktop,web,android,ios}.rs`, `src/robot.rs` (`capture_keyframes`, `touch_down/move/up`, `find_button_bounds_exact`, `measure_text`).
+
+Apps: `apps/desktop-demo` (the showcase + `robot-runners/` + `examples/`), `apps/android-demo`, `apps/desktop-demo-platform` (android/wasm exported libs).
+
+Reference media (the etalon): `example/iphone17_records/*.MP4` (source recordings — `bottom_bar_glass_effects_and_form.MP4` 1320×2868 @60fps, `text_handles_bubble_and_popup.MP4` @120fps) and `example/target/{overview,toggle-press,menu-open,tab-swipe,text-selection,bottom-bar-form}/` (canonical pre-extracted PNG frame sequences, each with a README of measured invariants).
+
+Load-bearing architecture facts (deeper notes are in the Fable memory dir `~/.claude/projects/-home-s-develop-projects-compose-rs-proposal/memory/*.md`, which Codex won't share — the key ones):
+- **Glass geometry is dp + node-size container**, never bake density into shader uniforms (robot captures render at scale 1.0; desktop density ≈1.354). Shader has two modes: explicit-rect (container>0, all-dp) and cover (container==0, px).
+- **sRGB pass-through**: never pick `*UnormSrgb` swapchains; colors are sRGB bytes.
+- The glass **backdrop effect** composites premultiplied-src-over and is **transparent outside the SDF**; it ignores layer alpha (this is why the demo unmounts covered buttons rather than fading them).
+- Animatable springs stamp `start_time` on their **first frame after `animateTo`**, so a pose lags its label by one keyframe step — say so on judge sheets and add 1ms "stamp-steps" in keyframe sequences.
+
+## Running independent judges (the full method — user directive #11, reproducible)
+
+Every visual-match claim is settled by a **fresh, out-of-context sonnet judge** comparing A (target) vs B (ours), and its **CONFIRMED verdicts are binding** — but you **pixel-arbitrate every claim first** because judges mis-measure. Concrete pipeline (all commands run this session):
+
+**1. Extract A (target) frames.** Prefer the pre-extracted `example/target/<component>/`; regenerate a tighter crop with ffmpeg:
+```sh
+ffmpeg -ss <start_s> -to <end_s> -i example/iphone17_records/<file>.MP4 -vf "fps=<N>,crop=W:H:X:Y" out_%03d.png
+```
+**Find the true event frame** (press/growth start) — do NOT trust wall-time labels — via consecutive-frame diff; the first frame where the mean jumps is t=0:
+```sh
+magick f_030.png f_031.png -compose difference -composite -format "%[fx:mean*255]" info:
+```
+(Mislabeling A's press frame caused a whole wasted judge round this session.)
+
+**2. Capture B (ours) on the ANIMATION clock**, never wall-clock sleeps (they flake under host load — a sleep-sampled morph "confirmed" three innocent subsystems in a bisect). A robot runner calls:
+```rust
+robot.capture_keyframes(1.0, &[(0.0,false),(1.0,false),(20.0,true),(40.0,true), …]) // (advance_ms, capture)
+```
+It advances `last_frame + dt` atomically and returns one screenshot per capturing step. Include a `(1.0,false)` stamp-step after the trigger (spring start-time stamping). Run: `ROBOT_SHOT_DIR=<dir> cargo run -p desktop-app --example <runner> --features desktop,robot-app`. The `robot_liquid_motion_contract`, `robot_liquid_bubble_physics`, and `robot_text_loupe` runners already save labelled keyframe series.
+
+**3. Build the A/B sheet at NATIVE resolution** (downscaled tiles read as "opaque/no refraction" — a real false-verdict source this session). Crop the component region, label each tile, montage two columns:
+```sh
+magick in.png -crop WxH+X+Y tile.png
+magick tile.png -background gray15 -fill white -pointsize 18 label:"A t=83ms (cruise)" -append labelled.png
+montage A00.png B00.png A01.png B01.png … -tile 2x -geometry +4+4 -background gray10 sheet.png
+```
+Align rows by animation **phase** (launch/cruise/brake/arrive/settle), not raw wall time, when framerates differ. (Python helpers used this session live in `scratchpad/judge*/build_sheet*.py`.)
+
+**4. Dispatch a FRESH judge each round** — never reuse one (bias):
+```
+Agent(subagent_type: "general-purpose", model: "sonnet", prompt: <<sheet path + rubric>>)
+```
+Prompt must state: A=ground-truth / B=ours; per-row phase labels; **SCOPE EXCLUSIONS** (font, exact content, colors, A's video motion blur, sub-3px AA, absolute pixel sizes → judge proportions); any known **state caveats** (e.g. "B pressed an already-ON toggle in these rows"); and a per-aspect **MATCH/CLOSE/MISMATCH** rubric ending in a ranked list of concrete visual deltas. Ask it to zoom into crops for close calls.
+
+**5. Pixel-arbitrate before acting.** For each claim, run a measurement — crop+diff (`-compose difference`), luma probe, or bbox (`numpy`/PIL) — to confirm or refute. Refuted this session: "frozen dissolve plateau" (pixel-diff showed continuous change; the pill's right edge is static *by design* since lens==pill width), "opaque no refraction" (downscaled-sheet artifact — full-res showed dome bowing), and several "sheet-state mismatch" claims (A presses an OFF toggle, we captured an ON one). Document the refutation, rebuild the sheet with a caveat, and **re-judge fresh**. Never overrule a *confirmed* verdict; when the judge misreads the TASK, improve the prompt/sheet and re-run (user directive: "if he understood task wrong make better description").
+
+This loop ran ~6 rounds for the flight lens (converged deformation-law + volume to MATCH), plus menu and toggle rounds — see IN FLIGHT above for the open ones.
 
 ## DONE this round (committed, contract-pinned)
 
