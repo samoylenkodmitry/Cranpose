@@ -432,8 +432,13 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     if spread > 0.02 {
         var acc = vec3<f32>(0.0);
         var wsum = vec3<f32>(0.0);
-        for (var i = 0; i < 6; i = i + 1) {
-            let t = (f32(i) + 0.5) / 6.0;
+        // The loupe's wide fold spread quantizes into distinct rainbow bands
+        // at six taps ("fewer but hotter" fringe pixels than the reference's
+        // softer blend); extra taps smooth it at the same total energy.
+        // Legacy materials keep exactly six — their renders are pinned.
+        let tap_count = select(6, 10, loupe_mode > 0.5);
+        for (var i = 0; i < tap_count; i = i + 1) {
+            let t = (f32(i) + 0.5) / f32(tap_count);
             let w = spectrum_weight(t);
             // Red (t→1) bends least, violet (t→0) most.
             let scale = 1.0 + (0.5 - t) * spread;
