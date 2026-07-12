@@ -330,6 +330,24 @@ pub(crate) struct TextFieldRefs {
     /// single-line fields). Shared with the node's `measured_wrap_width` so the
     /// pointer handler resolves the same wrapped lines the renderer draws.
     pub wrap_width: Rc<Cell<Option<f32>>>,
+    /// Live touch press on the text surface (window space), for the widget
+    /// layer's long-press → slide-to-menu gesture. `None` outside a
+    /// touch-like press.
+    pub press_track: Rc<Cell<Option<TouchPressTrack>>>,
+    /// Set by the widget when its long-press watcher claims the active
+    /// gesture: the node then stops drag-selecting on Move and the press
+    /// positions feed the menu slide instead.
+    pub gesture_claimed: Rc<Cell<bool>>,
+}
+
+/// A live touch-like press on the text surface, published by the field node
+/// for the widget layer (window coordinates).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TouchPressTrack {
+    /// Where the press went down.
+    pub start: Point,
+    /// The press's current position.
+    pub position: Point,
 }
 
 impl TextFieldRefs {
@@ -349,6 +367,8 @@ impl TextFieldRefs {
             node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
             line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
             wrap_width: Rc::new(Cell::new(None::<f32>)),
+            press_track: Rc::new(Cell::new(None::<TouchPressTrack>)),
+            gesture_claimed: Rc::new(Cell::new(false)),
         }
     }
 }
@@ -573,6 +593,16 @@ impl TextFieldModifierNode {
                     // clean caret for a mouse.
                     refs.last_pointer_source.set(event.source);
 
+                    // Publish a live touch press for the widget layer's
+                    // long-press → slide-to-menu gesture.
+                    if event.source.is_touch_like() {
+                        refs.press_track.set(Some(TouchPressTrack {
+                            start: event.global_position,
+                            position: event.global_position,
+                        }));
+                        refs.gesture_claimed.set(false);
+                    }
+
                     // Request focus with O(1) handler, passing node_id and line
                     // limits for key handling plus the live geometry cells the
                     // layout keeps fresh, so coordinate-based platform text input
@@ -695,6 +725,18 @@ impl TextFieldModifierNode {
                     event.consume();
                 }
                 PointerEventKind::Move => {
+                    // Keep the live press stream fresh for the widget layer.
+                    if let Some(mut track) = refs.press_track.get() {
+                        track.position = event.global_position;
+                        refs.press_track.set(Some(track));
+                        crate::request_render_invalidation();
+                    }
+                    // A claimed gesture belongs to the widget's menu slide:
+                    // the node must not keep drag-selecting under it.
+                    if refs.gesture_claimed.get() {
+                        event.consume();
+                        return;
+                    }
                     // If we have a drag anchor, extend selection during drag
                     if let Some(anchor) = refs.drag_anchor.get() {
                         if *refs.is_focused.borrow() {
@@ -722,6 +764,12 @@ impl TextFieldModifierNode {
                 PointerEventKind::Up => {
                     // Clear drag anchor on mouse up
                     refs.drag_anchor.set(None);
+                    refs.press_track.set(None);
+                    refs.gesture_claimed.set(false);
+                }
+                PointerEventKind::Cancel => {
+                    refs.press_track.set(None);
+                    refs.gesture_claimed.set(false);
                 }
                 _ => {}
             }
