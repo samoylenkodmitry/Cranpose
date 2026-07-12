@@ -159,6 +159,10 @@ pub struct Glass {
     /// white-on-white). Negative protects a DARK foreground: it lightens
     /// over dark backdrops.
     pub adaptive_contrast: f32,
+    /// Top-edge fold strength (0 = off): content just above the glass
+    /// renders vertically mirrored inside the top band (the reference bar's
+    /// meniscus folds section headers upside-down into it).
+    pub edge_fold: f32,
 }
 
 impl Glass {
@@ -177,6 +181,7 @@ impl Glass {
             shadow: true,
             clip: true,
             adaptive_contrast: 0.0,
+            edge_fold: 0.0,
         }
     }
 
@@ -209,6 +214,7 @@ impl Glass {
             shadow: true,
             clip: true,
             adaptive_contrast: 0.0,
+            edge_fold: 0.0,
         }
     }
 
@@ -256,6 +262,11 @@ impl Glass {
 
     pub fn adaptive_contrast(mut self, strength: f32) -> Self {
         self.adaptive_contrast = strength;
+        self
+    }
+
+    pub fn edge_fold(mut self, strength: f32) -> Self {
+        self.edge_fold = strength;
         self
     }
 
@@ -333,6 +344,7 @@ impl Glass {
                 1.0
             },
             adaptive_contrast: self.adaptive_contrast,
+            edge_fold: self.edge_fold,
             magnify: if self.variant == GlassVariant::Lens {
                 1.35
             } else {
@@ -414,6 +426,8 @@ pub(crate) struct ResolvedGlass {
     pub rim_style: f32,
     /// Backdrop-adaptive legibility strength (see [`Glass::adaptive_contrast`]).
     pub adaptive_contrast: f32,
+    /// Top-edge fold strength (see [`Glass::edge_fold`]).
+    pub edge_fold: f32,
     pub shadow_color: Color,
     /// Variant-scaled drop shadow geometry: the lens bubble carries a tight
     /// contact hint, large surfaces a soft wide ambient.
@@ -492,6 +506,7 @@ impl ResolvedGlass {
         shader.set_float(34, self.dome_direction);
         shader.set_float(35, self.magnify + dynamics.magnify_boost.max(0.0));
         shader.set_float(91, self.adaptive_contrast);
+        shader.set_float(92, self.edge_fold);
         // Morph padding: wobble reach plus how far any scene shape (plus its
         // glue neck) extends beyond the primary rect — the capture and the
         // composite surface must cover the whole glued field.

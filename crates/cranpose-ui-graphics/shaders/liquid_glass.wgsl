@@ -460,6 +460,28 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         rgb = acc / max(wsum, vec3<f32>(0.0001));
     }
 
+    // Long-edge FOLD (uniform 92, 0 = off): the reference bar's meniscus
+    // bends light past total internal reflection at its TOP edge — content
+    // just above the bar renders inside the band VERTICALLY MIRRORED
+    // (section headers upside-down in the bar), blurred by the material's
+    // own frost and fading out by ~a third of the bar's height.
+    let edge_fold = get_float(92u);
+    if edge_fold > 0.0 && rim_style < 0.5 && loupe_mode < 0.5 {
+        let top_edge_y = center.y - rect_size.y * 0.5;
+        let depth = coord.y - top_edge_y;
+        let band = rect_size.y * 0.34;
+        if depth > 0.0 && depth < band && outward_normal.y < -0.3 {
+            let w = edge_fold * (1.0 - depth / band);
+            let uv_fold = clamp(
+                uv + (disp_a + vec2<f32>(disp_c.x, -2.0 * depth)) / tex_size,
+                vec2<f32>(0.0),
+                vec2<f32>(1.0),
+            );
+            let folded = textureSampleLevel(input_texture, input_sampler, uv_fold, 0.0).rgb;
+            rgb = mix(rgb, folded, w);
+        }
+    }
+
     // Tone pipeline: vibrancy first, then a gentle contrast pivot, then the
     // scheme lift. The lift is a SCREEN blend toward white (or a multiply
     // toward black when negative) — unlike an alpha-mix it keeps the ghosts

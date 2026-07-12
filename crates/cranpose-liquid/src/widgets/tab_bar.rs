@@ -102,7 +102,10 @@ pub fn LiquidTabBar(
                             Glass::regular()
                                 .blur_radius(14.0)
                                 .highlight(0.55)
-                                .adaptive_contrast(-0.14),
+                                .adaptive_contrast(-0.14)
+                                // The reference bar folds the headers just
+                                // above it upside-down into its top band.
+                                .edge_fold(0.45),
                         )
                         .height(BAR_HEIGHT);
                     Box(pill, BoxSpec::default(), move || {
