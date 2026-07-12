@@ -136,8 +136,7 @@ pub fn loupe_target_for_drag(
             line_mid_y: line_bottom - 0.5 * line_height,
             // The end/cursor dot hangs (2·radius − overlap) below the line
             // box; the mirror must clear its bottom (plus an AA margin).
-            dot_clearance: 0.5 * line_height
-                + 2.0 * crate::text_selection::HANDLE_RADIUS
+            dot_clearance: 0.5 * line_height + 2.0 * crate::text_selection::HANDLE_RADIUS
                 - crate::text_selection::HANDLE_DOT_LINE_OVERLAP
                 + 1.0,
         })
@@ -329,10 +328,21 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     // center.
     let focus_offset_y = shown.line_mid_y - center_y;
 
+    // The newborn reference silhouette is a flat-topped SQUIRCLE, rounding
+    // into the full capsule as the width fills out (a stadium at birth
+    // width ~= height reads as a plain circle, which the reference never
+    // shows). The grow spring drives the morph; dissolve keeps the capsule.
+    let corner_frac = if active {
+        0.38 + (0.5 - 0.38) * (p * 2.0).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    let corner_radius = height * corner_frac;
     let spec = LiquidLoupeSpec {
         magnification: LOUPE_MAGNIFICATION,
         focus_offset: (0.0, focus_offset_y),
         seam_lift: shown.dot_clearance,
+        corner_radius,
         // The optics are constant for the lens's whole life; the dissolve
         // fades the CONTENT (a true translucency blend in the shader).
         progress: optic,
@@ -352,7 +362,7 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
                 .size(Size { width, height })
                 .graphics_layer(move || GraphicsLayer {
                     backdrop_effect: Some(liquid_loupe_effect((width, height), &spec)),
-                    shape: LayerShape::Rounded(RoundedCornerShape::uniform(1.0e6)),
+                    shape: LayerShape::Rounded(RoundedCornerShape::uniform(corner_radius)),
                     clip: true,
                     ..Default::default()
                 }),
@@ -490,7 +500,10 @@ mod tests {
             u[83]
         );
         assert!(u[86] > 0.0, "dispersion never animates");
-        assert!((u[90] - 0.65).abs() < 1e-6, "content alpha rides uniform 90");
+        assert!(
+            (u[90] - 0.65).abs() < 1e-6,
+            "content alpha rides uniform 90"
+        );
         assert!(
             u[87] > 20.0,
             "the fold floor clears the handle dot, got {}",

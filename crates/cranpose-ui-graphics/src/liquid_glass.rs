@@ -226,6 +226,10 @@ pub struct LiquidLoupeSpec {
     /// lens output toward the plain backdrop (the measured fade plateaus
     /// near ~0.65 before the terminal vanish).
     pub progress: f32,
+    /// Corner radius (dp). The newborn reference is a flat-topped SQUIRCLE,
+    /// not a circle: the caller passes ~0.38·height at birth, morphing to
+    /// the capsule's half-height as the width fills out. <= 0 = capsule.
+    pub corner_radius: f32,
 }
 
 impl Default for LiquidLoupeSpec {
@@ -249,6 +253,7 @@ impl Default for LiquidLoupeSpec {
             // through its highlight (calibrated on captures).
             highlight: 4.4,
             progress: 1.0,
+            corner_radius: 0.0,
         }
     }
 }
@@ -270,7 +275,11 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     shader.set_float2(0, w, h); // container = node size dp
     shader.set_float2(2, w * 0.5, h * 0.5); // capsule centered in the node
     shader.set_float2(4, w, h);
-    shader.set_float(6, -1.0); // capsule radius sentinel
+    if spec.corner_radius > 0.0 {
+        shader.set_float(6, spec.corner_radius.min(0.5 * h.min(w)));
+    } else {
+        shader.set_float(6, -1.0); // capsule radius sentinel
+    }
     shader.set_float(7, 0.5 * h.min(w)); // bezel = inradius (sheen falloff)
     shader.set_float(11, spec.highlight);
     shader.set_float4(14, 1.0, 1.0, 1.0, 0.0); // no tint
@@ -331,10 +340,10 @@ pub fn liquid_menu_glass_effect(
     shader.set_float(11, 0.19 * p); // rim intensity (the reference settled
                                     // pill peaks ~x1.9 of its baseline on
                                     // BOTH long edges)
-    // Settled material (measured on the reference still: white text behind
-    // the pill reads ~242/255 through it, the dark card dims ~x0.78): a
-    // WHISPER of dark tint plus a mild contrast pivot — not the heavy
-    // dim+lift that flattened ghosts into an opaque-looking fill.
+                                    // Settled material (measured on the reference still: white text behind
+                                    // the pill reads ~242/255 through it, the dark card dims ~x0.78): a
+                                    // WHISPER of dark tint plus a mild contrast pivot — not the heavy
+                                    // dim+lift that flattened ghosts into an opaque-looking fill.
     shader.set_float4(14, 0.0, 0.0, 0.0, 0.04 * p);
     shader.set_float(18, 1.0 + 0.10 * p); // mild vibrancy
     shader.set_float(19, 0.0); // no dispersion on the menu

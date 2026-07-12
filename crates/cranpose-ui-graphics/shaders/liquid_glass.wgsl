@@ -351,7 +351,10 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // above much weaker (the reference's top edge shows only a whisper
         // of mirrored ascenders).
         let below = select(0.35, 1.0, outward_normal.y > 0.0);
-        let vert_weight = mix(0.12, 1.0, vert) * below;
+        // sqrt shaping: the reference visibly bends content at the SHOULDER
+        // regions (diagonal normals) — vert-squared starved them — while
+        // pure end caps stay near-quiet.
+        let vert_weight = mix(0.12, 1.0, sqrt(vert)) * below;
         if xr > band_start {
             let tau = clamp((xr - band_start) / max(1.0 - band_start, 0.001), 0.0, 1.0);
             // A fast reach-out (first ~30% of the band) followed by a LONG
@@ -363,6 +366,11 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             let s_band0 = band_start / m;
             let s_units = s_band0 + (fold_peak - s_band0) * g;
             disp_c = outward_normal * (s_units - xr) * r_in * vert_weight;
+            // The reference folds over a continuously curved surface: even
+            // dead-center strokes bow sideways slightly and pick up
+            // horizontal chroma. A pure normal displacement leaves vertical
+            // stems ruler-straight and fringe-free at the band's center.
+            disp_c.x = disp_c.x + p.x * 0.08 * tau * vert_weight;
             // Fold floor (uniform 87, dp): the bottom band must never
             // re-display content nearer the focus than this clearance —
             // the dragged handle's dot hangs just below the line, and

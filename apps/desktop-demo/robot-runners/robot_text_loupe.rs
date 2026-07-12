@@ -105,7 +105,12 @@ fn main() -> ExitCode {
                 let probe = robot.screenshot_with_scale(1.0).expect("selection probe");
                 if region_has_structure(
                     &probe,
-                    (start_x - 12.0, line1_top - 16.0, start_x + 12.0, line1_top - 2.0),
+                    (
+                        start_x - 12.0,
+                        line1_top - 16.0,
+                        start_x + 12.0,
+                        line1_top - 2.0,
+                    ),
                 ) {
                     break;
                 }
@@ -133,17 +138,23 @@ fn main() -> ExitCode {
             // frames at birth +0/+35/+90/+180/+380 ms, plus a mid-delay
             // probe (+60) that must show NO bubble yet.
             robot.touch_down(end_x, line1_mid).expect("grab end handle");
+            // Animations stamp their start on their FIRST frame after
+            // animateTo — 1 ms stamp-steps right after each event/flip keep
+            // that lag at 1 ms instead of a whole keyframe step.
             let grow_steps = [
-                (0.0, false),  // process the grab; the birth gate starts here
-                (60.0, true),  // mid birth-delay: menu dissolving, no bubble
-                (60.0, true),  // +120: the birth pose
-                (35.0, true),  // +155
-                (55.0, true),  // +210
-                (90.0, true),  // +300: near the width peak
-                (200.0, true), // +500: settled
+                (0.0, false),  // process the grab
+                (1.0, false),  // birth gate stamps here
+                (59.0, true),  // +60: mid birth-delay, no bubble
+                (61.0, true),  // +121: gate completes; grow stamps next
+                (1.0, true),   // +122: the birth pose (grow t=0)
+                (34.0, true),  // +156: grow t=35
+                (55.0, true),  // +211: grow t=90
+                (90.0, true),  // +301: grow t=180 (the overshoot)
+                (200.0, true), // +501: settled
             ];
             let grow_names = [
                 "01b-menu-dissolving",
+                "01c-birth-boundary",
                 "02-grow-a",
                 "02b-grow-b",
                 "03-grow-c",
@@ -210,8 +221,9 @@ fn main() -> ExitCode {
             // for the menu's 250 ms-delay + 140 ms materialize window).
             robot.touch_up(drag_to_x, line1_mid).expect("release");
             let dissolve_steps = [
-                (0.0, false), // process the release; the fade starts here
-                (8.0, true),
+                (0.0, false),  // process the release
+                (1.0, false),  // the fade stamps here
+                (7.0, true),   // +8
                 (17.0, true),  // +25
                 (17.0, true),  // +42
                 (13.0, true),  // +55
