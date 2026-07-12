@@ -243,9 +243,12 @@ impl Default for LiquidLoupeSpec {
             // and reaches the next text line's x-band, mirrored near 1:1.
             band_start: 0.78,
             fold_peak: 0.80,
-            // The reference fringes are tight (3-5 px at 3x) and live only in
-            // the fold band.
-            dispersion: 0.15,
+            // The reference fringes measure 3-5 px (at 3x) IN the band and
+            // RAMP continuously along mirrored strokes (R-B splitting from
+            // ~10 to ~50-60 channel units tip-to-tip). 0.15 left the
+            // x-chroma sub-pixel through most of the band — strokes read
+            // rigid/un-fringed until the rim.
+            dispersion: 0.35,
             seam_lift: 26.0,
             // The reference rim reads as a clear bright line around the whole
             // capsule (peak ~+127 luminance over the backdrop); the
