@@ -365,7 +365,11 @@ fn SelectionHandles(
     // finger y): drags keep targeting the line the finger means whether the
     // handle was grabbed on the line or by its dot outside it. One cell
     // serves all handles — only one drags at a time.
-    let drag_bias: Rc<Cell<Option<f32>>> = remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
+    // (bias, last finger y): the bias one-way-ratchets toward full handle
+    // visibility above the finger as the drag proceeds (see
+    // `ratchet_grab_bias`).
+    let drag_bias: Rc<Cell<Option<(f32, f32)>>> =
+        remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
 
     if selection.collapsed() {
         // Collapsed caret: a single cursor handle (a dot below the caret).
@@ -404,9 +408,13 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                if grab_bias.get().is_none() {
-                    grab_bias.set(Some(tip_y - pos.y));
-                }
+                let bias = match grab_bias.get() {
+                    None => tip_y - pos.y,
+                    Some((bias, last_y)) => {
+                        crate::text_selection::ratchet_grab_bias(bias, last_y, pos.y)
+                    }
+                };
+                grab_bias.set(Some((bias, pos.y)));
                 drag_pos.set(Some(pos));
                 on_drag(pos);
             },
@@ -482,9 +490,13 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                if grab_bias.get().is_none() {
-                    grab_bias.set(Some(start_tip_y - pos.y));
-                }
+                let bias = match grab_bias.get() {
+                    None => start_tip_y - pos.y,
+                    Some((bias, last_y)) => {
+                        crate::text_selection::ratchet_grab_bias(bias, last_y, pos.y)
+                    }
+                };
+                grab_bias.set(Some((bias, pos.y)));
                 drag_pos.set(Some(pos));
                 on_drag_start(pos);
             },
@@ -517,9 +529,13 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                if grab_bias.get().is_none() {
-                    grab_bias.set(Some(end_tip_y - pos.y));
-                }
+                let bias = match grab_bias.get() {
+                    None => end_tip_y - pos.y,
+                    Some((bias, last_y)) => {
+                        crate::text_selection::ratchet_grab_bias(bias, last_y, pos.y)
+                    }
+                };
+                grab_bias.set(Some((bias, pos.y)));
                 drag_pos.set(Some(pos));
                 on_drag_end(pos);
             },
@@ -577,7 +593,7 @@ fn SelectionHandles(
     // unconditionally so the bubble stays mounted through its release
     // deflation.
     let loupe_target = drag_pos.value().and_then(|finger| {
-        let bias = drag_bias.get().unwrap_or(0.0);
+        let bias = drag_bias.get().map_or(0.0, |(bias, _)| bias);
         let offset = window_pos_to_offset(&text, &style, &metrics, finger, bias);
         // Upstream: the loupe magnifies the line the FINGER rides — at a
         // shared wrap boundary that is the upper line the mapping sampled.
@@ -595,14 +611,14 @@ fn drag_caret_closure(
     state: TextFieldState,
     style: TextStyle,
     controller: TextFieldHandleController,
-    drag_bias: Rc<Cell<Option<f32>>>,
+    drag_bias: Rc<Cell<Option<(f32, f32)>>>,
 ) -> Rc<dyn Fn(Point)> {
     Rc::new(move |window_pos: Point| {
         let Some(metrics) = controller.metrics() else {
             return;
         };
         let text = state.text();
-        let bias = drag_bias.get().unwrap_or(0.0);
+        let bias = drag_bias.get().map_or(0.0, |(bias, _)| bias);
         let offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
         state.set_selection(TextRange::new(offset, offset));
         crate::request_render_invalidation();
@@ -617,14 +633,14 @@ fn drag_edge_closure(
     state: TextFieldState,
     style: TextStyle,
     controller: TextFieldHandleController,
-    drag_bias: Rc<Cell<Option<f32>>>,
+    drag_bias: Rc<Cell<Option<(f32, f32)>>>,
 ) -> Rc<dyn Fn(Point)> {
     Rc::new(move |window_pos: Point| {
         let Some(metrics) = controller.metrics() else {
             return;
         };
         let text = state.text();
-        let bias = drag_bias.get().unwrap_or(0.0);
+        let bias = drag_bias.get().map_or(0.0, |(bias, _)| bias);
         let dragged_offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
         let selection = state.selection();
         let fixed_edge = match dragged {

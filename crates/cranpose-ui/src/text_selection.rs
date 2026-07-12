@@ -236,6 +236,34 @@ pub fn caret_visual_line(
     result
 }
 
+/// Fraction of each DOWNWARD finger delta absorbed into the grab bias while
+/// it migrates toward [`grab_bias_full_view`]: the handle starts under the
+/// finger and drifts up-visible as the drag proceeds (the reference handle
+/// "moves with the finger, then rides above it"), while the selection still
+/// follows the remaining fraction — never a dead zone.
+pub const GRAB_BIAS_MIGRATE_FRACTION: f32 = 0.35;
+/// Extra clearance (dp) below the handle dot once fully visible above the
+/// finger.
+pub const GRAB_BIAS_VIEW_CLEARANCE: f32 = 4.0;
+
+/// The migration target: bias placing the finger just below the handle dot
+/// (tip + dot + clearance), so the whole lollipop stays visible above it.
+pub fn grab_bias_full_view() -> f32 {
+    -(2.0 * HANDLE_RADIUS + GRAB_BIAS_VIEW_CLEARANCE)
+}
+
+/// One-way grab-bias ratchet: absorbs a fraction of DOWNWARD finger travel
+/// into the bias until the handle rides fully visible above the finger;
+/// upward travel never un-migrates (strict following once earned). Returns
+/// the updated bias for a finger that moved from `last_y` to `now_y`.
+pub fn ratchet_grab_bias(bias: f32, last_y: f32, now_y: f32) -> f32 {
+    let down = now_y - last_y;
+    if down <= 0.0 {
+        return bias;
+    }
+    (bias - down * GRAB_BIAS_MIGRATE_FRACTION).max(grab_bias_full_view().min(bias))
+}
+
 /// Which selection handle a lollipop represents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HandleKind {
@@ -630,6 +658,34 @@ mod tests {
             caret_visual_line(&ranges, 12, LineAffinity::Downstream),
             (2, 10)
         );
+    }
+
+    /// The grab-bias ratchet: downward finger travel migrates the handle
+    /// above the finger at the documented fraction, saturating at full view;
+    /// upward travel never un-migrates; a grab already deeper than the
+    /// full-view offset holds its own floor.
+    #[test]
+    fn grab_bias_ratchet_migrates_down_only_to_full_view() {
+        // Grab ON the line (finger at the stem): bias +8.
+        let mut bias = 8.0;
+        // Finger slides 20dp down: 35% absorbed.
+        bias = ratchet_grab_bias(bias, 100.0, 120.0);
+        assert!((bias - 1.0).abs() < 1e-4, "got {bias}");
+        // Upward travel changes nothing.
+        let up = ratchet_grab_bias(bias, 120.0, 90.0);
+        assert_eq!(up, bias);
+        // A long slide saturates at the full-view offset.
+        let saturated = ratchet_grab_bias(bias, 90.0, 400.0);
+        assert_eq!(saturated, grab_bias_full_view());
+        // Once saturated, further downward travel holds.
+        assert_eq!(
+            ratchet_grab_bias(saturated, 400.0, 500.0),
+            grab_bias_full_view()
+        );
+        // A grab deeper than full view (finger far below the dot) keeps its
+        // own deeper bias instead of snapping up to the target.
+        let deep = grab_bias_full_view() - 10.0;
+        assert_eq!(ratchet_grab_bias(deep, 0.0, 50.0), deep);
     }
 
     #[test]
