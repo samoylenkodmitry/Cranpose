@@ -140,11 +140,13 @@ fn main() -> ExitCode {
                 (40.0, true),
                 (60.0, true),
                 (90.0, true),
-                (140.0, true),
-                (200.0, true),
-                (280.0, true),
-                (400.0, true),
-                (700.0, true),
+                (70.0, true),
+                (70.0, true),
+                (80.0, true),
+                (120.0, true),
+                (130.0, true),
+                (150.0, true),
+                (1100.0, true),
             ];
             let shots = robot
                 .capture_keyframes(1.0, &steps)
@@ -152,8 +154,8 @@ fn main() -> ExitCode {
             // Wall clock must catch back up with the advanced animation clock.
             std::thread::sleep(Duration::from_millis(2100));
             let labels = [
-                "0016ms", "0036ms", "0061ms", "0091ms", "0131ms", "0191ms", "0281ms", "0421ms",
-                "0621ms", "0901ms", "1301ms", "2001ms",
+                "0016ms", "0036ms", "0061ms", "0091ms", "0131ms", "0191ms", "0281ms", "0351ms",
+                "0421ms", "0501ms", "0621ms", "0751ms", "0901ms", "2001ms",
             ];
             for (shot, label) in shots.iter().zip(labels.iter()) {
                 save(shot, &shot_dir, &format!("flight-{label}"));

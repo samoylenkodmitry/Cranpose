@@ -211,7 +211,7 @@ pub fn LiquidTabBar(
                             // that.
                             let lens_alpha_anim = animateFloatAsState(
                                 lens_alpha_target,
-                                cranpose_animation::spring(1.0, 450.0),
+                                cranpose_animation::spring(1.0, 700.0),
                                 "tabbar-lens-alpha",
                             );
                             let lens_alpha = move || {
@@ -444,7 +444,7 @@ pub fn LiquidTabBar(
                                     .shadow(false)
                                     .lift(-0.03)
                                     .highlight(0.55)
-                                    .chromatic_aberration(1.2)
+                                    .chromatic_aberration(2.8)
                                     .displacement(32.0),
                                 move || {
                                     // Droplet law: the pose integrates the ride

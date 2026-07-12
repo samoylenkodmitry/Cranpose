@@ -415,13 +415,18 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             // passing icons showed no warp until dead center).
             let r_face = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
             let x_face = clamp(-d / r_face, 0.0, 1.0);
-            // Floor the dome at the rim: easing all the way to m=1 paints an
-            // UN-magnified second copy of edge content (doubled labels, icon
-            // shards at the rim) — the interior hands off to the rim band's
-            // compression, never to identity.
+            // Floor the dome at the rim: easing all the way to m=1 across a
+            // WIDE band paints an UN-magnified second copy of edge content
+            // (doubled labels, icon shards) — the interior hands off to the
+            // rim band's compression, never to identity.
             let dome = mix(0.62, 1.0, height_profile(x_face, profile));
             let m_local = 1.0 + (magnify - 1.0) * dome;
-            disp = disp + p * (1.0 / m_local - 1.0);
+            // …but AT the silhouette the displacement must reach exactly
+            // zero over a hair-thin feather, or content straddling the edge
+            // breaks in two: the covered half displaced, the uncovered half
+            // crisp beside it (gear/roof fragments piercing the rim).
+            let edge_feather = smoothstep(0.0, 2.5 * s, -d);
+            disp = disp + p * (1.0 / m_local - 1.0) * edge_feather;
         }
         disp_c = disp;
         spread = chroma * (slope_edge / 4.0);
