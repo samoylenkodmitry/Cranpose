@@ -237,16 +237,16 @@ pub fn caret_visual_line(
 }
 
 /// Fraction of each DOWNWARD finger delta absorbed into the grab bias while
-/// it migrates toward [`grab_bias_full_view`]: the handle starts under the
+/// it drifts toward [`grab_bias_full_view`]: the handle starts under the
 /// finger and drifts up-visible as the drag proceeds (the reference handle
 /// "moves with the finger, then rides above it"), while the selection still
 /// follows the remaining fraction — never a dead zone.
-pub const GRAB_BIAS_MIGRATE_FRACTION: f32 = 0.35;
+pub const GRAB_BIAS_DRIFT_FRACTION: f32 = 0.35;
 /// Extra clearance (dp) below the handle dot once fully visible above the
 /// finger.
 pub const GRAB_BIAS_VIEW_CLEARANCE: f32 = 4.0;
 
-/// The migration target: bias placing the finger just below the handle dot
+/// The drift target: bias placing the finger just below the handle dot
 /// (tip + dot + clearance), so the whole lollipop stays visible above it.
 pub fn grab_bias_full_view() -> f32 {
     -(2.0 * HANDLE_RADIUS + GRAB_BIAS_VIEW_CLEARANCE)
@@ -261,7 +261,7 @@ pub fn ratchet_grab_bias(bias: f32, last_y: f32, now_y: f32) -> f32 {
     if down <= 0.0 {
         return bias;
     }
-    (bias - down * GRAB_BIAS_MIGRATE_FRACTION).max(grab_bias_full_view().min(bias))
+    (bias - down * GRAB_BIAS_DRIFT_FRACTION).max(grab_bias_full_view().min(bias))
 }
 
 /// Which selection handle a lollipop represents.
