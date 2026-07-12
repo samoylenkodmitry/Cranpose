@@ -85,10 +85,11 @@ fn loupe_grow_spring() -> AnimationType {
     spring(0.5, 310.0)
 }
 
-/// Rise: overdamped (no overshoot), an ~95 ms-τ ease-out — the reference top
-/// edge climbs monotonically, half done ~65 ms after birth, settled ~350 ms.
+/// Rise: overdamped (no overshoot), an ~86 ms-τ ease-out — the reference top
+/// edge climbs monotonically, half done ~60 ms after birth, and is flat by
+/// the ~+300 ms mark (a 95 ms tail still crept visibly at +380).
 fn loupe_rise_spring() -> AnimationType {
-    spring(2.0, 1550.0)
+    spring(2.0, 1900.0)
 }
 
 /// The birth-delay gate: a linear timer from the grab to the bubble's birth.
