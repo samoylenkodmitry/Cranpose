@@ -369,8 +369,10 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             // The reference folds over a continuously curved surface: even
             // dead-center strokes bow sideways slightly and pick up
             // horizontal chroma. A pure normal displacement leaves vertical
-            // stems ruler-straight and fringe-free at the band's center.
-            disp_c.x = disp_c.x + p.x * 0.08 * tau * vert_weight;
+            // stems ruler-straight and fringe-free at the band's center —
+            // and a center-symmetric bow (p.x-proportional) still vanishes
+            // exactly there, so a small uniform drift rides along.
+            disp_c.x = disp_c.x + (p.x * 0.08 + r_in * 0.05) * tau * vert_weight;
             // Fold floor (uniform 87, dp): the bottom band must never
             // re-display content nearer the focus than this clearance —
             // the dragged handle's dot hangs just below the line, and
