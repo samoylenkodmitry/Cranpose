@@ -419,7 +419,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             // UN-magnified second copy of edge content (doubled labels, icon
             // shards at the rim) — the interior hands off to the rim band's
             // compression, never to identity.
-            let dome = mix(0.55, 1.0, height_profile(x_face, profile));
+            let dome = mix(0.62, 1.0, height_profile(x_face, profile));
             let m_local = 1.0 + (magnify - 1.0) * dome;
             disp = disp + p * (1.0 / m_local - 1.0);
         }

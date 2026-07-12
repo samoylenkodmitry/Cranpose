@@ -438,12 +438,20 @@ pub fn LiquidTabBar(
                                     // Droplet law: the pose integrates the ride
                                     // position on the animation clock.
                                     let pose = dynamics.update((lens_px, 0.0));
-                                    let (w, h) = pose.size(lens_w, lens_h);
+                                    // The optic COLLAPSES into the resting
+                                    // pill as it fades — geometry and material
+                                    // relax in lockstep (a frozen full-height
+                                    // capsule that unmounts at fade-end reads
+                                    // as a snap).
+                                    let presence = lens_a.clamp(0.0, 1.0);
+                                    let ease = presence * presence * (3.0 - 2.0 * presence);
+                                    let base_h = BLOB_HEIGHT + (lens_h - BLOB_HEIGHT) * ease;
+                                    let (w, h) = pose.size(lens_w, base_h);
                                     // The bar's edges physically cap the
                                     // droplet's vertical swell: an unclamped
                                     // launch compression ballooned the blob
                                     // into the content above the bar.
-                                    let h = h.min(lens_h);
+                                    let h = h.min(base_h);
                                     let energy = pose.energy();
                                     // Continuous-curvature read: the resting lens
                                     // is a flattened squircle, not a stadium; it
