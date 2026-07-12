@@ -135,8 +135,15 @@ pub fn LiquidTabBar(
                             let moving_right =
                                 cranpose_core::remember(|| cranpose_core::mutableStateOf(true))
                                     .with(|state| *state);
+                            // The cell the current flight departed from — the
+                            // accent stays on it until the lens leaves (see
+                            // the cells loop).
+                            let flight_from =
+                                cranpose_core::remember(|| cranpose_core::mutableStateOf(selected))
+                                    .with(|state| *state);
                             if previous.get() != selected {
                                 moving_right.set(selected > previous.get());
+                                flight_from.set(previous.get());
                                 previous.set(selected);
                             }
                             let (left_spec, right_spec) = if moving_right.get() {
@@ -211,7 +218,7 @@ pub fn LiquidTabBar(
                             // that.
                             let lens_alpha_anim = animateFloatAsState(
                                 lens_alpha_target,
-                                cranpose_animation::spring(1.0, 700.0),
+                                cranpose_animation::spring(1.0, 420.0),
                                 "tabbar-lens-alpha",
                             );
                             let lens_alpha = move || {
@@ -257,13 +264,38 @@ pub fn LiquidTabBar(
                             Row(Modifier::empty(), RowSpec::default(), move || {
                                 for (index, tab) in cells_tabs.iter().enumerate() {
                                     let is_selected = index == selected;
+                                    // The accent RIDES the glass: while the lens
+                                    // carries the selection, the destination only
+                                    // colors as the lens arrives over it and the
+                                    // source keeps its accent until the lens
+                                    // departs (the reference source fades over
+                                    // ~50ms of departure; an instant tap-time swap
+                                    // breaks the carried-selection illusion).
+                                    let cell_center = tab_width * (index as f32 + 0.5);
+                                    let lens_center = lens_x.get() + tab_width * 0.5;
+                                    let lens_near =
+                                        (lens_center - cell_center).abs() < tab_width * 0.6;
+                                    let accent_on = if lens_alpha() > 0.5 {
+                                        (is_selected || index == flight_from.get()) && lens_near
+                                    } else {
+                                        is_selected
+                                    };
+                                    let accent_t = animateFloatAsState(
+                                        if accent_on { 1.0 } else { 0.0 },
+                                        cranpose_animation::spring(1.0, 2500.0),
+                                        "tabbar-cell-accent",
+                                    );
+                                    let t = accent_t.get().clamp(0.0, 1.0);
+                                    let accent = colors.accent;
+                                    let label_color = colors.label;
                                     // Unselected tabs use the full label color (the
                                     // reference bar draws them black, not gray).
-                                    let color = if is_selected {
-                                        colors.accent
-                                    } else {
-                                        colors.label
-                                    };
+                                    let color = cranpose_ui_graphics::Color::rgba(
+                                        label_color.r() + (accent.r() - label_color.r()) * t,
+                                        label_color.g() + (accent.g() - label_color.g()) * t,
+                                        label_color.b() + (accent.b() - label_color.b()) * t,
+                                        1.0,
+                                    );
                                     let label_for_semantics = tab.label;
                                     let cell = Modifier::empty()
                                         .size(Size::new(tab_width, BLOB_HEIGHT))
@@ -458,7 +490,15 @@ pub fn LiquidTabBar(
                                     let presence = lens_a.clamp(0.0, 1.0);
                                     let ease = presence * presence * (3.0 - 2.0 * presence);
                                     let base_h = BLOB_HEIGHT + (lens_h - BLOB_HEIGHT) * ease;
-                                    let (w, h) = pose.size(lens_w, base_h);
+                                    let (w, raw_h) = pose.size(lens_w, base_h);
+                                    // The bar's meniscus resists vertical
+                                    // thinning: full area-conserving ortho
+                                    // made the cruise lens SHORTER than the
+                                    // icons (their tops pierced the
+                                    // silhouette as crisp fragments) — the
+                                    // reference cruise lens stays tall enough
+                                    // to swallow them.
+                                    let h = base_h + (raw_h - base_h) * 0.35;
                                     // The bar's edges physically cap the
                                     // droplet's vertical swell: an unclamped
                                     // launch compression ballooned the blob

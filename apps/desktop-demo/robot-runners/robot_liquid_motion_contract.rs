@@ -49,14 +49,37 @@ fn main() -> ExitCode {
                 fail(&robot, "menu items in semantics before opening the menu");
             }
             robot.click(858.0, 122.0).expect("open menu");
-            // Exact-clock sample of the young droplet: a wall-clock sleep
-            // stretches under host load and the first pumped frame then lands
-            // past the small-droplet phase (same flake class as the close).
+            // Exact-clock samples of the whole droplet growth (a wall-clock
+            // sleep stretches under host load and lands past the
+            // small-droplet phase): the 54ms sample feeds the fade-in guard,
+            // the rest are the judge's A/B growth keyframes.
+            let grow_steps: Vec<(f32, bool)> = vec![
+                (0.0, false),
+                (1.0, false),
+                (20.0, true),
+                (16.0, true),
+                (17.0, true),
+                (21.0, true),
+                (25.0, true),
+                (30.0, true),
+                (35.0, true),
+                (40.0, true),
+                (60.0, true),
+                (65.0, true),
+                (170.0, true),
+            ];
             let grow_shots = robot
-                .capture_keyframes(1.0, &[(0.0, false), (1.0, false), (54.0, true)])
+                .capture_keyframes(1.0, &grow_steps)
                 .expect("grow keyframes");
-            std::thread::sleep(Duration::from_millis(80));
-            let early = grow_shots.into_iter().next().expect("early keyframe");
+            std::thread::sleep(Duration::from_millis(600));
+            let grow_labels = [
+                "021ms", "037ms", "054ms", "075ms", "100ms", "130ms", "165ms", "205ms", "265ms",
+                "330ms", "500ms",
+            ];
+            for (shot, label) in grow_shots.iter().zip(grow_labels.iter()) {
+                save(shot, &shot_dir, &format!("menu-grow-{label}"));
+            }
+            let early = grow_shots.into_iter().nth(2).expect("54ms keyframe");
             // Materialization: the popup's items land in semantics once it
             // is composed — poll that instead of a fixed wall-clock wait so
             // host throttling cannot race the capture. Pixel diffs stay for
@@ -185,8 +208,30 @@ fn main() -> ExitCode {
                 .mouse_move(track_right - 20.0, toggle_y)
                 .expect("hover thumb");
             robot.mouse_down().expect("press thumb");
-            std::thread::sleep(Duration::from_millis(320));
-            let pressed = robot.screenshot().expect("toggle pressed");
+            // Exact-clock press-grow keyframes: judge frames for the lens
+            // materialization; the 321ms sample doubles as the pressed shot.
+            let toggle_steps: Vec<(f32, bool)> = vec![
+                (0.0, false),
+                (1.0, false),
+                (20.0, true),
+                (20.0, true),
+                (25.0, true),
+                (35.0, true),
+                (60.0, true),
+                (80.0, true),
+                (80.0, true),
+            ];
+            let toggle_shots = robot
+                .capture_keyframes(1.0, &toggle_steps)
+                .expect("toggle grow keyframes");
+            std::thread::sleep(Duration::from_millis(500));
+            let toggle_labels = [
+                "021ms", "041ms", "066ms", "101ms", "161ms", "241ms", "321ms",
+            ];
+            for (shot, label) in toggle_shots.iter().zip(toggle_labels.iter()) {
+                save(shot, &shot_dir, &format!("toggle-press-{label}"));
+            }
+            let pressed = toggle_shots.into_iter().last().expect("321ms keyframe");
             let pressed_white = count_white(&pressed, thumb_probe);
             // Lens overflow: pixels just above the track must change while
             // the lens is up (it pokes past the track edge — its rim arc
@@ -216,8 +261,27 @@ fn main() -> ExitCode {
                 );
             }
             robot.mouse_up().expect("release thumb");
-            settle(&robot, 1200);
-            let after = robot.screenshot().expect("toggle settled");
+            // Release-settle keyframes: the reference lens lingers ~0.6s
+            // while the thumb flies and the white capsule rematerializes.
+            let release_steps: Vec<(f32, bool)> = vec![
+                (0.0, false),
+                (1.0, false),
+                (50.0, true),
+                (70.0, true),
+                (110.0, true),
+                (170.0, true),
+                (250.0, true),
+                (550.0, true),
+            ];
+            let release_shots = robot
+                .capture_keyframes(1.0, &release_steps)
+                .expect("toggle release keyframes");
+            settle(&robot, 1600);
+            let release_labels = ["051ms", "121ms", "231ms", "401ms", "651ms", "1201ms"];
+            for (shot, label) in release_shots.iter().zip(release_labels.iter()) {
+                save(shot, &shot_dir, &format!("toggle-release-{label}"));
+            }
+            let after = release_shots.into_iter().last().expect("settled keyframe");
             // The tap flipped it OFF: the white thumb now rests at the LEFT.
             let thumb_probe_off = (
                 (track_left + 4.0) as usize,
