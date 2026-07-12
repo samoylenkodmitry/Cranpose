@@ -670,11 +670,19 @@ fn SelectionHandles(
         // it stays composed while fading).
         if menu_open.value() {
             let can_paste = clipboard_read_text().is_some();
+            // A claimed long-press feeds the menu its live finger position:
+            // sliding over items highlights them, the release fires.
+            let slide_point = if controller.gesture_claimed() {
+                metrics.press.map(|press| press.position)
+            } else {
+                None
+            };
             TextSelectionMenu(
                 // Centered over the selection, above its first line.
                 (start_tip.x + end_tip.x) * 0.5,
                 start_tip.y - metrics.glyph_box.1,
                 drag_pos.value().is_none(),
+                slide_point,
                 can_paste,
                 move || {
                     if let Some(text) = dispatch_copy() {

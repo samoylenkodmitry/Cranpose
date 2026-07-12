@@ -30,7 +30,7 @@ use crate::widgets::popup::{local_popup_viewport, Popup};
 use crate::widgets::{Row, RowSpec, Text};
 use crate::PointerInputScope;
 use cranpose_animation::{Animatable, AnimationSpec, AnimationType, Easing};
-use cranpose_core::{remember, with_current_composer};
+use cranpose_core::{remember, with_current_composer, SideEffect};
 use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{
     liquid_menu_glass_effect, GraphicsLayer, LayerShape, Point, Rect, RoundedCornerShape, Size,
@@ -208,6 +208,33 @@ fn item_width(label: &str, style: &TextStyle) -> f32 {
     measure_text(&AnnotatedString::from(label), style).width + 2.0 * ITEM_PADDING
 }
 
+/// Page-relative index of the item under a live slide point, walking the
+/// same measured cell widths the Row lays out (6dp of vertical grace above
+/// and below the capsule).
+fn slide_item_at(
+    point: cranpose_ui_graphics::Point,
+    origin_x: f32,
+    origin_y: f32,
+    page_items: &[TextMenuItem],
+    style: &TextStyle,
+) -> Option<usize> {
+    if point.y < origin_y - 6.0 || point.y > origin_y + MENU_HEIGHT + 6.0 {
+        return None;
+    }
+    let mut cursor = origin_x;
+    for (index, item) in page_items.iter().enumerate() {
+        if index > 0 {
+            cursor += SEPARATOR_WIDTH;
+        }
+        let width = item_width(&item.label, style);
+        if point.x >= cursor && point.x < cursor + width {
+            return Some(index);
+        }
+        cursor += width;
+    }
+    None
+}
+
 /// Splits `items` into pages that fit `max_width`, appending the chevron
 /// disc's width to any page that is followed by more items. Every page holds
 /// at least one item.
@@ -259,6 +286,10 @@ struct MenuMotion {
     was_visible: Cell<bool>,
     page: Cell<usize>,
     disc_pressed: Rc<Cell<bool>>,
+    /// Page-relative item index a live slide gesture hovers, and whether a
+    /// slide was in flight last frame (its release fires the hovered item).
+    slide_hover: Cell<Option<usize>>,
+    slide_live: Cell<bool>,
 }
 
 /// The liquid-glass text edit menu.
@@ -272,7 +303,13 @@ struct MenuMotion {
 ///   fading).
 /// * `items` — the actions.
 #[composable]
-pub fn LiquidTextMenu(center_x: f32, line_top_y: f32, visible: bool, items: Vec<TextMenuItem>) {
+pub fn LiquidTextMenu(
+    center_x: f32,
+    line_top_y: f32,
+    visible: bool,
+    live_point: Option<cranpose_ui_graphics::Point>,
+    items: Vec<TextMenuItem>,
+) {
     let motion = remember(|| {
         let runtime = with_current_composer(|composer| composer.runtime_handle());
         Rc::new(MenuMotion {
@@ -280,6 +317,8 @@ pub fn LiquidTextMenu(center_x: f32, line_top_y: f32, visible: bool, items: Vec<
             was_visible: Cell::new(false),
             page: Cell::new(0),
             disc_pressed: Rc::new(Cell::new(false)),
+            slide_hover: Cell::new(None),
+            slide_live: Cell::new(false),
         })
     })
     .with(Rc::clone);
@@ -346,6 +385,31 @@ pub fn LiquidTextMenu(center_x: f32, line_top_y: f32, visible: bool, items: Vec<
     };
     let density = crate::current_density();
     let page_items: Vec<TextMenuItem> = page.iter().map(|&i| items[i].clone()).collect();
+
+    // Slide-to-fire: a still-down gesture (long-press claimed) feeds live
+    // window positions; the hovered item highlights, and the gesture's
+    // release fires it — no separate Down required (the reference menu
+    // selects under a continuous press).
+    let slide_hover = match live_point {
+        Some(point) => {
+            motion.slide_live.set(true);
+            let hover = slide_item_at(point, x, y, &page_items, &style);
+            motion.slide_hover.set(hover);
+            hover
+        }
+        None => {
+            let hover = motion.slide_hover.take();
+            if motion.slide_live.replace(false) {
+                if let Some(index) = hover {
+                    if let Some(item) = page_items.get(index) {
+                        let action = Rc::clone(&item.action);
+                        SideEffect(move || action());
+                    }
+                }
+            }
+            None
+        }
+    };
     let disc_pressed = Rc::clone(&motion.disc_pressed);
     let page_count = pages.len();
     let motion_for_disc = Rc::clone(&motion);
@@ -419,6 +483,7 @@ pub fn LiquidTextMenu(center_x: f32, line_top_y: f32, visible: bool, items: Vec<
                                     || {},
                                 );
                             }
+                            let slide_hovered = slide_hover == Some(index);
                             Text(
                                 item.label.clone(),
                                 Modifier::empty()
@@ -426,6 +491,18 @@ pub fn LiquidTextMenu(center_x: f32, line_top_y: f32, visible: bool, items: Vec<
                                     // box; the reference centers them to a
                                     // pixel, so bias 2dp onto the bottom.
                                     .padding_each(ITEM_PADDING, 0.0, ITEM_PADDING, 2.0)
+                                    .draw_behind(move |scope| {
+                                        // Slide hover: the reference lights the
+                                        // item under the sliding finger.
+                                        if slide_hovered {
+                                            scope.draw_round_rect(
+                                                cranpose_ui_graphics::Brush::solid(Color(
+                                                    1.0, 1.0, 1.0, 0.10,
+                                                )),
+                                                cranpose_ui_graphics::CornerRadii::uniform(10.0),
+                                            );
+                                        }
+                                    })
                                     .then(menu_item_pointer_input(
                                         &item.label,
                                         Rc::clone(&item.action),
@@ -490,6 +567,7 @@ pub fn TextSelectionMenu(
     center_x: f32,
     line_top_y: f32,
     visible: bool,
+    live_point: Option<cranpose_ui_graphics::Point>,
     can_paste: bool,
     on_copy: impl Fn() + 'static,
     on_cut: impl Fn() + 'static,
@@ -504,7 +582,7 @@ pub fn TextSelectionMenu(
         items.push(TextMenuItem::new("Paste", on_paste));
     }
     items.push(TextMenuItem::new("Select all", on_select_all));
-    LiquidTextMenu(center_x, line_top_y, visible, items);
+    LiquidTextMenu(center_x, line_top_y, visible, live_point, items);
 }
 
 /// A floating Paste / Select all / Undo / Redo menu shown near the collapsed
@@ -538,7 +616,7 @@ pub fn CaretActionMenu(
     if can_redo {
         items.push(TextMenuItem::new("Redo", on_redo));
     }
-    LiquidTextMenu(center_x, line_top_y, visible, items);
+    LiquidTextMenu(center_x, line_top_y, visible, None, items);
 }
 
 #[cfg(test)]

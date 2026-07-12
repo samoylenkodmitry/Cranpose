@@ -95,7 +95,34 @@ fn main() -> ExitCode {
                 );
             }
 
-            println!("PASS: menu slide contract (stage 1)");
+            // ---------- Stage 2: hold → slide onto "Copy" → lift fires ----------
+            // Press a DIFFERENT word: the first selection's end-handle dot
+            // hangs at the old press point and would capture the touch.
+            let beats_x = FIELD_X + width_of("Silence. Melody. Then ") + width_of("beats") * 0.5;
+            robot.touch_down(beats_x, line_mid).expect("second press");
+            std::thread::sleep(Duration::from_millis(750));
+            let copy = find_text_in_semantics(&robot, "Copy")
+                .unwrap_or_else(|| fail(&robot, "menu absent during the second hold"));
+            let (copy_cx, copy_cy) = (copy.0 + copy.2 * 0.5, copy.1 + copy.3 * 0.5);
+            // Slide up onto the item (the live feed highlights it), then lift.
+            robot
+                .touch_move((press_x + copy_cx) * 0.5, (line_mid + copy_cy) * 0.5)
+                .expect("slide toward menu");
+            std::thread::sleep(Duration::from_millis(60));
+            robot.touch_move(copy_cx, copy_cy).expect("slide onto Copy");
+            std::thread::sleep(Duration::from_millis(120));
+            robot.touch_up(copy_cx, copy_cy).expect("lift on Copy");
+            std::thread::sleep(Duration::from_millis(300));
+            let _ = robot.wait_for_idle();
+            // The fired action dismisses the menu.
+            if find_text_in_semantics(&robot, "Copy").is_some() {
+                fail(
+                    &robot,
+                    "lifting on Copy did not fire it (menu still open after release)",
+                );
+            }
+
+            println!("PASS: menu slide contract");
             robot.exit().expect("exit");
         })
         .try_run(move || {
