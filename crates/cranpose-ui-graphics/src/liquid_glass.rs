@@ -214,15 +214,17 @@ pub struct LiquidLoupeSpec {
     /// Dispersion strength inside the band (RGB fringes on the folded rim)
     /// and across the rim ring's side arcs.
     pub dispersion: f32,
-    /// How far past the seamless continuation the fold's mirror starts, in
-    /// inradius units. The reference mirror skips a small strip below the
-    /// seam — exactly where the dragged handle's dot bottom sits — so the
-    /// dot never re-displays in the fold.
+    /// The fold floor: the bottom band never re-displays content nearer the
+    /// focus line than this clearance (dp). The dragged handle's dot hangs
+    /// just below the line; the caller sets this past the dot's bottom so
+    /// the mirror shows the next line, never a second pink lobe.
     pub seam_lift: f32,
     /// Specular rim intensity.
     pub highlight: f32,
-    /// Progress of the grow-in (0..1): scales magnification toward 1 and
-    /// softens the rim so the bubble inflates out of the text.
+    /// Content alpha (0..1): 1 while the lens lives (grow included — the
+    /// optics never animate); the dissolve lowers it, blending the whole
+    /// lens output toward the plain backdrop (the measured fade plateaus
+    /// near ~0.65 before the terminal vanish).
     pub progress: f32,
 }
 
@@ -240,7 +242,7 @@ impl Default for LiquidLoupeSpec {
             // The reference fringes are tight (3-5 px at 3x) and live only in
             // the fold band.
             dispersion: 0.15,
-            seam_lift: 0.08,
+            seam_lift: 26.0,
             // The reference rim reads as a clear bright line around the whole
             // capsule (peak ~+127 luminance over the backdrop); the
             // interactive-lens rim gain is a whisper, so the loupe drives it
@@ -258,20 +260,19 @@ impl Default for LiquidLoupeSpec {
 /// at 1.0, fractional desktop scales).
 pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> RenderEffect {
     let (w, h) = (node_size.0.max(1.0), node_size.1.max(1.0));
-    let optic = spec.progress.clamp(0.0, 1.0);
-    // GROW is fixed-optic (the widget passes progress 1.0: from the first
-    // visible frame the lens carries full power — only geometry animates).
-    // DISSOLVE fades THROUGH the optic: as progress falls, magnification
-    // converges to 1 and the rim/dispersion die out, which reads as the
-    // reference's translucent fade — a backdrop lens has no alpha to fade.
-    let magnification = 1.0 + (spec.magnification - 1.0) * optic;
+    // The lens is FIXED-OPTIC through its whole life: magnification, rim and
+    // dispersion never animate. `progress` is the CONTENT ALPHA — the
+    // dissolve blends the whole lens output toward the plain backdrop
+    // (uniform 90), which is how the reference reads translucent mid-fade
+    // while its magnified glyphs stay magnified.
+    let alpha = spec.progress.clamp(0.0, 1.0);
     let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
     shader.set_float2(0, w, h); // container = node size dp
     shader.set_float2(2, w * 0.5, h * 0.5); // capsule centered in the node
     shader.set_float2(4, w, h);
     shader.set_float(6, -1.0); // capsule radius sentinel
     shader.set_float(7, 0.5 * h.min(w)); // bezel = inradius (sheen falloff)
-    shader.set_float(11, spec.highlight * optic);
+    shader.set_float(11, spec.highlight);
     shader.set_float4(14, 1.0, 1.0, 1.0, 0.0); // no tint
     shader.set_float(18, 1.0); // saturation neutral
     shader.set_float(20, 0.0); // no lift
@@ -287,11 +288,12 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
                                 // line read as a flat stroke)
     shader.set_float(80, 1.0); // loupe mode
     shader.set_float2(81, spec.focus_offset.0, spec.focus_offset.1);
-    shader.set_float(83, magnification);
+    shader.set_float(83, spec.magnification);
     shader.set_float(84, spec.band_start);
     shader.set_float(85, spec.fold_peak);
-    shader.set_float(86, spec.dispersion * optic);
+    shader.set_float(86, spec.dispersion);
     shader.set_float(87, spec.seam_lift);
+    shader.set_float(90, alpha.max(1.0e-3));
     // The capture must cover the farthest sample: the focus offset plus the
     // fold reach past the bubble edge (in dp; paddings are logical units).
     let r_in = 0.5 * w.min(h);
@@ -326,29 +328,35 @@ pub fn liquid_menu_glass_effect(
                                   // menu barely bends what grazes its edge)
     shader.set_float(9, 1.4);
     shader.set_float(10, 0.6);
-    shader.set_float(11, 0.30 * p); // top rim highlight (the top edge must
-                                    // unambiguously carry the emphasis)
-    shader.set_float4(14, 0.0, 0.0, 0.0, 0.15 * p); // dark tint (reference
-                                                    // dims backdrop ~24%)
-    shader.set_float(18, 1.0 + 0.25 * p); // mild vibrancy
+    shader.set_float(11, 0.19 * p); // rim intensity (the reference settled
+                                    // pill peaks ~x1.9 of its baseline on
+                                    // BOTH long edges)
+    // Settled material (measured on the reference still: white text behind
+    // the pill reads ~242/255 through it, the dark card dims ~x0.78): a
+    // WHISPER of dark tint plus a mild contrast pivot — not the heavy
+    // dim+lift that flattened ghosts into an opaque-looking fill.
+    shader.set_float4(14, 0.0, 0.0, 0.0, 0.04 * p);
+    shader.set_float(18, 1.0 + 0.10 * p); // mild vibrancy
     shader.set_float(19, 0.0); // no dispersion on the menu
-    shader.set_float(20, -0.09 * p); // dim bright backdrop content like the
-                                     // reference (ghosts stay smudges)
+    shader.set_float(20, -0.06 * p);
+    shader.set_float(24, 1.0 + 0.05 * p); // gentle contrast pivot
     shader.set_float(88, 0.7); // bottom rim clearly softer than the top
     shader.set_float(89, 0.45); // rim holds ~45% strength off the lit arc
     shader.set_float(21, 0.5);
     // Measured on captures: (0,1) puts the crisp arc on the TOP edge with
     // the 0.45x counter on the bottom — the reference hierarchy.
     shader.set_float2(22, 0.0, 1.0);
-    shader.set_float(24, 1.0);
     shader.set_float(25, 0.5);
     shader.set_input_padding(12.0);
     let lens = RenderEffect::runtime_shader(shader);
     if blur_radius_px > 0.5 {
-        // Full blur from the first fade frame: scaling the radius with the
-        // fade left raw, crisp backdrop text showing through the half-faded
-        // body — the reference smudges from the start.
-        RenderEffect::blur(blur_radius_px).then(lens)
+        // The reference RESOLVES its blur through the materialize: the
+        // half-faded body is a strong smudge that sharpens to a near-clear
+        // settled pill (white text behind reads ~242/255 through it). A
+        // whisper of frost remains at rest — a flat tint reads as paint,
+        // not glass.
+        let radius = (blur_radius_px * (1.0 - p)).max(blur_radius_px * 0.08);
+        RenderEffect::blur(radius).then(lens)
     } else {
         lens
     }

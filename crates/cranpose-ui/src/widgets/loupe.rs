@@ -61,9 +61,13 @@ const LOUPE_BIRTH_WIDTH_FRAC: f32 = 0.63;
 const LOUPE_BIRTH_HEIGHT_FRAC: f32 = 0.93;
 const LOUPE_BIRTH_RISE_FRAC: f32 = 0.82;
 /// Dissolve: the fraction of the released size the bubble shrinks toward,
-/// and the fraction of [`LOUPE_RISE`] it sinks, by the end of the fade.
+/// the fraction of [`LOUPE_RISE`] it plunges back toward the line, and the
+/// content-alpha floor it fades to (all measured: by +25 ms the reference
+/// has sunk ~26 dp and dimmed its whole content to ~65-70%, holding there
+/// until the terminal vanish).
 const LOUPE_DISSOLVE_SHRINK: f32 = 0.30;
-const LOUPE_DISSOLVE_SINK: f32 = 0.10;
+const LOUPE_DISSOLVE_SINK: f32 = 0.35;
+const LOUPE_DISSOLVE_ALPHA_FLOOR: f32 = 0.65;
 /// Delay between the grab and the bubble's birth (reference: the menu
 /// dissolves first; the bubble appears ~120 ms after the touch-down). A grab
 /// released within the delay never shows a loupe.
@@ -111,6 +115,9 @@ fn loupe_follow_spring() -> AnimationType {
 pub struct LoupeTarget {
     pub focus_x: f32,
     pub line_mid_y: f32,
+    /// Fold floor: how far below the line mid the dragged handle's dot
+    /// reaches (dp) — the lens's mirror band must sample past it.
+    pub dot_clearance: f32,
 }
 
 /// The measured visibility rule: the loupe shows while the finger covers the
@@ -127,6 +134,12 @@ pub fn loupe_target_for_drag(
         Some(LoupeTarget {
             focus_x: finger.x,
             line_mid_y: line_bottom - 0.5 * line_height,
+            // The end/cursor dot hangs (2·radius − overlap) below the line
+            // box; the mirror must clear its bottom (plus an AA margin).
+            dot_clearance: 0.5 * line_height
+                + 2.0 * crate::text_selection::HANDLE_RADIUS
+                - crate::text_selection::HANDLE_DOT_LINE_OVERLAP
+                + 1.0,
         })
     } else {
         None
@@ -156,23 +169,27 @@ fn grow_pose(p: f32, rise: f32) -> LoupePose {
 
 /// Dissolve mapping over `q` (1 at the release, 0 fully gone), RELATIVE to
 /// the pose the bubble was released from — releasing a newborn shrinks the
-/// newborn, not a full capsule. Returns the pose plus the optic power (the
-/// spec `progress`): the reference holds pixel-still through the first
-/// ~15% (≈8 ms), then shrinks fast (≈3/4 of the released size by +25 ms,
-/// sinking slightly) while the optics — magnification, rim, dispersion —
-/// fade with an ease-out so the lens stays clearly visible at +25 ms and
-/// reads translucent at +42 ms.
+/// newborn, not a full capsule. Returns the pose plus the CONTENT ALPHA
+/// (the spec `progress`): the reference holds pixel-still through the
+/// first ~15% (≈8 ms), then drops fast — by +25 ms it has shrunk toward
+/// ~3/4, PLUNGED ~a third of its rise back toward the line, and dimmed its
+/// whole content (glyphs, rim, fold together) to the alpha floor, holding
+/// that translucency until the terminal vanish at ~55 ms. The optics never
+/// animate; only geometry and the content blend do.
 fn dissolve_pose(released: LoupePose, q: f32) -> (LoupePose, f32) {
     let d = 1.0 - q.clamp(0.0, 1.0);
     let u = ((d - 0.15) / 0.85).clamp(0.0, 1.0);
     let shrink = (u * 1.9).min(1.0);
+    // The sink and the fade both complete EARLY (by ~+25 ms) — the last
+    // stretch of the tween only finishes the shrink before the unmount.
+    let plunge = (u * 2.8).min(1.0);
     let factor = 1.0 - LOUPE_DISSOLVE_SHRINK * shrink;
     let pose = LoupePose {
         width_frac: released.width_frac * factor,
         height_frac: released.height_frac * factor,
-        rise_frac: released.rise_frac - LOUPE_DISSOLVE_SINK * shrink,
+        rise_frac: released.rise_frac - LOUPE_DISSOLVE_SINK * plunge,
     };
-    (pose, 1.0 - u * u)
+    (pose, 1.0 - (1.0 - LOUPE_DISSOLVE_ALPHA_FLOOR) * plunge)
 }
 
 /// Animated loupe state living across recompositions: grow/collapse progress
@@ -315,8 +332,9 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     let spec = LiquidLoupeSpec {
         magnification: LOUPE_MAGNIFICATION,
         focus_offset: (0.0, focus_offset_y),
-        // Grow runs at full optic power (a fixed-optic lens whose shape
-        // grows); the dissolve fades THROUGH the optics.
+        seam_lift: shown.dot_clearance,
+        // The optics are constant for the lens's whole life; the dissolve
+        // fades the CONTENT (a true translucency blend in the shader).
         progress: optic,
         ..LiquidLoupeSpec::default()
     };
@@ -399,33 +417,37 @@ mod tests {
     }
 
     #[test]
-    fn dissolve_holds_still_then_shrinks_and_sinks_relative_to_release() {
+    fn dissolve_holds_still_then_plunges_shrinks_and_dims() {
         let released = grow_pose(1.0, 1.0);
-        // First ~15% of the fade (≈8 ms): pixel-still, full optics — the
+        // First ~15% of the fade (≈8 ms): pixel-still, fully opaque — the
         // reference's +8 ms frame is identical to the held one.
-        let (pose, optic) = dissolve_pose(released, 0.9);
+        let (pose, alpha) = dissolve_pose(released, 0.9);
         assert_eq!(pose, released);
-        assert_eq!(optic, 1.0);
-        // Mid-fade (+25 ms ≈ q 0.55): clearly shrunk (toward ~3/4) and
-        // sinking, but still plainly visible.
-        let (pose, optic) = dissolve_pose(released, 0.55);
+        assert_eq!(alpha, 1.0);
+        // Mid-fade (+25 ms ≈ q 0.55): shrunk toward ~3/4, PLUNGED about a
+        // third of the rise back toward the line, and already dimmed to
+        // the measured ~65% content alpha.
+        let (pose, alpha) = dissolve_pose(released, 0.55);
         assert!(
             pose.width_frac < 0.85 && pose.width_frac > 0.75,
             "mid-fade width {}",
             pose.width_frac
         );
-        assert!(pose.rise_frac < released.rise_frac);
-        assert!(optic > 0.7, "still clearly visible at +25 ms, got {optic}");
-        // Late (+42 ms ≈ q 0.24): at the shrink floor, translucent.
-        let (pose, optic) = dissolve_pose(released, 0.24);
-        assert!((pose.width_frac - 0.70).abs() < 0.02);
         assert!(
-            optic > 0.2 && optic < 0.6,
-            "translucent mid-fade, got {optic}"
+            released.rise_frac - pose.rise_frac > 0.30,
+            "the bubble plunges toward the line by +25 ms, sank {}",
+            released.rise_frac - pose.rise_frac
         );
-        // Done: optics fully dead.
-        let (_, optic) = dissolve_pose(released, 0.0);
-        assert_eq!(optic, 0.0);
+        assert!(
+            (alpha - LOUPE_DISSOLVE_ALPHA_FLOOR).abs() < 0.02,
+            "content dimmed to the floor by +25 ms, got {alpha}"
+        );
+        // Late (+42 ms ≈ q 0.24): shrink floor reached, translucency and
+        // sink HOLD (the reference plateaus until the terminal vanish).
+        let (pose, alpha) = dissolve_pose(released, 0.24);
+        assert!((pose.width_frac - 0.70).abs() < 0.02);
+        assert!((alpha - LOUPE_DISSOLVE_ALPHA_FLOOR).abs() < 1e-6);
+        assert!((released.rise_frac - pose.rise_frac - LOUPE_DISSOLVE_SINK).abs() < 1e-6);
     }
 
     #[test]
@@ -447,42 +469,33 @@ mod tests {
     }
 
     #[test]
-    fn loupe_effect_scales_its_optics_with_grow_progress() {
-        // `progress` is the OPTIC power: the grow phase passes 1.0 (a
-        // fixed-optic lens whose shape grows), and the dissolve fades
-        // through it — magnification converging to 1 with the rim dying
-        // out is the translucent fade of a backdrop lens.
-        let grown = LiquidLoupeSpec {
-            progress: 1.0,
+    fn loupe_effect_keeps_optics_constant_and_fades_content_alpha() {
+        // The lens is FIXED-OPTIC for its whole life; `progress` is the
+        // CONTENT ALPHA (uniform 90) — the dissolve blends the whole lens
+        // output toward the plain backdrop while magnification, rim and
+        // dispersion stay at full power (the reference's magnified glyphs
+        // stay magnified while dimming).
+        let dimmed = LiquidLoupeSpec {
+            progress: 0.65,
             ..LiquidLoupeSpec::default()
         };
-        let effect = liquid_loupe_effect((LOUPE_WIDTH, LOUPE_HEIGHT), &grown);
+        let effect = liquid_loupe_effect((LOUPE_WIDTH, LOUPE_HEIGHT), &dimmed);
         let cranpose_ui_graphics::RenderEffect::Shader { shader } = effect else {
             panic!("loupe must be a bare shader effect");
         };
         let u = shader.uniforms();
         assert!(
-            (u[83] - LOUPE_MAGNIFICATION).abs() < 1e-3,
-            "full optic power carries full magnification, got {}",
+            (u[83] - LOUPE_MAGNIFICATION).abs() < 1e-6,
+            "magnification never animates, got {}",
             u[83]
         );
-        assert!(u[86] > 0.0, "full-power dispersion visible");
-
-        let dissolving = LiquidLoupeSpec {
-            progress: 0.0,
-            ..LiquidLoupeSpec::default()
-        };
-        let effect = liquid_loupe_effect((LOUPE_WIDTH, LOUPE_HEIGHT), &dissolving);
-        let cranpose_ui_graphics::RenderEffect::Shader { shader } = effect else {
-            panic!("loupe must be a bare shader effect");
-        };
-        let u = shader.uniforms();
+        assert!(u[86] > 0.0, "dispersion never animates");
+        assert!((u[90] - 0.65).abs() < 1e-6, "content alpha rides uniform 90");
         assert!(
-            (u[83] - 1.0).abs() < 1e-3,
-            "a fully faded lens magnifies nothing (reads transparent), got {}",
-            u[83]
+            u[87] > 20.0,
+            "the fold floor clears the handle dot, got {}",
+            u[87]
         );
-        assert_eq!(u[86], 0.0, "faded dispersion is 0");
 
         let grown = LiquidLoupeSpec::default();
         let effect = liquid_loupe_effect((LOUPE_WIDTH, LOUPE_HEIGHT), &grown);

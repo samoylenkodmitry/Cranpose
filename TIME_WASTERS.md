@@ -256,3 +256,29 @@ AFTER the last code change, and crop generously around the component
   and the post-release synthesized hover re-armed the loupe (bubble
   reappearing ~140 ms after release). Gesture loops must gate Move/Up on
   a live press.
+
+## Wall-clock keyframing of sub-100ms animations (robot, 2026-07-12)
+
+Symptom: dissolve keyframes captured via sleep(offset)+capture were
+byte-identical "gone" frames at +8/+25 while +42 caught a real pose —
+looked like a widget bug, was three compounding harness/runtime traps:
+
+1. The headless loop FREE-RUNS (~5ms real/frame) and scale-3 captures
+   stall 25-60ms unpredictably — sleep choreography samples a 55ms
+   tween anywhere including past its end. Fix: `capture_keyframes`
+   (atomic exact-clock advances; commit 37cfd6cb). Never add retry
+   loops around racy captures — make the clock deterministic instead.
+2. Presence probes whose band touches glyph ascenders are tautologies:
+   they pass forever and hide that the thing never rendered. Bands must
+   sit strictly above ALL other chrome (menu capsule + halo included).
+3. The real bug underneath: recompose callbacks were consumed per
+   direct recompose and healed by ancestor promotion NEXT frame — a
+   tween's final write had no next frame, so the loupe froze and only
+   an arg change resurrected it. Wall-clock runs masked this for the
+   entire project lifetime (plus one extra ancestor recompose per
+   animation frame everywhere). See recompose.rs / animation_frame_pump
+   test.
+
+Debug method that worked: env-gated eprintln tracing layer-by-layer
+(watchers → pending scopes → recompose branches → callback set/take),
+diffing one working frame against one dead frame in the SAME run.

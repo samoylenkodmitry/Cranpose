@@ -97,6 +97,30 @@ fn main() -> ExitCode {
                 .drag(melody_center, line1_mid, melody_center, line1_mid)
                 .expect("tap 2");
             settle(&robot, 700);
+            // The taps ride wall-clock timing: VERIFY the selection armed
+            // (the start handle's dot floats above the line) and retry the
+            // pair on a race — everything downstream grabs that handle.
+            let start_x = FIELD_X + width_of("Silence. ");
+            for attempt in 0..3 {
+                let probe = robot.screenshot_with_scale(1.0).expect("selection probe");
+                if region_has_structure(
+                    &probe,
+                    (start_x - 12.0, line1_top - 16.0, start_x + 12.0, line1_top - 2.0),
+                ) {
+                    break;
+                }
+                if attempt == 2 {
+                    fail(&robot, "double-tap selection never armed");
+                }
+                robot
+                    .drag(melody_center, line1_mid, melody_center, line1_mid)
+                    .expect("re-tap 1");
+                std::thread::sleep(Duration::from_millis(120));
+                robot
+                    .drag(melody_center, line1_mid, melody_center, line1_mid)
+                    .expect("re-tap 2");
+                settle(&robot, 700);
+            }
             let idle = robot.screenshot_with_scale(3.0).expect("idle");
             save(&idle, &shot_dir, "01-idle-selection");
 
@@ -192,7 +216,8 @@ fn main() -> ExitCode {
                 (17.0, true),  // +42
                 (13.0, true),  // +55
                 (35.0, true),  // +90
-                (210.0, true), // +300
+                (170.0, true), // +260: materialize just started (dim)
+                (40.0, true),  // +300
                 (60.0, true),  // +360
             ];
             let dissolve_names = [
@@ -201,6 +226,7 @@ fn main() -> ExitCode {
                 "10b-dissolve-c",
                 "11-after-release",
                 "11d-gone",
+                "11a-menu-materializing-0",
                 "11b-menu-materializing",
                 "11c-menu-materializing-2",
             ];

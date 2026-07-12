@@ -55,6 +55,8 @@ const MENU_FONT_SP: f32 = 15.0;
 const DISC_COLOR: Color = Color(1.0, 1.0, 1.0, 0.19);
 const DISC_PRESSED_COLOR: Color = Color(1.0, 1.0, 1.0, 0.9);
 /// Backdrop blur behind the capsule, dp.
+/// The materialize smudge radius; the effect resolves it to ~a fifth as the
+/// menu sharpens (the settled reference pill keeps backdrop text readable).
 const MENU_BLUR_DP: f32 = 15.0;
 
 /// Motion (measured): ~70 ms dissolve, ~140 ms materialize arriving ~250 ms
@@ -364,10 +366,15 @@ pub fn LiquidTextMenu(center_x: f32, line_top_y: f32, visible: bool, items: Vec<
                 .drop_shadow(
                     LayerShape::Rounded(RoundedCornerShape::uniform(1.0e6)),
                     move |scope| {
-                        scope.radius = 18.0;
+                        // A transient BRIGHT bloom while the pill
+                        // materializes (the reference's disc flash / glow),
+                        // gone at rest — the settled reference shows a flat
+                        // baseline right up to the rim, and a dark band is
+                        // invisible on the dark card anyway.
+                        scope.radius = 16.0;
                         scope.spread = -2.0;
-                        scope.offset.y = 6.0;
-                        scope.color = Color(0.0, 0.0, 0.0, 0.35 * p);
+                        scope.offset.y = 0.0;
+                        scope.color = Color(1.0, 1.0, 1.0, 0.12 * p * (1.0 - p));
                         scope.cutout = true;
                     },
                 )

@@ -360,14 +360,23 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             // next line at essentially MAIN-TEXT scale, so the descent walks
             // back through the content at ~1 content-dp per display-dp.
             let g = smoothstep(0.0, 0.3, tau) - 0.74 * smoothstep(0.3, 1.0, tau);
-            // Seam lift (uniform 87, default 0): the reference mirror starts
-            // a touch DEEPER than the seamless continuation — the strip just
-            // past the seam (where the handle dot's bottom edge lives) never
-            // re-displays in the fold.
-            let seam_lift = max(get_float(87u), 0.0);
-            let s_band0 = band_start / m + seam_lift;
-            let s_units = s_band0 + (max(fold_peak, s_band0) - s_band0) * g;
+            let s_band0 = band_start / m;
+            let s_units = s_band0 + (fold_peak - s_band0) * g;
             disp_c = outward_normal * (s_units - xr) * r_in * vert_weight;
+            // Fold floor (uniform 87, dp): the bottom band must never
+            // re-display content nearer the focus than this clearance —
+            // the dragged handle's dot hangs just below the line, and
+            // mirroring it paints a second pink lobe under the displayed
+            // dot. An ABSOLUTE scene clearance (not inradius-relative):
+            // the bubble shrinks during grow/dissolve but the dot doesn't.
+            let seam_floor = max(get_float(87u), 0.0) * dp_scale.y;
+            if seam_floor > 0.0 && outward_normal.y > 0.5 {
+                let sample_dy = p.y + disp_a.y + disp_c.y;
+                let floor_dy = focus_px.y + seam_floor;
+                if sample_dy < floor_dy {
+                    disp_c.y = disp_c.y + (floor_dy - sample_dy);
+                }
+            }
             spread = band_chroma * smoothstep(0.0, 0.25, tau) * vert_weight;
         }
     } else {
@@ -496,19 +505,41 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // the sides read as a vesica), with only a faint prismatic tint
         // phased across the line's width.
         let facing = pow(facing_light, 1.4) + pow(facing_away, 2.0) * 0.3;
-        let ring_gain = (0.25 + 0.75 * facing) * spec_gain;
+        // The reference ring is near-uniform around the silhouette (side
+        // contrast ~as strong as the apex, both ~+127 luminance); only a
+        // whisper of top emphasis rides the facing term.
+        let ring_gain = (0.92 + 0.08 * facing) * spec_gain;
         // Chromatic rim: on the straight SIDES the reference ring splits
         // into a blue-shifted leading (outer) band and a red-shifted
         // trailing (inner) band; the top arc stays near-white. The split
         // rides the dispersion knob so it dies with the optics on dissolve.
         let side = 1.0 - outward_normal.y * outward_normal.y;
-        let fringe = get_float(86u) * side * 8.0;
+        // Narrow split: wide per-channel offsets wash the ring's mean
+        // luminance at the sides (the reference side contrast matches the
+        // apex) while staying visible on close crops.
+        let fringe = get_float(86u) * side * 4.0;
         let dc = d + edge_center;
         let ring_r = 1.0 - smoothstep(0.0, edge_width, abs(dc + fringe) - 0.2);
         let ring_b = 1.0 - smoothstep(0.0, edge_width, abs(dc - fringe) - 0.2);
         spec_rgb = vec3<f32>(ring_r, edge_line, ring_b) * ring_gain;
     }
     rgb = rgb + spec_rgb * highlight;
+
+    if loupe_mode > 0.5 {
+        // Loupe content alpha (uniform 90): the reference dissolve fades the
+        // WHOLE lens content — magnified glyphs, rim, fold — toward what sits
+        // behind the lens (~68% by mid-fade), while the optics themselves
+        // stay at full power. Blend against the undisplaced backdrop so the
+        // fade reads as the lens turning translucent, not the optics dying.
+        var lens_alpha = get_float(90u);
+        if lens_alpha <= 0.0 {
+            lens_alpha = 1.0;
+        }
+        if lens_alpha < 1.0 {
+            let plain = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
+            rgb = mix(plain.rgb, rgb, lens_alpha);
+        }
+    }
 
     // Ordered-noise dither hides banding in the blurred gradients behind the
     // glass (±0.5/255 at dither_amount = 1).
