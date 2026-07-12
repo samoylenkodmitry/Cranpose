@@ -11,10 +11,10 @@ use cranpose_foundation::text::TextFieldState;
 use cranpose_foundation::PointerEventKind;
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{
-    composable, BasicTextField, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
-    CornerRadii, GraphicsLayer, IntrinsicSize, LinearArrangement, Modifier, Point,
-    PointerInputScope, RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, TextStyle,
-    VerticalAlignment,
+    composable, BasicTextField, BasicTextFieldOptions, BasicTextFieldWithOptions, BoxSpec, Brush,
+    Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer, IntrinsicSize,
+    LinearArrangement, Modifier, Point, PointerInputScope, RoundedCornerShape, Row, RowSpec, Size,
+    Spacer, Text, TextStyle, VerticalAlignment,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -745,6 +745,55 @@ fn text_input_example() {
                         .background(Color(0.18, 0.15, 0.22, 1.0))
                         .rounded_corners(8.0),
                     TextStyle::default(),
+                );
+            }
+
+            Spacer(Size {
+                width: 0.0,
+                height: 24.0,
+            });
+
+            // Touch-selection showcase: the full liquid-glass text chrome —
+            // double-tap a word to raise the finger handles and the glass
+            // edit menu, drag a handle to float the magnifier loupe (uniform
+            // 1.25x lens with the chromatic fold band), release to watch it
+            // plunge back. Multi-line with the recording's line pitch so the
+            // fold mirrors the next line like the reference.
+            Text(
+                "Touch Selection (double-tap, then drag a handle):",
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
+
+            Spacer(Size {
+                width: 0.0,
+                height: 8.0,
+            });
+
+            {
+                let state = cranpose_core::remember(|| {
+                    TextFieldState::new(
+                        "Silence. Melody. Then beats. Subtle electronics                          weave through mantra trance, pulsing, catching                          melodies that rise and dissolve like glass.",
+                    )
+                })
+                .with(|state| state.clone());
+                let mut style = TextStyle::default();
+                style.span_style.font_size = cranpose_ui::text::TextUnit::Sp(16.0);
+                style.paragraph_style.line_height = cranpose_ui::text::TextUnit::Sp(24.0);
+                BasicTextFieldWithOptions(
+                    state,
+                    Modifier::empty()
+                        .fill_max_width()
+                        .padding(14.0)
+                        .background(Color(0.149, 0.129, 0.125, 1.0))
+                        .rounded_corners(10.0),
+                    BasicTextFieldOptions {
+                        text_style: style,
+                        // The reference recording's pink accent: one color
+                        // drives the caret, both handles and the highlight.
+                        cursor_color: Color(0.965, 0.208, 0.557, 1.0),
+                        ..BasicTextFieldOptions::default()
+                    },
                 );
             }
 

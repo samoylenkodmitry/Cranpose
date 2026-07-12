@@ -107,11 +107,12 @@ pub use pointer_dispatch::{
 };
 pub use primitives::{
     fade_in, fade_out, remember_svg, slide_in_vertically, slide_out_vertically, AnimatedVisibility,
-    BasicText, BasicTextField, BasicTextFieldOptions, BasicTextWithOptions, BitmapPainter, Box,
-    BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl,
-    Button, ButtonSpec, Canvas, Column, ColumnSpec, ContentScale, Crossfade, EnterTransition,
-    ExitTransition, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec, Spacer,
-    SubcomposeLayout, SvgPainter, SvgPainterError, Text, TextWithOptions, DEFAULT_ALPHA,
+    BasicText, BasicTextField, BasicTextFieldOptions, BasicTextFieldWithOptions,
+    BasicTextWithOptions, BitmapPainter, Box, BoxScope, BoxSpec, BoxWithConstraints,
+    BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, ButtonSpec, Canvas, Column,
+    ColumnSpec, ContentScale, Crossfade, EnterTransition, ExitTransition, ForEach, Image, Layout,
+    LayoutNode, Painter, Row, RowSpec, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text,
+    TextWithOptions, DEFAULT_ALPHA,
 };
 // Lazy list exports - single source from cranpose-foundation
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
