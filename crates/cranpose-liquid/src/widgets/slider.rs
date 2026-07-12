@@ -169,7 +169,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                     if lens_progress.get() > 0.01 {
                         let node = LENS_SIZE + LENS_PAD * 2.0;
                         let lens_for_layer = lens_progress;
-                        let last_x = remember(|| Rc::new(Cell::new(f32::NAN))).with(Rc::clone);
+                        let dynamics = crate::dynamics::remember_liquid_dynamics();
                         let lens = Modifier::empty()
                             // required_size: the lens node exceeds the 32dp
                             // control; the fixed-height host keeps layout put.
@@ -185,21 +185,22 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                 move || {
                                     let grow = lens_for_layer.get().clamp(0.0, 1.2);
                                     let d = THUMB_SIZE + (LENS_SIZE - THUMB_SIZE) * grow;
-                                    let x = thumb_x;
-                                    let prev = last_x.replace(x);
-                                    let vx = if prev.is_nan() { 0.0 } else { x - prev };
-                                    let bulge = (vx.abs() * 1.6).min(4.0);
-                                    let dir = if vx >= 0.0 { 0.0 } else { std::f32::consts::PI };
+                                    // Droplet law over the thumb ride
+                                    // (crate::dynamics): drag speed stretches
+                                    // the circle into a travel-axis oval,
+                                    // braking swells its leading edge.
+                                    let pose = dynamics.update((thumb_x, 0.0));
+                                    let (w, h) = pose.size(d, d);
                                     GlassDynamics {
                                         morph: Some(GlassMorph {
                                             node_size: (node, node),
-                                            primary: (node * 0.5, node * 0.5, d, d, -1.0),
+                                            primary: (node * 0.5, node * 0.5, w, h, -1.0),
                                             shapes: Vec::new(),
                                             glue: 0.0,
                                             wobble_amplitude: 0.0,
                                             wobble_phase: 0.0,
-                                            bulge_amplitude: bulge,
-                                            bulge_direction: dir,
+                                            bulge_amplitude: pose.bulge_amplitude.min(4.0),
+                                            bulge_direction: pose.bulge_direction,
                                         }),
                                         magnify_boost: 0.2,
                                         ..Default::default()

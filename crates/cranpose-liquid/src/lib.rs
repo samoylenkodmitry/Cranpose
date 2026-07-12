@@ -19,12 +19,14 @@
 #![deny(unsafe_code)]
 #![allow(non_snake_case)]
 
+pub mod dynamics;
 pub mod icons;
 pub mod material;
 pub mod motion;
 pub mod theme;
 pub mod widgets;
 
+pub use dynamics::{remember_liquid_dynamics, LiquidDynamics, LiquidPose};
 pub use material::{Glass, GlassDynamics, GlassVariant, LiquidModifierExt, LiquidShape};
 pub use motion::{liquid_press_scale, LiquidMotion};
 pub use theme::{
@@ -35,6 +37,7 @@ pub use widgets::*;
 
 /// Everything an app needs to build Liquid UI.
 pub mod prelude {
+    pub use crate::dynamics::{remember_liquid_dynamics, LiquidDynamics, LiquidPose};
     pub use crate::icons;
     pub use crate::material::{Glass, GlassDynamics, GlassVariant, LiquidModifierExt, LiquidShape};
     pub use crate::motion::{liquid_press_scale, LiquidMotion};

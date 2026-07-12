@@ -177,24 +177,57 @@ pub fn find_paragraph_boundaries(text: &str, pos: usize) -> (usize, usize) {
     (start.min(end), end)
 }
 
+/// Which visual line a caret/handle at a soft-wrap boundary belongs to. At a
+/// shared boundary byte (the end of one wrapped visual line IS the start of
+/// the next — mid-word wraps produce these) the offset alone is ambiguous:
+///
+/// * [`LineAffinity::Upstream`] anchors to the END of the upper line — the
+///   glyph a dragging finger means. Selection END and cursor handles, the
+///   drawn caret, and the loupe use this; without it a drag along a wrapped
+///   line's right edge snaps the handle one line DOWN and to the left edge.
+/// * [`LineAffinity::Downstream`] anchors to the START of the lower line —
+///   where the first selected glyph actually renders. Selection START handles
+///   and highlight geometry use this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineAffinity {
+    Upstream,
+    Downstream,
+}
+
 /// Given the source byte ranges of the **visual** (wrapped) lines and a caret
 /// byte `offset`, returns the `(visual_line_index, line_start_byte)` the caret
 /// sits on.
 ///
 /// The caret belongs to the last visual line whose start is at or before
-/// `offset`, so:
+/// `offset`, except at a shared soft-wrap boundary where `affinity` decides
+/// (see [`LineAffinity`]):
 /// * a caret in the middle of a visual line resolves to that line;
-/// * a caret at a soft-wrap boundary sits at the start of the lower line;
 /// * a caret at the very end of the text sits on the last visual line.
 ///
 /// This is the wrap-aware replacement for counting logical `\n` lines: without
 /// it, a caret on a wrapped line's second visual line is drawn on the first (and
 /// its x runs off the right edge), even though typing and the magnifier place it
 /// correctly. Returns `(0, 0)` when there are no ranges.
-pub fn caret_visual_line(ranges: &[std::ops::Range<usize>], offset: usize) -> (usize, usize) {
+pub fn caret_visual_line(
+    ranges: &[std::ops::Range<usize>],
+    offset: usize,
+    affinity: LineAffinity,
+) -> (usize, usize) {
     let mut result = (0usize, 0usize);
     for (index, range) in ranges.iter().enumerate() {
         if range.start <= offset {
+            // A SHARED boundary (the previous line ends exactly where this one
+            // starts — soft wrap, no separator byte) belongs upstream to the
+            // upper line's end. A hard `\n` never shares (the ranges gap over
+            // the separator), and an empty upper line never captures.
+            if affinity == LineAffinity::Upstream
+                && index > 0
+                && range.start == offset
+                && ranges[index - 1].end == offset
+                && ranges[index - 1].start < offset
+            {
+                break;
+            }
             result = (index, range.start);
         } else {
             break;
@@ -563,24 +596,90 @@ mod tests {
         let ranges = vec![0..5usize, 5..9, 10..12];
 
         // Start of the first visual line.
-        assert_eq!(caret_visual_line(&ranges, 0), (0, 0));
+        assert_eq!(
+            caret_visual_line(&ranges, 0, LineAffinity::Downstream),
+            (0, 0)
+        );
         // Middle of the first visual line.
-        assert_eq!(caret_visual_line(&ranges, 3), (0, 0));
+        assert_eq!(
+            caret_visual_line(&ranges, 3, LineAffinity::Downstream),
+            (0, 0)
+        );
         // Start of the second (wrapped) visual line.
-        assert_eq!(caret_visual_line(&ranges, 5), (1, 5));
+        assert_eq!(
+            caret_visual_line(&ranges, 5, LineAffinity::Downstream),
+            (1, 5)
+        );
         // Middle of the second visual line — must NOT resolve to line 0.
-        assert_eq!(caret_visual_line(&ranges, 7), (1, 5));
+        assert_eq!(
+            caret_visual_line(&ranges, 7, LineAffinity::Downstream),
+            (1, 5)
+        );
         // End of the wrapped logical line.
-        assert_eq!(caret_visual_line(&ranges, 9), (1, 5));
+        assert_eq!(
+            caret_visual_line(&ranges, 9, LineAffinity::Downstream),
+            (1, 5)
+        );
         // The line after the hard newline.
-        assert_eq!(caret_visual_line(&ranges, 11), (2, 10));
+        assert_eq!(
+            caret_visual_line(&ranges, 11, LineAffinity::Downstream),
+            (2, 10)
+        );
         // End of text.
-        assert_eq!(caret_visual_line(&ranges, 12), (2, 10));
+        assert_eq!(
+            caret_visual_line(&ranges, 12, LineAffinity::Downstream),
+            (2, 10)
+        );
     }
 
     #[test]
     fn caret_visual_line_handles_empty_ranges() {
-        assert_eq!(caret_visual_line(&[], 5), (0, 0));
+        assert_eq!(caret_visual_line(&[], 5, LineAffinity::Upstream), (0, 0));
+        assert_eq!(caret_visual_line(&[], 5, LineAffinity::Downstream), (0, 0));
+    }
+
+    /// A soft-wrap boundary byte is BOTH the end of the upper visual line and
+    /// the start of the lower one. A finger dragging a selection END (or the
+    /// caret/cursor handle, or the loupe) along the upper line's right edge
+    /// produces exactly that byte — upstream affinity must keep the anchor on
+    /// the upper line's end instead of snapping one line down to the left
+    /// edge (the reported wrapped-multiline handle Y-offset bug).
+    #[test]
+    fn caret_visual_line_upstream_anchors_shared_wrap_boundary_to_upper_line() {
+        let ranges = vec![0..5usize, 5..9, 10..12];
+
+        // The shared boundary resolves per affinity.
+        assert_eq!(
+            caret_visual_line(&ranges, 5, LineAffinity::Upstream),
+            (0, 0)
+        );
+        assert_eq!(
+            caret_visual_line(&ranges, 5, LineAffinity::Downstream),
+            (1, 5)
+        );
+
+        // Mid-line offsets are affinity-independent.
+        assert_eq!(
+            caret_visual_line(&ranges, 3, LineAffinity::Upstream),
+            (0, 0)
+        );
+        assert_eq!(
+            caret_visual_line(&ranges, 7, LineAffinity::Upstream),
+            (1, 5)
+        );
+
+        // A hard-newline boundary is NOT shared (the ranges gap over the
+        // separator): upstream must not pull the lower line's start up.
+        assert_eq!(
+            caret_visual_line(&ranges, 10, LineAffinity::Upstream),
+            (2, 10)
+        );
+
+        // End of text stays on the last line under either affinity.
+        assert_eq!(
+            caret_visual_line(&ranges, 12, LineAffinity::Upstream),
+            (2, 10)
+        );
     }
 
     #[test]

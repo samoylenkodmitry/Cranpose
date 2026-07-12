@@ -192,6 +192,7 @@ pub(crate) fn caret_visual_line_for_offset(
     node_id: Option<cranpose_core::NodeId>,
     wrap_width: Option<f32>,
     offset: usize,
+    affinity: crate::text_selection::LineAffinity,
 ) -> (usize, usize) {
     let offset = offset.min(text.len());
     match wrap_width {
@@ -204,9 +205,11 @@ pub(crate) fn caret_visual_line_for_offset(
                 crate::text::TextLayoutOptions::default(),
                 Some(width),
             );
-            crate::text_selection::caret_visual_line(&ranges, offset)
+            crate::text_selection::caret_visual_line(&ranges, offset, affinity)
         }
         _ => {
+            // Logical `\n` lines never share a boundary byte (the separator
+            // sits between them), so affinity cannot change the result here.
             let before = &text[..offset];
             let line_index = before.matches('\n').count();
             let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
@@ -1214,12 +1217,16 @@ impl DrawModifierNode for TextFieldModifierNode {
                 // counting only logical `\n` lines would draw the caret on the
                 // wrong line (and, with the full logical-line-prefix width, off
                 // the right edge) while typing/the magnifier stay correct.
+                // Upstream affinity: a caret placed by a finger at a wrapped
+                // line's right edge draws at that line's end, not one line
+                // down at the left edge (matching the cursor handle's anchor).
                 let (line_index, line_start) = caret_visual_line_for_offset(
                     &text,
                     &style,
                     node_id.get(),
                     measured_wrap_width.get(),
                     pos,
+                    crate::text_selection::LineAffinity::Upstream,
                 );
                 let cursor_x = crate::text::measure_text(
                     &crate::text::AnnotatedString::from(&text[line_start..pos]),

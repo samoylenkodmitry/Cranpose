@@ -16,8 +16,6 @@ use cranpose_services::{default_haptics, HapticFeedback};
 use cranpose_ui::widgets::{Box, BoxSpec};
 use cranpose_ui::{Modifier, PointerEventKind, PointerInputScope, Size};
 use cranpose_ui_graphics::{Brush, CornerRadii, GraphicsLayer};
-use std::cell::Cell;
-use std::rc::Rc;
 
 pub(crate) const TRACK_WIDTH: f32 = 63.0;
 pub(crate) const TRACK_HEIGHT: f32 = 28.0;
@@ -267,7 +265,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             let node_h = LENS_HEIGHT + LENS_PAD * 2.0;
             let thumb_x_for_lens = thumb_x;
             let lens_for_layer = lens_progress;
-            let last_x = remember(|| Rc::new(Cell::new(f32::NAN))).with(Rc::clone);
+            let dynamics = crate::dynamics::remember_liquid_dynamics();
             let lens = Modifier::empty()
                 // required_size: the lens node MUST exceed the 63×28 track
                 // box — plain size() would be coerced by the parent's
@@ -293,16 +291,13 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                     Glass::lens().shape(LiquidShape::Capsule).no_clip(),
                     move || {
                         let grow = lens_for_layer.get().clamp(0.0, 1.2);
-                        let w = THUMB_WIDTH + (LENS_WIDTH - THUMB_WIDTH) * grow;
-                        let h = THUMB_HEIGHT + (LENS_HEIGHT - THUMB_HEIGHT) * grow;
-                        // Finite-difference velocity of the ride position
-                        // feeds the leading-edge bulge: dragging the lens
-                        // swells its front like a pulled droplet.
-                        let x = thumb_x_for_lens.get();
-                        let prev = last_x.replace(x);
-                        let vx = if prev.is_nan() { 0.0 } else { x - prev };
-                        let bulge = (vx.abs() * 1.6).min(5.0);
-                        let dir = if vx >= 0.0 { 0.0 } else { std::f32::consts::PI };
+                        let base_w = THUMB_WIDTH + (LENS_WIDTH - THUMB_WIDTH) * grow;
+                        let base_h = THUMB_HEIGHT + (LENS_HEIGHT - THUMB_HEIGHT) * grow;
+                        // Droplet law over the ride position: drag speed
+                        // stretches the lens along the track, braking swells
+                        // its leading edge (crate::dynamics).
+                        let pose = dynamics.update((thumb_x_for_lens.get(), 0.0));
+                        let (w, h) = pose.size(base_w, base_h);
                         GlassDynamics {
                             morph: Some(GlassMorph {
                                 node_size: (node_w, node_h),
@@ -311,8 +306,8 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                 glue: 0.0,
                                 wobble_amplitude: 0.0,
                                 wobble_phase: 0.0,
-                                bulge_amplitude: bulge,
-                                bulge_direction: dir,
+                                bulge_amplitude: pose.bulge_amplitude.min(5.0),
+                                bulge_direction: pose.bulge_direction,
                             }),
                             // The reference toggle lens fills with the
                             // magnified track — the base 1.35 isn't enough

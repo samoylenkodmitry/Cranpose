@@ -400,6 +400,7 @@ struct RuntimeInner {
     scope_queue: RefCell<Vec<(ScopeId, Weak<RecomposeScopeInner>)>>,
     frame_callbacks: RefCell<VecDeque<FrameCallbackEntry>>,
     next_frame_callback_id: Cell<u64>,
+    last_frame_time_nanos: Cell<Option<u64>>,
     ui_dispatcher: Arc<UiDispatcherInner>,
     ui_rx: RefCell<mpsc::Receiver<UiMessage>>,
     local_tasks: RefCell<VecDeque<Box<dyn FnOnce() + 'static>>>,
@@ -432,6 +433,7 @@ impl RuntimeInner {
             scope_queue: RefCell::new(Vec::new()),
             frame_callbacks: RefCell::new(VecDeque::new()),
             next_frame_callback_id: Cell::new(1),
+            last_frame_time_nanos: Cell::new(None),
             ui_dispatcher: dispatcher,
             ui_rx: RefCell::new(rx),
             local_tasks: RefCell::new(VecDeque::new()),
@@ -725,6 +727,7 @@ impl RuntimeInner {
     }
 
     fn drain_frame_callbacks(&self, frame_time_nanos: u64) {
+        self.last_frame_time_nanos.set(Some(frame_time_nanos));
         let mut callbacks = self.frame_callbacks.borrow_mut();
         let mut pending: Vec<Box<dyn FnOnce(u64) + 'static>> = Vec::with_capacity(callbacks.len());
         while let Some(mut entry) = callbacks.pop_front() {
@@ -822,6 +825,14 @@ impl Runtime {
 
     pub fn set_needs_frame(&self, value: bool) {
         *self.inner.needs_frame.borrow_mut() = value;
+    }
+
+    /// Animation-clock time of the most recent frame-callback drain. This is
+    /// the same clock `Animatable`s advance on (virtual under robot exact
+    /// captures), so per-frame integrators derive dt from it instead of wall
+    /// time.
+    pub fn last_frame_time_nanos(&self) -> Option<u64> {
+        self.inner.last_frame_time_nanos.get()
     }
 
     #[cfg(any(feature = "internal", test))]
@@ -1109,6 +1120,14 @@ impl RuntimeHandle {
         if let Some(inner) = self.inner.upgrade() {
             inner.drain_frame_callbacks(frame_time_nanos);
         }
+    }
+
+    /// Animation-clock time of the most recent frame-callback drain (see
+    /// [`Runtime::last_frame_time_nanos`]).
+    pub fn last_frame_time_nanos(&self) -> Option<u64> {
+        self.inner
+            .upgrade()
+            .and_then(|inner| inner.last_frame_time_nanos.get())
     }
 
     #[cfg(any(feature = "internal", test))]

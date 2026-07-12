@@ -38,6 +38,13 @@ impl LiquidMotion {
     pub fn blob_trailing() -> AnimationType {
         spring(0.9, 380.0)
     }
+
+    /// A released lens flying to its committed slot: the reference tab-bar
+    /// transit crosses ~3 cells in ~330 ms (measured from the iphone17
+    /// recording) — much gentler than the finger-chase spring.
+    pub fn glide() -> AnimationType {
+        spring(0.9, 260.0)
+    }
 }
 
 /// Press feedback for glass controls, per the Liquid Glass law: touched glass

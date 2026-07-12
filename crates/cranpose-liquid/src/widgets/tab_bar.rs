@@ -163,9 +163,16 @@ pub fn LiquidTabBar(
                                     .clamp(-tab_width * 0.2, tab_width * (count as f32 - 0.45)),
                                 None => tab_width * selected as f32,
                             };
+                            // Finger-attached: tight chase. Released: the
+                            // committed-slot flight runs the reference ~330ms
+                            // glide (velocity carries across the retarget).
                             let lens_x = animateFloatAsState(
                                 lens_target_x,
-                                LiquidMotion::snappy(),
+                                if lens_drag_x.get().is_some() {
+                                    LiquidMotion::snappy()
+                                } else {
+                                    LiquidMotion::glide()
+                                },
                                 "tabbar-lens-x",
                             );
                             let lens_settling = (lens_x.get() - lens_target_x).abs() > 1.0;
@@ -176,11 +183,23 @@ pub fn LiquidTabBar(
                             } else {
                                 0.0
                             };
-                            let lens_alpha = animateFloatAsState(
+                            // Arming is INSTANT — the reference flight starts
+                            // as a full lens with the gray pill already gone
+                            // (never two shapes); only the post-settle
+                            // dissolve is gentle. The spring still retargets
+                            // to 1 so a dissolve always starts from 1.
+                            let lens_alpha_anim = animateFloatAsState(
                                 lens_alpha_target,
                                 LiquidMotion::smooth(),
                                 "tabbar-lens-alpha",
                             );
+                            let lens_alpha = move || {
+                                if lens_alpha_target > 0.5 {
+                                    1.0
+                                } else {
+                                    lens_alpha_anim.get()
+                                }
+                            };
 
                             // The selection pill is a plain gray fill a step darker
                             // than the bar glass (iOS systemFill), not more glass.
@@ -197,7 +216,7 @@ pub fn LiquidTabBar(
                                     GraphicsLayer {
                                         translation_x: lead,
                                         scale_x: ((trail - lead) / tab_width.max(1.0)).max(0.01),
-                                        alpha: (1.0 - lens_alpha.get()).clamp(0.0, 1.0),
+                                        alpha: (1.0 - lens_alpha()).clamp(0.0, 1.0),
                                         transform_origin: cranpose_ui_graphics::TransformOrigin {
                                             pivot_fraction_x: 0.0,
                                             pivot_fraction_y: 0.5,
@@ -352,36 +371,37 @@ pub fn LiquidTabBar(
                             // Publish the lens springs for the overlay rendered
                             // ABOVE the finished bar (outside this glass layer, so
                             // the lens magnifies icons and glass together).
-                            let published = (lens_x.get(), lens_alpha.get(), tab_width);
+                            let published = (lens_x.get(), lens_alpha(), tab_width);
                             if lens_x_outer.get() != published {
                                 lens_x_outer.set(published);
                             }
                         });
                     });
 
-                    // The lens bubble, floating above the whole pill. While it
-                    // moves fast it pulls rounder and taller (surface tension —
-                    // the reference mid-swipe bubble is nearly a circle poking
-                    // past the bar) and magnifies harder; at rest it relaxes
-                    // into a capsule hugging the cell. The search accessory's
-                    // circle joins its liquid field: drag the lens to the bar's
-                    // end and the two glue through a smooth-union neck.
+                    // The lens bubble, floating above the whole pill. Its shape
+                    // follows the droplet law (crate::dynamics): cruising speed
+                    // stretches it along the travel axis, launch compresses it,
+                    // braking swells the leading edge — orthogonal axis inverse,
+                    // area conserved — and it magnifies harder in motion. The
+                    // search accessory's circle joins its liquid field: drag the
+                    // lens to the bar's end and the two glue through a
+                    // smooth-union neck.
                     let (lens_px, lens_a, lens_tab_w) = lens_x_outer.get();
                     if lens_a > 0.01 {
                         let lens_w = lens_tab_w;
                         let lens_h = BAR_HEIGHT * 1.35;
-                        // Node headroom for the moving lens's taller/rounder
-                        // shape and its rim glow.
-                        let node_w = lens_w + 28.0;
-                        let node_h = lens_h + 22.0;
+                        // Node headroom for the deformation extremes (max axis
+                        // stretch + leading bulge, max ortho swell) and rim glow.
+                        let node_w = lens_w * crate::dynamics::STRETCH_MAX
+                            + crate::dynamics::BULGE_MAX
+                            + 20.0;
+                        let node_h = lens_h / crate::dynamics::STRETCH_MIN + 16.0;
                         let node_x = BLOB_MARGIN + lens_px - (node_w - lens_w) * 0.5;
                         let pill_w = lens_tab_w * count as f32 + 2.0 * BLOB_MARGIN;
                         // Accessory circle center in lens-node-local coords.
                         let accessory_cx = pill_w + 10.0 + BAR_HEIGHT * 0.5 - node_x;
                         let accessory_cy = node_h * 0.5;
-                        let last_px =
-                            cranpose_core::remember(|| Rc::new(std::cell::Cell::new(f32::NAN)))
-                                .with(Rc::clone);
+                        let dynamics = crate::dynamics::remember_liquid_dynamics();
                         let lens = Modifier::empty()
                             // required_size: the stack is pinned to BAR_HEIGHT so
                             // the taller lens can never inflate the bar; the node
@@ -395,35 +415,26 @@ pub fn LiquidTabBar(
                             })
                             .glass_effect_with(
                                 // Near-invisible construction: the bar lens is
-                                // defined by refraction, not by rim strokes or
-                                // milk (the reference lens has no drawn edge).
+                                // defined by refraction, not by rim strokes,
+                                // milk or shadow (the reference flying lens
+                                // has no drawn edge and no gray halo).
                                 Glass::lens()
                                     .no_clip()
+                                    .shadow(false)
                                     .lift(-0.03)
                                     .highlight(0.55)
                                     .chromatic_aberration(1.2)
                                     .displacement(32.0),
                                 move || {
-                                    // Per-frame travel speed shapes the droplet.
-                                    let prev = last_px.replace(lens_px);
-                                    let speed = if prev.is_nan() {
-                                        0.0
-                                    } else {
-                                        (lens_px - prev).abs()
-                                    };
-                                    let roundness = (speed * 0.10).min(1.0);
-                                    let w = lens_w - (lens_w - lens_h * 0.92) * roundness * 0.55;
-                                    let h = lens_h + 14.0 * roundness;
+                                    // Droplet law: the pose integrates the ride
+                                    // position on the animation clock.
+                                    let pose = dynamics.update((lens_px, 0.0));
+                                    let (w, h) = pose.size(lens_w, lens_h);
+                                    let energy = pose.energy();
                                     // Continuous-curvature read: the resting lens
                                     // is a flattened squircle, not a stadium; it
                                     // rounds toward a capsule only at speed.
-                                    let radius = h * (0.42 + 0.08 * roundness);
-                                    let bulge = (speed * 0.9).min(8.0);
-                                    let dir = if lens_px >= prev || prev.is_nan() {
-                                        0.0
-                                    } else {
-                                        std::f32::consts::PI
-                                    };
+                                    let radius = h * (0.42 + 0.08 * energy);
                                     // The search circle joins the liquid field only
                                     // when the lens edge actually gets within glue
                                     // reach — passing glue, not a permanent overdraw
@@ -452,14 +463,18 @@ pub fn LiquidTabBar(
                                             primary: (node_w * 0.5, node_h * 0.5, w, h, radius),
                                             shapes,
                                             glue,
-                                            wobble_amplitude: (speed * 0.35).min(3.5),
-                                            wobble_phase: lens_px * 0.11,
-                                            bulge_amplitude: bulge,
-                                            bulge_direction: dir,
+                                            // A whisper: the reference outline
+                                            // stays one smooth curve in every
+                                            // frame — strong lobes read as a
+                                            // lumpy peanut.
+                                            wobble_amplitude: 1.1 * energy,
+                                            wobble_phase: lens_px * 0.045,
+                                            bulge_amplitude: pose.bulge_amplitude,
+                                            bulge_direction: pose.bulge_direction,
                                         }),
                                         // The reference lens magnifies its cell hard
                                         // even while pressed-still, harder in motion.
-                                        magnify_boost: 0.25 + 0.4 * roundness,
+                                        magnify_boost: 0.25 + 0.4 * energy,
                                         ..Default::default()
                                     }
                                 },

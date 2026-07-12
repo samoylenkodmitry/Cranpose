@@ -49,8 +49,14 @@ fn main() -> ExitCode {
                 fail(&robot, "menu items in semantics before opening the menu");
             }
             robot.click(858.0, 122.0).expect("open menu");
-            std::thread::sleep(Duration::from_millis(55));
-            let early = robot.screenshot().expect("early shot");
+            // Exact-clock sample of the young droplet: a wall-clock sleep
+            // stretches under host load and the first pumped frame then lands
+            // past the small-droplet phase (same flake class as the close).
+            let grow_shots = robot
+                .capture_keyframes(1.0, &[(0.0, false), (1.0, false), (54.0, true)])
+                .expect("grow keyframes");
+            std::thread::sleep(Duration::from_millis(80));
+            let early = grow_shots.into_iter().next().expect("early keyframe");
             // Materialization: the popup's items land in semantics once it
             // is composed — poll that instead of a fixed wall-clock wait so
             // host throttling cannot race the capture. Pixel diffs stay for
@@ -89,14 +95,24 @@ fn main() -> ExitCode {
                     ),
                 );
             }
-            // Close: deflates back into the anchor, then zero residue.
+            // Close: deflates back into the anchor, then zero residue. The
+            // ~140ms deflate MUST be sampled on the exact animation clock —
+            // a wall-clock sleep stretches under host load and the first
+            // pumped frame then advances the spring past the whole morph
+            // (the capture lands on an already-closed menu and flakes).
             robot.click(200.0, 500.0).expect("dismiss menu");
-            std::thread::sleep(Duration::from_millis(70));
-            let closing = robot.screenshot().expect("closing shot");
-            settle(&robot, 800);
-            let closed = robot.screenshot().expect("closed shot");
-            let closing_area = diff_area(&clean, &closing, region);
-            let closed_area = diff_area(&clean, &closed, region);
+            let close_shots = robot
+                .capture_keyframes(
+                    1.0,
+                    &[(0.0, false), (1.0, false), (45.0, true), (800.0, true)],
+                )
+                .expect("close keyframes");
+            // Let wall time catch back up with the advanced animation clock.
+            settle(&robot, 900);
+            let closing = &close_shots[0];
+            let closed = &close_shots[1];
+            let closing_area = diff_area(&clean, closing, region);
+            let closed_area = diff_area(&clean, closed, region);
             println!("menu-close closing_area={closing_area} closed_area={closed_area}");
             if closing_area < 200 {
                 fail(
@@ -107,16 +123,16 @@ fn main() -> ExitCode {
                 );
             }
             if closing_area * 10 > open_area * 9 {
-                save(&closing, &shot_dir, "menu-closing");
+                save(closing, &shot_dir, "menu-closing");
                 fail(
                     &robot,
                     &format!(
-                        "menu not deflating 70ms after dismiss: area {closing_area} vs open {open_area}"
+                        "menu not deflating 46ms after dismiss: area {closing_area} vs open {open_area}"
                     ),
                 );
             }
             if closed_area > 160 {
-                save(&closed, &shot_dir, "menu-closed-residue");
+                save(closed, &shot_dir, "menu-closed-residue");
                 fail(
                     &robot,
                     &format!("menu left {closed_area} changed pixels after closing"),

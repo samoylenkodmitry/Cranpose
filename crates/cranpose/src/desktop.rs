@@ -30,7 +30,8 @@ use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position};
 use winit::event::{
-    ButtonSource, ElementState, MouseButton, PointerSource as WinitPointerSource, WindowEvent,
+    ButtonSource, ElementState, MouseButton, PointerSource as WinitPointerSource, TabletToolButton,
+    WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{
@@ -2300,27 +2301,32 @@ impl App {
             }
             WindowEvent::PointerButton {
                 state,
-                button: button @ ButtonSource::Mouse(MouseButton::Left),
+                position,
+                button:
+                    button @ (ButtonSource::Mouse(MouseButton::Left)
+                    | ButtonSource::Touch { .. }
+                    | ButtonSource::TabletTool {
+                        button: TabletToolButton::Contact,
+                        ..
+                    }),
                 ..
             } => {
-                native
-                    .app
-                    .set_pointer_source(pointer_source_from_button(&button));
-                if native.last_cursor_position.is_none() {
-                    Self::refresh_native_cursor_from_platform_pointer(
-                        &self.native_window_platform_probe,
-                        &mut native,
-                    );
-                }
+                let source = pointer_source_from_button(&button);
+                native.app.set_pointer_source(source);
+                // The button event's own position is authoritative: touch taps
+                // arrive without a prior hover move.
+                let logical = native.platform.pointer_position(position);
+                native.last_cursor_position = Some((logical.x, logical.y));
+                native.last_cursor_physical_position = Some(position);
                 trace_native_window(format_args!(
                     "event pointer-button key={:?} state={:?} cursor={:?}",
                     native.key, state, native.last_cursor_position
                 ));
-                if let Some((x, y)) = native.last_cursor_position {
+                {
                     let platform_probe = &self.native_window_platform_probe;
                     native_window::with_native_window_surface_origin(
                         native_window_surface_origin(platform_probe, &native.window),
-                        || native.app.set_cursor(x, y),
+                        || native.app.set_cursor(logical.x, logical.y),
                     );
                 }
                 match state {
@@ -2371,7 +2377,17 @@ impl App {
                                 &self.native_window_platform_probe,
                                 &native.window,
                             ),
-                            || native.app.pointer_released(),
+                            // Touch lift-off samples must not become velocity
+                            // samples (see AppShell::pointer_released_at_position).
+                            || {
+                                if source.is_touch_like() {
+                                    native
+                                        .app
+                                        .pointer_released_at_position(logical.x, logical.y)
+                                } else {
+                                    native.app.pointer_released()
+                                }
+                            },
                         );
                         native.app.sync_selection_to_primary();
                         if handled {
@@ -4159,62 +4175,58 @@ impl ApplicationHandler for App {
             }
             WindowEvent::PointerButton {
                 state,
-                button: button @ ButtonSource::Mouse(MouseButton::Left),
+                position,
+                button:
+                    button @ (ButtonSource::Mouse(MouseButton::Left)
+                    | ButtonSource::Touch { .. }
+                    | ButtonSource::TabletTool {
+                        button: TabletToolButton::Contact,
+                        ..
+                    }),
                 ..
             } => {
-                app.set_pointer_source(pointer_source_from_button(&button));
-                if self.last_cursor_position.is_none()
-                    && Self::refresh_primary_cursor_from_platform_pointer(
-                        &self.native_window_platform_probe,
-                        window,
-                        platform,
-                        app,
-                        &mut self.last_cursor_position,
-                    )
-                {
+                let source = pointer_source_from_button(&button);
+                app.set_pointer_source(source);
+                // The button event's own position is authoritative: touch taps
+                // arrive without a prior hover move.
+                let logical = platform.pointer_position(position);
+                self.last_cursor_position = Some((logical.x, logical.y));
+                log::trace!(
+                    target: "cranpose::input",
+                    "desktop pointer button {:?} at ({:.2},{:.2})",
+                    state,
+                    logical.x,
+                    logical.y
+                );
+                if app.set_cursor(logical.x, logical.y) {
                     request_redraw_once(window, &mut self.primary_redraw_pending);
-                }
-                let cursor_position = self.last_cursor_position;
-                if let Some((x, y)) = self.last_cursor_position {
-                    log::trace!(
-                        target: "cranpose::input",
-                        "desktop pointer button {:?} at ({:.2},{:.2})",
-                        state,
-                        x,
-                        y
-                    );
-                    if app.set_cursor(x, y) {
-                        request_redraw_once(window, &mut self.primary_redraw_pending);
-                    }
                 }
                 match state {
                     ElementState::Pressed => {
-                        if let Some((x, y)) = cursor_position {
-                            if let Some(mode) = app.handle_dev_overlay_click(x, y) {
+                        if let Some(mode) = app.handle_dev_overlay_click(logical.x, logical.y) {
+                            apply_frame_pacing_mode(
+                                app,
+                                surface,
+                                surface_config,
+                                self.surface_caps.as_ref(),
+                                mode,
+                            );
+                            self.frame_pacing_mode = mode;
+                            self.last_frame_start_time = None;
+                            request_redraw_once(window, &mut self.primary_redraw_pending);
+                            for native in self.native_windows.values_mut() {
                                 apply_frame_pacing_mode(
-                                    app,
-                                    surface,
-                                    surface_config,
-                                    self.surface_caps.as_ref(),
+                                    &mut native.app,
+                                    &native.surface,
+                                    &mut native.surface_config,
+                                    Some(&native.surface_caps),
                                     mode,
                                 );
-                                self.frame_pacing_mode = mode;
-                                self.last_frame_start_time = None;
-                                request_redraw_once(window, &mut self.primary_redraw_pending);
-                                for native in self.native_windows.values_mut() {
-                                    apply_frame_pacing_mode(
-                                        &mut native.app,
-                                        &native.surface,
-                                        &mut native.surface_config,
-                                        Some(&native.surface_caps),
-                                        mode,
-                                    );
-                                    native.frame_pacing_mode = mode;
-                                    native.last_frame_start_time = None;
-                                    native.window.request_redraw();
-                                }
-                                return;
+                                native.frame_pacing_mode = mode;
+                                native.last_frame_start_time = None;
+                                native.window.request_redraw();
                             }
+                            return;
                         }
                         let request = pointer_button_frame_request(app.pointer_pressed());
                         apply_primary_pointer_button_frame_request(
@@ -4228,7 +4240,14 @@ impl ApplicationHandler for App {
                         }
                     }
                     ElementState::Released => {
-                        let request = pointer_button_frame_request(app.pointer_released());
+                        // Touch lift-off samples must not become velocity
+                        // samples (see AppShell::pointer_released_at_position).
+                        let released = if source.is_touch_like() {
+                            app.pointer_released_at_position(logical.x, logical.y)
+                        } else {
+                            app.pointer_released()
+                        };
+                        let request = pointer_button_frame_request(released);
                         app.sync_selection_to_primary();
                         apply_primary_pointer_button_frame_request(
                             window,

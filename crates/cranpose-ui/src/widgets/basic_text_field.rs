@@ -16,7 +16,7 @@ use crate::text_field_focus::{dispatch_copy, dispatch_cut, dispatch_paste, dispa
 use crate::text_field_modifier_node::{
     TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics,
 };
-use crate::text_selection::{selection_after_handle_drag, HandleKind, HANDLE_RADIUS};
+use crate::text_selection::{selection_after_handle_drag, HandleKind, LineAffinity, HANDLE_RADIUS};
 use crate::widgets::{
     loupe_target_for_drag, CaretActionMenu, Layout, SelectionHandle, SelectionLoupe,
     TextSelectionMenu,
@@ -36,11 +36,15 @@ pub const SELECTION_HIGHLIGHT_ALPHA: f32 = 0.32;
 
 /// Window-space position where a handle's tip should sit for the caret/selection
 /// endpoint at byte `offset`: the bottom of that offset's visual line.
+/// `affinity` decides the line at a shared soft-wrap boundary: selection ENDS,
+/// the cursor handle and the loupe anchor upstream (the line the finger rides),
+/// the selection START anchors downstream (the first highlighted glyph).
 fn handle_tip_window_pos(
     text: &str,
     style: &TextStyle,
     metrics: &TextFieldHandleMetrics,
     offset: usize,
+    affinity: LineAffinity,
 ) -> Point {
     let offset = offset.min(text.len());
     // Resolve the caret's VISUAL (wrapped) line so the handle tip anchors on the
@@ -52,6 +56,7 @@ fn handle_tip_window_pos(
         None,
         metrics.wrap_width,
         offset,
+        affinity,
     );
     let caret_x = measure_text(&AnnotatedString::from(&text[line_start..offset]), style).width;
     Point {
@@ -225,7 +230,7 @@ fn caret_window_rect(
 ) -> Rect {
     // `handle_tip_window_pos` returns the tight glyph-box BOTTOM (the handle
     // tip); the caret rect spans that box.
-    let tip = handle_tip_window_pos(text, style, metrics, offset);
+    let tip = handle_tip_window_pos(text, style, metrics, offset, LineAffinity::Upstream);
     Rect {
         x: tip.x,
         y: tip.y - metrics.glyph_box.1,
@@ -364,7 +369,13 @@ fn SelectionHandles(
 
     if selection.collapsed() {
         // Collapsed caret: a single cursor handle (a dot below the caret).
-        let tip = handle_tip_window_pos(&text, &style, &metrics, selection.start);
+        let tip = handle_tip_window_pos(
+            &text,
+            &style,
+            &metrics,
+            selection.start,
+            LineAffinity::Upstream,
+        );
         let on_drag = drag_caret_closure(
             state.clone(),
             style.clone(),
@@ -450,8 +461,9 @@ fn SelectionHandles(
         // Range selection: start (leftmost) and end (rightmost) lollipops.
         let start = selection.min();
         let end = selection.max();
-        let start_tip = handle_tip_window_pos(&text, &style, &metrics, start);
-        let end_tip = handle_tip_window_pos(&text, &style, &metrics, end);
+        let start_tip =
+            handle_tip_window_pos(&text, &style, &metrics, start, LineAffinity::Downstream);
+        let end_tip = handle_tip_window_pos(&text, &style, &metrics, end, LineAffinity::Upstream);
 
         let on_drag_start = drag_edge_closure(
             HandleKind::SelectionStart,
@@ -567,7 +579,10 @@ fn SelectionHandles(
     let loupe_target = drag_pos.value().and_then(|finger| {
         let bias = drag_bias.get().unwrap_or(0.0);
         let offset = window_pos_to_offset(&text, &style, &metrics, finger, bias);
-        let line_bottom = handle_tip_window_pos(&text, &style, &metrics, offset).y;
+        // Upstream: the loupe magnifies the line the FINGER rides — at a
+        // shared wrap boundary that is the upper line the mapping sampled.
+        let line_bottom =
+            handle_tip_window_pos(&text, &style, &metrics, offset, LineAffinity::Upstream).y;
         loupe_target_for_drag(finger, line_bottom, metrics.glyph_box.1)
     });
     SelectionLoupe(loupe_target);
@@ -1157,7 +1172,8 @@ mod tests {
                 }
                 // A grab exactly at the tip (the line bottom) captures a zero
                 // bias; the mapping still resolves the grabbed line's offset.
-                let tip = handle_tip_window_pos(text, &style, &metrics, offset);
+                let tip =
+                    handle_tip_window_pos(text, &style, &metrics, offset, LineAffinity::Downstream);
                 let resolved = window_pos_to_offset(text, &style, &metrics, tip, 0.0);
                 assert_eq!(
                     resolved, offset,
@@ -1166,6 +1182,82 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A long unbroken word wraps MID-WORD, so consecutive visual lines share
+    /// their boundary byte. A selection END dragged along the upper line's
+    /// right edge produces exactly that byte — its handle (and the loupe line)
+    /// must anchor to the UPPER line's end, never one line down at the left
+    /// edge (the wrapped-multiline handle Y-offset bug reported on device).
+    /// The START handle at the same byte anchors downstream where the first
+    /// highlighted glyph renders.
+    #[test]
+    fn shared_wrap_boundary_anchors_by_handle_affinity() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let text = "aaaaaaaaaaaaaaaaaaaaaaaa";
+            let style = TextStyle::default();
+            let annotated = crate::text::AnnotatedString::from(text);
+            let full = crate::text::measure_text(&annotated, &style);
+            // Tight enough to split the word across ≥2 visual lines.
+            let wrap_width = full.width / 3.0;
+            let ranges = crate::text::wrapped_line_ranges(
+                None,
+                &annotated,
+                &style,
+                crate::text::TextLayoutOptions::default(),
+                Some(wrap_width),
+            );
+            assert!(
+                ranges.len() >= 2,
+                "test setup: text must wrap, got {ranges:?}"
+            );
+            let boundary = ranges[1].start;
+            assert_eq!(
+                ranges[0].end, boundary,
+                "test setup: a mid-word wrap must share its boundary byte, got {ranges:?}"
+            );
+
+            let line_height = 20.0;
+            let metrics = TextFieldHandleMetrics {
+                focused: true,
+                touch: true,
+                node_origin: Point { x: 0.0, y: 0.0 },
+                padding_left: 0.0,
+                padding_top: 0.0,
+                scroll_offset: 0.0,
+                line_height,
+                glyph_box: (0.0, line_height),
+                wrap_width: Some(wrap_width),
+            };
+
+            let end_tip =
+                handle_tip_window_pos(text, &style, &metrics, boundary, LineAffinity::Upstream);
+            assert!(
+                (end_tip.y - line_height).abs() < 0.5,
+                "end handle must sit on the UPPER line's bottom ({line_height}), got y={}",
+                end_tip.y
+            );
+            assert!(
+                end_tip.x > 1.0,
+                "end handle must sit at the upper line's right edge, got x={}",
+                end_tip.x
+            );
+
+            let start_tip =
+                handle_tip_window_pos(text, &style, &metrics, boundary, LineAffinity::Downstream);
+            assert!(
+                (start_tip.y - 2.0 * line_height).abs() < 0.5,
+                "start handle must sit on the LOWER line's bottom ({}), got y={}",
+                2.0 * line_height,
+                start_tip.y
+            );
+            assert!(
+                start_tip.x.abs() < 0.5,
+                "start handle must sit at the lower line's left edge, got x={}",
+                start_tip.x
+            );
+        })
     }
 
     fn text_values(scene: &crate::renderer::RecordedRenderScene) -> Vec<String> {

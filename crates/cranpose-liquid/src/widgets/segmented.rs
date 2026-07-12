@@ -19,7 +19,6 @@ use cranpose_ui::widgets::{
 use cranpose_ui::{Modifier, PointerInputScope, Size};
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
-use std::cell::Cell;
 use std::rc::Rc;
 
 const SEGMENT_HEIGHT: f32 = 36.0;
@@ -256,7 +255,7 @@ pub fn LiquidSegmentedControl(
                 let node_w = segment_width + LENS_PAD * 2.0;
                 let node_h = lens_h + LENS_PAD * 2.0;
                 let lens_for_layer = lens_progress;
-                let last_x = remember(|| Rc::new(Cell::new(f32::NAN))).with(Rc::clone);
+                let dynamics = crate::dynamics::remember_liquid_dynamics();
                 let lens = Modifier::empty()
                     // required_size: taller than the track; the fixed-height
                     // host keeps the control's layout put.
@@ -271,13 +270,13 @@ pub fn LiquidSegmentedControl(
                         Glass::lens().shape(LiquidShape::Capsule).no_clip(),
                         move || {
                             let grow = lens_for_layer.get().clamp(0.0, 1.2);
-                            let w = segment_width + 4.0 * grow;
-                            let h = SEGMENT_HEIGHT + LENS_OVERFLOW * grow;
-                            let x = leading.get();
-                            let prev = last_x.replace(x);
-                            let vx = if prev.is_nan() { 0.0 } else { x - prev };
-                            let bulge = (vx.abs() * 0.9).min(6.0);
-                            let dir = if vx >= 0.0 { 0.0 } else { std::f32::consts::PI };
+                            let base_w = segment_width + 4.0 * grow;
+                            let base_h = SEGMENT_HEIGHT + LENS_OVERFLOW * grow;
+                            // Droplet law over the indicator ride
+                            // (crate::dynamics): speed stretches the capsule
+                            // along the travel, braking swells its front.
+                            let pose = dynamics.update((leading.get(), 0.0));
+                            let (w, h) = pose.size(base_w, base_h);
                             GlassDynamics {
                                 morph: Some(GlassMorph {
                                     node_size: (node_w, node_h),
@@ -286,8 +285,8 @@ pub fn LiquidSegmentedControl(
                                     glue: 0.0,
                                     wobble_amplitude: 0.0,
                                     wobble_phase: 0.0,
-                                    bulge_amplitude: bulge,
-                                    bulge_direction: dir,
+                                    bulge_amplitude: pose.bulge_amplitude.min(6.0),
+                                    bulge_direction: pose.bulge_direction,
                                 }),
                                 magnify_boost: 0.18,
                                 ..Default::default()

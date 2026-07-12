@@ -406,15 +406,17 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             (slope_edge + dome_dir * slope_dome * 0.35 * (1.0 - rim_style)) * bend * disp_scale;
         var disp = outward_normal * lens + tilt * slope_dome * bend * disp_scale;
         if magnify != 1.0 {
-            // Near-uniform interior magnification: the reference lens is
-            // FILLED with a CRISP magnified image edge to edge (the toggle
-            // lens shows track color across its whole face; the tab lens
-            // keeps its icon legible). Keeping the profile nearly flat
-            // confines distortion to the refractive rim; samples pull
-            // inward, so full-strength magnification at the rim stays
-            // inside the capture.
-            let interior = mix(0.97, 1.0, height_profile(x_full, profile));
-            disp = disp + p * (1.0 / magnify - 1.0) * interior;
+            // Dome magnification: a plano-convex crown over the WHOLE face —
+            // strongest at the deepest interior point, easing to exactly 1
+            // at the rim. Straight content bows continuously through a
+            // transit and glyphs near the lens edge stay readable (a flat
+            // interior magnification read as an opaque scale-swap: content
+            // near the edge fell outside the shrunken source window, and
+            // passing icons showed no warp until dead center).
+            let r_face = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
+            let x_face = clamp(-d / r_face, 0.0, 1.0);
+            let m_local = 1.0 + (magnify - 1.0) * height_profile(x_face, profile);
+            disp = disp + p * (1.0 / m_local - 1.0);
         }
         disp_c = disp;
         spread = chroma * (slope_edge / 4.0);
