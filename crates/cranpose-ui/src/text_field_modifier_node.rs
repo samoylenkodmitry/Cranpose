@@ -126,6 +126,15 @@ impl TextFieldHandleController {
             claim.set(true);
         }
     }
+
+    /// Whether the active press gesture is claimed by the widget layer.
+    pub fn gesture_claimed(&self) -> bool {
+        self.inner
+            .gesture_claim
+            .borrow()
+            .as_ref()
+            .is_some_and(|claim| claim.get())
+    }
 }
 
 impl Default for TextFieldHandleController {

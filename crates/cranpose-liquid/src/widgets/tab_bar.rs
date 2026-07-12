@@ -175,7 +175,12 @@ pub fn LiquidTabBar(
                                 },
                                 "tabbar-lens-x",
                             );
-                            let lens_settling = (lens_x.get() - lens_target_x).abs() > 1.0;
+                            // Visually settled well before 1dp spring convergence: gate the
+                            // dissolve at ~12dp so the optic starts fading the moment
+                            // the flight reads as arrived (the reference is flat
+                            // ~370ms after settle; a 1dp gate added a ~400ms armed
+                            // plateau first).
+                            let lens_settling = (lens_x.get() - lens_target_x).abs() > 12.0;
                             let lens_alpha_target = if lens_pressed.get()
                                 || (lens_drag_x.get().is_none() && lens_settling)
                             {
@@ -194,7 +199,7 @@ pub fn LiquidTabBar(
                             // that.
                             let lens_alpha_anim = animateFloatAsState(
                                 lens_alpha_target,
-                                cranpose_animation::spring(1.0, 300.0),
+                                cranpose_animation::spring(1.0, 450.0),
                                 "tabbar-lens-alpha",
                             );
                             let lens_alpha = move || {
@@ -438,7 +443,7 @@ pub fn LiquidTabBar(
                                     // droplet's vertical swell: an unclamped
                                     // launch compression ballooned the blob
                                     // into the content above the bar.
-                                    let h = h.min(lens_h * 1.12);
+                                    let h = h.min(lens_h);
                                     let energy = pose.energy();
                                     // Continuous-curvature read: the resting lens
                                     // is a flattened squircle, not a stadium; it
@@ -478,7 +483,7 @@ pub fn LiquidTabBar(
                                             // lumpy peanut.
                                             wobble_amplitude: 1.1 * energy,
                                             wobble_phase: lens_px * 0.045,
-                                            bulge_amplitude: pose.bulge_amplitude,
+                                            bulge_amplitude: (pose.bulge_amplitude * 0.5).min(4.0),
                                             bulge_direction: pose.bulge_direction,
                                         }),
                                         // The reference lens magnifies its cell hard
