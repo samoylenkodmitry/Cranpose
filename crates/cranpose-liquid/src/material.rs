@@ -154,6 +154,11 @@ pub struct Glass {
     /// Clip the layer to `shape`. Morphing glass disables this — coverage
     /// comes entirely from the shader's SDF.
     pub clip: bool,
+    /// Backdrop-adaptive legibility strength (0 = off). Positive protects a
+    /// LIGHT foreground: the glass darkens over bright backdrops (no
+    /// white-on-white). Negative protects a DARK foreground: it lightens
+    /// over dark backdrops.
+    pub adaptive_contrast: f32,
 }
 
 impl Glass {
@@ -171,6 +176,7 @@ impl Glass {
             lift: None,
             shadow: true,
             clip: true,
+            adaptive_contrast: 0.0,
         }
     }
 
@@ -202,6 +208,7 @@ impl Glass {
             lift: None,
             shadow: true,
             clip: true,
+            adaptive_contrast: 0.0,
         }
     }
 
@@ -244,6 +251,11 @@ impl Glass {
     /// shows; the bar lens uses a near-zero lift to stay transmissive).
     pub fn lift(mut self, lift: f32) -> Self {
         self.lift = Some(lift);
+        self
+    }
+
+    pub fn adaptive_contrast(mut self, strength: f32) -> Self {
+        self.adaptive_contrast = strength;
         self
     }
 
@@ -320,6 +332,7 @@ impl Glass {
             } else {
                 1.0
             },
+            adaptive_contrast: self.adaptive_contrast,
             magnify: if self.variant == GlassVariant::Lens {
                 1.35
             } else {
@@ -399,6 +412,8 @@ pub(crate) struct ResolvedGlass {
     /// 0 = surface glass (soft white spec rim); 1 = interactive lens (thin
     /// bright line + stronger dark outline, chroma does the color).
     pub rim_style: f32,
+    /// Backdrop-adaptive legibility strength (see [`Glass::adaptive_contrast`]).
+    pub adaptive_contrast: f32,
     pub shadow_color: Color,
     /// Variant-scaled drop shadow geometry: the lens bubble carries a tight
     /// contact hint, large surfaces a soft wide ambient.
@@ -476,6 +491,7 @@ impl ResolvedGlass {
         shader.set_float(28, self.rim_style);
         shader.set_float(34, self.dome_direction);
         shader.set_float(35, self.magnify + dynamics.magnify_boost.max(0.0));
+        shader.set_float(91, self.adaptive_contrast);
         // Morph padding: wobble reach plus how far any scene shape (plus its
         // glue neck) extends beyond the primary rect — the capture and the
         // composite surface must cover the whole glued field.

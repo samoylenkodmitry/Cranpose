@@ -94,7 +94,16 @@ pub fn LiquidTabBar(
                     // The bar's edge is defined by shadow and contrast, not a
                     // bright rim stroke.
                     let pill = Modifier::empty()
-                        .glass_effect(Glass::regular().blur_radius(14.0).highlight(0.55))
+                        .glass_effect(
+                            // Dark labels must never sink into dark content
+                            // scrolling beneath: the glass lifts adaptively over
+                            // dark backdrops (inert over the light ones the
+                            // pinned captures use).
+                            Glass::regular()
+                                .blur_radius(14.0)
+                                .highlight(0.55)
+                                .adaptive_contrast(-0.14),
+                        )
                         .height(BAR_HEIGHT);
                     Box(pill, BoxSpec::default(), move || {
                         let tabs = Rc::clone(&tabs);

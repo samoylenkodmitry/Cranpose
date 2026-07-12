@@ -747,6 +747,11 @@ path = "robot-runners/robot_menu_slide.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
+name = "robot_adaptive_frost"
+path = "robot-runners/robot_adaptive_frost.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
 name = "robot_regression_fused_viewport_contract"
 path = "robot-runners/robot_regression_fused_viewport_contract.rs"
 required-features = ["desktop", "robot-app"]

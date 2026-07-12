@@ -468,10 +468,22 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     rgb = mix(vec3<f32>(luma), rgb, max(saturation, 0.0));
     rgb = (rgb - vec3<f32>(0.5)) * contrast + vec3<f32>(0.5);
-    if lift >= 0.0 {
-        rgb = vec3<f32>(1.0) - (vec3<f32>(1.0) - rgb) * (1.0 - lift);
+    // Backdrop-adaptive legibility (uniform 91, 0 = off): positive strength
+    // protects a LIGHT foreground by pulling the lift down over bright
+    // backdrops (no white-on-white); negative protects a DARK foreground by
+    // lifting over dark backdrops. Keyed on the blurred sample's luma, so
+    // the response is as spatially smooth as the frost itself.
+    var lift_eff = lift;
+    let adaptive = get_float(91u);
+    if adaptive > 0.0 {
+        lift_eff = lift - adaptive * smoothstep(0.45, 0.8, luma);
+    } else if adaptive < 0.0 {
+        lift_eff = lift - adaptive * (1.0 - smoothstep(0.2, 0.55, luma));
+    }
+    if lift_eff >= 0.0 {
+        rgb = vec3<f32>(1.0) - (vec3<f32>(1.0) - rgb) * (1.0 - lift_eff);
     } else {
-        rgb = rgb * (1.0 + lift);
+        rgb = rgb * (1.0 + lift_eff);
     }
 
     // Tint blending (near-neutral for plain glass; carries accent for
