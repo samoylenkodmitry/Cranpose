@@ -415,7 +415,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             // passing icons showed no warp until dead center).
             let r_face = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
             let x_face = clamp(-d / r_face, 0.0, 1.0);
-            let m_local = 1.0 + (magnify - 1.0) * height_profile(x_face, profile);
+            // Floor the dome at the rim: easing all the way to m=1 paints an
+            // UN-magnified second copy of edge content (doubled labels, icon
+            // shards at the rim) — the interior hands off to the rim band's
+            // compression, never to identity.
+            let dome = mix(0.55, 1.0, height_profile(x_face, profile));
+            let m_local = 1.0 + (magnify - 1.0) * dome;
             disp = disp + p * (1.0 / m_local - 1.0);
         }
         disp_c = disp;

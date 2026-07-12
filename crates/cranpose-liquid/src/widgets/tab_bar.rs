@@ -188,9 +188,13 @@ pub fn LiquidTabBar(
                             // (never two shapes); only the post-settle
                             // dissolve is gentle. The spring still retargets
                             // to 1 so a dissolve always starts from 1.
+                            // Dissolve pace: the reference lens is optically
+                            // flat ~350ms after settling (judge-measured);
+                            // the old gentle spring was still glassy at 4×
+                            // that.
                             let lens_alpha_anim = animateFloatAsState(
                                 lens_alpha_target,
-                                LiquidMotion::smooth(),
+                                cranpose_animation::spring(1.0, 300.0),
                                 "tabbar-lens-alpha",
                             );
                             let lens_alpha = move || {
@@ -430,6 +434,11 @@ pub fn LiquidTabBar(
                                     // position on the animation clock.
                                     let pose = dynamics.update((lens_px, 0.0));
                                     let (w, h) = pose.size(lens_w, lens_h);
+                                    // The bar's edges physically cap the
+                                    // droplet's vertical swell: an unclamped
+                                    // launch compression ballooned the blob
+                                    // into the content above the bar.
+                                    let h = h.min(lens_h * 1.12);
                                     let energy = pose.energy();
                                     // Continuous-curvature read: the resting lens
                                     // is a flattened squircle, not a stadium; it
