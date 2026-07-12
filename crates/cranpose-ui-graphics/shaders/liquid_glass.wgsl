@@ -372,7 +372,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             // stems ruler-straight and fringe-free at the band's center —
             // and a center-symmetric bow (p.x-proportional) still vanishes
             // exactly there, so a small uniform drift rides along.
-            disp_c.x = disp_c.x + (p.x * 0.08 + r_in * 0.05) * tau * vert_weight;
+            disp_c.x = disp_c.x + (p.x * 0.08 + r_in * 0.12) * tau * vert_weight;
             // Fold floor (uniform 87, dp): the bottom band must never
             // re-display content nearer the focus than this clearance —
             // the dragged handle's dot hangs just below the line, and
@@ -389,7 +389,10 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                     // center (normal straight down), while at the corners the
                     // weak fold samples shallow dot-free content — pushing
                     // those deep painted stretched "ribbon" flaps.
-                    let bottom_arc = smoothstep(0.6, 0.95, vert);
+                    // Narrow gate: at the shoulders a partial push kinked
+                    // the magnified highlight's edge into a jagged notch;
+                    // the dot column sits at vert ~1 and keeps full cover.
+                    let bottom_arc = smoothstep(0.78, 0.98, vert);
                     disp_c.y = disp_c.y + (floor_dy - sample_dy) * 0.85 * bottom_arc;
                 }
             }
