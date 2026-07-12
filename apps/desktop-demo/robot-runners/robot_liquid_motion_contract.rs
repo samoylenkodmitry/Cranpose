@@ -319,6 +319,10 @@ fn main() -> ExitCode {
                 robot.mouse_move(x, toggle_y).expect("drag step");
                 std::thread::sleep(Duration::from_millis(120));
                 let shot = robot.screenshot().expect("drag shot");
+                // Judge frames: OFF-side press dragged toward ON — the lens
+                // magnifies the split-track boundary mid-face (the reference
+                // segment's money shot).
+                save(&shot, &shot_dir, &format!("toggle-drag-{step}"));
                 let Some(cx) = diff_centroid_x(&rest_off, &shot, track_region) else {
                     save(&shot, &shot_dir, "toggle-drag-blank");
                     fail(&robot, "toggle drag produced no visible lens change");
@@ -326,7 +330,27 @@ fn main() -> ExitCode {
                 centroids.push(cx);
             }
             robot.mouse_up().expect("release drag");
+            // Release linger keyframes for the judge (exact clock).
+            let drag_release_shots = robot
+                .capture_keyframes(
+                    1.0,
+                    &[
+                        (0.0, false),
+                        (1.0, false),
+                        (60.0, true),
+                        (120.0, true),
+                        (180.0, true),
+                        (240.0, true),
+                    ],
+                )
+                .expect("drag release keyframes");
             settle(&robot, 1200);
+            for (shot, label) in drag_release_shots
+                .iter()
+                .zip(["061ms", "181ms", "361ms", "601ms"].iter())
+            {
+                save(shot, &shot_dir, &format!("toggle-drag-release-{label}"));
+            }
             println!("toggle drag centroids={centroids:?}");
             if !(centroids[1] > centroids[0] + 2.0 && centroids[2] > centroids[1] + 2.0) {
                 fail(
