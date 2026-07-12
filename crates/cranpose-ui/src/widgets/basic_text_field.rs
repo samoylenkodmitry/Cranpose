@@ -695,6 +695,7 @@ mod tests {
                         line_height: 18.0,
                         glyph_box: (0.0, 18.0),
                         wrap_width: None,
+                        press: None,
                     });
                     SelectionHandles(
                         state.clone(),
@@ -762,6 +763,7 @@ mod tests {
                         line_height: 18.0,
                         glyph_box: (0.0, 18.0),
                         wrap_width: None,
+                        press: None,
                     });
                     SelectionHandles(
                         state.clone(),
@@ -839,6 +841,7 @@ mod tests {
                                 line_height: 18.0,
                                 glyph_box: (0.0, 18.0),
                                 wrap_width: None,
+                                press: None,
                             });
                             SelectionHandles(
                                 state.clone(),
@@ -937,6 +940,7 @@ mod tests {
                                         line_height: 18.0,
                                         glyph_box: (0.0, 18.0),
                                         wrap_width: None,
+                                        press: None,
                                     });
                                     SelectionHandles(
                                         state.clone(),
@@ -1181,6 +1185,7 @@ mod tests {
                 line_height: 18.0,
                 glyph_box: (0.0, 18.0),
                 wrap_width: None,
+                press: None,
             };
             for offset in 0..=text.len() {
                 if !text.is_char_boundary(offset) {
@@ -1245,6 +1250,7 @@ mod tests {
                 line_height,
                 glyph_box: (0.0, line_height),
                 wrap_width: Some(wrap_width),
+                press: None,
             };
 
             let end_tip =

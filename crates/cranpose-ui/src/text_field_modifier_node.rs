@@ -50,6 +50,9 @@ pub struct TextFieldHandleMetrics {
     /// Width the field wrapped its text at (`None` for single-line fields).
     /// Lets the handles resolve the same visual (wrapped) lines the caret does.
     pub wrap_width: Option<f32>,
+    /// Live touch press on the text surface (window space) — the widget's
+    /// long-press → slide-to-menu gesture reads this stream.
+    pub press: Option<TouchPressTrack>,
 }
 
 /// Shared channel by which a `TextFieldModifierNode` publishes its live handle
@@ -70,6 +73,10 @@ impl PartialEq for TextFieldHandleController {
 struct TextFieldHandleControllerInner {
     metrics: Cell<Option<TextFieldHandleMetrics>>,
     revision: MutableState<u64>,
+    /// The field node's gesture-claim flag, adopted at publish time so the
+    /// widget's long-press watcher can take over the live pointer (the node
+    /// then stops drag-selecting under it).
+    gesture_claim: RefCell<Option<Rc<Cell<bool>>>>,
 }
 
 impl TextFieldHandleController {
@@ -80,6 +87,7 @@ impl TextFieldHandleController {
             inner: Rc::new(TextFieldHandleControllerInner {
                 metrics: Cell::new(None),
                 revision: mutableStateOf(0u64),
+                gesture_claim: RefCell::new(None),
             }),
         }
     }
@@ -100,6 +108,23 @@ impl TextFieldHandleController {
     pub fn metrics(&self) -> Option<TextFieldHandleMetrics> {
         let _ = self.inner.revision.value();
         self.inner.metrics.get()
+    }
+
+    /// Adopts the field node's gesture-claim flag (idempotent).
+    pub(crate) fn adopt_gesture_claim(&self, claim: &Rc<Cell<bool>>) {
+        let mut slot = self.inner.gesture_claim.borrow_mut();
+        let adopted = slot.as_ref().is_some_and(|held| Rc::ptr_eq(held, claim));
+        if !adopted {
+            *slot = Some(Rc::clone(claim));
+        }
+    }
+
+    /// Claims the active press gesture for the widget layer: the node stops
+    /// drag-selecting and the press stream drives the menu slide instead.
+    pub fn claim_gesture(&self) {
+        if let Some(claim) = self.inner.gesture_claim.borrow().as_ref() {
+            claim.set(true);
+        }
     }
 }
 
@@ -1144,6 +1169,8 @@ impl DrawModifierNode for TextFieldModifierNode {
         let handle_controller = self.handle_controller.clone();
         let node_origin = self.refs.node_origin.clone();
         let last_pointer_source = self.refs.last_pointer_source.clone();
+        let press_track = self.refs.press_track.clone();
+        let gesture_claimed = self.refs.gesture_claimed.clone();
 
         Some(Rc::new(move |size| {
             // Check focus at DRAW time
@@ -1161,6 +1188,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                         line_height: cached_line_height.get(),
                         glyph_box: crate::text::glyph_line_box(&style, cached_line_height.get()),
                         wrap_width: measured_wrap_width.get(),
+                        press: None,
                     });
                 }
                 return vec![];
@@ -1184,6 +1212,7 @@ impl DrawModifierNode for TextFieldModifierNode {
             // Publish live geometry so the `BasicTextField` composable can place
             // and drive the finger selection handles.
             if let Some(controller) = &handle_controller {
+                controller.adopt_gesture_claim(&gesture_claimed);
                 controller.publish(TextFieldHandleMetrics {
                     focused: true,
                     touch: last_pointer_source.get().is_touch_like(),
@@ -1194,6 +1223,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                     line_height,
                     glyph_box: crate::text::glyph_line_box(&style, line_height),
                     wrap_width: measured_wrap_width.get(),
+                    press: press_track.get(),
                 });
             }
             // Everything the field draws (selection, IME underline, cursor)
