@@ -1810,14 +1810,16 @@ mod tests {
 
     #[test]
     fn profile_workspace_keeps_the_optic_and_curves_in_one_viewport() {
-        assert!(
-            PROFILE_STAGE_HEIGHT <= 200.0,
-            "the draggable optic must not consume a viewport by itself"
-        );
-        assert!(
-            PROFILE_PLOT_HEIGHT <= 200.0,
-            "the physical curves must remain visible beside the optic"
-        );
+        const {
+            assert!(
+                PROFILE_STAGE_HEIGHT <= 200.0,
+                "the draggable optic must not consume a viewport by itself"
+            );
+            assert!(
+                PROFILE_PLOT_HEIGHT <= 200.0,
+                "the physical curves must remain visible beside the optic"
+            );
+        }
         assert!(profile_uses_wide_workspace(824.0));
         assert!(!profile_uses_wide_workspace(360.0));
         assert_eq!(profile_wide_pane_width(824.0), 407.0);
