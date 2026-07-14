@@ -37,22 +37,148 @@ fn sd_round_rect(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
-// Height profile over the bezel: 0 at the edge, 1 deep inside.
-//   circle:   x²           (gentle at the edge, grows inward)
-//   squircle: 1 − (1−x)⁴   (steep at the edge, flattens inward)
-fn height_profile(x: f32, profile: f32) -> f32 {
-    let xc = clamp(x, 0.0, 1.0);
-    let h_circle = xc * xc;
-    let h_squircle = 1.0 - pow(1.0 - xc, 4.0);
-    return mix(h_circle, h_squircle, clamp(profile, 0.0, 1.0));
+fn sd_ellipse_approx(p: vec2<f32>, half_size: vec2<f32>) -> f32 {
+    let safe_half = max(half_size, vec2<f32>(0.001));
+    return (length(p / safe_half) - 1.0) * min(safe_half.x, safe_half.y);
 }
 
-// Derivative of the height profile — the bend strength.
-fn d_height_dx(x: f32, profile: f32) -> f32 {
-    let xc = clamp(x, 0.0, 1.0);
-    let d_circle = 2.0 * xc;
-    let d_squircle = 4.0 * pow(1.0 - xc, 3.0);
-    return mix(d_circle, d_squircle, clamp(profile, 0.0, 1.0));
+const MAX_GLASS_PROFILE_KNOTS: u32 = 6u;
+
+struct ProfileSample {
+    height: f32,
+    derivative: f32,
+}
+
+struct SurfaceSample {
+    height: f32,
+    gradient: vec2<f32>,
+    radial_position: f32,
+}
+
+fn profile_knot(base: u32, index: u32) -> vec3<f32> {
+    let offset = base + index * 3u;
+    return vec3<f32>(
+        get_float(offset),
+        get_float(offset + 1u),
+        get_float(offset + 2u),
+    );
+}
+
+// The CPU generates monotonicity-preserving tangents. Evaluating the same
+// cubic here makes editor curves and production optics mathematically
+// identical rather than two approximations that happen to share knots.
+fn sample_profile(position_in: f32, count_in: f32, base: u32) -> ProfileSample {
+    let count = min(max(u32(count_in), 2u), MAX_GLASS_PROFILE_KNOTS);
+    let position = clamp(position_in, 0.0, 1.0);
+    let first = profile_knot(base, 0u);
+    if position <= first.x {
+        return ProfileSample(first.y, first.z);
+    }
+    let last = profile_knot(base, count - 1u);
+    if position >= last.x {
+        return ProfileSample(last.y, last.z);
+    }
+
+    var start = first;
+    var end = profile_knot(base, 1u);
+    for (var index = 0u; index + 1u < MAX_GLASS_PROFILE_KNOTS; index = index + 1u) {
+        if index + 1u >= count {
+            break;
+        }
+        start = profile_knot(base, index);
+        end = profile_knot(base, index + 1u);
+        if position <= end.x {
+            break;
+        }
+    }
+
+    let width = max(end.x - start.x, 0.00001);
+    let t = clamp((position - start.x) / width, 0.0, 1.0);
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    let height = h00 * start.y
+        + h10 * width * start.z
+        + h01 * end.y
+        + h11 * width * end.z;
+
+    let dh00 = 6.0 * t2 - 6.0 * t;
+    let dh10 = 3.0 * t2 - 4.0 * t + 1.0;
+    let dh01 = -dh00;
+    let dh11 = 3.0 * t2 - 2.0 * t;
+    let derivative = (
+        dh00 * start.y
+            + dh10 * width * start.z
+            + dh01 * end.y
+            + dh11 * width * end.z
+    ) / width;
+    return ProfileSample(height, derivative);
+}
+
+// Blend the authored principal cross-sections over a superelliptic radius.
+// The blend-weight derivative is part of the analytic gradient: omitting it
+// produces a visible diagonal seam whenever X-Z and Y-Z differ.
+fn sample_glass_surface(
+    local_p: vec2<f32>,
+    half_size_in: vec2<f32>,
+    unit_scale: f32,
+) -> SurfaceSample {
+    let half_size = max(half_size_in, vec2<f32>(0.001));
+    let normalized = local_p / half_size;
+    let abs_normalized = abs(normalized);
+    let radial_power = clamp(get_float(114u), 1.5, 8.0);
+    let a = pow(abs_normalized.x, radial_power);
+    let b = pow(abs_normalized.y, radial_power);
+    let q = a + b;
+    let x_center = sample_profile(0.0, get_float(115u), 120u);
+    if q <= 0.000001 || get_float(113u) <= 0.5 {
+        return SurfaceSample(x_center.height, vec2<f32>(0.0), 0.0);
+    }
+
+    let inverse_power = 1.0 / radial_power;
+    let radial = pow(q, inverse_power);
+    let profile_position = clamp(radial, 0.0, 1.0);
+    let x_sample = sample_profile(profile_position, get_float(115u), 120u);
+    let y_sample = sample_profile(profile_position, get_float(116u), 140u);
+    let y_weight = b / q;
+    let oval_height = mix(x_sample.height, y_sample.height, y_weight);
+
+    let sign_x = select(-1.0, 1.0, normalized.x >= 0.0);
+    let sign_y = select(-1.0, 1.0, normalized.y >= 0.0);
+    let x_power = pow(abs_normalized.x, radial_power - 1.0) * sign_x;
+    let y_power = pow(abs_normalized.y, radial_power - 1.0) * sign_y;
+    let radial_factor = pow(q, inverse_power - 1.0);
+    let dr_du = radial_factor * x_power;
+    let dr_dv = radial_factor * y_power;
+    let q_squared = q * q;
+    let dw_du = -b * radial_power * x_power / q_squared;
+    let dw_dv = a * radial_power * y_power / q_squared;
+    let radial_derivative = mix(x_sample.derivative, y_sample.derivative, y_weight);
+    let profile_delta = y_sample.height - x_sample.height;
+    let oval_dz_du = radial_derivative * dr_du + profile_delta * dw_du;
+    let oval_dz_dv = radial_derivative * dr_dv + profile_delta * dw_dv;
+    let x_axis_sample = sample_profile(clamp(abs_normalized.x, 0.0, 1.0), get_float(115u), 120u);
+    let y_axis_sample = sample_profile(clamp(abs_normalized.y, 0.0, 1.0), get_float(116u), 140u);
+    let toric_height = x_axis_sample.height + y_axis_sample.height - x_center.height;
+    let toric_dz_du = x_axis_sample.derivative * sign_x;
+    let toric_dz_dv = y_axis_sample.derivative * sign_y;
+    let axis_coupling = clamp(get_float(158u), 0.0, 1.0);
+    let coupling_weight = axis_coupling;
+    let height_delta = toric_height - oval_height;
+    let height = oval_height + height_delta * coupling_weight;
+    let dz_du = oval_dz_du
+        + (toric_dz_du - oval_dz_du) * coupling_weight;
+    let dz_dv = oval_dz_dv
+        + (toric_dz_dv - oval_dz_dv) * coupling_weight;
+    let depth = max(get_float(117u), 0.0) * unit_scale;
+    let gradient = vec2<f32>(
+        dz_du * depth / half_size.x,
+        dz_dv * depth / half_size.y,
+    );
+    return SurfaceSample(height, gradient, profile_position);
 }
 
 // Polynomial smooth minimum — SDF metaball gluing: shapes within `k` of
@@ -80,6 +206,16 @@ fn hash12(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
     p3 = p3 + dot(p3, vec3<f32>(p3.y, p3.z, p3.x) + 33.33);
     return fract((p3.x + p3.y) * p3.z);
+}
+
+fn sampled_luma(sample_uv: vec2<f32>) -> f32 {
+    let rgb = textureSampleLevel(
+        input_texture,
+        input_sampler,
+        clamp(sample_uv, vec2<f32>(0.0), vec2<f32>(1.0)),
+        0.0,
+    ).rgb;
+    return dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
 // Extra scene shapes for the liquid field: every glass shape near another
@@ -127,8 +263,21 @@ fn scene_sdf(
     wobble_phase: f32,
     bulge_amp: f32,
     bulge_dir: f32,
+    strain_axis: vec2<f32>,
+    strain_along: f32,
+    strain_across: f32,
 ) -> f32 {
-    var d = sd_round_rect(p_a, half_a, r_a);
+    let strain_normal = vec2<f32>(-strain_axis.y, strain_axis.x);
+    let local_along = dot(p_a, strain_axis) / strain_along;
+    let local_across = dot(p_a, strain_normal) / strain_across;
+    let strained_p = strain_axis * local_along + strain_normal * local_across;
+    // The inverse affine transform gives the exact deformed zero contour.
+    // Scaling the returned distance by its smaller singular value keeps the
+    // antialias/refraction bands conservative under strong strain.
+    let rounded_d = sd_round_rect(strained_p, half_a, r_a);
+    let ellipse_d = sd_ellipse_approx(strained_p, half_a);
+    var d = mix(rounded_d, ellipse_d, clamp(get_float(110u), 0.0, 1.0))
+        * min(strain_along, strain_across);
     let count = min(shape_count, MAX_SCENE_SHAPES);
     for (var i = 0u; i < count; i = i + 1u) {
         let base = 36u + i * 5u;
@@ -146,11 +295,13 @@ fn scene_sdf(
             + 0.6 * sin(5.0 * theta - 1.7 * wobble_phase)
             + 0.35 * sin(2.0 * theta + 2.3 * wobble_phase);
         d = d - wobble_amp * lobes * 0.5;
-        // Viscous leading-edge bulge: while the shape travels/inflates, its
-        // leading side (along `bulge_dir`) swells like a droplet being
-        // pulled — the trailing side stays put. cos^3 keeps one focused lobe.
+        // Viscous leading-edge redistribution. The focused cos^3 lobe has
+        // angular mean 2/(3*pi); subtracting that mean pulls the remaining
+        // perimeter inward by the same first-order volume the leading edge
+        // gains, so the bulge cannot inflate the bubble.
         let align = max(cos(theta - bulge_dir), 0.0);
-        d = d - bulge_amp * align * align * align;
+        let volume_neutral_lobe = align * align * align - 0.21220659;
+        d = d - bulge_amp * volume_neutral_lobe;
     }
     return d;
 }
@@ -202,25 +353,27 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         corner_radius = 0.5 * min(rect_size.x, rect_size.y);
     }
     let bezel = max(get_float(7u) * s, 0.001);
-    let disp_scale = get_float(8u) * s;
+    let optical_strength_raw = get_float(111u);
+    let optical_strength = select(
+        1.0,
+        clamp(optical_strength_raw, 0.0, 1.0),
+        optical_strength_raw > 0.0,
+    );
+    let disp_scale = get_float(8u) * optical_strength * s;
     let ri = get_float(9u);
-    let profile = get_float(10u);
     let highlight = get_float(11u);
     let tilt_angle = get_float(12u);
     let tilt_pitch = get_float(13u);
     let tint_color = get_vec4(14u);
     let saturation = get_float(18u);
-    let chroma = get_float(19u);
+    let chroma = get_float(19u) * optical_strength;
+    let dispersion_axes = max(get_vec2(118u), vec2<f32>(0.0));
     let lift = get_float(20u);
     let dither_amount = get_float(21u);
     let light_dir_in = get_vec2(22u);
     var contrast = get_float(24u);
     if contrast <= 0.0 {
         contrast = 1.0;
-    }
-    var edge_band = get_float(25u);
-    if edge_band <= 0.0 {
-        edge_band = 0.5;
     }
     // Liquid scene: float 30 = extra shape count (shapes at 36+, 5 floats
     // each); 31 = glue radius for the smooth union; 32/33 = wobble
@@ -231,19 +384,18 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let wobble_phase = get_float(33u);
     let bulge_amp = get_float(26u) * s;
     let bulge_dir = get_float(27u);
-    // Dome direction: +1 stretches the backdrop outward at the rim (bars,
-    // menus); -1 pulls samples toward the center — true magnification (the
-    // interactive lens). 0 defaults to +1.
-    var dome_dir = get_float(34u);
-    if dome_dir == 0.0 {
-        dome_dir = 1.0;
+    var strain_axis = get_vec2(106u);
+    let strain_axis_length = length(strain_axis);
+    if strain_axis_length > 0.001 {
+        strain_axis = strain_axis / strain_axis_length;
+    } else {
+        strain_axis = vec2<f32>(1.0, 0.0);
     }
-    // True magnification factor (uniform 35): interior samples pull toward
-    // the shape center by 1/m, enveloped by the height profile so it blends
-    // into the rim band. 0/1 = off.
-    var magnify = get_float(35u);
-    if magnify <= 0.0 {
-        magnify = 1.0;
+    var strain_along = get_float(108u);
+    var strain_across = get_float(109u);
+    if strain_along <= 0.0 || strain_across <= 0.0 {
+        strain_along = 1.0;
+        strain_across = 1.0;
     }
     // Sheen strength (float 29): broad bezel glow toward the light. 0 keeps
     // the default; the interactive lens dials it near zero for the crisp
@@ -260,6 +412,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let d = scene_sdf(
         coord, p, half_size, corner_radius,
         shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+        strain_axis, strain_along, strain_across,
     );
 
     // Anti-aliased shape coverage. Output is premultiplied and composited
@@ -267,8 +420,28 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // untouched (sharp) backdrop below shows through — the blur applied to
     // this pass's input must never leak outside the glass.
     let coverage = 1.0 - smoothstep(-0.75, 0.75, d);
+    // A morphing glass node uses this same scene SDF as the alpha mask for
+    // its foreground content. Keeping the mask in this shader guarantees
+    // that blurred children and the refracted backdrop share one silhouette.
+    if get_float(112u) > 0.5 {
+        return textureSample(input_texture, input_sampler, input.uv) * coverage;
+    }
+    let shadow_strength = clamp(get_float(102u), 0.0, 1.0);
+    var shadow_alpha = 0.0;
+    if shadow_strength > 0.0 {
+        let shadow_offset = vec2<f32>(0.0, get_float(104u) * s);
+        let shadow_coord = coord - shadow_offset;
+        let shadow_p = p - shadow_offset;
+        let shadow_d = scene_sdf(
+            shadow_coord, shadow_p, half_size, corner_radius,
+            shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+            strain_axis, strain_along, strain_across,
+        ) - get_float(105u) * s;
+        let shadow_blur = max(get_float(103u) * s, 1.0);
+        shadow_alpha = (1.0 - smoothstep(-0.75, shadow_blur, shadow_d)) * shadow_strength;
+    }
     if coverage <= 0.0 {
-        return vec4<f32>(0.0);
+        return vec4<f32>(0.0, 0.0, 0.0, shadow_alpha);
     }
 
     // Outward SDF normal (gradient) — the lens axis at this fragment.
@@ -276,18 +449,20 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let d_dx = scene_sdf(
         coord + vec2<f32>(eps, 0.0), p + vec2<f32>(eps, 0.0), half_size, corner_radius,
         shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+        strain_axis, strain_along, strain_across,
     );
     let d_dy = scene_sdf(
         coord + vec2<f32>(0.0, eps), p + vec2<f32>(0.0, eps), half_size, corner_radius,
         shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+        strain_axis, strain_along, strain_across,
     );
     let grad = vec2<f32>(d_dx - d, d_dy - d) / eps;
     let grad_len = length(grad);
     let outward_normal = select(vec2<f32>(0.0), grad / grad_len, grad_len > 0.001);
 
-    // Refraction — two regimes sharing the sampling/dispersion machinery via
-    // an achromatic displacement (disp_a) plus a chromatic one (disp_c, the
-    // only part the spectral taps re-scale):
+    // Refraction — two regimes sharing the sampling machinery. The base image
+    // displacement and zero-mean spectral carrier stay independent: a prism
+    // can separate wavelengths without duplicating the full-color backdrop.
     //
     // - LOUPE mode (uniform 80): the text-drag magnifier — a solid glass
     //   drop over an offset focus. Dome magnification (strongest at the
@@ -296,19 +471,30 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     //   painting an inverted, compressed image of what lies just beyond
     //   (the next text line upside-down at the bubble's bottom edge), with
     //   the dispersion fringes confined to that band.
-    // - Legacy glass/lens: edge band + dome + tilt, exactly as before.
-    let x_full = clamp(-d / bezel, 0.0, 1.0);
-    let x_edge = clamp(-d / (bezel * edge_band), 0.0, 1.0);
+    // - Surface glass/lens: one physical X-Z/Y-Z surface and its normal.
+    let bezel_depth = clamp(-d / bezel, 0.0, 1.0);
     let bend = 1.0 - 1.0 / max(ri, 1.0001);
-    let slope_edge = d_height_dx(x_edge, 1.0);
-    let slope_dome = d_height_dx(x_full, profile);
     let rim_style = clamp(get_float(28u), 0.0, 1.0);
     let loupe_mode = get_float(80u);
+    let strain_normal = vec2<f32>(-strain_axis.y, strain_axis.x);
+    let surface_local_p = strain_axis * (dot(p, strain_axis) / strain_along)
+        + strain_normal * (dot(p, strain_normal) / strain_across);
+    let surface = sample_glass_surface(surface_local_p, half_size, s);
+    let surface_gradient = strain_axis * (dot(surface.gradient, strain_axis) / strain_along)
+        + strain_normal * (dot(surface.gradient, strain_normal) / strain_across);
     let tilt = vec2<f32>(tilt_angle, tilt_pitch);
+    // A tilted glass body is the same height field plus a shallow plane. The
+    // resulting normal, rather than a separate directional displacement,
+    // feeds every optical and lighting term below.
+    let optical_gradient = surface_gradient + tilt * 0.18;
+    let optical_slope = length(optical_gradient);
+    let surface_normal = normalize(vec3<f32>(-optical_gradient, 1.0));
+    let surface_interior = 1.0 - smoothstep(0.52, 0.88, surface.radial_position);
 
-    var disp_a = vec2<f32>(0.0);
-    var disp_c = vec2<f32>(0.0);
+    var base_displacement = vec2<f32>(0.0);
+    var spectral_displacement = vec2<f32>(0.0);
     var spread = 0.0;
+    var loupe_seam_mask = 0.0;
     if loupe_mode > 0.5 {
         // The bubble's inradius: capsule half-height (the SDF's deepest
         // point), the natural unit of the drop optic.
@@ -338,7 +524,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // Magnify about the shape center, looking at the offset focus. The
         // whole interior shows the focus neighbourhood (the loupe displays
         // content from under the finger, offset up).
-        disp_a = focus_px + p * (1.0 / m - 1.0);
+        base_displacement = focus_px + p * (1.0 / m - 1.0);
         // The FOLD: an anisotropic vertical mirror — measured on the
         // reference, the band starts ~45% of the depth in on the long edges
         // (showing the NEXT text line inverted, near 1:1 and legible) and
@@ -354,7 +540,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // sqrt shaping: the reference visibly bends content at the SHOULDER
         // regions (diagonal normals) — vert-squared starved them — while
         // pure end caps stay near-quiet.
-        let vert_weight = mix(0.12, 1.0, sqrt(vert)) * below;
+        let vert_weight = pow(vert, 0.60) * below;
         if xr > band_start {
             let tau = clamp((xr - band_start) / max(1.0 - band_start, 0.001), 0.0, 1.0);
             // A fast reach-out (first ~30% of the band) followed by a LONG
@@ -362,74 +548,53 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             // sets the mirrored image's scale: the reference fold shows the
             // next line at essentially MAIN-TEXT scale, so the descent walks
             // back through the content at ~1 content-dp per display-dp.
-            let g = smoothstep(0.0, 0.3, tau) - 0.74 * smoothstep(0.3, 1.0, tau);
+            var g = 0.0;
+            if tau <= 0.3 {
+                g = smoothstep(0.0, 0.3, tau);
+            } else {
+                // This source-space slope is approximately -1 for the
+                // calibrated band and reach, preserving legible mirrored
+                // glyph bodies instead of stretching them into streaks.
+                g = 1.0 - 0.48 * ((tau - 0.3) / 0.7);
+            }
+            let fold_weight = vert_weight;
             let s_band0 = band_start / m;
             let s_units = s_band0 + (fold_peak - s_band0) * g;
-            disp_c = outward_normal * (s_units - xr) * r_in * vert_weight;
+            let fold_units = s_units - xr;
+            let seam_floor = max(get_float(87u), 0.0) * dp_scale.y;
+            let guard_radius = clamp(seam_floor * 1.15 / r_in, 0.28, 0.42);
+            let center_column = 1.0
+                - smoothstep(max(guard_radius - 0.05, 0.0), guard_radius + 0.08, abs(p.x) / r_in);
+            let seam_avoid = center_column
+                * smoothstep(0.45, 0.78, outward_normal.y)
+                * smoothstep(0.35, 0.70, tau);
+            loupe_seam_mask = seam_avoid * 0.55;
+            // The target fold is anisotropic: it mirrors vertically across the
+            // long edges. Using the radial normal here applies its vertical
+            // component a second time and starves the shoulder glyphs.
+            let fold_sign = select(-1.0, 1.0, outward_normal.y > 0.0);
+            spectral_displacement = vec2<f32>(
+                0.0,
+                fold_sign * fold_units * r_in * fold_weight,
+            );
             // The reference folds over a continuously curved surface: even
             // dead-center strokes bow sideways slightly and pick up
             // horizontal chroma. A pure normal displacement leaves vertical
             // stems ruler-straight and fringe-free at the band's center —
             // and a center-symmetric bow (p.x-proportional) still vanishes
             // exactly there, so a small uniform drift rides along.
-            disp_c.x = disp_c.x + (p.x * 0.08 + r_in * 0.12) * tau * vert_weight;
-            // Fold floor (uniform 87, dp): the bottom band must never
-            // re-display content nearer the focus than this clearance —
-            // the dragged handle's dot hangs just below the line, and
-            // mirroring it paints a second pink lobe under the displayed
-            // dot. An ABSOLUTE scene clearance (not inradius-relative):
-            // the bubble shrinks during grow/dissolve but the dot doesn't.
-            let seam_floor = max(get_float(87u), 0.0) * dp_scale.y;
-            if seam_floor > 0.0 && outward_normal.y > 0.5 {
-                let sample_dy = p.y + disp_a.y + disp_c.y;
-                let floor_dy = focus_px.y + seam_floor;
-                if sample_dy < floor_dy {
-                    // COMPRESS toward the floor instead of pinning, and only
-                    // on the truly-bottom arc: the dot lives at the band's
-                    // center (normal straight down), while at the corners the
-                    // weak fold samples shallow dot-free content — pushing
-                    // those deep painted stretched "ribbon" flaps.
-                    // Narrow gate: at the shoulders a partial push kinked
-                    // the magnified highlight's edge into a jagged notch;
-                    // the dot column sits at vert ~1 and keeps full cover.
-                    let bottom_arc = smoothstep(0.78, 0.98, vert);
-                    disp_c.y = disp_c.y + (floor_dy - sample_dy) * 0.85 * bottom_arc;
-                }
-            }
-            spread = band_chroma * smoothstep(0.0, 0.25, tau) * vert_weight;
+            spectral_displacement.x = spectral_displacement.x
+                + (p.x * 0.08 + r_in * 0.12) * tau * fold_weight;
+            base_displacement = base_displacement + spectral_displacement;
+            spread = band_chroma * smoothstep(0.0, 0.25, tau) * fold_weight;
         }
     } else {
-        // The interactive lens (rim_style 1) drops the dome term:
-        // magnification owns its interior, and an opposing dome slope inside
-        // the rim band double-imaged whatever sat under the lens.
-        let lens =
-            (slope_edge + dome_dir * slope_dome * 0.35 * (1.0 - rim_style)) * bend * disp_scale;
-        var disp = outward_normal * lens + tilt * slope_dome * bend * disp_scale;
-        if magnify != 1.0 {
-            // Dome magnification: a plano-convex crown over the WHOLE face —
-            // strongest at the deepest interior point, easing to exactly 1
-            // at the rim. Straight content bows continuously through a
-            // transit and glyphs near the lens edge stay readable (a flat
-            // interior magnification read as an opaque scale-swap: content
-            // near the edge fell outside the shrunken source window, and
-            // passing icons showed no warp until dead center).
-            let r_face = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
-            let x_face = clamp(-d / r_face, 0.0, 1.0);
-            // Floor the dome at the rim: easing all the way to m=1 across a
-            // WIDE band paints an UN-magnified second copy of edge content
-            // (doubled labels, icon shards) — the interior hands off to the
-            // rim band's compression, never to identity.
-            let dome = mix(0.62, 1.0, height_profile(x_face, profile));
-            let m_local = 1.0 + (magnify - 1.0) * dome;
-            // …but AT the silhouette the displacement must reach exactly
-            // zero over a hair-thin feather, or content straddling the edge
-            // breaks in two: the covered half displaced, the uncovered half
-            // crisp beside it (gear/roof fragments piercing the rim).
-            let edge_feather = smoothstep(0.0, 2.5 * s, -d);
-            disp = disp + p * (1.0 / m_local - 1.0) * edge_feather;
-        }
-        disp_c = disp;
-        spread = chroma * (slope_edge / 4.0);
+        // Snell displacement and dispersion are two observations of the same
+        // surface normal. The signed slope naturally creates the outward
+        // crest and inward return without painted concentric bands.
+        base_displacement = -optical_gradient * bend * disp_scale;
+        spectral_displacement = base_displacement * dispersion_axes;
+        spread = min(chroma * smoothstep(0.06, 1.8, optical_slope), 3.0);
     }
 
     // Spectral dispersion: six taps across the refraction-scale range, each
@@ -437,7 +602,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // most) — the green/yellow/magenta fringes the iOS lens shows at its
     // rim. Only the chromatic displacement re-scales per tap; away from the
     // rim the taps converge to one.
-    let uv_c = clamp(uv + (disp_a + disp_c) / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
+    let uv_c = clamp(uv + base_displacement / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
     let sample_c = textureSampleLevel(input_texture, input_sampler, uv_c, 0.0);
     var rgb = sample_c.rgb;
     let alpha = sample_c.a;
@@ -447,15 +612,16 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // The loupe's wide fold spread quantizes into distinct rainbow bands
         // at six taps ("fewer but hotter" fringe pixels than the reference's
         // softer blend); extra taps smooth it at the same total energy.
-        // Legacy materials keep exactly six — their renders are pinned.
-        let tap_count = select(6, 10, loupe_mode > 0.5);
+        // Surface materials keep six taps because their renders are pinned.
+        let tap_count = select(6, 10, loupe_mode > 0.5 || rim_style > 0.5);
         for (var i = 0; i < tap_count; i = i + 1) {
             let t = (f32(i) + 0.5) / f32(tap_count);
             let w = spectrum_weight(t);
             // Red (t→1) bends least, violet (t→0) most.
             let scale = 1.0 + (0.5 - t) * spread;
             let uv_i = clamp(
-                uv + (disp_a + disp_c * scale) / tex_size,
+                uv
+                    + (base_displacement + spectral_displacement * (scale - 1.0)) / tex_size,
                 vec2<f32>(0.0),
                 vec2<f32>(1.0),
             );
@@ -463,6 +629,51 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             wsum = wsum + w;
         }
         rgb = acc / max(wsum, vec3<f32>(0.0001));
+    }
+    if loupe_seam_mask > 0.0 {
+        let plain = textureSampleLevel(input_texture, input_sampler, uv, 0.0).rgb;
+        rgb = mix(rgb, plain, loupe_seam_mask);
+    }
+
+    // Accent recoloring is a local-detail operation, not a cell state. Dark
+    // strokes have lower luminance than their immediate four-neighbour field;
+    // broad dark backdrop regions do not. The resulting mask travels with the
+    // refracted sample and therefore exists only inside this glass coverage.
+    let recolor_strength = clamp(get_float(98u), 0.0, 1.0);
+    var content_detail = 0.0;
+    if recolor_strength > 0.0 {
+        let detail_step = vec2<f32>(4.5 * s) / tex_size;
+        let center_luma = dot(sample_c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let surround_luma = 0.25 * (
+            sampled_luma(uv_c - vec2<f32>(detail_step.x, 0.0))
+                + sampled_luma(uv_c + vec2<f32>(detail_step.x, 0.0))
+                + sampled_luma(uv_c - vec2<f32>(0.0, detail_step.y))
+                + sampled_luma(uv_c + vec2<f32>(0.0, detail_step.y))
+        );
+        let support_step = vec2<f32>(18.0 * s) / tex_size;
+        let support_luma = 0.25 * (
+            sampled_luma(uv_c - vec2<f32>(support_step.x, 0.0))
+                + sampled_luma(uv_c + vec2<f32>(support_step.x, 0.0))
+                + sampled_luma(uv_c - vec2<f32>(0.0, support_step.y))
+                + sampled_luma(uv_c + vec2<f32>(0.0, support_step.y))
+        );
+        let local_contrast = surround_luma - center_luma;
+        let edge_detail = smoothstep(0.018, 0.16, local_contrast)
+            * (1.0 - smoothstep(0.54, 0.76, center_luma));
+        let dark_stroke = (1.0 - smoothstep(0.48, 0.72, center_luma))
+            * smoothstep(0.52, 0.78, surround_luma);
+        let bounded_dark_region = (1.0 - smoothstep(0.48, 0.68, center_luma))
+            * smoothstep(0.54, 0.78, support_luma);
+        content_detail = max(edge_detail, max(dark_stroke, bounded_dark_region));
+        // Selection color rides through the refracted volume up to its outer
+        // lip. The final two percent remains unmodified, preserving the
+        // target's dark source sliver immediately outside the glass.
+        let recolor_face = mix(1.0, 1.0 - smoothstep(0.82, 0.98, surface.radial_position), rim_style);
+        content_detail = content_detail * recolor_face;
+    }
+    if content_detail > 0.0 {
+        let recolor = get_vec4(99u).rgb;
+        rgb = mix(rgb, recolor, content_detail * recolor_strength);
     }
 
     // Long-edge FOLD (uniform 92, 0 = off): the reference bar's meniscus
@@ -478,7 +689,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         if depth > 0.0 && depth < band && outward_normal.y < -0.3 {
             let w = edge_fold * (1.0 - depth / band);
             let uv_fold = clamp(
-                uv + (disp_a + vec2<f32>(disp_c.x, -2.0 * depth)) / tex_size,
+                uv
+                    + vec2<f32>(base_displacement.x, -2.0 * depth) / tex_size,
                 vec2<f32>(0.0),
                 vec2<f32>(1.0),
             );
@@ -495,105 +707,88 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     rgb = mix(vec3<f32>(luma), rgb, max(saturation, 0.0));
     rgb = (rgb - vec3<f32>(0.5)) * contrast + vec3<f32>(0.5);
-    // Backdrop-adaptive legibility (uniform 91, 0 = off): positive strength
-    // protects a LIGHT foreground by pulling the lift down over bright
-    // backdrops (no white-on-white); negative protects a DARK foreground by
-    // lifting over dark backdrops. Keyed on the blurred sample's luma, so
-    // the response is as spatially smooth as the frost itself.
-    var lift_eff = lift;
-    let adaptive = get_float(91u);
-    if adaptive > 0.0 {
-        lift_eff = lift - adaptive * smoothstep(0.45, 0.8, luma);
-    } else if adaptive < 0.0 {
-        lift_eff = lift - adaptive * (1.0 - smoothstep(0.2, 0.55, luma));
-    }
-    if lift_eff >= 0.0 {
-        rgb = vec3<f32>(1.0) - (vec3<f32>(1.0) - rgb) * (1.0 - lift_eff);
+    // Interactive lenses frost their face without bleaching the meniscus:
+    // the target toggle keeps saturated green/cyan at the outer rise while
+    // its recessed chamber approaches white. Surface glass uses uniform lift.
+    let face_lift = mix(
+        lift,
+        lift * mix(0.18, 1.0, surface_interior),
+        rim_style,
+    );
+    if face_lift >= 0.0 {
+        rgb = vec3<f32>(1.0) - (vec3<f32>(1.0) - rgb) * (1.0 - face_lift);
     } else {
-        rgb = rgb * (1.0 + lift_eff);
+        rgb = rgb * (1.0 + face_lift);
     }
 
     // Tint blending (near-neutral for plain glass; carries accent for
     // prominent buttons).
     rgb = mix(rgb, tint_color.rgb, tint_color.a);
 
-    // Rim lighting: a crisp ~1.6px specular LINE exactly at the edge, lit
-    // from `light_dir` with a softer counter-reflection on the opposite arc
-    // (the double rim that makes iOS glass edges read as glass), plus a
-    // broad low-power sheen across the bezel toward the light.
-    let inward_normal = -outward_normal;
-    let light_dir = normalize(light_dir_in + tilt * 0.35 + vec2<f32>(0.0, 1e-4));
-    // Rim style (uniform 28, read above): 0 = surface glass (soft white
-    // spec), 1 = the interactive lens (THIN bright line, stronger dark
-    // outline — the chromatic fringe from the spectral taps does the color).
-    // The loupe's rim is a ~2.5px bright line fully INSIDE the silhouette
-    // (straddling the AA edge halves it and reads as absent); other glass
-    // keeps the thin straddling line.
-    let edge_width = mix(1.6, select(1.1, 2.6, loupe_mode > 0.5), rim_style);
-    let edge_center = select(0.0, 1.6, loupe_mode > 0.5);
+    // Adaptive frost (91 strength, 97 foreground luma) protects either
+    // foreground polarity. It reacts only when the post-material backdrop is
+    // too close to the foreground, then moves the surface toward the opposite
+    // luminance pole. Both sampled backdrop and actual foreground determine
+    // the correction, preventing white-on-white and black-on-black alike.
+    let adaptive_frost = clamp(get_float(91u), 0.0, 1.0);
+    if adaptive_frost > 0.0 {
+        let foreground_luma = clamp(get_float(97u), 0.0, 1.0);
+        let frost_luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let separation = abs(frost_luma - foreground_luma);
+        let contrast_need = 1.0 - smoothstep(0.38, 0.58, separation);
+        let foreground_is_light = smoothstep(0.35, 0.65, foreground_luma);
+        let target_luma = mix(0.82, 0.18, foreground_is_light);
+        let correction = (target_luma - frost_luma) * adaptive_frost * contrast_need;
+        rgb = clamp(rgb + vec3<f32>(correction), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+
+    // The authored center-to-crest height difference supplies the recessed
+    // chamber's transmission loss; no independent inner contour is drawn.
+    let surface_recess = surface_interior * clamp(1.0 - surface.height, 0.0, 1.0);
+    let face_shadow = surface_recess * mix(0.010, 0.018, rim_style);
+    rgb = rgb * (1.0 - face_shadow);
+    let surface_light_direction = normalize(vec3<f32>(-light_dir_in, 1.0));
+    let view_direction = vec3<f32>(0.0, 0.0, 1.0);
+    let half_direction = normalize(surface_light_direction + view_direction);
+    let fresnel = pow(1.0 - clamp(surface_normal.z, 0.0, 1.0), 3.0);
+    let surface_specular = pow(max(dot(surface_normal, half_direction), 0.0), 28.0);
+    let surface_reflection = (
+        fresnel * mix(0.10, 0.17, rim_style)
+            + surface_specular * mix(0.025, 0.045, rim_style)
+    ) * highlight;
+    rgb = mix(rgb, vec3<f32>(1.0), clamp(surface_reflection, 0.0, 0.32));
+    let radial_surface_slope = dot(optical_gradient, outward_normal);
+    let return_transmission = max(-radial_surface_slope, 0.0)
+        / (1.0 + abs(radial_surface_slope));
+    rgb = rgb * (1.0 - return_transmission * mix(0.008, 0.11, rim_style));
+
+    // A single silhouette reflection closes the physical surface. Its arc and
+    // the broad sheen both use the sampled surface normal; there is no second
+    // painted bevel or chromatic outline.
+    let edge_width = mix(1.45, select(0.85, 2.0, loupe_mode > 0.5), rim_style);
+    let edge_center = select(0.0, 1.2, loupe_mode > 0.5);
     let edge_line = 1.0 - smoothstep(0.0, edge_width, abs(d + edge_center) - 0.2);
-    let facing_light = max(dot(inward_normal, light_dir), 0.0);
-    let facing_away = max(dot(inward_normal, -light_dir), 0.0);
-    // Counter-arc gain (uniform 88, default 0.45): how strongly the edge
-    // opposite the light reflects. The reference edit menu's bottom rim runs
-    // ~70% of its top; the default keeps every existing material identical.
+    let facing_light = max(dot(surface_normal, surface_light_direction), 0.0);
+    let counter_light_direction = normalize(vec3<f32>(light_dir_in, 1.0));
+    let facing_counter = max(dot(surface_normal, counter_light_direction), 0.0);
     var counter_gain = get_float(88u);
     if counter_gain <= 0.0 {
         counter_gain = 0.45;
     }
-    // Rim floor (uniform 89, default 0): minimum ring strength on the arcs
-    // perpendicular to the light — the reference menu's rim holds ~60-70% of
-    // its top brightness at 3/9 o'clock instead of pinching to nothing.
-    let rim_floor = clamp(get_float(89u), 0.0, 1.0);
-    let spec_line = edge_line
-        * mix(
-            pow(facing_light, 1.4) + pow(facing_away, 2.0) * counter_gain,
-            1.0,
-            rim_floor,
-        );
-    let sheen =
-        pow(max(1.0 - x_full, 0.0), 3.0) * (0.4 + 0.6 * facing_light) * sheen_strength;
-    // A faint dark contour just inside the bright line keeps the rim legible
-    // when the glass sits on a background as bright as the line itself.
-    let inner_contour = (1.0 - smoothstep(0.8, 4.0, -d)) * smoothstep(0.4, 1.4, -d);
-    // Dark line at the very rim (the lens outline in the reference toggle),
-    // strongest on the shadow side, under the bright specular arc.
-    let rim_dark = (1.0 - smoothstep(0.0, 1.3, abs(d))) * (0.6 + 0.4 * facing_away);
-    // The lens rim must be nearly invisible over uniform background — the
-    // dispersion fringe and displacement do the talking; only a whisper of
-    // specular reads on the lit arc.
-    let spec_gain = mix(0.85, 0.12, rim_style);
-    let rim_dark_gain = mix(0.16, 0.10, rim_style);
-    let contour_gain = 0.10 * mix(1.0, 0.5, rim_style);
-    rgb = rgb * (1.0 - inner_contour * contour_gain * highlight);
-    rgb = rgb * (1.0 - rim_dark * rim_dark_gain * highlight);
-    var spec_rgb = vec3<f32>(spec_line * spec_gain + sheen * 0.22);
-    if loupe_mode > 0.5 {
-        // The reference loupe rim is a continuous near-white line around the
-        // WHOLE silhouette (brightest on top, still present on the straight
-        // sides where a purely directional spec vanishes — without a floor
-        // the sides read as a vesica), with only a faint prismatic tint
-        // phased across the line's width.
-        let facing = pow(facing_light, 1.4) + pow(facing_away, 2.0) * 0.3;
-        // The reference ring is near-uniform around the silhouette (side
-        // contrast ~as strong as the apex, both ~+127 luminance); only a
-        // whisper of top emphasis rides the facing term.
-        let ring_gain = (0.92 + 0.08 * facing) * spec_gain;
-        // Chromatic rim: on the straight SIDES the reference ring splits
-        // into a blue-shifted leading (outer) band and a red-shifted
-        // trailing (inner) band; the top arc stays near-white. The split
-        // rides the dispersion knob so it dies with the optics on dissolve.
-        let side = 1.0 - outward_normal.y * outward_normal.y;
-        // Narrow split: wide per-channel offsets wash the ring's mean
-        // luminance at the sides (the reference side contrast matches the
-        // apex) while staying visible on close crops.
-        let fringe = get_float(86u) * side * 4.0;
-        let dc = d + edge_center;
-        let ring_r = 1.0 - smoothstep(0.0, edge_width, abs(dc + fringe) - 0.2);
-        let ring_b = 1.0 - smoothstep(0.0, edge_width, abs(dc - fringe) - 0.2);
-        spec_rgb = vec3<f32>(ring_r, edge_line, ring_b) * ring_gain;
-    }
-    rgb = rgb + spec_rgb * highlight;
+    let rim_floor = max(
+        clamp(get_float(89u), 0.0, 1.0),
+        0.12 * rim_style,
+    );
+    let reflection_arc = max(
+        pow(facing_light, 1.4) + pow(facing_counter, 1.8) * counter_gain,
+        rim_floor,
+    );
+    let spec_line = edge_line * reflection_arc;
+    let sheen = pow(max(1.0 - bezel_depth, 0.0), 1.65)
+        * mix(0.35 + 0.65 * facing_light, reflection_arc, rim_style)
+        * sheen_strength;
+    let spec_gain = mix(0.52, select(0.18, 0.48, loupe_mode > 0.5), rim_style);
+    rgb = rgb + vec3<f32>(spec_line * spec_gain + sheen * 0.16) * highlight;
 
     if loupe_mode > 0.5 {
         // Loupe content alpha (uniform 90): the reference dissolve fades the
@@ -616,6 +811,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let dither = (hash12(coord) - 0.5) * (dither_amount / 255.0);
     rgb = rgb + vec3<f32>(dither);
 
-    // Premultiplied output modulated by the shape coverage.
-    return vec4<f32>(rgb, alpha) * coverage;
+    // Premultiplied glass plus the shape-derived contact shadow. The shadow is
+    // suppressed under the glass itself and therefore cannot darken its face.
+    let shadow_out = shadow_alpha * (1.0 - coverage);
+    return vec4<f32>(rgb, alpha) * coverage + vec4<f32>(0.0, 0.0, 0.0, shadow_out);
 }

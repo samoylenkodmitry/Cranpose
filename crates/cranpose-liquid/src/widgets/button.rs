@@ -1,7 +1,7 @@
 //! Glass buttons: capsule glass with a spring press (scale + specular boost)
 //! and haptic feedback.
 
-use crate::material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape};
+use crate::material::{neutral_surface_tint, Glass, GlassDynamics, LiquidModifierExt, LiquidShape};
 use crate::motion::liquid_press_scale;
 use crate::theme::{liquid_colors, liquid_typography};
 use cranpose_macros::composable;
@@ -14,6 +14,9 @@ use cranpose_ui_graphics::{Color, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+const ICON_BACKPLATE_DIAMETER_RATIO: f32 = 0.50;
+const ICON_BACKPLATE_GLYPH_RATIO: f32 = 0.28;
 
 /// Visual style of a [`GlassButton`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -37,6 +40,9 @@ pub struct GlassButtonSpec {
     pub glass: Option<Glass>,
     /// Overrides the label/icon color (defaults per style).
     pub content_color: Option<Color>,
+    /// Optional inner color disc for icon buttons. The outer material remains
+    /// clear glass; the disc colors only the icon's compact foreground core.
+    pub icon_backplate: Option<Color>,
 }
 
 impl GlassButtonSpec {
@@ -75,6 +81,11 @@ impl GlassButtonSpec {
         self
     }
 
+    pub fn with_icon_backplate(mut self, color: Color) -> Self {
+        self.icon_backplate = Some(color);
+        self
+    }
+
     /// The label color for this style under `colors`.
     pub fn content_color(&self, colors: &crate::theme::LiquidColors) -> Color {
         if let Some(color) = self.content_color {
@@ -101,15 +112,31 @@ impl GlassButtonSpec {
         }
     }
 
-    fn resolve_material(&self, colors: &crate::theme::LiquidColors) -> Option<Glass> {
+    fn resolve_material(
+        &self,
+        colors: &crate::theme::LiquidColors,
+        foreground: Color,
+    ) -> Option<Glass> {
         if let Some(glass) = &self.glass {
-            return Some(glass.clone());
+            return Some(if glass.foreground.is_some() {
+                glass.clone()
+            } else {
+                glass
+                    .clone()
+                    .adaptive_frost(foreground, glass.adaptive_frost)
+            });
         }
         match self.style {
-            GlassButtonStyle::Glass => Some(Glass::regular()),
-            GlassButtonStyle::Prominent => {
-                Some(Glass::regular().tint(colors.accent.with_alpha(0.75)))
-            }
+            GlassButtonStyle::Glass => Some(
+                Glass::regular()
+                    .tint(neutral_surface_tint(foreground, 0.08, 0.10))
+                    .adaptive_frost(foreground, 0.65),
+            ),
+            GlassButtonStyle::Prominent => Some(
+                Glass::regular()
+                    .tint(colors.accent.with_alpha(0.75))
+                    .adaptive_frost(foreground, 0.65),
+            ),
             GlassButtonStyle::Plain | GlassButtonStyle::Destructive => None,
         }
     }
@@ -130,7 +157,7 @@ pub fn GlassButton(
     let (pressed_modifier, pressed, content_alpha) =
         liquid_press_scale(Modifier::empty(), interaction.clone(), 1.08);
 
-    let material = spec.resolve_material(&colors);
+    let material = spec.resolve_material(&colors, spec.content_color(&colors));
     let mut base = pressed_modifier;
     if let Some(glass) = material {
         let pressed_for_glass = pressed;
@@ -186,6 +213,36 @@ pub fn GlassButtonLabel(text: impl Into<String>, spec: GlassButtonSpec) {
     Text(text.into(), Modifier::empty(), style);
 }
 
+#[composable]
+#[allow(non_snake_case)]
+pub(crate) fn GlassIconForeground(spec: GlassButtonSpec, diameter: f32, icon_path: &'static str) {
+    let colors = liquid_colors();
+    let icon_color = spec.icon_color(&colors);
+    if let Some(backplate) = spec.icon_backplate {
+        let backplate_diameter = diameter * ICON_BACKPLATE_DIAMETER_RATIO;
+        Box(
+            Modifier::empty()
+                .size(Size::new(backplate_diameter, backplate_diameter))
+                .draw_behind(move |scope| {
+                    scope.draw_circle(
+                        cranpose_ui_graphics::Brush::solid(backplate),
+                        cranpose_ui_graphics::Point::new(
+                            backplate_diameter * 0.5,
+                            backplate_diameter * 0.5,
+                        ),
+                        backplate_diameter * 0.5,
+                    );
+                }),
+            BoxSpec::default().content_alignment(Alignment::CENTER),
+            move || {
+                crate::icons::Icon(icon_path, diameter * ICON_BACKPLATE_GLYPH_RATIO, icon_color);
+            },
+        );
+    } else {
+        crate::icons::Icon(icon_path, diameter * 0.5, icon_color);
+    }
+}
+
 /// A circular glass icon button (44dp target).
 #[composable]
 #[allow(non_snake_case)]
@@ -196,13 +253,26 @@ pub fn GlassIconButton(
     on_click: impl Fn() + 'static,
     icon_path: &'static str,
 ) {
+    GlassIconButtonWithForegroundAlpha(modifier, spec, diameter, 1.0, on_click, icon_path);
+}
+
+#[composable]
+#[allow(non_snake_case)]
+pub(crate) fn GlassIconButtonWithForegroundAlpha(
+    modifier: Modifier,
+    spec: GlassButtonSpec,
+    diameter: f32,
+    foreground_alpha: f32,
+    on_click: impl Fn() + 'static,
+    icon_path: &'static str,
+) {
     let colors = liquid_colors();
     let interaction = rememberMutableInteractionSource();
     let (pressed_modifier, pressed, content_alpha) =
         liquid_press_scale(Modifier::empty(), interaction.clone(), 1.12);
 
     let material = spec
-        .resolve_material(&colors)
+        .resolve_material(&colors, spec.icon_color(&colors))
         .map(|glass| glass.shape(LiquidShape::Circle));
     let mut base = pressed_modifier;
     if let Some(glass) = material {
@@ -214,7 +284,6 @@ pub fn GlassIconButton(
         });
     }
 
-    let icon_color = spec.icon_color(&colors);
     let on_click = Rc::new(RefCell::new(on_click));
     let base = base
         .press_interaction_source(interaction)
@@ -226,20 +295,46 @@ pub fn GlassIconButton(
 
     // The reference press: the icon ghosts while the glass lifts.
     let content_layer = Modifier::empty().graphics_layer(move || GraphicsLayer {
-        alpha: content_alpha.get().clamp(0.0, 1.0),
+        alpha: content_alpha.get().clamp(0.0, 1.0) * foreground_alpha.clamp(0.0, 1.0),
         ..Default::default()
     });
     Box(
         base.then(modifier),
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || {
+            let foreground_spec = spec.clone();
             Box(
                 content_layer.clone(),
                 BoxSpec::default().content_alignment(Alignment::CENTER),
-                move || {
-                    crate::icons::Icon(icon_path, diameter * 0.5, icon_color);
-                },
+                move || GlassIconForeground(foreground_spec.clone(), diameter, icon_path),
             );
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn icon_backplate_colors_only_the_compact_foreground_core() {
+        let blue = Color::from_rgb_u8(0, 122, 255);
+        let spec = GlassButtonSpec::glass()
+            .with_icon_backplate(blue)
+            .with_content_color(Color::WHITE);
+        assert_eq!(spec.style, GlassButtonStyle::Glass);
+        assert_eq!(spec.icon_backplate, Some(blue));
+        assert_eq!(spec.content_color, Some(Color::WHITE));
+        assert!(spec.glass.is_none());
+        assert!((0.49..=0.51).contains(&ICON_BACKPLATE_DIAMETER_RATIO));
+        assert!((0.27..=0.29).contains(&ICON_BACKPLATE_GLYPH_RATIO));
+
+        let colors = crate::theme::LiquidColors::light(blue);
+        let material = GlassButtonSpec::glass()
+            .resolve_material(&colors, colors.label)
+            .expect("glass button material");
+        let tint = material.tint.expect("interactive neutral tint");
+        assert!(tint.r() < 0.05);
+        assert!((0.075..=0.085).contains(&tint.a()));
+    }
 }

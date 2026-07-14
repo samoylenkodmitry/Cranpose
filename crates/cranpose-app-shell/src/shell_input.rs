@@ -64,8 +64,8 @@ where
     /// Sets the device source (touch/mouse/stylus) of the pointer sample that
     /// the platform is about to dispatch. Call this before `set_cursor` /
     /// `pointer_pressed` / `pointer_released` so the resulting `PointerEvent`s
-    /// carry the source; consumers (e.g. text fields) use it to show finger
-    /// selection handles only for touch and keep a clean caret for a mouse.
+    /// carry the source so consumers can preserve device-specific gesture
+    /// details without changing shared pointer UI.
     pub fn set_pointer_source(&mut self, source: PointerSource) {
         self.pointer_source = source;
     }

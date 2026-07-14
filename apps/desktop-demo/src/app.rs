@@ -65,6 +65,7 @@ thread_local! {
     pub static TEST_COUNTER_APP_POINTER_POSITION_STATE: RefCell<Option<MutableState<Point>>> = const { RefCell::new(None) };
     pub static TEST_RECURSIVE_LAYOUT_DEPTH_STATE: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
     pub static TEST_LAZY_LIST_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
+    pub static TEST_LIQUID_SELECTED_TAB_STATE: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -91,6 +92,8 @@ pub enum DemoTab {
     MarkdownViewer,
     FilePicker,
 }
+
+pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::Liquid;
 
 impl DemoTab {
     pub fn label(self) -> &'static str {
@@ -156,6 +159,7 @@ impl DemoTab {
 
 pub const DEMO_TABS: [DemoTab; 21] = [
     DemoTab::Counter,
+    DemoTab::Liquid,
     DemoTab::CompositionLocal,
     DemoTab::Async,
     DemoTab::Animations,
@@ -172,7 +176,6 @@ pub const DEMO_TABS: [DemoTab; 21] = [
     DemoTab::Xkcd,
     DemoTab::Shaders,
     DemoTab::ShaderRect,
-    DemoTab::Liquid,
     DemoTab::MarkdownViewer,
     DemoTab::InteractiveAnim,
     DemoTab::FilePicker,
@@ -428,6 +431,12 @@ fn TabContent(
 #[composable]
 pub fn combined_app() {
     combined_app_with_startup(StartupSelection::default());
+}
+
+#[composable]
+#[allow(non_snake_case)]
+pub fn DesktopApp() {
+    combined_app_with_initial_tab(Some(DESKTOP_INITIAL_TAB));
 }
 
 #[composable]

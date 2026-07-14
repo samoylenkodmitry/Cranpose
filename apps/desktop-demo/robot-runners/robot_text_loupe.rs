@@ -17,7 +17,10 @@ use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
 use image::RgbaImage;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 460;
@@ -55,6 +58,8 @@ fn main() -> ExitCode {
         std::env::var("ROBOT_SHOT_DIR").unwrap_or_else(|_| "target/text-loupe".to_string()),
     );
     std::fs::create_dir_all(&shot_dir).expect("create shot dir");
+    let wrap_boundary = Arc::new(Mutex::new(None::<usize>));
+    let wrap_boundary_for_driver = Arc::clone(&wrap_boundary);
 
     AppLauncher::new()
         .with_title("Text Loupe Contract")
@@ -86,6 +91,11 @@ fn main() -> ExitCode {
                 FIELD_X + 0.5 * (width_of("Silence. ") + width_of("Silence. Melody"));
             let end_x = FIELD_X + width_of("Silence. Melody");
             let drag_to_x = FIELD_X + width_of("Silence. Melody. Then");
+            let first_wrap_boundary = wrap_boundary_for_driver
+                .lock()
+                .expect("wrap boundary lock")
+                .expect("composed scene must publish its first wrap boundary");
+            let wrap_boundary_x = FIELD_X + width_of(&TEXT[..first_wrap_boundary]);
 
             // Focus with a touch tap, then a second tap on the same word to
             // select it (touch is what arms the finger handles).
@@ -186,7 +196,42 @@ fn main() -> ExitCode {
             // then).
             std::thread::sleep(Duration::from_millis(700));
 
-            // ---- Slow drag right: the bubble follows with its lag ----
+            // Direct-manipulation contract: pointer coordinates are never an
+            // animation target. Step the held pointer by a large amount and
+            // inspect the very next rendered frame; a chase spring leaves the
+            // bubble at its source for one or more frames and fails here.
+            let held = robot.screenshot_with_scale(3.0).expect("held loupe");
+            let held_center = loupe_top_rim_center_x(&held)
+                .unwrap_or_else(|| fail(&robot, "held loupe top rim was not measurable"));
+            let jump_x = (end_x + 90.0).min(FIELD_X + FIELD_WIDTH - 60.0);
+            robot
+                .touch_move(jump_x, line1_mid)
+                .expect("abrupt direct-manipulation step");
+            let jumped = robot
+                .screenshot_with_scale(3.0)
+                .expect("immediate jump frame");
+            save(&jumped, &shot_dir, "05b-direct-follow");
+            let jumped_center = loupe_top_rim_center_x(&jumped)
+                .unwrap_or_else(|| fail(&robot, "jumped loupe top rim was not measurable"));
+            println!(
+                "loupe direct follow held={held_center:.2} pointer={jump_x:.2} frame={jumped_center:.2}"
+            );
+            if (jumped_center - jump_x).abs() > 8.0
+                || jumped_center - held_center < jump_x - end_x - 12.0
+            {
+                fail(
+                    &robot,
+                    &format!(
+                        "loupe animated toward the pointer instead of following the input frame: held={held_center:.2}, pointer={jump_x:.2}, frame={jumped_center:.2}"
+                    ),
+                );
+            }
+            robot
+                .touch_move(end_x, line1_mid)
+                .expect("restore follow choreography");
+            settle(&robot, 320);
+
+            // ---- Slow drag right: the bubble follows every input frame ----
             let steps = 30;
             for i in 1..=steps {
                 let t = i as f32 / steps as f32;
@@ -217,7 +262,7 @@ fn main() -> ExitCode {
 
             // ---- Release: the bubble deflates back into the line, then the
             // menu rematerializes — ONE release, exact clock steps at the
-            // reference offsets (+8/+25/+42/+55/+90 for the fade, +300/+360
+            // reference offsets (+8/+25/+42/+55 for the fade, +300/+360
             // for the menu's 250 ms-delay + 140 ms materialize window).
             robot.touch_up(drag_to_x, line1_mid).expect("release");
             let dissolve_steps = [
@@ -228,7 +273,9 @@ fn main() -> ExitCode {
                 (17.0, true),  // +42
                 (13.0, true),  // +55
                 (35.0, true),  // +90
-                (170.0, true), // +260: materialize just started (dim)
+                (20.0, true),  // +110
+                (20.0, true),  // +130: gone
+                (130.0, true), // +260: materialize just started (dim)
                 (40.0, true),  // +300
                 (60.0, true),  // +360
             ];
@@ -237,7 +284,9 @@ fn main() -> ExitCode {
                 "10-dissolve-b",
                 "10b-dissolve-c",
                 "11-after-release",
-                "11d-gone",
+                "11d-dissolve-late",
+                "11e-terminal",
+                "11f-gone",
                 "11a-menu-materializing-0",
                 "11b-menu-materializing",
                 "11c-menu-materializing-2",
@@ -248,8 +297,8 @@ fn main() -> ExitCode {
             for (shot, name) in shots.iter().zip(dissolve_names) {
                 save(shot, &shot_dir, name);
             }
-            // The fade must actually be a fade: clearly present at +8 and
-            // +25, gone by +90 (the 55 ms tween unmounts at ~54 ms).
+            // The fade must actually be a fade: still at +8, reduced at +25,
+            // translucent at +42, and gone by +55.
             let fade_region = loupe_region_at(drag_to_x);
             if !region_has_structure(&shots[0], fade_region) {
                 fail(&robot, "dissolve +8: bubble already gone");
@@ -257,8 +306,14 @@ fn main() -> ExitCode {
             if !region_has_structure(&shots[1], fade_region) {
                 fail(&robot, "dissolve +25: bubble already gone");
             }
-            if region_has_structure(&shots[4], fade_region) {
-                fail(&robot, "dissolve +90: bubble residue never unmounted");
+            let terminal_region = (
+                drag_to_x - 25.0,
+                line1_mid - 37.0,
+                drag_to_x + 25.0,
+                line1_mid - 14.0,
+            );
+            if region_has_structure(&shots[3], terminal_region) {
+                fail(&robot, "dissolve +55: bubble residue never unmounted");
             }
             std::thread::sleep(Duration::from_millis(500));
             let after = robot.screenshot_with_scale(3.0).expect("after");
@@ -285,20 +340,39 @@ fn main() -> ExitCode {
             if region_has_structure(&dot_drag, dot_loupe_region) {
                 fail(&robot, "a loupe appeared for a dot grab below the line");
             }
-            robot.touch_move(end2_x + 40.0, dot_y).expect("dot move");
+            robot
+                .touch_move(wrap_boundary_x, dot_y)
+                .expect("dot move to soft-wrap boundary");
             std::thread::sleep(Duration::from_millis(200));
-            save(
-                &robot.screenshot_with_scale(3.0).expect("dot2"),
-                &shot_dir,
-                "14-dot-drag-moved",
+            let wrapped = robot.screenshot_with_scale(3.0).expect("wrapped handle");
+            save(&wrapped, &shot_dir, "14-dot-drag-moved");
+            let upper_end_pixels = count_accent_pixels(
+                &wrapped,
+                (
+                    wrap_boundary_x - 12.0,
+                    line1_bottom - 4.0,
+                    wrap_boundary_x + 12.0,
+                    line1_bottom + 18.0,
+                ),
             );
-            robot.touch_up(end2_x + 40.0, dot_y).expect("dot release");
+            println!(
+                "wrapped boundary byte={first_wrap_boundary} x={wrap_boundary_x:.2} upper-end pixels={upper_end_pixels}"
+            );
+            if upper_end_pixels < 20 {
+                fail(
+                    &robot,
+                    "end handle at a shared soft-wrap boundary jumped off the upper visual line",
+                );
+            }
+            robot
+                .touch_up(wrap_boundary_x, dot_y)
+                .expect("dot release at soft-wrap boundary");
             settle(&robot, 400);
 
             println!("PASS: text loupe contract");
             let _ = robot.exit();
         })
-        .try_run(content)
+        .try_run(move || content(Arc::clone(&wrap_boundary)))
         .expect("launch text loupe runner");
 
     if FAILED.load(Ordering::Relaxed) {
@@ -308,7 +382,20 @@ fn main() -> ExitCode {
     }
 }
 
-fn content() {
+fn content(wrap_boundary: Arc<Mutex<Option<usize>>>) {
+    let annotated = AnnotatedString::from(TEXT);
+    let ranges = cranpose_ui::text::wrapped_line_ranges(
+        None,
+        &annotated,
+        &text_style(),
+        cranpose_ui::text::TextLayoutOptions::default(),
+        Some(FIELD_WIDTH),
+    );
+    assert!(
+        ranges.len() >= 2 && ranges[0].end < TEXT.len(),
+        "loupe fixture must soft-wrap: {ranges:?}"
+    );
+    *wrap_boundary.lock().expect("wrap boundary lock") = Some(ranges[0].end);
     CBox(
         Modifier::empty()
             .size(Size {
@@ -387,6 +474,32 @@ fn region_has_structure(shot: &cranpose::RobotScreenshot, region: (f32, f32, f32
     hi.saturating_sub(lo) > 26 * 3
 }
 
+/// Center of the loupe's bright top rim in logical coordinates. The sampled
+/// band is above both the text and edit menu, so every bright pixel belongs to
+/// the bubble silhouette.
+fn loupe_top_rim_center_x(shot: &cranpose::RobotScreenshot) -> Option<f32> {
+    let scale = shot.width as f32 / WINDOW_WIDTH as f32;
+    let y0 = (45.0 * scale) as u32;
+    let y1 = (105.0 * scale) as u32;
+    let mut min_x = u32::MAX;
+    let mut max_x = 0u32;
+    let mut count = 0usize;
+    for y in y0..y1.min(shot.height) {
+        for x in 0..shot.width {
+            let index = ((y * shot.width + x) * 4) as usize;
+            let r = shot.pixels[index] as u16;
+            let g = shot.pixels[index + 1] as u16;
+            let b = shot.pixels[index + 2] as u16;
+            if r + g + b > 285 {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                count += 1;
+            }
+        }
+    }
+    (count >= 20).then(|| (min_x + max_x) as f32 * 0.5 / scale)
+}
+
 fn sample(shot: &cranpose::RobotScreenshot, x: f32, y: f32) -> Option<[u8; 3]> {
     let (xi, yi) = (x as u32, y as u32);
     if xi >= shot.width || yi >= shot.height {
@@ -395,6 +508,30 @@ fn sample(shot: &cranpose::RobotScreenshot, x: f32, y: f32) -> Option<[u8; 3]> {
     let idx = ((yi * shot.width + xi) * 4) as usize;
     let px = &shot.pixels[idx..idx + 3];
     Some([px[0], px[1], px[2]])
+}
+
+fn count_accent_pixels(shot: &cranpose::RobotScreenshot, region: (f32, f32, f32, f32)) -> usize {
+    let scale = shot.width as f32 / WINDOW_WIDTH as f32;
+    let (left, top, right, bottom) = region;
+    let (left, top, right, bottom) = (
+        (left * scale).max(0.0) as u32,
+        (top * scale).max(0.0) as u32,
+        ((right * scale) as u32).min(shot.width),
+        ((bottom * scale) as u32).min(shot.height),
+    );
+    let mut count = 0usize;
+    for y in top..bottom {
+        for x in left..right {
+            let index = ((y * shot.width + x) * 4) as usize;
+            let r = shot.pixels[index];
+            let g = shot.pixels[index + 1];
+            let b = shot.pixels[index + 2];
+            if r > 190 && r.saturating_sub(g) > 70 && b.saturating_sub(g) > 25 {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {

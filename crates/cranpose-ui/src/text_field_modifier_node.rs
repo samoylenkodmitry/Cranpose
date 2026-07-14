@@ -21,7 +21,7 @@ use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
     LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode, PointerSource,
+    NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode,
     SemanticsConfiguration, SemanticsNode, Size,
 };
 use cranpose_ui_graphics::{Brush, Color, Point};
@@ -29,14 +29,16 @@ use std::cell::{Cell, RefCell};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-/// Live geometry a `BasicTextField` needs to place and drive its finger
-/// selection handles: whether the field is focused and was touched, its
+/// Live geometry a `BasicTextField` needs to place and drive its selection
+/// handles: whether the field is focused and is under direct manipulation, its
 /// on-screen origin (window coordinates) and the metrics that map a window
 /// position back to a text offset.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TextFieldHandleMetrics {
     pub focused: bool,
-    pub touch: bool,
+    /// A primary pointer has interacted with the focused field. Mouse, touch,
+    /// and pen all expose the same draggable selection mechanics.
+    pub direct_manipulation: bool,
     /// Field node's top-left in window coordinates.
     pub node_origin: Point,
     pub padding_left: f32,
@@ -50,9 +52,9 @@ pub struct TextFieldHandleMetrics {
     /// Width the field wrapped its text at (`None` for single-line fields).
     /// Lets the handles resolve the same visual (wrapped) lines the caret does.
     pub wrap_width: Option<f32>,
-    /// Live touch press on the text surface (window space) — the widget's
+    /// Live pointer press on the text surface (window space) — the widget's
     /// long-press → slide-to-menu gesture reads this stream.
-    pub press: Option<TouchPressTrack>,
+    pub press: Option<PointerPressTrack>,
 }
 
 /// Shared channel by which a `TextFieldModifierNode` publishes its live handle
@@ -348,10 +350,10 @@ pub(crate) struct TextFieldRefs {
     /// Horizontal scroll (pan) offset in px for single-line fields.
     /// Keeps the cursor visible when the text is wider than the field.
     pub scroll_offset: Rc<Cell<f32>>,
-    /// Device source of the most recent pointer press on the field. Drives
-    /// touch-only affordances: finger selection handles are shown for touch /
-    /// stylus presses, while a mouse keeps a clean caret.
-    pub last_pointer_source: Rc<Cell<PointerSource>>,
+    /// Whether the focused field has been entered through a primary pointer.
+    /// This is source-independent: desktop mouse, touch, and pen share the
+    /// same direct-manipulation selection UI.
+    pub direct_manipulation: Rc<Cell<bool>>,
     /// Field node's top-left in window coordinates, derived from the most recent
     /// pointer event (`global_position - position`). Used to place selection
     /// handles in the top-level overlay, which is in window space.
@@ -364,20 +366,19 @@ pub(crate) struct TextFieldRefs {
     /// single-line fields). Shared with the node's `measured_wrap_width` so the
     /// pointer handler resolves the same wrapped lines the renderer draws.
     pub wrap_width: Rc<Cell<Option<f32>>>,
-    /// Live touch press on the text surface (window space), for the widget
-    /// layer's long-press → slide-to-menu gesture. `None` outside a
-    /// touch-like press.
-    pub press_track: Rc<Cell<Option<TouchPressTrack>>>,
+    /// Live primary-pointer press on the text surface (window space), for the
+    /// widget layer's long-press → slide-to-menu gesture.
+    pub press_track: Rc<Cell<Option<PointerPressTrack>>>,
     /// Set by the widget when its long-press watcher claims the active
     /// gesture: the node then stops drag-selecting on Move and the press
     /// positions feed the menu slide instead.
     pub gesture_claimed: Rc<Cell<bool>>,
 }
 
-/// A live touch-like press on the text surface, published by the field node
+/// A live primary-pointer press on the text surface, published by the field node
 /// for the widget layer (window coordinates).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TouchPressTrack {
+pub struct PointerPressTrack {
     /// Where the press went down.
     pub start: Point,
     /// The press's current position.
@@ -397,11 +398,11 @@ impl TextFieldRefs {
             click_count: Rc::new(Cell::new(0_u8)),
             node_id: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
             scroll_offset: Rc::new(Cell::new(0.0_f32)),
-            last_pointer_source: Rc::new(Cell::new(PointerSource::Unknown)),
+            direct_manipulation: Rc::new(Cell::new(false)),
             node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
             line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
             wrap_width: Rc::new(Cell::new(None::<f32>)),
-            press_track: Rc::new(Cell::new(None::<TouchPressTrack>)),
+            press_track: Rc::new(Cell::new(None::<PointerPressTrack>)),
             gesture_claimed: Rc::new(Cell::new(false)),
         }
     }
@@ -622,20 +623,15 @@ impl TextFieldModifierNode {
 
             match event.kind {
                 PointerEventKind::Down => {
-                    // Remember the device that pressed so the draw closure can
-                    // show finger selection handles for touch/stylus and keep a
-                    // clean caret for a mouse.
-                    refs.last_pointer_source.set(event.source);
-
-                    // Publish a live touch press for the widget layer's
-                    // long-press → slide-to-menu gesture.
-                    if event.source.is_touch_like() {
-                        refs.press_track.set(Some(TouchPressTrack {
-                            start: event.global_position,
-                            position: event.global_position,
-                        }));
-                        refs.gesture_claimed.set(false);
-                    }
+                    // Direct selection mechanics are source-independent:
+                    // mouse, touch and pen all expose handles and the same
+                    // continuous long-press → slide-to-menu gesture.
+                    refs.direct_manipulation.set(true);
+                    refs.press_track.set(Some(PointerPressTrack {
+                        start: event.global_position,
+                        position: event.global_position,
+                    }));
+                    refs.gesture_claimed.set(false);
 
                     // Request focus with O(1) handler, passing node_id and line
                     // limits for key handling plus the live geometry cells the
@@ -827,6 +823,11 @@ impl TextFieldModifierNode {
         let current = *self.refs.is_focused.borrow();
         if current != focused {
             *self.refs.is_focused.borrow_mut() = focused;
+            if !focused {
+                self.refs.direct_manipulation.set(false);
+                self.refs.press_track.set(None);
+                self.refs.gesture_claimed.set(false);
+            }
         }
     }
 
@@ -1177,7 +1178,7 @@ impl DrawModifierNode for TextFieldModifierNode {
         let pan_resolver = self.cached_pan_resolver.clone();
         let handle_controller = self.handle_controller.clone();
         let node_origin = self.refs.node_origin.clone();
-        let last_pointer_source = self.refs.last_pointer_source.clone();
+        let direct_manipulation = self.refs.direct_manipulation.clone();
         let press_track = self.refs.press_track.clone();
         let gesture_claimed = self.refs.gesture_claimed.clone();
 
@@ -1189,7 +1190,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                 if let Some(controller) = &handle_controller {
                     controller.publish(TextFieldHandleMetrics {
                         focused: false,
-                        touch: false,
+                        direct_manipulation: false,
                         node_origin: node_origin.get(),
                         padding_left: 0.0,
                         padding_top: 0.0,
@@ -1224,7 +1225,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                 controller.adopt_gesture_claim(&gesture_claimed);
                 controller.publish(TextFieldHandleMetrics {
                     focused: true,
-                    touch: last_pointer_source.get().is_touch_like(),
+                    direct_manipulation: direct_manipulation.get(),
                     node_origin: node_origin.get(),
                     padding_left,
                     padding_top,
@@ -1779,16 +1780,12 @@ mod tests {
         });
     }
 
-    /// End-to-end guard for the touch-vs-mouse finger-handle pipeline through
-    /// the real pointer handler and draw closure: a Touch-source press makes the
-    /// focused field publish `touch = true` (so `SelectionHandles` shows the
-    /// finger cursor/selection handles and the Copy/Cut/Paste popup), while a
-    /// Mouse-source press publishes `touch = false` (a clean caret, no handles).
-    /// The published `touch` flag is exactly what the overlay is gated on, so
-    /// this pins the source → `last_pointer_source` → metrics link the Android
-    /// touch handles depend on.
+    /// End-to-end guard for source-independent direct manipulation through the
+    /// real pointer handler and draw closure. Keyboard-only focus keeps a clean
+    /// caret; touch, mouse, and stylus presses publish handles and a continuous
+    /// press stream for long-press → slide-to-menu.
     #[test]
-    fn touch_press_publishes_touch_handle_metrics_but_mouse_does_not() {
+    fn every_primary_pointer_source_publishes_direct_manipulation_metrics() {
         use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
         use cranpose_ui_graphics::Point;
 
@@ -1796,7 +1793,7 @@ mod tests {
         with_test_runtime(|| {
             let state = TextFieldState::new("hello world");
             let controller = TextFieldHandleController::new();
-            let node = TextFieldModifierNode::new(state.clone(), TextStyle::default())
+            let mut node = TextFieldModifierNode::new(state.clone(), TextStyle::default())
                 .with_handle_controller(controller.clone());
             // Give the field a measured size so the draw closure has geometry.
             node.measured_size.set(Size {
@@ -1816,8 +1813,13 @@ mod tests {
                 height: 20.0,
             };
 
-            // Touch tap: the field focuses and remembers the touch source, so
-            // its draw closure publishes touch = true.
+            node.set_focused(true);
+            let _ = draw(size);
+            let keyboard_metrics = controller
+                .metrics()
+                .expect("focused field publishes handle metrics");
+            assert!(!keyboard_metrics.direct_manipulation);
+
             handler(
                 PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
             );
@@ -1827,12 +1829,11 @@ mod tests {
                 .expect("focused field publishes handle metrics");
             assert!(metrics.focused, "a tap focuses the field");
             assert!(
-                metrics.touch,
-                "a touch tap must publish touch = true so the finger handles show"
+                metrics.direct_manipulation,
+                "a touch tap must expose direct-manipulation handles"
             );
+            assert!(metrics.press.is_some(), "touch must publish the live press");
 
-            // Mouse tap on the same field: the source flips to mouse, so the
-            // field publishes touch = false (clean caret, no finger handles).
             handler(
                 PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Mouse),
             );
@@ -1841,8 +1842,26 @@ mod tests {
                 .metrics()
                 .expect("focused field publishes handle metrics");
             assert!(
-                !metrics.touch,
-                "a mouse tap must publish touch = false (clean caret, no finger handle)"
+                metrics.direct_manipulation,
+                "a mouse tap must expose the same direct-manipulation handles"
+            );
+            assert!(metrics.press.is_some(), "mouse must publish the live press");
+
+            handler(
+                PointerEvent::new(PointerEventKind::Down, at, at)
+                    .with_source(PointerSource::Stylus),
+            );
+            let _ = draw(size);
+            let metrics = controller
+                .metrics()
+                .expect("focused field publishes handle metrics");
+            assert!(
+                metrics.direct_manipulation,
+                "a stylus contact must expose the same direct-manipulation handles"
+            );
+            assert!(
+                metrics.press.is_some(),
+                "stylus must publish the live press"
             );
 
             crate::text_field_focus::clear_focus();

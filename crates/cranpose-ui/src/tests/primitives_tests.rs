@@ -722,6 +722,52 @@ fn box_with_constraints_composes_different_content() {
 }
 
 #[test]
+fn box_with_constraints_places_child_modifier_offset() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let child_id = Rc::new(Cell::new(None::<NodeId>));
+    let child_id_capture = Rc::clone(&child_id);
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            let child_id_capture = Rc::clone(&child_id_capture);
+            BoxWithConstraints(Modifier::empty(), move |_scope| {
+                child_id_capture.set(Some(Text(
+                    "offset child",
+                    Modifier::empty()
+                        .size(Size {
+                            width: 30.0,
+                            height: 20.0,
+                        })
+                        .offset(-10.0, -14.0),
+                    TextStyle::default(),
+                )));
+            });
+        })
+        .expect("render succeeds");
+
+    let root = composition.root().expect("root node");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let _layout_tree = applier
+        .compute_layout(
+            root,
+            Size {
+                width: 100.0,
+                height: 80.0,
+            },
+        )
+        .expect("compute layout");
+    let child_node_id = child_id.get().expect("subcomposed child id");
+    let position = applier
+        .with_node::<LayoutNode, _>(child_node_id, |node| node.position())
+        .expect("subcomposed child layout node");
+    applier.clear_runtime_handle();
+    assert_eq!(position.x, -10.0);
+    assert_eq!(position.y, -14.0);
+}
+
+#[test]
 fn box_with_constraints_reacts_to_constraint_changes() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());

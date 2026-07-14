@@ -241,11 +241,14 @@ wait_for_host_capacity() {
         return 0
     fi
 
-    local min_cpu_mhz="${CRANPOSE_HOST_MIN_CPU_MHZ:-1000}"
-    local max_temp_c="${CRANPOSE_HOST_MAX_TEMP_C:-90}"
-    local resume_temp_c="${CRANPOSE_HOST_RESUME_TEMP_C:-85}"
-    local cooldown_secs="${CRANPOSE_HOST_COOLDOWN_SECS:-30}"
-    local max_wait_secs="${CRANPOSE_HOST_MAX_WAIT_SECS:-300}"
+    # Frequency-scaled CPUs commonly idle below 1GHz and boost as soon as work
+    # starts. A minimum is therefore opt-in; temperature remains the default
+    # capacity guard.
+    local min_cpu_mhz="${CRANPOSE_HOST_MIN_CPU_MHZ:-0}"
+    local max_temp_c="${CRANPOSE_HOST_MAX_TEMP_C:-95}"
+    local resume_temp_c="${CRANPOSE_HOST_RESUME_TEMP_C:-94}"
+    local cooldown_secs="${CRANPOSE_HOST_COOLDOWN_SECS:-10}"
+    local max_wait_secs="${CRANPOSE_HOST_MAX_WAIT_SECS:-900}"
     local elapsed=0
     local waiting_for_temp=0
 
@@ -256,7 +259,9 @@ wait_for_host_capacity() {
         unhealthy=0
         reason=""
 
-        if [ -n "$min_mhz" ] && number_lt "$min_mhz" "$min_cpu_mhz"; then
+        if number_gt "$min_cpu_mhz" "0" \
+            && [ -n "$min_mhz" ] \
+            && number_lt "$min_mhz" "$min_cpu_mhz"; then
             echo "host capacity guard refusing $label: cpu below ${min_cpu_mhz}MHz; $(host_state_summary)" >&2
             return 1
         fi

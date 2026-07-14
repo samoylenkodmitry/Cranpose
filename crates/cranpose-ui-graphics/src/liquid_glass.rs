@@ -9,7 +9,24 @@
 //! Typically chained after a [`RenderEffect::blur`] over the backdrop for the
 //! frosted "regular" material; used alone for the "clear" material.
 
-use crate::{Color, RenderEffect, RuntimeShader};
+use crate::{Color, GlassProfileCurve, GlassSurfaceProfile, RenderEffect, RuntimeShader};
+
+/// Uniform slot containing whether the physical surface has non-zero depth.
+pub const GLASS_SURFACE_ENABLED_UNIFORM: usize = 113;
+/// Uniform slot containing the superellipse radial power.
+pub const GLASS_SURFACE_RADIAL_POWER_UNIFORM: usize = 114;
+/// Uniform slot containing the X-Z profile knot count.
+pub const GLASS_SURFACE_X_COUNT_UNIFORM: usize = 115;
+/// Uniform slot containing the Y-Z profile knot count.
+pub const GLASS_SURFACE_Y_COUNT_UNIFORM: usize = 116;
+/// Uniform slot containing the physical profile depth in logical pixels.
+pub const GLASS_SURFACE_DEPTH_UNIFORM: usize = 117;
+/// First uniform slot containing X-Z `(position, height, tangent)` knots.
+pub const GLASS_SURFACE_X_UNIFORM_BASE: usize = 120;
+/// First uniform slot containing Y-Z `(position, height, tangent)` knots.
+pub const GLASS_SURFACE_Y_UNIFORM_BASE: usize = 140;
+/// Uniform slot containing the oval-to-toric principal-axis coupling.
+pub const GLASS_SURFACE_AXIS_COUPLING_UNIFORM: usize = 158;
 
 /// LiquidGlass WGSL shader source.
 ///
@@ -26,7 +43,6 @@ use crate::{Color, RenderEffect, RuntimeShader};
 ///   7: bezel width dp
 ///   8: displacement scale (px at 1x)
 ///   9: refractive index (1.0 = none, higher = more bending)
-///  10: profile exponent (0 = circle, 1 = squircle)
 ///  11: highlight intensity
 ///  12,13: tilt (x, y) — motion-driven displacement direction
 ///  14,15,16,17: tint color (r,g,b,a)
@@ -36,13 +52,19 @@ use crate::{Color, RenderEffect, RuntimeShader};
 ///  21: dither amount (0..1, in 1/255 steps)
 ///  22,23: specular light direction ((0,1) lights the top edge)
 ///  24: contrast (1.0 = neutral; ≤0 treated as 1.0)
-///  25: edge-band fraction of the bezel carrying the strong lens + CA
 ///  80: loupe mode (>0.5 replaces the lens terms with the drop optic)
 ///  81,82: loupe focus offset from the shape center (dp)
 ///  83: loupe center magnification (m0)
 ///  84: loupe band start (depth fraction 0..1 where the rim fold begins)
 ///  85: loupe fold peak (sampling reach at the fold crest, in inradius units)
 ///  86: loupe band dispersion strength
+/// 113: physical surface enabled
+/// 114: oval/superellipse radial power
+/// 115,116: X-Z and Y-Z knot counts
+/// 117: physical surface depth dp
+/// 118,119: principal-axis spectral response (X-Z, Y-Z)
+/// 120..137: X-Z knots as `(position, height, tangent)`
+/// 140..157: Y-Z knots as `(position, height, tangent)`
 pub const LIQUID_GLASS_WGSL: &str = include_str!("../shaders/liquid_glass.wgsl");
 
 /// Configuration for the LiquidGlass effect.
@@ -56,8 +78,8 @@ pub struct LiquidGlassSpec {
     pub displacement_scale: f32,
     /// Refractive index (1.0 = no refraction, higher = more bending).
     pub refractive_index: f32,
-    /// Surface profile exponent: 0 = circle, 1 = squircle.
-    pub profile: f32,
+    /// Physical X-Z/Y-Z cross-sections of the glass surface.
+    pub surface_profile: GlassSurfaceProfile,
     /// Specular highlight intensity.
     pub highlight: f32,
     /// Motion tilt (x) — gesture/device-motion displacement input.
@@ -68,15 +90,14 @@ pub struct LiquidGlassSpec {
     pub saturation: f32,
     /// Chromatic aberration spread at the bezel (0 = off, ~0.4 = iOS-like).
     pub chromatic_aberration: f32,
+    /// Principal-axis wavelength response for the X-Z and Y-Z profiles.
+    pub dispersion_axes: (f32, f32),
     /// Scheme lift: positive screen-blends toward white (light scheme),
     /// negative multiplies toward black (dark scheme). Screen keeps the
     /// backdrop ghosts colored, unlike an alpha mix.
     pub lift: f32,
     /// Contrast pivot around mid-gray (1.0 = neutral).
     pub contrast: f32,
-    /// Fraction of the bezel forming the steep edge-lens band (also carries
-    /// the chromatic aberration).
-    pub edge_band: f32,
     /// Anti-banding dither amount (0..1, in 1/255 steps).
     pub dither: f32,
     /// Specular light direction; `(0, 1)` lights the top edge.
@@ -90,15 +111,15 @@ impl Default for LiquidGlassSpec {
             bezel_width: 14.0,
             displacement_scale: 24.0,
             refractive_index: 1.5,
-            profile: 0.6,
+            surface_profile: GlassSurfaceProfile::regular(),
             highlight: 0.7,
             tilt_angle: 0.0,
             tilt_pitch: 0.0,
             saturation: 1.0,
             chromatic_aberration: 0.0,
+            dispersion_axes: (1.0, 1.0),
             lift: 0.0,
             contrast: 1.0,
-            edge_band: 0.5,
             dither: 0.5,
             light_direction: (0.0, 1.0),
         }
@@ -145,7 +166,6 @@ pub fn liquid_glass_effect(
     shader.set_float(7, spec.bezel_width);
     shader.set_float(8, spec.displacement_scale);
     shader.set_float(9, spec.refractive_index);
-    shader.set_float(10, spec.profile);
     shader.set_float(11, spec.highlight);
     shader.set_float2(12, spec.tilt_angle, spec.tilt_pitch);
     shader.set_float4(
@@ -157,12 +177,13 @@ pub fn liquid_glass_effect(
     );
     shader.set_float(18, spec.saturation);
     shader.set_float(19, spec.chromatic_aberration);
+    shader.set_float2(118, spec.dispersion_axes.0, spec.dispersion_axes.1);
     shader.set_float(20, spec.lift);
     shader.set_float(21, spec.dither);
     shader.set_float2(22, spec.light_direction.0, spec.light_direction.1);
     shader.set_float(24, spec.contrast);
-    shader.set_float(25, spec.edge_band);
-    shader.set_input_padding(liquid_glass_input_padding(spec));
+    apply_glass_surface_profile(&mut shader, spec.surface_profile, 1.0);
+    shader.set_input_padding(liquid_glass_input_padding(spec, rect.width, rect.height));
 
     RenderEffect::runtime_shader(shader)
 }
@@ -171,12 +192,14 @@ pub fn liquid_glass_effect(
 /// the backdrop capture must cover it. The displacement is
 /// `(normal + tilt) * bend * scale` with the chromatic-aberration spread on
 /// top; `|normal| = 1`, so the static lens contributes even with zero tilt.
-fn liquid_glass_input_padding(spec: &LiquidGlassSpec) -> f32 {
+fn liquid_glass_input_padding(spec: &LiquidGlassSpec, width: f32, height: f32) -> f32 {
     let bend = 1.0 - 1.0 / spec.refractive_index.max(1.0001);
     let tilt = (spec.tilt_angle * spec.tilt_angle + spec.tilt_pitch * spec.tilt_pitch).sqrt();
-    let reach = 1.0 + tilt;
-    let slope = liquid_glass_max_lens_slope(spec.profile);
-    let spread = 1.0 + spec.chromatic_aberration.max(0.0) * 0.5;
+    let half_extent = 0.5 * width.min(height).max(1.0);
+    let slope = glass_surface_max_slope(spec.surface_profile, half_extent);
+    let reach = slope + tilt;
+    let axis_scale = spec.dispersion_axes.0.max(spec.dispersion_axes.1);
+    let spread = 1.0 + axis_scale * spec.chromatic_aberration.max(0.0) * 0.5;
     let displacement = reach * bend * spec.displacement_scale.max(0.0) * slope * spread;
     if displacement > 0.0 {
         displacement.ceil() + 2.0
@@ -185,11 +208,58 @@ fn liquid_glass_input_padding(spec: &LiquidGlassSpec) -> f32 {
     }
 }
 
-/// Largest combined lens factor the shader can produce: the squircle edge
-/// band peaks at 4 at the rim, plus 0.35 × the dome slope.
-fn liquid_glass_max_lens_slope(profile: f32) -> f32 {
-    let p = profile.clamp(0.0, 1.0);
-    4.0 + 0.35 * (2.0 + 2.0 * p)
+/// Conservative maximum physical slope of a surface whose smaller half
+/// extent is `half_extent`.
+pub fn glass_surface_max_slope(profile: GlassSurfaceProfile, half_extent: f32) -> f32 {
+    let x_slope = curve_max_abs_tangent(profile.x_profile());
+    let y_slope = curve_max_abs_tangent(profile.y_profile());
+    // The second term conservatively covers the derivative of the X/Y blend
+    // weight on strongly non-circular superellipses.
+    let blend_slope = profile.radial_power() * 0.5;
+    (x_slope.max(y_slope) + blend_slope) * profile.depth() / half_extent.max(1.0)
+}
+
+fn curve_max_abs_tangent(profile: GlassProfileCurve) -> f32 {
+    (0..=64)
+        .map(|step| profile.evaluate(step as f32 / 64.0).1.abs())
+        .fold(0.0, f32::max)
+}
+
+/// Packs one physical surface definition into the shared liquid-glass shader
+/// layout. `depth_scale` converts the authored logical depth into the shader's
+/// geometry units without changing the cross-sections.
+pub fn apply_glass_surface_profile(
+    shader: &mut RuntimeShader,
+    profile: GlassSurfaceProfile,
+    depth_scale: f32,
+) {
+    let depth = profile.depth() * depth_scale.max(0.0);
+    shader.set_float(
+        GLASS_SURFACE_ENABLED_UNIFORM,
+        if depth > f32::EPSILON { 1.0 } else { 0.0 },
+    );
+    shader.set_float(GLASS_SURFACE_RADIAL_POWER_UNIFORM, profile.radial_power());
+    shader.set_float(
+        GLASS_SURFACE_X_COUNT_UNIFORM,
+        profile.x_profile().knots().len() as f32,
+    );
+    shader.set_float(
+        GLASS_SURFACE_Y_COUNT_UNIFORM,
+        profile.y_profile().knots().len() as f32,
+    );
+    shader.set_float(GLASS_SURFACE_DEPTH_UNIFORM, depth);
+    shader.set_float(GLASS_SURFACE_AXIS_COUPLING_UNIFORM, profile.axis_coupling());
+    pack_profile_curve(shader, GLASS_SURFACE_X_UNIFORM_BASE, profile.x_profile());
+    pack_profile_curve(shader, GLASS_SURFACE_Y_UNIFORM_BASE, profile.y_profile());
+}
+
+fn pack_profile_curve(shader: &mut RuntimeShader, base: usize, profile: GlassProfileCurve) {
+    for (index, knot) in profile.knots().iter().enumerate() {
+        let offset = base + index * 3;
+        shader.set_float(offset, knot.position());
+        shader.set_float(offset + 1, knot.height());
+        shader.set_float(offset + 2, knot.tangent());
+    }
 }
 
 /// The text-drag loupe material: a solid glass drop magnifying an offset
@@ -223,8 +293,7 @@ pub struct LiquidLoupeSpec {
     pub highlight: f32,
     /// Content alpha (0..1): 1 while the lens lives (grow included — the
     /// optics never animate); the dissolve lowers it, blending the whole
-    /// lens output toward the plain backdrop (the measured fade plateaus
-    /// near ~0.65 before the terminal vanish).
+    /// lens output toward the plain backdrop before the terminal vanish.
     pub progress: f32,
     /// Corner radius (dp). The newborn reference is a flat-topped SQUIRCLE,
     /// not a circle: the caller passes ~0.38·height at birth, morphing to
@@ -237,24 +306,23 @@ impl Default for LiquidLoupeSpec {
         Self {
             magnification: 1.25,
             focus_offset: (0.0, 75.0),
-            // Measured: the fold owns the outer ~30% of the depth on the
-            // long edges; its sampling starts fully PAST the handle dot's
-            // zone (band through the dot mirrored its bottom into a skirt)
-            // and reaches the next text line's x-band, mirrored near 1:1.
-            band_start: 0.78,
+            // The fold occupies the outer 40% of the long-edge depth. The center
+            // handle occludes it while the remaining band mirrors the next
+            // line near 1:1.
+            band_start: 0.60,
             fold_peak: 0.80,
             // The reference fringes measure 3-5 px (at 3x) IN the band and
             // RAMP continuously along mirrored strokes (R-B splitting from
             // ~10 to ~50-60 channel units tip-to-tip). 0.15 left the
             // x-chroma sub-pixel through most of the band — strokes read
             // rigid/un-fringed until the rim.
-            dispersion: 0.35,
+            dispersion: 0.20,
             seam_lift: 26.0,
             // The reference rim reads as a clear bright line around the whole
             // capsule (peak ~+127 luminance over the backdrop); the
             // interactive-lens rim gain is a whisper, so the loupe drives it
             // through its highlight (calibrated on captures).
-            highlight: 4.4,
+            highlight: 6.2,
             progress: 1.0,
             corner_radius: 0.0,
         }
@@ -306,6 +374,8 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     shader.set_float(86, spec.dispersion);
     shader.set_float(87, spec.seam_lift);
     shader.set_float(90, alpha.max(1.0e-3));
+    shader.set_float2(118, 1.0, 1.0);
+    apply_glass_surface_profile(&mut shader, GlassSurfaceProfile::lens(), 1.0);
     // The capture must cover the farthest sample: the focus offset plus the
     // fold reach past the bubble edge (in dp; paddings are logical units).
     let r_in = 0.5 * w.min(h);
@@ -339,7 +409,6 @@ pub fn liquid_menu_glass_effect(
     shader.set_float(8, 2.5 * p); // subtle edge refraction (the reference
                                   // menu barely bends what grazes its edge)
     shader.set_float(9, 1.4);
-    shader.set_float(10, 0.6);
     shader.set_float(11, 0.19 * p); // rim intensity (the reference settled
                                     // pill peaks ~x1.9 of its baseline on
                                     // BOTH long edges)
@@ -358,7 +427,14 @@ pub fn liquid_menu_glass_effect(
     // Measured on captures: (0,1) puts the crisp arc on the TOP edge with
     // the 0.45x counter on the bottom — the reference hierarchy.
     shader.set_float2(22, 0.0, 1.0);
-    shader.set_float(25, 0.5);
+    shader.set_float2(118, 1.0, 1.0);
+    apply_glass_surface_profile(
+        &mut shader,
+        GlassSurfaceProfile::regular()
+            .with_depth(2.4)
+            .expect("menu surface depth is valid"),
+        1.0,
+    );
     shader.set_input_padding(12.0);
     let lens = RenderEffect::runtime_shader(shader);
     if blur_radius_px > 0.5 {
@@ -412,6 +488,75 @@ mod tests {
     }
 
     #[test]
+    fn physical_surface_blends_oval_and_biconic_axis_profiles() {
+        assert!(LIQUID_GLASS_WGSL.contains("fn sample_profile"));
+        assert!(LIQUID_GLASS_WGSL.contains("fn sample_glass_surface"));
+        assert!(LIQUID_GLASS_WGSL.contains("let y_weight = b / q"));
+        assert!(LIQUID_GLASS_WGSL.contains("let profile_delta = y_sample.height - x_sample.height"));
+        assert!(LIQUID_GLASS_WGSL.contains("profile_delta * dw_du"));
+        assert!(LIQUID_GLASS_WGSL.contains("profile_delta * dw_dv"));
+        assert!(LIQUID_GLASS_WGSL.contains("let axis_coupling = clamp(get_float(158u)"));
+        assert!(LIQUID_GLASS_WGSL.contains("let coupling_weight = axis_coupling;"));
+        assert!(LIQUID_GLASS_WGSL.contains("let toric_height ="));
+        assert!(
+            LIQUID_GLASS_WGSL.contains("let height = oval_height + height_delta * coupling_weight")
+        );
+        assert!(LIQUID_GLASS_WGSL.contains("(toric_dz_du - oval_dz_du) * coupling_weight"));
+        assert!(LIQUID_GLASS_WGSL.contains("(toric_dz_dv - oval_dz_dv) * coupling_weight"));
+        assert!(!LIQUID_GLASS_WGSL.contains("coupling_gradient"));
+        assert!(!LIQUID_GLASS_WGSL.contains("recessed_face_gradient"));
+        assert!(!LIQUID_GLASS_WGSL.contains("d_height_dx"));
+    }
+
+    #[test]
+    fn one_surface_normal_drives_refraction_dispersion_and_lighting() {
+        assert!(LIQUID_GLASS_WGSL.contains("let optical_gradient = surface_gradient + tilt * 0.18"));
+        assert!(LIQUID_GLASS_WGSL.contains("let surface_normal = normalize"));
+        assert!(
+            LIQUID_GLASS_WGSL.contains("base_displacement = -optical_gradient * bend * disp_scale")
+        );
+        assert!(LIQUID_GLASS_WGSL.contains("spectral_displacement = base_displacement"));
+        assert!(
+            LIQUID_GLASS_WGSL.contains("base_displacement + spectral_displacement * (scale - 1.0)")
+        );
+        assert!(LIQUID_GLASS_WGSL.contains("dot(surface_normal, half_direction)"));
+        assert!(!LIQUID_GLASS_WGSL.contains("inner_contour"));
+        assert!(!LIQUID_GLASS_WGSL.contains("magnify != 1.0"));
+    }
+
+    #[test]
+    fn returning_meniscus_uses_normal_driven_transmission_loss() {
+        assert!(LIQUID_GLASS_WGSL.contains("let return_transmission ="));
+        assert!(LIQUID_GLASS_WGSL.contains("return_transmission * mix(0.008, 0.11, rim_style)"));
+        assert!(!LIQUID_GLASS_WGSL.contains("painted_ridge"));
+    }
+
+    #[test]
+    fn content_recolor_detects_bounded_broad_glyphs_at_multiple_scales() {
+        assert!(LIQUID_GLASS_WGSL.contains("fn sampled_luma"));
+        assert!(LIQUID_GLASS_WGSL.contains("let detail_step = vec2<f32>(4.5 * s)"));
+        assert!(LIQUID_GLASS_WGSL.contains("let support_step = vec2<f32>(18.0 * s)"));
+        assert!(LIQUID_GLASS_WGSL.contains("let bounded_dark_region"));
+        assert!(
+            LIQUID_GLASS_WGSL.contains("max(edge_detail, max(dark_stroke, bounded_dark_region))")
+        );
+        assert!(
+            LIQUID_GLASS_WGSL.contains("let recolor_face = mix(1.0, 1.0 - smoothstep(0.82, 0.98")
+        );
+        assert!(!LIQUID_GLASS_WGSL.contains("let recolor_face = mix(1.0, surface_interior"));
+        let recolor = LIQUID_GLASS_WGSL
+            .find("if content_detail > 0.0")
+            .expect("content recolor stage");
+        let tone = LIQUID_GLASS_WGSL
+            .find("// Tone pipeline")
+            .expect("tone stage");
+        let frost = LIQUID_GLASS_WGSL
+            .find("// Adaptive frost")
+            .expect("adaptive frost stage");
+        assert!(recolor < tone && tone < frost);
+    }
+
+    #[test]
     fn liquid_glass_effect_uniforms() {
         let rect = LiquidGlassRect {
             left: 100.0,
@@ -423,11 +568,14 @@ mod tests {
         let spec = LiquidGlassSpec {
             saturation: 1.6,
             chromatic_aberration: 0.4,
+            dispersion_axes: (0.25, 1.75),
             lift: 0.12,
             contrast: 1.05,
-            edge_band: 0.4,
             dither: 1.0,
             light_direction: (0.3, 0.7),
+            surface_profile: GlassSurfaceProfile::lens()
+                .with_axis_coupling(0.35)
+                .expect("axis coupling"),
             ..LiquidGlassSpec::default()
         };
         let effect = liquid_glass_effect(&rect, &spec, 800.0, 600.0);
@@ -454,7 +602,19 @@ mod tests {
         assert_eq!(u[22], 0.3);
         assert_eq!(u[23], 0.7);
         assert_eq!(u[24], 1.05);
-        assert_eq!(u[25], 0.4);
+        assert_eq!(u[113], 1.0);
+        assert_eq!(u[114], spec.surface_profile.radial_power());
+        assert_eq!(
+            u[115],
+            spec.surface_profile.x_profile().knots().len() as f32
+        );
+        assert_eq!(
+            u[116],
+            spec.surface_profile.y_profile().knots().len() as f32
+        );
+        assert_eq!(u[117], spec.surface_profile.depth());
+        assert_eq!(&u[118..120], &[0.25, 1.75]);
+        assert_eq!(u[158], 0.35);
     }
 
     #[test]
@@ -478,12 +638,26 @@ mod tests {
             panic!("expected Shader effect");
         };
         let bend = 1.0 - 1.0 / spec.refractive_index;
-        let min_padding = bend * spec.displacement_scale;
+        let slope = glass_surface_max_slope(spec.surface_profile, 50.0);
+        let min_padding = bend * spec.displacement_scale * slope;
         assert!(
             shader.input_padding() >= min_padding,
             "static lensing must capture backdrop beyond the rect: {} < {min_padding}",
             shader.input_padding()
         );
+    }
+
+    #[test]
+    fn surface_slope_scales_with_depth_and_inverse_extent() {
+        let profile = GlassSurfaceProfile::lens();
+        let base = glass_surface_max_slope(profile, 20.0);
+        let deep = glass_surface_max_slope(
+            profile.with_depth(profile.depth() * 2.0).expect("depth"),
+            20.0,
+        );
+        let wide = glass_surface_max_slope(profile, 40.0);
+        assert!((deep / base - 2.0).abs() < 1.0e-5);
+        assert!((wide / base - 0.5).abs() < 1.0e-5);
     }
 
     #[test]
@@ -511,7 +685,7 @@ mod tests {
         };
         let bend = 1.0 - 1.0 / spec.refractive_index.max(1.0001);
         let tilt = (spec.tilt_angle * spec.tilt_angle + spec.tilt_pitch * spec.tilt_pitch).sqrt();
-        let slope = 2.0 + 2.0 * spec.profile.clamp(0.0, 1.0);
+        let slope = glass_surface_max_slope(spec.surface_profile, 50.0);
         let spread = 1.0 + spec.chromatic_aberration * 0.5;
         let max_displacement = (1.0 + tilt) * bend * spec.displacement_scale * slope * spread;
         assert!(

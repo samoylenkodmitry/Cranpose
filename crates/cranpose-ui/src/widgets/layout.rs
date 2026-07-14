@@ -101,17 +101,15 @@ pub fn SubcomposeLayout(
     let id = cranpose_core::with_current_composer(|composer| {
         composer.emit_node(|| SubcomposeLayoutNode::new(modifier.clone(), Rc::clone(&policy)))
     });
-    // Capture the composition locals in scope here (compose time) so the
-    // measure-pass subcomposition can replay them: content subcomposed off the
-    // measure pass then observes the same composition locals as this call site,
-    // instead of the locals in scope during layout (which no longer carry
-    // ancestor providers once composition has unwound).
-    let captured_locals =
-        cranpose_core::with_current_composer(|composer| composer.capture_composition_locals());
+    // Measure-time composition inherits both locals and the source scope. The
+    // ownership link prevents secondary-host callbacks from outliving this
+    // composition while preserving the call-site local providers.
+    let captured_context =
+        cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut SubcomposeLayoutNode| {
         node.set_modifier(modifier.clone());
         node.set_measure_policy(Rc::clone(&policy));
-        node.set_captured_locals(captured_locals.clone());
+        node.set_captured_context(captured_context.clone());
         if policy_captures_changed {
             node.request_measure_recompose();
         }

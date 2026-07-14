@@ -12,7 +12,10 @@
 
 use crate::launcher::{AppSettings, LaunchError};
 use crate::wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame};
-use cranpose_app_shell::{default_root_key, AppShell, PointerSource};
+use crate::winit_pointer::{
+    is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
+};
+use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::EdgeInsets;
@@ -20,27 +23,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
-use winit::event::{ButtonSource, ElementState, PointerSource as WinitPointerSource, WindowEvent};
-
-/// Maps a winit pointer-move source onto the framework [`PointerSource`].
-fn pointer_source_from_winit(source: &WinitPointerSource) -> PointerSource {
-    match source {
-        WinitPointerSource::Mouse => PointerSource::Mouse,
-        WinitPointerSource::Touch { .. } => PointerSource::Touch,
-        WinitPointerSource::TabletTool { .. } => PointerSource::Stylus,
-        _ => PointerSource::Unknown,
-    }
-}
-
-/// Maps a winit button source onto the framework [`PointerSource`].
-fn pointer_source_from_button(button: &ButtonSource) -> PointerSource {
-    match button {
-        ButtonSource::Mouse(_) => PointerSource::Mouse,
-        ButtonSource::Touch { .. } => PointerSource::Touch,
-        ButtonSource::TabletTool { .. } => PointerSource::Stylus,
-        _ => PointerSource::Unknown,
-    }
-}
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowAttributes, WindowId};
 
@@ -418,9 +401,9 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             WindowEvent::PointerButton {
                 state,
                 position,
-                button: button @ (ButtonSource::Mouse(_) | ButtonSource::Touch { .. }),
+                button,
                 ..
-            } => {
+            } if is_primary_pointer_button(&button) => {
                 let logical = self.platform.pointer_position(position);
                 if let Some(shell) = self.shell.as_mut() {
                     shell.set_pointer_source(pointer_source_from_button(&button));

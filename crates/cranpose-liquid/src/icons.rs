@@ -32,8 +32,18 @@ pub const STAR: &str =
 pub const BOOKMARK: &str = "M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z";
 pub const EYE: &str = "M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z";
 pub const HOME: &str = "M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z";
+pub const APPLE: &str = "M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.47-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 8.57 7.31c1.34-.07 2.29.74 3.08.74.76 0 2.21-.91 3.72-.77.63.03 2.4.25 3.54 1.92-3.27 1.79-2.76 6.08.57 7.41-.67 1.76-1.54 3.5-2.89 4.87M12.03 7.25C11.88 4.62 13.99 2.45 16.44 2.25c.34 3.04-2.76 5.3-4.41 5";
+pub const ACCOUNT_CIRCLE: &str = "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z";
+pub const SHOPPING_BAG: &str = "M5 8h14c1.1 0 2 .9 2 2v9c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-9c0-1.1.9-2 2-2zM5 5h14v2H5zM7 2h10v2H7z";
+pub const LAYERS: &str = "M12 2 2 7l10 5 10-5-10-5zM2 12l10 5 10-5v3l-10 5-10-5v-3z";
+pub const ROCKET: &str = "M13.5 2C17 3 20 6.5 20 10l-5.2 5.2-6-6L13.5 2zM8.8 9.2 4 10.5 2 14l5.5-.5 1.3-4.3zM14.8 15.2 13.5 22l3.5-2 1.3-4.8h-3.5zM6 17c-2 0-3 2-3 4 2 0 4-1 4-3l-1-1zM15.5 6.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z";
+pub const JOYSTICK: &str = "M11 2h2v7h-2V2zm1 6c4.42 0 8 2.24 8 5s-3.58 5-8 5-8-2.24-8-5 3.58-5 8-5zm-5 5h2v-2h2v2h2v2h-2v2H9v-2H7v-2zm8-1h2v2h-2v-2zM5 18h14l2 4H3l2-4z";
 pub const GRID: &str =
     "M4 11h5V5H4v6zm0 7h5v-6H4v6zm6 0h5v-6h-5v6zm6 0h5v-6h-5v6zm-6-7h5V5h-5v6zm6-6v6h5V5h-5z";
+pub const LIST: &str =
+    "M4 5h3v3H4V5zm5 0h11v3H9V5zM4 10.5h3v3H4v-3zm5 0h11v3H9v-3zM4 16h3v3H4v-3zm5 0h11v3H9v-3z";
+pub const GRID_OUTLINE: &str = "M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm8-2h8v8h-8v-8zm2 2v4h4v-4h-4z";
+pub const LIST_OUTLINE: &str = "M4 5h2v2H4V5zm5 .25h11v1.5H9v-1.5zM4 11h2v2H4v-2zm5 .25h11v1.5H9v-1.5zM4 17h2v2H4v-2zm5 .25h11v1.5H9v-1.5z";
 pub const DOWNLOAD: &str = "M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z";
 pub const EDIT: &str = "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z";
 pub const GEAR: &str = SETTINGS;
@@ -63,4 +73,18 @@ pub fn Icon(path: &'static str, size: f32, color: Color) {
         BoxSpec::default(),
         || {},
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shopping_bag_has_the_stacked_tab_icon_silhouette() {
+        let bounds = VectorPath::parse(SHOPPING_BAG)
+            .expect("shopping bag path")
+            .bounds();
+        assert!((bounds.width - 18.0).abs() < 1.0e-4);
+        assert!((bounds.height - 19.0).abs() < 1.0e-4);
+    }
 }

@@ -62,6 +62,7 @@ enum PendingInput {
     PointerDown(f32, f32, Option<i64>, PointerSource),
     PointerUp(f32, f32, Option<i64>, PointerSource),
     PointerMove(f32, f32, Option<i64>, PointerSource),
+    PointerCancel,
     /// Translated key event (physical keyboard or soft-keyboard fallback
     /// input), routed to the focused text field via `AppShell::on_key_event`.
     Key(KeyEvent),
@@ -449,6 +450,11 @@ fn push_pending_inputs_from_android_event(
                     (false, None) => {}
                 }
             }
+            true
+        }
+        android_activity::input::MotionAction::Cancel => {
+            pending_inputs.push(PendingInput::PointerCancel);
+            *primary_pointer_id = None;
             true
         }
         _ => false,
@@ -1664,14 +1670,16 @@ pub fn run(
                                 PointerSource::Touch,
                             ));
                         }
-                        android_overlay_window::AndroidOverlayPointerAction::Up
-                        | android_overlay_window::AndroidOverlayPointerAction::Cancel => {
+                        android_overlay_window::AndroidOverlayPointerAction::Up => {
                             pending_inputs.push(PendingInput::PointerUp(
                                 logical.x as f32,
                                 logical.y as f32,
                                 None,
                                 PointerSource::Touch,
                             ));
+                        }
+                        android_overlay_window::AndroidOverlayPointerAction::Cancel => {
+                            pending_inputs.push(PendingInput::PointerCancel);
                         }
                         android_overlay_window::AndroidOverlayPointerAction::Move => {
                             pending_inputs.push(PendingInput::PointerMove(
@@ -1754,6 +1762,9 @@ pub fn run(
                         PendingInput::PointerMove(x, y, time_ms, source) => {
                             shell.set_pointer_source(source);
                             shell.set_cursor_at_time(x, y, time_ms);
+                        }
+                        PendingInput::PointerCancel => {
+                            shell.cancel_gesture();
                         }
                         PendingInput::Key(event) => {
                             shell.on_key_event(&event);

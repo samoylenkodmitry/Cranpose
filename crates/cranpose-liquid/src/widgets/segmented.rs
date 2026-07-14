@@ -1,7 +1,7 @@
 //! Segmented control with a liquid selection blob: the glass pill behind the
 //! selected segment runs its leading and trailing edges on different springs,
 //! so it stretches like a droplet while traveling and settles round. Touching
-//! it lifts the indicator into a magnifying glass lens that chases the finger
+//! it lifts the indicator into a magnifying glass lens that follows the finger
 //! across the segments (the reference control swipes, it doesn't just tap).
 
 use crate::material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape};
@@ -9,7 +9,7 @@ use crate::motion::LiquidMotion;
 use crate::theme::{liquid_colors, liquid_typography};
 use cranpose_animation::{animateFloatAsState, spring};
 use cranpose_core::{mutableStateOf, remember};
-use cranpose_foundation::PointerEventKind;
+use cranpose_foundation::{PointerEventKind, PointerId};
 use cranpose_macros::composable;
 use cranpose_services::{default_haptics, HapticFeedback};
 use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle};
@@ -17,7 +17,7 @@ use cranpose_ui::widgets::{
     Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Row, RowSpec, Text,
 };
 use cranpose_ui::{Modifier, PointerInputScope, Size};
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, GlassSurfaceProfile, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 use std::rc::Rc;
 
@@ -29,6 +29,14 @@ const LENS_OVERFLOW: f32 = 8.0;
 const LENS_PAD: f32 = 10.0;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
+
+fn plain_indicator_alpha(lens_progress: f32) -> f32 {
+    ((0.18 - lens_progress) / 0.16).clamp(0.0, 1.0)
+}
+
+fn segment_lens_left(pointer_x: f32, segment_width: f32, count: usize) -> f32 {
+    (pointer_x - segment_width * 0.5).clamp(0.0, segment_width * (count.saturating_sub(1)) as f32)
+}
 
 /// A segmented control. `labels` are equal-width segments; `selected` is the
 /// active index; `on_select` receives the committed index. Segments tap AND
@@ -48,8 +56,6 @@ pub fn LiquidSegmentedControl(
     let on_select: Rc<dyn Fn(usize)> = Rc::new(on_select);
     let labels = Rc::new(labels);
 
-    // Some(finger x) while dragging; the indicator target follows it.
-    let drag_x = remember(|| mutableStateOf(Option::<f32>::None)).with(|s| *s);
     let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
 
     let track_fill = colors.fill;
@@ -72,32 +78,29 @@ pub fn LiquidSegmentedControl(
             let on_select = Rc::clone(&on_select);
             let total_width = scope.constraints().max_width.max(1.0);
             let segment_width = total_width / count as f32;
+            let selected_x = segment_width * selected as f32;
+            let lens_axis = crate::motion::remember_liquid_drag_axis(selected_x);
+            lens_axis.settle_to(selected_x, LiquidMotion::glide());
+            let lens_x = lens_axis.value();
 
-            // While dragging, the indicator target is the finger-centered
-            // segment position (clamped inside the track); at rest it is the
-            // committed segment. Both edges keep their droplet springs, so a
-            // release settles from the drag with velocity preserved.
-            let indicator_target = match drag_x.get() {
-                Some(x) => {
-                    (x - segment_width * 0.5).clamp(0.0, segment_width * (count as f32 - 1.0))
-                }
-                None => segment_width * selected as f32,
-            };
+            // The resting indicator belongs to controlled state. The
+            // interaction lens has a separate direct-drag axis: it reads the
+            // raw pointer while held and only springs after release.
             let leading = animateFloatAsState(
-                indicator_target,
+                selected_x,
                 LiquidMotion::blob_leading(),
                 "segmented-leading",
             );
             let trailing = animateFloatAsState(
-                indicator_target + segment_width,
+                selected_x + segment_width,
                 LiquidMotion::blob_trailing(),
                 "segmented-trailing",
             );
 
             // Lens presence: up while touched, lingering decay on release
             // (the indicator stays liquid through the settle flight).
-            let lens_settling = (leading.get() - indicator_target).abs() > 1.0;
-            let lens_target = if pressed.get() || (drag_x.get().is_none() && lens_settling) {
+            let lens_settling = !lens_axis.is_dragging() && (lens_x - selected_x).abs() > 1.0;
+            let lens_target = if pressed.get() || lens_settling {
                 1.0
             } else {
                 0.0
@@ -127,7 +130,7 @@ pub fn LiquidSegmentedControl(
                         translation_x: lead,
                         scale_x: ((trail - lead) / segment_width.max(1.0)).max(0.01),
                         // The plain fill hides while the lens is up.
-                        alpha: (1.0 - lens_for_indicator.get()).clamp(0.0, 1.0),
+                        alpha: plain_indicator_alpha(lens_for_indicator.get()),
                         // Scale from the leading edge so translation stays exact.
                         transform_origin: cranpose_ui_graphics::TransformOrigin {
                             pivot_fraction_x: 0.0,
@@ -188,38 +191,53 @@ pub fn LiquidSegmentedControl(
             // Swipe/tap surface across the whole control.
             let gesture = Modifier::empty()
                 .size(Size::new(total_width, SEGMENT_HEIGHT))
-                .pointer_input((), {
+                .pointer_input(selected, {
                     let on_select = Rc::clone(&on_select);
+                    let lens_axis = Rc::clone(&lens_axis);
                     move |scope: PointerInputScope| {
                         let on_select = Rc::clone(&on_select);
+                        let lens_axis = Rc::clone(&lens_axis);
                         async move {
                             scope
                                 .await_pointer_event_scope(|await_scope| async move {
                                     let mut down_x = 0.0f32;
-                                    let mut active = false;
+                                    let mut active_pointer = Option::<PointerId>::None;
                                     loop {
                                         let event = await_scope.await_pointer_event().await;
-                                        if event.id != 0 {
-                                            continue;
-                                        }
                                         match event.kind {
-                                            PointerEventKind::Down => {
-                                                active = true;
+                                            PointerEventKind::Down if active_pointer.is_none() => {
+                                                active_pointer = Some(event.id);
                                                 down_x = event.position.x;
                                                 pressed.set(true);
-                                                drag_x.set(Some(event.position.x));
+                                                lens_axis.begin(
+                                                    segment_lens_left(
+                                                        event.position.x,
+                                                        segment_width,
+                                                        count,
+                                                    ),
+                                                    event.time_ms,
+                                                );
                                                 default_haptics()
                                                     .perform(HapticFeedback::Selection);
                                                 event.consume();
                                             }
-                                            PointerEventKind::Move if active => {
-                                                drag_x.set(Some(event.position.x));
+                                            PointerEventKind::Move
+                                                if active_pointer == Some(event.id) =>
+                                            {
+                                                lens_axis.move_to(
+                                                    segment_lens_left(
+                                                        event.position.x,
+                                                        segment_width,
+                                                        count,
+                                                    ),
+                                                    event.time_ms,
+                                                );
                                                 event.consume();
                                             }
-                                            PointerEventKind::Up | PointerEventKind::Cancel
-                                                if active =>
+                                            PointerEventKind::Up
+                                                if active_pointer == Some(event.id) =>
                                             {
-                                                active = false;
+                                                active_pointer = None;
                                                 pressed.set(false);
                                                 let travelled =
                                                     (event.position.x - down_x).abs() > TAP_SLOP;
@@ -232,10 +250,26 @@ pub fn LiquidSegmentedControl(
                                                     ((position / segment_width).floor().max(0.0)
                                                         as usize)
                                                         .min(count - 1);
-                                                drag_x.set(None);
+                                                lens_axis.release_to(
+                                                    segment_width * index as f32,
+                                                    event.time_ms,
+                                                    LiquidMotion::glide(),
+                                                );
                                                 default_haptics()
                                                     .perform(HapticFeedback::ImpactLight);
                                                 on_select(index);
+                                                event.consume();
+                                            }
+                                            PointerEventKind::Cancel
+                                                if active_pointer == Some(event.id) =>
+                                            {
+                                                active_pointer = None;
+                                                pressed.set(false);
+                                                lens_axis.release_to(
+                                                    selected_x,
+                                                    event.time_ms,
+                                                    LiquidMotion::glide(),
+                                                );
                                                 event.consume();
                                             }
                                             _ => {}
@@ -252,22 +286,42 @@ pub fn LiquidSegmentedControl(
             // magnifies the label under it and bulges along the travel.
             if lens_progress.get() > 0.01 {
                 let lens_h = SEGMENT_HEIGHT + LENS_OVERFLOW;
-                let node_w = segment_width + LENS_PAD * 2.0;
-                let node_h = lens_h + LENS_PAD * 2.0;
+                let deformation_headroom =
+                    crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
+                let node_w = (segment_width + 4.0) * deformation_headroom
+                    + crate::dynamics::BULGE_MAX
+                    + LENS_PAD * 2.0;
+                let node_h =
+                    lens_h * deformation_headroom + crate::dynamics::BULGE_MAX + LENS_PAD * 2.0;
                 let lens_for_layer = lens_progress;
-                let dynamics = crate::dynamics::remember_liquid_dynamics();
+                let physics_axis = Rc::clone(&lens_axis);
                 let lens = Modifier::empty()
                     // required_size: taller than the track; the fixed-height
                     // host keeps the control's layout put.
                     .required_size(Size::new(node_w, node_h))
-                    .offset(-LENS_PAD, (SEGMENT_HEIGHT - node_h) * 0.5)
+                    .offset(
+                        (segment_width - node_w) * 0.5,
+                        (SEGMENT_HEIGHT - node_h) * 0.5,
+                    )
                     .graphics_layer(move || GraphicsLayer {
-                        translation_x: leading.get(),
+                        translation_x: lens_x,
                         alpha: (lens_for_layer.get() * 2.5).clamp(0.0, 1.0),
                         ..Default::default()
                     })
                     .glass_effect_with(
-                        Glass::lens().shape(LiquidShape::Capsule).no_clip(),
+                        Glass::lens()
+                            .shape(LiquidShape::Capsule)
+                            .tint(Color::rgba(1.0, 1.0, 1.0, 0.05))
+                            .surface_profile(
+                                GlassSurfaceProfile::lens()
+                                    .with_depth(6.8)
+                                    .expect("segmented surface depth is valid"),
+                            )
+                            .highlight(0.52)
+                            .chromatic_aberration(2.4)
+                            .displacement(24.0)
+                            .content_recolor(colors.accent, 1.0)
+                            .no_clip(),
                         move || {
                             let grow = lens_for_layer.get().clamp(0.0, 1.2);
                             let base_w = segment_width + 4.0 * grow;
@@ -275,20 +329,21 @@ pub fn LiquidSegmentedControl(
                             // Droplet law over the indicator ride
                             // (crate::dynamics): speed stretches the capsule
                             // along the travel, braking swells its front.
-                            let pose = dynamics.update((leading.get(), 0.0));
-                            let (w, h) = pose.size(base_w, base_h);
+                            let pose = physics_axis.liquid_pose();
                             GlassDynamics {
                                 morph: Some(GlassMorph {
                                     node_size: (node_w, node_h),
-                                    primary: (node_w * 0.5, node_h * 0.5, w, h, -1.0),
+                                    primary: (node_w * 0.5, node_h * 0.5, base_w, base_h, -1.0),
                                     shapes: Vec::new(),
                                     glue: 0.0,
                                     wobble_amplitude: 0.0,
                                     wobble_phase: 0.0,
                                     bulge_amplitude: pose.bulge_amplitude.min(6.0),
                                     bulge_direction: pose.bulge_direction,
+                                    ellipse_blend: 0.0,
+                                    deformation: Some(pose.deformation()),
                                 }),
-                                magnify_boost: 0.18,
+                                surface_depth_boost: 0.18,
                                 ..Default::default()
                             }
                         },
@@ -297,4 +352,28 @@ pub fn LiquidSegmentedControl(
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_position_is_the_clamped_lens_center() {
+        let width = 100.0;
+        assert_eq!(segment_lens_left(50.0, width, 3), 0.0);
+        assert_eq!(segment_lens_left(150.0, width, 3), 100.0);
+        assert_eq!(segment_lens_left(250.0, width, 3), 200.0);
+        assert_eq!(segment_lens_left(-50.0, width, 3), 0.0);
+        assert_eq!(segment_lens_left(400.0, width, 3), 200.0);
+    }
+
+    #[test]
+    fn plain_indicator_stays_hidden_until_the_lens_is_almost_gone() {
+        assert_eq!(plain_indicator_alpha(1.0), 0.0);
+        assert_eq!(plain_indicator_alpha(0.5), 0.0);
+        assert_eq!(plain_indicator_alpha(0.2), 0.0);
+        assert!(plain_indicator_alpha(0.05) > 0.8);
+        assert_eq!(plain_indicator_alpha(0.0), 1.0);
+    }
 }

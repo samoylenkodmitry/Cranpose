@@ -35,7 +35,7 @@ pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
 pub use callbacks::{CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot};
-pub use composer::{CapturedCompositionLocals, Composer, ValueSlotHandle};
+pub use composer::{CapturedCompositionContext, Composer, ValueSlotHandle};
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{
@@ -443,6 +443,7 @@ pub(crate) struct RecomposeScopeInner {
     parent_hint: Cell<Option<NodeId>>,
     recompose: RefCell<Option<RecomposeCallback>>,
     parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
+    lifetime_owner_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
     local_stack: RefCell<LocalStackSnapshot>,
     slots_storage_key: Cell<usize>,
     slots_runtime_state: RefCell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
@@ -466,6 +467,7 @@ impl RecomposeScopeInner {
             parent_hint: Cell::new(None),
             recompose: RefCell::new(None),
             parent_scope: RefCell::new(None),
+            lifetime_owner_scope: RefCell::new(None),
             local_stack: RefCell::new(empty_local_stack()),
             slots_storage_key: Cell::new(0),
             slots_runtime_state: RefCell::new(None),
@@ -550,6 +552,28 @@ impl RecomposeScope {
         self.inner.active.get()
     }
 
+    pub(crate) fn is_effectively_active(&self) -> bool {
+        let mut current = Some(self.clone());
+        while let Some(scope) = current {
+            if !scope.is_active() {
+                return false;
+            }
+            let structural_parent = scope.inner.parent_scope.borrow().clone();
+            let lifetime_owner = scope.inner.lifetime_owner_scope.borrow().clone();
+            let next = structural_parent.or(lifetime_owner);
+            current = match next {
+                Some(parent) => {
+                    let Some(inner) = parent.upgrade() else {
+                        return false;
+                    };
+                    Some(RecomposeScope { inner })
+                }
+                None => None,
+            };
+        }
+        true
+    }
+
     fn record_state_subscription(&self, state_id: StateId) {
         self.inner.state_subscriptions.borrow_mut().insert(state_id);
     }
@@ -567,7 +591,7 @@ impl RecomposeScope {
 
     fn enqueue_invalidation(&self) {
         self.inner.invalid.set(true);
-        if !self.inner.active.get() {
+        if !self.is_effectively_active() {
             return;
         }
         if !self.inner.enqueued.replace(true) {
@@ -675,6 +699,20 @@ impl RecomposeScope {
             .map(|inner| RecomposeScope { inner })
     }
 
+    fn set_lifetime_owner_scope(&self, owner: Option<RecomposeScope>) {
+        *self.inner.lifetime_owner_scope.borrow_mut() = owner.map(|scope| scope.downgrade());
+    }
+
+    #[cfg(test)]
+    fn lifetime_owner_scope(&self) -> Option<RecomposeScope> {
+        self.inner
+            .lifetime_owner_scope
+            .borrow()
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .map(|inner| RecomposeScope { inner })
+    }
+
     fn callback_promotion_target(&self) -> Option<RecomposeScope> {
         let mut current = self.parent_scope();
         while let Some(scope) = current {
@@ -718,11 +756,18 @@ impl RecomposeScope {
         }
     }
 
-    pub fn reactivate(&self) {
-        if self.inner.active.replace(true) {
-            return;
+    pub(crate) fn defer_until_reactivated(&self) {
+        if self.inner.enqueued.replace(false) {
+            self.inner.runtime.mark_scope_recomposed(self.id());
         }
-        if self.inner.invalid.get() && !self.inner.enqueued.replace(true) {
+    }
+
+    pub fn reactivate(&self) {
+        self.inner.active.set(true);
+        if self.inner.invalid.get()
+            && self.is_effectively_active()
+            && !self.inner.enqueued.replace(true)
+        {
             self.inner
                 .runtime
                 .register_invalid_scope(self.id(), self.downgrade());

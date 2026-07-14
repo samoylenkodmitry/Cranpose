@@ -1612,9 +1612,19 @@ impl LayoutBuilderState {
                 // container's tighter constraints.
                 Self::measure_node(Rc::clone(&state_rc), placement.node_id, inner_constraints)?
             };
-            let position = Point {
+            let policy_position = Point {
                 x: padding.left + placement.x,
                 y: padding.top + placement.y,
+            };
+            // Subcompose policies return raw placements and bypass the
+            // child's `Placeable::place`, which normally adds the modifier
+            // chain's node offset. Retained rendering reads the live node
+            // position, so it must receive that same final coordinate. The
+            // measured-tree edge keeps the raw policy position because
+            // `build_layout_tree` applies `child.offset` itself.
+            let retained_position = Point {
+                x: policy_position.x + child.offset.x,
+                y: policy_position.y + child.offset.y,
             };
 
             // Critical: Update the child's retained placement state.
@@ -1627,20 +1637,20 @@ impl LayoutBuilderState {
             if let Ok(mut applier) = applier_host.try_borrow_typed() {
                 if applier
                     .with_node::<LayoutNode, _>(placement.node_id, |node| {
-                        node.set_position(position);
+                        node.set_position(retained_position);
                     })
                     .is_err()
                 {
                     let _ =
                         applier.with_node::<SubcomposeLayoutNode, _>(placement.node_id, |node| {
-                            node.set_position(position);
+                            node.set_position(retained_position);
                         });
                 }
             }
 
             children.push(MeasuredChild {
                 node: child,
-                offset: position,
+                offset: policy_position,
             });
         }
 

@@ -142,6 +142,9 @@ pub mod desktop;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_input;
 
+#[cfg(any(feature = "desktop-shell", all(feature = "ios", target_os = "ios")))]
+mod winit_pointer;
+
 /// Renderer-agnostic robot testing harness shared by the desktop shells.
 #[cfg(all(
     feature = "robot",

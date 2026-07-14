@@ -26,8 +26,15 @@ pub mod motion;
 pub mod theme;
 pub mod widgets;
 
+pub use cranpose_ui_graphics::{
+    GlassProfileCurve, GlassProfileError, GlassProfileKnot, GlassSurfaceProfile,
+    MAX_GLASS_PROFILE_KNOTS,
+};
 pub use dynamics::{remember_liquid_dynamics, LiquidDynamics, LiquidPose};
-pub use material::{Glass, GlassDynamics, GlassVariant, LiquidModifierExt, LiquidShape};
+pub use material::{
+    Glass, GlassDeformation, GlassDynamics, GlassShadow, GlassVariant, LiquidModifierExt,
+    LiquidShape,
+};
 pub use motion::{liquid_press_scale, LiquidMotion};
 pub use theme::{
     liquid_colors, liquid_typography, LiquidColors, LiquidTheme, LiquidThemeSpec, LiquidTypography,
@@ -39,11 +46,18 @@ pub use widgets::*;
 pub mod prelude {
     pub use crate::dynamics::{remember_liquid_dynamics, LiquidDynamics, LiquidPose};
     pub use crate::icons;
-    pub use crate::material::{Glass, GlassDynamics, GlassVariant, LiquidModifierExt, LiquidShape};
+    pub use crate::material::{
+        Glass, GlassDeformation, GlassDynamics, GlassShadow, GlassVariant, LiquidModifierExt,
+        LiquidShape,
+    };
     pub use crate::motion::{liquid_press_scale, LiquidMotion};
     pub use crate::theme::{
         liquid_colors, liquid_typography, LiquidColors, LiquidTheme, LiquidThemeSpec,
         LiquidTypography, SchemeMode,
     };
     pub use crate::widgets::*;
+    pub use cranpose_ui_graphics::{
+        GlassProfileCurve, GlassProfileError, GlassProfileKnot, GlassSurfaceProfile,
+        MAX_GLASS_PROFILE_KNOTS,
+    };
 }

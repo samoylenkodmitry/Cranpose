@@ -7,8 +7,8 @@ use crate::theme::LiquidColors;
 use cranpose_ui::current_density;
 use cranpose_ui::Modifier;
 use cranpose_ui_graphics::{
-    Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader,
-    LIQUID_GLASS_WGSL,
+    apply_glass_surface_profile, glass_surface_max_slope, Color, GlassSurfaceProfile,
+    GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader, LIQUID_GLASS_WGSL,
 };
 use std::rc::Rc;
 
@@ -72,6 +72,28 @@ pub enum GlassVariant {
     Lens,
 }
 
+/// Shadow owned by a glass surface. Morphing glass evaluates the same live
+/// SDF for this shadow; clipped static glass forwards the values to the layer
+/// shadow primitive.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassShadow {
+    pub color: Color,
+    pub radius: f32,
+    pub offset_y: f32,
+    pub spread: f32,
+}
+
+impl GlassShadow {
+    pub fn new(color: Color, radius: f32, offset_y: f32, spread: f32) -> Self {
+        Self {
+            color,
+            radius: radius.max(0.0),
+            offset_y,
+            spread,
+        }
+    }
+}
+
 /// Per-frame motion inputs for an interactive glass element, read lazily at
 /// scene-build time (no recomposition per frame).
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -80,12 +102,30 @@ pub struct GlassDynamics {
     pub tilt: (f32, f32),
     /// Extra specular intensity (0 = spec default; e.g. press boost).
     pub highlight_boost: f32,
-    /// Extra magnification over the variant's base (the moving lens
-    /// magnifies harder than a resting one).
-    pub magnify_boost: f32,
+    /// Optional per-frame multiplier for the material tint alpha. This lets a
+    /// resting selection wash clear continuously as its lens enters flight.
+    pub tint_alpha_multiplier: Option<f32>,
+    /// Extra physical Z depth over the material profile's base depth. Motion
+    /// can deepen the same surface without switching to a separate zoom law.
+    pub surface_depth_boost: f32,
+    /// Motion-state multiplier for displacement and spectral separation.
+    /// Zero keeps the material's full resolved strength; positive values
+    /// explicitly scale it, allowing one persistent body to become quieter
+    /// at rest without cross-fading to another component.
+    pub optical_strength: f32,
     /// Shape morph: when set, the glass geometry is these node-local rects
     /// instead of the node cover — the shapeshift channel.
     pub morph: Option<GlassMorph>,
+}
+
+pub(crate) fn neutral_surface_tint(foreground: Color, light_alpha: f32, dark_alpha: f32) -> Color {
+    let foreground_luma =
+        0.2126 * foreground.r() + 0.7152 * foreground.g() + 0.0722 * foreground.b();
+    if foreground_luma < 0.5 {
+        Color::BLACK.with_alpha(light_alpha.clamp(0.0, 1.0))
+    } else {
+        Color::WHITE.with_alpha(dark_alpha.clamp(0.0, 1.0))
+    }
 }
 
 /// A liquid shapeshift frame: the primary shape plus any number of nearby
@@ -119,6 +159,50 @@ pub struct GlassMorph {
     /// pulled droplet. Amplitude in dp, usually driven by morph velocity.
     pub bulge_amplitude: f32,
     pub bulge_direction: f32,
+    /// Blends the primary rounded-rectangle field toward an ellipse. This is
+    /// used by expanding droplets whose broad phase has continuous curvature
+    /// rather than the straight sides of a capsule.
+    pub ellipse_blend: f32,
+    /// Area-preserving affine strain applied to the primary shape. Extra
+    /// scene shapes remain fixed so nearby glass can join the travelling
+    /// droplet without being dragged through its local deformation.
+    pub deformation: Option<GlassDeformation>,
+}
+
+/// A normalized motion axis and reciprocal scales for incompressible glass.
+/// Construction derives the cross-axis scale, so callers cannot describe a
+/// deformation that changes the bubble's area.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassDeformation {
+    axis: (f32, f32),
+    along: f32,
+}
+
+impl GlassDeformation {
+    pub fn incompressible(axis: (f32, f32), along: f32) -> Self {
+        let length = (axis.0 * axis.0 + axis.1 * axis.1).sqrt();
+        let axis = if length > f32::EPSILON {
+            (axis.0 / length, axis.1 / length)
+        } else {
+            (1.0, 0.0)
+        };
+        Self {
+            axis,
+            along: along.max(f32::EPSILON),
+        }
+    }
+
+    pub fn axis(self) -> (f32, f32) {
+        self.axis
+    }
+
+    pub fn along(self) -> f32 {
+        self.along
+    }
+
+    pub fn across(self) -> f32 {
+        1.0 / self.along
+    }
 }
 
 impl GlassMorph {
@@ -140,25 +224,35 @@ pub struct Glass {
     pub saturation: Option<f32>,
     /// Chromatic aberration spread at the bezel.
     pub chromatic_aberration: f32,
+    /// Principal-axis wavelength response for the X-Z and Y-Z profiles.
+    pub dispersion_axes: (f32, f32),
     /// Lens strength: refraction displacement in px.
     pub displacement: f32,
     /// Bezel width in dp (the refractive rim zone).
     pub bezel_width: f32,
     /// Specular rim intensity.
     pub highlight: f32,
+    /// Physical X-Z/Y-Z cross-sections for the surface.
+    pub surface_profile: GlassSurfaceProfile,
+    /// Broad Fresnel sheen across the bezel. `None` uses the variant default.
+    pub sheen: Option<f32>,
     /// Screen-lift override (brightening toward white; negative darkens).
     /// Defaults per variant.
     pub lift: Option<f32>,
     /// Drop shadow below the glass.
     pub shadow: bool,
+    /// Per-surface shadow override.
+    pub shadow_style: Option<GlassShadow>,
     /// Clip the layer to `shape`. Morphing glass disables this — coverage
     /// comes entirely from the shader's SDF.
     pub clip: bool,
-    /// Backdrop-adaptive legibility strength (0 = off). Positive protects a
-    /// LIGHT foreground: the glass darkens over bright backdrops (no
-    /// white-on-white). Negative protects a DARK foreground: it lightens
-    /// over dark backdrops.
-    pub adaptive_contrast: f32,
+    /// Foreground color whose contrast the frost must protect. `None` uses
+    /// the theme label color.
+    pub foreground: Option<Color>,
+    /// Strength of backdrop+foreground frost adaptation.
+    pub adaptive_frost: f32,
+    /// Accent applied only to dark foreground detail sampled inside the glass.
+    pub content_recolor: Option<(Color, f32)>,
     /// Top-edge fold strength (0 = off): content just above the glass
     /// renders vertically mirrored inside the top band (the reference bar's
     /// meniscus folds section headers upside-down into it).
@@ -174,13 +268,19 @@ impl Glass {
             blur_radius: None,
             saturation: None,
             chromatic_aberration: 0.5,
+            dispersion_axes: (1.0, 1.0),
             displacement: 22.0,
             bezel_width: 12.0,
             highlight: 0.9,
+            surface_profile: GlassSurfaceProfile::regular(),
+            sheen: None,
             lift: None,
             shadow: true,
+            shadow_style: None,
             clip: true,
-            adaptive_contrast: 0.0,
+            foreground: None,
+            adaptive_frost: 0.65,
+            content_recolor: None,
             edge_fold: 0.0,
         }
     }
@@ -199,21 +299,26 @@ impl Glass {
         Self {
             variant: GlassVariant::Lens,
             shape: LiquidShape::Capsule,
-            tint: Some(Color::rgba(1.0, 1.0, 1.0, 0.0)),
+            tint: Some(Color::rgba(1.0, 1.0, 1.0, 0.07)),
             blur_radius: None,
             saturation: None,
             chromatic_aberration: 3.2,
+            dispersion_axes: (1.0, 1.0),
             displacement: 30.0,
-            // Rim-hugging: refraction, dispersion and sheen live in a thin
-            // band at the edge; the interior is pure crisp magnification
-            // (a whole-element bezel made the edge term fight the magnify
-            // pull mid-face — double images of whatever sat under the lens).
-            bezel_width: 16.0,
+            // One compact signed cross-section owns the raised lip and the
+            // recessed-face return. A wide band reads as two concentric
+            // bevels and consumes most of the smaller toggle lens.
+            bezel_width: 10.0,
             highlight: 1.15,
+            surface_profile: GlassSurfaceProfile::lens(),
+            sheen: None,
             lift: None,
             shadow: true,
+            shadow_style: None,
             clip: true,
-            adaptive_contrast: 0.0,
+            foreground: None,
+            adaptive_frost: 0.0,
+            content_recolor: None,
             edge_fold: 0.0,
         }
     }
@@ -243,13 +348,33 @@ impl Glass {
         self
     }
 
+    pub fn dispersion_axes(mut self, x: f32, y: f32) -> Self {
+        self.dispersion_axes = (x.clamp(0.0, 4.0), y.clamp(0.0, 4.0));
+        self
+    }
+
     pub fn displacement(mut self, displacement_px: f32) -> Self {
         self.displacement = displacement_px;
         self
     }
 
+    pub fn bezel_width(mut self, width_dp: f32) -> Self {
+        self.bezel_width = width_dp.max(0.0);
+        self
+    }
+
     pub fn highlight(mut self, highlight: f32) -> Self {
         self.highlight = highlight;
+        self
+    }
+
+    pub fn surface_profile(mut self, profile: GlassSurfaceProfile) -> Self {
+        self.surface_profile = profile;
+        self
+    }
+
+    pub fn sheen(mut self, sheen: f32) -> Self {
+        self.sheen = Some(sheen);
         self
     }
 
@@ -260,8 +385,14 @@ impl Glass {
         self
     }
 
-    pub fn adaptive_contrast(mut self, strength: f32) -> Self {
-        self.adaptive_contrast = strength;
+    pub fn adaptive_frost(mut self, foreground: Color, strength: f32) -> Self {
+        self.foreground = Some(foreground);
+        self.adaptive_frost = strength.clamp(0.0, 1.0);
+        self
+    }
+
+    pub fn content_recolor(mut self, color: Color, strength: f32) -> Self {
+        self.content_recolor = Some((color, strength.clamp(0.0, 1.0)));
         self
     }
 
@@ -272,6 +403,11 @@ impl Glass {
 
     pub fn shadow(mut self, shadow: bool) -> Self {
         self.shadow = shadow;
+        self
+    }
+
+    pub fn shadow_style(mut self, shadow: GlassShadow) -> Self {
+        self.shadow_style = Some(shadow);
         self
     }
 
@@ -314,6 +450,32 @@ impl Glass {
             (GlassVariant::Lens, false) => 0.10,
             (GlassVariant::Lens, true) => -0.08,
         });
+        let foreground = self.foreground.unwrap_or(colors.label);
+        let shadow = self.shadow_style.unwrap_or_else(|| {
+            GlassShadow::new(
+                Color::BLACK.with_alpha(match (self.variant, colors.is_dark) {
+                    (GlassVariant::Lens, false) => 0.14,
+                    (GlassVariant::Lens, true) => 0.28,
+                    (_, false) => 0.16,
+                    (_, true) => 0.5,
+                }),
+                if self.variant == GlassVariant::Lens {
+                    10.0
+                } else {
+                    22.0
+                },
+                if self.variant == GlassVariant::Lens {
+                    3.0
+                } else {
+                    8.0
+                },
+                if self.variant == GlassVariant::Lens {
+                    -6.0
+                } else {
+                    -2.0
+                },
+            )
+        });
         ResolvedGlass {
             shape: self.shape,
             tint: self.tint.unwrap_or(colors.glass_tint),
@@ -322,71 +484,39 @@ impl Glass {
                 .unwrap_or_else(|| self.default_blur_radius()),
             saturation: self.saturation.unwrap_or_else(|| self.default_saturation()),
             chromatic_aberration: self.chromatic_aberration,
+            dispersion_axes: self.dispersion_axes,
             displacement: self.displacement,
             bezel_width_dp: self.bezel_width,
             highlight: self.highlight,
+            surface_profile: self.surface_profile,
             lift,
             contrast: if self.variant == GlassVariant::Lens {
                 1.0
             } else {
                 1.03
             },
-            edge_band: if self.variant == GlassVariant::Lens {
-                0.35
-            } else {
-                0.4
-            },
             shadow: self.shadow,
             clip: self.clip,
-            dome_direction: if self.variant == GlassVariant::Lens {
-                -1.0
-            } else {
-                1.0
-            },
-            adaptive_contrast: self.adaptive_contrast,
+            foreground_luma: 0.2126 * foreground.r()
+                + 0.7152 * foreground.g()
+                + 0.0722 * foreground.b(),
+            adaptive_frost: self.adaptive_frost,
+            content_recolor: self.content_recolor.unwrap_or((Color::BLACK, 0.0)),
             edge_fold: self.edge_fold,
-            magnify: if self.variant == GlassVariant::Lens {
-                1.35
-            } else {
-                1.0
-            },
-            sheen: if self.variant == GlassVariant::Lens {
+            sheen: self.sheen.unwrap_or(if self.variant == GlassVariant::Lens {
                 0.05
             } else {
                 1.0
-            },
+            }),
             rim_style: if self.variant == GlassVariant::Lens {
                 1.0
             } else {
                 0.0
             },
-            shadow_color: Color::BLACK.with_alpha(match (self.variant, colors.is_dark) {
-                (GlassVariant::Lens, false) => 0.14,
-                (GlassVariant::Lens, true) => 0.28,
-                (_, false) => 0.16,
-                (_, true) => 0.5,
-            }),
-            // The lens is a small floating bubble — its shadow is a tight,
-            // barely-there contact hint; large surfaces get the soft wide
-            // ambient. The reference thumb shadows are almost invisible.
-            shadow_radius: if self.variant == GlassVariant::Lens {
-                10.0
-            } else {
-                22.0
-            },
-            shadow_offset_y: if self.variant == GlassVariant::Lens {
-                3.0
-            } else {
-                8.0
-            },
-            // The lens node is padded well past the visible bubble; a strong
-            // negative spread pulls the shadow back to hug the glass (the
-            // node-sized shadow read as an oversized halo).
-            shadow_spread: if self.variant == GlassVariant::Lens {
-                -6.0
-            } else {
-                -2.0
-            },
+            shadow_color: shadow.color,
+            shadow_radius: shadow.radius,
+            shadow_offset_y: shadow.offset_y,
+            shadow_spread: shadow.spread,
         }
     }
 }
@@ -406,26 +536,23 @@ pub(crate) struct ResolvedGlass {
     pub blur_radius_dp: f32,
     pub saturation: f32,
     pub chromatic_aberration: f32,
+    pub dispersion_axes: (f32, f32),
     pub displacement: f32,
     pub bezel_width_dp: f32,
     pub highlight: f32,
+    pub surface_profile: GlassSurfaceProfile,
     pub lift: f32,
     pub contrast: f32,
-    pub edge_band: f32,
     pub shadow: bool,
     pub clip: bool,
-    /// +1 = rim stretch (bars, menus); −1 = magnifying dome (the lens).
-    pub dome_direction: f32,
-    /// True center magnification (1 = off); the interactive lens uses ~1.35.
-    pub magnify: f32,
-    /// Broad bezel-glow strength (1 = default; the lens dials it to ~0.12
-    /// for the crisp interior of the reference frames).
+    /// Broad bezel-glow strength selected by the resolved material.
     pub sheen: f32,
     /// 0 = surface glass (soft white spec rim); 1 = interactive lens (thin
     /// bright line + stronger dark outline, chroma does the color).
     pub rim_style: f32,
-    /// Backdrop-adaptive legibility strength (see [`Glass::adaptive_contrast`]).
-    pub adaptive_contrast: f32,
+    pub foreground_luma: f32,
+    pub adaptive_frost: f32,
+    pub content_recolor: (Color, f32),
     /// Top-edge fold strength (see [`Glass::edge_fold`]).
     pub edge_fold: f32,
     pub shadow_color: Color,
@@ -441,6 +568,19 @@ impl ResolvedGlass {
     /// density and per-frame dynamics. Cover mode: geometry in px, container
     /// uniform zeroed, the renderer injects the node's rect.
     pub(crate) fn backdrop_effect(&self, density: f32, dynamics: GlassDynamics) -> RenderEffect {
+        self.runtime_effect(density, dynamics, false)
+    }
+
+    fn content_mask_effect(&self, density: f32, dynamics: GlassDynamics) -> RenderEffect {
+        self.runtime_effect(density, dynamics, true)
+    }
+
+    fn runtime_effect(
+        &self,
+        density: f32,
+        dynamics: GlassDynamics,
+        content_mask: bool,
+    ) -> RenderEffect {
         let density = density.max(f32::EPSILON);
         let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
         if let Some(morph) = dynamics.morph.as_ref() {
@@ -470,6 +610,16 @@ impl ResolvedGlass {
             shader.set_float(33, morph.wobble_phase);
             shader.set_float(26, morph.bulge_amplitude);
             shader.set_float(27, morph.bulge_direction);
+            shader.set_float(110, morph.ellipse_blend.clamp(0.0, 1.0));
+            if let Some(deformation) = morph.deformation {
+                let axis = deformation.axis();
+                shader.set_float2(106, axis.0, axis.1);
+                shader.set_float(108, deformation.along());
+                shader.set_float(109, deformation.across());
+            } else {
+                shader.set_float2(106, 1.0, 0.0);
+                shader.set_float2(108, 1.0, 1.0);
+            }
             // Bezel in dp: the shader scales by px-per-dp.
             shader.set_float(7, self.bezel_width_dp);
         } else {
@@ -481,7 +631,6 @@ impl ResolvedGlass {
         }
         shader.set_float(8, self.displacement);
         shader.set_float(9, 1.5);
-        shader.set_float(10, 0.6);
         shader.set_float(
             11,
             (self.highlight + dynamics.highlight_boost).clamp(0.0, 2.0),
@@ -492,21 +641,56 @@ impl ResolvedGlass {
             self.tint.r(),
             self.tint.g(),
             self.tint.b(),
-            self.tint.a(),
+            self.tint.a()
+                * dynamics
+                    .tint_alpha_multiplier
+                    .unwrap_or(1.0)
+                    .clamp(0.0, 1.0),
         );
         shader.set_float(18, self.saturation);
         shader.set_float(19, self.chromatic_aberration);
+        shader.set_float2(118, self.dispersion_axes.0, self.dispersion_axes.1);
         shader.set_float(20, self.lift);
         shader.set_float(21, 0.5);
         shader.set_float2(22, 0.0, 1.0);
         shader.set_float(24, self.contrast);
-        shader.set_float(25, self.edge_band);
         shader.set_float(29, self.sheen);
         shader.set_float(28, self.rim_style);
-        shader.set_float(34, self.dome_direction);
-        shader.set_float(35, self.magnify + dynamics.magnify_boost.max(0.0));
-        shader.set_float(91, self.adaptive_contrast);
+        shader.set_float(111, dynamics.optical_strength.clamp(0.0, 1.0));
+        shader.set_float(112, if content_mask { 1.0 } else { 0.0 });
+        let profile_unit_scale = if dynamics.morph.is_some() {
+            1.0
+        } else {
+            density
+        };
+        apply_glass_surface_profile(
+            &mut shader,
+            self.surface_profile,
+            profile_unit_scale * (1.0 + dynamics.surface_depth_boost).max(0.0),
+        );
+        shader.set_float(91, self.adaptive_frost);
         shader.set_float(92, self.edge_fold);
+        shader.set_float(97, self.foreground_luma);
+        shader.set_float(98, self.content_recolor.1);
+        shader.set_float4(
+            99,
+            self.content_recolor.0.r(),
+            self.content_recolor.0.g(),
+            self.content_recolor.0.b(),
+            0.0,
+        );
+        let dynamic_shadow = !self.clip && self.shadow;
+        shader.set_float(
+            102,
+            if dynamic_shadow {
+                self.shadow_color.a() * 0.55
+            } else {
+                0.0
+            },
+        );
+        shader.set_float(103, self.shadow_radius);
+        shader.set_float(104, self.shadow_offset_y);
+        shader.set_float(105, self.shadow_spread);
         // Morph padding: wobble reach plus how far any scene shape (plus its
         // glue neck) extends beyond the primary rect — the capture and the
         // composite surface must cover the whole glued field.
@@ -542,10 +726,18 @@ impl ResolvedGlass {
         // neighbors, plus the ~2px antialiased rim); declare it so the
         // composite scissor doesn't clip the field at the node edge.
         if dynamics.morph.is_some() {
-            shader.set_output_padding(morph_pad + 4.0);
+            let shadow_reach = if dynamic_shadow {
+                self.shadow_radius + self.shadow_offset_y.abs() + self.shadow_spread.max(0.0)
+            } else {
+                0.0
+            };
+            shader.set_output_padding(morph_pad + shadow_reach + 4.0);
         }
 
         let lens = RenderEffect::runtime_shader(shader);
+        if content_mask {
+            return lens;
+        }
         let blur_px = self.blur_radius_dp * density;
         if blur_px > 0.5 {
             RenderEffect::blur(blur_px).then(lens)
@@ -559,10 +751,10 @@ impl ResolvedGlass {
     /// for tilt up to ±1 per axis so per-frame tilt never outruns the capture.
     fn input_padding(&self) -> f32 {
         let bend = 1.0 - 1.0 / 1.5_f32;
-        let reach = 1.0 + std::f32::consts::SQRT_2;
-        // Edge band peaks at 4; the dome adds 0.35 × its own slope.
-        let slope = 4.0 + 0.35 * (2.0 + 2.0 * 0.6);
-        let spread = 1.0 + self.chromatic_aberration.max(0.0) * 0.5;
+        let slope = glass_surface_max_slope(self.surface_profile, self.bezel_width_dp.max(1.0));
+        let reach = slope + std::f32::consts::SQRT_2 * 0.18;
+        let axis_scale = self.dispersion_axes.0.max(self.dispersion_axes.1);
+        let spread = 1.0 + axis_scale * self.chromatic_aberration.max(0.0) * 0.5;
         let displacement = reach * bend * self.displacement.max(0.0) * slope * spread;
         displacement.ceil() + 2.0
     }
@@ -602,7 +794,7 @@ impl LiquidModifierExt for Modifier {
         let shape = resolved.shape;
 
         let mut modifier = self;
-        if resolved.shadow {
+        if resolved.shadow && resolved.clip {
             let shadow_color = resolved.shadow_color;
             let (radius, offset_y, spread) = (
                 resolved.shadow_radius,
@@ -622,11 +814,18 @@ impl LiquidModifierExt for Modifier {
 
         let layer_resolved = Rc::clone(&resolved);
         let clip = resolved.clip;
-        modifier.graphics_layer(move || GraphicsLayer {
-            backdrop_effect: Some(layer_resolved.backdrop_effect(current_density(), dynamics())),
-            shape: shape.layer_shape(),
-            clip,
-            ..Default::default()
+        modifier.graphics_layer(move || {
+            let density = current_density();
+            let frame = dynamics();
+            let render_effect = (!clip && frame.morph.is_some())
+                .then(|| layer_resolved.content_mask_effect(density, frame.clone()));
+            GraphicsLayer {
+                backdrop_effect: Some(layer_resolved.backdrop_effect(density, frame)),
+                render_effect,
+                shape: shape.layer_shape(),
+                clip,
+                ..Default::default()
+            }
         })
     }
 }
@@ -641,10 +840,40 @@ mod tests {
 
     #[test]
     fn regular_glass_resolves_frosted_defaults() {
-        let resolved = Glass::regular().resolve(&light_colors());
+        let colors = light_colors();
+        let resolved = Glass::regular().resolve(&colors);
         assert!(resolved.blur_radius_dp > 5.0, "regular material is frosted");
         assert!(resolved.saturation > 1.3, "regular material is vibrant");
         assert!(resolved.lift > 0.0, "light scheme lifts toward white");
+        assert_eq!(resolved.adaptive_frost, 0.65);
+        let label_luma =
+            0.2126 * colors.label.r() + 0.7152 * colors.label.g() + 0.0722 * colors.label.b();
+        assert!((resolved.foreground_luma - label_luma).abs() < 1e-6);
+    }
+
+    #[test]
+    fn neutral_surface_tint_follows_foreground_polarity() {
+        let light_surface = neutral_surface_tint(Color::BLACK, 0.08, 0.10);
+        assert_eq!(light_surface, Color::BLACK.with_alpha(0.08));
+        let dark_surface = neutral_surface_tint(Color::WHITE, 0.08, 0.10);
+        assert_eq!(dark_surface, Color::WHITE.with_alpha(0.10));
+    }
+
+    #[test]
+    fn dynamics_can_clear_a_material_tint_without_switching_bodies() {
+        let tint = Color::BLACK.with_alpha(0.8);
+        let resolved = Glass::lens().tint(tint).resolve(&light_colors());
+        let effect = resolved.backdrop_effect(
+            1.0,
+            GlassDynamics {
+                tint_alpha_multiplier: Some(0.25),
+                ..Default::default()
+            },
+        );
+        let RenderEffect::Shader { shader } = effect else {
+            panic!("lens glass must be a bare shader");
+        };
+        assert!((shader.uniforms()[17] - 0.2).abs() < 1.0e-6);
     }
 
     #[test]
@@ -652,6 +881,30 @@ mod tests {
         let resolved = Glass::clear().resolve(&light_colors());
         assert!(resolved.blur_radius_dp < 5.0);
         assert!(resolved.saturation < 1.3);
+    }
+
+    #[test]
+    fn interactive_lens_uses_a_compact_signed_meniscus() {
+        let glass = Glass::lens();
+        assert!(
+            (9.0..=11.0).contains(&glass.bezel_width),
+            "the target lens has one thin raised-lip/recess section, got {}dp",
+            glass.bezel_width
+        );
+        let resolved = glass.resolve(&light_colors());
+        let RenderEffect::Shader { shader } =
+            resolved.backdrop_effect(1.0, GlassDynamics::default())
+        else {
+            panic!("lens glass must be a bare shader");
+        };
+        assert_eq!(shader.uniforms()[7], glass.bezel_width);
+
+        assert_eq!(Glass::lens().bezel_width(7.5).bezel_width, 7.5);
+        assert_eq!(Glass::lens().bezel_width(-1.0).bezel_width, 0.0);
+        assert_eq!(
+            Glass::lens().dispersion_axes(-1.0, 5.0).dispersion_axes,
+            (0.0, 4.0)
+        );
     }
 
     #[test]
@@ -667,6 +920,90 @@ mod tests {
         let tint = Color::from_rgba_u8(0, 122, 255, 60);
         let resolved = Glass::regular().tint(tint).resolve(&light_colors());
         assert_eq!(resolved.tint, tint);
+    }
+
+    #[test]
+    fn explicit_sheen_overrides_the_variant_default() {
+        let resolved = Glass::lens().sheen(0.85).resolve(&light_colors());
+        assert_eq!(resolved.sheen, 0.85);
+        let effect = resolved.backdrop_effect(1.0, GlassDynamics::default());
+        let RenderEffect::Shader { shader } = effect else {
+            panic!("lens glass must be a bare shader");
+        };
+        assert_eq!(shader.uniforms()[29], 0.85);
+    }
+
+    #[test]
+    fn physical_surface_profile_is_packed_for_the_shader() {
+        let x = cranpose_ui_graphics::GlassProfileCurve::from_points(&[
+            (0.0, 0.1),
+            (0.5, 0.2),
+            (1.0, 0.8),
+        ])
+        .expect("X-Z profile");
+        let y = cranpose_ui_graphics::GlassProfileCurve::from_points(&[
+            (0.0, 0.1),
+            (0.6, 0.3),
+            (1.0, 0.7),
+        ])
+        .expect("Y-Z profile");
+        let profile = GlassSurfaceProfile::new(x, y, 4.0, 3.0)
+            .and_then(|profile| profile.with_axis_coupling(0.3))
+            .expect("surface profile");
+        let resolved = Glass::lens()
+            .surface_profile(profile)
+            .dispersion_axes(0.25, 2.0)
+            .resolve(&light_colors());
+        assert_eq!(resolved.surface_profile, profile);
+        assert_eq!(resolved.dispersion_axes, (0.25, 2.0));
+        let effect = resolved.backdrop_effect(
+            1.0,
+            GlassDynamics {
+                surface_depth_boost: 0.25,
+                ..Default::default()
+            },
+        );
+        let RenderEffect::Shader { shader } = effect else {
+            panic!("lens glass must be a bare shader");
+        };
+        let uniforms = shader.uniforms();
+        assert_eq!(&uniforms[113..118], &[1.0, 3.0, 3.0, 3.0, 5.0]);
+        assert_eq!(&uniforms[118..120], &[0.25, 2.0]);
+        assert_eq!(uniforms[120], 0.0);
+        assert_eq!(uniforms[121], 0.1);
+        assert_eq!(uniforms[126], 1.0);
+        assert_eq!(uniforms[127], 0.8);
+        assert_eq!(uniforms[140], 0.0);
+        assert_eq!(uniforms[141], 0.1);
+        assert_eq!(uniforms[146], 1.0);
+        assert_eq!(uniforms[147], 0.7);
+        assert_eq!(uniforms[158], 0.3);
+    }
+
+    #[test]
+    fn adaptive_frost_and_inside_recolor_are_packed() {
+        let foreground = Color::WHITE;
+        let accent = Color::from_rgb_u8(0, 122, 255);
+        let resolved = Glass::lens()
+            .adaptive_frost(foreground, 0.75)
+            .content_recolor(accent, 0.9)
+            .resolve(&light_colors());
+        let effect = resolved.backdrop_effect(1.0, GlassDynamics::default());
+        let RenderEffect::Shader { shader } = effect else {
+            panic!("lens glass must be a bare shader");
+        };
+        let uniforms = shader.uniforms();
+        assert_eq!(uniforms[91], 0.75);
+        assert!((uniforms[97] - 1.0).abs() < 1e-6);
+        assert_eq!(uniforms[98], 0.9);
+        assert_eq!(&uniforms[99..102], &[accent.r(), accent.g(), accent.b()]);
+
+        let clamped = Glass::lens()
+            .adaptive_frost(foreground, 2.0)
+            .content_recolor(accent, -1.0)
+            .resolve(&light_colors());
+        assert_eq!(clamped.adaptive_frost, 1.0);
+        assert_eq!(clamped.content_recolor.1, 0.0);
     }
 
     #[test]
@@ -694,19 +1031,22 @@ mod tests {
         // density-scaled px here broke every capture whose render scale
         // differed from the platform density (robot captures at 1.0 on a
         // 1.354-density desktop rendered the lens displaced and unscaled).
-        let resolved = Glass::lens().resolve(&light_colors());
+        let resolved = Glass::lens().no_clip().resolve(&light_colors());
         let dynamics = GlassDynamics {
+            optical_strength: 0.3,
             morph: Some(GlassMorph {
                 node_size: (78.0, 59.0),
                 primary: (39.0, 29.5, 58.0, 39.0, -1.0),
                 shapes: vec![(100.0, 29.5, 44.0, 44.0, -1.0)],
                 glue: 12.0,
+                ellipse_blend: 0.75,
+                deformation: Some(GlassDeformation::incompressible((3.0, 4.0), 1.25)),
                 ..Default::default()
             }),
             ..Default::default()
         };
         // Density must NOT leak into the packed geometry.
-        let effect = resolved.backdrop_effect(2.0, dynamics);
+        let effect = resolved.backdrop_effect(2.0, dynamics.clone());
         let RenderEffect::Shader { shader } = effect else {
             panic!("lens glass must be a bare shader (no frost blur)");
         };
@@ -716,10 +1056,46 @@ mod tests {
         assert_eq!(uniforms[6], -1.0, "capsule sentinel unscaled");
         assert_eq!(uniforms[31], 12.0, "glue dp");
         assert_eq!(&uniforms[36..40], &[100.0, 29.5, 44.0, 44.0], "shape dp");
+        assert_eq!(&uniforms[106..108], &[0.6, 0.8], "normalized strain axis");
+        assert_eq!(&uniforms[108..110], &[1.25, 0.8], "reciprocal scales");
+        assert_eq!(uniforms[110], 0.75, "primary ellipse blend");
+        assert_eq!(uniforms[111], 0.3, "dynamic optical strength");
+        assert_eq!(uniforms[112], 0.0, "backdrop mode must preserve the lens");
+        assert!(uniforms[102] > 0.0, "morph shadow is generated by the SDF");
+        assert_eq!(uniforms[103], resolved.shadow_radius);
+        assert_eq!(uniforms[104], resolved.shadow_offset_y);
+        assert_eq!(uniforms[105], resolved.shadow_spread);
         assert!(
-            shader.output_padding() > 0.0,
-            "morph glass declares output padding"
+            shader.output_padding() > resolved.shadow_radius,
+            "morph output padding must include the dynamic shadow"
         );
+
+        let mask = resolved.content_mask_effect(2.0, dynamics);
+        let RenderEffect::Shader {
+            shader: mask_shader,
+        } = mask
+        else {
+            panic!("the exact morph content mask must be one shader stage");
+        };
+        let mask_uniforms = mask_shader.uniforms();
+        assert_eq!(&mask_uniforms[0..6], &uniforms[0..6]);
+        assert_eq!(&mask_uniforms[30..40], &uniforms[30..40]);
+        assert_eq!(&mask_uniforms[106..111], &uniforms[106..111]);
+        assert_eq!(mask_uniforms[112], 1.0, "content mask mode is explicit");
+    }
+
+    #[test]
+    fn explicit_shadow_style_controls_static_and_morph_shadow_geometry() {
+        let style = GlassShadow::new(Color::BLACK.with_alpha(0.07), 32.0, 10.0, 1.5);
+        let resolved = Glass::regular()
+            .shadow_style(style)
+            .no_clip()
+            .resolve(&light_colors());
+        assert_eq!(resolved.shadow_color, style.color);
+        assert_eq!(resolved.shadow_radius, 32.0);
+        assert_eq!(resolved.shadow_offset_y, 10.0);
+        assert_eq!(resolved.shadow_spread, 1.5);
+        assert_eq!(GlassShadow::new(Color::BLACK, -2.0, 0.0, 0.0).radius, 0.0);
     }
 
     #[test]

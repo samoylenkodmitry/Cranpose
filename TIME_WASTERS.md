@@ -282,3 +282,24 @@ looked like a widget bug, was three compounding harness/runtime traps:
 Debug method that worked: env-gated eprintln tracing layer-by-layer
 (watchers → pending scopes → recompose branches → callback set/take),
 diffing one working frame against one dead frame in the SAME run.
+
+## Robot screenshot output variables are filtered (2026-07-13)
+
+`run_robot_test.sh` starts each example through `env -i` and
+`robot_process_env`; the allowlist forwards `CRANPOSE_*` and a small set of
+platform variables, but not `ROBOT_SHOT_DIR`. Several visual runners document
+`ROBOT_SHOT_DIR`, so invoking them through the suite appears to honor a custom
+directory while silently writing to `target/liquid-*`. This caused two full
+recaptures to be filed under the wrong path. When running through the suite,
+move the default output directory after the runner exits or add the variable
+to the explicit environment allowlist; direct `cargo run` does honor it.
+
+## Component crops must share an internal anchor (2026-07-13)
+
+Comparing equal-size target/current crops is still invalid when the component
+lands at a different Y inside each crop. A toggle lens was mismeasured as 48dp
+instead of 39dp because the current track center sat 26 physical pixels below
+the target track center. Align a stable internal feature first (the track
+center, bar top, or text baseline), keep both images at native device scale,
+and only then measure the optical silhouette. Shadows and white-on-white glass
+edges are not reliable geometry anchors.

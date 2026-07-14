@@ -17,9 +17,12 @@ use crate::robot::{
 };
 use crate::wgpu_surface::surface_present_required;
 use crate::wgpu_surface::{current_surface_texture, SurfaceFrame};
-use cranpose_app_shell::{
-    default_root_key, AppShell, FramePacingMode, FrameUpdateResult, PointerSource,
+use crate::winit_pointer::{
+    is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
 };
+#[cfg(feature = "robot")]
+use cranpose_app_shell::PointerSource;
+use cranpose_app_shell::{default_root_key, AppShell, FramePacingMode, FrameUpdateResult};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 use std::cell::{Cell, RefCell};
@@ -29,10 +32,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position};
-use winit::event::{
-    ButtonSource, ElementState, MouseButton, PointerSource as WinitPointerSource, TabletToolButton,
-    WindowEvent,
-};
+use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{
     ResizeDirection, Window, WindowAttributes, WindowId as WinitWindowId, WindowLevel,
@@ -46,26 +46,6 @@ const NATIVE_WINDOW_PLACEMENT_MARGIN: f32 = 32.0;
 #[cfg(feature = "robot")]
 const ROBOT_PUMP_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const DEFAULT_DESKTOP_FRAME_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
-
-/// Maps a winit pointer-move source to the framework [`PointerSource`].
-fn pointer_source_from_winit(source: &WinitPointerSource) -> PointerSource {
-    match source {
-        WinitPointerSource::Mouse => PointerSource::Mouse,
-        WinitPointerSource::Touch { .. } => PointerSource::Touch,
-        WinitPointerSource::TabletTool { .. } => PointerSource::Stylus,
-        _ => PointerSource::Unknown,
-    }
-}
-
-/// Maps a winit button source (mouse click / touch / tablet) to [`PointerSource`].
-fn pointer_source_from_button(button: &ButtonSource) -> PointerSource {
-    match button {
-        ButtonSource::Mouse(_) => PointerSource::Mouse,
-        ButtonSource::Touch { .. } => PointerSource::Touch,
-        ButtonSource::TabletTool { .. } => PointerSource::Stylus,
-        _ => PointerSource::Unknown,
-    }
-}
 
 #[cfg(feature = "robot")]
 use std::sync::mpsc;
@@ -2302,15 +2282,9 @@ impl App {
             WindowEvent::PointerButton {
                 state,
                 position,
-                button:
-                    button @ (ButtonSource::Mouse(MouseButton::Left)
-                    | ButtonSource::Touch { .. }
-                    | ButtonSource::TabletTool {
-                        button: TabletToolButton::Contact,
-                        ..
-                    }),
+                button,
                 ..
-            } => {
+            } if is_primary_pointer_button(&button) => {
                 let source = pointer_source_from_button(&button);
                 native.app.set_pointer_source(source);
                 // The button event's own position is authoritative: touch taps
@@ -4176,15 +4150,9 @@ impl ApplicationHandler for App {
             WindowEvent::PointerButton {
                 state,
                 position,
-                button:
-                    button @ (ButtonSource::Mouse(MouseButton::Left)
-                    | ButtonSource::Touch { .. }
-                    | ButtonSource::TabletTool {
-                        button: TabletToolButton::Contact,
-                        ..
-                    }),
+                button,
                 ..
-            } => {
+            } if is_primary_pointer_button(&button) => {
                 let source = pointer_source_from_button(&button);
                 app.set_pointer_source(source);
                 // The button event's own position is authoritative: touch taps
@@ -4548,24 +4516,21 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    RobotCommand::TouchDown { x, y } => {
-                        // Robot touch gestures ARE touch: tag the source so
-                        // touch-gated affordances (finger selection handles,
-                        // the glass loupe) arm exactly as on a device.
-                        app.set_pointer_source(PointerSource::Touch);
+                    RobotCommand::TouchDown { x, y, source } => {
+                        app.set_pointer_source(source);
                         let cursor_dirty = app.set_cursor(x, y);
                         controller.begin_synthetic_primary_gesture();
                         let press_dirty = app.pointer_pressed();
                         robot_visual_dirty |= cursor_dirty || press_dirty;
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
-                    RobotCommand::TouchMove { x, y } => {
-                        app.set_pointer_source(PointerSource::Touch);
+                    RobotCommand::TouchMove { x, y, source } => {
+                        app.set_pointer_source(source);
                         robot_visual_dirty |= app.set_cursor(x, y);
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
-                    RobotCommand::TouchMoveAndWaitForFrame { x, y } => {
-                        app.set_pointer_source(PointerSource::Touch);
+                    RobotCommand::TouchMoveAndWaitForFrame { x, y, source } => {
+                        app.set_pointer_source(source);
                         let visual_dirty = app.set_cursor(x, y);
                         if visual_dirty {
                             robot_visual_dirty = true;
@@ -4592,8 +4557,8 @@ impl ApplicationHandler for App {
                             let _ = controller.tx.send(RobotResponse::Ok);
                         }
                     }
-                    RobotCommand::TouchUp { x, y } => {
-                        app.set_pointer_source(PointerSource::Touch);
+                    RobotCommand::TouchUp { x, y, source } => {
+                        app.set_pointer_source(source);
                         let cursor_dirty = app.set_cursor(x, y);
                         let release_dirty = app.pointer_released();
                         controller.end_synthetic_primary_gesture();
