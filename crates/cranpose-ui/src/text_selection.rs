@@ -236,12 +236,11 @@ pub fn caret_visual_line(
     result
 }
 
-/// Fraction of each DOWNWARD finger delta absorbed into the grab bias while
-/// it drifts toward [`grab_bias_full_view`]: the handle starts under the
-/// finger and drifts up-visible as the drag proceeds (the reference handle
-/// "moves with the finger, then rides above it"), while the selection still
-/// follows the remaining fraction — never a dead zone.
-pub const GRAB_BIAS_DRIFT_FRACTION: f32 = 0.35;
+/// Downward travel that follows with the original finger-to-handle offset
+/// before the visibility drift starts.
+pub const GRAB_DIRECT_FOLLOW_DISTANCE: f32 = 8.0;
+/// Additional downward travel over which the handle moves into full view.
+pub const GRAB_VISIBILITY_DRIFT_DISTANCE: f32 = 48.0;
 /// Extra clearance (dp) below the handle dot once fully visible above the
 /// finger.
 pub const GRAB_BIAS_VIEW_CLEARANCE: f32 = 4.0;
@@ -252,16 +251,49 @@ pub fn grab_bias_full_view() -> f32 {
     -(2.0 * HANDLE_RADIUS + GRAB_BIAS_VIEW_CLEARANCE)
 }
 
-/// One-way grab-bias ratchet: absorbs a fraction of DOWNWARD finger travel
-/// into the bias until the handle rides fully visible above the finger;
-/// upward travel never un-migrates (strict following once earned). Returns
-/// the updated bias for a finger that moved from `last_y` to `now_y`.
-pub fn ratchet_grab_bias(bias: f32, last_y: f32, now_y: f32) -> f32 {
-    let down = now_y - last_y;
-    if down <= 0.0 {
-        return bias;
+/// Finger-to-handle relationship for one drag. The first phase preserves the
+/// captured offset exactly, the second shifts the handle above the finger,
+/// and the third preserves that final offset exactly. Progress is based on
+/// the furthest displacement from the grab, so event cadence and small
+/// reversals cannot change the result.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HandleGrabOffset {
+    initial_bias: f32,
+    bias: f32,
+    start_y: f32,
+    furthest_y: f32,
+    drift_progress: f32,
+}
+
+impl HandleGrabOffset {
+    pub fn begin(handle_tip_y: f32, finger_y: f32) -> Self {
+        let initial_bias = handle_tip_y - finger_y;
+        Self {
+            initial_bias,
+            bias: initial_bias,
+            start_y: finger_y,
+            furthest_y: finger_y,
+            drift_progress: 0.0,
+        }
     }
-    (bias - down * GRAB_BIAS_DRIFT_FRACTION).max(grab_bias_full_view().min(bias))
+
+    pub fn track(&mut self, finger_y: f32) -> f32 {
+        self.furthest_y = self.furthest_y.max(finger_y);
+        let travel = (self.furthest_y - self.start_y - GRAB_DIRECT_FOLLOW_DISTANCE).max(0.0);
+        let t = (travel / GRAB_VISIBILITY_DRIFT_DISTANCE).clamp(0.0, 1.0);
+        self.drift_progress = t * t * (3.0 - 2.0 * t);
+        let full_view = self.initial_bias.min(grab_bias_full_view());
+        self.bias = self.initial_bias + (full_view - self.initial_bias) * self.drift_progress;
+        self.bias
+    }
+
+    pub fn bias(&self) -> f32 {
+        self.bias
+    }
+
+    pub fn drift_progress(&self) -> f32 {
+        self.drift_progress
+    }
 }
 
 /// Which selection handle a lollipop represents.
@@ -660,32 +692,48 @@ mod tests {
         );
     }
 
-    /// The grab-bias ratchet: downward finger travel migrates the handle
-    /// above the finger at the documented fraction, saturating at full view;
-    /// upward travel never un-migrates; a grab already deeper than the
-    /// full-view offset holds its own floor.
     #[test]
-    fn grab_bias_ratchet_migrates_down_only_to_full_view() {
-        // Grab ON the line (finger at the stem): bias +8.
-        let mut bias = 8.0;
-        // Finger slides 20dp down: 35% absorbed.
-        bias = ratchet_grab_bias(bias, 100.0, 120.0);
-        assert!((bias - 1.0).abs() < 1e-4, "got {bias}");
-        // Upward travel changes nothing.
-        let up = ratchet_grab_bias(bias, 120.0, 90.0);
-        assert_eq!(up, bias);
-        // A long slide saturates at the full-view offset.
-        let saturated = ratchet_grab_bias(bias, 90.0, 400.0);
-        assert_eq!(saturated, grab_bias_full_view());
-        // Once saturated, further downward travel holds.
+    fn grab_offset_has_follow_drift_and_strict_phases() {
+        let mut grab = HandleGrabOffset::begin(108.0, 100.0);
+        assert_eq!(grab.bias(), 8.0);
+
+        let direct_bias = grab.track(108.0);
+        assert_eq!(direct_bias, 8.0, "initial travel follows exactly");
+        assert_eq!(108.0 + direct_bias, 116.0);
+
+        let drifting_bias = grab.track(132.0);
+        assert!(drifting_bias < 8.0 && drifting_bias > grab_bias_full_view());
+        assert!((0.0..1.0).contains(&grab.drift_progress()));
+
+        assert_eq!(grab.track(156.0), grab_bias_full_view());
+        assert_eq!(grab.drift_progress(), 1.0);
+        assert_eq!(grab.track(220.0), grab_bias_full_view());
+    }
+
+    #[test]
+    fn grab_offset_is_cadence_independent_and_never_unwinds() {
+        let mut single = HandleGrabOffset::begin(108.0, 100.0);
+        single.track(140.0);
+
+        let mut sampled = HandleGrabOffset::begin(108.0, 100.0);
+        for y in [104.0, 109.0, 116.0, 130.0, 140.0] {
+            sampled.track(y);
+        }
+        assert_eq!(sampled.bias(), single.bias());
+        assert_eq!(sampled.drift_progress(), single.drift_progress());
+
+        let migrated = sampled.bias();
+        sampled.track(90.0);
         assert_eq!(
-            ratchet_grab_bias(saturated, 400.0, 500.0),
-            grab_bias_full_view()
+            sampled.bias(),
+            migrated,
+            "upward travel cannot unwind drift"
         );
-        // A grab deeper than full view (finger far below the dot) keeps its
-        // own deeper bias instead of snapping up to the target.
+
         let deep = grab_bias_full_view() - 10.0;
-        assert_eq!(ratchet_grab_bias(deep, 0.0, 50.0), deep);
+        let mut already_visible = HandleGrabOffset::begin(deep, 0.0);
+        already_visible.track(100.0);
+        assert_eq!(already_visible.bias(), deep);
     }
 
     #[test]

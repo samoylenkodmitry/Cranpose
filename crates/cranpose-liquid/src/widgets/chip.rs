@@ -46,7 +46,7 @@ pub fn LiquidChip(
 
     let mut base = pressed_modifier;
     if selected {
-        base = base.glass_effect(Glass::regular());
+        base = base.glass_effect(Glass::regular().adaptive_frost(colors.accent, 0.65));
     } else {
         let fill = colors.fill;
         base = base.clip_to_bounds().draw_behind(move |scope| {

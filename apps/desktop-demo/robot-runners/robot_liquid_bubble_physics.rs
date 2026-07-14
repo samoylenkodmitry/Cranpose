@@ -15,7 +15,7 @@
 //! Screenshots land in `ROBOT_SHOT_DIR` (default `target/liquid-bubble`).
 
 use cranpose::AppLauncher;
-use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
+use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE, TEST_LIQUID_SELECTED_TAB_STATE};
 use image::RgbaImage;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -23,7 +23,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 900;
-const WINDOW_HEIGHT: u32 = 800;
+const WINDOW_HEIGHT: u32 = 500;
+const GLASS_ACTIVITY_RGB_DELTA: u32 = 24;
+const SILHOUETTE_RGB_DELTA: u32 = 12;
+const LAST_FULL_OPACITY_FLIGHT_FRAME: usize = 7;
+const MAX_DIRECT_FOLLOW_ERROR_IN_TABS: f32 = 0.18;
+const MAX_MEASURED_FLIGHT_WIDTH_IN_TABS: f32 = 1.90;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
@@ -57,10 +62,10 @@ fn main() -> ExitCode {
                 .flatten()
                 .unwrap_or_else(|| fail(&robot, "Discover tab button not in semantics"));
             let settings = robot
-                .find_button_bounds_exact("Settings")
+                .find_button_bounds_exact("Account")
                 .ok()
                 .flatten()
-                .unwrap_or_else(|| fail(&robot, "Settings tab button not in semantics"));
+                .unwrap_or_else(|| fail(&robot, "Account tab button not in semantics"));
             let discover_cx = discover.0 + discover.2 * 0.5;
             let settings_cx = settings.0 + settings.2 * 0.5;
             let bar_cy = discover.1 + discover.3 * 0.5;
@@ -79,20 +84,47 @@ fn main() -> ExitCode {
             // ---------- Leg 1: the lens follows the dragging finger ----------
             let baseline = robot.screenshot().expect("baseline");
             save(&baseline, &shot_dir, "drag-0-baseline");
+            let direct_x = discover_cx + (settings_cx - discover_cx) * 0.72;
             robot
                 .touch_down(discover_cx, bar_cy)
                 .expect("grab selected tab");
             std::thread::sleep(Duration::from_millis(160));
+            robot
+                .touch_move_and_wait_for_frame(direct_x, bar_cy)
+                .expect("direct tab-bar pointer step");
+            let direct = robot.screenshot().expect("direct tab-bar frame");
+            save(&direct, &shot_dir, "drag-direct-frame");
+            let ghost_mask = (discover_cx - tab_w * 0.75, discover_cx + tab_w * 0.75);
+            let Some((direct_cx, _)) = activity_center(&baseline, &direct, band, ghost_mask) else {
+                fail(&robot, "tab-bar lens did not reach the direct-pointer region");
+            };
+            println!(
+                "direct follow finger={direct_x:.0} lens_cx={direct_cx:.0} err={:.0}",
+                (direct_cx - direct_x).abs()
+            );
+            if (direct_cx - direct_x).abs() > tab_w * MAX_DIRECT_FOLLOW_ERROR_IN_TABS {
+                fail(
+                    &robot,
+                    "tab-bar lens center missed the pointer in the delivered input frame",
+                );
+            }
+            robot
+                .touch_move_and_wait_for_frame(discover_cx, bar_cy)
+                .expect("restore tab-bar drag start");
+            std::thread::sleep(Duration::from_millis(240));
             let steps = 6usize;
             let mut follow_ok = 0usize;
             let mut checked = 0usize;
+            let mut drag_frames = Vec::with_capacity(steps);
             for i in 1..=steps {
                 let t = i as f32 / steps as f32;
                 let x = discover_cx + (settings_cx - discover_cx) * t;
-                robot.touch_move(x, bar_cy).expect("drag move");
-                std::thread::sleep(Duration::from_millis(45));
+                robot
+                    .touch_move_and_wait_for_frame(x, bar_cy)
+                    .expect("drag move and present");
                 let shot = robot.screenshot().expect("drag shot");
                 save(&shot, &shot_dir, &format!("drag-{i}"));
+                drag_frames.push(shot.clone());
                 // Activity vs the resting baseline: pill ghost stays near
                 // Discover, so only judge samples ≥ 1.2 tabs out.
                 if (x - discover_cx).abs() > tab_w * 1.2 {
@@ -104,7 +136,7 @@ fn main() -> ExitCode {
                             println!(
                                 "follow t={t:.2} finger={x:.0} lens_cx={cx:.0} err={err:.0} span={span:.0}"
                             );
-                            if err <= tab_w * 0.75 {
+                            if err <= tab_w * MAX_DIRECT_FOLLOW_ERROR_IN_TABS {
                                 follow_ok += 1;
                             }
                         }
@@ -114,7 +146,26 @@ fn main() -> ExitCode {
             }
             robot
                 .touch_up(settings_cx, bar_cy)
-                .expect("release on Settings");
+                .expect("release on Account");
+            for (index, shot) in drag_frames.iter().enumerate() {
+                if let Some(sample) = silhouette_sample(
+                    &baseline,
+                    shot,
+                    band,
+                    (discover_cx - tab_w * 0.4, settings_cx + tab_w * 0.7),
+                ) {
+                    println!(
+                        "direct silhouette {}: width={:.1} height={:.1} area={:.1} centroid_x={:.1} leading_skew={:.3} clipped={}",
+                        index + 1,
+                        sample.width,
+                        sample.height,
+                        sample.width * sample.height,
+                        sample.centroid_x,
+                        sample.leading_skew,
+                        sample.clipped,
+                    );
+                }
+            }
             if checked < 3 || follow_ok + 1 < checked {
                 fail(
                     &robot,
@@ -126,8 +177,14 @@ fn main() -> ExitCode {
             // Commit + full dissolve before the flight leg.
             settle(&robot, 1200);
 
-            // ---------- Leg 2: tap → deterministic flight keyframes ----------
-            robot.click(discover_cx, bar_cy).expect("tap Discover");
+            // ---------- Leg 2: controlled state → deterministic flight ----------
+            // Direct contact already moves the lens to the pointer on the
+            // delivered down frame. A source-to-target tap animation would
+            // contradict that contract, so programmatic selection changes
+            // exercise the post-input spring channel independently.
+            robot
+                .invoke_app_hook("set-liquid-selected", "0")
+                .expect("retarget selected liquid tab");
             // The glide transit runs ~330ms; sample launch, cruise, brake,
             // arrival swell, dissolve tail, and the fully settled end.
             let steps: Vec<(f32, bool)> = vec![
@@ -159,6 +216,100 @@ fn main() -> ExitCode {
             ];
             for (shot, label) in shots.iter().zip(labels.iter()) {
                 save(shot, &shot_dir, &format!("flight-{label}"));
+            }
+
+            // Rendered deformation contract. Interior samples cover launch
+            // and cruise; full-opacity samples at the destination cover the
+            // braking/decompression phase. A thresholded diff against the
+            // settled destination isolates that arrival lens without a
+            // selected-icon state change. Dissolve frames are excluded.
+            let flight_x = (discover_cx - tab_w * 1.1, settings_cx + tab_w * 0.7);
+            let flight_settled = shots.last().expect("settled flight keyframe");
+            let mut silhouettes = Vec::new();
+            for (frame_index, (shot, label)) in shots.iter().zip(labels.iter()).enumerate() {
+                if let Some(sample) = silhouette_sample(flight_settled, shot, band, flight_x) {
+                    println!(
+                        "silhouette {label}: width={:.1} height={:.1} area={:.1} centroid_x={:.1} leading_skew={:.3} clipped={}",
+                        sample.width,
+                        sample.height,
+                        sample.width * sample.height,
+                        sample.centroid_x,
+                        sample.leading_skew,
+                        sample.clipped,
+                    );
+                    let safely_interior = sample.centroid_x > discover_cx + tab_w * 0.20
+                        && sample.centroid_x < settings_cx - tab_w * 0.25;
+                    let launching_at_source = frame_index <= LAST_FULL_OPACITY_FLIGHT_FRAME
+                        && (sample.centroid_x - settings_cx).abs() < tab_w * 0.15;
+                    let braking_at_destination = frame_index <= LAST_FULL_OPACITY_FLIGHT_FRAME
+                        && (sample.centroid_x - discover_cx).abs() < tab_w * 0.25;
+                    if frame_index <= LAST_FULL_OPACITY_FLIGHT_FRAME
+                        && sample.width > 60.0
+                        // The selected-label recolor can join the optical
+                        // diff into a component wider than the glass quad.
+                        // Reject that component instead of treating text as
+                        // liquid volume.
+                        && sample.width < tab_w * MAX_MEASURED_FLIGHT_WIDTH_IN_TABS
+                        && sample.height > 20.0
+                        && !sample.clipped
+                        && (safely_interior || launching_at_source || braking_at_destination)
+                    {
+                        silhouettes.push(sample);
+                    }
+                }
+            }
+            if silhouettes.len() < 2 {
+                fail(
+                    &robot,
+                    &format!(
+                        "only {} rendered deformation silhouettes were measurable",
+                        silhouettes.len()
+                    ),
+                );
+            }
+            let min_width = silhouettes
+                .iter()
+                .map(|sample| sample.width)
+                .fold(f32::MAX, f32::min);
+            let max_width = silhouettes
+                .iter()
+                .map(|sample| sample.width)
+                .fold(0.0f32, f32::max);
+            let min_height = silhouettes
+                .iter()
+                .map(|sample| sample.height)
+                .fold(f32::MAX, f32::min);
+            let max_height = silhouettes
+                .iter()
+                .map(|sample| sample.height)
+                .fold(0.0f32, f32::max);
+            if max_width < min_width * 1.12 || max_height < min_height * 1.10 {
+                fail(
+                    &robot,
+                    &format!(
+                        "rendered droplet did not visibly exchange axis volume: width {min_width:.1}..{max_width:.1}, height {min_height:.1}..{max_height:.1}"
+                    ),
+                );
+            }
+            let areas: Vec<f32> = silhouettes
+                .iter()
+                .map(|sample| sample.width * sample.height)
+                .collect();
+            let min_area = areas.iter().copied().fold(f32::MAX, f32::min);
+            let max_area = areas.iter().copied().fold(0.0f32, f32::max);
+            if max_area > min_area * 1.38 {
+                fail(
+                    &robot,
+                    &format!(
+                        "rendered droplet volume changed excessively: area {min_area:.1}..{max_area:.1}"
+                    ),
+                );
+            }
+            if !silhouettes
+                .iter()
+                .any(|sample| sample.leading_skew.abs() >= 0.005)
+            {
+                fail(&robot, "no rendered leading-edge redistribution was measurable");
             }
 
             // Flight continuity via consecutive-keyframe diffs: static
@@ -238,17 +389,27 @@ fn main() -> ExitCode {
 }
 
 fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
-    if name != "set-tab" {
-        return Err(format!("unsupported robot app hook {name}({argument})"));
+    if name == "set-tab" {
+        if argument != "liquid" {
+            return Err(format!("unknown demo tab '{argument}'"));
+        }
+        let state = TEST_ACTIVE_TAB_STATE
+            .with(|cell| cell.borrow().as_ref().copied())
+            .ok_or_else(|| "active tab state was not installed".to_string())?;
+        state.set(app::DemoTab::Liquid);
+        return Ok(None);
     }
-    if argument != "liquid" {
-        return Err(format!("unknown demo tab '{argument}'"));
+    if name == "set-liquid-selected" {
+        let selected = argument
+            .parse::<usize>()
+            .map_err(|error| format!("invalid liquid tab index '{argument}': {error}"))?;
+        let state = TEST_LIQUID_SELECTED_TAB_STATE
+            .with(|cell| cell.borrow().as_ref().copied())
+            .ok_or_else(|| "liquid tab state was not installed".to_string())?;
+        state.set(selected);
+        return Ok(None);
     }
-    let state = TEST_ACTIVE_TAB_STATE
-        .with(|cell| cell.borrow().as_ref().copied())
-        .ok_or_else(|| "active tab state was not installed".to_string())?;
-    state.set(app::DemoTab::Liquid);
-    Ok(None)
+    Err(format!("unsupported robot app hook {name}({argument})"))
 }
 
 /// Record the failure, ask the app to shut down cleanly, and let `main`
@@ -303,6 +464,108 @@ fn activity_center(
     Some((sum_x / count as f32, max_x - min_x))
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SilhouetteSample {
+    width: f32,
+    height: f32,
+    centroid_x: f32,
+    leading_skew: f32,
+    clipped: bool,
+}
+
+fn silhouette_sample(
+    baseline: &cranpose::RobotScreenshot,
+    frame: &cranpose::RobotScreenshot,
+    band: (f32, f32),
+    x_range: (f32, f32),
+) -> Option<SilhouetteSample> {
+    if baseline.width != frame.width || baseline.height != frame.height {
+        return None;
+    }
+    let (sx, sy) = shot_scale(frame);
+    let y0 = ((band.0 * sy).max(0.0) as usize).min(frame.height as usize);
+    let y1 = ((band.1 * sy).max(0.0) as usize).min(frame.height as usize);
+    let x0 = ((x_range.0 * sx).max(0.0) as usize).min(frame.width as usize);
+    let x1 = ((x_range.1 * sx).max(0.0) as usize).min(frame.width as usize);
+    let width_px = frame.width as usize;
+    let scan_width = x1.saturating_sub(x0);
+    let scan_height = y1.saturating_sub(y0);
+    let mut changed = vec![false; scan_width * scan_height];
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * width_px + x) * 4;
+            let delta = baseline.pixels[i].abs_diff(frame.pixels[i]) as u32
+                + baseline.pixels[i + 1].abs_diff(frame.pixels[i + 1]) as u32
+                + baseline.pixels[i + 2].abs_diff(frame.pixels[i + 2]) as u32;
+            changed[(y - y0) * scan_width + (x - x0)] = delta > SILHOUETTE_RGB_DELTA;
+        }
+    }
+
+    let mut visited = vec![false; changed.len()];
+    let mut best: Option<SilhouetteSample> = None;
+    for seed in 0..changed.len() {
+        if !changed[seed] || visited[seed] {
+            continue;
+        }
+        let mut stack = vec![seed];
+        visited[seed] = true;
+        let mut count = 0usize;
+        let mut sum_x = 0.0f32;
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_y = f32::MAX;
+        let mut max_y = f32::MIN;
+        while let Some(index) = stack.pop() {
+            let local_x = index % scan_width;
+            let local_y = index / scan_width;
+            let logical_x = (x0 + local_x) as f32 / sx;
+            let logical_y = (y0 + local_y) as f32 / sy;
+            count += 1;
+            sum_x += logical_x;
+            min_x = min_x.min(logical_x);
+            max_x = max_x.max(logical_x);
+            min_y = min_y.min(logical_y);
+            max_y = max_y.max(logical_y);
+
+            let start_x = local_x.saturating_sub(1);
+            let end_x = (local_x + 1).min(scan_width.saturating_sub(1));
+            let start_y = local_y.saturating_sub(1);
+            let end_y = (local_y + 1).min(scan_height.saturating_sub(1));
+            for neighbor_y in start_y..=end_y {
+                for neighbor_x in start_x..=end_x {
+                    let neighbor = neighbor_y * scan_width + neighbor_x;
+                    if changed[neighbor] && !visited[neighbor] {
+                        visited[neighbor] = true;
+                        stack.push(neighbor);
+                    }
+                }
+            }
+        }
+        let width = max_x - min_x;
+        let height = max_y - min_y;
+        if count < 80 || width < 18.0 || height < 18.0 {
+            continue;
+        }
+        let centroid_x = sum_x / count as f32;
+        let leading_skew = if width > 0.0 {
+            ((min_x + max_x) * 0.5 - centroid_x) / width
+        } else {
+            0.0
+        };
+        let sample = SilhouetteSample {
+            width,
+            height,
+            centroid_x,
+            leading_skew,
+            clipped: min_x <= x_range.0 + 2.0 || max_x >= x_range.1 - 2.0,
+        };
+        if best.is_none_or(|best_sample| sample.centroid_x > best_sample.centroid_x) {
+            best = Some(sample);
+        }
+    }
+    best
+}
+
 fn diff_count(
     a: &cranpose::RobotScreenshot,
     b: &cranpose::RobotScreenshot,
@@ -339,7 +602,7 @@ fn scan_diff(
             let d = a.pixels[i].abs_diff(b.pixels[i]) as u32
                 + a.pixels[i + 1].abs_diff(b.pixels[i + 1]) as u32
                 + a.pixels[i + 2].abs_diff(b.pixels[i + 2]) as u32;
-            if d > 42 {
+            if d > GLASS_ACTIVITY_RGB_DELTA {
                 count += 1;
                 sum_x += logical_x;
                 if logical_x < min_x {

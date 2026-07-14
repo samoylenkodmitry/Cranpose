@@ -506,8 +506,8 @@ fn recursive_layout_depth_six_survives_combined_app_shell_robot_path() {
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, combined_app);
-    shell.set_buffer_size(1024, 768);
-    shell.set_viewport(1024.0, 768.0);
+    shell.set_buffer_size(1200, 768);
+    shell.set_viewport(1200.0, 768.0);
     shell.set_semantics_enabled(true);
     pump_shell_until_stable(&mut shell);
 

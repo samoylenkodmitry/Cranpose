@@ -44,7 +44,6 @@ cranpose-animation = { path = "crates/cranpose-animation", version = "0.1.59" }
 cranpose-liquid = { path = "crates/cranpose-liquid", version = "0.1.59" }
 cranpose = { path = "crates/cranpose", version = "0.1.59", default-features = false }
 cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.1.59" }
-cranpose-assets = { path = "crates/cranpose-assets", version = "0.1.59" }
 cranpose-core = { path = "crates/cranpose-core", version = "0.1.59" }
 cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.1.59" }
 cranpose-macros = { path = "crates/cranpose-macros", version = "0.1.59" }
@@ -56,7 +55,6 @@ cranpose-render-pixels = { path = "crates/cranpose-render/pixels", version = "0.
 cranpose-render-wgpu = { path = "crates/cranpose-render/wgpu", version = "0.1.59" }
 cranpose-runtime-std = { path = "crates/cranpose-runtime-std", version = "0.1.59" }
 cranpose-services = { path = "crates/cranpose-services", version = "0.1.59", default-features = false }
-cranpose-testing = { path = "crates/cranpose-testing", version = "0.1.59" }
 cranpose-ui = { path = "crates/cranpose-ui", version = "0.1.59" }
 cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.1.59" }
 cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.1.59" }

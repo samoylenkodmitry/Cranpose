@@ -19,6 +19,158 @@ when the goal is closed.
 10. Glass **frost adapts** to backdrop+foreground so text is never white-on-white.
 11. Each of the above is a **separate out-of-context judge** whose verdict is **binding** and re-run fresh each time.
 12. All `example/target` reproduced precisely in `desktop-demo`, working on all platforms.
+13. on text input tab i don't see any text handles on desktop app;
+14. liquid glass bubble doesn't follow the touch, it lags behind with ugly freezes;
+15. on liquid ui tab the toggles can't toggle back;segmented has wrong y for liquid bubble; all controls expected to be touched-up-zoomed on finger touch, instead they are pressed down on touch;;
+16. the glass z-geometry is wrong, it just lens, but if you look carefully at ./examples/target etalone glass you could see the glass z-geometry is beveled-in;
+17. the glass recolors wrong: in target it "colors" what inside glass while what ouside stays non-coored, but in liquid ui tab i just see the selected tab being blue and hovered tab being blue - totally miss the complexity of the behavior;
+18. the menu long press-and-move gesture still not works (tested with mouse)
+19. menu openeing/closing shape is truncated and physics is wrong
+20. strange "shadow"-like artefact around opened menu
+21. you should absolutely see the result yourself before desiding that issue is resolved/fixed/implementated
+
+## Reopened audit (Codex, 2026-07-12)
+
+The previous close was invalid: it proved a narrow robot contract, not this
+goal. Current evidence contradicts completion:
+
+| Requirements | Current evidence |
+|---|---|
+| 1, 8, 13, 18 | `TextFieldHandleMetrics.touch` rejects mouse input, and the press stream that owns long-press/slide is only published for touch-like sources. The Liquid UI menu anchor is a release-click button and has no continuous long-press handoff. |
+| 2, 5, 9, 14 | Segmented and tab lenses spring toward live pointer coordinates. The loupe has an explicit horizontal follow spring. These paths lag by construction. |
+| 3 | Shared dynamics has velocity/acceleration inputs and inverse-axis area, but no fresh visual proof covers every travelling component or pointer cadence. |
+| 4, 16, 17 | The shader has a one-direction bezel slope plus component-specific rim bands. It does not model the target's signed outer-rise/inner-recess cross-section or inside-only foreground coloration. |
+| 6 | Wrap-affinity unit tests exist, but there is no current Android capture proving finger/handle alignment on the reported wrapped case. |
+| 7, 12, 15 | The desktop showcase has no target-aligned proof for the full control set. The toggle pointer coroutine captures its first `checked` value. Segmented uses a lagging spring coordinate for both X and deformation. |
+| 10 | Adaptive contrast currently relies on a caller-selected sign; the material is not resolved from both foreground and backdrop contrast. |
+| 19, 20 | Fresh menu captures show the opening surface detached/truncated near the anchor and large black shadow/compositing rectangles during growth. |
+| 11, 21 | Existing tests and previous sheets are not fresh independent verdicts for the full numbered scope. Fresh native-resolution A/B evidence is required after each fix. |
+
+Ranked root causes:
+
+1. Pointer position and animated settle position are the same state in several
+   controls. Direct manipulation must use the raw pointer; springs begin only
+   after release.
+2. Pointer-source gating prevents the desktop app from exposing the requested
+   selection UI and continuous menu gesture with a mouse.
+3. Morphing glass uses static layer/drop-shadow geometry while its visible SDF
+   changes independently, producing mismatched halos and intermediate damage.
+4. The optical model treats the bezel as a single convex slope. The target has
+   a signed meniscus profile with an outer rise and inset recessed face.
+5. Foreground accent/contrast is changed per component outside the glass;
+   target coloration is spatially confined by the live glass field.
+
+## Reopened visual audit (Codex, 2026-07-13, round 50)
+
+The global material and pointer-cadence changes invalidate every earlier
+component-material verdict. Current target/current sheets always place the
+target on the left and the current render on the right at the same logical
+scale:
+
+- `/tmp/menu-ab-r49.png`
+- `/tmp/toggle-ab-r49.png`
+- `/tmp/bar-ab-r49-horizontal.png`
+- `/tmp/flight-ab-r50.png` (eight phase-matched launch-to-dissolve rows)
+
+Fresh evidence:
+
+1. `robot_liquid_bubble_physics` fails its rendered incompressible-strain
+   contract. Direct tracking is within 0-3 px, but eligible flight silhouettes
+   span only `87-97 x 74-81` dp; both axis-exchange ratios miss the pinned
+   target. The event-velocity continuity filter fixed micro-movement impulses,
+   but `STRETCH_PER_SPEED` was reduced from the measured law and now starves
+   real motion.
+2. The flight A/B shows a thick concentric double bevel, a milky lavender face,
+   and abrupt oversized icon zoom. The target has one thin bright meniscus,
+   a clear readable face, and continuous refraction through the travel.
+3. The shader computes a signed raised-lip/inset slope, then independently
+   paints `outer_curve`, `inner_curve`, `raised_lip_body`,
+   `inset_recess_band`, `inner_wall_shadow`, `inner_contour`, and `rim_dark`.
+   Those unrelated masks are the visible false bevel. Whole-face
+   magnification is nearly uniform for lenses and drops to identity in a tiny
+   edge feather, causing the zoom seam.
+4. The toggle footprint is correctly `58 x 39` dp, but its 10 dp endpoint lean
+   places it about 6-7 dp farther right than the reference and exposes a closed
+   green/white donut instead of the reference's track-connected inset.
+5. The settled menu is about the right width, but the row grid is too loose:
+   current leading centers are roughly 10/25/41 dp farther right than target
+   for check/icon/label, and the second-row baseline is about 12 dp too low.
+   Its white lift also erases more backdrop than the reference.
+6. Two reference bars are distinct products: Apple Developer is four tabs plus
+   a detached Search circle (`tab-swipe`); App Store is one five-tab capsule
+   with an inset Search selection (`bottom-bar-form`). The demo currently puts
+   the detached variant over the App Store tile scene, so the complete result
+   cannot match either reference.
+
+Ranked root-cause suspicions:
+
+1. Competing shader masks, not component color constants, create the false
+   bevel and opacity.
+2. The discontinuous magnification mapping creates the reported strange zoom;
+   a continuous height-field mapping must own both displacement and Fresnel.
+3. Pointer velocity must remain event-filtered and persistent, while the
+   measured deformation gain is restored for intentional motion.
+4. Bar configuration is an API/state-model issue and must represent both
+   reference forms explicitly.
+5. Menu and toggle residuals are local geometry/material calibration after the
+   shared optic is corrected.
+
+Architecture decision: use one continuous signed height-field optic for every
+glass surface, with component parameters selecting profile depth, frost, and
+magnification. Constant-only tuning is rejected because it retains the false
+ridge topology; separate per-widget shaders are rejected because they would
+duplicate the same optical and adaptive-contrast pipeline.
+
+### Round 57 paired evidence and z-profile decision
+
+Target-left/current-right composites from the fresh passing motion run are
+`/tmp/menu-ab-r57-4x.png`, `/tmp/toggle-ab-r57-correct-5x.png`, and
+`/tmp/tabbar-ab-r57-250.png`.
+
+1. The toggle footprint and track alignment are close, but the current lens
+   carries green across almost its entire face. The target transitions near
+   the lens center into a broad pale recessed chamber.
+2. `recessed_depth_slope` is defined only against `x_full = -d / bezel` and
+   returns zero after `recess_start`. More importantly, its direction is the
+   nearest-boundary SDF normal. In the straight middle of a capsule that normal
+   is vertical, so this model cannot produce the target's horizontal face bend
+   even with larger displacement constants.
+3. The menu's target grid is now close, but its comparison backdrop is blank
+   under most of the current panel. Material opacity cannot be calibrated from
+   that sheet until the demo supplies target-like text/detail behind the menu.
+4. The demo previously combined App Store backdrop tiles with the Apple
+   Developer detached-Search bar. The public API now represents unified and
+   detached-accessory forms separately, and a regression test pins the absence
+   of an accessory gap in the unified form.
+
+Ranked options:
+
+1. Add one shared recessed-face gradient derived from normalized face
+   coordinates, blended continuously into the signed perimeter profile. This
+   gives the inset chamber a real 2D z-gradient while preserving the SDF for
+   silhouette, lip, coverage, and motion deformation. **Chosen.**
+2. Increase per-widget edge displacement or magnification. Rejected: the
+   capsule core keeps the wrong SDF-normal direction and merely enlarges the
+   existing green echo.
+3. Paint a pale overlay over the toggle face. Rejected: it hides the backdrop
+   instead of refracting it and cannot generalize to tab, slider, or loupe
+   optics.
+
+The first face-gradient render (`/tmp/toggle-ab-r58-5x.png`) creates the missing
+pale chamber, confirming the model, but leaves a narrow green spear through its
+center. Pixel topology traces that residue to the positive raised-crest slope:
+it still pulls the full-color track inward at full strength. The target crest
+retains chromatic dispersion but only a weak achromatic fold. The next pass
+therefore attenuates the crest in the achromatic displacement only; dispersion
+continues to use the unattenuated signed slope.
+
+`/tmp/toggle-ab-r59-5x.png` confirms that crest attenuation removes the spear,
+but also removes most rim color. The shader currently stores all surface
+refraction in `disp_c`; spectral taps scale that same vector, coupling base
+image fold and chromatic separation. The production fix is two explicit
+channels: base displacement for the achromatic image and a zero-mean spectral
+carrier used only as `(scale - 1)`. This preserves loupe folding while letting
+interactive crests disperse without duplicating the backdrop image.
 
 ## Project orientation (fresh checkout)
 
@@ -160,3 +312,320 @@ Claude-Session: https://claude.ai/code/session_01V9mAB1Wg7LEZvRRp1xnpfa
 ## Key files touched this round
 
 `crates/cranpose-liquid/src/dynamics.rs` (new), `.../widgets/{tab_bar,toggle,segmented,slider}.rs`, `.../material.rs`, `.../motion.rs`; `crates/cranpose-ui-graphics/shaders/liquid_glass.wgsl`; `crates/cranpose-ui/src/{text_selection,text_field_modifier_node}.rs`, `.../widgets/{basic_text_field,text_selection_menu}.rs`; `crates/cranpose-core/src/runtime.rs`; `crates/cranpose/src/desktop.rs`; `apps/desktop-demo/src/app/liquid_ui.rs`; `apps/desktop-demo/robot-runners/robot_{liquid_bubble_physics,menu_slide,adaptive_frost}.rs` + `robot_liquid_motion_contract.rs`.
+
+## 2026-07-13 menu morph diagnostic (paired r76)
+
+The required target-left/current-right sheet is `/tmp/menu-r76-paired-key.png`;
+native-size zooms are `/tmp/menu-r76-row{075,100,130,330}-2x.png`. Vision and
+full-resolution target inspection establish these measurements (target source
+is 3x device pixels, so values below are logical dp):
+
+| phase | target frame | target glass contour | current behavior |
+|---|---:|---:|---|
+| source | `f_042` | two independent 44dp controls | matches |
+| +33ms | `f_043` | one smooth ~96x78 droplet | still two independent controls |
+| +67ms | `f_045` | ~127x94 | ~124x69 horizontal capsule |
+| +100ms | `f_047` | ~178x107 | ~166x78; blurred row ink escapes left of glass |
+| +133ms | `f_049` | ~214x108 | width is close, height still late |
+| +167ms | `f_051` | ~235x106 | close footprint, wrong preceding trajectory |
+| +200ms | `f_053` | ~244x103 | near settle |
+| +267ms | `f_057` | ~256x103 width overshoot | current overshoot timing is broadly close |
+
+Findings ranked by evidence:
+
+1. The unit oracle in `menu_geometry_recoils_round_then_opens_through_a_wide_oval`
+   incorrectly requires only 70-78dp height at the +75ms spring state. The target
+   is already ~94dp and reaches a short ~107-108dp vertical overshoot before
+   returning to ~103-104dp. This wrong test drove the visible flat-capsule error.
+2. The menu API currently receives only the trailing anchor. The target's first
+   animated pose is the aggregate volume of both trailing controls; the filter
+   rect is already measurable by the UI but is discarded. Scaling one anchor
+   cannot reproduce the +33ms footprint or center.
+3. Rows use a full-width layer with blur and only a weak 0.92..1.0 transform.
+   The morph backdrop is SDF-shaped but `.no_clip()` leaves child content
+   unmasked, which is why the +100ms blurred icon appears left of the glass.
+4. Reveal timing at stiffness 200 is now close enough to judge only after the
+   correct geometry and mask land; diff-derived geometry extents are currently
+   contaminated by unmasked blurred row pixels.
+
+Architecture options:
+
+1. **Chosen:** report the complete source cluster to `LiquidMenu`, derive one
+   smooth aggregate birth ellipse from those real rects, and interpolate exact
+   physical geometry from that source. In the shared material path, reuse the
+   liquid shader's existing scene SDF in a content-mask mode so backdrop and
+   child clipping are bit-identical. This fixes both root causes without a
+   target-specific coordinate or duplicated SDF.
+2. Restore separate neighbor SDF lobes with smooth-union glue. Rejected: the
+   earlier implementation produced the independently judged notch/bi-lobed
+   silhouette; the target has a single smooth aggregate outline by +33ms.
+3. Delay/fade/scale the rows until they happen to fit. Rejected: it hides the
+   clipping defect, regresses the binding early-materialization verdict, and
+   still permits blur kernels outside the live surface.
+
+## 2026-07-13 menu morph binding judge (paired r82)
+
+The fresh out-of-context judge reviewed `/tmp/menu-r82-paired.png` with the
+target on the left and the current capture on the right. Its binding verdict
+was MISMATCH for source merging, silhouette trajectory, early topology, and
+the absorbed blue control; content staging and the final surface were CLOSE.
+The ranked deltas were:
+
+1. The target body drops during its fast expansion, overshoots vertically,
+   then rebounds into the settled card. The current body expands around an
+   almost pinned center and therefore looks like a direct interpolation.
+2. The target keeps the absorbed blue control recognizable through the early
+   expansion, then stretches it into an irregular cyan vertical refraction.
+   The current control loses its glyph immediately and settles into a round
+   Gaussian spot.
+3. At +37ms the current capture still contains both source-control shells,
+   producing a scalloped crown. The target has already absorbed the menu
+   trigger; only the neighboring blue source participates visibly.
+4. Target row content rides the downward excursion. Current content stays
+   higher, tighter, and reaches its final registration too soon.
+5. The settled footprint is close; current frost is slightly more opaque and
+   its shadow and perimeter are tighter.
+
+Full-resolution pixel arbitration confirmed findings 1-4. Target center Y is
+approximately 76dp at +33ms, 84dp at +67ms, 94-95dp at +100-133ms, 91dp at
++167ms, 87dp at +200ms, and 81dp at +267ms before settling near 80dp. The
+current center has no corresponding downward excursion. Inspection of the
+source layers also confirmed that the trigger's 120ms cover tween leaves its
+backdrop glass mounted long after the target has absorbed it.
+
+Architecture choices:
+
+1. **Chosen for trajectory:** one pure `menu_vertical_overshoot(path)` law
+   supplies the same offset to the shader geometry and row-content layer. The
+   excursion rises quickly, peaks during the width/height acceleration phase,
+   and returns before settle. A single law prevents glass and content from
+   drifting apart.
+2. Apply a transform only to the popup content. Rejected: the silhouette would
+   remain wrong and rows would visibly detach from the refractive body.
+3. Move the popup node itself. Rejected: popup hit rectangles and the anchor
+   coordinate frame would move with animation, breaking the continuous
+   press-slide-release gesture.
+4. **Chosen for source topology:** unmount the trigger's backdrop effect at
+   the measured absorption time instead of fading it for 120ms. Alpha cannot
+   hide a backdrop effect in this renderer, so leaving it mounted is
+   structurally wrong.
+5. **Next architectural step for the blue source:** represent an absorbed
+   source as geometry plus transferable visual content, so its backplate and
+   icon can remain crisp initially and then deform inside the same menu surface
+   mask. A menu-specific hardcoded filter drawing is rejected; the source
+   transfer must work for any glass control.
+
+The native-resolution source-only comparison
+`/tmp/menu-r83-source-paired.png` confirms that choice. From +33ms through
++133ms the target retains a readable white glyph on a blue foreground core
+above the growing glass. The current implementation shows only the fixed
+button sampled through the popup's blur, so the new body clips it to a small
+blue cap immediately. By +167ms the target foreground begins stretching and
+blurring into the backdrop sample. Therefore an absorbed source needs both a
+real source rect for the SDF trajectory and a transferable foreground visual;
+backdrop refraction alone cannot reproduce the observed layer order.
+
+The first transferred-source capture is
+`/tmp/menu-r84-source-paired.png` (target left, current right). It confirms the
+new layer order but rejects the initial calibration: current stays nearly
+source-blue and sharp through +130ms, while target is pale cyan and begins
+softening; current's +200ms smear is also too dark and too tall. Native pixels
+put the target blue core near 38% of the 44dp outer control, versus the shared
+icon button's current 50%. The correction therefore belongs partly in the
+shared icon-button foreground geometry, with the menu transfer using lower
+alpha, an earlier blur ramp, and a shorter stretch.
+
+Follow-up pixel arbitration corrected the diameter estimate: color-isolated
+blue bounds are 65x66 device pixels in target `f_042`, or approximately
+22x22dp. `r85` measures 17x17dp after the 38% change. The target therefore
+confirms the original 50% backplate diameter; only the glyph needs the smaller
+ratio. The paired final frames also reveal a separate ownership error: keeping
+the source foreground mounted below the popup creates a 39x33dp round blue
+sample, while target's settled caustic is approximately 17x37dp. The live
+button must retain its glass shell but transfer foreground ownership to the
+menu for the entire open/close morph.
+
+`r86` implements single ownership and is paired at
+`/tmp/menu-r86-source-paired.png`. Fixed-coordinate center probes (red channel,
+lower means stronger blue) are target/current: +33ms 219/191, +100ms 189/191,
++167ms 171/183, +267ms 177/213. The target does not monotonically fade: it
+starts pale, concentrates blue energy as the glyph melts, then retains a
+settled caustic. Shape inspection also shows a round blur through +167ms and
+anisotropic stretch only afterward. The next law therefore separates early
+isotropic shrink from late stretch and uses a peaked, persistent color-energy
+curve rather than an opacity fade.
+
+The `r87` same-image review shows that a single transferred overlay still has
+the wrong topology: it remains a symmetric blurred ellipse above the material,
+whereas target transitions from crisp foreground through +133ms into a source
+that is refracted by the glass z profile. The selected architecture splits the
+transfer into two ordered layers in the popup root: a foreground copy drawn
+after the glass during the readable phase, and a deformed source drawn before
+the glass during/after melt. The latter is sampled by the real backdrop shader,
+so its settled asymmetry comes from the same z surface as every other source.
+
+`r88` confirms that popup sibling ordering is sampled by the backdrop shader.
+The late mark is now materially integrated, but its optical footprint reaches
+full energy too late: tight source crops have minimum red target/current
+161/198 at +200ms and 167/178 at +267ms. Since backdrop alpha is already one,
+the remaining cause is the deformation area. The handoff and stretch must be
+front-loaded so +200ms is already close to settled caustic dimensions.
+
+The motion robot's old +75ms aspect check is invalid after the confirmed
+vertical rebound. It derives height from a diff against the closed frame, so
+its bbox is the union of the departed source and displaced body (108px), not
+the live SDF height. Exact contour dimensions remain pinned by
+`menu_geometry_merges_sources_and_matches_the_measured_growth_contour`; the
+robot keeps render-presence and width progression checks and reports the
+diff-center trajectory separately.
+
+## 2026-07-13 menu binding judge and shared face-field decision (paired r89)
+
+The fresh out-of-context judge reviewed `/tmp/menu-r89-paired.png` and
+`/tmp/menu-r89-source-paired.png`, always target-left/current-right. Its
+overall verdict was CLOSE. Pixel arbitration rejected the claimed source,
+settled-footprint, horizontal-growth, and row-grid errors:
+
+- The target blue core is `65x66` device pixels at 3x, or `21.7x22dp`;
+  current is `22x22dp`. The claimed 25% deficit is not present.
+- Source-center separation is approximately `51dp` target and `52dp`
+  current. Current is not 15% tighter.
+- The target growth widths are approximately `96, 127, 178, 214, 235, 244,
+  256dp` at `+33, +67, +100, +133, +167, +200, +267ms`. The pure current
+  geometry reaches `94-98, ~127, 174-182, 205-216, 228-238, 241-249,
+  252-259dp` at the same phases. The alleged jump/plateau is not in the
+  geometry law.
+- Current settled coverage is `249x105dp`; the target contour is roughly
+  `244x103dp`. Current is slightly wider, not 6-7% narrower. Both row pitches
+  are approximately `42.5dp`, not 15% apart.
+
+Three judge findings are confirmed and binding:
+
+1. The absorbed blue source settles into a broad symmetric Gaussian plume.
+   The target retains a compact folded caustic with separated blue/cyan
+   structure and a darker lower bulb.
+2. In-flight row ink is scaled and blurred but does not undergo enough lens
+   displacement. The target visibly warps the rows through the growing
+   surface.
+3. The checkmark starts resolving by the current `+165ms` frame; the target
+   keeps it absent at `+167ms` and materializes it around `+200ms`.
+
+The target-left/current-right toggle sheet `/tmp/toggle-r94-paired.png`
+provides a cleaner probe of the same z-field error. The README pins the track
+at `63dp`: from its approximately x37 device-pixel left contour, the raw right
+endpoint is near x226 at 3x. The pressed target terminates saturated green near
+x209, a `5-6dp` inward fold, and leaves a broad pale chamber. Current saturated
+green reaches its raw x844 endpoint. The target also has an asymmetric
+green/yellow upper meniscus and cyan lower return, while current draws a
+near-continuous cyan double rim. The bar sheet `/tmp/bar-r89-paired.png` shows
+the same overdrawn rim around the selected tab, in addition to local
+component-size differences.
+
+Architecture options:
+
+1. **Chosen foundation:** define the recessed face as an actual height field
+   in physical units. Its center sits `recess_depth * bezel` below the
+   shoulder, and the analytic derivative (including normalized-ellipse chain
+   rule) supplies refraction opposite the surface gradient. Blend this field
+   continuously into the signed perimeter meniscus. This makes depth scale
+   with the authored glass cross-section and gives toggle, tab, and slider one
+   optical model. It does not by itself solve the separately confirmed menu
+   source-transfer blur or the duplicated spectral rim.
+2. Raise per-widget displacement or magnification. Rejected: both retain the
+   wrong face derivative and enlarge the current green echo/zoom.
+3. Draw a pale face overlay or hand-shaped blue menu mark. Rejected: neither
+   refracts arbitrary backdrop content, so they cannot reproduce the same
+   target over text, tiles, and controls.
+
+The pressed-toggle oracle therefore requires the strict saturated-green mask
+to terminate at least `3dp` before the raw track endpoint. Pale green spectral
+fringe is deliberately excluded. `lens_probe` now runs at the toggle's gentle
+`1.02x` magnification so the physical face derivative can be inspected without
+the default lens zoom hiding it.
+
+## 2026-07-14 secondary slot-host ownership and callback promotion
+
+The intermittent `state cell missing` panic after switching demo tabs was not
+a liquid-widget state bug. A callback created by measure-time subcomposition
+could remain locally active after the source composition that supplied its
+state had been removed. Replaying that callback then read a released state
+cell. The focused regression is
+`subcomposition_scope_inherits_source_owner_lifetime`.
+
+The first implementation put the captured source scope on the secondary
+composer's normal scope stack. That stopped the stale callback, but a full
+workspace test exposed a second deterministic failure:
+`dismissed_row_inside_lazy_column_leaves_no_lingering_strip` exhausted the
+100-round invalid-scope limit. The secondary root treated its source scope as
+a normal recomposition parent, so a callbackless secondary group promoted its
+invalidation into a different `SlotsHost` and re-enqueued the same work.
+
+The scope graph now has two distinct weak relations:
+
+1. `parent_scope` is structural ancestry inside one slot host. Callback
+   promotion follows only this relation.
+2. `lifetime_owner_scope` binds a secondary root to the source scope captured
+   at the subcomposition call site. Effective activity follows this relation,
+   but callback promotion never does.
+
+`CapturedCompositionContext` carries locals plus a weak source owner. A new
+secondary root receives that owner without placing it on the structural scope
+stack; descendants inherit activity through their ordinary structural parent.
+Expired or inactive links make the secondary scope effectively inactive, and
+inactive callbacks are deferred until the tree is composed and reactivated
+again. This preserves state lifetime without allowing recomposition to cross
+slot-host boundaries.
+
+Verification after the split:
+
+- core ownership regression: passes and asserts the secondary root has no
+  structural parent, has the captured lifetime owner, and has no cross-host
+  callback-promotion target;
+- LazyColumn dismiss regression: failed before the split with
+  `RecompositionLimitExceeded`, passes afterward;
+- `cargo test -p cranpose-core`: 661 unit tests plus integrations and docs pass;
+- full workspace `cargo test` and `cargo clippy` on the isolated 12-core
+  builder pass with zero warnings.
+
+## 2026-07-14 checkpoint verification and visual truth
+
+This checkpoint is functionally green but is not the final visual etalon.
+Fresh target/current composites were built from the same image for each
+inspection rather than judging separate screenshots from memory. The binding
+remaining differences are:
+
+- Toggle press: current dome is too flat and wide, with a doubled sharp
+  spectral rim. The target has a taller egg-shaped chamber, one asymmetric
+  green/yellow upper meniscus, and a cyan lower return.
+- Tab swipe: current selected surface is too frosted and produces only mild
+  icon doubling. The target is clearer and bends the blue WWDC foreground
+  across most of the dome, with a separated Account-side image.
+- Open menu: geometry and row pitch are close, but current introduces a dark
+  horizontal backdrop smear. Target frost stays evenly luminous. Current also
+  uses a filled grid glyph where the reference uses four outlined cells.
+- Bottom-bar variants remain distinct requirements: the tab-swipe reference
+  has a detached search circle, while `bottom-bar-form` integrates Search into
+  the five-item surface. One variant cannot stand in for both.
+
+Do not respond to these differences by increasing global magnification,
+bevel, or chromatic gain. The paired images show that those parameters amplify
+the wrong topology. The next shader work must use the configurable X-Z/Y-Z
+profile to produce the target's tall recessed face and asymmetric returning
+meniscus, then calibrate per-component aperture and frost against aligned raw
+pixels.
+
+Checkpoint gates:
+
+- workspace `cargo test > 1.tmp`: pass, zero warnings;
+- workspace `cargo clippy > 2.tmp`: pass, zero warnings;
+- Android `:app:assembleRelease`: pass after moving Java source/target to 17,
+  zero warnings;
+- desktop-demo wasm build: pass;
+- optimized desktop release build: pass, zero warnings;
+- full real-X11 robot suite on Intel UHD 730: 128/128 pass;
+- local NVIDIA/X11 smoke set: 7/7 pass, including liquid motion, menu, loupe,
+  vertical selection grab, tab navigation, fused viewport, and external drag.
+
+The verified release is installed at `target/release/desktop-app` and runs as
+the user unit `cranpose-desktop-demo.service` with normal nice level 0. The
+Liquid UI opens directly on the physical-profile playground.

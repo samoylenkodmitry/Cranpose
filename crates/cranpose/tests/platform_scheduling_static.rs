@@ -511,6 +511,35 @@ fn platform_drivers_set_density_through_app_shell() {
 }
 
 #[test]
+fn web_primary_pointer_stream_is_captured_until_release_or_cancel() {
+    let source = crate_source("src/web.rs");
+
+    assert!(
+        source.contains("set_pointer_capture(event.pointer_id())"),
+        "web pointer-down must capture the pointer so selection handles keep ownership outside the canvas"
+    );
+    assert!(
+        source
+            .matches("release_pointer_capture(event.pointer_id())")
+            .count()
+            >= 2,
+        "web pointer-up and pointer-cancel must both release canvas pointer capture"
+    );
+}
+
+#[test]
+fn android_cancel_terminates_the_primary_pointer_stream() {
+    let source = crate_source("src/android.rs");
+
+    assert!(
+        source.contains("MotionAction::Cancel")
+            && source.contains("PendingInput::PointerCancel")
+            && source.contains("shell.cancel_gesture()"),
+        "Android ACTION_CANCEL must reach AppShell::cancel_gesture instead of leaving a selection handle captured"
+    );
+}
+
+#[test]
 fn desktop_frame_cap_deadline_is_option_checked() {
     let source = crate_source("src/desktop.rs");
 

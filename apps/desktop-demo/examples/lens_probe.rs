@@ -70,8 +70,9 @@ fn ProbeApp() {
                                 wobble_phase: 0.0,
                                 bulge_amplitude: 0.0,
                                 bulge_direction: 0.0,
+                                ellipse_blend: 0.0,
+                                deformation: None,
                             }),
-                            magnify_boost: 0.25,
                             ..Default::default()
                         },
                     );

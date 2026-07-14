@@ -16,7 +16,9 @@ use crate::text_field_focus::{dispatch_copy, dispatch_cut, dispatch_paste, dispa
 use crate::text_field_modifier_node::{
     TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics,
 };
-use crate::text_selection::{selection_after_handle_drag, HandleKind, LineAffinity, HANDLE_RADIUS};
+use crate::text_selection::{
+    selection_after_handle_drag, HandleGrabOffset, HandleKind, LineAffinity, HANDLE_RADIUS,
+};
 use crate::widgets::{
     loupe_target_for_drag, CaretActionMenu, Layout, SelectionHandle, SelectionLoupe,
     TextSelectionMenu,
@@ -255,7 +257,7 @@ pub fn BasicTextFieldWithOptions(
     let _selection = state.selection();
 
     // Shared channel through which the field node publishes live handle geometry
-    // (focus, touch, on-screen origin, metrics). Remembered so it is stable
+    // (focus, direct manipulation, on-screen origin, metrics). Remembered so it is stable
     // across recompositions.
     let controller =
         remember(TextFieldHandleController::new).with(TextFieldHandleController::clone);
@@ -289,8 +291,9 @@ pub fn BasicTextFieldWithOptions(
         controller.clone(),
     );
 
-    // Finger selection handles (touch only): a caret handle for a collapsed
-    // selection, start/end lollipops for a range. Rendered in the top-level
+    // Direct-manipulation selection handles: a caret handle for a collapsed
+    // selection, start/end lollipops for a range. Mouse, touch and pen share
+    // this path. Rendered in the top-level
     // overlay via `Popup` so they escape the field's clip and hang outside the
     // line. A `PopupHost` at the app root (installed by the shell) is
     // required for them to appear.
@@ -375,8 +378,8 @@ fn BringCaretIntoView(
     });
 }
 
-/// Emits the finger selection/cursor handles for the field when it is focused
-/// and was last touched (never for mouse input, which keeps a clean caret).
+/// Emits selection/cursor handles for a focused field entered through any
+/// primary pointer. Keyboard-only focus keeps a clean caret.
 /// `accent` is the field's tint (its cursor color): handles are drawn solid in
 /// it, matching the caret and the highlight derived from it.
 #[composable]
@@ -430,13 +433,13 @@ fn SelectionHandles(
     let Some(metrics) = controller.metrics() else {
         return;
     };
-    if !metrics.focused || !metrics.touch {
+    if !metrics.focused || !metrics.direct_manipulation {
         return;
     }
 
     let text = state.text();
 
-    // Long-press → slide-to-menu: when the field node publishes a fresh touch
+    // Long-press → slide-to-menu: when the field node publishes a fresh pointer
     // press, arm a frame-clock watcher that claims the gesture after the hold
     // threshold (word select; the range-change side effect opens the menu
     // while the finger is still down). The slot holds the watcher's only
@@ -472,19 +475,14 @@ fn SelectionHandles(
         }
     }
 
-    // Window position of an in-progress handle drag (touch), or `None` when no
+    // Window position of an in-progress handle drag, or `None` when no
     // handle is being dragged. Drives the glass loupe (below) so it floats
     // above the finger while the caret/selection edge is being placed.
     let drag_pos: MutableState<Option<Point>> =
         remember(|| mutableStateOf(None::<Point>)).with(|state| *state);
-    // The finger-to-line offset captured at the grab (grab line bottom −
-    // finger y): drags keep targeting the line the finger means whether the
-    // handle was grabbed on the line or by its dot outside it. One cell
-    // serves all handles — only one drags at a time.
-    // (bias, last finger y): the bias one-way-ratchets toward full handle
-    // visibility above the finger as the drag proceeds (see
-    // `ratchet_grab_bias`).
-    let drag_bias: Rc<Cell<Option<(f32, f32)>>> =
+    // One displacement-based grab relationship serves all handles; only one
+    // can own the pointer at a time.
+    let drag_bias: Rc<Cell<Option<HandleGrabOffset>>> =
         remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
 
     if selection.collapsed() {
@@ -524,13 +522,7 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                let bias = match grab_bias.get() {
-                    None => tip_y - pos.y,
-                    Some((bias, last_y)) => {
-                        crate::text_selection::ratchet_grab_bias(bias, last_y, pos.y)
-                    }
-                };
-                grab_bias.set(Some((bias, pos.y)));
+                track_handle_grab(&grab_bias, tip_y, pos.y);
                 drag_pos.set(Some(pos));
                 on_drag(pos);
             },
@@ -606,13 +598,7 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                let bias = match grab_bias.get() {
-                    None => start_tip_y - pos.y,
-                    Some((bias, last_y)) => {
-                        crate::text_selection::ratchet_grab_bias(bias, last_y, pos.y)
-                    }
-                };
-                grab_bias.set(Some((bias, pos.y)));
+                track_handle_grab(&grab_bias, start_tip_y, pos.y);
                 drag_pos.set(Some(pos));
                 on_drag_start(pos);
             },
@@ -645,13 +631,7 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                let bias = match grab_bias.get() {
-                    None => end_tip_y - pos.y,
-                    Some((bias, last_y)) => {
-                        crate::text_selection::ratchet_grab_bias(bias, last_y, pos.y)
-                    }
-                };
-                grab_bias.set(Some((bias, pos.y)));
+                track_handle_grab(&grab_bias, end_tip_y, pos.y);
                 drag_pos.set(Some(pos));
                 on_drag_end(pos);
             },
@@ -717,7 +697,7 @@ fn SelectionHandles(
     // unconditionally so the bubble stays mounted through its release
     // deflation.
     let loupe_target = drag_pos.value().and_then(|finger| {
-        let bias = drag_bias.get().map_or(0.0, |(bias, _)| bias);
+        let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
         let offset = window_pos_to_offset(&text, &style, &metrics, finger, bias);
         // Upstream: the loupe magnifies the line the FINGER rides — at a
         // shared wrap boundary that is the upper line the mapping sampled.
@@ -728,6 +708,19 @@ fn SelectionHandles(
     SelectionLoupe(loupe_target);
 }
 
+fn track_handle_grab(
+    drag_bias: &Cell<Option<HandleGrabOffset>>,
+    handle_tip_y: f32,
+    finger_y: f32,
+) -> f32 {
+    let mut grab = drag_bias
+        .get()
+        .unwrap_or_else(|| HandleGrabOffset::begin(handle_tip_y, finger_y));
+    let bias = grab.track(finger_y);
+    drag_bias.set(Some(grab));
+    bias
+}
+
 /// Builds the drag handler for the collapsed cursor handle: moves the caret to
 /// the dragged position. `drag_bias` is the finger-to-line offset captured at
 /// the grab (see [`window_pos_to_offset`]).
@@ -735,14 +728,14 @@ fn drag_caret_closure(
     state: TextFieldState,
     style: TextStyle,
     controller: TextFieldHandleController,
-    drag_bias: Rc<Cell<Option<(f32, f32)>>>,
+    drag_bias: Rc<Cell<Option<HandleGrabOffset>>>,
 ) -> Rc<dyn Fn(Point)> {
     Rc::new(move |window_pos: Point| {
         let Some(metrics) = controller.metrics() else {
             return;
         };
         let text = state.text();
-        let bias = drag_bias.get().map_or(0.0, |(bias, _)| bias);
+        let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
         let offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
         state.set_selection(TextRange::new(offset, offset));
         crate::request_render_invalidation();
@@ -757,14 +750,14 @@ fn drag_edge_closure(
     state: TextFieldState,
     style: TextStyle,
     controller: TextFieldHandleController,
-    drag_bias: Rc<Cell<Option<(f32, f32)>>>,
+    drag_bias: Rc<Cell<Option<HandleGrabOffset>>>,
 ) -> Rc<dyn Fn(Point)> {
     Rc::new(move |window_pos: Point| {
         let Some(metrics) = controller.metrics() else {
             return;
         };
         let text = state.text();
-        let bias = drag_bias.get().map_or(0.0, |(bias, _)| bias);
+        let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
         let dragged_offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
         let selection = state.selection();
         let fixed_edge = match dragged {
@@ -793,7 +786,7 @@ mod tests {
     /// Composes just the finger handles for a collapsed caret with the given
     /// published metrics, and returns the rendered scene. The teardrop
     /// rasterizes to an image primitive, so counting images counts handles.
-    fn render_collapsed_handles(touch: bool) -> crate::renderer::RecordedRenderScene {
+    fn render_collapsed_handles(direct_manipulation: bool) -> crate::renderer::RecordedRenderScene {
         use crate::layout::LayoutEngine;
         use crate::renderer::HeadlessRenderer;
         use crate::widgets::PopupHost;
@@ -811,7 +804,7 @@ mod tests {
                     let controller = TextFieldHandleController::new();
                     controller.publish(TextFieldHandleMetrics {
                         focused: true,
-                        touch,
+                        direct_manipulation,
                         node_origin: Point { x: 0.0, y: 10.0 },
                         padding_left: 0.0,
                         padding_top: 0.0,
@@ -858,7 +851,7 @@ mod tests {
 
     /// Composes the handles + contextual menu for a range selection with the
     /// given metrics, returning the rendered scene.
-    fn render_range_menu(touch: bool) -> crate::renderer::RecordedRenderScene {
+    fn render_range_menu(direct_manipulation: bool) -> crate::renderer::RecordedRenderScene {
         use crate::layout::LayoutEngine;
         use crate::renderer::HeadlessRenderer;
         use crate::widgets::PopupHost;
@@ -879,7 +872,7 @@ mod tests {
                     }
                     controller.publish(TextFieldHandleMetrics {
                         focused: true,
-                        touch,
+                        direct_manipulation,
                         node_origin: Point { x: 0.0, y: 40.0 },
                         padding_left: 0.0,
                         padding_top: 0.0,
@@ -929,7 +922,9 @@ mod tests {
     /// the measure pass), mirroring a real app where text fields live inside
     /// `BoxWithConstraints`/`LazyColumn`. The overlay `Popup`s must still reach
     /// the enclosing `PopupHost` across the subcomposition boundary.
-    fn render_range_menu_subcomposed(touch: bool) -> crate::renderer::RecordedRenderScene {
+    fn render_range_menu_subcomposed(
+        direct_manipulation: bool,
+    ) -> crate::renderer::RecordedRenderScene {
         use crate::layout::LayoutEngine;
         use crate::renderer::HeadlessRenderer;
         use crate::widgets::{BoxWithConstraints, PopupHost};
@@ -957,7 +952,7 @@ mod tests {
                             }
                             controller.publish(TextFieldHandleMetrics {
                                 focused: true,
-                                touch,
+                                direct_manipulation,
                                 node_origin: Point { x: 0.0, y: 40.0 },
                                 padding_left: 0.0,
                                 padding_top: 0.0,
@@ -1017,7 +1012,9 @@ mod tests {
     /// measure pass through `LazyColumn`'s own `SubcomposeLayoutNode`, so the
     /// overlay `Popup`s (handles + menu) only reach the enclosing `PopupHost`
     /// once the item subcomposition inherits the call-site composition locals.
-    fn render_range_menu_lazy_column(touch: bool) -> crate::renderer::RecordedRenderScene {
+    fn render_range_menu_lazy_column(
+        direct_manipulation: bool,
+    ) -> crate::renderer::RecordedRenderScene {
         use crate::layout::LayoutEngine;
         use crate::renderer::HeadlessRenderer;
         use crate::widgets::PopupHost;
@@ -1056,7 +1053,7 @@ mod tests {
                                     }
                                     controller.publish(TextFieldHandleMetrics {
                                         focused: true,
-                                        touch,
+                                        direct_manipulation,
                                         node_origin: Point { x: 0.0, y: 40.0 },
                                         padding_left: 0.0,
                                         padding_top: 0.0,
@@ -1301,7 +1298,7 @@ mod tests {
         for node_origin in [Point { x: 12.0, y: 240.0 }, Point { x: 12.0, y: 190.0 }] {
             let metrics = TextFieldHandleMetrics {
                 focused: true,
-                touch: true,
+                direct_manipulation: true,
                 node_origin,
                 padding_left: 4.0,
                 padding_top: 3.0,
@@ -1366,7 +1363,7 @@ mod tests {
             let line_height = 20.0;
             let metrics = TextFieldHandleMetrics {
                 focused: true,
-                touch: true,
+                direct_manipulation: true,
                 node_origin: Point { x: 0.0, y: 0.0 },
                 padding_left: 0.0,
                 padding_top: 0.0,
@@ -1403,6 +1400,41 @@ mod tests {
                 "start handle must sit at the lower line's left edge, got x={}",
                 start_tip.x
             );
+
+            // The inverse mapping must preserve finger-to-handle coordination
+            // through every grab phase. The finger moves down while the handle
+            // drifts into view; the resolved visual-line bottom must remain
+            // nearest `finger + bias` instead of accumulating one line of Y
+            // error for every soft wrap above it.
+            let mut grab = HandleGrabOffset::begin(end_tip.y, end_tip.y);
+            for finger_y in [
+                end_tip.y,
+                end_tip.y + 8.0,
+                end_tip.y + 32.0,
+                end_tip.y + 80.0,
+            ] {
+                let bias = grab.track(finger_y);
+                let resolved = window_pos_to_offset(
+                    text,
+                    &style,
+                    &metrics,
+                    Point {
+                        x: end_tip.x,
+                        y: finger_y,
+                    },
+                    bias,
+                );
+                let resolved_tip =
+                    handle_tip_window_pos(text, &style, &metrics, resolved, LineAffinity::Upstream);
+                let target_tip_y =
+                    (finger_y + bias).clamp(line_height, ranges.len() as f32 * line_height);
+                assert!(
+                    (resolved_tip.y - target_tip_y).abs() <= line_height * 0.5 + 0.5,
+                    "finger y={finger_y}, bias={bias} resolved to offset {resolved} at y={}, expected the nearest visual-line bottom to {}",
+                    resolved_tip.y,
+                    target_tip_y,
+                );
+            }
         })
     }
 
@@ -1506,7 +1538,7 @@ mod tests {
     }
 
     #[test]
-    fn context_menu_shows_for_touch_selection_only() {
+    fn context_menu_shows_for_pointer_selection_on_every_platform() {
         let _app_context = crate::render_state::app_context_test_scope();
 
         let touch = text_values(&render_range_menu(true));
@@ -1523,10 +1555,15 @@ mod tests {
             "expected Select all, got {touch:?}"
         );
 
-        let mouse = text_values(&render_range_menu(false));
+        let mouse = text_values(&render_range_menu(true));
         assert!(
-            !mouse.iter().any(|t| t == "Copy"),
-            "mouse selection must not show the finger contextual menu, got {mouse:?}"
+            mouse.iter().any(|t| t == "Copy"),
+            "mouse selection must expose the same direct-manipulation menu, got {mouse:?}"
+        );
+        let keyboard = text_values(&render_range_menu(false));
+        assert!(
+            !keyboard.iter().any(|t| t == "Copy"),
+            "keyboard-only focus must keep a clean caret, got {keyboard:?}"
         );
     }
 
@@ -1606,7 +1643,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_handle_shows_for_touch_only() {
+    fn cursor_handle_shows_for_pointer_selection_on_every_platform() {
         let _app_context = crate::render_state::app_context_test_scope();
         assert_eq!(
             image_count(&render_collapsed_handles(true)),
@@ -1614,9 +1651,14 @@ mod tests {
             "a touch caret should show one finger cursor handle in the overlay"
         );
         assert_eq!(
+            image_count(&render_collapsed_handles(true)),
+            1,
+            "a mouse-created caret should expose its draggable handle"
+        );
+        assert_eq!(
             image_count(&render_collapsed_handles(false)),
             0,
-            "a mouse caret should keep a clean caret with no finger handle"
+            "keyboard-only focus should keep a clean caret"
         );
     }
 

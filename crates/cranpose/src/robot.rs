@@ -12,7 +12,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::mpsc;
 
-use cranpose_app_shell::{AppShell, KeyCode, RuntimeLeakDebugStats};
+use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
 
@@ -115,18 +115,22 @@ pub(crate) enum RobotCommand {
     TouchDown {
         x: f32,
         y: f32,
+        source: PointerSource,
     },
     TouchMove {
         x: f32,
         y: f32,
+        source: PointerSource,
     },
     TouchMoveAndWaitForFrame {
         x: f32,
         y: f32,
+        source: PointerSource,
     },
     TouchUp {
         x: f32,
         y: f32,
+        source: PointerSource,
     },
     TypeText(String),
     SendKey(String), // Key code like "Up", "Down", "Home", "End", "Return", "a", etc.
@@ -268,8 +272,17 @@ impl Robot {
     /// [`touch_move`](Self::touch_move) / [`touch_up`](Self::touch_up) for
     /// step-by-step gestures with captures between steps.
     pub fn touch_down(&self, x: f32, y: f32) -> Result<(), String> {
+        self.primary_pointer_down(x, y, PointerSource::Touch)
+    }
+
+    /// Press a stylus contact at the specified logical coordinates.
+    pub fn stylus_down(&self, x: f32, y: f32) -> Result<(), String> {
+        self.primary_pointer_down(x, y, PointerSource::Stylus)
+    }
+
+    fn primary_pointer_down(&self, x: f32, y: f32, source: PointerSource) -> Result<(), String> {
         self.tx
-            .send(RobotCommand::TouchDown { x, y })
+            .send(RobotCommand::TouchDown { x, y, source })
             .map_err(|e| format!("Failed to send touch down: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -281,8 +294,27 @@ impl Robot {
 
     /// Move the active touch pointer (after [`touch_down`](Self::touch_down)).
     pub fn touch_move(&self, x: f32, y: f32) -> Result<(), String> {
+        self.primary_pointer_move(x, y, PointerSource::Touch)
+    }
+
+    /// Move the active stylus contact.
+    pub fn stylus_move(&self, x: f32, y: f32) -> Result<(), String> {
+        self.primary_pointer_move(x, y, PointerSource::Stylus)
+    }
+
+    /// Move the active touch pointer and return after its frame is presented.
+    pub fn touch_move_and_wait_for_frame(&self, x: f32, y: f32) -> Result<(), String> {
+        self.primary_pointer_move_and_wait_for_frame(x, y, PointerSource::Touch)
+    }
+
+    /// Move the active stylus contact and return after its frame is presented.
+    pub fn stylus_move_and_wait_for_frame(&self, x: f32, y: f32) -> Result<(), String> {
+        self.primary_pointer_move_and_wait_for_frame(x, y, PointerSource::Stylus)
+    }
+
+    fn primary_pointer_move(&self, x: f32, y: f32, source: PointerSource) -> Result<(), String> {
         self.tx
-            .send(RobotCommand::TouchMove { x, y })
+            .send(RobotCommand::TouchMove { x, y, source })
             .map_err(|e| format!("Failed to send touch move: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -292,10 +324,36 @@ impl Robot {
         }
     }
 
+    fn primary_pointer_move_and_wait_for_frame(
+        &self,
+        x: f32,
+        y: f32,
+        source: PointerSource,
+    ) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::TouchMoveAndWaitForFrame { x, y, source })
+            .map_err(|e| format!("Failed to send primary-pointer move: {e}"))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(error)) => Err(error),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(error) => Err(format!("Failed to receive response: {error}")),
+        }
+    }
+
     /// Lift the active touch pointer at the specified coordinates.
     pub fn touch_up(&self, x: f32, y: f32) -> Result<(), String> {
+        self.primary_pointer_up(x, y, PointerSource::Touch)
+    }
+
+    /// Lift the active stylus contact at the specified logical coordinates.
+    pub fn stylus_up(&self, x: f32, y: f32) -> Result<(), String> {
+        self.primary_pointer_up(x, y, PointerSource::Stylus)
+    }
+
+    fn primary_pointer_up(&self, x: f32, y: f32, source: PointerSource) -> Result<(), String> {
         self.tx
-            .send(RobotCommand::TouchUp { x, y })
+            .send(RobotCommand::TouchUp { x, y, source })
             .map_err(|e| format!("Failed to send touch up: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -442,6 +500,7 @@ impl Robot {
             .send(RobotCommand::TouchDown {
                 x: from_x,
                 y: from_y,
+                source: PointerSource::Touch,
             })
             .map_err(|e| format!("Failed to send touch down: {}", e))?;
         match self.rx.recv() {
@@ -459,7 +518,11 @@ impl Robot {
             let y = from_y + (to_y - from_y) * t;
 
             self.tx
-                .send(RobotCommand::TouchMove { x, y })
+                .send(RobotCommand::TouchMove {
+                    x,
+                    y,
+                    source: PointerSource::Touch,
+                })
                 .map_err(|e| format!("Failed to send touch move: {}", e))?;
             match self.rx.recv() {
                 Ok(RobotResponse::Ok) => {}
@@ -471,7 +534,11 @@ impl Robot {
 
         // Touch up at end position
         self.tx
-            .send(RobotCommand::TouchUp { x: to_x, y: to_y })
+            .send(RobotCommand::TouchUp {
+                x: to_x,
+                y: to_y,
+                source: PointerSource::Touch,
+            })
             .map_err(|e| format!("Failed to send touch up: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -497,6 +564,7 @@ impl Robot {
             .send(RobotCommand::TouchDown {
                 x: from_x,
                 y: from_y,
+                source: PointerSource::Touch,
             })
             .map_err(|e| format!("Failed to send touch down: {}", e))?;
         match self.rx.recv() {
@@ -513,7 +581,11 @@ impl Robot {
             let y = from_y + (to_y - from_y) * t;
 
             self.tx
-                .send(RobotCommand::TouchMoveAndWaitForFrame { x, y })
+                .send(RobotCommand::TouchMoveAndWaitForFrame {
+                    x,
+                    y,
+                    source: PointerSource::Touch,
+                })
                 .map_err(|e| format!("Failed to send touch move: {}", e))?;
             match self.rx.recv() {
                 Ok(RobotResponse::Ok) => {}
@@ -524,7 +596,11 @@ impl Robot {
         }
 
         self.tx
-            .send(RobotCommand::TouchUp { x: to_x, y: to_y })
+            .send(RobotCommand::TouchUp {
+                x: to_x,
+                y: to_y,
+                source: PointerSource::Touch,
+            })
             .map_err(|e| format!("Failed to send touch up: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),

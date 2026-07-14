@@ -252,6 +252,11 @@ path = "robot-runners/robot_drag_selection.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_selection_vertical_grab"
+path = "robot-runners/robot_selection_vertical_grab.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_double_click"
 path = "robot-runners/robot_double_click.rs"
 required-features = ["robot-app"]

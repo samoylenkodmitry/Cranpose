@@ -6,17 +6,17 @@ use crate::{
     composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
     ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey,
     LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
-    ProvidedValue, RecomposeOptions, RecomposeScope, RecycledNode, RetentionMode, RetentionPolicy,
-    RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList,
-    SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal, StaticLocalEntry,
-    SubcomposeState, COMMAND_FLUSH_THRESHOLD,
+    ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
+    RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
+    SlotsHost, SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal,
+    StaticLocalEntry, SubcomposeState, COMMAND_FLUSH_THRESHOLD,
 };
 use smallvec::SmallVec;
 use std::any::Any;
 use std::cell::{Cell, RefCell, RefMut};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 pub struct ValueSlotHandle<'pass, T: 'static> {
     slot: ValueSlotId,
@@ -132,9 +132,21 @@ impl ComposerRuntimeState {
     pub(crate) fn clear_host_storage_key(&self, host_key: usize) {
         self.retention_by_host.borrow_mut().remove(&host_key);
         self.live_hosts.borrow_mut().remove(&host_key);
-        self.scope_registry
-            .borrow_mut()
-            .retain(|_, scope| scope.slots_storage_key() != Some(host_key));
+        let removed_scopes = {
+            let mut removed = Vec::new();
+            self.scope_registry.borrow_mut().retain(|_, scope| {
+                if scope.slots_storage_key() == Some(host_key) {
+                    removed.push(scope.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            removed
+        };
+        for scope in removed_scopes {
+            scope.deactivate();
+        }
     }
 
     pub(crate) fn bind_applier_host(&self, applier: &Rc<dyn ApplierHost>) {
@@ -447,6 +459,7 @@ pub(crate) struct ComposerCore {
     pub(crate) root: Cell<Option<NodeId>>,
     pub(crate) commands: RefCell<CommandQueue>,
     pub(crate) scope_stack: RefCell<Vec<RecomposeScope>>,
+    subcomposition_owner_scope: RefCell<Option<RecomposeScope>>,
     pub(crate) local_stack: RefCell<LocalStackSnapshot>,
     pub(crate) side_effects: RefCell<Vec<Box<dyn FnOnce()>>>,
     pub(crate) pending_scope_options: RefCell<Option<RecomposeOptions>>,
@@ -457,11 +470,14 @@ pub(crate) struct ComposerCore {
     pub(crate) _not_send: PhantomData<*const ()>,
 }
 
-/// An opaque snapshot of the composition-local values in scope at the point it
-/// was captured (see [`Composer::capture_composition_locals`]). Cheap to clone
-/// (an `Rc` internally); replayed by [`Composer::subcompose_slot_with_locals`].
+/// The composition context inherited by work that is composed in another slot
+/// host. Besides composition locals, this carries the source owner scope so a
+/// secondary tree cannot outlive the composition that supplied its callbacks.
 #[derive(Clone)]
-pub struct CapturedCompositionLocals(LocalStackSnapshot);
+pub struct CapturedCompositionContext {
+    locals: LocalStackSnapshot,
+    owner_scope: Option<Weak<RecomposeScopeInner>>,
+}
 
 fn take_subcompose_frame(core: &ComposerCore, operation: &str) -> SubcomposeFrame {
     match core.subcompose_stack.borrow_mut().pop() {
@@ -508,6 +524,7 @@ impl ComposerCore {
             root: Cell::new(root),
             commands: RefCell::new(CommandQueue::default()),
             scope_stack: RefCell::new(Vec::new()),
+            subcomposition_owner_scope: RefCell::new(None),
             local_stack: RefCell::new(empty_local_stack()),
             side_effects: RefCell::new(Vec::new()),
             pending_scope_options: RefCell::new(None),
@@ -973,8 +990,14 @@ impl Composer {
                 scope
             };
 
+        let lifetime_owner_scope = if parent_scope.is_none() {
+            self.core.subcomposition_owner_scope.borrow().clone()
+        } else {
+            None
+        };
         scope_ref.reactivate();
         scope_ref.set_parent_scope(parent_scope);
+        scope_ref.set_lifetime_owner_scope(lifetime_owner_scope);
         scope_ref.set_retention_mode(options.retention);
 
         if options.force_recompose {
@@ -1510,9 +1533,8 @@ impl Composer {
         Ok(result)
     }
 
-    /// Captures the composition-local values in scope at the current point of
-    /// composition, as an opaque snapshot that can later be replayed with
-    /// [`Composer::subcompose_slot_with_locals`].
+    /// Captures the composition context at the current point so work composed
+    /// in another slot host inherits both locals and source ownership.
     ///
     /// A `SubcomposeLayout` captures this while it is being composed and replays
     /// it while subcomposing off the measure pass, so content that is
@@ -1521,8 +1543,13 @@ impl Composer {
     /// subcomposition inherits the composition locals of the layout that
     /// created it rather than whatever happens to be in scope during measure
     /// (which, after composition unwinds, no longer carries ancestor providers).
-    pub fn capture_composition_locals(&self) -> CapturedCompositionLocals {
-        CapturedCompositionLocals(self.current_local_stack())
+    pub fn capture_composition_context(&self) -> CapturedCompositionContext {
+        CapturedCompositionContext {
+            locals: self.current_local_stack(),
+            owner_scope: self
+                .current_recranpose_scope()
+                .map(|scope| scope.downgrade()),
+        }
     }
 
     /// Subcomposes content using an isolated SlotsHost without resetting it.
@@ -1535,26 +1562,23 @@ impl Composer {
         root: Option<NodeId>,
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
-        self.subcompose_slot_with_locals(slots, root, None, f)
+        let context = self.capture_composition_context();
+        self.subcompose_slot_with_context(slots, root, &context, f)
     }
 
-    /// Like [`Composer::subcompose_slot`], but seeds the subcomposition with a
-    /// composition-local snapshot captured earlier (see
-    /// [`Composer::capture_composition_locals`]). When `locals` is `None` the
-    /// locals in scope right now are used, preserving the plain behavior.
-    pub fn subcompose_slot_with_locals<R>(
+    /// Like [`Composer::subcompose_slot`], but uses a context captured at the
+    /// source composition site. This is required for measure-time composition,
+    /// where the source scope is no longer on the active stack.
+    pub fn subcompose_slot_with_context<R>(
         &self,
         slots: &Rc<SlotsHost>,
         root: Option<NodeId>,
-        locals: Option<&CapturedCompositionLocals>,
+        context: &CapturedCompositionContext,
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
         let runtime_handle = self.runtime_handle();
         let phase = self.phase();
-        let locals = match locals {
-            Some(captured) => captured.0.clone(),
-            None => self.current_local_stack(),
-        };
+        let locals = context.locals.clone();
         let shared_state = slots
             .runtime_state()
             .unwrap_or_else(|| Rc::clone(&self.core.shared_state));
@@ -1569,6 +1593,11 @@ impl Composer {
         ));
         core.phase.set(phase);
         *core.local_stack.borrow_mut() = locals;
+        *core.subcomposition_owner_scope.borrow_mut() = context
+            .owner_scope
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .map(|inner| RecomposeScope { inner });
         let composer = Composer::from_core(core);
         composer.subcompose_stack().push(SubcomposeFrame::default());
         struct StackGuard {

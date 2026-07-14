@@ -1,14 +1,16 @@
-//! Adaptive-frost contract: a glass with positive `adaptive_contrast` must
-//! darken over a BRIGHT backdrop (protecting light foreground content from
-//! white-on-white) while staying inert over a dark one — measured against an
-//! identical non-adaptive glass in the same scene.
+//! Adaptive-frost contract: glass protects both light foreground over a
+//! bright backdrop and dark foreground over a dark backdrop. Each result is
+//! measured against an identical non-adaptive glass in the same scene.
 //!
 //! Run with:
 //! `cargo run --package desktop-app --example robot_adaptive_frost --features desktop,robot-app`
 
 use cranpose::liquid::prelude::*;
-use cranpose::widgets::{Box as CBox, BoxSpec};
-use cranpose::{AppLauncher, Color, Modifier, Size};
+use cranpose::text::{FontWeight, SpanStyle, TextStyle, TextUnit};
+use cranpose::widgets::{Box as CBox, BoxSpec, Text};
+use cranpose::{Alignment, AppLauncher, Color, Modifier, Size};
+use image::RgbaImage;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -25,6 +27,10 @@ static FAILED: AtomicBool = AtomicBool::new(false);
 
 fn main() -> ExitCode {
     let _ = env_logger::try_init();
+    let shot_dir = PathBuf::from(
+        std::env::var("ROBOT_SHOT_DIR").unwrap_or_else(|_| "target/adaptive-frost".to_string()),
+    );
+    std::fs::create_dir_all(&shot_dir).expect("create adaptive frost shot dir");
 
     AppLauncher::new()
         .with_title("Adaptive Frost Contract")
@@ -35,10 +41,16 @@ fn main() -> ExitCode {
             std::thread::sleep(Duration::from_millis(900));
             let _ = robot.wait_for_idle();
             let shot = robot.screenshot().expect("shot");
+            let image = RgbaImage::from_raw(shot.width, shot.height, shot.pixels.clone())
+                .expect("adaptive frost screenshot buffer");
+            image
+                .save(shot_dir.join("adaptive-frost-foregrounds.png"))
+                .expect("save adaptive frost proof");
 
             let sample = |x: f32, y: f32| -> f32 {
-                // Mean luma of the capsule's interior (clear of the rim).
-                mean_luma(&shot, x + 25.0, y + 14.0, GLASS_W - 50.0, GLASS_H - 28.0)
+                // Mean luma at the left of the capsule, clear of rim and the
+                // centered foreground label.
+                mean_luma(&shot, x + 18.0, y + 14.0, 22.0, GLASS_H - 28.0)
             };
             let white_cx = (PANEL_W - GLASS_W) * 0.5;
             let black_cx = PANEL_W + (PANEL_W - GLASS_W) * 0.5;
@@ -50,6 +62,25 @@ fn main() -> ExitCode {
                 "white: adaptive={adaptive_white:.1} plain={plain_white:.1}  \
                  black: adaptive={adaptive_black:.1} plain={plain_black:.1}"
             );
+            let white_contrast = contrast_ratio(255.0, adaptive_white);
+            let black_contrast = contrast_ratio(0.0, adaptive_black);
+            let white_text_extrema = region_luma_extrema(
+                &shot,
+                white_cx + 45.0,
+                ADAPTIVE_Y + 10.0,
+                GLASS_W - 90.0,
+                GLASS_H - 20.0,
+            );
+            let black_text_extrema = region_luma_extrema(
+                &shot,
+                black_cx + 45.0,
+                ADAPTIVE_Y + 10.0,
+                GLASS_W - 90.0,
+                GLASS_H - 20.0,
+            );
+            println!(
+                "foreground contrast white={white_contrast:.2}:1 black={black_contrast:.2}:1 extrema white={white_text_extrema:?} black={black_text_extrema:?}"
+            );
 
             if plain_white - adaptive_white < 8.0 {
                 fail(
@@ -60,12 +91,28 @@ fn main() -> ExitCode {
                     ),
                 );
             }
-            if (adaptive_black - plain_black).abs() > 4.0 {
+            if adaptive_black - plain_black < 8.0 {
                 fail(
                     &robot,
                     &format!(
-                        "positive adaptive strength must be inert over a dark backdrop: \
+                        "adaptive glass must lighten behind dark foreground on a dark backdrop: \
                          adaptive {adaptive_black:.1} vs plain {plain_black:.1}"
+                    ),
+                );
+            }
+            if white_text_extrema.1 < 225.0 || black_text_extrema.0 > 30.0 {
+                fail(
+                    &robot,
+                    &format!(
+                        "adaptive proof labels did not render at their requested foreground polarity: white {white_text_extrema:?}, black {black_text_extrema:?}"
+                    ),
+                );
+            }
+            if white_contrast < 4.5 || black_contrast < 4.5 {
+                fail(
+                    &robot,
+                    &format!(
+                        "adaptive frost failed foreground contrast: white {white_contrast:.2}:1, black {black_contrast:.2}:1"
                     ),
                 );
             }
@@ -104,11 +151,35 @@ fn main() -> ExitCode {
                             BoxSpec::default(),
                             || {},
                         );
-                        for (x, y, strength) in [
-                            ((PANEL_W - GLASS_W) * 0.5, ADAPTIVE_Y, 0.35),
-                            ((PANEL_W - GLASS_W) * 0.5, PLAIN_Y, 0.0),
-                            (PANEL_W + (PANEL_W - GLASS_W) * 0.5, ADAPTIVE_Y, 0.35),
-                            (PANEL_W + (PANEL_W - GLASS_W) * 0.5, PLAIN_Y, 0.0),
+                        for (x, y, foreground, strength, label) in [
+                            (
+                                (PANEL_W - GLASS_W) * 0.5,
+                                ADAPTIVE_Y,
+                                Color::WHITE,
+                                0.65,
+                                "WHITE",
+                            ),
+                            (
+                                (PANEL_W - GLASS_W) * 0.5,
+                                PLAIN_Y,
+                                Color::WHITE,
+                                0.0,
+                                "WHITE",
+                            ),
+                            (
+                                PANEL_W + (PANEL_W - GLASS_W) * 0.5,
+                                ADAPTIVE_Y,
+                                Color::BLACK,
+                                0.65,
+                                "BLACK",
+                            ),
+                            (
+                                PANEL_W + (PANEL_W - GLASS_W) * 0.5,
+                                PLAIN_Y,
+                                Color::BLACK,
+                                0.0,
+                                "BLACK",
+                            ),
                         ] {
                             CBox(
                                 Modifier::empty()
@@ -120,10 +191,24 @@ fn main() -> ExitCode {
                                     .glass_effect(
                                         Glass::regular()
                                             .blur_radius(10.0)
-                                            .adaptive_contrast(strength),
+                                            .adaptive_frost(foreground, strength),
                                     ),
-                                BoxSpec::default(),
-                                || {},
+                                BoxSpec::default().content_alignment(Alignment::CENTER),
+                                move || {
+                                    Text(
+                                        label,
+                                        Modifier::empty(),
+                                        TextStyle {
+                                            span_style: SpanStyle {
+                                                color: Some(foreground),
+                                                font_size: TextUnit::Sp(18.0),
+                                                font_weight: Some(FontWeight::BOLD),
+                                                ..Default::default()
+                                            },
+                                            ..Default::default()
+                                        },
+                                    );
+                                },
                             );
                         }
                     },
@@ -175,5 +260,62 @@ fn mean_luma(shot: &cranpose::RobotScreenshot, x: f32, y: f32, w: f32, h: f32) -
         0.0
     } else {
         (sum / count as f64) as f32
+    }
+}
+
+fn region_luma_extrema(
+    shot: &cranpose::RobotScreenshot,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) -> (f32, f32) {
+    let sx = shot.width as f32 / shot.logical_width.max(1.0);
+    let sy = shot.height as f32 / shot.logical_height.max(1.0);
+    let (x0, y0) = ((x * sx) as usize, (y * sy) as usize);
+    let (x1, y1) = (
+        (((x + w) * sx) as usize).min(shot.width as usize),
+        (((y + h) * sy) as usize).min(shot.height as usize),
+    );
+    let mut darkest = 255.0f32;
+    let mut lightest = 0.0f32;
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let i = (py * shot.width as usize + px) * 4;
+            let luma = 0.2126 * shot.pixels[i] as f32
+                + 0.7152 * shot.pixels[i + 1] as f32
+                + 0.0722 * shot.pixels[i + 2] as f32;
+            darkest = darkest.min(luma);
+            lightest = lightest.max(luma);
+        }
+    }
+    (darkest, lightest)
+}
+
+fn contrast_ratio(foreground_luma: f32, backdrop_luma: f32) -> f32 {
+    fn linear(byte_luma: f32) -> f32 {
+        let value = (byte_luma / 255.0).clamp(0.0, 1.0);
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    let foreground = linear(foreground_luma);
+    let backdrop = linear(backdrop_luma);
+    let lighter = foreground.max(backdrop);
+    let darker = foreground.min(backdrop);
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contrast_ratio_matches_wcag_endpoints() {
+        assert!((contrast_ratio(255.0, 0.0) - 21.0).abs() < 0.01);
+        assert!((contrast_ratio(0.0, 255.0) - 21.0).abs() < 0.01);
+        assert!((contrast_ratio(128.0, 128.0) - 1.0).abs() < 0.01);
     }
 }

@@ -21,16 +21,18 @@ use cranpose_core::with_current_composer;
 use cranpose_core::RuntimeHandle;
 use cranpose_macros::composable;
 
-/// Stretch gained per dp/s of travel speed (measured: the App Store bar lens
-/// runs ~1.3× wide mid-flight at ~1200 dp/s).
-const STRETCH_PER_SPEED: f32 = 2.5e-4;
+use crate::material::GlassDeformation;
+
+/// Stretch gained per dp/s of travel speed. The target redistributes volume
+/// visibly but remains a landscape lens through launch and cruise.
+const STRETCH_PER_SPEED: f32 = 3.2e-4;
 /// Stretch removed per dp/s² of forward acceleration (and added back per
 /// dp/s² of braking): launch blunts the bubble, arrival elongates it.
 const STRETCH_PER_ACCEL: f32 = 1.1e-5;
 /// The droplet never deforms past these bounds, however violent the fling.
 /// Public so hosting nodes can budget layout headroom for the extremes.
 pub const STRETCH_MIN: f32 = 0.78;
-pub const STRETCH_MAX: f32 = 1.42;
+pub const STRETCH_MAX: f32 = 1.50;
 /// Leading-edge swell per dp/s² of braking, and its cap in dp (public for
 /// the same headroom budgeting).
 const BULGE_PER_DECEL: f32 = 4.5e-4;
@@ -38,8 +40,14 @@ pub const BULGE_MAX: f32 = 8.0;
 /// Low-pass time constants (s): the fluid's visual inertia is asymmetric —
 /// excitation grabs the droplet fast, but it relaxes back viscously (the
 /// reference arrival swell stays visible for a beat before rounding off).
-const ATTACK_TAU: f32 = 0.035;
+const ATTACK_TAU: f32 = 0.03;
 const RELEASE_TAU: f32 = 0.11;
+/// Direct input arrives independently from rendering. Preserve the last
+/// observed finger velocity across short gaps instead of interpreting every
+/// intervening render as an instantaneous stop.
+const POINTER_VELOCITY_TAU: f32 = 0.045;
+const POINTER_STOP_HORIZON_NANOS: u64 = 40_000_000;
+const POINTER_COAST_TAU: f32 = 0.10;
 /// Below this speed (dp/s) the motion axis holds its last direction, so a
 /// settling bubble relaxes in place instead of flipping its axis on noise.
 const AXIS_MIN_SPEED: f32 = 60.0;
@@ -64,7 +72,7 @@ pub struct LiquidPose {
     /// Leading-edge swell amplitude (dp) toward `bulge_direction` (radians).
     pub bulge_amplitude: f32,
     pub bulge_direction: f32,
-    /// Smoothed travel speed (dp/s) for auxiliary channels (magnify boost,
+    /// Smoothed travel speed (dp/s) for auxiliary channels (surface depth,
     /// wobble, chromatic fringe).
     pub speed: f32,
 }
@@ -83,16 +91,12 @@ impl Default for LiquidPose {
 }
 
 impl LiquidPose {
-    /// Project the anisotropic scale onto an axis-aligned box: the diagonal
-    /// of `R·diag(stretch, ortho)·Rᵀ` for the motion axis' rotation `R`.
-    /// Exact for horizontal/vertical travel, the correct tensor blend for
-    /// anything between.
-    pub fn size(&self, width: f32, height: f32) -> (f32, f32) {
-        let cos2 = self.axis.0 * self.axis.0;
-        let sin2 = self.axis.1 * self.axis.1;
-        let scale_x = self.stretch * cos2 + self.ortho * sin2;
-        let scale_y = self.stretch * sin2 + self.ortho * cos2;
-        (width * scale_x, height * scale_y)
+    /// The full rotating strain tensor for the shader. Applying this to the
+    /// signed-distance field preserves area for horizontal, vertical and
+    /// diagonal travel; projecting it into an axis-aligned width/height pair
+    /// cannot preserve that invariant away from the cardinal axes.
+    pub fn deformation(&self) -> GlassDeformation {
+        GlassDeformation::incompressible(self.axis, self.stretch)
     }
 
     /// Normalized motion energy in 0..1 (`speed` against a reference fling
@@ -114,6 +118,9 @@ pub struct LiquidDynamics {
     speed: Cell<f32>,
     axis: Cell<(f32, f32)>,
     pose: Cell<LiquidPose>,
+    pointer_pose_pending: Cell<bool>,
+    pointer_active: Cell<bool>,
+    last_pointer_nanos: Cell<Option<u64>>,
 }
 
 impl LiquidDynamics {
@@ -128,6 +135,9 @@ impl LiquidDynamics {
             speed: Cell::new(0.0),
             axis: Cell::new((1.0, 0.0)),
             pose: Cell::new(LiquidPose::default()),
+            pointer_pose_pending: Cell::new(false),
+            pointer_active: Cell::new(false),
+            last_pointer_nanos: Cell::new(None),
         }
     }
 
@@ -144,6 +154,85 @@ impl LiquidDynamics {
             axis: self.axis.get(),
             ..LiquidPose::default()
         });
+        self.pointer_pose_pending.set(false);
+        self.pointer_active.set(false);
+        self.last_pointer_nanos.set(None);
+    }
+
+    pub(crate) fn anchor_pointer(&self, pos: (f32, f32)) {
+        self.reset();
+        self.last_pos.set(Some(pos));
+        let now = self.runtime.last_frame_time_nanos();
+        self.last_nanos.set(now);
+        self.last_pointer_nanos.set(now);
+        self.pointer_active.set(true);
+    }
+
+    pub(crate) fn advance_pointer(&self, pos: (f32, f32), dt: f32) -> LiquidPose {
+        let Some(last_pos) = self.last_pos.get() else {
+            self.last_pos.set(Some(pos));
+            return self.pose.get();
+        };
+        let dt = dt.clamp(DT_MIN, DT_MAX);
+        let raw_velocity = ((pos.0 - last_pos.0) / dt, (pos.1 - last_pos.1) / dt);
+        self.last_pos.set(Some(pos));
+        let previous = self.velocity.get();
+        let follow = 1.0 - (-dt / POINTER_VELOCITY_TAU).exp();
+        let filtered_velocity = (
+            previous.0 + (raw_velocity.0 - previous.0) * follow,
+            previous.1 + (raw_velocity.1 - previous.1) * follow,
+        );
+        let pose = self.advance_velocity(filtered_velocity, dt);
+        let now = self.runtime.last_frame_time_nanos();
+        self.last_nanos.set(now);
+        self.last_pointer_nanos.set(now);
+        self.pointer_active.set(true);
+        self.pointer_pose_pending.set(true);
+        pose
+    }
+
+    pub(crate) fn release_pointer(&self) {
+        self.pointer_active.set(false);
+    }
+
+    pub(crate) fn update_pointer(&self, pos: (f32, f32)) -> LiquidPose {
+        if self.pointer_pose_pending.replace(false) {
+            self.last_pos.set(Some(pos));
+            self.last_nanos.set(self.runtime.last_frame_time_nanos());
+            return self.pose.get();
+        }
+        let Some(now) = self.runtime.last_frame_time_nanos() else {
+            self.last_pos.set(Some(pos));
+            return self.pose.get();
+        };
+        let Some(last) = self.last_nanos.get() else {
+            self.last_nanos.set(Some(now));
+            self.last_pos.set(Some(pos));
+            return self.pose.get();
+        };
+        if last == now {
+            return self.pose.get();
+        }
+        let dt = (now.saturating_sub(last)) as f32 / 1_000_000_000.0;
+        self.last_nanos.set(Some(now));
+        let stationary = self.last_pos.get().is_some_and(|last_pos| {
+            (last_pos.0 - pos.0).abs() < 0.001 && (last_pos.1 - pos.1).abs() < 0.001
+        });
+        if !stationary {
+            return self.advance(pos, dt);
+        }
+        let within_pointer_horizon = self.pointer_active.get()
+            && self
+                .last_pointer_nanos
+                .get()
+                .is_some_and(|sample| now.saturating_sub(sample) <= POINTER_STOP_HORIZON_NANOS);
+        if within_pointer_horizon {
+            return self.pose.get();
+        }
+        let dt = dt.clamp(DT_MIN, DT_MAX);
+        let decay = (-dt / POINTER_COAST_TAU).exp();
+        let velocity = self.velocity.get();
+        self.advance_velocity((velocity.0 * decay, velocity.1 * decay), dt)
     }
 
     /// Advance with the lens ride position using the runtime's animation
@@ -190,6 +279,12 @@ impl LiquidDynamics {
             return self.pose.get();
         }
 
+        self.advance_velocity(velocity, dt)
+    }
+
+    fn advance_velocity(&self, velocity: (f32, f32), dt: f32) -> LiquidPose {
+        let dt = dt.clamp(DT_MIN, DT_MAX);
+        let raw_speed = (velocity.0 * velocity.0 + velocity.1 * velocity.1).sqrt();
         let previous_velocity = self.velocity.get();
         self.velocity.set(velocity);
         let accel = (
@@ -290,15 +385,24 @@ mod tests {
     fn constant_speed_elongates_along_axis_and_conserves_area() {
         let d = dynamics();
         let pose = cruise(&d, 1200.0, 40);
-        assert!(
-            pose.stretch > 1.2 && pose.stretch < STRETCH_MAX,
-            "cruise stretch {}",
-            pose.stretch
-        );
+        assert!((1.36..1.40).contains(&pose.stretch));
         assert!((pose.stretch * pose.ortho - 1.0).abs() < 1e-4);
         assert!((pose.axis.0 - 1.0).abs() < 1e-4);
-        let (w, h) = pose.size(100.0, 40.0);
-        assert!(w > 120.0 && h < 40.0, "size ({w}, {h})");
+    }
+
+    #[test]
+    fn subpixel_pointer_jitter_cannot_invent_extreme_strain() {
+        let d = dynamics();
+        d.anchor_pointer((0.0, 0.0));
+        let mut pose = d.pose();
+        for sample in 1..=12 {
+            pose = d.advance_pointer((sample as f32 * 0.20, 0.0), 1.0 / 60.0);
+        }
+        assert!(
+            (pose.stretch - 1.0).abs() < 0.025,
+            "subpixel travel must stay near equilibrium: {pose:?}"
+        );
+        assert!((pose.stretch * pose.ortho - 1.0).abs() < 1e-4);
     }
 
     #[test]
@@ -310,10 +414,11 @@ mod tests {
         let dt = 1.0 / 60.0;
         let pose = d.advance((1500.0 * dt, 0.0), dt);
         assert!(pose.stretch < 1.0, "launch stretch {}", pose.stretch);
+        assert!(pose.ortho > 1.0, "launch ortho {}", pose.ortho);
     }
 
     #[test]
-    fn braking_stretches_past_cruise_and_swells_leading_edge() {
+    fn braking_decompresses_past_cruise_and_swells_leading_edge() {
         let d = dynamics();
         let cruise_pose = cruise(&d, 1200.0, 40);
         // Brake to a stop over two frames.
@@ -321,7 +426,7 @@ mod tests {
         let x = d.last_pos.get().unwrap().0;
         let brake = d.advance((x + 300.0 * dt, 0.0), dt);
         assert!(
-            brake.stretch > cruise_pose.stretch - 1e-3,
+            brake.stretch > cruise_pose.stretch + 0.04,
             "brake {} vs cruise {}",
             brake.stretch,
             cruise_pose.stretch
@@ -330,6 +435,11 @@ mod tests {
             brake.bulge_amplitude > 0.5,
             "bulge {}",
             brake.bulge_amplitude
+        );
+        assert!(
+            brake.ortho < cruise_pose.ortho,
+            "brake ortho {}",
+            brake.ortho
         );
         // Leading edge = travel direction (+x).
         assert!(brake.bulge_direction.abs() < 1e-3);
@@ -400,7 +510,7 @@ mod tests {
         );
         // Motion resumes cleanly from the new anchor.
         let resumed = cruise(&d, 800.0, 30);
-        assert!(resumed.stretch > 1.1);
+        assert!(resumed.stretch > 1.01);
     }
 
     #[test]
@@ -414,9 +524,12 @@ mod tests {
             y += 1000.0 * dt;
             pose = d.advance((0.0, y), dt);
         }
-        let (w, h) = pose.size(100.0, 40.0);
-        assert!(h > 44.0, "height {h}");
-        assert!(w < 100.0, "width {w}");
+        assert!(
+            (1.30..1.34).contains(&pose.stretch),
+            "stretch {}",
+            pose.stretch
+        );
+        assert!((pose.stretch * pose.ortho - 1.0).abs() < 1e-4);
     }
 
     #[test]

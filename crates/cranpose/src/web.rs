@@ -412,9 +412,11 @@ pub async fn run(
     {
         let app = app.clone();
         let platform = platform.clone();
+        let pointer_canvas = canvas.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
+            let _ = pointer_canvas.set_pointer_capture(event.pointer_id());
             let x = event.offset_x() as f64;
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
@@ -432,6 +434,7 @@ pub async fn run(
     {
         let app = app.clone();
         let platform = platform.clone();
+        let pointer_canvas = canvas.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
@@ -445,6 +448,7 @@ pub async fn run(
                 app_mut.pointer_released_at_position(logical.x, logical.y);
                 request_frame();
             }
+            let _ = pointer_canvas.release_pointer_capture(event.pointer_id());
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("pointerup", closure.as_ref().unchecked_ref())?;
         closure.forget();
@@ -452,6 +456,7 @@ pub async fn run(
 
     {
         let app = app.clone();
+        let pointer_canvas = canvas.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
@@ -459,6 +464,7 @@ pub async fn run(
                 app_mut.cancel_gesture();
                 request_frame();
             }
+            let _ = pointer_canvas.release_pointer_capture(event.pointer_id());
         }) as Box<dyn FnMut(_)>);
         canvas
             .add_event_listener_with_callback("pointercancel", closure.as_ref().unchecked_ref())?;

@@ -30,7 +30,14 @@ impl Composer {
             }
         }
 
-        // CRITICAL FIX: Check if scope is still invalid before recomposing.
+        // A prior callback in the same batch can detach this scope. Retained scopes
+        // keep their invalid bit so reactivation can schedule the deferred work.
+        if !scope.is_effectively_active() {
+            scope.defer_until_reactivated();
+            return;
+        }
+
+        // Check if scope is still invalid before recomposing.
         // When parent and child scopes are both invalidated, the child may be
         // visited (and marked recomposed) during parent's recomposition.
         // Without this check, we'd recompose the child again with wrong parent_stack,

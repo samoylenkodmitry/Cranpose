@@ -30,9 +30,8 @@ pub enum PointerEventKind {
 ///
 /// Threaded from the platform layer (Android `MotionEvent` tool type, winit
 /// `PointerSource`/`ButtonSource`, web `PointerEvent.pointerType`) so input
-/// consumers can behave differently for finger vs. mouse input — for example a
-/// text field shows draggable finger handles only for [`PointerSource::Touch`]
-/// / [`PointerSource::Stylus`] and keeps a clean caret for a mouse.
+/// consumers can preserve device-specific gesture details while keeping shared
+/// direct-manipulation behavior source-independent.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PointerSource {
     /// A mouse or other indirect precise pointer (desktop, web `"mouse"`).
@@ -47,8 +46,8 @@ pub enum PointerSource {
 }
 
 impl PointerSource {
-    /// Whether this source is a direct-touch device (finger or stylus) for
-    /// which platforms show draggable selection handles rather than a caret.
+    /// Whether this source is a direct-touch device (finger or stylus), used
+    /// for contact-specific release and velocity semantics.
     pub fn is_touch_like(self) -> bool {
         matches!(self, PointerSource::Touch | PointerSource::Stylus)
     }

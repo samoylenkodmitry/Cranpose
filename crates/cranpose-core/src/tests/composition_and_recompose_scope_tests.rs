@@ -683,6 +683,317 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
 }
 
 #[test]
+fn scope_deactivated_during_invalidation_batch_waits_for_reactivation() {
+    thread_local! {
+        static CHILD_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static DEACTIVATE_CHILD: Cell<bool> = const { Cell::new(false) };
+        static CHILD_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let parent_trigger = MutableState::with_runtime(0, runtime.clone());
+    let child_trigger = MutableState::with_runtime(0, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+
+    CHILD_SCOPE.with(|slot| slot.borrow_mut().take());
+    DEACTIVATE_CHILD.with(|flag| flag.set(false));
+    CHILD_INVOCATIONS.with(|count| count.set(0));
+
+    #[composable]
+    fn earlier_sibling(parent_trigger: MutableState<i32>) {
+        let _ = parent_trigger.value();
+        if DEACTIVATE_CHILD.with(|flag| flag.replace(false)) {
+            CHILD_SCOPE.with(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .expect("child scope captured")
+                    .deactivate();
+            });
+        }
+    }
+
+    #[composable]
+    fn later_sibling(child_trigger: MutableState<i32>) {
+        let _ = child_trigger.value();
+        CHILD_INVOCATIONS.with(|count| count.set(count.get() + 1));
+        with_current_composer(|composer| {
+            CHILD_SCOPE.with(|slot| {
+                slot.replace(Some(
+                    composer
+                        .current_recranpose_scope()
+                        .expect("child scope available"),
+                ));
+            });
+        });
+    }
+
+    composition
+        .render(root_key, || {
+            earlier_sibling(parent_trigger);
+            later_sibling(child_trigger);
+        })
+        .expect("initial composition");
+    assert_composition_valid(&composition);
+    assert_eq!(CHILD_INVOCATIONS.with(Cell::get), 1);
+
+    DEACTIVATE_CHILD.with(|flag| flag.set(true));
+    parent_trigger.set_value(1);
+    child_trigger.set_value(1);
+
+    composition
+        .process_invalid_scopes()
+        .expect("process batch containing deactivated child");
+    assert_composition_valid(&composition);
+    assert_eq!(
+        CHILD_INVOCATIONS.with(Cell::get),
+        1,
+        "a scope deactivated by an earlier callback in the batch must not run",
+    );
+
+    let child_scope = CHILD_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("child scope retained for reactivation");
+    assert!(child_scope.is_invalid());
+    child_scope.reactivate();
+
+    composition
+        .process_invalid_scopes()
+        .expect("process child after reactivation");
+    assert_composition_valid(&composition);
+    assert_eq!(CHILD_INVOCATIONS.with(Cell::get), 2);
+}
+
+#[test]
+fn scope_beneath_inactive_ancestor_waits_for_tree_reactivation() {
+    thread_local! {
+        static PARENT_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static CHILD_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static CHILD_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let child_trigger = MutableState::with_runtime(0, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+
+    PARENT_SCOPE.with(|slot| slot.borrow_mut().take());
+    CHILD_SCOPE.with(|slot| slot.borrow_mut().take());
+    CHILD_INVOCATIONS.with(|count| count.set(0));
+
+    #[composable]
+    fn child(child_trigger: MutableState<i32>) {
+        let _ = child_trigger.value();
+        CHILD_INVOCATIONS.with(|count| count.set(count.get() + 1));
+        with_current_composer(|composer| {
+            CHILD_SCOPE.with(|slot| {
+                slot.replace(Some(
+                    composer
+                        .current_recranpose_scope()
+                        .expect("child scope available"),
+                ));
+            });
+        });
+    }
+
+    #[composable]
+    fn parent(child_trigger: MutableState<i32>) {
+        with_current_composer(|composer| {
+            PARENT_SCOPE.with(|slot| {
+                slot.replace(Some(
+                    composer
+                        .current_recranpose_scope()
+                        .expect("parent scope available"),
+                ));
+            });
+        });
+        child(child_trigger);
+    }
+
+    composition
+        .render(root_key, || parent(child_trigger))
+        .expect("initial composition");
+    assert_composition_valid(&composition);
+    assert_eq!(CHILD_INVOCATIONS.with(Cell::get), 1);
+
+    let parent_scope = PARENT_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("parent scope captured");
+    let child_scope = CHILD_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("child scope captured");
+    assert!(parent_scope.is_active());
+    assert!(child_scope.is_active());
+
+    child_trigger.set_value(1);
+    parent_scope.deactivate();
+    composition
+        .process_invalid_scopes()
+        .expect("defer child beneath inactive ancestor");
+    assert_composition_valid(&composition);
+    assert_eq!(
+        CHILD_INVOCATIONS.with(Cell::get),
+        1,
+        "a locally active scope cannot run beneath an inactive ancestor",
+    );
+    assert!(child_scope.is_invalid());
+
+    parent_scope.reactivate();
+    child_scope.reactivate();
+    composition
+        .process_invalid_scopes()
+        .expect("recompose child after tree reactivation");
+    assert_composition_valid(&composition);
+    assert_eq!(CHILD_INVOCATIONS.with(Cell::get), 2);
+}
+
+#[test]
+fn subcomposition_scope_inherits_source_owner_lifetime() {
+    thread_local! {
+        static SECONDARY_HOST: RefCell<Option<Rc<SlotsHost>>> = const { RefCell::new(None) };
+        static OWNER_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
+        static OWNER_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static SECONDARY_ROOT_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static CHILD_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static CHILD_READS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    let mut composition = test_composition();
+    let root_key = location_key(file!(), line!(), column!());
+
+    SECONDARY_HOST.with(|slot| {
+        slot.replace(Some(Rc::new(SlotsHost::new(SlotTable::new()))));
+    });
+    OWNER_STATE.with(|slot| slot.borrow_mut().take());
+    OWNER_SCOPE.with(|slot| slot.borrow_mut().take());
+    SECONDARY_ROOT_SCOPE.with(|slot| slot.borrow_mut().take());
+    CHILD_SCOPE.with(|slot| slot.borrow_mut().take());
+    CHILD_READS.with(|count| count.set(0));
+
+    #[composable]
+    fn secondary_content(state: MutableState<i32>) {
+        let _ = state.value();
+        CHILD_READS.with(|count| count.set(count.get() + 1));
+        with_current_composer(|composer| {
+            CHILD_SCOPE.with(|slot| {
+                slot.replace(Some(
+                    composer
+                        .current_recranpose_scope()
+                        .expect("secondary child scope available"),
+                ));
+            });
+        });
+    }
+
+    #[composable]
+    fn owner() {
+        let state = useState(|| 0_i32);
+        OWNER_STATE.with(|slot| slot.replace(Some(state)));
+        with_current_composer(|composer| {
+            OWNER_SCOPE.with(|slot| {
+                slot.replace(Some(
+                    composer
+                        .current_recranpose_scope()
+                        .expect("source owner scope available"),
+                ));
+            });
+        });
+        let context = with_current_composer(Composer::capture_composition_context);
+        let host = SECONDARY_HOST.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .cloned()
+                .expect("secondary host installed")
+        });
+        with_current_composer(|composer| {
+            composer
+                .subcompose_slot_with_context(&host, None, &context, |secondary_composer| {
+                    SECONDARY_ROOT_SCOPE.with(|slot| {
+                        slot.replace(Some(
+                            secondary_composer
+                                .current_recranpose_scope()
+                                .expect("secondary root scope available"),
+                        ));
+                    });
+                    secondary_content(state);
+                })
+                .expect("subcompose owner content");
+        });
+    }
+
+    #[composable]
+    fn root(show_owner: bool) {
+        if show_owner {
+            owner();
+        }
+    }
+
+    composition
+        .render(root_key, || root(true))
+        .expect("initial owner composition");
+    assert_composition_valid(&composition);
+    assert_eq!(CHILD_READS.with(Cell::get), 1);
+
+    let owner_scope = OWNER_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("source owner scope captured");
+    let secondary_root_scope = SECONDARY_ROOT_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("secondary root scope captured");
+    assert!(
+        secondary_root_scope.parent_scope().is_none(),
+        "cross-host lifetime ownership must not become structural recomposition ancestry",
+    );
+    assert_eq!(
+        secondary_root_scope
+            .lifetime_owner_scope()
+            .map(|scope| scope.id()),
+        Some(owner_scope.id()),
+        "secondary root must remain weakly bound to its source owner's lifetime",
+    );
+    assert!(
+        secondary_root_scope.callback_promotion_target().is_none(),
+        "callback promotion must not cross slot-host boundaries",
+    );
+
+    let owner_state = OWNER_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("owner state captured");
+    let child_scope = CHILD_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("secondary child scope captured");
+    owner_state.set_value(1);
+    assert!(child_scope.is_invalid());
+
+    composition
+        .render(root_key, || root(false))
+        .expect("remove state owner");
+    assert_composition_valid(&composition);
+    assert!(
+        !owner_state.is_alive(),
+        "removing the source group must release its owned state",
+    );
+
+    composition
+        .process_invalid_scopes()
+        .expect("defer invalid secondary child after source removal");
+    assert_composition_valid(&composition);
+    assert_eq!(
+        CHILD_READS.with(Cell::get),
+        1,
+        "secondary content cannot execute after its source owner is removed",
+    );
+    assert!(child_scope.is_invalid());
+    assert!(!child_scope.is_effectively_active());
+
+    SECONDARY_HOST.with(|slot| slot.borrow_mut().take());
+    OWNER_STATE.with(|slot| slot.borrow_mut().take());
+    OWNER_SCOPE.with(|slot| slot.borrow_mut().take());
+    SECONDARY_ROOT_SCOPE.with(|slot| slot.borrow_mut().take());
+    CHILD_SCOPE.with(|slot| slot.borrow_mut().take());
+}
+
+#[test]
 fn invalidating_active_scope_recomposes_that_scope() {
     thread_local! {
         static CAPTURED_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
@@ -3300,6 +3611,41 @@ fn subcompose_slot_root_level_scopes_keep_container_parent_hint() {
     }
 
     drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
+fn secondary_host_reset_deactivates_all_owned_scopes() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    let secondary_host = Rc::new(SlotsHost::new(SlotTable::new()));
+    let child_key = location_key(file!(), line!(), column!());
+
+    let (_, scopes) = composer
+        .subcompose_slot(&secondary_host, None, |composer| {
+            composer.with_group(child_key, |_| {});
+        })
+        .expect("subcompose secondary host");
+    assert!(!scopes.is_empty());
+    for scope in &scopes {
+        assert!(scope.is_active());
+        scope.invalidate();
+    }
+
+    secondary_host.reset().expect("reset secondary host");
+
+    for scope in &scopes {
+        assert!(
+            !scope.is_active(),
+            "host reset must deactivate scopes that survive through queued references",
+        );
+    }
+
+    drop(composer);
+    drop(secondary_host);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
 
