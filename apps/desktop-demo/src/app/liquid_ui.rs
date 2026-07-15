@@ -706,6 +706,7 @@ fn StoreBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
                             let on_select = std::rc::Rc::clone(&on_select);
                             LiquidTabBar(
                                 Modifier::empty(),
+                                LiquidTabBarSpec::default(),
                                 vec![
                                     LiquidTab::new(icons::DOCUMENT, "Today"),
                                     LiquidTab::new(icons::ROCKET, "Games"),
@@ -720,6 +721,47 @@ fn StoreBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
                     },
                 );
             }
+        },
+    );
+}
+
+#[composable]
+fn OnWhiteBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
+    let on_select: std::rc::Rc<dyn Fn(usize)> = std::rc::Rc::new(on_select);
+    Box(
+        Modifier::empty()
+            .width(330.0)
+            .height(98.0)
+            .draw_behind(|scope| {
+                scope.draw_rect(Brush::solid(Color::from_rgb_u8(241, 240, 247)));
+            }),
+        BoxSpec::default().content_alignment(Alignment::new(
+            HorizontalAlignment::CenterHorizontally,
+            VerticalAlignment::Bottom,
+        )),
+        move || {
+            let on_select = std::rc::Rc::clone(&on_select);
+            LiquidTheme(
+                LiquidThemeSpec {
+                    scheme: SchemeMode::Light,
+                    accent: Color::from_rgb_u8(0, 190, 200),
+                    ..LiquidThemeSpec::default()
+                },
+                move || {
+                    let on_select = std::rc::Rc::clone(&on_select);
+                    LiquidTabBar(
+                        Modifier::empty().offset(5.0, -10.0),
+                        LiquidTabBarSpec::new(85.0),
+                        vec![
+                            LiquidTab::new(icons::TRANSLATE, "Translate"),
+                            LiquidTab::new(icons::CAMERA, "Camera"),
+                            LiquidTab::new(icons::GROUP, "Conversation"),
+                        ],
+                        selected,
+                        move |index| on_select(index),
+                    );
+                },
+            );
         },
     );
 }
@@ -805,6 +847,7 @@ pub fn LiquidUiTab() {
         *cell.borrow_mut() = Some(selected_tab);
     });
     let store_tab = remember(|| mutableStateOf(4usize)).with(|s| *s);
+    let on_white_tab = remember(|| mutableStateOf(0usize)).with(|s| *s);
     let toggle_a = remember(|| mutableStateOf(true)).with(|s| *s);
     let toggle_b = remember(|| mutableStateOf(false)).with(|s| *s);
     let slider = remember(|| mutableStateOf(0.6f32)).with(|s| *s);
@@ -845,6 +888,7 @@ pub fn LiquidUiTab() {
                     let segment_state = segment;
                     let chip_state = chip;
                     let store_tab_state = store_tab;
+                    let on_white_tab_state = on_white_tab;
                     let clicks_state = clicks;
                     Column(
                         Modifier::empty()
@@ -908,6 +952,10 @@ pub fn LiquidUiTab() {
                             let store_state = store_tab_state;
                             StoreBottomBarExample(store_state.get(), move |index| {
                                 store_state.set(index);
+                            });
+                            let on_white_state = on_white_tab_state;
+                            OnWhiteBottomBarExample(on_white_state.get(), move |index| {
+                                on_white_state.set(index);
                             });
                             Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
 
@@ -1280,6 +1328,7 @@ pub fn LiquidUiTab() {
                             let tab_state2 = tab_state;
                             LiquidTabBarWithAccessory(
                                 Modifier::empty(),
+                                LiquidTabBarSpec::default(),
                                 tab_swipe_reference_tabs(),
                                 tab_state.get(),
                                 move |index| tab_state2.set(index),

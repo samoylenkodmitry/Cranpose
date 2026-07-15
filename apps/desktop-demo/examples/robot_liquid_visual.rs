@@ -229,6 +229,7 @@ fn main() {
             }
 
             capture_store_bar_visuals(&robot, &shot_dir);
+            capture_on_white_bar_visuals(&robot, &shot_dir);
             capture_button_visuals(&robot, &shot_dir);
             capture_control_visuals(&robot, &shot_dir);
             if std::env::var_os("CRANPOSE_LIQUID_OPTICS_ONLY").is_some() {
@@ -515,6 +516,62 @@ fn capture_store_bar_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
     }
     settle(robot, 700);
     shot_scaled(robot, shot_dir, "01c9-store-arcade-rest", 2.0);
+}
+
+fn capture_on_white_bar_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
+    scroll_text_to_y(robot, "Conversation", 500.0);
+    settle(robot, 500);
+    let translate = cranpose_testing::find_button_exact_in_semantics(robot, "Translate")
+        .expect("Translate on-white tab in semantics");
+    let camera = cranpose_testing::find_button_exact_in_semantics(robot, "Camera")
+        .expect("Camera on-white tab in semantics");
+    let conversation = cranpose_testing::find_button_exact_in_semantics(robot, "Conversation")
+        .expect("Conversation on-white tab in semantics");
+    let center =
+        |bounds: (f32, f32, f32, f32)| (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5);
+
+    shot_scaled(robot, shot_dir, "01ca-on-white-rest", 2.0);
+    let (translate_x, bar_y) = center(translate);
+    robot
+        .mouse_move(translate_x, bar_y)
+        .expect("hover Translate on-white tab");
+    robot.mouse_down().expect("press Translate on-white tab");
+    std::thread::sleep(Duration::from_millis(180));
+    shot_scaled(robot, shot_dir, "01cb-on-white-held", 2.0);
+
+    for (name, bounds) in [
+        ("01cc-on-white-direct-camera", camera),
+        ("01cd-on-white-direct-conversation", conversation),
+    ] {
+        let (x, y) = center(bounds);
+        robot.mouse_move(x, y).expect("drag on-white tab lens");
+        shot_scaled(robot, shot_dir, name, 2.0);
+    }
+
+    robot.mouse_up().expect("release on-white tab lens");
+    let release_steps = [
+        (0.0, true),
+        (1.0, false),
+        (32.0, true),
+        (67.0, true),
+        (100.0, true),
+        (200.0, true),
+    ];
+    let release_names = [
+        "01ce-on-white-release-000ms",
+        "01ce-on-white-release-033ms",
+        "01ce-on-white-release-100ms",
+        "01ce-on-white-release-200ms",
+        "01ce-on-white-release-400ms",
+    ];
+    let frames = robot
+        .capture_keyframes(2.0, &release_steps)
+        .expect("on-white bar release keyframes");
+    for (frame, name) in frames.iter().zip(release_names) {
+        save_frame(frame, shot_dir, name);
+    }
+    settle(robot, 700);
+    shot_scaled(robot, shot_dir, "01cf-on-white-settled", 2.0);
 }
 
 fn capture_button_visuals(robot: &cranpose::Robot, shot_dir: &Path) {

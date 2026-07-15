@@ -117,6 +117,30 @@ const TAB_LABEL_SIZE: f32 = 11.0;
 const TAP_SLOP: f32 = 6.0;
 const ACCESSORY_GAP: f32 = 10.0;
 
+/// Layout parameters for a [`LiquidTabBar`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiquidTabBarSpec {
+    max_tab_width: f32,
+}
+
+impl LiquidTabBarSpec {
+    pub fn new(max_tab_width: f32) -> Self {
+        Self {
+            max_tab_width: if max_tab_width.is_finite() {
+                max_tab_width.max(1.0)
+            } else {
+                TAB_WIDTH
+            },
+        }
+    }
+}
+
+impl Default for LiquidTabBarSpec {
+    fn default() -> Self {
+        Self::new(TAB_WIDTH)
+    }
+}
+
 fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color) -> Glass {
     Glass::lens()
         .no_clip()
@@ -419,11 +443,12 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
 #[allow(non_snake_case)]
 pub fn LiquidTabBar(
     modifier: Modifier,
+    spec: LiquidTabBarSpec,
     tabs: Vec<LiquidTab>,
     selected: usize,
     on_select: impl Fn(usize) + 'static,
 ) {
-    LiquidTabBarLayout(modifier, tabs, selected, on_select, false, || {});
+    LiquidTabBarLayout(modifier, spec, tabs, selected, on_select, false, || {});
 }
 
 /// A floating glass tab bar with a detached accessory to its right.
@@ -431,18 +456,20 @@ pub fn LiquidTabBar(
 #[allow(non_snake_case)]
 pub fn LiquidTabBarWithAccessory(
     modifier: Modifier,
+    spec: LiquidTabBarSpec,
     tabs: Vec<LiquidTab>,
     selected: usize,
     on_select: impl Fn(usize) + 'static,
     accessory: impl FnMut() + 'static,
 ) {
-    LiquidTabBarLayout(modifier, tabs, selected, on_select, true, accessory);
+    LiquidTabBarLayout(modifier, spec, tabs, selected, on_select, true, accessory);
 }
 
 #[composable]
 #[allow(non_snake_case)]
 fn LiquidTabBarLayout(
     modifier: Modifier,
+    spec: LiquidTabBarSpec,
     tabs: Vec<LiquidTab>,
     selected: usize,
     on_select: impl Fn(usize) + 'static,
@@ -511,9 +538,9 @@ fn LiquidTabBarLayout(
                             let on_select = Rc::clone(&on_select);
                             let constrained = scope.constraints().max_width;
                             let tab_width = if constrained.is_finite() && constrained > 1.0 {
-                                (constrained / count as f32).min(TAB_WIDTH)
+                                (constrained / count as f32).min(spec.max_tab_width)
                             } else {
-                                TAB_WIDTH
+                                spec.max_tab_width
                             };
 
                             // One optical body owns selection at rest, under direct
@@ -805,6 +832,14 @@ pub fn LiquidTabBarSearchAccessory(on_click: impl Fn() + 'static) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_bar_spec_normalizes_the_maximum_cell_width() {
+        assert_eq!(LiquidTabBarSpec::default().max_tab_width, TAB_WIDTH);
+        assert_eq!(LiquidTabBarSpec::new(85.0).max_tab_width, 85.0);
+        assert_eq!(LiquidTabBarSpec::new(0.0).max_tab_width, 1.0);
+        assert_eq!(LiquidTabBarSpec::new(f32::NAN).max_tab_width, TAB_WIDTH);
+    }
 
     #[test]
     fn drag_pointer_centers_the_lens_and_preserves_end_overdrag() {
