@@ -106,5 +106,5 @@ fn main() {
             }
             robot.exit().expect("exit");
         })
-        .run(|| ProbeApp());
+        .run(ProbeApp);
 }

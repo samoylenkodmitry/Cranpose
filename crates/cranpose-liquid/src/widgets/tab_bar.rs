@@ -2,9 +2,12 @@
 //! liquid selection blob (dual-spring stretch), plus an optional detached
 //! circular accessory (the iOS 26 search button).
 
-use crate::material::{neutral_surface_tint, Glass, GlassDynamics, GlassMorph, LiquidModifierExt};
-use crate::motion::LiquidMotion;
-use crate::theme::{liquid_colors, liquid_typography};
+use crate::material::{
+    liquid_content_mask_with, neutral_surface_lift, neutral_surface_tint, Glass, GlassDynamics,
+    GlassMorph, LiquidModifierExt,
+};
+use crate::motion::{liquid_axis_owns_visual_selection, liquid_visual_index, LiquidMotion};
+use crate::theme::{liquid_colors, liquid_typography, LiquidTypography};
 use cranpose_foundation::PointerId;
 use cranpose_macros::composable;
 use cranpose_services::{default_haptics, HapticFeedback};
@@ -16,7 +19,6 @@ use cranpose_ui::widgets::{
 use cranpose_ui::{
     Brush, Color, CornerRadii, Modifier, PointerEventKind, PointerInputScope, Rect, Size,
 };
-use cranpose_ui_graphics::{GlassProfileCurve, GlassSurfaceProfile};
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, VerticalAlignment};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -60,24 +62,52 @@ impl LiquidTab {
     }
 
     pub fn with_icon_scale(mut self, scale: f32) -> Self {
-        self.icon_scale = if scale.is_finite() {
-            scale.clamp(0.5, 1.5)
-        } else {
-            1.0
-        };
+        self.icon_scale = normalize_icon_scale(scale);
         self
     }
+}
+
+fn normalize_icon_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        scale.clamp(0.5, 1.5)
+    } else {
+        1.0
+    }
+}
+
+fn tab_base_content_color(colors: crate::theme::LiquidColors) -> Color {
+    colors.label
+}
+
+fn tab_selection_content_color(colors: crate::theme::LiquidColors) -> Color {
+    colors.accent
+}
+
+fn mix_color(from: Color, to: Color, amount: f32) -> Color {
+    let amount = amount.clamp(0.0, 1.0);
+    if amount <= 0.0 {
+        return from;
+    }
+    if amount >= 1.0 {
+        return to;
+    }
+    Color::rgba(
+        from.r() + (to.r() - from.r()) * amount,
+        from.g() + (to.g() - from.g()) * amount,
+        from.b() + (to.b() - from.b()) * amount,
+        from.a() + (to.a() - from.a()) * amount,
+    )
+}
+
+fn tab_base_selected_color(colors: crate::theme::LiquidColors, activity: f32) -> Color {
+    mix_color(colors.accent, colors.label, activity)
 }
 
 const BAR_HEIGHT: f32 = 64.0;
 const BLOB_HEIGHT: f32 = 52.0;
 const BLOB_MARGIN: f32 = 8.0;
-const FLIGHT_LENS_WIDTH_FACTOR: f32 = 1.17;
+const FLIGHT_LENS_WIDTH_FACTOR: f32 = 1.37;
 const FLIGHT_LENS_HEIGHT_FACTOR: f32 = 1.0;
-const FLIGHT_LENS_DEPTH_ACTIVE: f32 = 0.0;
-const FLIGHT_LENS_DEPTH_MOTION: f32 = 0.12;
-const FLIGHT_SURFACE_RADIAL_POWER: f32 = 1.5;
-const FLIGHT_SURFACE_AXIS_COUPLING: f32 = 0.78;
 /// Width allotted to each tab inside the pill.
 const TAB_WIDTH: f32 = 78.0;
 /// Plain icon frame size (its path occupies about 25dp over 11dp labels).
@@ -86,72 +116,29 @@ const TAB_LABEL_SIZE: f32 = 11.0;
 /// The drag lens overflows the pill vertically like the reference bubble.
 const TAP_SLOP: f32 = 6.0;
 const ACCESSORY_GAP: f32 = 10.0;
-const VISUAL_HANDOFF_TOLERANCE_IN_TABS: f32 = 0.12;
 
-fn flight_surface_profile() -> GlassSurfaceProfile {
-    let x_profile = GlassProfileCurve::from_points(&[
-        (0.0, 0.50),
-        (0.16, 0.508),
-        (0.34, 0.54),
-        (0.56, 0.44),
-        (0.78, 0.34),
-        (1.0, 0.24),
-    ])
-    .expect("tab flight X-Z profile is valid");
-    let y_profile = GlassProfileCurve::from_points(&[
-        (0.0, 0.50),
-        (0.16, 0.50),
-        (0.30, 0.50),
-        (0.52, 0.515),
-        (0.76, 0.558),
-        (1.0, 0.51),
-    ])
-    .expect("tab flight Y-Z profile is valid");
-    GlassSurfaceProfile::new(x_profile, y_profile, 30.0, FLIGHT_SURFACE_RADIAL_POWER)
-        .and_then(|profile| profile.with_axis_coupling(FLIGHT_SURFACE_AXIS_COUPLING))
-        .expect("tab flight surface profile is coherent")
-}
-
-fn tab_flight_lens_material(
-    foreground: cranpose_ui_graphics::Color,
-    accent: cranpose_ui_graphics::Color,
-) -> Glass {
+fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color) -> Glass {
     Glass::lens()
         .no_clip()
-        .tint(neutral_surface_tint(foreground, 0.08, 0.10))
-        .content_recolor(accent, 1.0)
-        .blur_radius(2.0)
+        .tint(neutral_surface_tint(foreground, 0.13, 0.10))
+        .blur_radius(0.0)
+        .dispersion(0.22)
         .lift(0.0)
         .highlight(0.32)
-        .surface_profile(flight_surface_profile())
-        .sheen(0.12)
-        .chromatic_aberration(1.2)
-        .displacement(55.0)
 }
 
 fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
     Glass::regular()
-        .tint(neutral_surface_tint(foreground, 0.028, 0.04))
-        .blur_radius(16.0)
+        .tint(neutral_surface_tint(foreground, 0.0, 0.04))
+        .blur_radius(4.0)
         .saturation(0.95)
-        .lift(0.48)
+        .lift(neutral_surface_lift(foreground, 0.48, -0.24))
         .highlight(0.20)
-        .surface_profile(
-            GlassSurfaceProfile::regular()
-                .with_depth(3.0)
-                .expect("tab bar surface depth is valid"),
-        )
         .adaptive_frost(foreground, 0.42)
-        .edge_fold(1.0)
-}
-
-fn tab_flight_depth_boost(activity: f32, energy: f32) -> f32 {
-    activity.clamp(0.0, 1.0)
-        * (FLIGHT_LENS_DEPTH_ACTIVE + FLIGHT_LENS_DEPTH_MOTION * energy.clamp(0.0, 1.0))
 }
 
 fn tab_flight_tint_multiplier(activity: f32) -> f32 {
-    1.0 - 0.60 * activity.clamp(0.0, 1.0)
+    1.0 - 0.25 * activity.clamp(0.0, 1.0)
 }
 
 fn tab_lens_activity_motion(active: bool) -> cranpose_animation::AnimationType {
@@ -166,34 +153,52 @@ fn tab_lens_left(pointer_x: f32, tab_width: f32, count: usize) -> f32 {
     (pointer_x - tab_width * 0.5).clamp(-tab_width * 0.2, tab_width * (count as f32 - 0.45))
 }
 
-fn tab_visual_index(
+fn tab_visual_selection(
     selected: usize,
-    lens_x: f32,
+    lens_position: f32,
     tab_width: f32,
     count: usize,
     direct: bool,
 ) -> usize {
-    if count == 0 {
-        return 0;
-    }
-    let selected = selected.min(count - 1);
-    if !direct || !lens_x.is_finite() || tab_width <= f32::EPSILON {
-        return selected;
-    }
-    (lens_x / tab_width)
-        .round()
-        .clamp(0.0, count.saturating_sub(1) as f32) as usize
+    let selected = selected.min(count.saturating_sub(1));
+    let state_position = tab_width * selected as f32;
+    let lens_owns_selection =
+        liquid_axis_owns_visual_selection(direct, lens_position, state_position, tab_width);
+    liquid_visual_index(
+        selected,
+        lens_position,
+        tab_width,
+        count,
+        lens_owns_selection,
+    )
 }
 
-fn tab_lens_owns_visual_selection(
-    direct: bool,
-    lens_x: f32,
-    target_x: f32,
-    tab_width: f32,
-) -> bool {
-    direct
-        || (lens_x - target_x).abs()
-            > tab_width.max(f32::EPSILON) * VISUAL_HANDOFF_TOLERANCE_IN_TABS
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AppBadgeGeometry {
+    size: Size,
+    corner_radius: f32,
+    stripe: Rect,
+    glyph: Rect,
+}
+
+fn app_badge_geometry(optical_scale: f32) -> AppBadgeGeometry {
+    let scale = normalize_icon_scale(optical_scale);
+    AppBadgeGeometry {
+        size: Size::new(20.0 * scale, 32.0 * scale),
+        corner_radius: 5.0 * scale,
+        stripe: Rect {
+            x: 7.0 * scale,
+            y: 4.5 * scale,
+            width: 6.0 * scale,
+            height: 1.5 * scale,
+        },
+        glyph: Rect {
+            x: 3.0 * scale,
+            y: 10.0 * scale,
+            width: 14.0 * scale,
+            height: 14.0 * scale,
+        },
+    }
 }
 
 #[composable]
@@ -208,35 +213,106 @@ fn TabIcon(icon: &'static str, style: LiquidTabIconStyle, color: Color, optical_
                 crate::icons::Icon(icon, TAB_ICON_SIZE * optical_scale, color)
             }
             LiquidTabIconStyle::AppBadge => {
+                let geometry = app_badge_geometry(optical_scale);
                 Box(
                     Modifier::empty()
-                        .size(Size::new(20.0, FRAME_HEIGHT))
+                        .size(geometry.size)
                         .draw_behind(move |scope| {
-                            scope.draw_round_rect(Brush::solid(color), CornerRadii::uniform(5.0));
-                            scope.draw_rect_at(
-                                Rect {
-                                    x: 7.0,
-                                    y: 4.5,
-                                    width: 6.0,
-                                    height: 1.5,
-                                },
-                                Brush::solid(Color::WHITE),
+                            scope.draw_round_rect(
+                                Brush::solid(color),
+                                CornerRadii::uniform(geometry.corner_radius),
                             );
+                            scope.draw_rect_at(geometry.stripe, Brush::solid(Color::WHITE));
                         }),
                     BoxSpec::default(),
                     move || {
                         Box(
                             Modifier::empty()
-                                .offset(4.0, 11.0)
-                                .size(Size::new(12.0, 12.0)),
+                                .offset(geometry.glyph.x, geometry.glyph.y)
+                                .size(Size::new(geometry.glyph.width, geometry.glyph.height)),
                             BoxSpec::default(),
-                            move || crate::icons::Icon(icon, 12.0, Color::WHITE),
+                            move || crate::icons::Icon(icon, geometry.glyph.width, Color::WHITE),
                         );
                     },
                 );
             }
         },
     );
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct TabCellsSpec {
+    base_color: Color,
+    selected: Option<usize>,
+    selected_color: Color,
+    interactive: bool,
+    selection_only: bool,
+}
+
+fn tab_cell_is_visible(index: usize, selected: Option<usize>, selection_only: bool) -> bool {
+    !selection_only || selected == Some(index)
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn TabCells(
+    modifier: Modifier,
+    tabs: Rc<Vec<LiquidTab>>,
+    typography: LiquidTypography,
+    tab_width: f32,
+    spec: TabCellsSpec,
+) {
+    Row(modifier, RowSpec::default(), move || {
+        for (index, tab) in tabs.iter().enumerate() {
+            let visible = tab_cell_is_visible(index, spec.selected, spec.selection_only);
+            let color = if spec.selected == Some(index) {
+                spec.selected_color
+            } else {
+                spec.base_color
+            };
+            let label_for_semantics = tab.label;
+            let mut cell = Modifier::empty().size(Size::new(tab_width, BLOB_HEIGHT));
+            if spec.interactive {
+                cell = cell.semantics(move |config| {
+                    config.is_button = true;
+                    config.is_clickable = true;
+                    config.content_description = Some(label_for_semantics.to_string());
+                });
+            }
+            let icon = tab.icon;
+            let icon_style = tab.icon_style;
+            let icon_scale = tab.icon_scale;
+            let label = tab.label;
+            let label_style = TextStyle {
+                span_style: SpanStyle {
+                    color: Some(color),
+                    font_size: cranpose_ui::text::TextUnit::Sp(TAB_LABEL_SIZE),
+                    font_weight: Some(FontWeight::MEDIUM),
+                    ..typography.caption1.span_style.clone()
+                },
+                ..typography.caption1.clone()
+            };
+            Box(
+                cell,
+                BoxSpec::default().content_alignment(Alignment::CENTER),
+                move || {
+                    if !visible {
+                        return;
+                    }
+                    let label_style = label_style.clone();
+                    Column(
+                        Modifier::empty(),
+                        ColumnSpec::default()
+                            .horizontal_alignment(HorizontalAlignment::CenterHorizontally),
+                        move || {
+                            TabIcon(icon, icon_style, color, icon_scale);
+                            Text(label, Modifier::empty(), label_style.clone());
+                        },
+                    );
+                },
+            );
+        }
+    });
 }
 
 fn tab_lens_node_top(node_height: f32) -> f32 {
@@ -251,6 +327,10 @@ fn tab_bar_accessory_gap(has_accessory: bool) -> f32 {
     }
 }
 
+fn accessory_surfaces_touch(edge_gap: f32) -> bool {
+    edge_gap <= 0.0
+}
+
 fn tab_lens_base_size(tab_width: f32, activity: f32) -> (f32, f32) {
     let activity = activity.clamp(0.0, 1.0);
     let ease = activity * activity * (3.0 - 2.0 * activity);
@@ -262,17 +342,71 @@ fn tab_lens_base_size(tab_width: f32, activity: f32) -> (f32, f32) {
     )
 }
 
-fn tab_flight_launch_wake(
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TabFlightGeometry {
+    center: (f32, f32),
+    base_size: Size,
     pose: crate::dynamics::LiquidPose,
-    base_height: f32,
-) -> Option<(f32, f32)> {
-    let compression = ((1.0 - pose.stretch) / (1.0 - crate::dynamics::STRETCH_MIN)).clamp(0.0, 1.0);
-    if compression <= 0.03 {
-        return None;
+    lens_position: f32,
+    lens_activity: f32,
+    accessory_center: Option<(f32, f32)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TabFlightNode {
+    origin: (f32, f32),
+    size: Size,
+}
+
+fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> GlassDynamics {
+    let activity = geometry.lens_activity.clamp(0.0, 1.0);
+    let energy = geometry.pose.energy() * activity;
+    let radius = geometry.base_size.height * (0.48 + 0.02 * energy);
+    let glue = 20.0;
+    let shapes = geometry
+        .accessory_center
+        .filter(|(x, _)| {
+            let edge_gap = (*x - geometry.center.0).abs()
+                - geometry.base_size.width * geometry.pose.stretch.max(geometry.pose.ortho) * 0.5
+                - BAR_HEIGHT * 0.5;
+            accessory_surfaces_touch(edge_gap)
+        })
+        .map(|(x, y)| {
+            vec![(
+                x - node.origin.0,
+                y - node.origin.1,
+                BAR_HEIGHT,
+                BAR_HEIGHT,
+                -1.0,
+            )]
+        })
+        .unwrap_or_default();
+    GlassDynamics {
+        morph: Some(GlassMorph {
+            node_size: (node.size.width, node.size.height),
+            primary: (
+                geometry.center.0 - node.origin.0,
+                geometry.center.1 - node.origin.1,
+                geometry.base_size.width,
+                geometry.base_size.height,
+                radius,
+            ),
+            shapes,
+            glue,
+            wobble_amplitude: 1.1 * energy,
+            wobble_phase: geometry.lens_position * 0.045,
+            bulge_amplitude: geometry.pose.bulge_amplitude.min(8.0) * activity,
+            bulge_direction: geometry.pose.bulge_direction,
+            ellipse_blend: 0.0,
+            deformation: Some(crate::material::GlassDeformation::incompressible(
+                geometry.pose.axis,
+                1.0 + (geometry.pose.stretch - 1.0) * activity,
+            )),
+        }),
+        activity: Some(activity),
+        tint_alpha_multiplier: Some(tab_flight_tint_multiplier(geometry.lens_activity)),
+        ..Default::default()
     }
-    let amplitude = base_height * (0.04 + 0.04 * compression);
-    let trailing = (-pose.axis.0, -pose.axis.1);
-    Some((amplitude, trailing.1.atan2(trailing.0)))
 }
 
 /// A unified floating glass tab bar with every destination inside one pill.
@@ -335,6 +469,7 @@ fn LiquidTabBarLayout(
                     0.0f32,
                     0.0f32,
                     crate::dynamics::LiquidPose::default(),
+                    0usize,
                 ))
             })
             .with(|state| *state);
@@ -348,6 +483,8 @@ fn LiquidTabBarLayout(
                     let tabs = Rc::clone(&tabs);
                     let typography = typography.clone();
                     let on_select = Rc::clone(&on_select);
+                    let selection_tabs = Rc::clone(&tabs);
+                    let selection_typography = typography.clone();
                     // The bar's edge is defined by shadow and contrast, not a
                     // bright rim stroke.
                     let pill = Modifier::empty()
@@ -405,73 +542,27 @@ fn LiquidTabBarLayout(
                                 }
                             };
 
-                            let cells_tabs = Rc::clone(&tabs);
-                            let visual_index = tab_visual_index(
+                            let lens_activity = lens_activity();
+                            let visual_selection = tab_visual_selection(
                                 selected,
                                 lens_x,
                                 tab_width,
                                 count,
-                                tab_lens_owns_visual_selection(
-                                    lens_pressed.get(),
-                                    lens_x,
-                                    resting_lens_x,
-                                    tab_width,
-                                ),
+                                lens_axis.is_dragging(),
                             );
-                            Row(Modifier::empty(), RowSpec::default(), move || {
-                                for (index, tab) in cells_tabs.iter().enumerate() {
-                                    let color = if index == visual_index {
-                                        colors.accent
-                                    } else {
-                                        colors.label
-                                    };
-                                    let label_for_semantics = tab.label;
-                                    let cell = Modifier::empty()
-                                        .size(Size::new(tab_width, BLOB_HEIGHT))
-                                        .semantics(move |config| {
-                                            config.is_button = true;
-                                            config.is_clickable = true;
-                                            config.content_description =
-                                                Some(label_for_semantics.to_string());
-                                        });
-                                    let icon = tab.icon;
-                                    let icon_style = tab.icon_style;
-                                    let icon_scale = tab.icon_scale;
-                                    let label = tab.label;
-                                    let label_style = TextStyle {
-                                        span_style: SpanStyle {
-                                            color: Some(color),
-                                            font_size: cranpose_ui::text::TextUnit::Sp(
-                                                TAB_LABEL_SIZE,
-                                            ),
-                                            font_weight: Some(FontWeight::MEDIUM),
-                                            ..typography.caption1.span_style.clone()
-                                        },
-                                        ..typography.caption1.clone()
-                                    };
-                                    Box(
-                                        cell,
-                                        BoxSpec::default().content_alignment(Alignment::CENTER),
-                                        move || {
-                                            let label_style = label_style.clone();
-                                            Column(
-                                                Modifier::empty(),
-                                                ColumnSpec::default().horizontal_alignment(
-                                                    HorizontalAlignment::CenterHorizontally,
-                                                ),
-                                                move || {
-                                                    TabIcon(icon, icon_style, color, icon_scale);
-                                                    Text(
-                                                        label,
-                                                        Modifier::empty(),
-                                                        label_style.clone(),
-                                                    );
-                                                },
-                                            );
-                                        },
-                                    );
-                                }
-                            });
+                            TabCells(
+                                Modifier::empty(),
+                                Rc::clone(&tabs),
+                                typography.clone(),
+                                tab_width,
+                                TabCellsSpec {
+                                    base_color: tab_base_content_color(colors),
+                                    selected: Some(selected),
+                                    selected_color: tab_base_selected_color(colors, lens_activity),
+                                    interactive: true,
+                                    selection_only: false,
+                                },
+                            );
 
                             // Swipe/tap surface across the whole pill interior.
                             let row_width = tab_width * count as f32;
@@ -592,7 +683,13 @@ fn LiquidTabBarLayout(
                             // Publish the lens springs for the overlay rendered
                             // ABOVE the finished bar (outside this glass layer, so
                             // the lens magnifies icons and glass together).
-                            let published = (lens_x, lens_activity(), tab_width, lens_pose);
+                            let published = (
+                                lens_x,
+                                lens_activity,
+                                tab_width,
+                                lens_pose,
+                                visual_selection,
+                            );
                             if lens_x_outer.get() != published {
                                 lens_x_outer.set(published);
                             }
@@ -607,107 +704,75 @@ fn LiquidTabBarLayout(
                     // search accessory's circle joins its liquid field: drag the
                     // lens to the bar's end and the two glue through a
                     // smooth-union neck.
-                    let (lens_px, lens_activity, lens_tab_w, pose) = lens_x_outer.get();
-                    {
-                        let lens_w = lens_tab_w * FLIGHT_LENS_WIDTH_FACTOR;
-                        let lens_h = BAR_HEIGHT * FLIGHT_LENS_HEIGHT_FACTOR;
-                        // Node headroom for the deformation extremes (max axis
-                        // stretch + leading bulge, max ortho swell) and rim glow.
-                        let deformation_headroom =
-                            crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
-                        let node_w =
-                            lens_w * deformation_headroom + crate::dynamics::BULGE_MAX + 20.0;
-                        let node_h =
-                            lens_h * deformation_headroom + crate::dynamics::BULGE_MAX + 16.0;
-                        let lens_center_x = BLOB_MARGIN + lens_px + lens_tab_w * 0.5;
-                        let node_x = lens_center_x - node_w * 0.5;
-                        let pill_w = lens_tab_w * count as f32 + 2.0 * BLOB_MARGIN;
-                        // Accessory circle center in lens-node-local coords.
-                        let accessory_cx =
-                            pill_w + tab_bar_accessory_gap(has_accessory) + BAR_HEIGHT * 0.5
-                                - node_x;
-                        let accessory_cy = node_h * 0.5;
-                        let lens = Modifier::empty()
-                            // required_size: the stack is pinned to BAR_HEIGHT so
-                            // the taller lens can never inflate the bar; the node
-                            // still measures (and draws) at its full size and the
-                            // offset centers it on the pill.
-                            .required_size(Size::new(node_w, node_h))
-                            .offset(node_x, tab_lens_node_top(node_h))
-                            .glass_effect_with(
-                                tab_flight_lens_material(colors.label, colors.accent),
-                                move || {
-                                    let (base_w, base_h) =
-                                        tab_lens_base_size(lens_tab_w, lens_activity);
-                                    let energy = pose.energy();
-                                    // Continuous-curvature read: the resting lens
-                                    // is a flattened squircle, not a stadium; it
-                                    // rounds toward a capsule only at speed.
-                                    let radius = base_h * (0.48 + 0.02 * energy);
-                                    // The search circle joins the liquid field only
-                                    // when the lens edge actually gets within glue
-                                    // reach — passing glue, not a permanent overdraw
-                                    // (a far shape re-rendered by this node would
-                                    // paint a spurious rim over the real button).
-                                    let glue = 20.0;
-                                    let edge_gap = (accessory_cx - node_w * 0.5).abs()
-                                        - base_w * pose.stretch.max(pose.ortho) * 0.5
-                                        - BAR_HEIGHT * 0.5;
-                                    // Join only when nearly touching: a parked lens
-                                    // one cell away must not repaint the circle.
-                                    let shapes = if edge_gap < 10.0 {
-                                        vec![(
-                                            accessory_cx,
-                                            accessory_cy,
-                                            BAR_HEIGHT,
-                                            BAR_HEIGHT,
-                                            -1.0,
-                                        )]
-                                    } else {
-                                        Vec::new()
-                                    };
-                                    let (bulge_amplitude, bulge_direction) =
-                                        tab_flight_launch_wake(pose, base_h).unwrap_or((
-                                            pose.bulge_amplitude.min(8.0),
-                                            pose.bulge_direction,
-                                        ));
-                                    GlassDynamics {
-                                        morph: Some(GlassMorph {
-                                            node_size: (node_w, node_h),
-                                            primary: (
-                                                node_w * 0.5,
-                                                node_h * 0.5,
-                                                base_w,
-                                                base_h,
-                                                radius,
-                                            ),
-                                            shapes,
-                                            glue,
-                                            // A whisper: the reference outline
-                                            // stays one smooth curve in every
-                                            // frame — strong lobes read as a
-                                            // lumpy peanut.
-                                            wobble_amplitude: 1.1 * energy,
-                                            wobble_phase: lens_px * 0.045,
-                                            bulge_amplitude,
-                                            bulge_direction,
-                                            ellipse_blend: 0.0,
-                                            deformation: Some(pose.deformation()),
-                                        }),
-                                        surface_depth_boost: tab_flight_depth_boost(
-                                            lens_activity,
-                                            energy,
-                                        ),
-                                        tint_alpha_multiplier: Some(tab_flight_tint_multiplier(
-                                            lens_activity,
-                                        )),
-                                        optical_strength: 0.18 + 0.67 * lens_activity,
-                                        ..Default::default()
-                                    }
-                                },
-                            );
-                        Box(lens, BoxSpec::default(), || {});
-                    }
+                    let (lens_px, lens_activity, lens_tab_w, pose, visual_selection) =
+                        lens_x_outer.get();
+                    let lens_w = lens_tab_w * FLIGHT_LENS_WIDTH_FACTOR;
+                    let lens_h = BAR_HEIGHT * FLIGHT_LENS_HEIGHT_FACTOR;
+                    // Node headroom for the deformation extremes (max axis
+                    // stretch + leading bulge, max ortho swell) and rim glow.
+                    let deformation_headroom =
+                        crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
+                    let node_w = lens_w * deformation_headroom + crate::dynamics::BULGE_MAX + 20.0;
+                    let node_h = lens_h * deformation_headroom + crate::dynamics::BULGE_MAX + 16.0;
+                    let lens_center_x = BLOB_MARGIN + lens_px + lens_tab_w * 0.5;
+                    let node_x = lens_center_x - node_w * 0.5;
+                    let node_top = tab_lens_node_top(node_h);
+                    let pill_w = lens_tab_w * count as f32 + 2.0 * BLOB_MARGIN;
+                    let (base_w, base_h) = tab_lens_base_size(lens_tab_w, lens_activity);
+                    let geometry = TabFlightGeometry {
+                        center: (lens_center_x, BAR_HEIGHT * 0.5),
+                        base_size: Size::new(base_w, base_h),
+                        pose,
+                        lens_position: lens_px,
+                        lens_activity,
+                        accessory_center: has_accessory.then_some((
+                            pill_w + tab_bar_accessory_gap(true) + BAR_HEIGHT * 0.5,
+                            BAR_HEIGHT * 0.5,
+                        )),
+                    };
+                    let mask_node = TabFlightNode {
+                        origin: (0.0, 0.0),
+                        size: Size::new(pill_w, BAR_HEIGHT),
+                    };
+                    let lens_node = TabFlightNode {
+                        origin: (node_x, node_top),
+                        size: Size::new(node_w, node_h),
+                    };
+
+                    let selection_geometry = geometry;
+                    let selection_mask = liquid_content_mask_with(
+                        Modifier::empty().required_size(mask_node.size),
+                        tab_flight_lens_material(colors.label),
+                        move || tab_flight_dynamics(selection_geometry, mask_node),
+                    );
+                    Box(selection_mask, BoxSpec::default(), move || {
+                        TabCells(
+                            Modifier::empty().offset(BLOB_MARGIN, BLOB_MARGIN),
+                            Rc::clone(&selection_tabs),
+                            selection_typography.clone(),
+                            lens_tab_w,
+                            TabCellsSpec {
+                                base_color: tab_selection_content_color(colors),
+                                selected: Some(visual_selection),
+                                selected_color: tab_selection_content_color(colors),
+                                interactive: false,
+                                selection_only: true,
+                            },
+                        );
+                    });
+
+                    let lens_geometry = geometry;
+                    let lens = Modifier::empty()
+                        // required_size: the stack is pinned to BAR_HEIGHT so
+                        // the taller lens can never inflate the bar; the node
+                        // still measures (and draws) at its full size and the
+                        // offset centers it on the pill.
+                        .required_size(lens_node.size)
+                        .offset(node_x, node_top)
+                        .glass_effect_with(tab_flight_lens_material(colors.label), move || {
+                            tab_flight_dynamics(lens_geometry, lens_node)
+                        });
+                    Box(lens, BoxSpec::default(), || {});
                 },
             );
 
@@ -776,19 +841,94 @@ mod tests {
     }
 
     #[test]
-    fn direct_drag_selects_the_visual_tab_under_the_lens() {
-        assert_eq!(tab_visual_index(2, 0.0, TAB_WIDTH, 4, false), 2);
-        assert_eq!(tab_visual_index(0, 2.0 * TAB_WIDTH, TAB_WIDTH, 4, true), 2);
-        assert_eq!(tab_visual_index(0, 99.0 * TAB_WIDTH, TAB_WIDTH, 4, true), 3);
-        assert!(tab_lens_owns_visual_selection(
-            false, TAB_WIDTH, 0.0, TAB_WIDTH
+    fn app_badge_geometry_honors_the_tab_optical_scale() {
+        let full = app_badge_geometry(1.0);
+        let corrected = app_badge_geometry(0.85);
+        assert_eq!(full.size, Size::new(20.0, 32.0));
+        assert_eq!(corrected.size, Size::new(17.0, 27.2));
+        assert!((corrected.glyph.width - 11.9).abs() < 1.0e-5);
+        assert!((corrected.corner_radius / full.corner_radius - 0.85).abs() < f32::EPSILON);
+        assert!((corrected.stripe.x / full.stripe.x - 0.85).abs() < f32::EPSILON);
+        assert!((corrected.glyph.width / full.glyph.width - 0.85).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn base_tab_content_remains_neutral_under_the_moving_selection_layer() {
+        let colors = crate::theme::LiquidColors::light(cranpose_ui_graphics::Color::from_rgb_u8(
+            0, 122, 255,
         ));
-        assert!(!tab_lens_owns_visual_selection(
-            false,
-            TAB_WIDTH * 0.05,
-            0.0,
-            TAB_WIDTH
+        assert_eq!(tab_base_content_color(colors), colors.label);
+        assert_eq!(tab_selection_content_color(colors), colors.accent);
+    }
+
+    #[test]
+    fn selected_tab_accent_crossfades_into_the_persistent_flight_layer() {
+        let colors = crate::theme::LiquidColors::light(cranpose_ui_graphics::Color::from_rgb_u8(
+            0, 122, 255,
         ));
+        assert_eq!(tab_base_selected_color(colors, 0.0), colors.accent);
+        assert_eq!(tab_base_selected_color(colors, 1.0), colors.label);
+        let halfway = tab_base_selected_color(colors, 0.5);
+        assert!((halfway.r() - (colors.accent.r() + colors.label.r()) * 0.5).abs() < 1.0e-6);
+        assert!((halfway.g() - (colors.accent.g() + colors.label.g()) * 0.5).abs() < 1.0e-6);
+        assert!((halfway.b() - (colors.accent.b() + colors.label.b()) * 0.5).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn flight_overlay_accents_only_the_lens_owned_cell() {
+        assert_eq!(
+            tab_visual_selection(3, TAB_WIDTH * 2.5, TAB_WIDTH, 4, true),
+            2
+        );
+        assert!(tab_cell_is_visible(2, Some(2), true));
+        assert!(!tab_cell_is_visible(3, Some(2), true));
+        assert!(tab_cell_is_visible(3, Some(2), false));
+    }
+
+    #[test]
+    fn selection_mask_and_lens_resolve_the_same_global_sdf() {
+        let geometry = TabFlightGeometry {
+            center: (212.0, 32.0),
+            base_size: Size::new(106.0, 64.0),
+            pose: crate::dynamics::LiquidPose::default(),
+            lens_position: 160.0,
+            lens_activity: 1.0,
+            accessory_center: None,
+        };
+        let mask_node = TabFlightNode {
+            origin: (0.0, 0.0),
+            size: Size::new(328.0, 64.0),
+        };
+        let lens_node = TabFlightNode {
+            origin: (132.0, -22.0),
+            size: Size::new(160.0, 108.0),
+        };
+        let mask = tab_flight_dynamics(geometry, mask_node)
+            .morph
+            .expect("selection mask morph");
+        let lens = tab_flight_dynamics(geometry, lens_node)
+            .morph
+            .expect("lens morph");
+        assert_eq!(
+            (
+                mask.primary.0 + mask_node.origin.0,
+                mask.primary.1 + mask_node.origin.1
+            ),
+            geometry.center
+        );
+        assert_eq!(
+            (
+                lens.primary.0 + lens_node.origin.0,
+                lens.primary.1 + lens_node.origin.1
+            ),
+            geometry.center
+        );
+        assert_eq!(
+            (mask.primary.2, mask.primary.3, mask.primary.4),
+            (lens.primary.2, lens.primary.3, lens.primary.4)
+        );
+        assert_eq!(mask.node_size, (328.0, 64.0));
+        assert_eq!(lens.node_size, (160.0, 108.0));
     }
 
     #[test]
@@ -798,12 +938,19 @@ mod tests {
     }
 
     #[test]
+    fn flight_lens_only_joins_accessory_after_surface_contact() {
+        assert!(!accessory_surfaces_touch(0.01));
+        assert!(accessory_surfaces_touch(0.0));
+        assert!(accessory_surfaces_touch(-4.0));
+    }
+
+    #[test]
     fn one_lens_morphs_between_rest_and_full_flight_footprints() {
         let width = TAB_WIDTH * FLIGHT_LENS_WIDTH_FACTOR;
         let height = BAR_HEIGHT * FLIGHT_LENS_HEIGHT_FACTOR;
         assert!(
-            (1.165..=1.175).contains(&(width / TAB_WIDTH)),
-            "the undeformed optic must reach the target width after physical flight stretch: {width}"
+            (1.35..=1.39).contains(&(width / TAB_WIDTH)),
+            "the undeformed optic must span the target's measured active footprint: {width}"
         );
         assert!(
             (0.98..=1.02).contains(&(height / BAR_HEIGHT)),
@@ -827,183 +974,50 @@ mod tests {
     }
 
     #[test]
-    fn flight_lens_couples_principal_profiles_into_rounded_side_lobes() {
-        let coupling = flight_surface_profile().axis_coupling();
-        assert!(
-            (0.70..=0.85).contains(&coupling),
-            "the target's rounded side lobes require both principal profiles off-axis; full toric isolation leaves upright icon columns, got {coupling}"
-        );
-    }
-
-    #[test]
-    fn flight_lens_uses_clear_target_range_optics() {
-        let accent = cranpose_ui_graphics::Color::rgb(0.0, 0.48, 1.0);
-        let glass = tab_flight_lens_material(cranpose_ui_graphics::Color::BLACK, accent);
+    fn flight_lens_uses_the_clear_wcksrd_contract() {
+        let glass = tab_flight_lens_material(cranpose_ui_graphics::Color::BLACK);
         assert!(glass
             .lift
             .is_some_and(|lift| (-0.02..=0.02).contains(&lift)));
-        assert!((1.1..=1.3).contains(&glass.chromatic_aberration));
-        assert_eq!(glass.blur_radius, Some(2.0));
+        assert_eq!(glass.refraction_depth, 0.34);
+        assert_eq!(glass.dispersion, 0.22);
+        assert_eq!(glass.blur_radius, Some(0.0));
         assert!((0.28..=0.36).contains(&glass.highlight));
-        assert!((52.0..=58.0).contains(&glass.displacement));
-        assert!((29.0..=31.0).contains(&glass.surface_profile.depth()));
-        assert_eq!(glass.surface_profile.radial_power(), 1.5);
-        assert_eq!(glass.surface_profile.axis_coupling(), 0.78);
         assert!(
             glass.shadow,
             "the moving lens needs its target-visible SDF contact outline"
         );
         assert!(glass
             .tint
-            .is_some_and(|tint| { tint.r() < 0.05 && (0.075..=0.085).contains(&tint.a()) }));
-        assert!(glass
-            .sheen
-            .is_some_and(|sheen| (0.08..=0.16).contains(&sheen)));
-        assert!(glass.content_recolor.is_some_and(|(color, strength)| {
-            color == accent && (0.95..=1.0).contains(&strength)
-        }));
-        assert!(
-            (-9.0..=-5.0).contains(
-                &(glass.surface_profile.y_profile().evaluate(0.94).1
-                    * glass.surface_profile.depth())
-            ),
-            "the short-axis outer return must form the target's deep crown ridge"
-        );
-        let depth = glass.surface_profile.depth();
-        let x_return_inner = glass.surface_profile.x_profile().evaluate(0.453).1 * depth;
-        let x_return_mid = glass.surface_profile.x_profile().evaluate(0.705).1 * depth;
-        let y_inner_shoulder = glass.surface_profile.y_profile().evaluate(0.22).1 * depth;
-        let y_shoulder = glass.surface_profile.y_profile().evaluate(0.65).1 * depth;
-        let y_outer = glass.surface_profile.y_profile().evaluate(0.90).1 * depth;
-        assert!(
-            (-19.0..=-15.0).contains(&x_return_inner)
-                && (-15.0..=-11.0).contains(&x_return_mid)
-                && y_inner_shoulder.abs() <= 0.5
-                && y_shoulder > 0.0
-                && (-9.0..=-5.0).contains(&y_outer),
-            "the long-axis return must allocate broad side lobes while the short axis magnifies through its inner shoulder and keeps its crown return: x=({x_return_inner}, {x_return_mid}), y=({y_inner_shoulder}, {y_shoulder}, {y_outer})"
-        );
-        assert_eq!(
-            glass
-                .surface_profile
-                .y_profile()
-                .knots()
-                .last()
-                .map(|knot| knot.height()),
-            Some(0.51)
-        );
-        assert_eq!(glass.surface_profile, flight_surface_profile());
-        let curve = glass.surface_profile.x_profile();
-        let epsilon = 0.001;
-        let center_curvature = (curve.evaluate(epsilon).1 - curve.evaluate(0.0).1) / epsilon;
-        let half_width = TAB_WIDTH * FLIGHT_LENS_WIDTH_FACTOR * 0.5;
-        let bend = 1.0 - 1.0 / 1.5;
-        let active_optical_strength = 0.18 + 0.67;
-        let source_scale = 1.0
-            - center_curvature
-                * glass.surface_profile.depth()
-                * bend
-                * glass.displacement
-                * active_optical_strength
-                / (half_width * half_width);
-        let magnification = 1.0 / source_scale;
-        assert!(
-            (1.20..=1.35).contains(&magnification),
-            "the authored surface must physically magnify the tab content, got {magnification}x"
-        );
-        let moving_depth = glass.surface_profile.depth() * (1.0 + tab_flight_depth_boost(1.0, 1.0));
-        let flight_strain = 1.07;
-        let moving_half_width = half_width * flight_strain;
-        let moving_source_scale = 1.0
-            - center_curvature * moving_depth * bend * glass.displacement * active_optical_strength
-                / (moving_half_width * moving_half_width);
-        let moving_magnification = 1.0 / moving_source_scale;
-        assert!(
-            (1.15..=1.35).contains(&moving_magnification),
-            "the fully resolved moving optic must stay in the measured target range, got {moving_magnification}x"
-        );
-        let horizontal_mapping = |normalized_x: f32| {
-            normalized_x
-                - curve.evaluate(normalized_x).1
-                    * moving_depth
-                    * bend
-                    * glass.displacement
-                    * active_optical_strength
-                    / (moving_half_width * moving_half_width)
-        };
-        assert!(
-            (0.58..=0.61).contains(&horizontal_mapping(0.466))
-                && (0.79..=0.82).contains(&horizontal_mapping(0.705)),
-            "the long-axis return must map the source badge into the target lobe bounds: inner={}, mid={}",
-            horizontal_mapping(0.466),
-            horizontal_mapping(0.705)
-        );
-        for step in 1..=49 {
-            let normalized_x = step as f32 * 0.02;
-            let source_scale = (horizontal_mapping(normalized_x + epsilon)
-                - horizontal_mapping(normalized_x - epsilon))
-                / (2.0 * epsilon);
-            assert!(
-                source_scale > 0.05,
-                "the full target lens must remain a single monotonic image at x={normalized_x}, got {source_scale}"
-            );
-        }
-        let vertical_mapping = |normalized_y: f32| {
-            let gradient = glass
-                .surface_profile
-                .sample_normalized((0.68, normalized_y))
-                .gradient
-                .1;
-            let half_height = BAR_HEIGHT * FLIGHT_LENS_HEIGHT_FACTOR * 0.5;
-            let normalized_gain =
-                moving_depth * glass.displacement * bend * active_optical_strength
-                    / (half_height * half_height);
-            normalized_y - gradient * normalized_gain
-        };
-        let vertical_source_scale =
-            (vertical_mapping(0.22 + epsilon) - vertical_mapping(0.22 - epsilon)) / (2.0 * epsilon);
-        assert!(
-            (0.95..=1.05).contains(&vertical_source_scale),
-            "the side-band vertical Jacobian must preserve the target glyph's native proportions, got {vertical_source_scale}"
-        );
-        assert!(
-            (0.49..=0.51).contains(&vertical_mapping(0.58)),
-            "the outer Y-Z zone must expand the source badge into the target lobe height, got {}",
-            vertical_mapping(0.58)
-        );
-        for step in 1..=35 {
-            let normalized_y = step as f32 * 0.02;
-            let source_scale = (vertical_mapping(normalized_y + epsilon)
-                - vertical_mapping(normalized_y - epsilon))
-                / (2.0 * epsilon);
-            assert!(
-                source_scale > 0.05,
-                "the visible biconic interior must stay fold-free at y={normalized_y}, got {source_scale}"
-            );
-        }
-        assert_eq!(tab_flight_depth_boost(0.0, 1.0), 0.0);
-        let still = tab_flight_depth_boost(1.0, 0.0);
-        let cruise = tab_flight_depth_boost(1.0, 1.0);
-        assert_eq!(still, 0.0);
-        assert!((0.11..=0.13).contains(&cruise));
+            .is_some_and(|tint| { tint.r() < 0.05 && (0.125..=0.135).contains(&tint.a()) }));
+        assert_eq!(glass.adaptive_frost, 0.0);
     }
 
     #[test]
     fn flight_lens_retains_neutral_tint_through_direct_motion() {
         assert_eq!(tab_flight_tint_multiplier(0.0), 1.0);
-        assert!((tab_flight_tint_multiplier(1.0) - 0.4).abs() < f32::EPSILON);
+        assert!((tab_flight_tint_multiplier(1.0) - 0.75).abs() < f32::EPSILON);
         assert_eq!(tab_flight_tint_multiplier(-1.0), 1.0);
-        assert!((tab_flight_tint_multiplier(2.0) - 0.4).abs() < f32::EPSILON);
+        assert!((tab_flight_tint_multiplier(2.0) - 0.75).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn bar_surface_frosts_color_inside_a_bright_folded_body() {
+    fn bar_surface_adapts_frost_to_its_foreground() {
         let glass = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
-        assert_eq!(glass.blur_radius, Some(16.0));
+        assert_eq!(glass.blur_radius, Some(4.0));
         assert_eq!(glass.saturation, Some(0.95));
         assert_eq!(glass.lift, Some(0.48));
-        assert_eq!(glass.edge_fold, 1.0);
-        assert!((2.8..=3.2).contains(&glass.surface_profile.depth()));
+        assert_eq!(glass.refraction_depth, 0.34);
+        assert_eq!(glass.adaptive_frost, 0.42);
+    }
+
+    #[test]
+    fn bar_surface_lift_tracks_the_local_foreground_polarity() {
+        let light_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
+        assert_eq!(light_surface.lift, Some(0.48));
+
+        let dark_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::WHITE);
+        assert_eq!(dark_surface.lift, Some(-0.24));
     }
 
     #[test]
@@ -1012,7 +1026,7 @@ mod tests {
             .tint
             .expect("bar tint");
         assert!(light_surface.r() < 0.05);
-        assert!((0.02..=0.04).contains(&light_surface.a()));
+        assert_eq!(light_surface.a(), 0.0);
 
         let dark_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::WHITE)
             .tint
@@ -1029,30 +1043,5 @@ mod tests {
         };
         assert_eq!(settle.damping_ratio, 1.0);
         assert!((1300.0..=1500.0).contains(&settle.stiffness));
-    }
-
-    #[test]
-    fn launch_inertia_drives_one_trailing_perimeter_lobe() {
-        let launch = crate::dynamics::LiquidPose {
-            stretch: 0.84,
-            ortho: 1.0 / 0.84,
-            axis: (-1.0, 0.0),
-            ..Default::default()
-        };
-        let (amplitude, direction) = tab_flight_launch_wake(launch, 72.0)
-            .expect("accelerating fluid needs a trailing inertia lobe");
-        assert!((3.0..=7.0).contains(&amplitude));
-        assert!(
-            direction.abs() < 1e-4,
-            "leftward flight must trail to the right"
-        );
-
-        let cruise = crate::dynamics::LiquidPose {
-            stretch: 1.02,
-            ortho: 1.0 / 1.02,
-            axis: (-1.0, 0.0),
-            ..Default::default()
-        };
-        assert!(tab_flight_launch_wake(cruise, 72.0).is_none());
     }
 }

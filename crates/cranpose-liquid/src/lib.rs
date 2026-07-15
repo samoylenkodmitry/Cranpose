@@ -1,8 +1,8 @@
 //! Liquid UI — cranpose's first-party component library.
 //!
 //! An iOS-26-style "Liquid Glass" design system: translucent lens materials
-//! over live backdrop (refraction, blur, vibrancy, chromatic aberration,
-//! specular rims), semantic theming with automatic light/dark, and
+//! over live backdrop (wcKSRD refraction, blur, vibrancy, and edge light),
+//! semantic theming with automatic light/dark, and
 //! spring-physics motion. Pure UI code — no platform dependencies; runs on
 //! every cranpose target.
 //!
@@ -26,10 +26,6 @@ pub mod motion;
 pub mod theme;
 pub mod widgets;
 
-pub use cranpose_ui_graphics::{
-    GlassProfileCurve, GlassProfileError, GlassProfileKnot, GlassSurfaceProfile,
-    MAX_GLASS_PROFILE_KNOTS,
-};
 pub use dynamics::{remember_liquid_dynamics, LiquidDynamics, LiquidPose};
 pub use material::{
     Glass, GlassDeformation, GlassDynamics, GlassShadow, GlassVariant, LiquidModifierExt,
@@ -56,8 +52,4 @@ pub mod prelude {
         LiquidTypography, SchemeMode,
     };
     pub use crate::widgets::*;
-    pub use cranpose_ui_graphics::{
-        GlassProfileCurve, GlassProfileError, GlassProfileKnot, GlassSurfaceProfile,
-        MAX_GLASS_PROFILE_KNOTS,
-    };
 }

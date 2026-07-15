@@ -172,6 +172,86 @@ channels: base displacement for the achromatic image and a zero-mean spectral
 carrier used only as `(scale - 1)`. This preserves loupe folding while letting
 interactive crests disperse without duplicating the backdrop image.
 
+## Current wcKSRD checkpoint (Codex, 2026-07-15)
+
+The configurable z-profile experiment is rejected. It did not reproduce the
+reference and its UI must not return. The single material reference is the
+wcKSRD shader in `example/shaders.txt`; every component uses that shared
+implementation. The other downloaded shader variants have been removed.
+
+The release represented by `/tmp/liquid-wc-r56-toggle-target-current.png` and
+`/tmp/liquid-wc-r56-tab-target-current.png` is a useful visual checkpoint, not
+an acceptance verdict. Both sheets put the target above/left and the current
+render below/right. Direct visual inspection records these open defects:
+
+1. The text-handle/loupe zero-blur path previously ran the 81-tap blur kernel
+   with a forced 0.5 px step. It now samples the backdrop exactly once, and
+   `/tmp/liquid-wc-r57-loupe-target-current.png` confirms crisp glyphs. The
+   overall loupe remains unaccepted: its face is opaque gray, too flat/wide,
+   and its lower mirrored band maps the wrong source region.
+2. The toggle has the right footprint but the wrong internal topology: the
+   current white circular fold does not match the target's asymmetric mirrored
+   chamber and lower-edge reflection.
+3. The bottom bar is close while touched. At rest it must be an ordinary bar,
+   and only the touched item should become liquid and move toward the viewer.
+   The lens currently leaks beyond the bar's right edge in some poses.
+4. Buttons move away from the viewer on press. Target behavior lifts the glass
+   toward the viewer and highlights it while the pointer is down.
+5. Slider fling can reverse briefly after release. Pointer velocity, inertial
+   travel, and spring settling must remain directionally continuous.
+6. The blurred header flickers along its top edge.
+7. The segmented lens is too thin, over-stretches into a worm-like shape, and
+   settles at a geometry that does not match its selected segment.
+8. Every fix requires a fresh target/current composite on one bitmap and a
+   direct vision inspection before automated tests can support acceptance.
+
+### Continuous tab-glass correction (2026-07-15, r61)
+
+The tab selection is one persistent SDF body. It is never conditionally
+mounted and has no replacement rest capsule. `GlassDynamics::activity` drives
+uniform 111 and continuously scales refraction depth/curve, blur, dispersion,
+highlight, tint, saturation, lift, contrast, dither, rim, adaptive frost,
+shadow, wobble, bulge, ellipse blend, and incompressible strain toward
+identity. Direct pointer frames still force activity to one immediately.
+
+An inactive backdrop shader must return transparent, not an opaque sample of
+its captured texture. The latter exposes the padded capture coordinate space
+as a duplicate capsule even when all optical parameters are zero. Both the
+backdrop output and the selection content mask now fade by the same activity;
+activity zero returns exact transparent identity while retaining the node and
+its pointer path.
+
+The tab bar body remains a regular wcKSRD glass surface. Its frost was reduced
+from 16dp to 4dp so the refracted scene survives instead of becoming a flat
+white panel. The moving lens uses zero shader blur, so its content is sampled
+once at native capture resolution. The active overlay renders only the
+lens-owned cell: at the canonical Account-to-WWDC half-cell drag, WWDC becomes
+blue while Account remains black. Recoloring every overlapped tab was the main
+source of doubled, soft-looking glyphs.
+
+The aligned visual harness now derives the Apple reference title position from
+the actual tab-bar crop origin. Its prior scroll restoration put the
+orange/purple optics tiles behind the current bar while the target used the
+Apple scene, invalidating material comparisons. The fresh exact-alignment
+sheet is `/tmp/liquid-r61-tab-target-current-half.png` (target top, current
+bottom). It confirms the inactive duplicate is gone and foreground ownership
+matches. Remaining tab delta: current surface frost/lift is still slightly
+more uniform than the target's localized gray dome and the wcKSRD returned-ray
+contour needs further pixel calibration; this is not final acceptance.
+
+Regression/verification at this point:
+
+- continuous activity material tests pass at exact zero and one;
+- zero activity transparent-identity shader test passes;
+- lens-owned cell composition test passes;
+- real-X11 `robot_liquid_visual` passes with a 3x target-aligned capture;
+- real-X11 `robot_liquid_bubble_physics` passes direct follow, deformation,
+  monotonic travel, and settle;
+- workspace tests and strict all-target/all-feature clippy pass with zero
+  warnings;
+- live release hash is
+  `98ca3e0f86e2bda822bfc47a6c1bee209ea8aa5464eda154775bc59f6952e303`.
+
 ## Project orientation (fresh checkout)
 
 **cranpose** is a Jetpack-Compose-style declarative UI framework in Rust: `#[composable]` functions, `remember`/`mutableStateOf`/`State`, modifier chains, closed-form value-space spring animation, rendered by wgpu (Vulkan on this Linux/X11 host) with a software text raster. Targets: desktop (winit), wasm/WebGL2, android, ios. There is a headless **robot** test harness that drives real gestures and captures screenshots.
@@ -629,3 +709,45 @@ Checkpoint gates:
 The verified release is installed at `target/release/desktop-app` and runs as
 the user unit `cranpose-desktop-demo.service` with normal nice level 0. The
 Liquid UI opens directly on the physical-profile playground.
+
+## 2026-07-15 wcKSRD r84 visual checkpoint
+
+The configurable physical-profile implementation and its playground were
+removed. `example/shaders.txt` contains the single retained wcKSRD reference,
+and every liquid component uses the shared wcKSRD runtime shader. Shader
+source-text assertions were also removed: WGSL compilation validates the
+program, while rendered target/current images decide visual correctness.
+
+The currently installed desktop release is the visually inspected `r84`
+checkpoint, SHA-256
+`770dcdff9352bc72d8ac4d696fa768e59d8545b88dc8b16fa3fe1f27dfb3aaa8`.
+The matching service process and `target/release/desktop-app` hashes were
+verified equal after restart.
+
+Fresh same-bitmap evidence:
+
+- `/tmp/toggle-target052-current-r84.png`: target `f_052` left, current right;
+- `/tmp/preview-r82-r84.png`: rejected broad-reflection shader left, corrected
+  shared shader right over the same orange/purple scene;
+- `/tmp/cranpose-liquid-r84-top.png`: complete desktop visual harness frame.
+
+The rejected inner-reflection implementation mixed an opposite-wall backdrop
+sample through a broad long-edge mask. It produced opaque horizontal bands on
+arbitrary capsules, visible as the reported stadium shape. An incidence-only
+Fresnel version (`r86`) still exposed the same incorrect screen-space source
+mapping and was rejected before installation. The retained shader limits the
+opposite-wall sample to the narrow meniscus path; the global stadium artifact
+is absent.
+
+The toggle is improved but not accepted. Its physical lower extent and cyan
+return align substantially better with the target, while the left return is
+still too thick and its target's broad neutral shoulder remains under-modeled.
+Changing wcKSRD depth from `0.34` to the source shader's approximate `0.60`
+ratio enlarged only the end-cap fold and was rejected. The missing shoulder
+must come from a correct dome refraction/normal path, not another spatial
+opacity mask or full opposite-wall mirror.
+
+Four new native iPhone recordings under
+`example/iphone17_records/on_white/` supersede inferred motion/material reads.
+Their exhaustive per-frame extraction and canonical state grids are the next
+visual authority for touch-up, text-handle/loupe, and bottom-bar behavior.

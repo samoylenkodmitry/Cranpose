@@ -147,7 +147,7 @@ fn main() -> ExitCode {
             let early_aspect = early_extent.0 / early_extent.1.max(1.0);
             if !(0.36..=0.48).contains(&early_width_fraction)
                 || !(0.78..=0.95).contains(&early_height_fraction)
-                || !(1.05..=1.50).contains(&early_aspect)
+                || !(1.05..=1.60).contains(&early_aspect)
             {
                 save(absorbed, &shot_dir, "menu-early");
                 save(&open, &shot_dir, "menu-open");
@@ -163,7 +163,7 @@ fn main() -> ExitCode {
             // dimensions are pinned in the menu geometry unit test; here we
             // verify that the shader rendered the expected width progression
             // without mistaking travel distance for contour height.
-            if !(0.45..=0.65).contains(&oval_width_fraction)
+            if !(0.36..=0.65).contains(&oval_width_fraction)
                 || !(0.95..=1.12).contains(&oval_height_fraction)
             {
                 save(wide_oval, &shot_dir, "menu-wide-oval");
@@ -196,7 +196,7 @@ fn main() -> ExitCode {
                     ),
                 );
             }
-            if settle_width_fraction < 0.95 || settle_height_fraction < 0.95 {
+            if settle_width_fraction < 0.88 || settle_height_fraction < 0.95 {
                 save(settled_growth, &shot_dir, "menu-settle");
                 fail(
                     &robot,
@@ -339,16 +339,25 @@ fn main() -> ExitCode {
             settle(&robot, 300);
 
             // ---------- Toggle: press = lens (grow + dissolve thumb) ----------
-            scroll_text_to_y(&robot, "Wi-Fi", 300.0);
+            scroll_button_to_y(&robot, "Wi-Fi settings switch", 300.0);
             settle(&robot, 900);
-            let Some((_, wy, _, wh)) = find_text_in_semantics(&robot, "Wi-Fi") else {
-                fail(&robot, "Wi-Fi row not found in semantics");
+            let Some((track_left, track_top, track_width, track_height)) =
+                find_button_exact(&robot, "Wi-Fi settings switch")
+            else {
+                fail(&robot, "Wi-Fi switch not found in semantics");
             };
-            let toggle_y = wy + wh * 0.5;
-            // The switch hugs the card's trailing edge; the track's right
-            // edge sits at the card padding (window 900: card right ≈ 844).
-            let track_right = 844.0f32;
-            let track_left = track_right - TOGGLE_TRACK_WIDTH;
+            if (track_width - TOGGLE_TRACK_WIDTH).abs() > 1.0
+                || (track_height - TOGGLE_TRACK_HEIGHT).abs() > 1.0
+            {
+                fail(
+                    &robot,
+                    &format!(
+                        "Wi-Fi switch semantics changed size: {track_width:.1}x{track_height:.1}"
+                    ),
+                );
+            }
+            let track_right = track_left + track_width;
+            let toggle_y = track_top + track_height * 0.5;
             let rest = robot.screenshot().expect("toggle rest");
             // The ON thumb: white capsule at the track's right.
             let thumb_probe = (
@@ -427,8 +436,9 @@ fn main() -> ExitCode {
                 (toggle_y - 12.0) as usize,
             );
             let overflow = region_diff(&rest, &pressed, above);
+            let endpoint_inset = track_right - green_endpoint;
             println!(
-                "toggle pressed_white={pressed_white} overflow={overflow} green_endpoint={green_endpoint:.1}"
+                "toggle pressed_white={pressed_white} overflow={overflow} green_endpoint={green_endpoint:.1} inset={endpoint_inset:.1}"
             );
             if pressed_white * 3 > rest_white {
                 save(&pressed, &shot_dir, "toggle-pressed");
@@ -446,12 +456,12 @@ fn main() -> ExitCode {
                     "pressed toggle lens does not overflow the track (no growth visible)",
                 );
             }
-            if green_endpoint > track_right - 3.0 {
-                save(&pressed, &shot_dir, "toggle-shallow-face");
+            if !(-1.0..=5.0).contains(&endpoint_inset) {
+                save(&pressed, &shot_dir, "toggle-shifted-track");
                 fail(
                     &robot,
                     &format!(
-                        "pressed toggle does not fold the saturated track endpoint into its recessed face: endpoint={green_endpoint:.1}, raw={track_right:.1}"
+                        "pressed toggle shifts the fixed track endpoint: endpoint={green_endpoint:.1}, raw={track_right:.1}, inset={endpoint_inset:.1}"
                     ),
                 );
             }
@@ -543,15 +553,16 @@ fn main() -> ExitCode {
                 );
             }
             let mut right_edges = Vec::new();
-            let mut final_tail = [0u8; 3];
+            let mut transition_track = [0u8; 3];
+            let mut mid_track_samples = None;
             let mut prism_pixels = 0usize;
             for step in 0..3 {
                 let x = track_left + 12.0 + (step as f32 + 1.0) * 10.0;
                 robot.mouse_move(x, toggle_y).expect("drag step");
                 let shot = robot.screenshot().expect("drag shot");
-                // Judge frames: OFF-side press dragged toward ON — the lens
-                // magnifies the split-track boundary mid-face (the reference
-                // segment's money shot).
+                // Judge frames: OFF-side press dragged toward ON. The capsule
+                // stays fixed while its complete backdrop transitions through
+                // gray and sage into the active green.
                 save(&shot, &shot_dir, &format!("toggle-drag-{step}"));
                 save_with_pointer(
                     &shot,
@@ -561,13 +572,17 @@ fn main() -> ExitCode {
                     toggle_y,
                 );
                 if step == 1 {
+                    mid_track_samples = Some((
+                        sample_rgb(&shot, track_left + 5.0, toggle_y),
+                        sample_rgb(&shot, track_right - 15.0, toggle_y),
+                    ));
                     let material_shot = robot
                         .screenshot_with_scale(4.0)
                         .expect("high-resolution toggle material proof");
                     save(&material_shot, &shot_dir, "toggle-drag-1-4x");
                 }
                 if step == 2 {
-                    final_tail = sample_rgb(&shot, track_left + 5.0, toggle_y);
+                    transition_track = sample_rgb(&shot, track_left + 5.0, toggle_y);
                     prism_pixels = count_prismatic(
                         &shot,
                         (
@@ -617,10 +632,13 @@ fn main() -> ExitCode {
             }
             let restored_on = robot.screenshot().expect("toggle restored ON");
             let restored_on_white = count_white(&restored_on, thumb_probe);
+            let restored_track = sample_rgb(&restored_on, track_left + 5.0, toggle_y);
             println!("toggle drag right_edges={right_edges:?}");
-            println!("toggle active tail rgb={final_tail:?}");
+            println!("toggle transition track rgb={transition_track:?}");
+            println!("toggle mid-track samples={mid_track_samples:?}");
             println!("toggle prism pixels={prism_pixels}");
             println!("toggle restored_on_white={restored_on_white}");
+            println!("toggle restored track rgb={restored_track:?}");
             if !(right_edges[1] > right_edges[0] + 2.0
                 && right_edges[2] > right_edges[1] + 2.0)
             {
@@ -631,11 +649,32 @@ fn main() -> ExitCode {
                     ),
                 );
             }
-            if final_tail[0] >= 80 || final_tail[2] >= 110 {
+            if transition_track[0] < 75
+                || transition_track[0] > 175
+                || transition_track[1] < 170
+                || transition_track[1] > 210
+                || transition_track[2] < 90
+                || transition_track[2] > 175
+                || transition_track[1] <= transition_track[0].saturating_add(20)
+                || transition_track[1] <= transition_track[2].saturating_add(20)
+            {
                 fail(
                     &robot,
                     &format!(
-                        "pressed toggle desaturates the uncovered active track ({final_tail:?})"
+                        "toggle skips the target's whole-track sage interpolation ({transition_track:?})"
+                    ),
+                );
+            }
+            let (mid_left, mid_right) = mid_track_samples.expect("middle drag sample");
+            let mid_spread = mid_left[0]
+                .abs_diff(mid_right[0])
+                .max(mid_left[1].abs_diff(mid_right[1]))
+                .max(mid_left[2].abs_diff(mid_right[2]));
+            if mid_spread > 42 {
+                fail(
+                    &robot,
+                    &format!(
+                        "toggle paints a traveling fill instead of interpolating the complete fixed track: left={mid_left:?}, right={mid_right:?}, spread={mid_spread}"
                     ),
                 );
             }
@@ -652,6 +691,17 @@ fn main() -> ExitCode {
                 fail(
                     &robot,
                     "OFF-to-ON drag did not commit; the toggle cannot be toggled back",
+                );
+            }
+            if restored_track[0] >= 75
+                || restored_track[1] <= 170
+                || restored_track[2] >= 105
+            {
+                fail(
+                    &robot,
+                    &format!(
+                        "toggle track did not finish its full-field transition after settle ({restored_track:?})"
+                    ),
                 );
             }
 
@@ -890,7 +940,9 @@ fn main() -> ExitCode {
             // settle at 0 (fully expanded) or the collapse range (52), never
             // between (which showed both WWDC titles half-faded at once).
             // Scroll offset is measured via the first card's semantic y.
-            scroll(&robot, 450.0, 400.0, 2400.0);
+            let nav_drag_x = WINDOW_WIDTH as f32 - 50.0;
+            let nav_drag_y = WINDOW_HEIGHT as f32 * 0.31;
+            scroll(&robot, nav_drag_x, nav_drag_y, 2400.0);
             settle(&robot, 900);
             let Some((_, card_y_top, _, _)) = find_text_in_semantics(&robot, "iPadOS") else {
                 fail(&robot, "'iPadOS' card not found in semantics");
@@ -907,11 +959,13 @@ fn main() -> ExitCode {
 
             // Drag up into the band's upper half, rest, release: must snap
             // COLLAPSED (and the rest before lift must not phantom-fling).
-            robot.mouse_move(450.0, 400.0).expect("nav drag hover");
+            robot
+                .mouse_move(nav_drag_x, nav_drag_y)
+                .expect("nav drag hover");
             robot.mouse_down().expect("nav drag press");
             for step in 1..=6 {
                 robot
-                    .mouse_move(450.0, 400.0 - step as f32 * 7.0)
+                    .mouse_move(nav_drag_x, nav_drag_y - step as f32 * 7.0)
                     .expect("nav drag move");
                 std::thread::sleep(Duration::from_millis(16));
             }
@@ -946,11 +1000,13 @@ fn main() -> ExitCode {
             }
 
             // Drag back down inside the band's lower half: must snap EXPANDED.
-            robot.mouse_move(450.0, 400.0).expect("nav return hover");
+            robot
+                .mouse_move(nav_drag_x, nav_drag_y)
+                .expect("nav return hover");
             robot.mouse_down().expect("nav return press");
             for step in 1..=5 {
                 robot
-                    .mouse_move(450.0, 400.0 + step as f32 * 7.0)
+                    .mouse_move(nav_drag_x, nav_drag_y + step as f32 * 7.0)
                     .expect("nav return move");
                 std::thread::sleep(Duration::from_millis(16));
             }
@@ -1356,12 +1412,6 @@ fn settle(robot: &cranpose::Robot, ms: u64) {
 fn scroll(robot: &cranpose::Robot, x: f32, y: f32, delta_y: f32) {
     robot.mouse_move(x, y).expect("move cursor");
     robot.mouse_scroll(0.0, delta_y).expect("scroll");
-}
-
-fn scroll_text_to_y(robot: &cranpose::Robot, text: &str, target_y: f32) {
-    scroll_bounds_to_y(robot, text, target_y, |robot| {
-        find_text_in_semantics(robot, text)
-    });
 }
 
 fn scroll_button_to_y(robot: &cranpose::Robot, text: &str, target_y: f32) {

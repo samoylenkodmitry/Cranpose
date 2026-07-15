@@ -17,7 +17,7 @@ use cranpose_ui::widgets::{
     Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Row, RowSpec, Text,
 };
 use cranpose_ui::{Modifier, PointerInputScope, Size};
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, GlassSurfaceProfile, GraphicsLayer};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 use std::rc::Rc;
 
@@ -82,6 +82,18 @@ pub fn LiquidSegmentedControl(
             let lens_axis = crate::motion::remember_liquid_drag_axis(selected_x);
             lens_axis.settle_to(selected_x, LiquidMotion::glide());
             let lens_x = lens_axis.value();
+            let visual_index = crate::motion::liquid_visual_index(
+                selected,
+                lens_x,
+                segment_width,
+                count,
+                crate::motion::liquid_axis_owns_visual_selection(
+                    pressed.get(),
+                    lens_x,
+                    selected_x,
+                    segment_width,
+                ),
+            );
 
             // The resting indicator belongs to controlled state. The
             // interaction lens has a separate direct-drag axis: it reads the
@@ -152,7 +164,7 @@ pub fn LiquidSegmentedControl(
             // surface below.
             Row(Modifier::empty(), RowSpec::default(), move || {
                 for (index, label) in labels.iter().enumerate() {
-                    let is_selected = index == selected;
+                    let is_selected = index == visual_index;
                     let style = TextStyle {
                         span_style: SpanStyle {
                             color: Some(if is_selected {
@@ -312,15 +324,7 @@ pub fn LiquidSegmentedControl(
                         Glass::lens()
                             .shape(LiquidShape::Capsule)
                             .tint(Color::rgba(1.0, 1.0, 1.0, 0.05))
-                            .surface_profile(
-                                GlassSurfaceProfile::lens()
-                                    .with_depth(6.8)
-                                    .expect("segmented surface depth is valid"),
-                            )
                             .highlight(0.52)
-                            .chromatic_aberration(2.4)
-                            .displacement(24.0)
-                            .content_recolor(colors.accent, 1.0)
                             .no_clip(),
                         move || {
                             let grow = lens_for_layer.get().clamp(0.0, 1.2);
@@ -343,7 +347,6 @@ pub fn LiquidSegmentedControl(
                                     ellipse_blend: 0.0,
                                     deformation: Some(pose.deformation()),
                                 }),
-                                surface_depth_boost: 0.18,
                                 ..Default::default()
                             }
                         },

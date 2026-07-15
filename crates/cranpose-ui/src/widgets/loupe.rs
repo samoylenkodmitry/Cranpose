@@ -522,10 +522,11 @@ mod tests {
             "magnification never animates, got {}",
             u[83]
         );
+        let dispersion = u[cranpose_ui_graphics::GLASS_DISPERSION_UNIFORM];
         assert!(
-            (0.18..=0.22).contains(&u[86]),
-            "fold dispersion must stay within the measured 3-5px fringe, got {}",
-            u[86]
+            (dispersion - 1.0).abs() < 1e-6,
+            "the shared wcKSRD dispersion must stay at full strength, got {}",
+            dispersion
         );
         assert!(u[11] >= 4.8, "neutral rim highlight is too weak: {}", u[11]);
         assert!(

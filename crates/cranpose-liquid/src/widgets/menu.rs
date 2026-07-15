@@ -16,9 +16,7 @@ use cranpose_ui::{
     rememberMutableInteractionSource, Modifier, PointerEventKind, PointerInputScope,
     PressInteractionPress, Size,
 };
-use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, GlassSurfaceProfile, GraphicsLayer, Point, Rect, RenderEffect,
-};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, Point, Rect, RenderEffect};
 use cranpose_ui_layout::VerticalAlignment;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -142,12 +140,6 @@ const MENU_TRIGGER_ABSORPTION_MS: u64 = 36;
 const MENU_TRIGGER_RESTORE_DELAY_MS: u64 = 205;
 const MENU_SOURCE_FOREGROUND_HIDE_MS: u64 = 5;
 const MENU_SOURCE_FOREGROUND_RESTORE_DELAY_MS: u64 = 205;
-fn menu_surface_profile() -> GlassSurfaceProfile {
-    GlassSurfaceProfile::regular()
-        .with_depth(3.0)
-        .expect("menu surface depth is valid")
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct MenuGestureSnapshot {
     active: bool,
@@ -968,10 +960,6 @@ pub fn LiquidMenu(
                     .saturation(1.55)
                     .lift(0.58)
                     .highlight(0.08)
-                    .surface_profile(menu_surface_profile())
-                    .sheen(0.04)
-                    .chromatic_aberration(0.12)
-                    .displacement(12.0)
                     .shadow_style(GlassShadow::new(
                         Color::BLACK.with_alpha(if colors.is_dark { 0.18 } else { 0.075 }),
                         26.0,
@@ -1435,7 +1423,6 @@ mod tests {
         assert_eq!(MENU_RADIUS, 32.0);
         assert!((0.045..=0.055).contains(&MENU_GROW_DELAY));
         assert!((59.0..=61.0).contains(&MENU_GROW_STIFFNESS));
-        assert!((2.8..=3.2).contains(&menu_surface_profile().depth()));
     }
 
     #[test]

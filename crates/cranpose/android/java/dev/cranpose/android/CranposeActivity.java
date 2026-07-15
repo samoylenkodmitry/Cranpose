@@ -803,6 +803,7 @@ public class CranposeActivity extends NativeActivity {
         });
     }
 
+    @SuppressWarnings("deprecation")
     private void pushInsets(WindowInsets insets) {
         int left;
         int top;
@@ -984,6 +985,7 @@ public class CranposeActivity extends NativeActivity {
 
     /** Posts (or replaces, by {@code tag}) a notification. Called from Rust
      * over JNI. */
+    @SuppressWarnings("deprecation")
     public void cranposeNotify(final String tag, final String title, final String body,
             final boolean ongoing, final String deeplink) {
         runOnUiThread(() -> {

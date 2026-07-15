@@ -107,9 +107,6 @@ fn liquid_glass_local_effect(width: f32, height: f32, corner: f32) -> RenderEffe
         &glass_rect,
         &LiquidGlassSpec {
             corner_radius: corner,
-            // Tilt simulates viewing angle for refraction on desktop
-            tilt_angle: 0.5,
-            tilt_pitch: 0.3,
             ..LiquidGlassSpec::default()
         },
         width,

@@ -28,14 +28,14 @@ use crate::material::GlassDeformation;
 const STRETCH_PER_SPEED: f32 = 3.2e-4;
 /// Stretch removed per dp/s² of forward acceleration (and added back per
 /// dp/s² of braking): launch blunts the bubble, arrival elongates it.
-const STRETCH_PER_ACCEL: f32 = 1.1e-5;
+const STRETCH_PER_ACCEL: f32 = 3.5e-5;
 /// The droplet never deforms past these bounds, however violent the fling.
 /// Public so hosting nodes can budget layout headroom for the extremes.
 pub const STRETCH_MIN: f32 = 0.78;
 pub const STRETCH_MAX: f32 = 1.50;
-/// Leading-edge swell per dp/s² of braking, and its cap in dp (public for
-/// the same headroom budgeting).
-const BULGE_PER_DECEL: f32 = 4.5e-4;
+/// Perimeter displacement per dp/s² of acceleration. Launch inertia trails
+/// opposite the acceleration; braking inertia runs ahead of the bubble.
+const BULGE_PER_ACCELERATION: f32 = 4.5e-4;
 pub const BULGE_MAX: f32 = 8.0;
 /// Low-pass time constants (s): the fluid's visual inertia is asymmetric —
 /// excitation grabs the droplet fast, but it relaxes back viscously (the
@@ -114,7 +114,7 @@ pub struct LiquidDynamics {
     last_pos: Cell<Option<(f32, f32)>>,
     velocity: Cell<(f32, f32)>,
     stretch: Cell<f32>,
-    bulge: Cell<f32>,
+    bulge_vector: Cell<(f32, f32)>,
     speed: Cell<f32>,
     axis: Cell<(f32, f32)>,
     pose: Cell<LiquidPose>,
@@ -131,7 +131,7 @@ impl LiquidDynamics {
             last_pos: Cell::new(None),
             velocity: Cell::new((0.0, 0.0)),
             stretch: Cell::new(1.0),
-            bulge: Cell::new(0.0),
+            bulge_vector: Cell::new((0.0, 0.0)),
             speed: Cell::new(0.0),
             axis: Cell::new((1.0, 0.0)),
             pose: Cell::new(LiquidPose::default()),
@@ -148,7 +148,7 @@ impl LiquidDynamics {
         self.last_pos.set(None);
         self.velocity.set((0.0, 0.0));
         self.stretch.set(1.0);
-        self.bulge.set(0.0);
+        self.bulge_vector.set((0.0, 0.0));
         self.speed.set(0.0);
         self.pose.set(LiquidPose {
             axis: self.axis.get(),
@@ -303,7 +303,8 @@ impl LiquidDynamics {
         let target_stretch = (1.0 + STRETCH_PER_SPEED * raw_speed
             - STRETCH_PER_ACCEL * accel_along)
             .clamp(STRETCH_MIN, STRETCH_MAX);
-        let target_bulge = (BULGE_PER_DECEL * (-accel_along).max(0.0)).min(BULGE_MAX);
+        let signed_bulge = (-BULGE_PER_ACCELERATION * accel_along).clamp(-BULGE_MAX, BULGE_MAX);
+        let target_bulge = (axis.0 * signed_bulge, axis.1 * signed_bulge);
 
         // Excitation (moving away from neutral) is fast; relaxation back is
         // viscous, so a brake swell lingers a beat like the reference.
@@ -316,18 +317,37 @@ impl LiquidDynamics {
             current + (target - current) * (1.0 - (-dt / tau).exp())
         };
         let stretch = follow(self.stretch.get(), target_stretch, 1.0);
-        let bulge = follow(self.bulge.get(), target_bulge, 0.0);
+        let current_bulge = self.bulge_vector.get();
+        let current_bulge_length = current_bulge.0.hypot(current_bulge.1);
+        let target_bulge_length = target_bulge.0.hypot(target_bulge.1);
+        let bulge_tau = if target_bulge_length > current_bulge_length {
+            ATTACK_TAU
+        } else {
+            RELEASE_TAU
+        };
+        let bulge_follow = 1.0 - (-dt / bulge_tau).exp();
+        let bulge_vector = (
+            current_bulge.0 + (target_bulge.0 - current_bulge.0) * bulge_follow,
+            current_bulge.1 + (target_bulge.1 - current_bulge.1) * bulge_follow,
+        );
+        let bulge = bulge_vector.0.hypot(bulge_vector.1);
         let speed = follow(self.speed.get(), raw_speed, 0.0);
         self.stretch.set(stretch);
-        self.bulge.set(bulge);
+        self.bulge_vector.set(bulge_vector);
         self.speed.set(speed);
+
+        let bulge_direction = if bulge > 1.0e-4 {
+            bulge_vector.1.atan2(bulge_vector.0)
+        } else {
+            axis.1.atan2(axis.0)
+        };
 
         let pose = LiquidPose {
             stretch,
             ortho: 1.0 / stretch,
             axis,
             bulge_amplitude: bulge,
-            bulge_direction: axis.1.atan2(axis.0),
+            bulge_direction,
             speed,
         };
         self.pose.set(pose);
@@ -418,6 +438,49 @@ mod tests {
     }
 
     #[test]
+    fn launch_acceleration_leaves_a_persistent_trailing_material_wake() {
+        let d = dynamics();
+        let dt = 1.0 / 60.0;
+        d.advance((0.0, 0.0), dt);
+        let launch = d.advance((1200.0 * dt, 0.0), dt);
+        assert!(
+            launch.bulge_amplitude > 0.5,
+            "launch must displace liquid toward the trailing edge: {launch:?}"
+        );
+        assert!(
+            (launch.bulge_direction.abs() - std::f32::consts::PI).abs() < 0.1,
+            "rightward acceleration must trail to the left: {launch:?}"
+        );
+
+        let cruise = d.advance((2400.0 * dt, 0.0), dt);
+        assert!(
+            cruise.bulge_amplitude > 0.25,
+            "the material wake must survive beyond one pointer sample: {launch:?} -> {cruise:?}"
+        );
+        assert!(
+            (cruise.bulge_direction.abs() - std::f32::consts::PI).abs() < 0.2,
+            "the remembered wake cannot flip on the next sample: {cruise:?}"
+        );
+    }
+
+    #[test]
+    fn direct_drag_cadence_remains_launch_compressed() {
+        let d = dynamics();
+        d.anchor_pointer((0.0, 0.0));
+        d.advance_pointer((-20.0, 0.0), 0.08);
+        let pose = d.advance_pointer((-40.0, 0.0), 0.03);
+        assert!(
+            pose.stretch <= 0.92,
+            "the target's two-event launch must compress along travel: {pose:?}"
+        );
+        assert!(
+            pose.ortho >= 1.08,
+            "launch must expand across travel: {pose:?}"
+        );
+        assert!((pose.stretch * pose.ortho - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
     fn braking_decompresses_past_cruise_and_swells_leading_edge() {
         let d = dynamics();
         let cruise_pose = cruise(&d, 1200.0, 40);
@@ -471,7 +534,10 @@ mod tests {
             pose = d.advance((x, 0.0), dt);
         }
         assert!((pose.axis.0 + 1.0).abs() < 1e-4, "axis {:?}", pose.axis);
-        assert!((pose.bulge_direction.abs() - std::f32::consts::PI).abs() < 1e-3);
+        assert!(
+            pose.bulge_direction.abs() < 0.1,
+            "leftward launch inertia must trail toward +x: {pose:?}"
+        );
         // Stopping keeps the last axis instead of flipping on noise.
         let held = settle(&d, (x, 0.0), 30);
         assert!((held.axis.0 + 1.0).abs() < 1e-4);

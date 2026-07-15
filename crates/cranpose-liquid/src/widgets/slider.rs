@@ -10,7 +10,7 @@ use cranpose_foundation::{PointerEventKind, PointerId};
 use cranpose_macros::composable;
 use cranpose_ui::widgets::{Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope};
 use cranpose_ui::{Modifier, Size};
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, GlassSurfaceProfile, GraphicsLayer};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -226,14 +226,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                 Glass::lens()
                                     .shape(LiquidShape::Circle)
                                     .tint(Color::WHITE.with_alpha(0.05))
-                                    .surface_profile(
-                                        GlassSurfaceProfile::lens()
-                                            .with_depth(7.2)
-                                            .expect("slider surface depth is valid"),
-                                    )
                                     .highlight(0.52)
-                                    .chromatic_aberration(2.5)
-                                    .displacement(26.0)
                                     .no_clip(),
                                 move || {
                                     let grow = lens_for_layer.get().clamp(0.0, 1.2);
@@ -259,7 +252,6 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                             ellipse_blend: 0.0,
                                             deformation: Some(slider_deformation(pose)),
                                         }),
-                                        surface_depth_boost: 0.2,
                                         ..Default::default()
                                     }
                                 },

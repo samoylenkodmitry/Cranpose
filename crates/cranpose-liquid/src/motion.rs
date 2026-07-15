@@ -14,6 +14,37 @@ use std::rc::Rc;
 use crate::dynamics::{LiquidDynamics, LiquidPose};
 
 const FLUID_RELAX_MS: u64 = 420;
+const VISUAL_HANDOFF_TOLERANCE_IN_ITEMS: f32 = 0.12;
+
+pub(crate) fn liquid_visual_index(
+    selected: usize,
+    lens_position: f32,
+    item_width: f32,
+    count: usize,
+    lens_owns_selection: bool,
+) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    let selected = selected.min(count - 1);
+    if !lens_owns_selection || !lens_position.is_finite() || item_width <= f32::EPSILON {
+        return selected;
+    }
+    (lens_position / item_width)
+        .floor()
+        .clamp(0.0, count.saturating_sub(1) as f32) as usize
+}
+
+pub(crate) fn liquid_axis_owns_visual_selection(
+    direct: bool,
+    lens_position: f32,
+    state_position: f32,
+    item_width: f32,
+) -> bool {
+    direct
+        || (lens_position - state_position).abs()
+            > item_width.max(f32::EPSILON) * VISUAL_HANDOFF_TOLERANCE_IN_ITEMS
+}
 
 /// Named springs used across the Liquid components (value-space, velocity
 /// preserving).
@@ -247,6 +278,26 @@ mod tests {
     }
 
     #[test]
+    fn direct_manipulation_owns_visual_selection_until_the_lens_reaches_state() {
+        assert_eq!(liquid_visual_index(2, 0.0, 78.0, 4, false), 2);
+        assert_eq!(liquid_visual_index(0, 2.0 * 78.0, 78.0, 4, true), 2);
+        assert_eq!(liquid_visual_index(0, 2.71 * 78.0, 78.0, 4, true), 2);
+        assert_eq!(liquid_visual_index(0, 3.0 * 78.0, 78.0, 4, true), 3);
+        assert_eq!(liquid_visual_index(0, 99.0 * 78.0, 78.0, 4, true), 3);
+        assert_eq!(liquid_visual_index(9, f32::NAN, 78.0, 4, true), 3);
+        assert_eq!(liquid_visual_index(0, 78.0, 0.0, 4, true), 0);
+
+        assert!(liquid_axis_owns_visual_selection(true, 0.0, 0.0, 78.0));
+        assert!(liquid_axis_owns_visual_selection(false, 78.0, 0.0, 78.0));
+        assert!(!liquid_axis_owns_visual_selection(
+            false,
+            78.0 * 0.05,
+            0.0,
+            78.0,
+        ));
+    }
+
+    #[test]
     fn pointer_sample_excites_the_incompressible_pose_before_render() {
         let (_runtime, axis) = axis(0.0);
         axis.begin(0.0, Some(0));
@@ -254,7 +305,7 @@ mod tests {
         let pose = axis.liquid_pose();
         let deformation = (pose.stretch - 1.0).abs();
         assert!(
-            (0.03..=0.08).contains(&deformation),
+            (0.08..=0.12).contains(&deformation),
             "the direct-input frame must deform visibly without treating one sample as extreme acceleration: {pose:?}"
         );
         assert!((pose.stretch * pose.ortho - 1.0).abs() < 1e-4);

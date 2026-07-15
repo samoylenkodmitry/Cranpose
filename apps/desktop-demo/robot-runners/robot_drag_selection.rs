@@ -14,6 +14,8 @@ use std::time::Duration;
 
 mod text_input_robot_helpers;
 
+type SelectedEditable = ((f32, f32, f32, f32), (usize, usize));
+
 fn main() {
     env_logger::init();
     println!("=== Click-Drag Selection Test ===\n");
@@ -260,9 +262,7 @@ fn lower_handle_center(shot: &RobotScreenshot, rect: (f32, f32, f32, f32)) -> Op
     })
 }
 
-fn selected_editable(
-    elements: &[SemanticElement],
-) -> Option<((f32, f32, f32, f32), (usize, usize))> {
+fn selected_editable(elements: &[SemanticElement]) -> Option<SelectedEditable> {
     for element in elements {
         if element.editable_text {
             if let Some(selection) = element.text_selection {

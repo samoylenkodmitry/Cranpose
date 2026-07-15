@@ -16,6 +16,7 @@ const FIELD_X: f32 = 42.0;
 const FIELD_Y: f32 = 84.0;
 const FIELD_WIDTH: f32 = 110.0;
 const ACCENT: Color = Color(0.965, 0.208, 0.557, 1.0);
+type SelectedEditable = ((f32, f32, f32, f32), (usize, usize));
 
 fn text_style() -> TextStyle {
     let mut style = TextStyle::default();
@@ -164,9 +165,7 @@ fn content() {
     );
 }
 
-fn selected_editable(
-    elements: &[SemanticElement],
-) -> Option<((f32, f32, f32, f32), (usize, usize))> {
+fn selected_editable(elements: &[SemanticElement]) -> Option<SelectedEditable> {
     for element in elements {
         if element.editable_text {
             if let Some(selection) = element.text_selection {

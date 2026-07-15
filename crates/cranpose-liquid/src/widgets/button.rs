@@ -1,7 +1,7 @@
 //! Glass buttons: capsule glass with a spring press (scale + specular boost)
 //! and haptic feedback.
 
-use crate::material::{neutral_surface_tint, Glass, GlassDynamics, LiquidModifierExt, LiquidShape};
+use crate::material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape};
 use crate::motion::liquid_press_scale;
 use crate::theme::{liquid_colors, liquid_typography};
 use cranpose_macros::composable;
@@ -127,11 +127,7 @@ impl GlassButtonSpec {
             });
         }
         match self.style {
-            GlassButtonStyle::Glass => Some(
-                Glass::regular()
-                    .tint(neutral_surface_tint(foreground, 0.08, 0.10))
-                    .adaptive_frost(foreground, 0.65),
-            ),
+            GlassButtonStyle::Glass => Some(Glass::regular().adaptive_frost(foreground, 0.65)),
             GlassButtonStyle::Prominent => Some(
                 Glass::regular()
                     .tint(colors.accent.with_alpha(0.75))
@@ -162,7 +158,6 @@ pub fn GlassButton(
     if let Some(glass) = material {
         let pressed_for_glass = pressed;
         base = base.glass_effect_with(glass, move || GlassDynamics {
-            tilt: (0.0, 0.0),
             highlight_boost: if pressed_for_glass.get() { 0.85 } else { 0.0 },
             ..Default::default()
         });
@@ -278,7 +273,6 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
     if let Some(glass) = material {
         let pressed_for_glass = pressed;
         base = base.glass_effect_with(glass, move || GlassDynamics {
-            tilt: (0.0, 0.0),
             highlight_boost: if pressed_for_glass.get() { 0.85 } else { 0.0 },
             ..Default::default()
         });
@@ -333,8 +327,22 @@ mod tests {
         let material = GlassButtonSpec::glass()
             .resolve_material(&colors, colors.label)
             .expect("glass button material");
-        let tint = material.tint.expect("interactive neutral tint");
-        assert!(tint.r() < 0.05);
-        assert!((0.075..=0.085).contains(&tint.a()));
+        assert_eq!(material.tint, None);
+        assert_eq!(material.resolve(&colors).tint, colors.glass_tint);
+    }
+
+    #[test]
+    fn neutral_button_tint_comes_from_the_theme_not_foreground_polarity() {
+        let accent = Color::from_rgb_u8(0, 122, 255);
+        for colors in [
+            crate::theme::LiquidColors::light(accent),
+            crate::theme::LiquidColors::dark(accent),
+        ] {
+            let material = GlassButtonSpec::glass()
+                .resolve_material(&colors, colors.label)
+                .expect("glass button material");
+            assert_eq!(material.tint, None);
+            assert_eq!(material.resolve(&colors).tint, colors.glass_tint);
+        }
     }
 }

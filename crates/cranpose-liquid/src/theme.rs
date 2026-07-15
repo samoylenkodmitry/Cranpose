@@ -53,6 +53,10 @@ pub struct LiquidColors {
     pub destructive: Color,
     /// Success color.
     pub success: Color,
+    /// Active switch track.
+    pub toggle_on: Color,
+    /// Inactive switch track.
+    pub toggle_off: Color,
     /// Warning color.
     pub warning: Color,
     /// Tint mixed over glass materials.
@@ -78,6 +82,8 @@ impl LiquidColors {
             on_accent: Color::WHITE,
             destructive: Color::from_rgb_u8(255, 59, 48),
             success: Color::from_rgb_u8(52, 199, 89),
+            toggle_on: Color::from_rgb_u8(43, 189, 76),
+            toggle_off: Color::from_rgb_u8(187, 186, 188),
             warning: Color::from_rgb_u8(255, 149, 0),
             glass_tint: Color::from_rgba_u8(255, 255, 255, 18),
             glass_stroke: Color::from_rgba_u8(255, 255, 255, 120),
@@ -100,6 +106,8 @@ impl LiquidColors {
             on_accent: Color::WHITE,
             destructive: Color::from_rgb_u8(255, 69, 58),
             success: Color::from_rgb_u8(48, 209, 88),
+            toggle_on: Color::from_rgb_u8(48, 209, 88),
+            toggle_off: Color::from_rgb_u8(99, 99, 102),
             warning: Color::from_rgb_u8(255, 159, 10),
             glass_tint: Color::from_rgba_u8(20, 20, 24, 40),
             glass_stroke: Color::from_rgba_u8(255, 255, 255, 46),
@@ -248,6 +256,8 @@ mod tests {
         assert_eq!(light.accent, dark.accent);
         assert_ne!(light.background, dark.background);
         assert_ne!(light.glass_tint, dark.glass_tint);
+        assert_ne!(light.toggle_on, dark.toggle_on);
+        assert_ne!(light.toggle_off, dark.toggle_off);
     }
 
     #[test]

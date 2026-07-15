@@ -18,7 +18,7 @@ const WINDOW_WIDTH: u32 = 600;
 const WINDOW_HEIGHT: u32 = 260;
 
 const SOLID: Color = Color(52.0 / 255.0, 199.0 / 255.0, 89.0 / 255.0, 1.0);
-const GRADIENT_END: Color = Color(255.0 / 255.0, 45.0 / 255.0, 85.0 / 255.0, 1.0);
+const GRADIENT_END: Color = Color(1.0, 45.0 / 255.0, 85.0 / 255.0, 1.0);
 const TEXT_COLOR: Color = Color(17.0 / 255.0, 17.0 / 255.0, 20.0 / 255.0, 1.0);
 const BACKGROUND: Color = Color(1.0, 1.0, 1.0, 1.0);
 
