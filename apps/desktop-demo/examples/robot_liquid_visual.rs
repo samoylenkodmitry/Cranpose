@@ -287,6 +287,28 @@ fn main() {
             settle(&robot, 600);
             shot(&robot, &shot_dir, "08b-menu-closed");
 
+            // One continuous menu gesture: the original DOWN owns the stream
+            // while the menu opens, sliding updates the highlighted row, and
+            // the matching UP commits that row without an intermediate lift.
+            robot.mouse_move(858.0, 122.0).expect("hover menu trigger");
+            robot.mouse_down().expect("hold menu trigger");
+            std::thread::sleep(Duration::from_millis(650));
+            let grid = cranpose_testing::find_text_in_semantics(&robot, "Grid")
+                .expect("menu must open while the original pointer remains down");
+            shot(&robot, &shot_dir, "09a-menu-long-hold");
+            robot
+                .mouse_move(grid.0 + grid.2 * 0.5, grid.1 + grid.3 * 0.5)
+                .expect("slide original menu gesture onto Grid");
+            std::thread::sleep(Duration::from_millis(80));
+            shot(&robot, &shot_dir, "09b-menu-grid-highlight");
+            robot.mouse_up().expect("release menu gesture on Grid");
+            settle(&robot, 500);
+            assert!(
+                cranpose_testing::find_text_in_semantics(&robot, "Grid").is_none(),
+                "lifting the claimed gesture over Grid must fire and dismiss the menu"
+            );
+            shot(&robot, &shot_dir, "09c-menu-grid-fired");
+
             println!(
                 "PASS: liquid visual walkthrough written to {}",
                 shot_dir.display()
