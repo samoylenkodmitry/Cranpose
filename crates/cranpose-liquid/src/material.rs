@@ -9,7 +9,7 @@ use cranpose_ui::Modifier;
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
-    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
+    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
     GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
 };
 use std::rc::Rc;
@@ -104,6 +104,9 @@ pub struct GlassDynamics {
     /// `Some(0)` is an exact backdrop identity while retaining the same node,
     /// SDF, and pointer ride path.
     pub activity: Option<f32>,
+    /// Base tint of the same persistent SDF surface at zero optical activity.
+    /// Its alpha cross-fades out as the refractive material rises.
+    pub resting_tint: Option<Color>,
     /// Extra specular intensity (0 = spec default; e.g. press boost).
     pub highlight_boost: f32,
     /// Optional per-frame multiplier for the material tint alpha. This lets a
@@ -627,6 +630,14 @@ impl ResolvedGlass {
         };
         shader.set_float(GLASS_BLUR_RADIUS_UNIFORM, wcksrd_blur_radius);
         shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
+        let resting_tint = dynamics.resting_tint.unwrap_or(Color::TRANSPARENT);
+        shader.set_float4(
+            GLASS_RESTING_TINT_UNIFORM,
+            resting_tint.r(),
+            resting_tint.g(),
+            resting_tint.b(),
+            resting_tint.a(),
+        );
         shader.set_float(112, if content_mask { 1.0 } else { 0.0 });
         shader.set_float(91, self.adaptive_frost * activity);
         shader.set_float(97, self.foreground_luma);
@@ -974,10 +985,38 @@ mod tests {
         assert_eq!(uniforms[GLASS_BLUR_RADIUS_UNIFORM], 0.0);
         assert_eq!(uniforms[91], 0.0);
         assert_eq!(uniforms[102], 0.0);
+        assert_eq!(
+            &uniforms[GLASS_RESTING_TINT_UNIFORM..GLASS_RESTING_TINT_UNIFORM + 4],
+            &[0.0, 0.0, 0.0, 0.0]
+        );
         assert_eq!(uniforms[32], 0.0);
         assert_eq!(uniforms[26], 0.0);
         assert_eq!(&uniforms[108..110], &[1.0, 1.0]);
         assert_eq!(&uniforms[2..6], &[60.0, 36.0, 96.0, 52.0]);
+    }
+
+    #[test]
+    fn resting_surface_tint_survives_zero_optical_activity() {
+        let tint = Color::BLACK.with_alpha(0.11);
+        let RenderEffect::Shader { shader } = Glass::lens()
+            .no_clip()
+            .resolve(&light_colors())
+            .backdrop_effect(
+                1.0,
+                GlassDynamics {
+                    activity: Some(0.0),
+                    resting_tint: Some(tint),
+                    ..Default::default()
+                },
+            )
+        else {
+            panic!("resting surface must use the shared wcKSRD shader");
+        };
+        assert_eq!(
+            &shader.uniforms()[GLASS_RESTING_TINT_UNIFORM..GLASS_RESTING_TINT_UNIFORM + 4],
+            &[tint.r(), tint.g(), tint.b(), tint.a()]
+        );
+        assert_eq!(shader.uniforms()[GLASS_ACTIVITY_UNIFORM], 0.0);
     }
 
     #[test]

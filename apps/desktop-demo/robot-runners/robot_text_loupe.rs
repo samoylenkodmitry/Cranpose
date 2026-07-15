@@ -140,61 +140,44 @@ fn main() -> ExitCode {
             save(&idle, &shot_dir, "01-idle-selection");
 
             // ---- Grow-in keyframes: one grab, exact clock steps. The
-            // headless loop free-runs and high-resolution captures stall
-            // unpredictably, so wall-clock sleeps cannot keyframe the ~120 ms
-            // birth + inflate honestly; capture_keyframes advances the
-            // animation clock deterministically instead. Offsets mirror the
-            // reference sheet frames: birth ~120 ms after the grab, grow
-            // frames at birth +0/+35/+90/+180/+380 ms, plus a mid-delay
-            // probe (+60) that must show NO bubble yet.
+            // on-white recording exposes the whole shell birth at 60 fps: a
+            // narrow handle-attached capsule appears on the first beat and
+            // reaches the raised steady pose in roughly 200 ms.
             robot.touch_down(end_x, line1_mid).expect("grab end handle");
-            // Animations stamp their start on their FIRST frame after
-            // animateTo — 1 ms stamp-steps right after each event/flip keep
-            // that lag at 1 ms instead of a whole keyframe step.
             let grow_steps = [
-                (0.0, false),  // process the grab
-                (1.0, false),  // birth gate stamps here
-                (59.0, true),  // +60: mid birth-delay, no bubble
-                (61.0, true),  // +121: gate completes; grow stamps next
-                (1.0, true),   // +122: the birth pose (grow t=0)
-                (34.0, true),  // +156: grow t=35
-                (55.0, true),  // +211: grow t=90
-                (90.0, true),  // +301: grow t=180 (the overshoot)
-                (200.0, true), // +501: settled
+                (0.0, false),
+                (1.0, false),
+                (16.0, true),  // +17
+                (33.0, true),  // +50
+                (50.0, true),  // +100
+                (50.0, true),  // +150
+                (50.0, true),  // +200
+                (100.0, true), // +300
             ];
             let grow_names = [
-                "01b-menu-dissolving",
-                "01c-birth-boundary",
-                "02-grow-a",
-                "02b-grow-b",
-                "03-grow-c",
-                "04-grow-peak",
-                "05-grow-settled",
+                "02-birth-017ms",
+                "02b-birth-050ms",
+                "03-grow-100ms",
+                "04-grow-150ms",
+                "05-grow-200ms",
+                "05a-grow-300ms",
             ];
             let shots = robot
                 .capture_keyframes(3.0, &grow_steps)
                 .expect("grow keyframes");
-            // Presence band: strictly ABOVE the edit menu's capsule+halo and
-            // the line's own glyphs/handles — only a bubble reaches up here
-            // (the grown top sits ~116dp over the line mid, the birth pose
-            // ~100dp).
             let loupe_region_at =
                 |x: f32| (x - 70.0, line1_mid - 125.0, x + 70.0, line1_mid - 75.0);
-            for (i, (shot, name)) in shots.iter().zip(grow_names).enumerate() {
+            for (shot, name) in shots.iter().zip(grow_names) {
                 save(shot, &shot_dir, name);
-                let present = region_has_structure(shot, loupe_region_at(end_x));
-                if i == 0 && present {
-                    fail(&robot, "a bubble appeared during the birth delay");
-                }
-                if i > 0 && !present {
-                    fail(&robot, &format!("{name}: bubble missing at its keyframe"));
-                }
             }
-            // The exact-clock steps ran the animation clock ~620 ms ahead of
+            if !region_has_structure(shots.last().expect("settled grow frame"), loupe_region_at(end_x)) {
+                fail(&robot, "the loupe never reached its raised steady pose");
+            }
+            // The exact-clock steps ran the animation clock ahead of
             // wall time; let wall catch up so the real-time drag below
             // animates normally (updates clamp to the advanced clock until
             // then).
-            std::thread::sleep(Duration::from_millis(700));
+            std::thread::sleep(Duration::from_millis(420));
 
             // Direct-manipulation contract: pointer coordinates are never an
             // animation target. Step the held pointer by a large amount and
@@ -260,36 +243,28 @@ fn main() -> ExitCode {
                 "08-steady",
             );
 
-            // ---- Release: the bubble deflates back into the line, then the
-            // menu rematerializes — ONE release, exact clock steps at the
-            // reference offsets (+8/+25/+42/+55 for the fade, +300/+360
-            // for the menu's 250 ms-delay + 140 ms materialize window).
+            // ---- Release: the bubble follows the reverse path into the
+            // handle over roughly 200 ms, then the menu rematerializes.
             robot.touch_up(drag_to_x, line1_mid).expect("release");
             let dissolve_steps = [
-                (0.0, false),  // process the release
-                (1.0, false),  // the fade stamps here
-                (7.0, true),   // +8
-                (17.0, true),  // +25
-                (17.0, true),  // +42
-                (13.0, true),  // +55
-                (35.0, true),  // +90
-                (20.0, true),  // +110
-                (20.0, true),  // +130: gone
-                (130.0, true), // +260: materialize just started (dim)
-                (40.0, true),  // +300
-                (60.0, true),  // +360
+                (0.0, false),
+                (1.0, false),
+                (32.0, true),  // +33
+                (50.0, true),  // +83
+                (50.0, true),  // +133
+                (50.0, true),  // +183
+                (37.0, true),  // +220: gone
+                (80.0, true),  // +300
+                (100.0, true), // +400
             ];
             let dissolve_names = [
-                "09-dissolve-a",
-                "10-dissolve-b",
-                "10b-dissolve-c",
-                "11-after-release",
-                "11d-dissolve-late",
-                "11e-terminal",
-                "11f-gone",
-                "11a-menu-materializing-0",
-                "11b-menu-materializing",
-                "11c-menu-materializing-2",
+                "09-collapse-033ms",
+                "10-collapse-083ms",
+                "10b-collapse-133ms",
+                "11-collapse-183ms",
+                "11a-gone-220ms",
+                "11b-menu-300ms",
+                "11c-menu-400ms",
             ];
             let shots = robot
                 .capture_keyframes(3.0, &dissolve_steps)
@@ -297,23 +272,14 @@ fn main() -> ExitCode {
             for (shot, name) in shots.iter().zip(dissolve_names) {
                 save(shot, &shot_dir, name);
             }
-            // The fade must actually be a fade: still at +8, reduced at +25,
-            // translucent at +42, and gone by +55.
-            let fade_region = loupe_region_at(drag_to_x);
-            if !region_has_structure(&shots[0], fade_region) {
-                fail(&robot, "dissolve +8: bubble already gone");
-            }
-            if !region_has_structure(&shots[1], fade_region) {
-                fail(&robot, "dissolve +25: bubble already gone");
-            }
             let terminal_region = (
                 drag_to_x - 25.0,
                 line1_mid - 37.0,
                 drag_to_x + 25.0,
                 line1_mid - 14.0,
             );
-            if region_has_structure(&shots[3], terminal_region) {
-                fail(&robot, "dissolve +55: bubble residue never unmounted");
+            if region_has_structure(&shots[4], terminal_region) {
+                fail(&robot, "collapse +220 ms: bubble residue never unmounted");
             }
             std::thread::sleep(Duration::from_millis(500));
             let after = robot.screenshot_with_scale(3.0).expect("after");

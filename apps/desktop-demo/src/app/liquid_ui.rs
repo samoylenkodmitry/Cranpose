@@ -224,9 +224,9 @@ fn OpticalParameterRow(label: &'static str, value: f32, on_change: impl Fn(f32) 
 #[composable]
 fn OpticalShaderPreview() {
     let center = remember(|| mutableStateOf(Option::<Point>::None)).with(|state| *state);
-    let depth = remember(|| mutableStateOf(0.50f32)).with(|state| *state);
-    let curve = remember(|| mutableStateOf(1.0f32)).with(|state| *state);
-    let blur = remember(|| mutableStateOf(0.19f32)).with(|state| *state);
+    let depth = remember(|| mutableStateOf(0.34f32)).with(|state| *state);
+    let curve = remember(|| mutableStateOf(0.25f32)).with(|state| *state);
+    let blur = remember(|| mutableStateOf(0.0f32)).with(|state| *state);
     let chroma = remember(|| mutableStateOf(0.30f32)).with(|state| *state);
     let light = remember(|| mutableStateOf(0.34f32)).with(|state| *state);
 
@@ -1021,7 +1021,7 @@ pub fn LiquidUiTab() {
                             SectionTitle("SEGMENTED");
                             let seg = segment_state;
                             LiquidSegmentedControl(
-                                Modifier::empty().fill_max_width(),
+                                Modifier::empty().width(420.0),
                                 vec![
                                     "All".to_string(),
                                     "Receipts".to_string(),

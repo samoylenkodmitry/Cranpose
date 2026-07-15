@@ -464,8 +464,16 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             * coverage
             * material_activity;
     }
+    let resting_tint = get_vec4(113u);
+    let resting_alpha = resting_tint.a
+        * (1.0 - material_activity)
+        * coverage;
+    let resting_output = vec4<f32>(
+        resting_tint.rgb * resting_alpha,
+        resting_alpha,
+    );
     if material_activity <= 0.0 {
-        return vec4<f32>(0.0);
+        return resting_output;
     }
     let shadow_strength = clamp(get_float(102u), 0.0, 1.0);
     var shadow_alpha = 0.0;
@@ -671,7 +679,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         * rim_style
         * (1.0 - lens_edge_incidence)
         * meniscus_transmission_axis
-        * 0.82;
+        * 0.45;
     rgb = rgb * (1.0 - meniscus_transmission_loss);
     outer_rgb = outer_rgb * (1.0 - meniscus_transmission_loss * 0.12);
 
@@ -899,5 +907,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let face_output = vec4<f32>(rgb, alpha) * coverage;
     let outer_output = vec4<f32>(outer_rgb, plain_path.a) * outer_coverage;
     return (face_output + outer_output) * material_activity
+        + resting_output
         + vec4<f32>(0.0, 0.0, 0.0, shadow_out);
 }

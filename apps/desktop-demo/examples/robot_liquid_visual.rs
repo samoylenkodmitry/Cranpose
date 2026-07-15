@@ -58,10 +58,10 @@ fn main() {
             );
             shot(&robot, &shot_dir, "01-top");
 
-            // Toggle lens: press-and-hold the Wi-Fi thumb — the whole thumb
-            // lifts into the transparent magnifying capsule (reference
-            // "toggle in action"); then drag it mid-track. The controls card
-            // must be scrolled into comfortable view first.
+            // Toggle lens: normalize to the reference's off state, raise the
+            // lens over the left thumb, then release once. The supplied 54
+            // frames show the lens springing right while the stationary track
+            // interpolates from gray to green.
             scroll_text_to_y(&robot, "TOGGLE PRESS", 300.0);
             settle(&robot, 800);
             if let Some(toggle) =
@@ -72,37 +72,70 @@ fn main() {
                     "Wi-Fi switch geometry drifted before optical capture: {toggle:?}"
                 );
                 let toggle_y = toggle.1 + toggle.3 * 0.5;
-                let thumb_x = toggle.0 + toggle.2 - 20.0;
-                robot.mouse_move(thumb_x, toggle_y).expect("hover thumb");
+                let on_thumb_x = toggle.0 + toggle.2 - 20.0;
+                let off_thumb_x = toggle.0 + 20.0;
+
+                // The showcase starts on. One ordinary tap gives the judge a
+                // deterministic off baseline before replaying off -> on.
+                robot
+                    .click(on_thumb_x, toggle_y)
+                    .expect("normalize toggle to off");
+                settle(&robot, 1100);
+
+                robot
+                    .mouse_move(off_thumb_x, toggle_y)
+                    .expect("hover off thumb");
                 robot.mouse_down().expect("press thumb");
                 std::thread::sleep(Duration::from_millis(380));
+                let toggle_crop = PixelCrop {
+                    left: aligned_origin(toggle.0, 3.0, TARGET_TOGGLE_TRACK_LEFT),
+                    top: aligned_origin(toggle.1, 3.0, TARGET_TOGGLE_TRACK_TOP),
+                    width: TARGET_TOGGLE_WIDTH,
+                    height: TARGET_TOGGLE_HEIGHT,
+                };
                 shot_scaled_aligned(
                     &robot,
                     &shot_dir,
-                    "01a-toggle-press-lens",
-                    "01a-toggle-press-lens-aligned",
+                    "01a-toggle-transition-f001",
+                    "01a-toggle-transition-f001-aligned",
                     3.0,
-                    PixelCrop {
-                        left: aligned_origin(toggle.0, 3.0, TARGET_TOGGLE_TRACK_LEFT),
-                        top: aligned_origin(toggle.1, 3.0, TARGET_TOGGLE_TRACK_TOP),
-                        width: TARGET_TOGGLE_WIDTH,
-                        height: TARGET_TOGGLE_HEIGHT,
-                    },
+                    toggle_crop,
                 );
-                for step in 1..=6 {
-                    robot
-                        .mouse_move(thumb_x - step as f32 * 4.0, toggle_y)
-                        .expect("drag thumb");
-                    std::thread::sleep(Duration::from_millis(30));
-                }
-                // Hold until the lens fully materializes.
-                std::thread::sleep(Duration::from_millis(420));
-                shot_scaled(&robot, &shot_dir, "01b-toggle-drag-lens", 3.0);
                 robot.mouse_up().expect("release thumb");
-                // The lens lingers through the settle flight.
-                std::thread::sleep(Duration::from_millis(220));
-                shot(&robot, &shot_dir, "01b2-toggle-settle-lens");
-                settle(&robot, 900);
+                let transition_steps = [
+                    (0.0, false),
+                    (1.0, false),
+                    (49.0, true),  // target f004: 50 ms after release
+                    (50.0, true),  // target f007: +100 ms
+                    (50.0, true),  // target f010: +150 ms
+                    (50.0, true),  // target f013: +200 ms
+                    (50.0, true),  // target f016: +250 ms
+                    (67.0, true),  // target f020: +317 ms
+                    (166.0, true), // target f030: +483 ms
+                    (200.0, true), // target f042: +683 ms
+                    (200.0, true), // target f054: +883 ms
+                ];
+                let transition_names = [
+                    "01a-toggle-transition-f004-aligned",
+                    "01a-toggle-transition-f007-aligned",
+                    "01a-toggle-transition-f010-aligned",
+                    "01a-toggle-transition-f013-aligned",
+                    "01a-toggle-transition-f016-aligned",
+                    "01a-toggle-transition-f020-aligned",
+                    "01a-toggle-transition-f030-aligned",
+                    "01a-toggle-transition-f042-aligned",
+                    "01a-toggle-transition-f054-aligned",
+                ];
+                let frames = robot
+                    .capture_keyframes(3.0, &transition_steps)
+                    .expect("toggle transition keyframes");
+                for (frame, name) in frames.iter().zip(transition_names) {
+                    save_aligned_frame(frame, &shot_dir, name, toggle_crop);
+                }
+
+                // The deterministic keyframes advanced animation time. Let
+                // wall time catch up before continuing with live gestures.
+                settle(&robot, 1100);
                 shot(&robot, &shot_dir, "01b3-toggle-settled");
             }
 
@@ -194,6 +227,8 @@ fn main() {
                 robot.mouse_up().expect("release tab");
                 settle(&robot, 700);
             }
+
+            capture_control_visuals(&robot, &shot_dir);
             if std::env::var_os("CRANPOSE_LIQUID_OPTICS_ONLY").is_some() {
                 println!(
                     "PASS: liquid optical comparison written to {}",
@@ -228,12 +263,10 @@ fn main() {
 
             // Morphing menu from the nav trailing button: the droplet inflates
             // out of the "…" circle (mid-flight frames), settles with a size
-            // overshoot, then deflates back into the button on dismiss. Park
-            // the colorful gradient stripe under the menu region first so the
-            // glass transparency reads against real content.
-            scroll(&robot, 450.0, 400.0, 4200.0);
-            settle(&robot, 900);
-            scroll(&robot, 450.0, 400.0, -260.0);
+            // overshoot, then deflates back into the button on dismiss. Match
+            // the reference capture with a structured session row behind the
+            // surface so frost and transmitted detail can be judged directly.
+            scroll_text_to_y(&robot, "iPadOS", 170.0);
             settle(&robot, 700);
             robot.click(858.0, 122.0).expect("open menu");
             std::thread::sleep(Duration::from_millis(50));
@@ -314,6 +347,89 @@ fn scroll_text_to_y_with_tolerance(
     );
 }
 
+fn capture_control_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
+    scroll_text_to_y(robot, "SEGMENTED", 300.0);
+    settle(robot, 500);
+    for frame in 1..=10 {
+        scroll(robot, 450.0, 500.0, -8.0);
+        std::thread::sleep(Duration::from_millis(16));
+        shot_scaled(
+            robot,
+            shot_dir,
+            &format!("01d-header-scroll-{frame:02}"),
+            2.0,
+        );
+    }
+    scroll_text_to_y(robot, "SEGMENTED", 300.0);
+    settle(robot, 500);
+    let receipts = cranpose_testing::find_text_in_semantics(robot, "Receipts")
+        .expect("Receipts segment in semantics");
+    let control_left = receipts.0 - receipts.2;
+    let control_y = receipts.1 + receipts.3 * 0.5;
+    let all_x = control_left + receipts.2 * 0.5;
+    let docs_x = control_left + receipts.2 * 2.5;
+
+    shot_scaled(robot, shot_dir, "01d-segmented-rest", 2.0);
+    robot
+        .mouse_move(all_x, control_y)
+        .expect("hover All segment");
+    robot.mouse_down().expect("press All segment");
+    std::thread::sleep(Duration::from_millis(260));
+    shot_scaled(robot, shot_dir, "01d-segmented-held", 2.0);
+    robot
+        .mouse_move(docs_x, control_y)
+        .expect("move segmented lens directly to Docs");
+    shot_scaled(robot, shot_dir, "01d-segmented-direct-follow", 2.0);
+    robot.mouse_up().expect("release Docs segment");
+    std::thread::sleep(Duration::from_millis(150));
+    shot_scaled(robot, shot_dir, "01d-segmented-release-150ms", 2.0);
+    settle(robot, 700);
+    shot_scaled(robot, shot_dir, "01d-segmented-settled", 2.0);
+
+    let airplane = cranpose_testing::find_text_in_semantics(robot, "Airplane Mode")
+        .expect("Airplane Mode row in semantics");
+    let slider_y = airplane.1 + airplane.3 + 26.0;
+    let slider_left = airplane.0;
+    let slider_right = WINDOW_WIDTH as f32 - airplane.0;
+    let slider_span = slider_right - slider_left;
+    let slider_x = |fraction: f32| slider_left + slider_span * fraction;
+    robot
+        .mouse_move(slider_x(0.60), slider_y)
+        .expect("hover slider thumb");
+    robot.mouse_down().expect("press slider thumb");
+    std::thread::sleep(Duration::from_millis(180));
+    shot_scaled(robot, shot_dir, "01e-slider-held", 2.0);
+    for fraction in [0.72, 0.84, 0.92] {
+        robot
+            .mouse_move(slider_x(fraction), slider_y)
+            .expect("fast slider move");
+        std::thread::sleep(Duration::from_millis(12));
+    }
+    shot_scaled(robot, shot_dir, "01e-slider-last-pointer", 2.0);
+    robot.mouse_up().expect("release slider");
+    let release_steps = [
+        (0.0, true),
+        (1.0, false),
+        (16.0, true),
+        (33.0, true),
+        (50.0, true),
+        (100.0, true),
+    ];
+    let release_names = [
+        "01e-slider-release-000ms",
+        "01e-slider-release-017ms",
+        "01e-slider-release-050ms",
+        "01e-slider-release-100ms",
+        "01e-slider-release-200ms",
+    ];
+    let release_frames = robot
+        .capture_keyframes(2.0, &release_steps)
+        .expect("slider release keyframes");
+    for (frame, name) in release_frames.iter().zip(release_names) {
+        save_frame(frame, shot_dir, name);
+    }
+}
+
 fn shot(robot: &cranpose::Robot, dir: &Path, name: &str) {
     let screenshot = robot.screenshot().expect("screenshot");
     let image = RgbaImage::from_raw(screenshot.width, screenshot.height, screenshot.pixels)
@@ -332,6 +448,18 @@ fn shot_scaled(robot: &cranpose::Robot, dir: &Path, name: &str, scale: f32) {
     let path = dir.join(format!("{name}.png"));
     image.save(&path).expect("save scaled screenshot");
     println!("captured {name} at {scale}x -> {}", path.display());
+}
+
+fn save_frame(screenshot: &cranpose::RobotScreenshot, dir: &Path, name: &str) {
+    let image = RgbaImage::from_raw(
+        screenshot.width,
+        screenshot.height,
+        screenshot.pixels.clone(),
+    )
+    .expect("screenshot buffer size");
+    let path = dir.join(format!("{name}.png"));
+    image.save(&path).expect("save screenshot");
+    println!("captured keyframe {name} -> {}", path.display());
 }
 
 fn aligned_origin(anchor_dp: f32, scale: f32, target_anchor_px: u32) -> u32 {
@@ -370,14 +498,7 @@ fn shot_scaled_aligned(
         .expect("scaled screenshot buffer size");
     let full_path = dir.join(format!("{name}.png"));
     image.save(&full_path).expect("save scaled screenshot");
-    assert!(
-        crop.left + crop.width <= image.width() && crop.top + crop.height <= image.height(),
-        "aligned crop {crop:?} exceeds {}x{} capture",
-        image.width(),
-        image.height()
-    );
-    let aligned =
-        image::imageops::crop_imm(&image, crop.left, crop.top, crop.width, crop.height).to_image();
+    let aligned = aligned_crop(&image, crop);
     let aligned_path = dir.join(format!("{aligned_name}.png"));
     aligned
         .save(&aligned_path)
@@ -388,4 +509,33 @@ fn shot_scaled_aligned(
         aligned_path.display()
     );
     aligned
+}
+
+fn save_aligned_frame(
+    screenshot: &cranpose::RobotScreenshot,
+    dir: &Path,
+    name: &str,
+    crop: PixelCrop,
+) {
+    let image = RgbaImage::from_raw(
+        screenshot.width,
+        screenshot.height,
+        screenshot.pixels.clone(),
+    )
+    .expect("scaled screenshot buffer size");
+    let path = dir.join(format!("{name}.png"));
+    aligned_crop(&image, crop)
+        .save(&path)
+        .expect("save aligned keyframe");
+    println!("captured aligned keyframe {name} -> {}", path.display());
+}
+
+fn aligned_crop(image: &RgbaImage, crop: PixelCrop) -> RgbaImage {
+    assert!(
+        crop.left + crop.width <= image.width() && crop.top + crop.height <= image.height(),
+        "aligned crop {crop:?} exceeds {}x{} capture",
+        image.width(),
+        image.height()
+    );
+    image::imageops::crop_imm(image, crop.left, crop.top, crop.width, crop.height).to_image()
 }

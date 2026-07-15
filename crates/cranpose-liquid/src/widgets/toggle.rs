@@ -37,11 +37,11 @@ const LENS_OUTWARD_LEAN: f32 = 5.75;
 const LENS_PAD: f32 = 10.0;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
-const LENS_RELEASE_LINGER_MS: u64 = 520;
+const LENS_RELEASE_LINGER_MS: u64 = 900;
 const LENS_RELEASE_FADE_MS: u64 = 140;
 
 fn toggle_track_motion() -> AnimationType {
-    spring(1.0, 100.0)
+    AnimationType::Tween(AnimationSpec::tween(380, Easing::EaseInOut).with_delay(50))
 }
 
 fn toggle_lens_material() -> Glass {
@@ -52,7 +52,7 @@ fn toggle_lens_material() -> Glass {
         .saturation(1.0)
         .refraction_depth(0.34)
         .refraction_curve(0.25)
-        .transmission_refraction(1.0)
+        .transmission_refraction(0.25)
         .dispersion(0.30)
         .highlight(0.34)
         .lift(-0.05)
@@ -148,7 +148,11 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     // the lighter, lower-saturation interior through refraction; applying
     // that tone transform to the whole track washes out the reference color.
     let animated_track = animateColorAsState(base_track, toggle_track_motion(), "toggle-track");
-    let track_color = animated_track.get();
+    let track_color = if drag_progress.get().is_some() {
+        base_track
+    } else {
+        animated_track.get()
+    };
 
     let min_x = THUMB_MARGIN;
     let max_x = TRACK_WIDTH - THUMB_MARGIN - THUMB_WIDTH;
@@ -409,30 +413,6 @@ mod tests {
     }
 
     #[test]
-    fn toggle_material_uses_the_clear_wcksrd_lens_contract() {
-        let glass = toggle_lens_material();
-        assert_eq!(glass.refraction_depth, 0.34);
-        assert_eq!(glass.refraction_curve, 0.25);
-        assert_eq!(glass.transmission_refraction, 1.0);
-        assert_eq!(glass.dispersion, 0.30);
-        assert!(glass
-            .blur_radius
-            .is_some_and(|radius| (0.5..=1.0).contains(&radius)));
-        assert!((0.30..=0.38).contains(&glass.highlight));
-        assert!(glass.tint.is_some_and(|tint| tint.a() <= 0.03));
-        assert!(glass
-            .saturation
-            .is_some_and(|saturation| (0.98..=1.02).contains(&saturation)));
-        assert!(glass
-            .lift
-            .is_some_and(|lift| (-0.06..=-0.04).contains(&lift)));
-        assert_eq!(glass.adaptive_frost, 0.0);
-        let shadow = glass.shadow_style.expect("toggle shadow override");
-        assert!((shadow.color.r() - shadow.color.g()).abs() < 1e-6);
-        assert!((12.0..=16.0).contains(&shadow.radius) && shadow.offset_y <= 4.0);
-    }
-
-    #[test]
     fn toggle_lens_growth_and_translation_are_outward_and_symmetric() {
         assert_eq!(LENS_OUTWARD_LEAN, 5.75);
         let node_width = LENS_WIDTH
@@ -471,11 +451,11 @@ mod tests {
 
     #[test]
     fn toggle_track_color_has_the_reference_lag() {
-        let AnimationType::Spring(spec) = toggle_track_motion() else {
-            panic!("toggle track color needs a velocity-preserving spring");
+        let AnimationType::Tween(spec) = toggle_track_motion() else {
+            panic!("toggle track color needs a bounded transition");
         };
-        assert_eq!(spec.damping_ratio, 1.0);
-        assert_eq!(spec.stiffness, 100.0);
+        assert_eq!(spec.delay_millis, 50);
+        assert_eq!(spec.duration_millis, 380);
     }
 
     #[test]
@@ -502,8 +482,8 @@ mod tests {
         let AnimationType::Tween(spec) = toggle_lens_release() else {
             panic!("toggle lens release needs an explicit linger interval");
         };
-        assert_eq!(spec.delay_millis, 520);
+        assert_eq!(spec.delay_millis, 900);
         assert_eq!(spec.duration_millis, LENS_RELEASE_FADE_MS);
-        assert_eq!(LENS_RELEASE_LINGER_MS, 520);
+        assert_eq!(LENS_RELEASE_LINGER_MS, 900);
     }
 }

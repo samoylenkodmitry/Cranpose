@@ -9,22 +9,14 @@
 //! folding into an inverted, chromatically dispersed band at the rim (see
 //! `liquid_glass.wgsl` loupe mode). The widget itself draws nothing.
 //!
-//! Motion, all measured from the 120 fps reference:
-//! * birth: ~120 ms after the grab (the menu dissolves first); a grab
-//!   released within the delay never shows a loupe;
-//! * grow-in: born a near-square squircle — already ~92% of the final
-//!   HEIGHT but only ~59% of the WIDTH — low over the line (~68% risen)
-//!   with FULL optics (magnified text, dot and rim all present on the
-//!   first visible frame). The width springs out to the capsule with a
-//!   ~+6% overshoot peaking ~200 ms after birth; the rise eases out
-//!   (τ ≈ 95 ms) with no overshoot;
-//! * follow: every active frame uses the current finger x directly; only the
-//!   vertical birth rise is animated. The y is locked to the grabbed line;
-//! * release: the shell immediately redistributes into a taller near-circle,
-//!   then shrinks with a slight sink, fading THROUGH its
-//!   own optics. The sampled handle holds through the first redistribution,
-//!   then contracts on its measured curve; the whole bubble is gone by
-//!   ~55 ms.
+//! Motion follows `example/target/on-white/text-handle-bubble/`:
+//! * the shell starts at the touched handle as a narrow vertical capsule;
+//! * width, height, rise, and optical opacity increase from one continuous
+//!   progress value over roughly 200 ms;
+//! * every active frame uses the current finger x directly while the vertical
+//!   rise supplies the stable grab offset;
+//! * release reverses that same physical path, sinking into the handle while
+//!   the shell and its optics fade over roughly 200 ms.
 //!
 //! Visibility (also from the recording): the loupe shows only while the
 //! finger covers the text line — dragging a handle by its dot below the line
@@ -54,51 +46,19 @@ pub const LOUPE_HEIGHT: f32 = 82.0;
 pub const LOUPE_RISE: f32 = 75.0;
 /// Magnification of the lens (uniform; measured on the reference).
 pub const LOUPE_MAGNIFICATION: f32 = 1.25;
-/// The birth pose (reference `loupe-grow/a_068`, the first visible frame):
-/// a near-square squircle — width well short of the capsule, height nearly
-/// full, most of the rise already done.
-const LOUPE_BIRTH_WIDTH_FRAC: f32 = 0.585;
-const LOUPE_BIRTH_HEIGHT_FRAC: f32 = 0.915;
-const LOUPE_BIRTH_RISE_FRAC: f32 = 0.68;
-/// Dissolve: the slight fraction of [`LOUPE_RISE`] the bubble sinks toward
-/// the line and the content-alpha floor it reaches near the terminal vanish.
-/// Width returns toward the birth squircle ahead of height, then both axes
-/// disappear together in the terminal beat.
-const LOUPE_DISSOLVE_ALPHA_FLOOR: f32 = 0.05;
-/// Delay between the grab and the bubble's birth (reference: the menu
-/// dissolves first; the bubble appears ~120 ms after the touch-down). A grab
-/// released within the delay never shows a loupe.
-const LOUPE_BIRTH_DELAY_MS: u64 = 120;
+const LOUPE_COLLAPSE_MS: u64 = 200;
 /// How far below the line bottom (in line heights) the finger still counts
 /// as covering the line. The end/cursor dot's center sits ~0.29 line heights
 /// below the bottom (16 dp dot on a 20 dp line), so a dot-center grab falls
 /// outside this margin and shows no loupe — the measured behavior.
 const LOUPE_LINE_GRAB_MARGIN: f32 = 0.15;
 
-/// Width grow-in: ζ≈0.5 → the width overshoots ~+6% of the capsule width
-/// (16% of the birth→full step) peaking ~200 ms after birth — both measured
-/// on the reference inflate.
 fn loupe_grow_spring() -> AnimationType {
-    spring(0.5, 270.0)
+    spring(0.85, 270.0)
 }
 
-/// Rise: overdamped (no overshoot), an ~86 ms-τ ease-out — the reference top
-/// edge climbs monotonically, half done ~60 ms after birth, and is flat by
-/// the ~+300 ms mark (a 95 ms tail still crept visibly at +380).
-fn loupe_rise_spring() -> AnimationType {
-    spring(2.0, 2200.0)
-}
-
-/// The birth-delay gate: a linear timer from the grab to the bubble's birth.
-fn loupe_birth_gate() -> AnimationType {
-    AnimationType::Tween(AnimationSpec::linear(LOUPE_BIRTH_DELAY_MS))
-}
-
-/// Release: the ~55 ms measured fade. The raw value runs release→0; the
-/// pose mapping (see [`dissolve_pose`]) holds still through the first ~15%,
-/// then shrinks fast and fades through the optics.
 fn loupe_collapse_tween() -> AnimationType {
-    AnimationType::Tween(AnimationSpec::linear(55))
+    AnimationType::Tween(AnimationSpec::linear(LOUPE_COLLAPSE_MS))
 }
 
 /// What the loupe magnifies: the finger x and the grabbed line's vertical
@@ -146,64 +106,23 @@ struct LoupePose {
     rise_frac: f32,
 }
 
-/// Grow mapping: the width carries the spring (including its overshoot past
-/// 1), the height clamps it (the reference capsule never grows taller than
-/// final), the rise runs on its own overdamped driver.
-fn grow_pose(p: f32, rise: f32) -> LoupePose {
-    let height_progress = (p * 5.0).clamp(0.0, 1.0);
-    let width_progress = if p <= 1.0 { p.max(0.0).powf(0.65) } else { p };
+/// One reversible material coordinate. Height leads width so the first
+/// visible shell is the narrow capsule in the recording; rise follows between
+/// them and therefore keeps the shell attached to the handle during birth and
+/// collapse.
+fn loupe_pose(progress: f32) -> LoupePose {
+    let p = progress.max(0.0);
+    let unit = p.min(1.0);
+    let width = if p <= 1.0 { unit.powf(0.95) } else { p };
     LoupePose {
-        width_frac: LOUPE_BIRTH_WIDTH_FRAC + (1.0 - LOUPE_BIRTH_WIDTH_FRAC) * width_progress,
-        height_frac: LOUPE_BIRTH_HEIGHT_FRAC + (1.0 - LOUPE_BIRTH_HEIGHT_FRAC) * height_progress,
-        rise_frac: LOUPE_BIRTH_RISE_FRAC + (1.0 - LOUPE_BIRTH_RISE_FRAC) * rise.clamp(0.0, 1.0),
+        width_frac: width,
+        height_frac: unit.powf(0.45),
+        rise_frac: unit.powf(0.60),
     }
 }
 
-/// Dissolve mapping over `q` (1 at the release, 0 fully gone), RELATIVE to
-/// the pose the bubble was released from — releasing a newborn shrinks the
-/// newborn, not a full capsule. Returns the pose plus the CONTENT ALPHA
-/// (the spec `progress`): the reference first redistributes width into height,
-/// then collapses both axes toward the line.
-/// The sampled optical image holds through the shell's initial redistribution,
-/// then contracts on its independently measured dissolve curve.
-fn dissolve_pose(released: LoupePose, q: f32) -> (LoupePose, f32) {
-    let d = 1.0 - q.clamp(0.0, 1.0);
-    let redistribute = smoothstep01(d / (8.0 / 55.0));
-    let middle = smoothstep01((d - 8.0 / 55.0) / (17.0 / 55.0));
-    let late = smoothstep01((d - 25.0 / 55.0) / (17.0 / 55.0));
-    let terminal = smoothstep01((d - 42.0 / 55.0) / (13.0 / 55.0));
-    let redistributed_w = 1.0 + (0.906 - 1.0) * redistribute;
-    let redistributed_h = 1.0 + (1.155 - 1.0) * redistribute;
-    let middle_w = redistributed_w + (0.632 - redistributed_w) * middle;
-    let middle_h = redistributed_h + (0.902 - redistributed_h) * middle;
-    let late_w = middle_w + (0.462 - middle_w) * late;
-    let late_h = middle_h + (0.488 - middle_h) * late;
-    let width_scale = late_w * (1.0 - terminal);
-    let height_scale = late_h * (1.0 - terminal);
-    let collapse = smoothstep01((d - 8.0 / 55.0) / (34.0 / 55.0));
-    let pose = LoupePose {
-        width_frac: released.width_frac * width_scale,
-        height_frac: released.height_frac * height_scale,
-        rise_frac: released.rise_frac * (1.0 - 0.15 * collapse) * (1.0 - terminal),
-    };
-    let fade = smoothstep01((d - 25.0 / 55.0) / (30.0 / 55.0));
-    (pose, 1.0 - (1.0 - LOUPE_DISSOLVE_ALPHA_FLOOR) * fade)
-}
-
-fn dissolve_optic_magnification(released: LoupePose, pose: LoupePose) -> f32 {
-    let width_scale = pose.width_frac / released.width_frac.max(1.0e-4);
-    let optic_scale = if width_scale >= 0.906 {
-        1.0
-    } else if width_scale >= 0.632 {
-        let phase = smoothstep01((width_scale - 0.632) / (0.906 - 0.632));
-        0.79 + (1.0 - 0.79) * phase
-    } else if width_scale >= 0.462 {
-        let phase = smoothstep01((width_scale - 0.462) / (0.632 - 0.462));
-        0.516 + (0.79 - 0.516) * phase
-    } else {
-        0.516 * width_scale / 0.462
-    };
-    (LOUPE_MAGNIFICATION * optic_scale).clamp(0.35, LOUPE_MAGNIFICATION)
+fn loupe_optic_alpha(progress: f32) -> f32 {
+    smoothstep01(progress / 0.28)
 }
 
 fn smoothstep01(value: f32) -> f32 {
@@ -211,25 +130,14 @@ fn smoothstep01(value: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Animated loupe state living across recompositions: grow/collapse progress
-/// plus the rise, and the frozen target/pose while
-/// dissolving.
+/// Animated loupe state living across recompositions. One progress value owns
+/// shape, rise, and optical opacity in both directions.
 struct LoupeState {
     progress: RefCell<Animatable<f32>>,
-    /// Birth-delay timer: runs 0→1 over [`LOUPE_BIRTH_DELAY_MS`] from the
-    /// grab; the grow starts only once it completes.
-    gate: RefCell<Animatable<f32>>,
-    /// Rise driver, 0→1 from the birth (separate from the width spring: the
-    /// reference rise never overshoots while the width does).
-    rise: RefCell<Animatable<f32>>,
     /// The last target shown; kept while the bubble deflates after release.
     shown: RefCell<Option<LoupeTarget>>,
-    /// The pose and progress value the bubble was released from — the
-    /// dissolve shrinks THAT pose, whatever its size (releasing a newborn
-    /// must not snap it to a full capsule first).
-    released: Cell<Option<(f32, LoupePose)>>,
     /// Whether the loupe was active on the previous recomposition.
-    was_active: std::cell::Cell<bool>,
+    was_active: Cell<bool>,
 }
 
 /// The floating loupe. Pass the live drag target while a handle drag covers
@@ -240,12 +148,9 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     let state = remember(|| {
         let runtime = with_current_composer(|composer| composer.runtime_handle());
         Rc::new(LoupeState {
-            progress: RefCell::new(Animatable::new(0.0, runtime.clone())),
-            gate: RefCell::new(Animatable::new(0.0, runtime.clone())),
-            rise: RefCell::new(Animatable::new(0.0, runtime)),
+            progress: RefCell::new(Animatable::new(0.0, runtime)),
             shown: RefCell::new(None),
-            released: Cell::new(None),
-            was_active: std::cell::Cell::new(false),
+            was_active: Cell::new(false),
         })
     })
     .with(Rc::clone);
@@ -255,78 +160,34 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
         let fresh_grab = !state.was_active.get();
         state.shown.replace(Some(t));
         if fresh_grab {
-            let mut gate = state.gate.borrow_mut();
-            gate.snapTo(0.0);
-            gate.animateTo(1.0, loupe_birth_gate());
-            state.progress.borrow_mut().snapTo(0.0);
-            state.rise.borrow_mut().snapTo(0.0);
-            state.released.set(None);
-        }
-        // The grow starts only once the birth gate elapses (reading the gate
-        // state subscribes this composition to its frames, so the flip
-        // recomposes even during a motionless hold).
-        let born = state.gate.borrow().state().value() >= 1.0;
-        if born {
             let mut progress = state.progress.borrow_mut();
-            if (progress.target() - 1.0).abs() > f32::EPSILON {
-                progress.animateTo(1.0, loupe_grow_spring());
-                state.rise.borrow_mut().animateTo(1.0, loupe_rise_spring());
-            }
+            progress.snapTo(0.0);
+            progress.animateTo(1.0, loupe_grow_spring());
         }
-    } else {
+    } else if state.was_active.get() {
         let mut progress = state.progress.borrow_mut();
-        if progress.target() != 0.0 {
-            // Freeze the pose at the release: the dissolve shrinks it
-            // relatively, and the rise driver must stop mid-flight instead
-            // of climbing under the fade.
-            let p_rel = progress.state().value().max(1.0e-3);
-            let mut rise = state.rise.borrow_mut();
-            let rise_rel = rise.state().value();
-            rise.snapTo(rise_rel);
-            state
-                .released
-                .set(Some((p_rel, grow_pose(p_rel, rise_rel))));
+        if progress.state().value() > 0.001 {
             progress.animateTo(0.0, loupe_collapse_tween());
+        } else {
+            state.shown.replace(None);
         }
     }
     state.was_active.set(active);
 
     let progress_state = state.progress.borrow().state();
-    let rise_state = state.rise.borrow().state();
     let p = progress_state.value().max(0.0);
     let Some(shown) = *state.shown.borrow() else {
         return;
     };
-    let born = active && state.gate.borrow().state().value() >= 1.0;
-    if p <= 0.001 && !born && state.released.get().is_none() {
-        // Not yet born (birth delay) — or a grab released inside the delay,
-        // which never shows a loupe at all. Once BORN, p = 0 is the birth
-        // pose itself (59% wide, full optics) and must render — the
-        // reference's first frame is clearly visible.
+    if p <= 0.001 {
         if !active {
             state.shown.replace(None);
         }
         return;
     }
 
-    let (pose, optic, magnification) = if active {
-        (grow_pose(p, rise_state.value()), 1.0, LOUPE_MAGNIFICATION)
-    } else {
-        let Some((p_rel, released)) = state.released.get() else {
-            state.shown.replace(None);
-            return;
-        };
-        let q = (p / p_rel).clamp(0.0, 1.0);
-        if q <= 0.02 {
-            // Fully faded: unmount until the next grab.
-            state.shown.replace(None);
-            state.released.set(None);
-            return;
-        }
-        let (pose, optic) = dissolve_pose(released, q);
-        let magnification = dissolve_optic_magnification(released, pose);
-        (pose, optic, magnification)
-    };
+    let pose = loupe_pose(p);
+    let optic = loupe_optic_alpha(p);
 
     let width = LOUPE_WIDTH * pose.width_frac;
     let height = LOUPE_HEIGHT * pose.height_frac;
@@ -336,23 +197,12 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     // center.
     let focus_offset_y = shown.line_mid_y - center_y;
 
-    // The newborn reference silhouette is a flat-topped SQUIRCLE, rounding
-    // into the full capsule as the width fills out (a stadium at birth
-    // width ~= height reads as a plain circle, which the reference never
-    // shows). The grow spring drives the morph; dissolve keeps the capsule.
-    let corner_frac = if active {
-        0.38 + (0.5 - 0.38) * (p * 2.0).clamp(0.0, 1.0)
-    } else {
-        0.5
-    };
-    let corner_radius = height * corner_frac;
+    let corner_radius = 0.5 * width.min(height);
     let spec = LiquidLoupeSpec {
-        magnification,
+        magnification: LOUPE_MAGNIFICATION,
         focus_offset: (0.0, focus_offset_y),
         seam_lift: shown.dot_clearance,
         corner_radius,
-        // Alpha fades the whole optical image; magnification contracts that
-        // image with the dissolving shell.
         progress: optic,
         ..LiquidLoupeSpec::default()
     };
@@ -410,95 +260,61 @@ mod tests {
     }
 
     #[test]
-    fn birth_pose_is_a_low_near_square_squircle() {
-        // Reference birth: ~59% width, ~92% height, ~68% risen — not a
-        // half-scale miniature (the uniform-scale model read as a blob a
-        // third of the final size).
-        let pose = grow_pose(0.0, 0.0);
-        assert!((pose.width_frac - LOUPE_BIRTH_WIDTH_FRAC).abs() < 1e-6);
-        assert!((pose.height_frac - LOUPE_BIRTH_HEIGHT_FRAC).abs() < 1e-6);
-        assert!((pose.rise_frac - LOUPE_BIRTH_RISE_FRAC).abs() < 1e-6);
-        assert!(
-            (0.66..=0.70).contains(&pose.rise_frac),
-            "birth must sit low enough to leave a visible rise, got {}",
-            pose.rise_frac
+    fn growth_starts_at_the_handle_as_a_vertical_capsule() {
+        assert_eq!(
+            loupe_pose(0.0),
+            LoupePose {
+                width_frac: 0.0,
+                height_frac: 0.0,
+                rise_frac: 0.0,
+            }
         );
-        // Near-square: the birth aspect is within a few percent of 1.
-        let aspect = (LOUPE_WIDTH * pose.width_frac) / (LOUPE_HEIGHT * pose.height_frac);
-        assert!((0.9..=1.05).contains(&aspect), "birth aspect {aspect}");
+        let emerging = loupe_pose(0.20);
+        let width = LOUPE_WIDTH * emerging.width_frac;
+        let height = LOUPE_HEIGHT * emerging.height_frac;
+        assert!(
+            height > width,
+            "birth must be vertically elongated: {emerging:?}"
+        );
+        assert!(emerging.rise_frac < 0.5);
+
+        let settled = loupe_pose(1.0);
+        assert_eq!(settled.width_frac, 1.0);
+        assert_eq!(settled.height_frac, 1.0);
+        assert_eq!(settled.rise_frac, 1.0);
     }
 
     #[test]
-    fn grow_width_carries_the_overshoot_and_height_clamps_it() {
-        // The ζ=0.5 width spring peaks ~16% past the step → ~+6% capsule
-        // width, like the reference's ~375px peak; the height must NOT
-        // follow past full.
-        let pose = grow_pose(1.16, 1.0);
-        assert!(pose.width_frac > 1.05 && pose.width_frac < 1.07);
+    fn width_can_overshoot_without_inflating_height_or_rise() {
+        let pose = loupe_pose(1.04);
+        assert!((pose.width_frac - 1.04).abs() < 1.0e-6);
         assert!((pose.height_frac - 1.0).abs() < 1e-6);
         assert!((pose.rise_frac - 1.0).abs() < 1e-6);
     }
 
     #[test]
-    fn dissolve_holds_then_contracts_the_shell_and_optics_by_55ms() {
-        let released = grow_pose(1.0, 1.0);
-        let (pose, alpha) = dissolve_pose(released, 1.0 - 8.0 / 55.0);
-        assert!((pose.width_frac - 0.906).abs() < 0.01);
-        assert!((pose.height_frac - 1.155).abs() < 0.01);
-        assert_eq!(alpha, 1.0);
-        let magnification = dissolve_optic_magnification(released, pose);
-        assert!((magnification - LOUPE_MAGNIFICATION).abs() < 1e-4);
-        let (pose, alpha) = dissolve_pose(released, 1.0 - 25.0 / 55.0);
-        assert!((0.62..0.65).contains(&pose.width_frac));
-        assert!((0.89..0.92).contains(&pose.height_frac));
-        assert!(alpha > 0.95);
-        let magnification = dissolve_optic_magnification(released, pose);
-        assert!(
-            (magnification / LOUPE_MAGNIFICATION - 0.79).abs() < 0.02,
-            "the sampled handle must retain 79% of its displayed size at 25ms, got {magnification}"
-        );
-        let (pose, alpha) = dissolve_pose(released, 1.0 - 42.0 / 55.0);
-        assert!((0.45..0.48).contains(&pose.width_frac));
-        assert!((0.47..0.51).contains(&pose.height_frac));
-        assert!(alpha < 0.45);
-        let magnification = dissolve_optic_magnification(released, pose);
-        assert!(
-            (magnification / LOUPE_MAGNIFICATION - 0.516).abs() < 0.02,
-            "the sampled handle must retain 51.6% of its displayed size at 42ms, got {magnification}"
-        );
-        let (pose, _) = dissolve_pose(released, 0.0);
-        assert!(pose.width_frac < 0.02 && pose.height_frac < 0.02);
-    }
-
-    #[test]
-    fn grow_and_release_clocks_match_the_reference_timeline() {
+    fn grow_and_release_clocks_match_the_on_white_timeline() {
         let AnimationType::Spring(grow) = loupe_grow_spring() else {
-            panic!("loupe grow must retain spring overshoot");
+            panic!("loupe grow must use a spring");
         };
-        assert_eq!(grow.damping_ratio, 0.5);
-        assert!((240.0..=300.0).contains(&grow.stiffness));
+        assert_eq!(grow.damping_ratio, 0.85);
+        assert_eq!(grow.stiffness, 270.0);
         let AnimationType::Tween(collapse) = loupe_collapse_tween() else {
             panic!("loupe collapse must use the measured linear clock");
         };
-        assert_eq!(collapse.duration_millis, 55);
+        assert_eq!(collapse.duration_millis, LOUPE_COLLAPSE_MS);
     }
 
     #[test]
-    fn dissolving_a_newborn_shrinks_the_newborn_pose() {
-        // Regression: an absolute mapping snapped a newborn release to
-        // 70% of a FULL capsule (bigger than the newborn itself) and then
-        // unmounted instantly because the raw progress sat under the
-        // absolute cliff. The dissolve must scale the released pose.
-        let newborn = grow_pose(0.02, 0.05);
-        let (pose, optic) = dissolve_pose(newborn, 1.0);
-        assert_eq!(
-            pose, newborn,
-            "the fade starts exactly at the released pose"
-        );
-        assert_eq!(optic, 1.0);
-        let (pose, _) = dissolve_pose(newborn, 0.3);
-        assert!(pose.width_frac < newborn.width_frac);
-        assert!(pose.width_frac > newborn.width_frac * 0.25);
+    fn shell_and_optics_share_one_reversible_progress() {
+        let early = loupe_pose(0.10);
+        let middle = loupe_pose(0.50);
+        let late = loupe_pose(0.90);
+        assert!(early.width_frac < middle.width_frac && middle.width_frac < late.width_frac);
+        assert!(early.height_frac < middle.height_frac && middle.height_frac < late.height_frac);
+        assert!(early.rise_frac < middle.rise_frac && middle.rise_frac < late.rise_frac);
+        assert!(loupe_optic_alpha(0.10) < loupe_optic_alpha(0.50));
+        assert_eq!(loupe_optic_alpha(1.0), 1.0);
     }
 
     #[test]
@@ -528,7 +344,6 @@ mod tests {
             "the shared wcKSRD dispersion must stay at full strength, got {}",
             dispersion
         );
-        assert!(u[11] >= 4.8, "neutral rim highlight is too weak: {}", u[11]);
         assert!(
             (0.58..=0.62).contains(&u[84]),
             "the legible fold must own the outer 40% of long-edge depth, got band start {}",

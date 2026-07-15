@@ -179,6 +179,27 @@ impl LiquidDragAxis {
             .animate_to_with_velocity(target, release_velocity, animation);
     }
 
+    /// End direct manipulation at its final sample without creating a
+    /// translational spring flight. Continuous controls stop at the finger,
+    /// while the fluid integrator retains and relaxes the sampled velocity.
+    pub(crate) fn finish_at(&self, position: f32, event_time_ms: Option<i64>) {
+        let Some(_) = self.pointer.get() else {
+            self.animation.borrow_mut().snapTo(position);
+            return;
+        };
+        let previous_time_ms = self.last_sample_ms.get();
+        let time_ms = self.sample_time_ms(event_time_ms);
+        self.velocity.borrow_mut().add_data_point(time_ms, position);
+        if let Some(previous_time_ms) = previous_time_ms {
+            let dt = (time_ms - previous_time_ms).max(1) as f32 / 1000.0;
+            self.dynamics.advance_pointer((position, 0.0), dt);
+        }
+        self.pointer.set(None);
+        self.animation.borrow_mut().snapTo(position);
+        self.dynamics.release_pointer();
+        self.arm_fluid_frames();
+    }
+
     pub(crate) fn settle_to(&self, target: f32, animation: AnimationType) {
         if self.pointer.get().is_some() {
             return;
@@ -339,6 +360,31 @@ mod tests {
         axis.release_to(90.0, Some(16), LiquidMotion::snappy());
         assert!(!axis.is_dragging());
         assert_eq!(axis.animation.borrow().target(), 90.0);
+    }
+
+    #[test]
+    fn continuous_release_stops_translation_without_erasing_fluid_velocity() {
+        let (_runtime, axis) = axis(0.0);
+        axis.runtime.drain_frame_callbacks(1_000_000);
+        axis.begin(0.0, Some(0));
+        axis.move_to(80.0, Some(16));
+        let moving = axis.liquid_pose();
+
+        axis.finish_at(80.0, Some(17));
+        assert!(!axis.is_dragging());
+        assert_eq!(axis.value(), 80.0);
+        assert!(moving.speed > 0.0);
+
+        let mut relaxed = moving;
+        for frame in 2..=12 {
+            axis.runtime.drain_frame_callbacks(frame * 17_000_000);
+            assert_eq!(axis.value(), 80.0, "frame {frame} backtracked");
+            relaxed = axis.liquid_pose();
+        }
+        assert!(
+            relaxed.speed < moving.speed,
+            "shape velocity must relax even though translation stops"
+        );
     }
 
     #[test]

@@ -21,6 +21,9 @@ pub const GLASS_TRANSMISSION_REFRACTION_UNIFORM: usize = 96;
 pub const GLASS_EFFECT_DENSITY_UNIFORM: usize = 99;
 /// Uniform slot containing continuous optical activity (identity at zero).
 pub const GLASS_ACTIVITY_UNIFORM: usize = 111;
+/// Uniform slot containing the base surface tint that remains when optical
+/// activity reaches zero. The four consecutive floats are RGBA.
+pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 
 /// LiquidGlass WGSL shader source.
 ///
@@ -52,6 +55,7 @@ pub const GLASS_ACTIVITY_UNIFORM: usize = 111;
 ///  85: loupe fold peak (sampling reach at the fold crest, in inradius units)
 ///  93: wcKSRD blur reach in physical pixels
 /// 111: continuous optical activity (0 = exact backdrop identity, 1 = full)
+/// 113..116: resting surface tint RGBA (transparent = no resting surface)
 pub const LIQUID_GLASS_WGSL: &str = include_str!("../shaders/liquid_glass.wgsl");
 
 /// Configuration for the LiquidGlass effect.
@@ -211,11 +215,9 @@ impl Default for LiquidLoupeSpec {
             band_start: 0.60,
             fold_peak: 0.80,
             seam_lift: 26.0,
-            // The reference rim reads as a clear bright line around the whole
-            // capsule (peak ~+127 luminance over the backdrop); the
-            // interactive-lens rim gain is a whisper, so the loupe drives it
-            // through its highlight (calibrated on captures).
-            highlight: 6.2,
+            // The rim is a distinct light path, but its gain stays low enough
+            // that the transmitted face remains transparent and high-contrast.
+            highlight: 0.6,
             progress: 1.0,
             corner_radius: 0.0,
         }

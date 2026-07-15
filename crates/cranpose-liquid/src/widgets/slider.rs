@@ -114,10 +114,9 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                                 PointerEventKind::Up
                                                     if active_pointer.get() == Some(event.id) =>
                                                 {
-                                                    lens_axis.release_to(
+                                                    lens_axis.finish_at(
                                                         usable * fraction,
                                                         event.time_ms,
-                                                        crate::motion::LiquidMotion::snappy(),
                                                     );
                                                     on_drag(fraction);
                                                     event.consume();

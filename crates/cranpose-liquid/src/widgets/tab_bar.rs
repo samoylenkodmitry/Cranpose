@@ -106,8 +106,8 @@ fn tab_base_selected_color(colors: crate::theme::LiquidColors, activity: f32) ->
 const BAR_HEIGHT: f32 = 64.0;
 const BLOB_HEIGHT: f32 = 52.0;
 const BLOB_MARGIN: f32 = 8.0;
-const FLIGHT_LENS_WIDTH_FACTOR: f32 = 1.37;
-const FLIGHT_LENS_HEIGHT_FACTOR: f32 = 1.0;
+const FLIGHT_LENS_WIDTH_FACTOR: f32 = 1.25;
+const FLIGHT_LENS_HEIGHT_FACTOR: f32 = 1.20;
 /// Width allotted to each tab inside the pill.
 const TAB_WIDTH: f32 = 78.0;
 /// Plain icon frame size (its path occupies about 25dp over 11dp labels).
@@ -141,12 +141,8 @@ fn tab_flight_tint_multiplier(activity: f32) -> f32 {
     1.0 - 0.25 * activity.clamp(0.0, 1.0)
 }
 
-fn tab_lens_activity_motion(active: bool) -> cranpose_animation::AnimationType {
-    if active {
-        LiquidMotion::smooth()
-    } else {
-        cranpose_animation::spring(1.0, 1400.0)
-    }
+fn tab_lens_activity_motion() -> cranpose_animation::AnimationType {
+    cranpose_animation::spring(1.0, 900.0)
 }
 
 fn tab_lens_left(pointer_x: f32, tab_width: f32, count: usize) -> f32 {
@@ -349,6 +345,7 @@ struct TabFlightGeometry {
     pose: crate::dynamics::LiquidPose,
     lens_position: f32,
     lens_activity: f32,
+    resting_tint: Color,
     accessory_center: Option<(f32, f32)>,
 }
 
@@ -404,6 +401,7 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
             )),
         }),
         activity: Some(activity),
+        resting_tint: Some(geometry.resting_tint),
         tint_alpha_multiplier: Some(tab_flight_tint_multiplier(geometry.lens_activity)),
         ..Default::default()
     }
@@ -531,18 +529,10 @@ fn LiquidTabBarLayout(
                             };
                             let lens_activity_anim = cranpose_animation::animateFloatAsState(
                                 lens_activity_target,
-                                tab_lens_activity_motion(lens_activity_target > 0.5),
+                                tab_lens_activity_motion(),
                                 "tabbar-lens-activity",
                             );
-                            let lens_activity = move || {
-                                if lens_activity_target > 0.5 {
-                                    1.0
-                                } else {
-                                    lens_activity_anim.get()
-                                }
-                            };
-
-                            let lens_activity = lens_activity();
+                            let lens_activity = lens_activity_anim.get();
                             let visual_selection = tab_visual_selection(
                                 selected,
                                 lens_x,
@@ -725,6 +715,7 @@ fn LiquidTabBarLayout(
                         pose,
                         lens_position: lens_px,
                         lens_activity,
+                        resting_tint: neutral_surface_tint(colors.label, 0.10, 0.14),
                         accessory_center: has_accessory.then_some((
                             pill_w + tab_bar_accessory_gap(true) + BAR_HEIGHT * 0.5,
                             BAR_HEIGHT * 0.5,
@@ -893,6 +884,7 @@ mod tests {
             pose: crate::dynamics::LiquidPose::default(),
             lens_position: 160.0,
             lens_activity: 1.0,
+            resting_tint: Color::BLACK.with_alpha(0.10),
             accessory_center: None,
         };
         let mask_node = TabFlightNode {
@@ -949,12 +941,12 @@ mod tests {
         let width = TAB_WIDTH * FLIGHT_LENS_WIDTH_FACTOR;
         let height = BAR_HEIGHT * FLIGHT_LENS_HEIGHT_FACTOR;
         assert!(
-            (1.35..=1.39).contains(&(width / TAB_WIDTH)),
+            (1.23..=1.27).contains(&(width / TAB_WIDTH)),
             "the undeformed optic must span the target's measured active footprint: {width}"
         );
         assert!(
-            (0.98..=1.02).contains(&(height / BAR_HEIGHT)),
-            "the moving optic shares the target bar's 64dp vertical footprint: {height}"
+            (1.18..=1.22).contains(&(height / BAR_HEIGHT)),
+            "the active optic must rise beyond the resting bar footprint: {height}"
         );
         assert_eq!(
             tab_lens_base_size(TAB_WIDTH, 0.0),
@@ -1037,11 +1029,10 @@ mod tests {
 
     #[test]
     fn arrival_contraction_uses_the_measured_fast_settle() {
-        let cranpose_animation::AnimationType::Spring(settle) = tab_lens_activity_motion(false)
-        else {
+        let cranpose_animation::AnimationType::Spring(settle) = tab_lens_activity_motion() else {
             panic!("arrival contraction must use a spring");
         };
         assert_eq!(settle.damping_ratio, 1.0);
-        assert!((1300.0..=1500.0).contains(&settle.stiffness));
+        assert_eq!(settle.stiffness, 900.0);
     }
 }
