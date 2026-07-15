@@ -146,9 +146,11 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         .no_clip()
         .tint(neutral_surface_tint(foreground, 0.13, 0.10))
         .blur_radius(0.0)
-        .dispersion(0.22)
+        .refraction_depth(0.26)
+        .refraction_curve(0.82)
+        .dispersion(0.16)
         .lift(0.0)
-        .highlight(0.32)
+        .highlight(0.24)
 }
 
 fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
@@ -1015,13 +1017,15 @@ mod tests {
     #[test]
     fn flight_lens_uses_the_clear_wcksrd_contract() {
         let glass = tab_flight_lens_material(cranpose_ui_graphics::Color::BLACK);
+        let generic_lens = Glass::lens();
         assert!(glass
             .lift
             .is_some_and(|lift| (-0.02..=0.02).contains(&lift)));
-        assert_eq!(glass.refraction_depth, 0.34);
-        assert_eq!(glass.dispersion, 0.22);
+        assert!(glass.refraction_depth < generic_lens.refraction_depth);
+        assert!(glass.refraction_curve < generic_lens.refraction_curve);
+        assert!(glass.dispersion < generic_lens.dispersion);
         assert_eq!(glass.blur_radius, Some(0.0));
-        assert!((0.28..=0.36).contains(&glass.highlight));
+        assert!(glass.highlight < generic_lens.highlight);
         assert!(
             glass.shadow,
             "the moving lens needs its target-visible SDF contact outline"

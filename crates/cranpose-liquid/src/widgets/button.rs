@@ -535,11 +535,9 @@ pub fn GlassIconButtonGroup(
                                         event.consume();
                                     }
                                 }
-                                PointerEventKind::Cancel => {
-                                    if down_index.take().is_some() {
-                                        active.set(None);
-                                        event.consume();
-                                    }
+                                PointerEventKind::Cancel if down_index.take().is_some() => {
+                                    active.set(None);
+                                    event.consume();
                                 }
                                 _ => {}
                             }

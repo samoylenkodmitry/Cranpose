@@ -546,6 +546,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         * transmission_refraction;
     var loupe_seam_mask = 0.0;
     if loupe_mode > 0.5 {
+        let loupe_activity = clamp(get_float(90u), 0.0, 1.0);
         // The bubble's inradius: capsule half-height (the SDF's deepest
         // point), the natural unit of the drop optic.
         let r_in = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
@@ -605,7 +606,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                 // glyph bodies instead of stretching them into streaks.
                 g = 1.0 - 0.48 * ((tau - 0.3) / 0.7);
             }
-            let fold_weight = vert_weight * 0.62;
+            let fold_weight = vert_weight * 0.62 * loupe_activity;
             let s_band0 = band_start / m;
             let s_units = s_band0 + (fold_peak - s_band0) * g;
             let fold_units = s_units - xr;
@@ -616,7 +617,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             let seam_avoid = center_column
                 * smoothstep(0.45, 0.78, outward_normal.y)
                 * smoothstep(0.35, 0.70, tau);
-            loupe_seam_mask = seam_avoid * 0.55;
+            loupe_seam_mask = seam_avoid * 0.55 * loupe_activity;
             // The target fold is anisotropic: it mirrors vertically across the
             // long edges. Using the radial normal here applies its vertical
             // component a second time and starves the shoulder glyphs.
@@ -854,22 +855,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         let target_luma = mix(0.82, 0.18, foreground_is_light);
         let correction = (target_luma - frost_luma) * adaptive_frost * contrast_need;
         rgb = clamp(rgb + vec3<f32>(correction), vec3<f32>(0.0), vec3<f32>(1.0));
-    }
-
-    if loupe_mode > 0.5 {
-        // Loupe content alpha (uniform 90): the reference dissolve fades the
-        // WHOLE lens content — magnified glyphs, rim, fold — toward what sits
-        // behind the lens (~68% by mid-fade), while the optics themselves
-        // stay at full power. Blend against the undisplaced backdrop so the
-        // fade reads as the lens turning translucent, not the optics dying.
-        var lens_alpha = get_float(90u);
-        if lens_alpha <= 0.0 {
-            lens_alpha = 1.0;
-        }
-        if lens_alpha < 1.0 {
-            let plain = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
-            rgb = mix(plain.rgb, rgb, lens_alpha);
-        }
     }
 
     // Ordered-noise dither hides banding in the blurred gradients behind the

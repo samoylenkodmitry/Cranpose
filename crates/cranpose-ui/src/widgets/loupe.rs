@@ -11,8 +11,8 @@
 //!
 //! Motion follows `example/target/on-white/text-handle-bubble/`:
 //! * the shell starts at the touched handle as a narrow vertical capsule;
-//! * width, height, rise, and optical opacity increase from one continuous
-//!   progress value over roughly 200 ms;
+//! * width, height, rise, refraction, magnification, chroma, and edge light
+//!   increase from one continuous progress value over roughly 200 ms;
 //! * every active frame uses the current finger x directly while the vertical
 //!   rise supplies the stable grab offset;
 //! * release reverses that same physical path, sinking into the handle while
@@ -124,8 +124,8 @@ fn loupe_pose(progress: f32) -> LoupePose {
     }
 }
 
-fn loupe_optic_alpha(progress: f32) -> f32 {
-    smoothstep01(progress / 0.28)
+fn loupe_optical_activity(progress: f32) -> f32 {
+    smoothstep01(progress)
 }
 
 fn smoothstep01(value: f32) -> f32 {
@@ -194,7 +194,7 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     }
 
     let pose = loupe_pose(p);
-    let optic = loupe_optic_alpha(p);
+    let optic = loupe_optical_activity(p);
 
     let width = LOUPE_WIDTH * pose.width_frac;
     let height = LOUPE_HEIGHT * pose.height_frac;
@@ -210,7 +210,7 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
         focus_offset: (0.0, focus_offset_y),
         seam_lift: shown.dot_clearance,
         corner_radius,
-        progress: optic,
+        activity: optic,
         ..LiquidLoupeSpec::default()
     };
 
@@ -321,38 +321,35 @@ mod tests {
         assert!(early.height_frac < middle.height_frac);
         assert_eq!(middle.height_frac, late.height_frac);
         assert!(early.rise_frac < middle.rise_frac && middle.rise_frac < late.rise_frac);
-        assert!(loupe_optic_alpha(0.10) < loupe_optic_alpha(0.50));
-        assert_eq!(loupe_optic_alpha(1.0), 1.0);
+        assert!(loupe_optical_activity(0.10) < loupe_optical_activity(0.50));
+        assert!(loupe_optical_activity(0.50) < loupe_optical_activity(0.90));
+        assert_eq!(loupe_optical_activity(1.0), 1.0);
     }
 
     #[test]
-    fn loupe_effect_keeps_optics_constant_and_fades_content_alpha() {
-        // The lens is FIXED-OPTIC for its whole life; `progress` is the
-        // CONTENT ALPHA (uniform 90) — the dissolve blends the whole lens
-        // output toward the plain backdrop while magnification, rim and
-        // dispersion stay at full power (the reference's magnified glyphs
-        // stay magnified while dimming).
-        let dimmed = LiquidLoupeSpec {
-            progress: 0.65,
+    fn loupe_effect_relaxes_optics_without_enabling_backdrop_blur() {
+        let relaxed = LiquidLoupeSpec {
+            activity: 0.65,
             ..LiquidLoupeSpec::default()
         };
-        let effect = liquid_loupe_effect((LOUPE_WIDTH, LOUPE_HEIGHT), &dimmed);
+        let effect = liquid_loupe_effect((LOUPE_WIDTH, LOUPE_HEIGHT), &relaxed);
         let cranpose_ui_graphics::RenderEffect::Shader { shader } = effect else {
             panic!("loupe must be a bare shader effect");
         };
         let u = shader.uniforms();
+        assert!((u[9] - 0.34 * relaxed.activity).abs() < 1e-6);
+        assert!((u[83] - (1.0 + (LOUPE_MAGNIFICATION - 1.0) * relaxed.activity)).abs() < 1e-6);
         assert!(
-            (u[83] - LOUPE_MAGNIFICATION).abs() < 1e-6,
-            "magnification never animates, got {}",
-            u[83]
+            (u[cranpose_ui_graphics::GLASS_DISPERSION_UNIFORM]
+                - relaxed.dispersion * relaxed.activity)
+                .abs()
+                < 1e-6
         );
-        let dispersion = u[cranpose_ui_graphics::GLASS_DISPERSION_UNIFORM];
-        assert_eq!(dispersion, dimmed.dispersion);
-        assert_eq!(u[84], dimmed.band_start);
-        assert!(
-            (u[90] - 0.65).abs() < 1e-6,
-            "content alpha rides uniform 90"
-        );
+        assert!((u[11] - relaxed.highlight * relaxed.activity).abs() < 1e-6);
+        assert_eq!(u[28], relaxed.activity);
+        assert_eq!(u[90], relaxed.activity);
+        assert_eq!(u[cranpose_ui_graphics::GLASS_BLUR_RADIUS_UNIFORM], 0.0);
+        assert_eq!(u[84], relaxed.band_start);
         assert!(
             (24.0..=29.0).contains(&u[87]),
             "the center seam must clear the source handle dot, got {}",

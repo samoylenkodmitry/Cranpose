@@ -53,6 +53,7 @@ pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 ///  83: loupe center magnification (m0)
 ///  84: loupe band start (depth fraction 0..1 where the rim fold begins)
 ///  85: loupe fold peak (sampling reach at the fold crest, in inradius units)
+///  90: loupe optical activity (0 = identity, 1 = fully raised drop)
 ///  93: wcKSRD blur reach in physical pixels
 /// 111: continuous optical activity (0 = exact backdrop identity, 1 = full)
 /// 113..116: resting surface tint RGBA (transparent = no resting surface)
@@ -196,13 +197,13 @@ pub struct LiquidLoupeSpec {
     pub seam_lift: f32,
     /// Specular rim intensity.
     pub highlight: f32,
-    /// Content alpha (0..1): 1 while the lens lives (grow included — the
-    /// optics never animate); the dissolve lowers it, blending the whole
-    /// lens output toward the plain backdrop before the terminal vanish.
-    pub progress: f32,
-    /// Corner radius (dp). The newborn reference is a flat-topped SQUIRCLE,
-    /// not a circle: the caller passes ~0.38·height at birth, morphing to
-    /// the capsule's half-height as the width fills out. <= 0 = capsule.
+    /// Continuous optical activity. Geometry is owned by the caller; this
+    /// coordinate raises and lowers refraction, magnification, dispersion,
+    /// fold return, and edge light without cross-fading sampled content.
+    pub activity: f32,
+    /// Corner radius in dp. The text loupe follows the smaller half-extent as
+    /// it grows, producing a narrow capsule at birth and the full horizontal
+    /// capsule at rest. Values <= 0 select that capsule radius automatically.
     pub corner_radius: f32,
 }
 
@@ -213,12 +214,12 @@ impl Default for LiquidLoupeSpec {
             focus_offset: (0.0, 75.0),
             band_start: 0.82,
             fold_peak: 0.94,
-            dispersion: 0.45,
+            dispersion: 0.36,
             seam_lift: 26.0,
             // The rim is a distinct light path, but its gain stays low enough
             // that the transmitted face remains transparent and high-contrast.
-            highlight: 0.6,
-            progress: 1.0,
+            highlight: 0.42,
+            activity: 1.0,
             corner_radius: 0.0,
         }
     }
@@ -231,12 +232,7 @@ impl Default for LiquidLoupeSpec {
 /// at 1.0, fractional desktop scales).
 pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> RenderEffect {
     let (w, h) = (node_size.0.max(1.0), node_size.1.max(1.0));
-    // The lens is FIXED-OPTIC through its whole life: magnification, rim and
-    // `progress` is the CONTENT ALPHA — the dissolve blends the whole lens
-    // output toward the plain backdrop
-    // (uniform 90), which is how the reference reads translucent mid-fade
-    // while its magnified glyphs stay magnified.
-    let alpha = spec.progress.clamp(0.0, 1.0);
+    let activity = spec.activity.clamp(0.0, 1.0);
     let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
     shader.set_float2(0, w, h); // container = node size dp
     shader.set_float2(2, w * 0.5, h * 0.5); // capsule centered in the node
@@ -246,26 +242,29 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     } else {
         shader.set_float(6, -1.0); // capsule radius sentinel
     }
-    shader.set_float(9, 0.34);
+    shader.set_float(9, 0.34 * activity);
     shader.set_float(GLASS_REFRACTION_CURVE_UNIFORM, 0.25);
-    shader.set_float(GLASS_DISPERSION_UNIFORM, spec.dispersion.clamp(0.0, 1.0));
+    shader.set_float(
+        GLASS_DISPERSION_UNIFORM,
+        spec.dispersion.clamp(0.0, 1.0) * activity,
+    );
     shader.set_float(GLASS_TRANSMISSION_REFRACTION_UNIFORM, 1.0);
     shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 1.0);
     shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
-    shader.set_float(11, spec.highlight);
+    shader.set_float(11, spec.highlight * activity);
     shader.set_float4(14, 1.0, 1.0, 1.0, 0.0); // no tint
     shader.set_float(18, 1.0); // saturation neutral
     shader.set_float(20, 0.0); // no lift
     shader.set_float(21, 0.5); // dither
     shader.set_float(24, 1.0); // contrast neutral
-    shader.set_float(28, 1.0); // interactive-lens rim style
+    shader.set_float(28, activity); // interactive-lens rim style
     shader.set_float(80, 1.0); // loupe mode
     shader.set_float2(81, spec.focus_offset.0, spec.focus_offset.1);
-    shader.set_float(83, spec.magnification);
+    shader.set_float(83, 1.0 + (spec.magnification.max(0.2) - 1.0) * activity);
     shader.set_float(84, spec.band_start);
     shader.set_float(85, spec.fold_peak);
     shader.set_float(87, spec.seam_lift);
-    shader.set_float(90, alpha.max(1.0e-3));
+    shader.set_float(90, activity);
     // The capture must cover the farthest sample: the focus offset plus the
     // fold reach past the bubble edge (in dp; paddings are logical units).
     let r_in = 0.5 * w.min(h);
