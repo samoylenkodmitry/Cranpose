@@ -58,6 +58,16 @@ fn main() {
             );
             shot(&robot, &shot_dir, "01-top");
 
+            if std::env::var_os("CRANPOSE_LIQUID_SEGMENTED_ONLY").is_some() {
+                capture_control_visuals(&robot, &shot_dir);
+                println!(
+                    "PASS: liquid segmented comparison written to {}",
+                    shot_dir.display()
+                );
+                robot.exit().expect("exit");
+                return;
+            }
+
             // Toggle lens: normalize to the reference's off state, raise the
             // lens over the left thumb, then release once. The supplied 54
             // frames show the lens springing right while the stationary track
@@ -419,6 +429,10 @@ fn capture_control_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
     shot_scaled(robot, shot_dir, "01d-segmented-release-150ms", 2.0);
     settle(robot, 700);
     shot_scaled(robot, shot_dir, "01d-segmented-settled", 2.0);
+
+    if std::env::var_os("CRANPOSE_LIQUID_SEGMENTED_ONLY").is_some() {
+        return;
+    }
 
     let airplane = cranpose_testing::find_text_in_semantics(robot, "Airplane Mode")
         .expect("Airplane Mode row in semantics");

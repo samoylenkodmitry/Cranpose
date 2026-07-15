@@ -31,6 +31,9 @@ const LENS_OVERFLOW: f32 = 8.0;
 const LENS_LIFT_SCALE: f32 = 1.22;
 /// Glass node span beyond the lens shape (rim glow + bulge live here).
 const LENS_PAD: f32 = 10.0;
+/// A segmented selection stays recognizably one cell wide while its surface
+/// carries the shared incompressible fluid strain.
+const SEGMENTED_STRAIN_RESPONSE: f32 = 0.36;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
 
@@ -301,8 +304,9 @@ pub fn LiquidSegmentedControl(
             // The interaction lens riding the indicator: a glass capsule that
             // magnifies the label under it and bulges along the travel.
             let lens_h = SEGMENT_HEIGHT + LENS_OVERFLOW;
-            let deformation_headroom =
-                crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
+            let response_stretch = |stretch: f32| 1.0 + (stretch - 1.0) * SEGMENTED_STRAIN_RESPONSE;
+            let deformation_headroom = response_stretch(crate::dynamics::STRETCH_MAX)
+                .max(1.0 / response_stretch(crate::dynamics::STRETCH_MIN));
             let node_w = (segment_width + 4.0) * LENS_LIFT_SCALE * deformation_headroom
                 + crate::dynamics::BULGE_MAX
                 + LENS_PAD * 2.0;
@@ -348,10 +352,15 @@ pub fn LiquidSegmentedControl(
                                 glue: 0.0,
                                 wobble_amplitude: 0.0,
                                 wobble_phase: 0.0,
-                                bulge_amplitude: pose.bulge_amplitude.min(6.0),
+                                bulge_amplitude: pose.bulge_amplitude.min(4.0),
                                 bulge_direction: pose.bulge_direction,
                                 ellipse_blend: 0.0,
-                                deformation: Some(pose.deformation()),
+                                deformation: Some(
+                                    crate::material::GlassDeformation::incompressible(
+                                        pose.axis,
+                                        response_stretch(pose.stretch),
+                                    ),
+                                ),
                             }),
                             ..Default::default()
                         }
