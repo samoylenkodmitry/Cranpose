@@ -32,7 +32,7 @@ pub fn LiquidChip(
     let typography = liquid_typography();
     let interaction = rememberMutableInteractionSource();
     let (pressed_modifier, _pressed, content_alpha) =
-        liquid_press_scale(Modifier::empty(), interaction.clone(), 1.06);
+        liquid_press_scale(Modifier::empty(), interaction.clone(), 1.18);
 
     let label_color = animateColorAsState(
         if selected {
@@ -44,7 +44,7 @@ pub fn LiquidChip(
         "chip-label",
     );
 
-    let mut base = pressed_modifier;
+    let mut base = Modifier::empty();
     if selected {
         base = base.glass_effect(Glass::regular().adaptive_frost(colors.accent, 0.65));
     } else {
@@ -64,29 +64,34 @@ pub fn LiquidChip(
         .padding_symmetric(14.0, 7.0);
 
     let label = label.into();
-    Box(
-        base.then(modifier),
-        BoxSpec::default().content_alignment(Alignment::CENTER),
-        move || {
-            let label = label.clone();
-            let style = TextStyle {
-                span_style: SpanStyle {
-                    color: Some(label_color.get()),
-                    font_weight: Some(if selected {
-                        FontWeight::SEMI_BOLD
-                    } else {
-                        FontWeight::MEDIUM
-                    }),
-                    ..typography.subheadline.span_style.clone()
-                },
-                ..typography.subheadline.clone()
-            };
-            let content_layer =
-                Modifier::empty().graphics_layer(move || cranpose_ui_graphics::GraphicsLayer {
-                    alpha: content_alpha.get().clamp(0.0, 1.0),
-                    ..Default::default()
-                });
-            Text(label, content_layer, style);
-        },
-    );
+    let chip = base.then(modifier);
+    Box(pressed_modifier, BoxSpec::default(), move || {
+        let label = label.clone();
+        let typography = typography.clone();
+        Box(
+            chip.clone(),
+            BoxSpec::default().content_alignment(Alignment::CENTER),
+            move || {
+                let label = label.clone();
+                let style = TextStyle {
+                    span_style: SpanStyle {
+                        color: Some(label_color.get()),
+                        font_weight: Some(if selected {
+                            FontWeight::SEMI_BOLD
+                        } else {
+                            FontWeight::MEDIUM
+                        }),
+                        ..typography.subheadline.span_style.clone()
+                    },
+                    ..typography.subheadline.clone()
+                };
+                let content_layer =
+                    Modifier::empty().graphics_layer(move || cranpose_ui_graphics::GraphicsLayer {
+                        alpha: content_alpha.get().clamp(0.0, 1.0),
+                        ..Default::default()
+                    });
+                Text(label, content_layer, style);
+            },
+        );
+    });
 }

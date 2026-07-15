@@ -253,18 +253,20 @@ fn main() -> ExitCode {
                 (50.0, true),  // +83
                 (50.0, true),  // +133
                 (50.0, true),  // +183
-                (37.0, true),  // +220: gone
-                (80.0, true),  // +300
-                (100.0, true), // +400
+                (50.0, true),  // +233
+                (37.0, true),  // +270: gone
+                (80.0, true),  // +350
+                (100.0, true), // +450
             ];
             let dissolve_names = [
                 "09-collapse-033ms",
                 "10-collapse-083ms",
                 "10b-collapse-133ms",
                 "11-collapse-183ms",
-                "11a-gone-220ms",
-                "11b-menu-300ms",
-                "11c-menu-400ms",
+                "11a-collapse-233ms",
+                "11b-gone-270ms",
+                "11c-menu-350ms",
+                "11d-menu-450ms",
             ];
             let shots = robot
                 .capture_keyframes(3.0, &dissolve_steps)
@@ -278,8 +280,8 @@ fn main() -> ExitCode {
                 drag_to_x + 25.0,
                 line1_mid - 14.0,
             );
-            if region_has_structure(&shots[4], terminal_region) {
-                fail(&robot, "collapse +220 ms: bubble residue never unmounted");
+            if region_has_structure(&shots[5], terminal_region) {
+                fail(&robot, "collapse +270 ms: bubble residue never unmounted");
             }
             std::thread::sleep(Duration::from_millis(500));
             let after = robot.screenshot_with_scale(3.0).expect("after");

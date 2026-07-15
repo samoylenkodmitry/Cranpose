@@ -46,7 +46,7 @@ pub const LOUPE_HEIGHT: f32 = 82.0;
 pub const LOUPE_RISE: f32 = 75.0;
 /// Magnification of the lens (uniform; measured on the reference).
 pub const LOUPE_MAGNIFICATION: f32 = 1.25;
-const LOUPE_COLLAPSE_MS: u64 = 200;
+const LOUPE_COLLAPSE_MS: u64 = 250;
 /// How far below the line bottom (in line heights) the finger still counts
 /// as covering the line. The end/cursor dot's center sits ~0.29 line heights
 /// below the bottom (16 dp dot on a 20 dp line), so a dot-center grab falls
@@ -112,12 +112,15 @@ struct LoupePose {
 /// collapse.
 fn loupe_pose(progress: f32) -> LoupePose {
     let p = progress.max(0.0);
-    let unit = p.min(1.0);
-    let width = if p <= 1.0 { unit.powf(0.95) } else { p };
+    let width = if p <= 1.0 {
+        staged_smoothstep(p, 0.08, 1.0)
+    } else {
+        p
+    };
     LoupePose {
         width_frac: width,
-        height_frac: unit.powf(0.45),
-        rise_frac: unit.powf(0.60),
+        height_frac: staged_smoothstep(p, 0.0, 0.42),
+        rise_frac: staged_smoothstep(p, 0.06, 0.78),
     }
 }
 
@@ -128,6 +131,10 @@ fn loupe_optic_alpha(progress: f32) -> f32 {
 fn smoothstep01(value: f32) -> f32 {
     let t = value.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+fn staged_smoothstep(value: f32, start: f32, end: f32) -> f32 {
+    smoothstep01((value - start) / (end - start).max(f32::EPSILON))
 }
 
 /// Animated loupe state living across recompositions. One progress value owns
@@ -311,7 +318,8 @@ mod tests {
         let middle = loupe_pose(0.50);
         let late = loupe_pose(0.90);
         assert!(early.width_frac < middle.width_frac && middle.width_frac < late.width_frac);
-        assert!(early.height_frac < middle.height_frac && middle.height_frac < late.height_frac);
+        assert!(early.height_frac < middle.height_frac);
+        assert_eq!(middle.height_frac, late.height_frac);
         assert!(early.rise_frac < middle.rise_frac && middle.rise_frac < late.rise_frac);
         assert!(loupe_optic_alpha(0.10) < loupe_optic_alpha(0.50));
         assert_eq!(loupe_optic_alpha(1.0), 1.0);
@@ -339,16 +347,8 @@ mod tests {
             u[83]
         );
         let dispersion = u[cranpose_ui_graphics::GLASS_DISPERSION_UNIFORM];
-        assert!(
-            (dispersion - 1.0).abs() < 1e-6,
-            "the shared wcKSRD dispersion must stay at full strength, got {}",
-            dispersion
-        );
-        assert!(
-            (0.58..=0.62).contains(&u[84]),
-            "the legible fold must own the outer 40% of long-edge depth, got band start {}",
-            u[84]
-        );
+        assert_eq!(dispersion, dimmed.dispersion);
+        assert_eq!(u[84], dimmed.band_start);
         assert!(
             (u[90] - 0.65).abs() < 1e-6,
             "content alpha rides uniform 90"

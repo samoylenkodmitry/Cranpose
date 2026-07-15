@@ -112,7 +112,7 @@ pub fn LiquidNavBar(
                 .glass_effect(
                     Glass::regular()
                         .shape(LiquidShape::RoundedRect(0.0))
-                        .blur_radius(30.0)
+                        .blur_radius(8.0)
                         .saturation(1.0)
                         .transmission_refraction(0.0)
                         .shadow(false),

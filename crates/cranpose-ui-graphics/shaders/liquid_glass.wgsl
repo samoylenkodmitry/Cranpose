@@ -605,7 +605,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                 // glyph bodies instead of stretching them into streaks.
                 g = 1.0 - 0.48 * ((tau - 0.3) / 0.7);
             }
-            let fold_weight = vert_weight;
+            let fold_weight = vert_weight * 0.62;
             let s_band0 = band_start / m;
             let s_units = s_band0 + (fold_peak - s_band0) * g;
             let fold_units = s_units - xr;

@@ -187,6 +187,8 @@ pub struct LiquidLoupeSpec {
     /// Sampling reach at the fold crest, in inradius units (>1 reaches past
     /// the bubble edge before folding back — the inversion).
     pub fold_peak: f32,
+    /// Spectral separation of the meniscus return.
+    pub dispersion: f32,
     /// The fold floor: the bottom band never re-displays content nearer the
     /// focus line than this clearance (dp). The dragged handle's dot hangs
     /// just below the line; the caller sets this past the dot's bottom so
@@ -209,11 +211,9 @@ impl Default for LiquidLoupeSpec {
         Self {
             magnification: 1.25,
             focus_offset: (0.0, 75.0),
-            // The fold occupies the outer 40% of the long-edge depth. The center
-            // handle occludes it while the remaining band mirrors the next
-            // line near 1:1.
-            band_start: 0.60,
-            fold_peak: 0.80,
+            band_start: 0.82,
+            fold_peak: 0.94,
+            dispersion: 0.45,
             seam_lift: 26.0,
             // The rim is a distinct light path, but its gain stays low enough
             // that the transmitted face remains transparent and high-contrast.
@@ -248,7 +248,7 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     }
     shader.set_float(9, 0.34);
     shader.set_float(GLASS_REFRACTION_CURVE_UNIFORM, 0.25);
-    shader.set_float(GLASS_DISPERSION_UNIFORM, 1.0);
+    shader.set_float(GLASS_DISPERSION_UNIFORM, spec.dispersion.clamp(0.0, 1.0));
     shader.set_float(GLASS_TRANSMISSION_REFRACTION_UNIFORM, 1.0);
     shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 1.0);
     shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
@@ -430,14 +430,18 @@ mod tests {
 
     #[test]
     fn loupe_and_menu_use_the_same_wcksrd_program() {
+        let loupe_spec = LiquidLoupeSpec::default();
         let RenderEffect::Shader { shader: loupe } =
-            liquid_loupe_effect((117.0, 82.0), &LiquidLoupeSpec::default())
+            liquid_loupe_effect((117.0, 82.0), &loupe_spec)
         else {
             panic!("loupe must use the shared runtime shader");
         };
         assert_eq!(loupe.uniforms()[9], 0.34);
         assert_eq!(loupe.uniforms()[GLASS_REFRACTION_CURVE_UNIFORM], 0.25);
-        assert_eq!(loupe.uniforms()[GLASS_DISPERSION_UNIFORM], 1.0);
+        assert_eq!(
+            loupe.uniforms()[GLASS_DISPERSION_UNIFORM],
+            loupe_spec.dispersion
+        );
         assert_eq!(loupe.uniforms()[80], 1.0);
         assert!(loupe.input_padding() >= 75.0);
 

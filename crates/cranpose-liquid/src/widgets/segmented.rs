@@ -25,6 +25,10 @@ const SEGMENT_HEIGHT: f32 = 36.0;
 const TRACK_PADDING: f32 = 2.0;
 /// How far the interaction lens pokes past the track vertically.
 const LENS_OVERFLOW: f32 = 8.0;
+/// Touch raises the whole optical body before directional deformation. This
+/// preserves the control's volume without letting maximum horizontal strain
+/// squash the lens below the track height.
+const LENS_LIFT_SCALE: f32 = 1.22;
 /// Glass node span beyond the lens shape (rim glow + bulge live here).
 const LENS_PAD: f32 = 10.0;
 /// Pointer travel below this is a tap, not a swipe.
@@ -300,11 +304,12 @@ pub fn LiquidSegmentedControl(
                 let lens_h = SEGMENT_HEIGHT + LENS_OVERFLOW;
                 let deformation_headroom =
                     crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
-                let node_w = (segment_width + 4.0) * deformation_headroom
+                let node_w = (segment_width + 4.0) * LENS_LIFT_SCALE * deformation_headroom
                     + crate::dynamics::BULGE_MAX
                     + LENS_PAD * 2.0;
-                let node_h =
-                    lens_h * deformation_headroom + crate::dynamics::BULGE_MAX + LENS_PAD * 2.0;
+                let node_h = lens_h * LENS_LIFT_SCALE * deformation_headroom
+                    + crate::dynamics::BULGE_MAX
+                    + LENS_PAD * 2.0;
                 let lens_for_layer = lens_progress;
                 let physics_axis = Rc::clone(&lens_axis);
                 let lens = Modifier::empty()
@@ -328,8 +333,9 @@ pub fn LiquidSegmentedControl(
                             .no_clip(),
                         move || {
                             let grow = lens_for_layer.get().clamp(0.0, 1.2);
-                            let base_w = segment_width + 4.0 * grow;
-                            let base_h = SEGMENT_HEIGHT + LENS_OVERFLOW * grow;
+                            let lift = 1.0 + (LENS_LIFT_SCALE - 1.0) * grow;
+                            let base_w = (segment_width + 4.0 * grow) * lift;
+                            let base_h = (SEGMENT_HEIGHT + LENS_OVERFLOW * grow) * lift;
                             // Droplet law over the indicator ride
                             // (crate::dynamics): speed stretches the capsule
                             // along the travel, braking swells its front.

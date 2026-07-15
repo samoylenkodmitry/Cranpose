@@ -956,7 +956,7 @@ pub fn LiquidMenu(
                 // smudge beneath the glass, not a hot saturated orb.
                 let glass = Glass::regular()
                     .shape(LiquidShape::RoundedRect(MENU_RADIUS))
-                    .blur_radius(13.0)
+                    .blur_radius(8.0)
                     .saturation(1.55)
                     .lift(0.58)
                     .highlight(0.08)

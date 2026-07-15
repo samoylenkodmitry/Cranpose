@@ -228,6 +228,8 @@ fn main() {
                 settle(&robot, 700);
             }
 
+            capture_store_bar_visuals(&robot, &shot_dir);
+            capture_button_visuals(&robot, &shot_dir);
             capture_control_visuals(&robot, &shot_dir);
             if std::env::var_os("CRANPOSE_LIQUID_OPTICS_ONLY").is_some() {
                 println!(
@@ -428,6 +430,144 @@ fn capture_control_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
     for (frame, name) in release_frames.iter().zip(release_names) {
         save_frame(frame, shot_dir, name);
     }
+}
+
+fn capture_store_bar_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
+    scroll_text_to_y(robot, "BOTTOM BAR", 250.0);
+    settle(robot, 500);
+    let today = cranpose_testing::find_button_exact_in_semantics(robot, "Today")
+        .expect("Today store tab in semantics");
+    let games = cranpose_testing::find_button_exact_in_semantics(robot, "Games")
+        .expect("Games store tab in semantics");
+    let apps = cranpose_testing::find_button_exact_in_semantics(robot, "Apps")
+        .expect("Apps store tab in semantics");
+    let arcade = cranpose_testing::find_button_exact_in_semantics(robot, "Arcade")
+        .expect("Arcade store tab in semantics");
+    let center =
+        |bounds: (f32, f32, f32, f32)| (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5);
+
+    shot_scaled(robot, shot_dir, "01c3-store-search-rest", 2.0);
+    let (today_x, bar_y) = center(today);
+    robot.click(today_x, bar_y).expect("select Today store tab");
+    let transition_steps = [
+        (0.0, true),
+        (1.0, false),
+        (32.0, true),
+        (34.0, true),
+        (50.0, true),
+        (83.0, true),
+        (167.0, true),
+    ];
+    let transition_names = [
+        "01c4-store-click-000ms",
+        "01c4-store-click-033ms",
+        "01c4-store-click-067ms",
+        "01c4-store-click-117ms",
+        "01c4-store-click-200ms",
+        "01c4-store-click-367ms",
+    ];
+    let frames = robot
+        .capture_keyframes(2.0, &transition_steps)
+        .expect("store-bar click keyframes");
+    for (frame, name) in frames.iter().zip(transition_names) {
+        save_frame(frame, shot_dir, name);
+    }
+    settle(robot, 700);
+    shot_scaled(robot, shot_dir, "01c5-store-today-rest", 2.0);
+
+    robot
+        .mouse_move(today_x, bar_y)
+        .expect("hover Today store tab");
+    robot.mouse_down().expect("press Today store tab");
+    std::thread::sleep(Duration::from_millis(180));
+    shot_scaled(robot, shot_dir, "01c6-store-held", 2.0);
+    for (index, bounds) in [games, apps, arcade].into_iter().enumerate() {
+        let (x, y) = center(bounds);
+        robot.mouse_move(x, y).expect("drag unified store lens");
+        shot_scaled(
+            robot,
+            shot_dir,
+            &format!("01c7-store-direct-follow-{}", index + 1),
+            2.0,
+        );
+    }
+    robot.mouse_up().expect("release unified store lens");
+    let release_steps = [
+        (0.0, true),
+        (1.0, false),
+        (32.0, true),
+        (67.0, true),
+        (100.0, true),
+        (200.0, true),
+    ];
+    let release_names = [
+        "01c8-store-release-000ms",
+        "01c8-store-release-033ms",
+        "01c8-store-release-100ms",
+        "01c8-store-release-200ms",
+        "01c8-store-release-400ms",
+    ];
+    let frames = robot
+        .capture_keyframes(2.0, &release_steps)
+        .expect("store-bar release keyframes");
+    for (frame, name) in frames.iter().zip(release_names) {
+        save_frame(frame, shot_dir, name);
+    }
+    settle(robot, 700);
+    shot_scaled(robot, shot_dir, "01c9-store-arcade-rest", 2.0);
+}
+
+fn capture_button_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
+    scroll_text_to_y(robot, "BUTTONS", 260.0);
+    settle(robot, 500);
+    shot_scaled(robot, shot_dir, "01f-buttons-rest", 2.0);
+    for (index, label) in ["Glass", "Prominent"].into_iter().enumerate() {
+        let bounds = cranpose_testing::find_button_exact_in_semantics(robot, label)
+            .or_else(|| cranpose_testing::find_text_in_semantics(robot, label))
+            .unwrap_or_else(|| panic!("{label} button in semantics"));
+        let x = bounds.0 + bounds.2 * 0.5;
+        let y = bounds.1 + bounds.3 * 0.5;
+        robot.mouse_move(x, y).expect("hover glass button");
+        robot.mouse_down().expect("press glass button");
+        std::thread::sleep(Duration::from_millis(180));
+        shot_scaled(
+            robot,
+            shot_dir,
+            &format!("01f-buttons-held-{}", index + 1),
+            2.0,
+        );
+        robot.mouse_up().expect("release glass button");
+        std::thread::sleep(Duration::from_millis(100));
+        shot_scaled(
+            robot,
+            shot_dir,
+            &format!("01f-buttons-release-{}", index + 1),
+            2.0,
+        );
+        settle(robot, 400);
+    }
+
+    scroll_text_to_y(robot, "CHIPS", 300.0);
+    settle(robot, 500);
+    shot_scaled(robot, shot_dir, "01g-chips-rest", 2.0);
+    let dark_mode = cranpose_testing::find_button_exact_in_semantics(robot, "Dark mode")
+        .or_else(|| cranpose_testing::find_text_in_semantics(robot, "Dark mode"))
+        .expect("Dark mode chip in semantics");
+    let chip_x = dark_mode.0 + dark_mode.2 * 0.5;
+    let chip_y = dark_mode.1 + dark_mode.3 * 0.5;
+    robot
+        .mouse_move(chip_x, chip_y)
+        .expect("hover Dark mode chip");
+    robot.mouse_down().expect("press Dark mode chip");
+    std::thread::sleep(Duration::from_millis(180));
+    shot_scaled(robot, shot_dir, "01g-chips-held", 2.0);
+    robot.mouse_up().expect("release Dark mode chip");
+    settle(robot, 500);
+    shot_scaled(robot, shot_dir, "01g-chips-selected", 2.0);
+    robot
+        .click(chip_x, chip_y)
+        .expect("restore light theme after chip capture");
+    settle(robot, 500);
 }
 
 fn shot(robot: &cranpose::Robot, dir: &Path, name: &str) {

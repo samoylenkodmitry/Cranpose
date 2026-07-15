@@ -1,4 +1,4 @@
-//! The Liquid Glass material: a backdrop lens with wcKSRD-owned blur and
+//! The Liquid Glass material: Gaussian backdrop frost followed by wcKSRD
 //! refraction applied to a composable's own bounds through
 //! [`LiquidModifierExt::glass_effect`] — the analogue of SwiftUI's
 //! `.glassEffect(_:in:)`.
@@ -21,6 +21,11 @@ const CAPSULE_CLIP_RADIUS: f32 = 1.0e6;
 /// Shader sentinel requesting the capsule radius (resolved against the node's
 /// size at render time; see `liquid_glass.wgsl` cover mode).
 const CAPSULE_SHADER_RADIUS: f32 = -1.0;
+
+/// wcKSRD uses a tightly sampled 9x9 footprint (four half-pixel steps in
+/// either direction). Larger frost radii belong in the renderer's Gaussian
+/// pass; spreading those 81 taps over a large radius produces a visible grid.
+const WCKSRD_OPTICAL_BLUR_RADIUS_PX: f32 = 2.0;
 
 /// The shape of a glass element (also its clip and shadow shape).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -391,7 +396,7 @@ impl Glass {
 
     fn default_blur_radius(&self) -> f32 {
         match self.variant {
-            GlassVariant::Regular => 18.0,
+            GlassVariant::Regular => 8.0,
             GlassVariant::Clear => 3.0,
             GlassVariant::Lens => 0.0,
         }
@@ -623,11 +628,13 @@ impl ResolvedGlass {
         shader.set_float2(22, 0.0, 1.0);
         shader.set_float(24, 1.0 + (self.contrast - 1.0) * activity);
         shader.set_float(28, self.rim_style * activity);
-        let wcksrd_blur_radius = if content_mask {
+        let requested_blur_radius_px = if content_mask {
             0.0
         } else {
             self.blur_radius_dp * density * activity
         };
+        let wcksrd_blur_radius = requested_blur_radius_px.min(WCKSRD_OPTICAL_BLUR_RADIUS_PX);
+        let gaussian_blur_radius = (requested_blur_radius_px - wcksrd_blur_radius).max(0.0);
         shader.set_float(GLASS_BLUR_RADIUS_UNIFORM, wcksrd_blur_radius);
         shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
         let resting_tint = dynamics.resting_tint.unwrap_or(Color::TRANSPARENT);
@@ -683,15 +690,7 @@ impl ResolvedGlass {
             .unwrap_or(0.0);
         // Paddings are consumed in LOGICAL units by the backdrop capture and
         // output rects — dp, never density-scaled.
-        shader.set_input_padding(
-            self.input_padding()
-                + morph_pad
-                + if content_mask {
-                    0.0
-                } else {
-                    self.blur_radius_dp
-                },
-        );
+        shader.set_input_padding(self.input_padding() + morph_pad + wcksrd_blur_radius / density);
         // Morphing glass WRITES outside the node rect (wobble, bulge, glued
         // neighbors, plus the ~2px antialiased rim); declare it so the
         // composite scissor doesn't clip the field at the node edge.
@@ -704,7 +703,12 @@ impl ResolvedGlass {
             shader.set_output_padding(morph_pad + shadow_reach + 4.0);
         }
 
-        RenderEffect::runtime_shader(shader)
+        let optical_effect = RenderEffect::runtime_shader(shader);
+        if gaussian_blur_radius > f32::EPSILON {
+            RenderEffect::blur(gaussian_blur_radius).then(optical_effect)
+        } else {
+            optical_effect
+        }
     }
 
     /// Backdrop capture padding (px) covering the largest refracted sample
@@ -813,6 +817,14 @@ mod tests {
         LiquidColors::light(Color::from_rgb_u8(0, 122, 255))
     }
 
+    fn terminal_shader(effect: RenderEffect) -> RuntimeShader {
+        match effect {
+            RenderEffect::Shader { shader } => shader,
+            RenderEffect::Chain { second, .. } => terminal_shader(*second),
+            effect => panic!("expected runtime shader, got {effect:?}"),
+        }
+    }
+
     #[test]
     fn liquid_shape_builds_matching_clip_and_layer_shapes() {
         for shape in [
@@ -914,16 +926,26 @@ mod tests {
             .blur_radius(3.0)
             .tint(Color::BLACK.with_alpha(0.8))
             .resolve(&light_colors());
-        let RenderEffect::Shader { shader } = resolved.backdrop_effect(
+        let effect = resolved.backdrop_effect(
             2.0,
             GlassDynamics {
                 highlight_boost: 0.2,
                 tint_alpha_multiplier: Some(0.25),
                 ..Default::default()
             },
-        ) else {
-            panic!("material must resolve to the shared wcKSRD shader");
+        );
+        let RenderEffect::Chain { first, .. } = &effect else {
+            panic!("macroscopic frost must precede the wcKSRD optical pass");
         };
+        assert!(matches!(
+            first.as_ref(),
+            RenderEffect::Blur {
+                radius_x: 4.0,
+                radius_y: 4.0,
+                ..
+            }
+        ));
+        let shader = terminal_shader(effect);
         assert_eq!(shader.uniforms()[9], 0.72);
         assert_eq!(shader.uniforms()[GLASS_REFRACTION_CURVE_UNIFORM], 0.8);
         assert_eq!(shader.uniforms()[GLASS_DISPERSION_UNIFORM], 0.42);
@@ -933,7 +955,10 @@ mod tests {
         );
         assert_eq!(shader.uniforms()[11], resolved.highlight + 0.2);
         assert!((shader.uniforms()[17] - 0.2).abs() < 1.0e-6);
-        assert_eq!(shader.uniforms()[GLASS_BLUR_RADIUS_UNIFORM], 6.0);
+        assert_eq!(
+            shader.uniforms()[GLASS_BLUR_RADIUS_UNIFORM],
+            WCKSRD_OPTICAL_BLUR_RADIUS_PX
+        );
         assert_eq!(shader.uniforms()[GLASS_EFFECT_DENSITY_UNIFORM], 2.0);
     }
 
@@ -1027,22 +1052,23 @@ mod tests {
             .dispersion(0.42)
             .blur_radius(3.0)
             .resolve(&light_colors());
-        let RenderEffect::Shader { shader } = resolved.backdrop_effect(
+        let shader = terminal_shader(resolved.backdrop_effect(
             2.0,
             GlassDynamics {
                 activity: Some(1.0),
                 ..Default::default()
             },
-        ) else {
-            panic!("material must resolve to the shared wcKSRD shader");
-        };
+        ));
         let uniforms = shader.uniforms();
         assert_eq!(uniforms[GLASS_ACTIVITY_UNIFORM], 1.0);
         assert_eq!(uniforms[9], 0.72);
         assert_eq!(uniforms[GLASS_REFRACTION_CURVE_UNIFORM], 0.8);
         assert_eq!(uniforms[GLASS_DISPERSION_UNIFORM], 0.42);
         assert_eq!(uniforms[GLASS_TRANSMISSION_REFRACTION_UNIFORM], 1.0);
-        assert_eq!(uniforms[GLASS_BLUR_RADIUS_UNIFORM], 6.0);
+        assert_eq!(
+            uniforms[GLASS_BLUR_RADIUS_UNIFORM],
+            WCKSRD_OPTICAL_BLUR_RADIUS_PX
+        );
     }
 
     #[test]

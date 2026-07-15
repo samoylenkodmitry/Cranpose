@@ -151,10 +151,10 @@ pub fn GlassButton(
     let colors = liquid_colors();
     let interaction = rememberMutableInteractionSource();
     let (pressed_modifier, pressed, content_alpha) =
-        liquid_press_scale(Modifier::empty(), interaction.clone(), 1.08);
+        liquid_press_scale(Modifier::empty(), interaction.clone(), 1.18);
 
     let material = spec.resolve_material(&colors, spec.content_color(&colors));
-    let mut base = pressed_modifier;
+    let mut base = Modifier::empty();
     if let Some(glass) = material {
         let pressed_for_glass = pressed;
         base = base.glass_effect_with(glass, move || GlassDynamics {
@@ -178,18 +178,23 @@ pub fn GlassButton(
         ..Default::default()
     });
     let content = Rc::new(RefCell::new(content));
-    Box(
-        base.then(modifier),
-        BoxSpec::default().content_alignment(Alignment::CENTER),
-        move || {
-            let content = Rc::clone(&content);
-            Box(
-                content_layer.clone(),
-                BoxSpec::default().content_alignment(Alignment::CENTER),
-                move || (content.borrow_mut())(),
-            );
-        },
-    );
+    let button = base.then(modifier);
+    Box(pressed_modifier, BoxSpec::default(), move || {
+        let content = Rc::clone(&content);
+        let content_layer = content_layer.clone();
+        Box(
+            button.clone(),
+            BoxSpec::default().content_alignment(Alignment::CENTER),
+            move || {
+                let content = Rc::clone(&content);
+                Box(
+                    content_layer.clone(),
+                    BoxSpec::default().content_alignment(Alignment::CENTER),
+                    move || (content.borrow_mut())(),
+                );
+            },
+        );
+    });
 }
 
 /// Convenience text label styled for the enclosing button.
@@ -264,12 +269,12 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
     let colors = liquid_colors();
     let interaction = rememberMutableInteractionSource();
     let (pressed_modifier, pressed, content_alpha) =
-        liquid_press_scale(Modifier::empty(), interaction.clone(), 1.12);
+        liquid_press_scale(Modifier::empty(), interaction.clone(), 1.20);
 
     let material = spec
         .resolve_material(&colors, spec.icon_color(&colors))
         .map(|glass| glass.shape(LiquidShape::Circle));
-    let mut base = pressed_modifier;
+    let mut base = Modifier::empty();
     if let Some(glass) = material {
         let pressed_for_glass = pressed;
         base = base.glass_effect_with(glass, move || GlassDynamics {
@@ -292,18 +297,23 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
         alpha: content_alpha.get().clamp(0.0, 1.0) * foreground_alpha.clamp(0.0, 1.0),
         ..Default::default()
     });
-    Box(
-        base.then(modifier),
-        BoxSpec::default().content_alignment(Alignment::CENTER),
-        move || {
-            let foreground_spec = spec.clone();
-            Box(
-                content_layer.clone(),
-                BoxSpec::default().content_alignment(Alignment::CENTER),
-                move || GlassIconForeground(foreground_spec.clone(), diameter, icon_path),
-            );
-        },
-    );
+    let button = base.then(modifier);
+    Box(pressed_modifier, BoxSpec::default(), move || {
+        let foreground_spec = spec.clone();
+        let content_layer = content_layer.clone();
+        Box(
+            button.clone(),
+            BoxSpec::default().content_alignment(Alignment::CENTER),
+            move || {
+                let foreground_spec = foreground_spec.clone();
+                Box(
+                    content_layer.clone(),
+                    BoxSpec::default().content_alignment(Alignment::CENTER),
+                    move || GlassIconForeground(foreground_spec.clone(), diameter, icon_path),
+                );
+            },
+        );
+    });
 }
 
 #[cfg(test)]
