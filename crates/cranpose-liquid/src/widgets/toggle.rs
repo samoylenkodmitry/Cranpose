@@ -52,7 +52,9 @@ fn toggle_lens_material() -> Glass {
         .saturation(1.0)
         .refraction_depth(0.34)
         .refraction_curve(0.25)
-        .transmission_refraction(0.25)
+        // The track is a stationary transmitted path. Its color boundary
+        // interpolates in place while the meniscus supplies the fold.
+        .transmission_refraction(0.0)
         .dispersion(0.30)
         .highlight(0.34)
         .lift(-0.05)

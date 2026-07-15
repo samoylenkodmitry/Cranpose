@@ -755,42 +755,18 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         let forward_dispersion = vec3<f32>(red_path.r, red_path.g, blue_path.b);
         let reflected_dispersion = vec3<f32>(blue_path.r, blue_path.g, red_path.b);
         let spectral_reflection_mix = smoothstep(-0.20, 0.20, outward_normal.y);
-        let outer_dispersion =
+        let dispersed =
             mix(forward_dispersion, reflected_dispersion, spectral_reflection_mix);
-        let inner_dispersion =
-            mix(reflected_dispersion, forward_dispersion, spectral_reflection_mix);
-        let band_offset = gradient_extent;
-        let outer_weight = clamp(
-            wcksrd_meniscus(
-                meniscus_distance - band_offset,
-                lens_refraction,
-                gradient_extent,
-            )
+        let dispersion_weight = clamp(
+            meniscus_core
                 * rim_style
                 * dispersion_strength
                 * long_edge_caustic,
             0.0,
             1.0,
         );
-        let inner_weight = clamp(
-            wcksrd_meniscus(
-                meniscus_distance + band_offset,
-                lens_refraction,
-                gradient_extent,
-            )
-                * rim_style
-                * dispersion_strength
-                * long_edge_caustic,
-            0.0,
-            1.0,
-        );
-        let dispersion_sum = outer_weight + inner_weight;
-        let dispersed = (
-            outer_dispersion * outer_weight
-                + inner_dispersion * inner_weight
-        ) / max(dispersion_sum, 0.001);
-        rgb = mix(rgb, dispersed, max(outer_weight, inner_weight));
-        outer_rgb = mix(outer_rgb, outer_dispersion, outer_weight);
+        rgb = mix(rgb, dispersed, dispersion_weight);
+        outer_rgb = mix(outer_rgb, dispersed, dispersion_weight);
     }
 
     let inner_meniscus = clamp(
@@ -804,6 +780,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     );
     let long_edge_specular = inner_meniscus
         * pow(abs(outward_normal.y), 4.0)
+        * lens_edge_incidence
         * highlight
         * rim_style
         * 0.24;
