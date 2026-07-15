@@ -151,6 +151,40 @@ fn TogglePressReferenceStage(checked: bool, on_change: impl Fn(bool) + 'static) 
     );
 }
 
+#[composable]
+fn TouchedUpReferenceStage() {
+    let action = Color::from_rgb_u8(0, 199, 208);
+    let action_spec = GlassButtonSpec::prominent()
+        .with_glass(
+            Glass::regular()
+                .tint(action.with_alpha(0.82))
+                .blur_radius(3.0)
+                .saturation(1.15)
+                .lift(0.03)
+                .highlight(0.72)
+                .adaptive_frost(Color::WHITE, 0.12),
+        )
+        .with_content_color(Color::WHITE);
+    Box(
+        Modifier::empty().fill_max_width().height(82.0),
+        BoxSpec::default().content_alignment(Alignment::CENTER),
+        move || {
+            GlassIconButtonGroup(
+                Modifier::empty(),
+                GlassIconButtonGroupSpec::new(44.0)
+                    .with_spacing(8.0)
+                    .with_pressed_scale(1.32)
+                    .with_glue_radius(12.0),
+                vec![
+                    GlassIconButtonGroupItem::new(icons::MORE_HORIZ, "More grouped action", || {}),
+                    GlassIconButtonGroupItem::new(icons::CHECK, "Confirm grouped action", || {})
+                        .with_spec(action_spec.clone()),
+                ],
+            );
+        },
+    );
+}
+
 fn clamp_optical_preview_center(position: Point, stage_size: Size) -> Point {
     let half_width = OPTICAL_PREVIEW_LENS_SIZE.width * 0.5;
     let half_height = OPTICAL_PREVIEW_LENS_SIZE.height * 0.5;
@@ -887,6 +921,8 @@ pub fn LiquidUiTab() {
                             );
 
                             SectionTitle("BUTTONS");
+                            TouchedUpReferenceStage();
+                            Box(Modifier::empty().height(8.0), BoxSpec::default(), || {});
                             Row(
                                 Modifier::empty(),
                                 RowSpec::default()

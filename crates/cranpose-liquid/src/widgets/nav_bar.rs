@@ -2,7 +2,7 @@
 //! the inline bar as content scrolls under, while a progressive glass blur
 //! fades in behind the bar.
 
-use crate::material::{Glass, LiquidModifierExt, LiquidShape};
+use crate::material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape};
 use crate::theme::{liquid_colors, liquid_typography};
 use cranpose_macros::composable;
 use cranpose_ui::text::{SpanStyle, TextStyle};
@@ -100,25 +100,25 @@ pub fn LiquidNavBar(
             );
         }
 
-        // Glass band behind the inline bar, fading in with the collapse.
-        if progress > 0.01 {
-            let band = Modifier::empty()
-                .graphics_layer(move || GraphicsLayer {
-                    alpha: progress,
+        // Glass band behind the inline bar. Keeping one capture layer mounted
+        // avoids a top-edge flash when scrolling crosses the collapse onset;
+        // the complete material resolves to transparent identity at zero.
+        let band = Modifier::empty()
+            .fill_max_width()
+            .height(BAR_HEIGHT)
+            .glass_effect_with(
+                Glass::regular()
+                    .shape(LiquidShape::RoundedRect(0.0))
+                    .blur_radius(8.0)
+                    .saturation(1.0)
+                    .transmission_refraction(0.0)
+                    .shadow(false),
+                move || GlassDynamics {
+                    activity: Some(progress),
                     ..Default::default()
-                })
-                .fill_max_width()
-                .height(BAR_HEIGHT)
-                .glass_effect(
-                    Glass::regular()
-                        .shape(LiquidShape::RoundedRect(0.0))
-                        .blur_radius(8.0)
-                        .saturation(1.0)
-                        .transmission_refraction(0.0)
-                        .shadow(false),
-                );
-            Box(band, BoxSpec::default(), || {});
-        }
+                },
+            );
+        Box(band, BoxSpec::default(), || {});
 
         // Inline bar row: leading / inline title / trailing.
         let inline_alpha = ((progress - 0.5) * 2.0).clamp(0.0, 1.0);

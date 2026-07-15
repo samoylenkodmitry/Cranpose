@@ -521,6 +521,20 @@ fn capture_button_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
     scroll_text_to_y(robot, "BUTTONS", 260.0);
     settle(robot, 500);
     shot_scaled(robot, shot_dir, "01f-buttons-rest", 2.0);
+    let grouped = cranpose_testing::find_button_exact_in_semantics(robot, "Confirm grouped action")
+        .expect("grouped confirm action in semantics");
+    let grouped_x = grouped.0 + grouped.2 * 0.5;
+    let grouped_y = grouped.1 + grouped.3 * 0.5;
+    robot
+        .mouse_move(grouped_x, grouped_y)
+        .expect("hover grouped confirm action");
+    robot.mouse_down().expect("press grouped confirm action");
+    std::thread::sleep(Duration::from_millis(180));
+    shot_scaled(robot, shot_dir, "01f-group-held", 2.0);
+    robot.mouse_up().expect("release grouped confirm action");
+    std::thread::sleep(Duration::from_millis(100));
+    shot_scaled(robot, shot_dir, "01f-group-release", 2.0);
+    settle(robot, 400);
     for (index, label) in ["Glass", "Prominent"].into_iter().enumerate() {
         let bounds = cranpose_testing::find_button_exact_in_semantics(robot, label)
             .or_else(|| cranpose_testing::find_text_in_semantics(robot, label))

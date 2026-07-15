@@ -1,18 +1,19 @@
 //! Glass buttons: capsule glass with a spring press (scale + specular boost)
 //! and haptic feedback.
 
-use crate::material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape};
-use crate::motion::liquid_press_scale;
+use crate::material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape};
+use crate::motion::{liquid_press_scale, LiquidMotion};
 use crate::theme::{liquid_colors, liquid_typography};
+use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
 use cranpose_services::{default_haptics, HapticFeedback};
 use cranpose_ui::rememberMutableInteractionSource;
 use cranpose_ui::text::TextStyle;
 use cranpose_ui::widgets::{Box, BoxSpec, Text};
-use cranpose_ui::{Modifier, Size};
+use cranpose_ui::{Modifier, PointerEventKind, PointerInputScope, Size};
 use cranpose_ui_graphics::{Color, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const ICON_BACKPLATE_DIAMETER_RATIO: f32 = 0.50;
@@ -136,6 +137,139 @@ impl GlassButtonSpec {
             GlassButtonStyle::Plain | GlassButtonStyle::Destructive => None,
         }
     }
+}
+
+/// One action in a [`GlassIconButtonGroup`].
+#[derive(Clone)]
+pub struct GlassIconButtonGroupItem {
+    spec: GlassButtonSpec,
+    icon_path: &'static str,
+    content_description: String,
+    on_click: Rc<RefCell<dyn FnMut()>>,
+}
+
+impl PartialEq for GlassIconButtonGroupItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.spec == other.spec
+            && self.icon_path == other.icon_path
+            && self.content_description == other.content_description
+            && Rc::ptr_eq(&self.on_click, &other.on_click)
+    }
+}
+
+impl GlassIconButtonGroupItem {
+    pub fn new(
+        icon_path: &'static str,
+        content_description: impl Into<String>,
+        on_click: impl FnMut() + 'static,
+    ) -> Self {
+        Self {
+            spec: GlassButtonSpec::glass(),
+            icon_path,
+            content_description: content_description.into(),
+            on_click: Rc::new(RefCell::new(on_click)),
+        }
+    }
+
+    pub fn with_spec(mut self, spec: GlassButtonSpec) -> Self {
+        self.spec = spec;
+        self
+    }
+}
+
+/// Geometry and interaction material for [`GlassIconButtonGroup`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassIconButtonGroupSpec {
+    diameter: f32,
+    spacing: f32,
+    pressed_scale: f32,
+    glue_radius: f32,
+}
+
+impl GlassIconButtonGroupSpec {
+    pub fn new(diameter: f32) -> Self {
+        Self {
+            diameter: diameter.max(1.0),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_spacing(mut self, spacing: f32) -> Self {
+        self.spacing = spacing.max(0.0);
+        self
+    }
+
+    pub fn with_pressed_scale(mut self, pressed_scale: f32) -> Self {
+        self.pressed_scale = pressed_scale.max(1.0);
+        self
+    }
+
+    pub fn with_glue_radius(mut self, glue_radius: f32) -> Self {
+        self.glue_radius = glue_radius.max(0.0);
+        self
+    }
+}
+
+impl Default for GlassIconButtonGroupSpec {
+    fn default() -> Self {
+        Self {
+            diameter: 44.0,
+            spacing: 8.0,
+            pressed_scale: 1.20,
+            glue_radius: 12.0,
+        }
+    }
+}
+
+fn icon_group_width(count: usize, spec: GlassIconButtonGroupSpec) -> f32 {
+    if count == 0 {
+        0.0
+    } else {
+        spec.diameter * count as f32 + spec.spacing * count.saturating_sub(1) as f32
+    }
+}
+
+fn icon_group_item_at(
+    x: f32,
+    y: f32,
+    count: usize,
+    spec: GlassIconButtonGroupSpec,
+) -> Option<usize> {
+    if !(0.0..=spec.diameter).contains(&y) {
+        return None;
+    }
+    let pitch = spec.diameter + spec.spacing;
+    let index = (x / pitch).floor() as isize;
+    if index < 0 || index as usize >= count {
+        return None;
+    }
+    let local_x = x - index as f32 * pitch;
+    (local_x <= spec.diameter).then_some(index as usize)
+}
+
+fn icon_group_neighbor_shapes(
+    count: usize,
+    active: usize,
+    spec: GlassIconButtonGroupSpec,
+    pad: f32,
+    center_y: f32,
+) -> Vec<(f32, f32, f32, f32, f32)> {
+    let pitch = spec.diameter + spec.spacing;
+    let contact_diameter = spec.diameter * 0.36;
+    let contact_offset = spec.diameter * 0.38;
+    (0..count)
+        .filter(|index| index.abs_diff(active) == 1)
+        .map(|index| {
+            let toward_active = if index < active { 1.0 } else { -1.0 };
+            (
+                pad + index as f32 * pitch + spec.diameter * 0.5 + toward_active * contact_offset,
+                center_y,
+                contact_diameter,
+                contact_diameter,
+                -1.0,
+            )
+        })
+        .collect()
 }
 
 /// A glass button. `content` composes the label (see [`GlassButton`] with
@@ -316,6 +450,226 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
     });
 }
 
+/// A row of circular actions whose pressed glass can join adjacent members.
+/// Each member keeps its own base material and foreground; one transparent,
+/// persistent interaction field supplies the shared refraction and neck.
+#[composable]
+#[allow(non_snake_case)]
+pub fn GlassIconButtonGroup(
+    modifier: Modifier,
+    spec: GlassIconButtonGroupSpec,
+    items: Vec<GlassIconButtonGroupItem>,
+) {
+    let count = items.len();
+    if count == 0 {
+        return;
+    }
+
+    let colors = liquid_colors();
+    let live_items: Rc<RefCell<Vec<GlassIconButtonGroupItem>>> =
+        remember(|| Rc::new(RefCell::new(Vec::new()))).with(Rc::clone);
+    *live_items.borrow_mut() = items;
+    let render_items = live_items.borrow().clone();
+
+    let active = remember(|| mutableStateOf(None::<usize>)).with(|state| *state);
+    let last_active = remember(|| Rc::new(Cell::new(0usize))).with(Rc::clone);
+    if let Some(index) = active.get() {
+        last_active.set(index.min(count - 1));
+    }
+    let press_progress = cranpose_animation::animateFloatAsState(
+        if active.get().is_some() { 1.0 } else { 0.0 },
+        LiquidMotion::snappy(),
+        "glass-icon-group-press",
+    );
+
+    let width = icon_group_width(count, spec);
+    let gesture_items = Rc::clone(&live_items);
+    let gesture = Modifier::empty()
+        .size(Size::new(width, spec.diameter))
+        .pointer_input(count, move |scope: PointerInputScope| {
+            let gesture_items = Rc::clone(&gesture_items);
+            async move {
+                scope
+                    .await_pointer_event_scope(|await_scope| async move {
+                        let mut down_index = None::<usize>;
+                        loop {
+                            let event = await_scope.await_pointer_event().await;
+                            match event.kind {
+                                PointerEventKind::Down if down_index.is_none() => {
+                                    down_index = icon_group_item_at(
+                                        event.position.x,
+                                        event.position.y,
+                                        gesture_items.borrow().len(),
+                                        spec,
+                                    );
+                                    if let Some(index) = down_index {
+                                        active.set(Some(index));
+                                        default_haptics().perform(HapticFeedback::Selection);
+                                        event.consume();
+                                    }
+                                }
+                                PointerEventKind::Move if down_index.is_some() => {
+                                    event.consume();
+                                }
+                                PointerEventKind::Up => {
+                                    let pressed_index = down_index.take();
+                                    active.set(None);
+                                    if let Some(index) = pressed_index {
+                                        let released_index = icon_group_item_at(
+                                            event.position.x,
+                                            event.position.y,
+                                            gesture_items.borrow().len(),
+                                            spec,
+                                        );
+                                        if released_index == Some(index) {
+                                            let on_click = gesture_items
+                                                .borrow()
+                                                .get(index)
+                                                .map(|item| Rc::clone(&item.on_click));
+                                            if let Some(on_click) = on_click {
+                                                default_haptics()
+                                                    .perform(HapticFeedback::ImpactLight);
+                                                (on_click.borrow_mut())();
+                                            }
+                                        }
+                                        event.consume();
+                                    }
+                                }
+                                PointerEventKind::Cancel => {
+                                    if down_index.take().is_some() {
+                                        active.set(None);
+                                        event.consume();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    })
+                    .await;
+            }
+        })
+        .then(modifier);
+
+    Box(gesture, BoxSpec::default(), move || {
+        let pitch = spec.diameter + spec.spacing;
+        let active_index = last_active.get().min(count - 1);
+
+        // Independent base surfaces preserve each member's style and tint.
+        for (index, item) in render_items.iter().enumerate() {
+            let x = index as f32 * pitch;
+            let surface_progress = press_progress;
+            let item_is_active = index == active_index;
+            let outer = Modifier::empty()
+                .size(Size::new(spec.diameter, spec.diameter))
+                .offset(x, 0.0);
+            let scale_layer = Modifier::empty().graphics_layer(move || {
+                let progress = if item_is_active {
+                    surface_progress.get().clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let scale = 1.0 + (spec.pressed_scale - 1.0) * progress;
+                GraphicsLayer {
+                    scale_x: scale,
+                    scale_y: scale,
+                    ..Default::default()
+                }
+            });
+            let mut surface = Modifier::empty().size(Size::new(spec.diameter, spec.diameter));
+            if let Some(material) = item
+                .spec
+                .resolve_material(&colors, item.spec.icon_color(&colors))
+            {
+                let surface_progress = press_progress;
+                surface =
+                    surface.glass_effect_with(material.shape(LiquidShape::Circle), move || {
+                        GlassDynamics {
+                            highlight_boost: if item_is_active {
+                                0.22 * surface_progress.get().clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            },
+                            ..Default::default()
+                        }
+                    });
+            }
+            Box(outer, BoxSpec::default(), move || {
+                let surface = surface.clone();
+                Box(scale_layer.clone(), BoxSpec::default(), move || {
+                    Box(surface.clone(), BoxSpec::default(), || {});
+                });
+            });
+        }
+
+        // Shared interaction field. At rest it is exact transparent identity;
+        // pressing grows one circle and smooth-unions only its direct neighbors.
+        let pad = spec.glue_radius + spec.diameter * (spec.pressed_scale - 1.0) * 0.5 + 4.0;
+        let node_width = width + pad * 2.0;
+        let node_height = spec.diameter * spec.pressed_scale + pad * 2.0;
+        let shared_progress = press_progress;
+        let shared_last_active = Rc::clone(&last_active);
+        let shared = Modifier::empty()
+            .required_size(Size::new(node_width, node_height))
+            .offset(-pad, (spec.diameter - node_height) * 0.5)
+            .glass_effect_with(
+                Glass::lens()
+                    .shape(LiquidShape::Circle)
+                    .tint(Color::WHITE.with_alpha(0.035))
+                    .highlight(0.48)
+                    .no_clip(),
+                move || {
+                    let progress = shared_progress.get().clamp(0.0, 1.0);
+                    let active_index = shared_last_active.get().min(count - 1);
+                    let center_y = node_height * 0.5;
+                    let center_x = pad + active_index as f32 * pitch + spec.diameter * 0.5;
+                    let diameter = spec.diameter * (1.0 + (spec.pressed_scale - 1.0) * progress);
+                    GlassDynamics {
+                        activity: Some(progress),
+                        morph: Some(GlassMorph {
+                            node_size: (node_width, node_height),
+                            primary: (center_x, center_y, diameter, diameter, -1.0),
+                            shapes: icon_group_neighbor_shapes(
+                                count,
+                                active_index,
+                                spec,
+                                pad,
+                                center_y,
+                            ),
+                            glue: spec.glue_radius * progress,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }
+                },
+            );
+        Box(shared, BoxSpec::default(), || {});
+
+        // Foregrounds remain crisp above the shared optical field while the
+        // active surface rises toward the pointer.
+        for (index, item) in render_items.iter().enumerate() {
+            let x = index as f32 * pitch;
+            let foreground_spec = item.spec.clone();
+            let icon_path = item.icon_path;
+            let description = item.content_description.clone();
+            let foreground = Modifier::empty()
+                .size(Size::new(spec.diameter, spec.diameter))
+                .offset(x, 0.0)
+                .semantics(move |config| {
+                    config.is_button = true;
+                    config.is_clickable = true;
+                    config.content_description = Some(description.clone());
+                });
+            Box(
+                foreground,
+                BoxSpec::default().content_alignment(Alignment::CENTER),
+                move || {
+                    GlassIconForeground(foreground_spec.clone(), spec.diameter, icon_path);
+                },
+            );
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +708,29 @@ mod tests {
             assert_eq!(material.tint, None);
             assert_eq!(material.resolve(&colors).tint, colors.glass_tint);
         }
+    }
+
+    #[test]
+    fn icon_button_group_builders_and_hit_regions_preserve_member_gaps() {
+        let spec = GlassIconButtonGroupSpec::new(44.0)
+            .with_spacing(8.0)
+            .with_pressed_scale(1.2)
+            .with_glue_radius(12.0);
+        assert_eq!(icon_group_width(2, spec), 96.0);
+        assert_eq!(icon_group_item_at(22.0, 22.0, 2, spec), Some(0));
+        assert_eq!(icon_group_item_at(48.0, 22.0, 2, spec), None);
+        assert_eq!(icon_group_item_at(74.0, 22.0, 2, spec), Some(1));
+        assert_eq!(icon_group_item_at(22.0, 50.0, 2, spec), None);
+
+        let shapes = icon_group_neighbor_shapes(4, 2, spec, 16.0, 38.0);
+        assert_eq!(shapes.len(), 2);
+        assert!((shapes[0].0 - (16.0 + 52.0 + 22.0 + 44.0 * 0.38)).abs() < 1e-5);
+        assert!((shapes[1].0 - (16.0 + 156.0 + 22.0 - 44.0 * 0.38)).abs() < 1e-5);
+        assert_eq!(shapes[0].2, 44.0 * 0.36);
+
+        let item = GlassIconButtonGroupItem::new("M0 0", "Confirm", || {})
+            .with_spec(GlassButtonSpec::prominent());
+        assert_eq!(item.content_description, "Confirm");
+        assert_eq!(item.spec.style, GlassButtonStyle::Prominent);
     }
 }

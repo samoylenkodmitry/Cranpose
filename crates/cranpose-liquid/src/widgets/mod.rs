@@ -14,6 +14,7 @@ mod toggle;
 
 pub use button::{
     GlassButton, GlassButtonLabel, GlassButtonSpec, GlassButtonStyle, GlassIconButton,
+    GlassIconButtonGroup, GlassIconButtonGroupItem, GlassIconButtonGroupSpec,
 };
 pub use card::{LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSection};
 pub use chip::LiquidChip;
