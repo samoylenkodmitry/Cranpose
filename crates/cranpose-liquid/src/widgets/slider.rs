@@ -236,6 +236,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                     // braking swells its leading edge.
                                     let pose = liquid_pose;
                                     GlassDynamics {
+                                        activity: Some(grow.clamp(0.0, 1.0)),
                                         morph: Some(GlassMorph {
                                             node_size: (node, node),
                                             primary: (node * 0.5, node * 0.5, d, d, -1.0),

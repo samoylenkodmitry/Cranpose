@@ -145,8 +145,15 @@ fn tab_lens_activity_motion() -> cranpose_animation::AnimationType {
     cranpose_animation::spring(1.0, 900.0)
 }
 
-fn tab_lens_left(pointer_x: f32, tab_width: f32, count: usize) -> f32 {
-    (pointer_x - tab_width * 0.5).clamp(-tab_width * 0.2, tab_width * (count as f32 - 0.45))
+fn tab_lens_left(pointer_x: f32, tab_width: f32, count: usize, has_accessory: bool) -> f32 {
+    let last_tab = tab_width * count.saturating_sub(1) as f32;
+    let min = if has_accessory { -tab_width * 0.2 } else { 0.0 };
+    let max = if has_accessory {
+        tab_width * (count as f32 - 0.45)
+    } else {
+        last_tab
+    };
+    (pointer_x - tab_width * 0.5).clamp(min, max)
 }
 
 fn tab_visual_selection(
@@ -588,6 +595,7 @@ fn LiquidTabBarLayout(
                                                                             event.position.x,
                                                                             tab_width,
                                                                             count,
+                                                                            has_accessory,
                                                                         ),
                                                                         event.time_ms,
                                                                     );
@@ -610,6 +618,7 @@ fn LiquidTabBarLayout(
                                                                             event.position.x,
                                                                             tab_width,
                                                                             count,
+                                                                            has_accessory,
                                                                         ),
                                                                         event.time_ms,
                                                                     );
@@ -715,7 +724,7 @@ fn LiquidTabBarLayout(
                         pose,
                         lens_position: lens_px,
                         lens_activity,
-                        resting_tint: neutral_surface_tint(colors.label, 0.10, 0.14),
+                        resting_tint: colors.fill,
                         accessory_center: has_accessory.then_some((
                             pill_w + tab_bar_accessory_gap(true) + BAR_HEIGHT * 0.5,
                             BAR_HEIGHT * 0.5,
@@ -800,10 +809,13 @@ mod tests {
     #[test]
     fn drag_pointer_centers_the_lens_and_preserves_end_overdrag() {
         let width = 100.0;
-        assert_eq!(tab_lens_left(50.0, width, 4), 0.0);
-        assert_eq!(tab_lens_left(250.0, width, 4), 200.0);
-        assert_eq!(tab_lens_left(-100.0, width, 4), -20.0);
-        assert_eq!(tab_lens_left(500.0, width, 4), 355.0);
+        assert_eq!(tab_lens_left(50.0, width, 4, true), 0.0);
+        assert_eq!(tab_lens_left(250.0, width, 4, true), 200.0);
+        assert_eq!(tab_lens_left(-100.0, width, 4, true), -20.0);
+        assert_eq!(tab_lens_left(500.0, width, 4, true), 355.0);
+
+        assert_eq!(tab_lens_left(-100.0, width, 4, false), 0.0);
+        assert_eq!(tab_lens_left(500.0, width, 4, false), 300.0);
     }
 
     #[test]

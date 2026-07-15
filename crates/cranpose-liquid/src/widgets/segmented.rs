@@ -341,6 +341,7 @@ pub fn LiquidSegmentedControl(
                             // along the travel, braking swells its front.
                             let pose = physics_axis.liquid_pose();
                             GlassDynamics {
+                                activity: Some(grow.clamp(0.0, 1.0)),
                                 morph: Some(GlassMorph {
                                     node_size: (node_w, node_h),
                                     primary: (node_w * 0.5, node_h * 0.5, base_w, base_h, -1.0),

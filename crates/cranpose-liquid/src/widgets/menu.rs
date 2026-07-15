@@ -1019,6 +1019,7 @@ pub fn LiquidMenu(
                         }
                         let glue = surface.glue;
                         GlassDynamics {
+                            activity: Some(t.clamp(0.0, 1.0)),
                             morph: Some(GlassMorph {
                                 node_size: (size.width.max(1.0), size.height.max(1.0)),
                                 primary,
