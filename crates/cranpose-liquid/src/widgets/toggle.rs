@@ -48,16 +48,17 @@ fn toggle_lens_material() -> Glass {
     Glass::lens()
         .shape(LiquidShape::Capsule)
         .tint(cranpose_ui_graphics::Color::WHITE.with_alpha(0.02))
-        .blur_radius(0.75)
-        .saturation(1.0)
+        .blur_radius(0.0)
+        .saturation(0.72)
         .refraction_depth(0.34)
-        .refraction_curve(0.25)
-        // The track is a stationary transmitted path. Its color boundary
-        // interpolates in place while the meniscus supplies the fold.
-        .transmission_refraction(0.0)
-        .dispersion(0.30)
-        .highlight(0.34)
-        .lift(-0.05)
+        .refraction_curve(0.70)
+        // The track remains one stationary interpolated capsule. A restrained
+        // transmitted ray reveals its fixed edge inside the raised lens while
+        // the meniscus carries the opposite-wall return.
+        .transmission_refraction(0.22)
+        .dispersion(0.42)
+        .highlight(0.36)
+        .lift(0.0)
         .shadow_style(GlassShadow::new(
             cranpose_ui_graphics::Color::BLACK.with_alpha(0.14),
             14.0,

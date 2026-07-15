@@ -139,6 +139,15 @@ fn main() {
                 shot(&robot, &shot_dir, "01b3-toggle-settled");
             }
 
+            if std::env::var_os("CRANPOSE_LIQUID_TOGGLE_ONLY").is_some() {
+                println!(
+                    "PASS: liquid toggle comparison written to {}",
+                    shot_dir.display()
+                );
+                robot.exit().expect("exit");
+                return;
+            }
+
             let account = cranpose_testing::find_button_exact_in_semantics(&robot, "Account")
                 .expect("account tab in semantics");
             let account_x = account.0 + account.2 * 0.5;
