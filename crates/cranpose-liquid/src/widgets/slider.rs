@@ -208,56 +208,54 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                     // The interaction lens riding the thumb: the SDF circle
                     // inflates from thumb-size to the lens with a viscous
                     // bulge along the travel direction.
-                    if lens_progress.get() > 0.01 {
-                        let node = LENS_SIZE + LENS_PAD * 2.0;
-                        let lens_for_layer = lens_progress;
-                        let lens = Modifier::empty()
-                            // required_size: the lens node exceeds the 32dp
-                            // control; the fixed-height host keeps layout put.
-                            .required_size(Size::new(node, node))
-                            .offset(0.0, (SLIDER_HEIGHT - node) * 0.5)
-                            .graphics_layer(move || GraphicsLayer {
-                                translation_x: thumb_x + (THUMB_SIZE - node) * 0.5,
-                                alpha: (lens_for_layer.get() * 2.5).clamp(0.0, 1.0),
-                                ..Default::default()
-                            })
-                            .glass_effect_with(
-                                Glass::lens()
-                                    .shape(LiquidShape::Circle)
-                                    .tint(Color::WHITE.with_alpha(0.05))
-                                    .highlight(0.52)
-                                    .no_clip(),
-                                move || {
-                                    let grow = lens_for_layer.get().clamp(0.0, 1.2);
-                                    let d = THUMB_SIZE + (LENS_SIZE - THUMB_SIZE) * grow;
-                                    // Droplet law over the thumb ride
-                                    // (crate::dynamics): drag speed stretches
-                                    // the circle into a travel-axis oval,
-                                    // braking swells its leading edge.
-                                    let pose = liquid_pose;
-                                    GlassDynamics {
-                                        activity: Some(grow.clamp(0.0, 1.0)),
-                                        morph: Some(GlassMorph {
-                                            node_size: (node, node),
-                                            primary: (node * 0.5, node * 0.5, d, d, -1.0),
-                                            shapes: Vec::new(),
-                                            glue: 0.0,
-                                            wobble_amplitude: 0.0,
-                                            wobble_phase: 0.0,
-                                            bulge_amplitude: pose
-                                                .bulge_amplitude
-                                                .max(2.5 * pose.energy())
-                                                .min(4.0),
-                                            bulge_direction: pose.bulge_direction,
-                                            ellipse_blend: 0.0,
-                                            deformation: Some(slider_deformation(pose)),
-                                        }),
-                                        ..Default::default()
-                                    }
-                                },
-                            );
-                        Box(lens, BoxSpec::default(), || {});
-                    }
+                    let node = LENS_SIZE + LENS_PAD * 2.0;
+                    let lens_for_layer = lens_progress;
+                    let lens = Modifier::empty()
+                        // required_size: the lens node exceeds the 32dp
+                        // control; the fixed-height host keeps layout put.
+                        .required_size(Size::new(node, node))
+                        .offset(0.0, (SLIDER_HEIGHT - node) * 0.5)
+                        .graphics_layer(move || GraphicsLayer {
+                            translation_x: thumb_x + (THUMB_SIZE - node) * 0.5,
+                            alpha: (lens_for_layer.get() * 2.5).clamp(0.0, 1.0),
+                            ..Default::default()
+                        })
+                        .glass_effect_with(
+                            Glass::lens()
+                                .shape(LiquidShape::Circle)
+                                .tint(Color::WHITE.with_alpha(0.05))
+                                .highlight(0.52)
+                                .no_clip(),
+                            move || {
+                                let grow = lens_for_layer.get().clamp(0.0, 1.2);
+                                let d = THUMB_SIZE + (LENS_SIZE - THUMB_SIZE) * grow;
+                                // Droplet law over the thumb ride
+                                // (crate::dynamics): drag speed stretches
+                                // the circle into a travel-axis oval,
+                                // braking swells its leading edge.
+                                let pose = liquid_pose;
+                                GlassDynamics {
+                                    activity: Some(grow.clamp(0.0, 1.0)),
+                                    morph: Some(GlassMorph {
+                                        node_size: (node, node),
+                                        primary: (node * 0.5, node * 0.5, d, d, -1.0),
+                                        shapes: Vec::new(),
+                                        glue: 0.0,
+                                        wobble_amplitude: 0.0,
+                                        wobble_phase: 0.0,
+                                        bulge_amplitude: pose
+                                            .bulge_amplitude
+                                            .max(2.5 * pose.energy())
+                                            .min(4.0),
+                                        bulge_direction: pose.bulge_direction,
+                                        ellipse_blend: 0.0,
+                                        deformation: Some(slider_deformation(pose)),
+                                    }),
+                                    ..Default::default()
+                                }
+                            },
+                        );
+                    Box(lens, BoxSpec::default(), || {});
                 });
             });
         },

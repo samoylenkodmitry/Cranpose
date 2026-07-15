@@ -32,7 +32,7 @@ const LENS_WIDTH: f32 = 58.0;
 const LENS_HEIGHT: f32 = 109.0 / 3.0;
 const LENS_VERTICAL_OFFSET: f32 = -2.0 / 3.0;
 /// Small outward lean at each resting end, measured from the thumb center.
-const LENS_OUTWARD_LEAN: f32 = 5.75;
+const LENS_OUTWARD_LEAN: f32 = 4.0;
 /// Glass node span beyond the lens shape (rim glow + wobble live here).
 const LENS_PAD: f32 = 10.0;
 /// Pointer travel below this is a tap, not a swipe.
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn toggle_lens_growth_and_translation_are_outward_and_symmetric() {
-        assert_eq!(LENS_OUTWARD_LEAN, 5.75);
+        assert_eq!(LENS_OUTWARD_LEAN, 4.0);
         let node_width = LENS_WIDTH
             * crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN)
             + crate::dynamics::BULGE_MAX
@@ -425,7 +425,7 @@ mod tests {
         let centered = lens_translation_x(midpoint, node_width, LENS_OUTWARD_LEAN);
         let off = lens_translation_x(min, node_width, LENS_OUTWARD_LEAN);
         let on = lens_translation_x(max, node_width, LENS_OUTWARD_LEAN);
-        assert_eq!(max + THUMB_WIDTH * 0.5 + LENS_OUTWARD_LEAN, 48.75);
+        assert_eq!(max + THUMB_WIDTH * 0.5 + LENS_OUTWARD_LEAN, 47.0);
         assert!((centered * 2.0 - off - on).abs() < 1.0e-5);
         assert!(off < lens_translation_x(min, node_width, 0.0));
         assert!(on > lens_translation_x(max, node_width, 0.0));
