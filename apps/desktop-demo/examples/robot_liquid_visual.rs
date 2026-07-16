@@ -300,9 +300,24 @@ fn main() {
             // overshoot, then deflates back into the button on dismiss. Match
             // the reference capture with a structured session row behind the
             // surface so frost and transmitted detail can be judged directly.
-            scroll_text_to_y(&robot, "iPadOS", 170.0);
-            settle(&robot, 700);
-            robot.click(858.0, 122.0).expect("open menu");
+            // The "..." anchor lives in the Featured videos card header;
+            // park the page at the top so the whole card (and its anchor)
+            // is on-screen.
+            for _ in 0..20 {
+                robot.mouse_move(450.0, 400.0).expect("hover for scroll");
+                robot.mouse_scroll(0.0, 200.0).expect("scroll to top");
+                std::thread::sleep(Duration::from_millis(60));
+            }
+            settle(&robot, 600);
+            let card = robot
+                .find_button_bounds_exact("Featured videos")
+                .ok()
+                .flatten()
+                .expect("featured videos card in semantics");
+            let menu_anchor = (card.0 + card.2 - 34.0, card.1 + 34.0);
+            robot
+                .click(menu_anchor.0, menu_anchor.1)
+                .expect("open menu");
             std::thread::sleep(Duration::from_millis(50));
             shot(&robot, &shot_dir, "06a-menu-morph-early");
             std::thread::sleep(Duration::from_millis(70));
@@ -321,11 +336,24 @@ fn main() {
             // One continuous menu gesture: the original DOWN owns the stream
             // while the menu opens, sliding updates the highlighted row, and
             // the matching UP commits that row without an intermediate lift.
-            robot.mouse_move(858.0, 122.0).expect("hover menu trigger");
+            robot
+                .mouse_move(menu_anchor.0, menu_anchor.1)
+                .expect("hover menu trigger");
             robot.mouse_down().expect("hold menu trigger");
-            std::thread::sleep(Duration::from_millis(650));
-            let grid = cranpose_testing::find_text_in_semantics(&robot, "Grid")
-                .expect("menu must open while the original pointer remains down");
+            // The held-open menu materializes its items near settle; poll
+            // semantics instead of racing a fixed sleep against host load.
+            let mut grid_probe = None;
+            for _ in 0..20 {
+                std::thread::sleep(Duration::from_millis(100));
+                grid_probe = cranpose_testing::find_text_in_semantics(&robot, "Grid");
+                if grid_probe.is_some() {
+                    break;
+                }
+            }
+            if grid_probe.is_none() {
+                shot(&robot, &shot_dir, "09z-hold-open-failure");
+            }
+            let grid = grid_probe.expect("menu must open while the original pointer remains down");
             shot(&robot, &shot_dir, "09a-menu-long-hold");
             robot
                 .mouse_move(grid.0 + grid.2 * 0.5, grid.1 + grid.3 * 0.5)
@@ -421,25 +449,25 @@ fn capture_control_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
     }
     scroll_text_to_y(robot, "SEGMENTED", 300.0);
     settle(robot, 500);
-    let receipts = cranpose_testing::find_text_in_semantics(robot, "Receipts")
-        .expect("Receipts segment in semantics");
-    let control_left = receipts.0 - receipts.2;
-    let control_y = receipts.1 + receipts.3 * 0.5;
-    let all_x = control_left + receipts.2 * 0.5;
-    let docs_x = control_left + receipts.2 * 2.5;
+    let sending = cranpose_testing::find_text_in_semantics(robot, "Sending")
+        .expect("Sending segment in semantics");
+    let control_left = sending.0 - sending.2;
+    let control_y = sending.1 + sending.3 * 0.5;
+    let all_x = control_left + sending.2 * 0.5;
+    let docs_x = control_left + sending.2 * 2.5;
 
     shot_scaled(robot, shot_dir, "01d-segmented-rest", 2.0);
     robot
         .mouse_move(all_x, control_y)
-        .expect("hover All segment");
-    robot.mouse_down().expect("press All segment");
+        .expect("hover Receiving segment");
+    robot.mouse_down().expect("press Receiving segment");
     std::thread::sleep(Duration::from_millis(260));
     shot_scaled(robot, shot_dir, "01d-segmented-held", 2.0);
     robot
         .mouse_move(docs_x, control_y)
-        .expect("move segmented lens directly to Docs");
+        .expect("move segmented lens directly to Errored");
     shot_scaled(robot, shot_dir, "01d-segmented-direct-follow", 2.0);
-    robot.mouse_up().expect("release Docs segment");
+    robot.mouse_up().expect("release Errored segment");
     std::thread::sleep(Duration::from_millis(150));
     shot_scaled(robot, shot_dir, "01d-segmented-release-150ms", 2.0);
     settle(robot, 700);

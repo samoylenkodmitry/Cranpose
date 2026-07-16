@@ -70,10 +70,10 @@ fn toggle_lens_material() -> Glass {
         // The pressed lens shows the track end-cap mildly enlarged
         // (toggle-press detail frames).
         .optical_zoom(1.18)
-        .dispersion(0.60)
+        .dispersion(0.85)
         // The reference press face is the magnified track, not a lit dome —
         // its luma matches the sampled backdrop (toggle-press detail).
-        .highlight(0.14)
+        .highlight(0.04)
         .lift(0.0)
         .shadow_style(GlassShadow::new(
             cranpose_ui_graphics::Color::BLACK.with_alpha(0.14),

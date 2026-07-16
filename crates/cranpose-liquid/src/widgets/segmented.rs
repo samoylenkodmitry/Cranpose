@@ -352,11 +352,11 @@ pub fn LiquidSegmentedControl(
                         .shape(LiquidShape::Capsule)
                         .tint(Color::rgba(1.0, 1.0, 1.0, 0.02))
                         .blur_radius(0.0)
-                        .refraction_depth(0.42)
+                        .refraction_depth(0.52)
                         .refraction_curve(0.25)
                         .fold_depth(5.0)
-                        .dispersion(0.65)
-                        .highlight(0.10)
+                        .dispersion(0.85)
+                        .highlight(0.04)
                         .lift(0.0)
                         .no_clip(),
                     move || {
