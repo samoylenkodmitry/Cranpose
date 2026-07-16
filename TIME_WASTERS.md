@@ -314,3 +314,19 @@ disappears, so morphs render as full-rect cards, lenses stop following the
 finger, and the loupe never raises. If several unrelated liquid robots start
 failing with "frozen geometry" symptoms at once, suspect a WGSL identifier
 error before debugging any widget.
+
+## robot_adaptive_frost red on GitHub-hosted CI only (lavapipe vulkan)
+Since ~2026-07-16 the Rust workflow's robot shard 1 fails robot_adaptive_frost
+with DETERMINISTIC numbers (adaptive 142.9 vs plain 138.8): the "dark
+backdrop" scenario reads LIGHT on CI. Reproduction attempts: NVIDIA vulkan
+and llvmpipe GL (LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl) both render
+byte-identically and PASS (white 88.1/148.7, black 144.1/24.0) — the
+divergence is exclusive to lavapipe VULKAN (CI: WGPU_BACKEND=vulkan +
+mesa software driver). plain=138.8 vs local plain=24 suggests the dark
+backdrop never reaches the capture (sRGB double-encode of ~24 ≈ 84-154, or
+a failed backdrop composite). The heavy-selfhosted workflow (real GPU) is
+green, and the local suite passes 129/129. DO NOT debug this blind through
+30-minute CI cycles: install `vulkan-swrast` (Arch) or run the Ubuntu
+mesa-vulkan-drivers stack in a container first, then chase the headless
+target/surface format path (surface_format.rs prefers non-sRGB but headless
+offscreen targets pick their format elsewhere).

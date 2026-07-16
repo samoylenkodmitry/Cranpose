@@ -390,6 +390,11 @@ run_test() {
         robot_leetcodedaily_code_scroll_pixel_drift)
             timeout_secs=180
             ;;
+        robot_liquid_visual)
+            # The full liquid walkthrough (toggle keyframes, tab drag, menus,
+            # segmented, sliders) needs headroom on CI's software vulkan.
+            timeout_secs=180
+            ;;
         robot_leetcodedaily_full_layout_scroll_stability)
             timeout_secs=540
             ;;
