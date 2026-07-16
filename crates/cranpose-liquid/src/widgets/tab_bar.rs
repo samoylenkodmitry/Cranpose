@@ -157,8 +157,11 @@ fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
     Glass::regular()
         .tint(neutral_surface_tint(foreground, 0.0, 0.04))
         .blur_radius(4.0)
-        .saturation(0.95)
-        .lift(neutral_surface_lift(foreground, 0.48, -0.24))
+        // The reference bar body lifts toward white yet keeps the tiles'
+        // orange/purple vivid through the glass (bottom-bar-form sheet);
+        // the stronger wash read pale.
+        .saturation(1.12)
+        .lift(neutral_surface_lift(foreground, 0.34, -0.24))
         .highlight(0.20)
         .adaptive_frost(foreground, 0.42)
 }
