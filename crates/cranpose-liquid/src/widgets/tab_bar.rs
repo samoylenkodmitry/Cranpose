@@ -163,7 +163,7 @@ fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         .saturation(1.12)
         .lift(neutral_surface_lift(foreground, 0.34, -0.24))
         .highlight(0.20)
-        .adaptive_frost(foreground, 0.42)
+        .adaptive_frost(foreground, 0.28)
 }
 
 fn tab_flight_tint_multiplier(activity: f32) -> f32 {
