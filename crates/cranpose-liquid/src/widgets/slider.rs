@@ -24,14 +24,9 @@ const SLIDER_HEIGHT: f32 = 32.0;
 const LENS_SIZE: f32 = 34.0;
 /// Glass node span beyond the lens shape (rim glow + bulge live here).
 const LENS_PAD: f32 = 10.0;
-const SLIDER_STRAIN_GAIN: f32 = 2.0;
 
 fn slider_deformation(pose: crate::dynamics::LiquidPose) -> crate::material::GlassDeformation {
-    let stretch = pose
-        .stretch
-        .powf(SLIDER_STRAIN_GAIN)
-        .clamp(crate::dynamics::STRETCH_MIN, crate::dynamics::STRETCH_MAX);
-    crate::material::GlassDeformation::incompressible(pose.axis, stretch)
+    pose.deformation()
 }
 
 /// A 0..=1 slider. The caller owns `value`; `on_change` streams new values
@@ -267,14 +262,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slider_strain_is_amplified_but_remains_incompressible() {
+    fn slider_strain_uses_the_shared_incompressible_pose() {
         let pose = crate::dynamics::LiquidPose {
             stretch: 1.05,
             ortho: 1.0 / 1.05,
             ..Default::default()
         };
         let deformation = slider_deformation(pose);
-        assert!(deformation.along() > 1.09);
+        assert!((deformation.along() - pose.stretch).abs() < 1e-6);
         assert!((deformation.along() * deformation.across() - 1.0).abs() < 1e-6);
     }
 
@@ -286,7 +281,7 @@ mod tests {
             ..Default::default()
         };
         let deformation = slider_deformation(pose);
-        assert!(deformation.along() < 0.91);
-        assert!(deformation.across() > 1.10);
+        assert!((deformation.along() - pose.stretch).abs() < 1e-6);
+        assert!(deformation.across() > 1.0);
     }
 }

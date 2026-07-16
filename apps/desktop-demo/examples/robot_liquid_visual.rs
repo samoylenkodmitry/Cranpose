@@ -59,7 +59,8 @@ fn main() {
             shot(&robot, &shot_dir, "01-top");
 
             let focused_controls = std::env::var_os("CRANPOSE_LIQUID_SEGMENTED_ONLY").is_some()
-                || std::env::var_os("CRANPOSE_LIQUID_HEADER_ONLY").is_some();
+                || std::env::var_os("CRANPOSE_LIQUID_HEADER_ONLY").is_some()
+                || std::env::var_os("CRANPOSE_LIQUID_SLIDER_ONLY").is_some();
             if focused_controls {
                 capture_control_visuals(&robot, &shot_dir);
                 println!(
