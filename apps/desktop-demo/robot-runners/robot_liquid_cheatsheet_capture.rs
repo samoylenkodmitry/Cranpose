@@ -208,7 +208,16 @@ fn capture_on_white(robot: &cranpose::Robot, shot_dir: &Path) {
     };
     let (conv_x, y) = center(conversation);
     let (cam_x, _) = center(camera);
+    let Some(translate) = robot.find_button_bounds_exact("Translate").ok().flatten() else {
+        eprintln!("SKIP on-white: translate cell not found");
+        return;
+    };
+    let (tr_x, _) = center(translate);
 
+    // The reference transfer starts from Translate; prime that state so the
+    // captured click actually flies.
+    robot.click(tr_x, y).expect("prime translate");
+    settle(robot, 1500);
     robot.click(conv_x, y).expect("click conversation");
     let transfer = robot
         .capture_keyframes(
@@ -226,7 +235,7 @@ fn capture_on_white(robot: &cranpose::Robot, shot_dir: &Path) {
             ],
         )
         .expect("click transfer keyframes");
-    let bar_crop = (0.0, y - 62.0, WINDOW_WIDTH as f32, 124.0);
+    let bar_crop = (cam_x - 175.0, y - 62.0, 380.0, 124.0);
     save_series(shot_dir, "on-white-click", bar_crop, transfer.iter());
     settle(robot, 900);
 
