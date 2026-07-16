@@ -64,12 +64,12 @@ fn toggle_lens_material() -> Glass {
         .saturation(1.0)
         .refraction_depth(0.24)
         .refraction_curve(0.25)
-        .transmission_refraction(0.35)
+        .transmission_refraction(0.70)
         .meniscus_absorption(0.70)
         .fold_depth(6.0)
         // The pressed lens shows the track end-cap mildly enlarged
         // (toggle-press detail frames).
-        .optical_zoom(1.18)
+        .optical_zoom(1.35)
         .dispersion(0.85)
         // The reference press face is the magnified track, not a lit dome —
         // its luma matches the sampled backdrop (toggle-press detail).
