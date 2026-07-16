@@ -100,7 +100,15 @@ fn capture_toggle_press(robot: &cranpose::Robot, shot_dir: &Path) {
 /// droplet grows over WHITE list content, so park the session cards under
 /// the nav anchor first.
 fn capture_menu_open(robot: &cranpose::Robot, shot_dir: &Path) {
-    let _ = scroll_to_button(robot, "Today", 740.0);
+    // Rest scroll: the Featured videos stage sits right under the nav's
+    // filter/"..." circles, composing the reference page.
+    for _ in 0..30 {
+        robot
+            .mouse_move(450.0, 400.0)
+            .expect("hover for scroll top");
+        robot.mouse_scroll(0.0, 200.0).expect("scroll to top");
+        settle(robot, 60);
+    }
     settle(robot, 400);
     robot.click(858.0, 122.0).expect("open menu");
     let grow = robot
@@ -122,7 +130,7 @@ fn capture_menu_open(robot: &cranpose::Robot, shot_dir: &Path) {
     save_series(
         shot_dir,
         "menu-open",
-        (560.0, 70.0, 320.0, 250.0),
+        (540.0, 70.0, 350.0, 260.0),
         grow.iter(),
     );
     settle(robot, 500);
@@ -130,47 +138,61 @@ fn capture_menu_open(robot: &cranpose::Robot, shot_dir: &Path) {
     settle(robot, 900);
 }
 
-/// Reference `tab-swipe` (57 frames @30fps, 1.9 s drag) and
-/// `bottom-bar-form` (stills over the vivid tiles).
+/// Reference `tab-swipe` (57 frames @30fps, 1.9 s drag): the MAIN floating
+/// bar dragged over the Enroll Now reference backdrop, exactly like the
+/// App Store recording. `bottom-bar-form` stills come from the store bar
+/// over the vivid tiles.
 fn capture_tab_swipe_and_form(robot: &cranpose::Robot, shot_dir: &Path) {
-    let Some(today) = scroll_to_button(robot, "Today", 430.0) else {
-        eprintln!("SKIP tab-swipe: store bar not found");
+    // Park the TAB SWIPE reference backdrop behind the main bar.
+    let _ = scroll_to_button(robot, "Wi-Fi switch", 300.0);
+    settle(robot, 400);
+    let Some(discover) = robot.find_button_bounds_exact("Discover").ok().flatten() else {
+        eprintln!("SKIP tab-swipe: main bar not found");
         return;
     };
-    let Some(search) = robot.find_button_bounds_exact("Search").ok().flatten() else {
-        eprintln!("SKIP tab-swipe: search cell not found");
+    let Some(account) = robot.find_button_bounds_exact("Account").ok().flatten() else {
+        eprintln!("SKIP tab-swipe: account cell not found");
         return;
     };
-    let (start_x, y) = center(search);
-    let (end_x, _) = center(today);
+    let (start_x, bar_y) = center(discover);
+    let (end_x, _) = center(account);
+    let main_bar_crop = (0.0, bar_y - 72.0, WINDOW_WIDTH as f32, 144.0);
 
-    // Form stills first: resting bar over the tiles, two selections.
-    let bar_crop = (0.0, y - 66.0, WINDOW_WIDTH as f32, 133.0);
-    let rest = robot.screenshot().expect("bar form rest");
-    save(&rest, shot_dir, "bottom-bar-form", bar_crop, 0);
-    robot.click(end_x, y).expect("select today");
-    settle(robot, 1500);
-    let today_selected = robot.screenshot().expect("bar form today");
-    save(&today_selected, shot_dir, "bottom-bar-form", bar_crop, 1);
-
-    // The swipe: grab Today, drag back to Search across ~1.9 s.
-    robot.mouse_move(end_x, y).expect("hover today");
-    robot.mouse_down().expect("grab today");
+    robot.mouse_move(start_x, bar_y).expect("hover discover");
+    robot.mouse_down().expect("grab main lens");
     std::thread::sleep(Duration::from_millis(220));
     let steps = 7usize;
     let mut frames = Vec::new();
     for step in 0..=steps {
         let t = step as f32 / steps as f32;
-        let x = end_x + (start_x - end_x) * t;
-        robot.mouse_move(x, y).expect("drag store lens");
+        let x = start_x + (end_x - start_x) * t;
+        robot.mouse_move(x, bar_y).expect("drag main lens");
         std::thread::sleep(Duration::from_millis(200));
         frames.push(robot.screenshot().expect("swipe frame"));
     }
-    robot.mouse_up().expect("release store lens");
+    robot.mouse_up().expect("release main lens");
     std::thread::sleep(Duration::from_millis(350));
     frames.push(robot.screenshot().expect("swipe settle"));
-    save_series(shot_dir, "tab-swipe", bar_crop, frames.iter());
+    save_series(shot_dir, "tab-swipe", main_bar_crop, frames.iter());
     settle(robot, 800);
+    // Return the selection home for later sections.
+    robot.click(start_x, bar_y).expect("restore discover");
+    settle(robot, 900);
+
+    // Form stills: the store bar resting over the vivid tiles.
+    let Some(today) = scroll_to_button(robot, "Today", 430.0) else {
+        eprintln!("SKIP bottom-bar-form: store bar not found");
+        return;
+    };
+    let (today_x, y) = center(today);
+    let bar_crop = (0.0, y - 66.0, WINDOW_WIDTH as f32, 133.0);
+    let rest = robot.screenshot().expect("bar form rest");
+    save(&rest, shot_dir, "bottom-bar-form", bar_crop, 0);
+    robot.click(today_x, y).expect("select today");
+    settle(robot, 1500);
+    let today_selected = robot.screenshot().expect("bar form today");
+    save(&today_selected, shot_dir, "bottom-bar-form", bar_crop, 1);
+    settle(robot, 400);
 }
 
 /// Reference `on-white/bottom-bar-click` (tap transfer, ~0.9 s) and

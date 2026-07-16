@@ -837,6 +837,116 @@ fn SessionCard(icon: &'static str, title: &'static str, subtitle: &'static str) 
     Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
 }
 
+/// The `menu-open` reference page block: the "Featured videos" header the
+/// iPhone menu droplet grows over, with the WWDC26 session rows beneath —
+/// the nav's filter/"..." circles sit directly above it at rest scroll, so
+/// the composed frame matches `example/target/menu-open`.
+#[composable]
+fn FeaturedVideosReferenceStage() {
+    Box(
+        Modifier::empty().fill_max_width(),
+        BoxSpec::default().content_alignment(Alignment::new(
+            HorizontalAlignment::End,
+            VerticalAlignment::Top,
+        )),
+        move || {
+            FeaturedVideosReferenceCard();
+        },
+    );
+    Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
+}
+
+#[composable]
+fn FeaturedVideosReferenceCard() {
+    let colors = liquid_colors();
+    Column(
+        Modifier::empty()
+            .required_size(Size::new(330.0, 210.0))
+            .semantics(|config| {
+                config.content_description = Some("Featured videos".to_string());
+            })
+            .draw_behind(|scope| {
+                scope.draw_round_rect(Brush::solid(Color::WHITE), CornerRadii::uniform(14.0));
+            })
+            .padding(14.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                "Featured videos",
+                Modifier::empty(),
+                TextStyle {
+                    span_style: SpanStyle {
+                        color: Some(colors.label),
+                        font_size: TextUnit::Sp(17.0),
+                        font_weight: Some(cranpose::text::FontWeight::BOLD),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            Text(
+                "1.328 of 1.328 Sessions",
+                Modifier::empty(),
+                body_style(colors.secondary_label),
+            );
+            Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
+            for (index, day) in ["Dub Dub Daily: Day 5", "Dub Dub Daily: Day 4"]
+                .into_iter()
+                .enumerate()
+            {
+                if index > 0 {
+                    Box(
+                        Modifier::empty()
+                            .fill_max_width()
+                            .height(1.0)
+                            .draw_behind(|scope| {
+                                scope.draw_rect(Brush::solid(Color::from_rgb_u8(232, 232, 236)));
+                            }),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    Box(Modifier::empty().height(10.0), BoxSpec::default(), || {});
+                }
+                Text(
+                    "WWDC26",
+                    Modifier::empty(),
+                    TextStyle {
+                        span_style: SpanStyle {
+                            color: Some(colors.secondary_label),
+                            font_size: TextUnit::Sp(12.0),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                );
+                Box(Modifier::empty().height(2.0), BoxSpec::default(), || {});
+                Row(
+                    Modifier::empty().fill_max_width(),
+                    RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
+                    move || {
+                        Text(
+                            day,
+                            Modifier::empty().weight(1.0),
+                            TextStyle {
+                                span_style: SpanStyle {
+                                    color: Some(colors.label),
+                                    font_size: TextUnit::Sp(16.0),
+                                    font_weight: Some(cranpose::text::FontWeight::BOLD),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                        );
+                        icons::Icon(icons::CHEVRON_RIGHT, 16.0, colors.secondary_label);
+                    },
+                );
+                Box(Modifier::empty().height(10.0), BoxSpec::default(), || {});
+            }
+        },
+    );
+    Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
+}
+
 /// The showcase page.
 #[composable]
 pub fn LiquidUiTab() {
@@ -901,6 +1011,8 @@ pub fn LiquidUiTab() {
                             ),
                         ColumnSpec::default(),
                         move || {
+                            FeaturedVideosReferenceStage();
+
                             SectionTitle("wcKSRD OPTICS");
                             OpticalShaderPreview();
 
