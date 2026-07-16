@@ -3,8 +3,8 @@
 //! circular accessory (the iOS 26 search button).
 
 use crate::material::{
-    liquid_refracted_content_with, neutral_surface_lift, neutral_surface_tint, Glass,
-    GlassDynamics, GlassMorph, LiquidModifierExt,
+    liquid_content_mask_with, neutral_surface_lift, neutral_surface_tint, Glass, GlassDynamics,
+    GlassMorph, LiquidModifierExt,
 };
 use crate::motion::{liquid_axis_owns_visual_selection, liquid_visual_index, LiquidMotion};
 use crate::theme::{liquid_colors, liquid_typography, LiquidTypography};
@@ -106,7 +106,7 @@ fn tab_base_selected_color(colors: crate::theme::LiquidColors, activity: f32) ->
 const BAR_HEIGHT: f32 = 64.0;
 const BLOB_HEIGHT: f32 = 52.0;
 const BLOB_MARGIN: f32 = 8.0;
-const FLIGHT_LENS_PROJECTION_SCALE: f32 = 1.30;
+const FLIGHT_LENS_PROJECTION_SCALE: f32 = 1.15;
 const TAB_LENS_REST_WIDTH_FACTOR: f32 = 1.16;
 /// Width allotted to each tab inside the pill.
 const TAB_WIDTH: f32 = 78.0;
@@ -149,7 +149,6 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         .refraction_depth(0.26)
         .refraction_curve(0.25)
         .dispersion(0.24)
-        .meniscus_absorption(0.55)
         .lift(0.0)
         .highlight(0.24)
 }
@@ -161,12 +160,6 @@ fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         .saturation(0.95)
         .lift(neutral_surface_lift(foreground, 0.48, -0.24))
         .highlight(0.20)
-        // The reference bar folds nearby content INSIDE its long edges:
-        // section headers under the top edge render mirrored upside-down
-        // (bar_headers_folded), the same rim optic as the lenses at a
-        // quieter strength.
-        .fold_depth(9.0)
-        .fold_strength(0.9)
         .adaptive_frost(foreground, 0.42)
 }
 
@@ -282,6 +275,11 @@ struct TabCellsSpec {
     selected: Option<usize>,
     selected_color: Color,
     interactive: bool,
+    selection_only: bool,
+}
+
+fn tab_cell_is_visible(index: usize, selected: Option<usize>, selection_only: bool) -> bool {
+    !selection_only || selected == Some(index)
 }
 
 #[composable]
@@ -295,6 +293,7 @@ fn TabCells(
 ) {
     Row(modifier, RowSpec::default(), move || {
         for (index, tab) in tabs.iter().enumerate() {
+            let visible = tab_cell_is_visible(index, spec.selected, spec.selection_only);
             let color = if spec.selected == Some(index) {
                 spec.selected_color
             } else {
@@ -326,6 +325,9 @@ fn TabCells(
                 cell,
                 BoxSpec::default().content_alignment(Alignment::CENTER),
                 move || {
+                    if !visible {
+                        return;
+                    }
                     let label_style = label_style.clone();
                     Column(
                         Modifier::empty(),
@@ -358,17 +360,11 @@ fn accessory_surfaces_touch(edge_gap: f32) -> bool {
     edge_gap <= 0.0
 }
 
-/// Depth projection of the raised lens: how much larger the lifted face (and
-/// the content riding it) appears than the resting selection surface.
-fn tab_lens_projection(activity: f32) -> f32 {
+fn tab_lens_base_size(tab_width: f32, activity: f32) -> (f32, f32) {
     let activity = activity.clamp(0.0, 1.0);
     let ease = activity * activity * (3.0 - 2.0 * activity);
-    1.0 + (FLIGHT_LENS_PROJECTION_SCALE - 1.0) * ease
-}
-
-fn tab_lens_base_size(tab_width: f32, activity: f32) -> (f32, f32) {
     let rest_width = tab_width * TAB_LENS_REST_WIDTH_FACTOR;
-    let projection = tab_lens_projection(activity);
+    let projection = 1.0 + (FLIGHT_LENS_PROJECTION_SCALE - 1.0) * ease;
     (rest_width * projection, BLOB_HEIGHT * projection)
 }
 
@@ -428,7 +424,7 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
             wobble_phase: geometry.lens_position * 0.045,
             bulge_amplitude: geometry.pose.bulge_amplitude.min(8.0) * activity,
             bulge_direction: geometry.pose.bulge_direction,
-            ellipse_blend: 0.24,
+            ellipse_blend: 0.0,
             deformation: Some(crate::material::GlassDeformation::incompressible(
                 geometry.pose.axis,
                 1.0 + (geometry.pose.stretch - 1.0) * activity,
@@ -592,6 +588,7 @@ fn LiquidTabBarLayout(
                                     selected: Some(selected),
                                     selected_color: tab_base_selected_color(colors, lens_activity),
                                     interactive: true,
+                                    selection_only: false,
                                 },
                             );
 
@@ -775,17 +772,11 @@ fn LiquidTabBarLayout(
                     };
 
                     let selection_geometry = geometry;
-                    let selection_mask = liquid_refracted_content_with(
+                    let selection_mask = liquid_content_mask_with(
                         Modifier::empty().required_size(mask_node.size),
                         tab_flight_lens_material(colors.label),
                         move || tab_flight_dynamics(selection_geometry, mask_node),
                     );
-                    // Every cell rides the lens in the selection color: the
-                    // reference lens tints whatever it covers mid-flight
-                    // (both neighbor glyphs turn accent-colored through the
-                    // glass), and the copy must shadow the refracted base
-                    // everywhere the SDF shows it — an uncovered neighbor
-                    // leaves its base-dark edge sweep as a dark rim ring.
                     Box(selection_mask, BoxSpec::default(), move || {
                         TabCells(
                             Modifier::empty().offset(BLOB_MARGIN, BLOB_MARGIN),
@@ -797,6 +788,7 @@ fn LiquidTabBarLayout(
                                 selected: Some(visual_selection),
                                 selected_color: tab_selection_content_color(colors),
                                 interactive: false,
+                                selection_only: true,
                             },
                         );
                     });
@@ -926,11 +918,14 @@ mod tests {
     }
 
     #[test]
-    fn flight_overlay_accents_the_lens_owned_cell() {
+    fn flight_overlay_accents_only_the_lens_owned_cell() {
         assert_eq!(
             tab_visual_selection(3, TAB_WIDTH * 2.5, TAB_WIDTH, 4, true),
             2
         );
+        assert!(tab_cell_is_visible(2, Some(2), true));
+        assert!(!tab_cell_is_visible(3, Some(2), true));
+        assert!(tab_cell_is_visible(3, Some(2), false));
     }
 
     #[test]
@@ -1003,10 +998,9 @@ mod tests {
         );
         assert!((raised.0 / resting.0 - FLIGHT_LENS_PROJECTION_SCALE).abs() < 0.001);
         assert!((raised.1 / resting.1 - FLIGHT_LENS_PROJECTION_SCALE).abs() < 0.001);
-        let projected_area = raised.0 * raised.1 / (resting.0 * resting.1);
         assert!(
-            (1.55..=2.05).contains(&projected_area),
-            "raised lens projection must stay inside the reference's ~1.6-2x band"
+            raised.0 * raised.1 / (resting.0 * resting.1) < 1.38,
+            "depth projection must not masquerade as fluid volume inflation"
         );
     }
 

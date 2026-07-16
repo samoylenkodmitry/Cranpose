@@ -71,22 +71,21 @@ fn wcksrd_meniscus(
         - clamp(gradient_inner * 4.0, 0.0, 1.0);
 }
 
-// One rim optic for every raised liquid element: the FOLD. Within the rim
-// band the sampling distance reaches out fast (band start -> crest), then
-// walks back down a long descending branch whose slope keeps the mirrored
-// content near its original scale. The loupe weights the fold vertically for
-// text; interactive lenses run it radially along the outward normal.
-fn fold_source_units(
-    xr: f32,
-    band_start: f32,
-    crest_xr: f32,
-    fold_peak: f32,
-    mirror_slope: f32,
-) -> f32 {
-    if xr <= crest_xr {
-        return mix(band_start, fold_peak, smoothstep(band_start, crest_xr, xr));
-    }
-    return fold_peak + mirror_slope * (xr - crest_xr);
+fn opposite_side_reflection_displacement(
+    local_position: vec2<f32>,
+    outward_normal: vec2<f32>,
+    half_size: vec2<f32>,
+    corner_radius: f32,
+) -> vec2<f32> {
+    let radius = clamp(
+        corner_radius,
+        0.0,
+        min(half_size.x, half_size.y),
+    );
+    let core_half_size = max(half_size - vec2<f32>(radius), vec2<f32>(0.0));
+    let opposite_support = dot(abs(outward_normal), core_half_size) + radius;
+    let opposite_surface = -outward_normal * opposite_support;
+    return opposite_surface - local_position;
 }
 
 // Polynomial smooth minimum — SDF metaball gluing: shapes within `k` of
@@ -170,6 +169,52 @@ fn sample_wcksrd_path(
         }
     }
     return accumulated / 81.0;
+}
+
+fn sample_wcksrd_reflection_path(
+    uv: vec2<f32>,
+    tex_size: vec2<f32>,
+    displacement: vec2<f32>,
+    tangent: vec2<f32>,
+    blur_radius: f32,
+) -> vec4<f32> {
+    let center_uv = clamp(
+        uv + displacement / tex_size,
+        vec2<f32>(0.0),
+        vec2<f32>(1.0),
+    );
+    let tangent_length = length(tangent);
+    let tangent_direction = select(
+        vec2<f32>(1.0, 0.0),
+        tangent / max(tangent_length, 0.001),
+        tangent_length > 0.001,
+    );
+    let outer_offset = tangent_direction * blur_radius / tex_size;
+    let inner_offset = outer_offset * 0.5;
+    let center = textureSampleLevel(input_texture, input_sampler, center_uv, 0.0);
+    let inner = textureSampleLevel(
+        input_texture,
+        input_sampler,
+        clamp(center_uv - inner_offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+        0.0,
+    ) + textureSampleLevel(
+        input_texture,
+        input_sampler,
+        clamp(center_uv + inner_offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+        0.0,
+    );
+    let outer = textureSampleLevel(
+        input_texture,
+        input_sampler,
+        clamp(center_uv - outer_offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+        0.0,
+    ) + textureSampleLevel(
+        input_texture,
+        input_sampler,
+        clamp(center_uv + outer_offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+        0.0,
+    );
+    return center * 0.40 + inner * 0.20 + outer * 0.10;
 }
 
 fn wcksrd_optics(
@@ -452,8 +497,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // A morphing glass node uses this same scene SDF as the alpha mask for
     // its foreground content. Keeping the mask in this shader guarantees
     // that blurred children and the refracted backdrop share one silhouette.
-    let input_mode = get_float(112u);
-    if input_mode > 0.5 && input_mode < 1.5 {
+    if get_float(112u) > 0.5 {
         return textureSample(input_texture, input_sampler, input.uv)
             * coverage
             * material_activity;
@@ -586,21 +630,23 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         let vert_weight = pow(vert, 0.60) * below;
         if xr > band_start {
             let tau = clamp((xr - band_start) / max(1.0 - band_start, 0.001), 0.0, 1.0);
-            // A fast reach-out followed by a long descending branch. Derive
-            // that branch from the requested -1 source/display slope: the
-            // fold then mirrors glyphs at their original height instead of
-            // compressing them into a stripe when band_start changes.
-            let crest_xr = band_start + 0.3 * (1.0 - band_start);
-            let fold_gain = 0.62;
-            let unit_mirror_slope = 1.0 - (1.0 + 1.0 / m) / fold_gain;
-            let s_units = fold_source_units(
-                xr,
-                band_start,
-                crest_xr,
-                fold_peak,
-                unit_mirror_slope,
-            );
-            let fold_weight = vert_weight * fold_gain * loupe_activity;
+            // A fast reach-out (first ~30% of the band) followed by a LONG
+            // descending branch — the inversion. The descent's slope is what
+            // sets the mirrored image's scale: the reference fold shows the
+            // next line at essentially MAIN-TEXT scale, so the descent walks
+            // back through the content at ~1 content-dp per display-dp.
+            var g = 0.0;
+            if tau <= 0.3 {
+                g = smoothstep(0.0, 0.3, tau);
+            } else {
+                // This source-space slope is approximately -1 for the
+                // calibrated band and reach, preserving legible mirrored
+                // glyph bodies instead of stretching them into streaks.
+                g = 1.0 - 0.48 * ((tau - 0.3) / 0.7);
+            }
+            let fold_weight = vert_weight * 0.62 * loupe_activity;
+            let s_band0 = band_start / m;
+            let s_units = s_band0 + (fold_peak - s_band0) * g;
             let fold_units = s_units - xr;
             let seam_floor = max(get_float(87u), 0.0) * dp_scale.y;
             let guard_radius = clamp(seam_floor * 1.15 / r_in, 0.28, 0.42);
@@ -630,62 +676,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // Interactive lenses share the loupe's rim optic: an inward FOLD along
-    // the outward normal. Walking back from the crest replays the lens
-    // interior mirrored toward the rim — the surround strip inside the
-    // footprint returns as the inner band and the backdrop's own boundary
-    // sweeps into the thin saturated turn line. Everything the band shows is
-    // sampled content, never a painted ring.
-    var fold_presence = 0.0;
-    var fold_tau = 0.0;
-    let fold_strength = get_float(86u);
-    let fold_depth_px = get_float(88u) * optical_scale;
-    if loupe_mode <= 0.5 && fold_strength > 0.0 && fold_depth_px > 0.0 {
-        let r_in_fold = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
-        let fold_band_start = clamp(1.0 - fold_depth_px / r_in_fold, 0.05, 0.95);
-        {
-            var fold_peak = get_float(85u);
-            if fold_peak <= 0.0 {
-                fold_peak = 0.94;
-            }
-            let xr = 1.0 - clamp(-d / r_in_fold, 0.0, 1.0);
-            if xr > fold_band_start {
-                let crest_xr = fold_band_start + 0.3 * (1.0 - fold_band_start);
-                let s_units = fold_source_units(
-                    xr,
-                    fold_band_start,
-                    crest_xr,
-                    fold_peak,
-                    -1.0,
-                );
-                fold_tau = clamp(
-                    (xr - fold_band_start) / max(1.0 - fold_band_start, 0.001),
-                    0.0,
-                    1.0,
-                );
-                fold_presence = smoothstep(0.0, 0.12, fold_tau) * fold_strength;
-                base_displacement = base_displacement
-                    + outward_normal * (s_units - xr) * r_in_fold * fold_presence;
-            }
-        }
-    }
-
-    // Foreground content raised by a moving glass element travels through the
-    // SAME source map as its backdrop — magnification, fold and all. Any
-    // other mapping (a crisp clipped overlay, a separate uniform zoom) leaves
-    // the refracted base image visible beside the riding copy as doubled
-    // icons and text. Catmull-Rom reconstruction keeps the shared path sharp.
-    if input_mode > 1.5 {
-        let content_uv = clamp(
-            uv + base_displacement / tex_size,
-            vec2<f32>(0.0),
-            vec2<f32>(1.0),
-        );
-        return sample_wcksrd_sharp_path(content_uv, tex_size)
-            * coverage
-            * material_activity;
-    }
-
     // wcKSRD owns source mapping and backdrop blur.
     let wcksrd_blur_radius = max(get_float(93u), 0.0);
     let transmitted_path = sample_wcksrd_path(
@@ -706,13 +696,18 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let lens_light_direction = normalize(vec2<f32>(1.0, 1.0));
     let lens_edge_incidence = 0.18
         + 0.82 * max(dot(outward_normal, lens_light_direction), 0.0);
-    // The meniscus band and the exterior bevel are distinct optical paths.
-    // The face return is concentrated inside the body; carrying the same
-    // broad mask through the exterior bevel turns backdrop detail into a
-    // painted outline instead of the target's thin independent light return.
+    // The meniscus is a separate light path. At grazing incidence the
+    // transmitted ray loses energy before the mirrored and spectral returns
+    // are added; this creates the target's dark upper/left inner caustic and
+    // bright lower return without displacing the face transmission.
+    let meniscus_distance = d;
+    // The meniscus and the exterior bevel are distinct optical paths.  The
+    // face return is concentrated inside the body; carrying the same broad
+    // mask through the exterior bevel turns backdrop detail into a painted
+    // outline instead of the target's thin independent light return.
     let meniscus_core = pow(
         clamp(
-            wcksrd_meniscus(d, lens_refraction, gradient_extent),
+            wcksrd_meniscus(meniscus_distance, lens_refraction, gradient_extent),
             0.0,
             1.0,
         ),
@@ -721,20 +716,61 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let face_meniscus = meniscus_core * coverage;
     let bevel_meniscus = optical_sample.edge_light;
     let long_edge_caustic = 0.18 + 0.82 * pow(abs(outward_normal.y), 1.5);
-    if fold_presence > 0.0 {
-        // Grazing rays lose energy through the fold as a second pass through
-        // the transmitted material itself: sage doubles into its saturated
-        // turn line while a white surround stays white. The remaining
-        // asymmetry is the light's incidence — the upper mirrored band
-        // returns dimmer than the lower one.
-        let meniscus_absorption = clamp(get_float(100u), 0.0, 1.0);
-        let self_absorb = smoothstep(0.62, 1.0, fold_tau)
-            * meniscus_absorption
-            * fold_presence;
-        rgb = rgb * mix(vec3<f32>(1.0), rgb, self_absorb);
-        let incidence_return = mix(0.80, 1.0, lens_edge_incidence);
-        rgb = rgb * mix(1.0, incidence_return, fold_presence);
-    }
+    let left_cap_absorption = pow(max(-outward_normal.x, 0.0), 2.0);
+    let meniscus_transmission_axis = max(
+        long_edge_caustic,
+        left_cap_absorption,
+    );
+    let meniscus_absorption = clamp(get_float(100u), 0.0, 1.0);
+    let meniscus_transmission_loss = face_meniscus
+        * rim_style
+        * (1.0 - lens_edge_incidence)
+        * meniscus_transmission_axis
+        * meniscus_absorption
+        * 0.72;
+    rgb = rgb * (1.0 - meniscus_transmission_loss);
+
+    // The meniscus returns the ray from the opposite wall of the same glass
+    // body. This is the mirrored image visible along the target's long edges;
+    // its weight is the wcKSRD gradient band, not a painted bevel mask.
+    let reflection_displacement = opposite_side_reflection_displacement(
+        p,
+        outward_normal,
+        half_size,
+        corner_radius,
+    );
+    let reflection_tangent = vec2<f32>(-outward_normal.y, outward_normal.x);
+    let reflection_path = sample_wcksrd_reflection_path(
+        uv,
+        tex_size,
+        reflection_displacement,
+        reflection_tangent,
+        gradient_extent * 1.5,
+    );
+    let reflection_path_length = length(reflection_displacement);
+    let internal_reflection_extinction =
+        0.097 * pow(1.0 - lens_edge_incidence, 2.0);
+    let internal_reflection_transmittance = exp(
+        -reflection_path_length / max(inradius, 1.0) * internal_reflection_extinction,
+    );
+    let reflection_rgb = reflection_path.rgb * internal_reflection_transmittance;
+    let long_edge_return = 0.40 + 0.60 * pow(abs(outward_normal.y), 1.5);
+    let meniscus_reflection = clamp(
+        face_meniscus
+            * long_edge_return
+            * mix(0.14, 0.24, rim_style),
+        0.0,
+        0.24,
+    ) * select(1.0, 0.0, loupe_mode > 0.5);
+    let bevel_reflection = clamp(
+        bevel_meniscus
+            * long_edge_return
+            * mix(0.035, 0.065, rim_style),
+        0.0,
+        0.08,
+    ) * select(1.0, 0.0, loupe_mode > 0.5);
+    rgb = mix(rgb, reflection_rgb, meniscus_reflection);
+    outer_rgb = mix(outer_rgb, reflection_rgb, bevel_reflection);
 
     if rim_style > 0.0 && dispersion_strength > 0.0 {
         let grazing_displacement = -p;
@@ -798,7 +834,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
     let inner_meniscus = clamp(
         wcksrd_meniscus(
-            d + gradient_extent * 0.5,
+            meniscus_distance + gradient_extent * 0.5,
             lens_refraction,
             gradient_extent,
         ),
@@ -817,7 +853,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
     let wcksrd_edge_gain = mix(
         highlight,
-        highlight * lens_edge_incidence * 0.55,
+        highlight * lens_edge_incidence,
         rim_style,
     );
     let wcksrd_edge_light = clamp(
@@ -830,11 +866,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     rgb = rgb + vec3<f32>(wcksrd_edge_light);
     outer_rgb = outer_rgb + vec3<f32>(wcksrd_edge_light);
     alpha = max(alpha, wcksrd_edge_light);
-    // A raised lens face transmits nearly flat (the reference face holds one
-    // color across its whole body); the broad top-lit wash belongs to
-    // surface glass only. The fold band already returns the bright surround.
-    let wcksrd_face_light = clamp(optical_sample.face_light * highlight, 0.0, 0.35)
-        * mix(1.0, 0.25, rim_style);
+    let wcksrd_face_light = clamp(optical_sample.face_light * highlight, 0.0, 0.35);
     rgb = rgb + vec3<f32>(wcksrd_face_light);
     alpha = max(alpha, wcksrd_face_light);
     // Tone pipeline: vibrancy first, then a gentle contrast pivot, then the

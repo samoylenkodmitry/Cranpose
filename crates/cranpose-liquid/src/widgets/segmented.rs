@@ -29,7 +29,7 @@ const LENS_OVERFLOW: f32 = 8.0;
 /// preserves the control's volume without letting maximum horizontal strain
 /// squash the lens below the track height.
 const LENS_WIDTH_LIFT_SCALE: f32 = 1.06;
-const LENS_HEIGHT_LIFT_SCALE: f32 = 1.36;
+const LENS_HEIGHT_LIFT_SCALE: f32 = 1.22;
 /// Glass node span beyond the lens shape (rim glow + bulge live here).
 const LENS_PAD: f32 = 10.0;
 /// A segmented selection stays recognizably one cell wide while its surface
@@ -350,7 +350,6 @@ pub fn LiquidSegmentedControl(
                         .refraction_depth(0.26)
                         .refraction_curve(0.25)
                         .dispersion(0.24)
-                        .meniscus_absorption(0.55)
                         .highlight(0.24)
                         .lift(0.0)
                         .no_clip(),
@@ -378,7 +377,7 @@ pub fn LiquidSegmentedControl(
                                 wobble_phase: 0.0,
                                 bulge_amplitude: pose.bulge_amplitude.min(4.0),
                                 bulge_direction: pose.bulge_direction,
-                                ellipse_blend: 0.20,
+                                ellipse_blend: 0.0,
                                 deformation: Some(
                                     crate::material::GlassDeformation::incompressible(
                                         pose.axis,

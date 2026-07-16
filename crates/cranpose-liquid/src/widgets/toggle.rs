@@ -29,10 +29,8 @@ const THUMB_MARGIN: f32 = 1.5;
 /// The pressed lens capsule rides the full track width and grows past the
 /// track edges, matching the reference's refractive chamber.
 const LENS_WIDTH: f32 = 58.0;
-/// Settled reference lens: 58×39, centered on the track (f_048 rims at
-/// y=34..150 @3x around the track center).
-const LENS_HEIGHT: f32 = 39.0;
-const LENS_VERTICAL_OFFSET: f32 = 0.0;
+const LENS_HEIGHT: f32 = 109.0 / 3.0;
+const LENS_VERTICAL_OFFSET: f32 = -2.0 / 3.0;
 /// The raised lens leans toward the travel side, measured from the thumb
 /// center on the reference press and settle frames (~6-8dp in every phase:
 /// press leans toward the destination, flight leads the thumb, settle
@@ -59,7 +57,7 @@ fn toggle_lens_material() -> Glass {
         .refraction_curve(0.25)
         .transmission_refraction(0.22)
         .meniscus_absorption(0.92)
-        .dispersion(0.60)
+        .dispersion(0.42)
         .highlight(0.36)
         .lift(0.0)
         .shadow_style(GlassShadow::new(
@@ -108,11 +106,10 @@ fn lens_translation_x(thumb_x: f32, node_width: f32) -> f32 {
     thumb_x + (THUMB_WIDTH - node_width) * 0.5
 }
 
-/// The gesture's travel side. The fluid motion axis is unusable here: a slow
-/// robot-speed drag stays under its direction threshold and holds whatever
-/// the previous flight left behind. The gesture itself always knows its
-/// destination — a fresh press heads to the flip side, movement follows the
-/// finger, and release heads to the committed end.
+/// The lean's travel side for a fresh press: the only end this switch can
+/// head to. Movement and release retarget it through the gesture handler —
+/// the fluid motion axis is unusable here because a slow drag stays under
+/// its direction threshold and holds whatever the previous flight left.
 fn lens_press_travel(checked: bool) -> f32 {
     if checked {
         -1.0
@@ -408,16 +405,19 @@ mod tests {
     fn toggle_geometry_matches_the_reference_proportions() {
         assert_eq!((TRACK_WIDTH, TRACK_HEIGHT), (63.0, 28.0));
         assert_eq!((THUMB_WIDTH, THUMB_HEIGHT), (37.0, 25.0));
-        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (58.0, 39.0));
+        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (58.0, 109.0 / 3.0));
         assert_eq!(
             toggle_lens_material().shape,
             LiquidShape::Capsule,
             "the pressed switch thumb remains a capsule while its optical body inflates"
         );
-        // The settled reference lens sits centered on the track and overhangs
-        // it by 5.5dp above and below (f_048 rims at y=34..150 @3x).
-        assert_eq!(LENS_VERTICAL_OFFSET, 0.0);
-        assert!(((LENS_HEIGHT - TRACK_HEIGHT) * 0.5 - 5.5).abs() < 1.0e-6);
+        assert!((LENS_VERTICAL_OFFSET + 2.0 / 3.0).abs() < 1.0e-6);
+        assert!(
+            ((LENS_HEIGHT - TRACK_HEIGHT) * 0.5 - LENS_VERTICAL_OFFSET - 29.0 / 6.0).abs() < 1.0e-6
+        );
+        assert!(
+            ((LENS_HEIGHT - TRACK_HEIGHT) * 0.5 + LENS_VERTICAL_OFFSET - 7.0 / 2.0).abs() < 1.0e-6
+        );
 
         let mid = interpolate_track_color(
             cranpose_ui_graphics::Color::from_rgb_u8(187, 186, 188),
@@ -447,11 +447,6 @@ mod tests {
         let mid_thumb_center = (min + max) * 0.5 + THUMB_WIDTH * 0.5;
         let lens_trailing_edge = mid_thumb_center + LENS_TRAVEL_LEAN - LENS_WIDTH * 0.5;
         assert!(lens_trailing_edge > 5.0);
-
-        // Settled at ON the lens overhangs the arrival end like the
-        // reference (its center ~7dp past the resting thumb center).
-        let settled_center = max + THUMB_WIDTH * 0.5 + LENS_TRAVEL_LEAN;
-        assert!(settled_center + LENS_WIDTH * 0.5 > TRACK_WIDTH);
 
         // The node itself never leans — the lean lives in the SDF center so
         // the oversized node's padding absorbs it on both sides.

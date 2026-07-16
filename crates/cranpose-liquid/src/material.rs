@@ -9,9 +9,9 @@ use cranpose_ui::Modifier;
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
-    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM, GLASS_FOLD_PEAK_UNIFORM,
-    GLASS_FOLD_STRENGTH_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
-    GLASS_RESTING_TINT_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
+    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM,
+    GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
+    GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
 };
 use std::rc::Rc;
 
@@ -27,11 +27,6 @@ const CAPSULE_SHADER_RADIUS: f32 = -1.0;
 /// either direction). Larger frost radii belong in the renderer's Gaussian
 /// pass; spreading those 81 taps over a large radius produces a visible grid.
 const WCKSRD_OPTICAL_BLUR_RADIUS_PX: f32 = 2.0;
-
-/// The fold crest's sampling reach in inradius units, measured on the
-/// reference toggle: the mirrored band peaks just inside the rim, so the
-/// walkback lands deep in the interior at the very edge.
-const WCKSRD_FOLD_PEAK: f32 = 0.94;
 
 /// The shape of a glass element (also its clip and shadow shape).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -273,13 +268,6 @@ pub struct Glass {
     /// Energy removed from the transmitted ray at the meniscus. Reflection
     /// and spectral return follow independent paths.
     pub meniscus_absorption: f32,
-    /// Depth of the rim fold band in dp. The raised lens rim replays its
-    /// interior mirrored toward the edge (the loupe optic run radially);
-    /// zero disables the fold.
-    pub fold_depth: f32,
-    /// Mirror strength of the fold band (1 = the full lens fold; quiet
-    /// surfaces fold subtler without adopting lens edge lighting).
-    pub fold_strength: f32,
     /// Specular rim intensity.
     pub highlight: f32,
     /// Screen-lift override (brightening toward white; negative darkens).
@@ -312,8 +300,6 @@ impl Glass {
             dispersion: 0.0,
             transmission_refraction: 1.0,
             meniscus_absorption: 1.0,
-            fold_depth: 0.0,
-            fold_strength: 1.0,
             highlight: 0.9,
             lift: None,
             shadow: true,
@@ -346,8 +332,6 @@ impl Glass {
             dispersion: 0.30,
             transmission_refraction: 1.0,
             meniscus_absorption: 1.0,
-            fold_depth: 6.0,
-            fold_strength: 1.0,
             highlight: 1.15,
             lift: None,
             shadow: true,
@@ -400,18 +384,6 @@ impl Glass {
 
     pub fn meniscus_absorption(mut self, strength: f32) -> Self {
         self.meniscus_absorption = strength.clamp(0.0, 1.0);
-        self
-    }
-
-    /// Sets the rim fold band depth in dp (zero disables the fold).
-    pub fn fold_depth(mut self, depth_dp: f32) -> Self {
-        self.fold_depth = depth_dp.max(0.0);
-        self
-    }
-
-    /// Sets the fold band's mirror strength (1 = the full lens fold).
-    pub fn fold_strength(mut self, strength: f32) -> Self {
-        self.fold_strength = strength.clamp(0.0, 1.0);
         self
     }
 
@@ -520,8 +492,6 @@ impl Glass {
             dispersion: self.dispersion,
             transmission_refraction: self.transmission_refraction,
             meniscus_absorption: self.meniscus_absorption,
-            fold_depth: self.fold_depth,
-            fold_strength: self.fold_strength,
             highlight: self.highlight,
             lift,
             contrast: if self.variant == GlassVariant::Lens {
@@ -567,8 +537,6 @@ pub(crate) struct ResolvedGlass {
     pub dispersion: f32,
     pub transmission_refraction: f32,
     pub meniscus_absorption: f32,
-    pub fold_depth: f32,
-    pub fold_strength: f32,
     pub highlight: f32,
     pub lift: f32,
     pub contrast: f32,
@@ -587,44 +555,23 @@ pub(crate) struct ResolvedGlass {
     pub shadow_spread: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GlassInputMode {
-    Backdrop,
-    ContentMask,
-    RefractedContent,
-}
-
-impl GlassInputMode {
-    fn shader_value(self) -> f32 {
-        match self {
-            Self::Backdrop => 0.0,
-            Self::ContentMask => 1.0,
-            Self::RefractedContent => 2.0,
-        }
-    }
-}
-
 impl ResolvedGlass {
     /// Builds the wcKSRD shader for the current density and
     /// per-frame dynamics. Cover mode keeps geometry in pixels with the
     /// container uniform zeroed; the shader owns all backdrop samples.
     pub(crate) fn backdrop_effect(&self, density: f32, dynamics: GlassDynamics) -> RenderEffect {
-        self.runtime_effect(density, dynamics, GlassInputMode::Backdrop)
+        self.runtime_effect(density, dynamics, false)
     }
 
     fn content_mask_effect(&self, density: f32, dynamics: GlassDynamics) -> RenderEffect {
-        self.runtime_effect(density, dynamics, GlassInputMode::ContentMask)
-    }
-
-    fn refracted_content_effect(&self, density: f32, dynamics: GlassDynamics) -> RenderEffect {
-        self.runtime_effect(density, dynamics, GlassInputMode::RefractedContent)
+        self.runtime_effect(density, dynamics, true)
     }
 
     fn runtime_effect(
         &self,
         density: f32,
         dynamics: GlassDynamics,
-        input_mode: GlassInputMode,
+        content_mask: bool,
     ) -> RenderEffect {
         let density = density.max(f32::EPSILON);
         let activity = dynamics
@@ -678,15 +625,6 @@ impl ResolvedGlass {
             shader.set_float2(0, 0.0, 0.0);
             shader.set_float(6, self.shape.shader_radius_px(density));
         }
-        // The rim fold band travels with every geometry mode: its dp depth is
-        // resolved against the live shape inradius in-shader, so morphing
-        // lenses and cover-mode lenses share one optic. Zero depth leaves the
-        // uniforms unset (fold off).
-        if self.fold_depth > 0.0 {
-            shader.set_float(GLASS_FOLD_DEPTH_UNIFORM, self.fold_depth);
-            shader.set_float(GLASS_FOLD_PEAK_UNIFORM, WCKSRD_FOLD_PEAK);
-            shader.set_float(GLASS_FOLD_STRENGTH_UNIFORM, self.fold_strength * activity);
-        }
         shader.set_float(9, self.refraction_depth * activity);
         shader.set_float(
             GLASS_REFRACTION_CURVE_UNIFORM,
@@ -725,10 +663,10 @@ impl ResolvedGlass {
         shader.set_float2(22, 0.0, 1.0);
         shader.set_float(24, 1.0 + (self.contrast - 1.0) * activity);
         shader.set_float(28, self.rim_style * activity);
-        let requested_blur_radius_px = if input_mode == GlassInputMode::Backdrop {
-            self.blur_radius_dp * density * activity
-        } else {
+        let requested_blur_radius_px = if content_mask {
             0.0
+        } else {
+            self.blur_radius_dp * density * activity
         };
         let wcksrd_blur_radius = requested_blur_radius_px.min(WCKSRD_OPTICAL_BLUR_RADIUS_PX);
         let gaussian_blur_radius = (requested_blur_radius_px - wcksrd_blur_radius).max(0.0);
@@ -742,7 +680,7 @@ impl ResolvedGlass {
             resting_tint.b(),
             resting_tint.a(),
         );
-        shader.set_float(112, input_mode.shader_value());
+        shader.set_float(112, if content_mask { 1.0 } else { 0.0 });
         shader.set_float(91, self.adaptive_frost * activity);
         shader.set_float(97, self.foreground_luma);
         let dynamic_shadow = !self.clip && self.shadow;
@@ -890,7 +828,7 @@ impl LiquidModifierExt for Modifier {
     }
 }
 
-pub(crate) fn liquid_refracted_content_with(
+pub(crate) fn liquid_content_mask_with(
     modifier: Modifier,
     glass: Glass,
     dynamics: impl Fn() -> GlassDynamics + 'static,
@@ -900,7 +838,7 @@ pub(crate) fn liquid_refracted_content_with(
     modifier.graphics_layer(move || {
         let density = current_density();
         GraphicsLayer {
-            render_effect: Some(resolved.refracted_content_effect(density, dynamics())),
+            render_effect: Some(resolved.content_mask_effect(density, dynamics())),
             ..Default::default()
         }
     })
