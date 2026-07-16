@@ -776,8 +776,10 @@ fn SortFilterReferenceStage() {
                 BoxSpec::default(),
                 move || {
                     let anchor_sink = std::rc::Rc::clone(&anchor_rect);
+                    let column_gesture = menu_gesture.clone();
                     Column(Modifier::empty().fill_max_size(), ColumnSpec::default(), {
                         move || {
+                            let column_gesture = column_gesture.clone();
                             // Header band: deep purple with the magenta pill.
                             let pill_open = menu_open;
                             Box(
@@ -799,49 +801,29 @@ fn SortFilterReferenceStage() {
                                 )),
                                 {
                                     let anchor_sink = std::rc::Rc::clone(&anchor_sink);
+                                    let pill_gesture = column_gesture.clone();
                                     move || {
-                                        let pill = Modifier::empty()
-                                            .size(Size::new(96.0, 40.0))
-                                            .offset(-16.0, 0.0)
-                                            .report_window_rect(std::rc::Rc::clone(&anchor_sink))
-                                            .semantics(|config| {
-                                                config.is_button = true;
-                                                config.is_clickable = true;
-                                                config.content_description =
-                                                    Some("Sort filter pill".to_string());
-                                            })
-                                            .pointer_input(
-                                                0usize,
-                                                move |scope: PointerInputScope| async move {
-                                                    scope
-                                                        .await_pointer_event_scope(
-                                                            |await_scope| async move {
-                                                                loop {
-                                                                    let event = await_scope
-                                                                        .await_pointer_event()
-                                                                        .await;
-                                                                    match event.kind {
-                                                                        PointerEventKind::Down => {
-                                                                            event.consume();
-                                                                        }
-                                                                        PointerEventKind::Up => {
-                                                                            pill_open.set(true);
-                                                                            event.consume();
-                                                                        }
-                                                                        _ => {}
-                                                                    }
-                                                                }
-                                                            },
-                                                        )
-                                                        .await;
-                                                },
-                                            )
-                                            .draw_behind(|scope| {
-                                                scope.draw_round_rect(
-                                                    Brush::solid(Color::from_rgb_u8(233, 30, 196)),
-                                                    CornerRadii::uniform(20.0),
-                                                );
-                                            });
+                                        let pill_open = pill_open;
+                                        let pill = liquid_menu_trigger_input(
+                                            Modifier::empty(),
+                                            pill_gesture.clone(),
+                                            move || pill_open.set(true),
+                                        )
+                                        .size(Size::new(96.0, 40.0))
+                                        .offset(-16.0, 0.0)
+                                        .report_window_rect(std::rc::Rc::clone(&anchor_sink))
+                                        .semantics(|config| {
+                                            config.is_button = true;
+                                            config.is_clickable = true;
+                                            config.content_description =
+                                                Some("Sort filter pill".to_string());
+                                        })
+                                        .draw_behind(|scope| {
+                                            scope.draw_round_rect(
+                                                Brush::solid(Color::from_rgb_u8(233, 30, 196)),
+                                                CornerRadii::uniform(20.0),
+                                            );
+                                        });
                                         Box(
                                             pill,
                                             BoxSpec::default().content_alignment(Alignment::CENTER),

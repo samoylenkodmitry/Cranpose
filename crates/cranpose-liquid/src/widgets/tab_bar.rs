@@ -504,15 +504,45 @@ fn LiquidTabBarLayout(
                     let tabs = Rc::clone(&tabs);
                     let typography = typography.clone();
                     let on_select = Rc::clone(&on_select);
+                    // Held glass comes CLOSER and lights up: while a finger
+                    // rests on the bar the whole surface scales up a touch
+                    // and the shader concentrates saturation + a gradient
+                    // highlight under the finger (user-observed reference
+                    // behavior of every touched glass surface).
+                    let bar_touch =
+                        cranpose_core::remember(|| cranpose_core::mutableStateOf((0.0f32, 0.0f32)))
+                            .with(|state| *state);
+                    let bar_held = cranpose_core::remember(|| cranpose_core::mutableStateOf(false))
+                        .with(|state| *state);
+                    let bar_press = cranpose_animation::animateFloatAsState(
+                        if bar_held.get() { 1.0 } else { 0.0 },
+                        cranpose_animation::spring(1.0, 600.0),
+                        "tabbar-hold-press",
+                    );
                     // The bar's edge is defined by shadow and contrast, not a
                     // bright rim stroke.
+                    // "Comes closer" reads through light, not geometry: a
+                    // geometric scale shifts the lens's finger-tracking
+                    // coordinates (bubble-physics contract). The held lift
+                    // rides the shader: stronger highlight, saturation and
+                    // the under-finger glow.
                     let pill = Modifier::empty()
-                        .glass_effect(
+                        .glass_effect_with(
                             // Dark labels must never sink into dark content
                             // scrolling beneath: the glass lifts adaptively over
                             // dark backdrops (inert over the light ones the
                             // pinned captures use).
                             tab_bar_surface_material(colors.label),
+                            move || {
+                                let press = bar_press.get().clamp(0.0, 1.0);
+                                let (touch_x, touch_y) = bar_touch.get();
+                                GlassDynamics {
+                                    highlight_boost: 0.16 * press,
+                                    saturation_boost: 0.22 * press,
+                                    touch: (press > 0.01).then_some((touch_x, touch_y, press)),
+                                    ..Default::default()
+                                }
+                            },
                         )
                         .height(BAR_HEIGHT);
                     Box(pill, BoxSpec::default(), move || {
@@ -625,6 +655,13 @@ fn LiquidTabBarLayout(
                                                                         event.time_ms,
                                                                     );
                                                                     lens_pressed.set(true);
+                                                                    bar_held.set(true);
+                                                                    bar_touch.set((
+                                                                        event.position.x
+                                                                            + BLOB_MARGIN,
+                                                                        event.position.y
+                                                                            + BLOB_MARGIN,
+                                                                    ));
                                                                     default_haptics().perform(
                                                                         HapticFeedback::Selection,
                                                                     );
@@ -657,6 +694,12 @@ fn LiquidTabBarLayout(
                                                                             event.time_ms,
                                                                         );
                                                                     }
+                                                                    bar_touch.set((
+                                                                        event.position.x
+                                                                            + BLOB_MARGIN,
+                                                                        event.position.y
+                                                                            + BLOB_MARGIN,
+                                                                    ));
                                                                     event.consume();
                                                                 }
                                                                 PointerEventKind::Up
@@ -665,6 +708,7 @@ fn LiquidTabBarLayout(
                                                                 {
                                                                     active_pointer = None;
                                                                     lens_pressed.set(false);
+                                                                    bar_held.set(false);
                                                                     let commit_x = if moved {
                                                                         event.position.x
                                                                     } else {
@@ -696,6 +740,7 @@ fn LiquidTabBarLayout(
                                                                 {
                                                                     active_pointer = None;
                                                                     lens_pressed.set(false);
+                                                                    bar_held.set(false);
                                                                     lens_axis.release_to(
                                                                         resting_lens_x,
                                                                         event.time_ms,

@@ -651,6 +651,109 @@ fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Attaches the shared menu-trigger gesture to ANY surface (the circular
+/// nav button, a filter pill, ...): a tap opens the menu; a long press
+/// claims the gesture and opens it while the finger is still down, and the
+/// SAME stream then slides through the opened menu's rows — keeps-open
+/// accordion rows included — committing on release.
+pub fn liquid_menu_trigger_input(
+    modifier: Modifier,
+    gesture: LiquidMenuGesture,
+    on_open: impl Fn() + 'static,
+) -> Modifier {
+    let gate = remember(|| {
+        let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
+        Rc::new(RefCell::new(cranpose_animation::Animatable::new(
+            0.0, runtime,
+        )))
+    })
+    .with(Rc::clone);
+    let on_open: Rc<dyn Fn()> = Rc::new(on_open);
+
+    let snapshot = gesture.snapshot();
+    let gate_progress = gate.borrow().state().value();
+    if gate_progress >= 1.0 && snapshot.active && !snapshot.claimed {
+        gesture.claim();
+        let on_open = Rc::clone(&on_open);
+        SideEffect(move || on_open());
+    }
+
+    modifier.pointer_input(gesture.id(), {
+        let gesture = gesture.clone();
+        let gate = Rc::clone(&gate);
+        let on_open = Rc::clone(&on_open);
+        move |scope: PointerInputScope| {
+            let gesture = gesture.clone();
+            let gate = Rc::clone(&gate);
+            let on_open = Rc::clone(&on_open);
+            async move {
+                scope
+                    .await_pointer_event_scope(|await_scope| async move {
+                        let mut active_pointer = Option::<PointerId>::None;
+                        let mut moved = false;
+                        loop {
+                            let event = await_scope.await_pointer_event().await;
+                            match event.kind {
+                                PointerEventKind::Down if active_pointer.is_none() => {
+                                    active_pointer = Some(event.id);
+                                    moved = false;
+                                    gesture.begin(event.global_position);
+                                    let mut timer = gate.borrow_mut();
+                                    timer.snapTo(0.0);
+                                    timer.animateTo(
+                                        1.0,
+                                        cranpose_animation::AnimationType::Tween(
+                                            cranpose_animation::AnimationSpec::linear(
+                                                MENU_LONG_PRESS_MS,
+                                            ),
+                                        ),
+                                    );
+                                    event.consume();
+                                }
+                                PointerEventKind::Move if active_pointer == Some(event.id) => {
+                                    gesture.move_to(event.global_position);
+                                    let state = gesture.snapshot();
+                                    let dx = event.global_position.x - state.start.x;
+                                    let dy = event.global_position.y - state.start.y;
+                                    if !state.claimed
+                                        && dx * dx + dy * dy
+                                            > MENU_LONG_PRESS_SLOP * MENU_LONG_PRESS_SLOP
+                                    {
+                                        moved = true;
+                                        gate.borrow_mut().snapTo(0.0);
+                                    }
+                                    event.consume();
+                                }
+                                PointerEventKind::Up if active_pointer == Some(event.id) => {
+                                    active_pointer = None;
+                                    let claimed = gesture.snapshot().claimed;
+                                    gate.borrow_mut().snapTo(0.0);
+                                    if claimed {
+                                        gesture.release(event.global_position);
+                                    } else {
+                                        gesture.cancel();
+                                        if !moved {
+                                            on_open();
+                                        }
+                                    }
+                                    event.consume();
+                                }
+                                PointerEventKind::Cancel if active_pointer == Some(event.id) => {
+                                    active_pointer = None;
+                                    gate.borrow_mut().snapTo(0.0);
+                                    gesture.cancel();
+                                    event.consume();
+                                }
+                                _ => {}
+                            }
+                        }
+                    })
+                    .await;
+            }
+        }
+    })
+}
+
 /// A glass icon trigger that owns one continuous menu gesture. A short click
 /// opens normally; a hold opens while still pressed, then the same pointer can
 /// slide over popup rows and release to fire one.
