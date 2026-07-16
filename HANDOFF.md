@@ -127,7 +127,14 @@ Zero warnings everywhere; all tests pass ("never *not yours*"); no `git reset` (
 
 `crates/cranpose-liquid/src/dynamics.rs` (new), `.../widgets/{tab_bar,toggle,segmented,slider}.rs`, `.../material.rs`, `.../motion.rs`; `crates/cranpose-ui-graphics/shaders/liquid_glass.wgsl`; `crates/cranpose-ui/src/{text_selection,text_field_modifier_node}.rs`, `.../widgets/{basic_text_field,text_selection_menu}.rs`; `crates/cranpose-core/src/runtime.rs`; `crates/cranpose/src/desktop.rs`; `apps/desktop-demo/src/app/liquid_ui.rs`; `apps/desktop-demo/robot-runners/robot_{liquid_bubble_physics,menu_slide,adaptive_frost}.rs` + `robot_liquid_motion_contract.rs`.
 
-## Unified rim-fold optic (this session, uncommitted)
+## Unified rim-fold optic (landed 2cb451fc, 546f33e2, d3300fc1)
+
+`example/screenshots_from_iphone_pay_attention/` are iPhone REFERENCE
+screenshots (the target look, annotated) — match them by vision, not by
+metric-chasing. Cover-mode lenses (`glass_effect(Glass::lens())`, the
+playground optics preview) fold via the same in-shader inradius resolution
+as morph lenses (uniform 88 depth dp / 85 peak / 86 strength); the bar body
+folds at depth 9dp strength 0.9. Details below still apply.
 
 Measured from `example/target/toggle-press` (see memory `liquid-rim-fold-optic`):
 every raised lens rim is the loupe's inward fold run radially — `fold_source_units`
