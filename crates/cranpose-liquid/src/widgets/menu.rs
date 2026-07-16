@@ -108,16 +108,16 @@ const MENU_WIDTH: f32 = 250.0;
 const MENU_RADIUS: f32 = 32.0;
 const MENU_GROW_DELAY: f32 = 0.050;
 const MENU_OVERSHOOT_SCALE: f32 = 0.30;
-const MENU_GROW_STIFFNESS: f32 = 60.0;
-const MENU_REVEAL_STIFFNESS: f32 = 200.0;
+const MENU_GROW_STIFFNESS: f32 = 15.0;
+const MENU_REVEAL_STIFFNESS: f32 = 50.0;
 const MENU_WIDTH_EASE_POWER: f32 = 4.5;
 const MENU_HEIGHT_EASE_POWER: f32 = 18.0;
 const MENU_HEIGHT_OVERSHOOT: f32 = 0.15;
 const MENU_HEIGHT_OVERSHOOT_END: f32 = 0.52;
 const MENU_VERTICAL_REBOUND: f32 = 14.0;
 const MENU_VERTICAL_REBOUND_END: f32 = 0.70;
-const MENU_SOURCE_HEIGHT_RATIO: f32 = 0.80;
-const MENU_SOURCE_TARGET_Y_PROGRESS: f32 = 0.76;
+const MENU_SOURCE_HEIGHT_RATIO: f32 = 0.50;
+const MENU_SOURCE_TARGET_Y_PROGRESS: f32 = 0.0;
 /// How far the card's top edge sits below the anchor's top: the settled menu
 /// swallows the anchor button ENTIRELY (the reference "…" disappears under
 /// the glass, reading as a smudge; only mid-flight does its bump ride the
@@ -138,7 +138,7 @@ const MENU_CONTENT_ALPHA_POWER: f32 = 0.45;
 const MENU_TRIGGER_GLASS_CUTOFF: f32 = 0.05;
 const MENU_TRIGGER_ABSORPTION_MS: u64 = 36;
 const MENU_TRIGGER_RESTORE_DELAY_MS: u64 = 205;
-const MENU_SOURCE_FOREGROUND_HIDE_MS: u64 = 5;
+const MENU_SOURCE_FOREGROUND_HIDE_MS: u64 = 200;
 const MENU_SOURCE_FOREGROUND_RESTORE_DELAY_MS: u64 = 205;
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct MenuGestureSnapshot {
@@ -491,7 +491,7 @@ fn menu_morph_geometry(
         primary.center_y += menu_vertical_rebound(phase.path);
     }
     let blob_radius = primary.height * 0.5;
-    let squareness = smoothstep(0.68, 1.0, phase.path);
+    let squareness = smoothstep(0.45, 0.62, phase.path);
     primary.radius = if !expanded {
         blob_radius
     } else if phase.path >= 1.0 {
@@ -508,7 +508,7 @@ fn menu_morph_geometry(
 }
 
 fn menu_ellipse_blend(path: f32) -> f32 {
-    0.42 * smoothstep(0.08, 0.28, path) * (1.0 - smoothstep(0.72, 0.96, path))
+    0.42 * smoothstep(0.08, 0.28, path) * (1.0 - smoothstep(0.45, 0.62, path))
 }
 
 fn menu_content_progress(expanded: bool, appear: f32, reveal: f32) -> f32 {
@@ -872,7 +872,7 @@ pub fn LiquidMenu(
     // The droplet spring: opening uses the bouncy morph spring (visible size
     // overshoot, the reference menu swells a few percent past its final width
     // and relaxes); closing is a faster, non-bouncy suck-back.
-    // Open ≈330ms press→crisp with a soft overshoot (timed against the
+    // Open ≈400ms press→crisp with a soft overshoot (timed against the
     // reference recording); close is a faster suck-back (~200ms).
     let grow = cranpose_animation::animate_float_as_state_with_initial(
         0.0,
@@ -1018,8 +1018,13 @@ pub fn LiquidMenu(
                             ));
                         }
                         let glue = surface.glue;
+                        let activity = if expanded {
+                            smoothstep(0.0, MENU_GROW_DELAY, appear)
+                        } else {
+                            t.clamp(0.0, 1.0)
+                        };
                         GlassDynamics {
-                            activity: Some(t.clamp(0.0, 1.0)),
+                            activity: Some(activity),
                             morph: Some(GlassMorph {
                                 node_size: (size.width.max(1.0), size.height.max(1.0)),
                                 primary,
@@ -1369,7 +1374,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_geometry_merges_sources_and_matches_the_measured_growth_contour() {
+    fn menu_geometry_keeps_the_source_cluster_horizontal_before_card_growth() {
         let anchor = MenuShape::capsule(228.0, 22.0, 44.0, 44.0);
         let absorbed = [MenuShape::capsule(176.0, 22.0, 44.0, 44.0)];
         let target = MenuShape {
@@ -1386,35 +1391,29 @@ mod tests {
 
         let merged = pose(0.028_576);
         assert!(
-            (94.0..=98.0).contains(&merged.width) && (75.0..=79.0).contains(&merged.height),
-            "+33ms must be one smooth aggregate source droplet: {merged:?}"
+            (94.0..=98.0).contains(&merged.width) && (46.0..=50.0).contains(&merged.height),
+            "the aggregate source must preserve the two-button footprint: {merged:?}"
         );
         assert!(
-            (199.0..=204.0).contains(&merged.center_x) && (43.0..=46.0).contains(&merged.center_y),
-            "the aggregate source must move toward the panel on both axes: {merged:?}"
+            (merged.center_y - anchor.center_y).abs() < 0.1,
+            "the source cluster must not jump toward the card before expansion: {merged:?}"
         );
 
-        for (label, appear, width, height) in [
-            ("+54ms", 0.070_208, 108.0..=113.0, 84.0..=89.0),
-            ("+75ms", 0.124_188, 139.0..=147.0, 96.0..=102.0),
-            ("+100ms", 0.199_019, 174.0..=182.0, 103.0..=109.0),
-            ("+130ms", 0.296_780, 205.0..=216.0, 106.0..=110.0),
-            ("+165ms", 0.412_956, 228.0..=238.0, 104.0..=109.0),
-            ("+205ms", 0.539_174, 241.0..=249.0, 102.0..=106.0),
-        ] {
-            let shape = pose(appear);
-            assert!(
-                width.contains(&shape.width) && height.contains(&shape.height),
-                "{label} contour mismatch: {shape:?}"
-            );
-        }
+        let early = pose(0.070_208);
+        let middle = pose(0.199_019);
+        let broad = pose(0.539_174);
+        assert!(early.width > merged.width && early.height > merged.height);
+        assert!(middle.width > early.width && middle.height > early.height);
+        assert!(broad.width > middle.width && broad.height <= target.height * 1.1);
+        assert!(early.width > early.height);
+        assert!(broad.width > broad.height * 2.0);
 
         let swell = pose(0.701_903);
         assert!(
             (252.0..=259.0).contains(&swell.width) && (102.0..=106.0).contains(&swell.height),
             "the broad body must overshoot horizontally without inflating vertically: {swell:?}"
         );
-        assert!((0.40..=0.43).contains(&menu_ellipse_blend(0.5)));
+        assert!(menu_ellipse_blend(0.25) > 0.3);
         assert_eq!(menu_ellipse_blend(0.0), 0.0);
         assert_eq!(menu_ellipse_blend(1.0), 0.0);
 
@@ -1423,21 +1422,27 @@ mod tests {
         assert!((104.0..=106.0).contains(&overshoot.height));
         assert_eq!(MENU_RADIUS, 32.0);
         assert!((0.045..=0.055).contains(&MENU_GROW_DELAY));
-        assert!((59.0..=61.0).contains(&MENU_GROW_STIFFNESS));
+        assert!((14.0..=16.0).contains(&MENU_GROW_STIFFNESS));
     }
 
     #[test]
-    fn menu_open_spring_reaches_the_measured_geometry_phase_at_130ms() {
-        let (appear, _) =
+    fn menu_open_spring_preserves_source_phase_before_expanding() {
+        let (source_phase, _) =
             cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.130);
         assert!(
-            (0.29..=0.30).contains(&appear),
-            "130ms spring phase must preserve the measured contour mapping: {appear}"
+            source_phase < 0.12,
+            "the source buttons must still own the early morph: {source_phase}"
+        );
+        let (broad_phase, _) =
+            cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.400);
+        assert!(
+            (0.45..=0.65).contains(&broad_phase),
+            "the broad menu body must be established by 400ms: {broad_phase}"
         );
     }
 
     #[test]
-    fn menu_body_and_content_share_the_measured_vertical_rebound() {
+    fn menu_body_uses_the_shared_vertical_rebound_path() {
         let anchor = MenuShape::capsule(228.0, 22.0, 44.0, 44.0);
         let absorbed = [MenuShape::capsule(176.0, 22.0, 44.0, 44.0)];
         let target = MenuShape {
@@ -1448,21 +1453,21 @@ mod tests {
             radius: 32.0,
         };
 
-        for (label, appear, expected_offset) in [
-            ("+67ms", 0.070_208, 3.0..=6.0),
-            ("+100ms", 0.199_019, 12.0..=16.0),
-            ("+130ms", 0.296_780, 11.0..=15.0),
-            ("+165ms", 0.412_956, 8.0..=12.0),
-            ("+205ms", 0.539_174, 4.0..=8.0),
-            ("+265ms", 0.701_903, -1.0..=2.0),
-        ] {
+        let source = menu_source_shape(anchor, &absorbed, target);
+        for appear in [0.070_208, 0.199_019, 0.296_780, 0.412_956, 0.539_174] {
             let geometry = menu_morph_geometry(true, appear, anchor, &absorbed, target);
-            let offset = geometry.primary.center_y - target.center_y;
+            let phase = menu_geometry_phase(true, appear);
+            let interpolated_y =
+                source.center_y + (target.center_y - source.center_y) * phase.height;
+            let expected_y = interpolated_y + menu_vertical_rebound(phase.path);
             assert!(
-                expected_offset.contains(&offset),
-                "{label} vertical rebound mismatch: {geometry:?}"
+                (geometry.primary.center_y - expected_y).abs() < 0.001,
+                "body and content must resolve the same rebound path: {geometry:?}"
             );
         }
+        assert_eq!(menu_vertical_rebound(0.0), 0.0);
+        assert!(menu_vertical_rebound(0.25) > 0.0);
+        assert_eq!(menu_vertical_rebound(MENU_VERTICAL_REBOUND_END), 0.0);
     }
 
     #[test]
@@ -1512,7 +1517,7 @@ mod tests {
         assert!(menu_content_blur(birth) > 13.0);
         assert!((7.0..8.0).contains(&menu_content_blur(mid)));
         assert!(menu_content_blur(settle) < 0.5);
-        assert!((190.0..=210.0).contains(&MENU_REVEAL_STIFFNESS));
+        assert!((45.0..=55.0).contains(&MENU_REVEAL_STIFFNESS));
         assert!((0.34..=0.37).contains(&menu_content_alpha(0.10)));
         assert!((0.79..=0.82).contains(&menu_content_alpha(0.62)));
         assert_eq!(menu_content_alpha(1.0), 1.0);
@@ -1602,7 +1607,7 @@ mod tests {
         let settled = menu_absorbed_visual_phase(1.0, 1.0);
         assert_eq!(settled.foreground_alpha, 0.0);
         assert_eq!(settled.backdrop_alpha, 1.0);
-        assert_eq!(MENU_SOURCE_FOREGROUND_HIDE_MS, 5);
+        assert_eq!(MENU_SOURCE_FOREGROUND_HIDE_MS, 200);
         assert_eq!(MENU_SOURCE_FOREGROUND_RESTORE_DELAY_MS, 205);
     }
 

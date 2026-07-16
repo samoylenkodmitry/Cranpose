@@ -69,6 +69,15 @@ fn main() {
                 robot.exit().expect("exit");
                 return;
             }
+            if std::env::var_os("CRANPOSE_LIQUID_MENU_ONLY").is_some() {
+                capture_menu_growth(&robot, &shot_dir);
+                println!(
+                    "PASS: liquid menu growth comparison written to {}",
+                    shot_dir.display()
+                );
+                robot.exit().expect("exit");
+                return;
+            }
 
             // Toggle lens: normalize to the reference's off state, raise the
             // lens over the left thumb, then release once. The supplied 54
@@ -479,6 +488,37 @@ fn capture_control_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
         .capture_keyframes(2.0, &release_steps)
         .expect("slider release keyframes");
     for (frame, name) in release_frames.iter().zip(release_names) {
+        save_frame(frame, shot_dir, name);
+    }
+}
+
+fn capture_menu_growth(robot: &cranpose::Robot, shot_dir: &Path) {
+    scroll_text_to_y(robot, "iPadOS", 170.0);
+    settle(robot, 500);
+    shot(robot, shot_dir, "menu-growth-rest");
+    robot.click(858.0, 122.0).expect("open focused menu");
+    let steps = [
+        (0.0, true),
+        (50.0, true),
+        (50.0, true),
+        (50.0, true),
+        (50.0, true),
+        (100.0, true),
+        (100.0, true),
+    ];
+    let names = [
+        "menu-growth-000ms",
+        "menu-growth-050ms",
+        "menu-growth-100ms",
+        "menu-growth-150ms",
+        "menu-growth-200ms",
+        "menu-growth-300ms",
+        "menu-growth-400ms",
+    ];
+    let frames = robot
+        .capture_keyframes(1.0, &steps)
+        .expect("menu growth keyframes");
+    for (frame, name) in frames.iter().zip(names) {
         save_frame(frame, shot_dir, name);
     }
 }
