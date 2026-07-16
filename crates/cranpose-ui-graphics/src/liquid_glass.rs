@@ -30,6 +30,10 @@ pub const GLASS_FOLD_BAND_START_UNIFORM: usize = 84;
 /// Uniform slot containing the fold's sampling reach at the crest, in
 /// inradius units.
 pub const GLASS_FOLD_PEAK_UNIFORM: usize = 85;
+/// Uniform slot containing the fold's mirror strength (0 disables the
+/// interactive rim fold; independent of the rim styling so quiet surfaces
+/// can fold without adopting lens edge lighting).
+pub const GLASS_FOLD_STRENGTH_UNIFORM: usize = 86;
 /// Uniform slot containing the uniform magnification of refracted foreground
 /// content riding a lens (input mode 2). Zero or negative reads as identity.
 pub const GLASS_CONTENT_MAGNIFICATION_UNIFORM: usize = 92;
@@ -325,6 +329,18 @@ pub fn liquid_menu_glass_effect(
     shader.set_float(GLASS_TRANSMISSION_REFRACTION_UNIFORM, 1.0);
     shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 1.0);
     shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
+    // A quiet slice of the shared rim-fold optic: the reference menu bends
+    // and mirrors the backdrop just inside its caps and long edges (the
+    // findings' "distortions at the ends") without the interactive lenses'
+    // edge lighting — the measured top bevel stays untouched. The band
+    // spans the outer ~5dp of the capsule inradius.
+    let menu_inradius = 0.5 * w.min(h);
+    shader.set_float(
+        GLASS_FOLD_BAND_START_UNIFORM,
+        (1.0 - 5.0 / menu_inradius.max(1.0)).clamp(0.0, 0.95),
+    );
+    shader.set_float(GLASS_FOLD_PEAK_UNIFORM, 0.94);
+    shader.set_float(GLASS_FOLD_STRENGTH_UNIFORM, 0.35 * p);
     shader.set_float(11, 0.19 * p); // rim intensity (the reference settled
                                     // pill peaks ~x1.9 of its baseline on
                                     // BOTH long edges)

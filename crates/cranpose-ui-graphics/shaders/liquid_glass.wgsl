@@ -638,7 +638,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // sampled content, never a painted ring.
     var fold_presence = 0.0;
     var fold_tau = 0.0;
-    if loupe_mode <= 0.5 && rim_style > 0.0 {
+    let fold_strength = get_float(86u);
+    if loupe_mode <= 0.5 && fold_strength > 0.0 {
         let fold_band_start = get_float(84u);
         if fold_band_start > 0.0 && fold_band_start < 1.0 {
             var fold_peak = get_float(85u);
@@ -661,7 +662,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                     0.0,
                     1.0,
                 );
-                fold_presence = smoothstep(0.0, 0.12, fold_tau) * rim_style;
+                fold_presence = smoothstep(0.0, 0.12, fold_tau) * fold_strength;
                 base_displacement = base_displacement
                     + outward_normal * (s_units - xr) * r_in_fold * fold_presence;
             }

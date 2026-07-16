@@ -10,8 +10,8 @@ use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
     GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_BAND_START_UNIFORM, GLASS_FOLD_PEAK_UNIFORM,
-    GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
-    GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
+    GLASS_FOLD_STRENGTH_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
+    GLASS_RESTING_TINT_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
 };
 use std::rc::Rc;
 
@@ -647,12 +647,13 @@ impl ResolvedGlass {
             shader.set_float(33, morph.wobble_phase);
             // The rim fold band: its dp depth is expressed as a depth fraction
             // of the live primary inradius so the band rides the morphing
-            // shape. Zero depth leaves the uniform unset (fold off).
+            // shape. Zero depth leaves the uniforms unset (fold off).
             if self.fold_depth > 0.0 {
                 let min_half = (w.min(h) * 0.5).max(f32::EPSILON);
                 let band_start = (1.0 - self.fold_depth / min_half).clamp(0.0, 0.95);
                 shader.set_float(GLASS_FOLD_BAND_START_UNIFORM, band_start);
                 shader.set_float(GLASS_FOLD_PEAK_UNIFORM, WCKSRD_FOLD_PEAK);
+                shader.set_float(GLASS_FOLD_STRENGTH_UNIFORM, self.rim_style * activity);
             }
             shader.set_float(26, morph.bulge_amplitude * activity);
             shader.set_float(27, morph.bulge_direction);
