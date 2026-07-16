@@ -19,6 +19,9 @@ pub const GLASS_DISPERSION_UNIFORM: usize = 95;
 pub const GLASS_TRANSMISSION_REFRACTION_UNIFORM: usize = 96;
 /// Uniform slot containing px-per-dp for cover-mode optical bands.
 pub const GLASS_EFFECT_DENSITY_UNIFORM: usize = 99;
+/// Uniform slot controlling energy absorbed by the meniscus transmission
+/// path. Reflection and spectral return remain independent.
+pub const GLASS_MENISCUS_ABSORPTION_UNIFORM: usize = 100;
 /// Uniform slot containing continuous optical activity (identity at zero).
 pub const GLASS_ACTIVITY_UNIFORM: usize = 111;
 /// Uniform slot containing the base surface tint that remains when optical
@@ -42,6 +45,7 @@ pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 ///  95: wcKSRD spectral dispersion strength (0..1)
 ///  96: transmitted-path refraction strength (0 = fixed backdrop coordinates)
 ///  99: cover-mode px-per-dp for density-stable optical bands
+/// 100: meniscus transmission absorption (0 = clear, 1 = full lens absorption)
 ///  11: highlight intensity
 ///  14,15,16,17: tint color (r,g,b,a)
 ///  18: saturation (1.0 = unchanged)
@@ -81,6 +85,9 @@ pub struct LiquidGlassSpec {
     pub lift: f32,
     /// Contrast pivot around mid-gray (1.0 = neutral).
     pub contrast: f32,
+    /// Energy absorbed from the transmitted ray at the meniscus. This does
+    /// not reduce the reflected or spectrally separated light paths.
+    pub meniscus_absorption: f32,
     /// Anti-banding dither amount (0..1, in 1/255 steps).
     pub dither: f32,
 }
@@ -96,6 +103,7 @@ impl Default for LiquidGlassSpec {
             saturation: 1.0,
             lift: 0.0,
             contrast: 1.0,
+            meniscus_absorption: 1.0,
             dither: 0.5,
         }
     }
@@ -158,6 +166,10 @@ pub fn liquid_glass_effect(
     shader.set_float(GLASS_BLUR_RADIUS_UNIFORM, spec.blur_radius.max(0.0));
     shader.set_float(GLASS_TRANSMISSION_REFRACTION_UNIFORM, 1.0);
     shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 1.0);
+    shader.set_float(
+        GLASS_MENISCUS_ABSORPTION_UNIFORM,
+        spec.meniscus_absorption.clamp(0.0, 1.0),
+    );
     shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
     shader.set_input_padding(liquid_glass_input_padding(spec));
 
@@ -250,6 +262,7 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     );
     shader.set_float(GLASS_TRANSMISSION_REFRACTION_UNIFORM, 1.0);
     shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 1.0);
+    shader.set_float(GLASS_MENISCUS_ABSORPTION_UNIFORM, 1.0);
     shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
     shader.set_float(11, spec.highlight * activity);
     shader.set_float4(14, 1.0, 1.0, 1.0, 0.0); // no tint
@@ -365,6 +378,7 @@ mod tests {
         assert_eq!(spec.saturation, 1.0);
         assert_eq!(spec.lift, 0.0);
         assert_eq!(spec.contrast, 1.0);
+        assert_eq!(spec.meniscus_absorption, 1.0);
     }
 
     #[test]
@@ -376,6 +390,7 @@ mod tests {
             saturation: 1.6,
             lift: 0.12,
             contrast: 1.05,
+            meniscus_absorption: 0.3,
             dither: 1.0,
             ..LiquidGlassSpec::default()
         };
@@ -389,6 +404,7 @@ mod tests {
         assert_eq!(uniforms[GLASS_REFRACTION_CURVE_UNIFORM], 0.8);
         assert_eq!(uniforms[GLASS_TRANSMISSION_REFRACTION_UNIFORM], 1.0);
         assert_eq!(uniforms[GLASS_EFFECT_DENSITY_UNIFORM], 1.0);
+        assert_eq!(uniforms[GLASS_MENISCUS_ABSORPTION_UNIFORM], 0.3);
         assert_eq!(uniforms[18], 1.6);
         assert_eq!(uniforms[20], 0.12);
         assert_eq!(uniforms[21], 1.0);

@@ -107,17 +107,19 @@ impl LiquidMenuAbsorbedSource {
 const MENU_WIDTH: f32 = 250.0;
 const MENU_RADIUS: f32 = 32.0;
 const MENU_GROW_DELAY: f32 = 0.050;
-const MENU_SOURCE_SEPARATE_END: f32 = 0.12;
+const MENU_SOURCE_SEPARATE_END: f32 = 0.06;
+const MENU_CARD_WIDTH_GROW_START: f32 = 0.16;
+const MENU_CARD_HEIGHT_GROW_START: f32 = 0.12;
 const MENU_OVERSHOOT_SCALE: f32 = 0.30;
-const MENU_GROW_STIFFNESS: f32 = 15.0;
+const MENU_GROW_STIFFNESS: f32 = 120.0;
 const MENU_REVEAL_STIFFNESS: f32 = 50.0;
 const MENU_WIDTH_EASE_POWER: f32 = 4.5;
 const MENU_HEIGHT_EASE_POWER: f32 = 18.0;
 const MENU_HEIGHT_OVERSHOOT: f32 = 0.15;
 const MENU_HEIGHT_OVERSHOOT_END: f32 = 0.52;
-const MENU_VERTICAL_REBOUND: f32 = 14.0;
+const MENU_VERTICAL_REBOUND: f32 = 18.0;
 const MENU_VERTICAL_REBOUND_END: f32 = 0.70;
-const MENU_SOURCE_HEIGHT_RATIO: f32 = 0.50;
+const MENU_SOURCE_HEIGHT_RATIO: f32 = 0.86;
 const MENU_SOURCE_TARGET_Y_PROGRESS: f32 = 0.0;
 /// How far the card's top edge sits below the anchor's top: the settled menu
 /// swallows the anchor button ENTIRELY (the reference "…" disappears under
@@ -354,17 +356,22 @@ fn menu_geometry_phase(expanded: bool, appear: f32) -> MenuGeometryPhase {
     }
 
     let path = ((appear - MENU_GROW_DELAY) / (1.0 - MENU_GROW_DELAY)).clamp(0.0, 1.0);
+    let width_growth =
+        ((path - MENU_CARD_WIDTH_GROW_START) / (1.0 - MENU_CARD_WIDTH_GROW_START)).clamp(0.0, 1.0);
+    let height_growth = ((path - MENU_CARD_HEIGHT_GROW_START)
+        / (1.0 - MENU_CARD_HEIGHT_GROW_START))
+        .clamp(0.0, 1.0);
     let overshoot_phase = ((path - 0.50) / 0.50).clamp(0.0, 1.0);
     let overshoot = 0.040 * (std::f32::consts::PI * overshoot_phase).sin().max(0.0);
-    let height_overshoot_phase = (path / MENU_HEIGHT_OVERSHOOT_END).clamp(0.0, 1.0);
+    let height_overshoot_phase = (height_growth / MENU_HEIGHT_OVERSHOOT_END).clamp(0.0, 1.0);
     let height_overshoot = MENU_HEIGHT_OVERSHOOT
         * (std::f32::consts::PI * height_overshoot_phase)
             .sin()
             .max(0.0);
     MenuGeometryPhase {
         path,
-        width: 1.0 - (1.0 - path).powf(MENU_WIDTH_EASE_POWER) + overshoot,
-        height: 1.0 - (1.0 - path).powf(MENU_HEIGHT_EASE_POWER) + height_overshoot,
+        width: 1.0 - (1.0 - width_growth).powf(MENU_WIDTH_EASE_POWER) + overshoot,
+        height: 1.0 - (1.0 - height_growth).powf(MENU_HEIGHT_EASE_POWER) + height_overshoot,
     }
 }
 
@@ -489,6 +496,7 @@ fn menu_morph_geometry(
         interpolate_menu_shape(start, target, phase.width, phase.height)
     };
     if expanded && phase.path >= MENU_SOURCE_SEPARATE_END {
+        primary.center_y = source.center_y + (target.center_y - source.center_y) * phase.path;
         primary.center_y += menu_vertical_rebound(phase.path);
     }
     let blob_radius = primary.height * 0.5;
@@ -516,7 +524,7 @@ fn menu_content_progress(expanded: bool, appear: f32, reveal: f32) -> f32 {
     if expanded {
         smoothstep(0.17, 0.82, reveal)
     } else {
-        ((appear - 0.45) / 0.55).clamp(0.0, 1.0)
+        smoothstep(0.20, 0.75, appear)
     }
 }
 
@@ -964,9 +972,9 @@ pub fn LiquidMenu(
                     .blur_radius(8.0)
                     .saturation(1.55)
                     .lift(0.58)
-                    .highlight(0.08)
+                    .highlight(0.14)
                     .shadow_style(GlassShadow::new(
-                        Color::BLACK.with_alpha(if colors.is_dark { 0.18 } else { 0.075 }),
+                        Color::BLACK.with_alpha(if colors.is_dark { 0.22 } else { 0.11 }),
                         26.0,
                         8.0,
                         0.0,
@@ -1038,7 +1046,7 @@ pub fn LiquidMenu(
                         let activity = if expanded {
                             smoothstep(0.0, MENU_GROW_DELAY, appear)
                         } else {
-                            t.clamp(0.0, 1.0)
+                            smoothstep(0.0, 0.65, t)
                         };
                         GlassDynamics {
                             activity: Some(activity),
@@ -1409,7 +1417,8 @@ mod tests {
         let merged = pose(0.028_576);
         assert_eq!(merged, initial);
         let source = menu_source_shape(anchor, &absorbed, target);
-        assert_eq!((source.width, source.height), (96.0, 48.0));
+        assert_eq!(source.width, 96.0);
+        assert!((82.5..=82.6).contains(&source.height));
         assert_eq!(source.center_y, anchor.center_y);
         assert_eq!(menu_absorbed_shape_presence(0.0), 1.0);
         assert_eq!(menu_absorbed_shape_presence(0.30), 0.0);
@@ -1418,7 +1427,8 @@ mod tests {
         let middle = pose(0.199_019);
         let broad = pose(0.539_174);
         assert_eq!(early, initial);
-        assert!(middle.width > source.width && middle.height > source.height);
+        assert_eq!(middle.width, source.width);
+        assert!(middle.height >= source.height);
         assert!(broad.width > middle.width && broad.height <= target.height * 1.1);
         assert!(middle.width > middle.height);
         assert!(broad.width > broad.height * 2.0);
@@ -1437,23 +1447,26 @@ mod tests {
         assert!((104.0..=106.0).contains(&overshoot.height));
         assert_eq!(MENU_RADIUS, 32.0);
         assert!((0.045..=0.055).contains(&MENU_GROW_DELAY));
-        assert!((14.0..=16.0).contains(&MENU_GROW_STIFFNESS));
+        assert!((110.0..=130.0).contains(&MENU_GROW_STIFFNESS));
     }
 
     #[test]
-    fn menu_open_spring_preserves_source_phase_before_expanding() {
+    fn menu_open_spring_departs_early_then_settles_without_a_dead_interval() {
         let (source_phase, _) =
-            cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.130);
+            cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.054);
         assert!(
-            source_phase < 0.12,
-            "the source buttons must still own the early morph: {source_phase}"
+            source_phase > MENU_GROW_DELAY,
+            "the departing oval must be visible by the target's early frame: {source_phase}"
         );
         let (broad_phase, _) =
-            cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.400);
+            cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.130);
         assert!(
-            (0.45..=0.65).contains(&broad_phase),
-            "the broad menu body must be established by 400ms: {broad_phase}"
+            (0.35..=0.60).contains(&broad_phase),
+            "the broad menu body must be established by 130ms: {broad_phase}"
         );
+        let (settled_phase, _) =
+            cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.400);
+        assert!(settled_phase > 0.95);
     }
 
     #[test]
@@ -1472,8 +1485,7 @@ mod tests {
         for appear in [0.199_019, 0.296_780, 0.412_956, 0.539_174] {
             let geometry = menu_morph_geometry(true, appear, anchor, &absorbed, target);
             let phase = menu_geometry_phase(true, appear);
-            let interpolated_y =
-                source.center_y + (target.center_y - source.center_y) * phase.height;
+            let interpolated_y = source.center_y + (target.center_y - source.center_y) * phase.path;
             let expected_y = interpolated_y + menu_vertical_rebound(phase.path);
             assert!(
                 (geometry.primary.center_y - expected_y).abs() < 0.001,
@@ -1497,9 +1509,10 @@ mod tests {
             "the close must pass back through the wide oval in physical dimensions: {phase:?}"
         );
         assert!(
-            menu_content_progress(false, 0.6, 1.0) < 0.3,
-            "content must disappear with the contracting surface"
+            menu_content_progress(false, 0.6, 1.0) > 0.75,
+            "content must remain coherent through the initial deflation"
         );
+        assert_eq!(menu_content_progress(false, 0.2, 1.0), 0.0);
         let rounded_volume = menu_geometry_phase(false, 0.21);
         assert!(
             rounded_volume.width > 0.35,

@@ -676,10 +676,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         long_edge_caustic,
         left_cap_absorption,
     );
+    let meniscus_absorption = clamp(get_float(100u), 0.0, 1.0);
     let meniscus_transmission_loss = meniscus_core
         * rim_style
         * (1.0 - lens_edge_incidence)
         * meniscus_transmission_axis
+        * meniscus_absorption
         * 0.45;
     rgb = rgb * (1.0 - meniscus_transmission_loss);
     outer_rgb = outer_rgb * (1.0 - meniscus_transmission_loss * 0.12);

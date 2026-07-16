@@ -37,11 +37,11 @@ const LENS_OUTWARD_LEAN: f32 = 4.0;
 const LENS_PAD: f32 = 10.0;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
-const LENS_RELEASE_LINGER_MS: u64 = 900;
-const LENS_RELEASE_FADE_MS: u64 = 140;
+const LENS_RELEASE_LINGER_MS: u64 = 650;
+const LENS_RELEASE_FADE_MS: u64 = 500;
 
 fn toggle_track_motion() -> AnimationType {
-    AnimationType::Tween(AnimationSpec::tween(380, Easing::EaseInOut).with_delay(50))
+    AnimationType::Tween(AnimationSpec::tween(300, Easing::EaseInOut).with_delay(33))
 }
 
 fn toggle_lens_material() -> Glass {
@@ -49,10 +49,11 @@ fn toggle_lens_material() -> Glass {
         .shape(LiquidShape::Capsule)
         .tint(cranpose_ui_graphics::Color::WHITE.with_alpha(0.02))
         .blur_radius(0.0)
-        .saturation(0.72)
-        .refraction_depth(0.34)
+        .saturation(0.90)
+        .refraction_depth(0.24)
         .refraction_curve(0.25)
-        .transmission_refraction(1.0)
+        .transmission_refraction(0.22)
+        .meniscus_absorption(0.62)
         .dispersion(0.42)
         .highlight(0.36)
         .lift(0.0)
@@ -71,13 +72,16 @@ fn toggle_motion_bulge(pose: crate::dynamics::LiquidPose) -> f32 {
 
 fn toggle_lens_release() -> AnimationType {
     AnimationType::Tween(
-        AnimationSpec::tween(LENS_RELEASE_FADE_MS, Easing::EaseOut)
+        AnimationSpec::tween(LENS_RELEASE_FADE_MS, Easing::EaseIn)
             .with_delay(LENS_RELEASE_LINGER_MS),
     )
 }
 
 fn track_tint_progress(progress: f32) -> f32 {
-    let t = ((progress.clamp(0.0, 1.0) - 0.20) / 0.65).clamp(0.0, 1.0);
+    // Direct contact never paints the committed endpoint color. The whole
+    // fixed capsule moves through gray/sage together; release owns the final
+    // transition into system green.
+    let t = ((progress.clamp(0.0, 1.0) - 0.20) / 1.25).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
@@ -178,12 +182,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     // Lens presence: springs to 1 fast on press (the glass materializes in
     // ~120ms), decays slowly after release (the reference lens lingers
     // through the settle flight for ~0.6s before the white thumb returns).
-    let settling = !lens_axis.is_dragging() && (lens_x - target_x).abs() > 0.75;
-    let lens_target = if pressed.get() || (drag_progress.get().is_none() && settling) {
-        1.0
-    } else {
-        0.0
-    };
+    let lens_target = if pressed.get() { 1.0 } else { 0.0 };
     let lens_progress = animateFloatAsState(
         lens_target,
         if pressed.get() {
@@ -445,8 +444,8 @@ mod tests {
     fn toggle_track_tint_waits_for_real_travel() {
         assert_eq!(track_tint_progress(0.20), 0.0);
         assert!(track_tint_progress(0.35) < 0.2);
-        assert!(track_tint_progress(0.70) > 0.8);
-        assert_eq!(track_tint_progress(1.0), 1.0);
+        assert!((0.30..=0.40).contains(&track_tint_progress(0.70)));
+        assert!((0.65..=0.75).contains(&track_tint_progress(1.0)));
     }
 
     #[test]
@@ -454,8 +453,8 @@ mod tests {
         let AnimationType::Tween(spec) = toggle_track_motion() else {
             panic!("toggle track color needs a bounded transition");
         };
-        assert_eq!(spec.delay_millis, 50);
-        assert_eq!(spec.duration_millis, 380);
+        assert_eq!(spec.delay_millis, 33);
+        assert_eq!(spec.duration_millis, 300);
     }
 
     #[test]
@@ -482,8 +481,9 @@ mod tests {
         let AnimationType::Tween(spec) = toggle_lens_release() else {
             panic!("toggle lens release needs an explicit linger interval");
         };
-        assert_eq!(spec.delay_millis, 900);
+        assert_eq!(spec.delay_millis, LENS_RELEASE_LINGER_MS);
         assert_eq!(spec.duration_millis, LENS_RELEASE_FADE_MS);
-        assert_eq!(LENS_RELEASE_LINGER_MS, 900);
+        assert_eq!(spec.easing, Easing::EaseIn);
+        assert!((1_050..=1_200).contains(&(spec.delay_millis + spec.duration_millis)));
     }
 }

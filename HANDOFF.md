@@ -751,3 +751,55 @@ Four new native iPhone recordings under
 `example/iphone17_records/on_white/` supersede inferred motion/material reads.
 Their exhaustive per-frame extraction and canonical state grids are the next
 visual authority for touch-up, text-handle/loupe, and bottom-bar behavior.
+
+## 2026-07-15 breadth-first liquid checkpoint
+
+This checkpoint was reviewed component-by-component against target and current
+renders placed in the same bitmap. The inspected evidence is:
+
+- `/tmp/toggle-transition-target-current-v2.png` — ten phase-aligned toggle
+  frames, target row above current row;
+- `/tmp/tabbar-target-current-v2.png` — aligned `tab-swipe/f_055` target above
+  the direct-drag render;
+- `/tmp/buttons-target-current-v4-overview.png` — the native touched-up action
+  sequence beside the held grouped action;
+- `/tmp/menu-target-current-crop.png` — settled target and current menu at a
+  common physical scale;
+- `/tmp/loupe-target-current-steady.png` — native on-white text handle/loupe
+  beside the current steady drag state;
+- `/tmp/segmented-shape-target-current.png` — target raised capsule above the
+  current direct-follow segmented lens for shape-law inspection.
+
+Implemented architecture and behavior:
+
+1. Meniscus transmission absorption is an independent `Glass` material
+   coordinate (uniform 100). Lowering it no longer suppresses reflection or
+   spectral return. The toggle uses this channel to keep its transmitted track
+   crisp without the broad stadium wall.
+2. Toggle release keeps the optical body raised through its physical flight,
+   then lowers the same material continuously before the white thumb returns.
+   The fixed track reaches green at the target cadence and never moves with the
+   thumb.
+3. Tab flight uses one direct pointer coordinate, an isotropic depth projection
+   separated from reciprocal fluid strain, and a target-aligned base footprint.
+   The aligned lens is now within a small contour delta of `tab-swipe/f_055`.
+4. Grouped icon actions grow toward the viewer to 1.45x, close into a real
+   shared neck, retain independently owned base tints, and raise tint chroma
+   through `GlassDynamics::saturation_boost`. The active foreground is absorbed
+   into the raised material instead of being double-rendered.
+5. Segmented depth lift and horizontal growth are separate. The selected body
+   stays one cell wide, rises vertically, and receives only 18% of the shared
+   motion strain, removing the compounded worm geometry.
+6. Menu growth leaves the source phase immediately, grows height before card
+   width, keeps content coherent during close, and uses a stronger independent
+   rim/shadow path. Its single claimed gesture still opens, highlights while
+   held, and fires on the same release.
+
+Fresh robot results on the same tree: `robot_liquid_visual`,
+`robot_liquid_motion_contract`, `robot_liquid_bubble_physics`,
+`robot_adaptive_frost`, `robot_text_loupe`, `robot_drag_selection`,
+`robot_selection_vertical_grab`, and `robot_menu_slide` all pass. The text
+loupe remains slightly flatter than the native steady dome and the toggle's
+left meniscus remains less sharply defined than the target. Those are visual
+deltas for the next breadth pass, not reasons to reintroduce the rejected
+profile playground or broaden screen-space reflection masks.

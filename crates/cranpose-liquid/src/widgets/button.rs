@@ -215,7 +215,7 @@ impl Default for GlassIconButtonGroupSpec {
         Self {
             diameter: 44.0,
             spacing: 8.0,
-            pressed_scale: 1.20,
+            pressed_scale: 1.45,
             glue_radius: 12.0,
         }
     }
@@ -552,55 +552,9 @@ pub fn GlassIconButtonGroup(
         let pitch = spec.diameter + spec.spacing;
         let active_index = last_active.get().min(count - 1);
 
-        // Independent base surfaces preserve each member's style and tint.
-        for (index, item) in render_items.iter().enumerate() {
-            let x = index as f32 * pitch;
-            let surface_progress = press_progress;
-            let item_is_active = index == active_index;
-            let outer = Modifier::empty()
-                .size(Size::new(spec.diameter, spec.diameter))
-                .offset(x, 0.0);
-            let scale_layer = Modifier::empty().graphics_layer(move || {
-                let progress = if item_is_active {
-                    surface_progress.get().clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let scale = 1.0 + (spec.pressed_scale - 1.0) * progress;
-                GraphicsLayer {
-                    scale_x: scale,
-                    scale_y: scale,
-                    ..Default::default()
-                }
-            });
-            let mut surface = Modifier::empty().size(Size::new(spec.diameter, spec.diameter));
-            if let Some(material) = item
-                .spec
-                .resolve_material(&colors, item.spec.icon_color(&colors))
-            {
-                let surface_progress = press_progress;
-                surface =
-                    surface.glass_effect_with(material.shape(LiquidShape::Circle), move || {
-                        GlassDynamics {
-                            highlight_boost: if item_is_active {
-                                0.22 * surface_progress.get().clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            },
-                            ..Default::default()
-                        }
-                    });
-            }
-            Box(outer, BoxSpec::default(), move || {
-                let surface = surface.clone();
-                Box(scale_layer.clone(), BoxSpec::default(), move || {
-                    Box(surface.clone(), BoxSpec::default(), || {});
-                });
-            });
-        }
-
-        // Shared interaction field. At rest it is exact transparent identity;
-        // pressing grows one circle and smooth-unions only its direct neighbors.
+        // The union field owns only the connection and shared refraction. It
+        // sits behind the item faces so a prominent action keeps its own tint
+        // instead of being washed through a second white lens.
         let pad = spec.glue_radius + spec.diameter * (spec.pressed_scale - 1.0) * 0.5 + 4.0;
         let node_width = width + pad * 2.0;
         let node_height = spec.diameter * spec.pressed_scale + pad * 2.0;
@@ -642,16 +596,72 @@ pub fn GlassIconButtonGroup(
             );
         Box(shared, BoxSpec::default(), || {});
 
-        // Foregrounds remain crisp above the shared optical field while the
-        // active surface rises toward the pointer.
+        // Independent base surfaces preserve each member's style and tint.
         for (index, item) in render_items.iter().enumerate() {
             let x = index as f32 * pitch;
+            let surface_progress = press_progress;
+            let item_is_active = index == active_index;
+            let outer = Modifier::empty()
+                .size(Size::new(spec.diameter, spec.diameter))
+                .offset(x, 0.0);
+            let scale_layer = Modifier::empty().graphics_layer(move || {
+                let progress = if item_is_active {
+                    surface_progress.get().clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let scale = 1.0 + (spec.pressed_scale - 1.0) * progress;
+                GraphicsLayer {
+                    scale_x: scale,
+                    scale_y: scale,
+                    ..Default::default()
+                }
+            });
+            let mut surface = Modifier::empty().size(Size::new(spec.diameter, spec.diameter));
+            if let Some(material) = item
+                .spec
+                .resolve_material(&colors, item.spec.icon_color(&colors))
+            {
+                let surface_progress = press_progress;
+                surface =
+                    surface.glass_effect_with(material.shape(LiquidShape::Circle), move || {
+                        let progress = surface_progress.get().clamp(0.0, 1.0);
+                        GlassDynamics {
+                            highlight_boost: if item_is_active { 0.22 * progress } else { 0.0 },
+                            saturation_boost: if item_is_active { 0.55 * progress } else { 0.0 },
+                            tint_alpha_multiplier: item_is_active.then_some(1.0 + 0.22 * progress),
+                            ..Default::default()
+                        }
+                    });
+            }
+            Box(outer, BoxSpec::default(), move || {
+                let surface = surface.clone();
+                Box(scale_layer.clone(), BoxSpec::default(), move || {
+                    Box(surface.clone(), BoxSpec::default(), || {});
+                });
+            });
+        }
+
+        // The active foreground is absorbed into the rising material. Other
+        // members stay crisp and retain their independent ownership.
+        for (index, item) in render_items.iter().enumerate() {
+            let x = index as f32 * pitch;
+            let item_is_active = index == active_index;
+            let foreground_progress = press_progress;
             let foreground_spec = item.spec.clone();
             let icon_path = item.icon_path;
             let description = item.content_description.clone();
             let foreground = Modifier::empty()
                 .size(Size::new(spec.diameter, spec.diameter))
                 .offset(x, 0.0)
+                .graphics_layer(move || GraphicsLayer {
+                    alpha: if item_is_active {
+                        1.0 - foreground_progress.get().clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    },
+                    ..Default::default()
+                })
                 .semantics(move |config| {
                     config.is_button = true;
                     config.is_clickable = true;

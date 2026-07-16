@@ -106,8 +106,8 @@ fn tab_base_selected_color(colors: crate::theme::LiquidColors, activity: f32) ->
 const BAR_HEIGHT: f32 = 64.0;
 const BLOB_HEIGHT: f32 = 52.0;
 const BLOB_MARGIN: f32 = 8.0;
-const FLIGHT_LENS_WIDTH_FACTOR: f32 = 1.25;
-const FLIGHT_LENS_HEIGHT_FACTOR: f32 = 1.20;
+const FLIGHT_LENS_PROJECTION_SCALE: f32 = 1.15;
+const TAB_LENS_REST_WIDTH_FACTOR: f32 = 1.16;
 /// Width allotted to each tab inside the pill.
 const TAB_WIDTH: f32 = 78.0;
 /// Plain icon frame size (its path occupies about 25dp over 11dp labels).
@@ -363,12 +363,9 @@ fn accessory_surfaces_touch(edge_gap: f32) -> bool {
 fn tab_lens_base_size(tab_width: f32, activity: f32) -> (f32, f32) {
     let activity = activity.clamp(0.0, 1.0);
     let ease = activity * activity * (3.0 - 2.0 * activity);
-    let rest_width = tab_width * 1.08;
-    let active_width = tab_width * FLIGHT_LENS_WIDTH_FACTOR;
-    (
-        rest_width + (active_width - rest_width) * ease,
-        BLOB_HEIGHT + (BAR_HEIGHT * FLIGHT_LENS_HEIGHT_FACTOR - BLOB_HEIGHT) * ease,
-    )
+    let rest_width = tab_width * TAB_LENS_REST_WIDTH_FACTOR;
+    let projection = 1.0 + (FLIGHT_LENS_PROJECTION_SCALE - 1.0) * ease;
+    (rest_width * projection, BLOB_HEIGHT * projection)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -556,19 +553,24 @@ fn LiquidTabBarLayout(
                             lens_axis.settle_to(resting_lens_x, LiquidMotion::glide());
                             let lens_x = lens_axis.value();
                             let lens_pose = lens_axis.liquid_pose();
-                            let lens_settling = !lens_axis.is_dragging()
-                                && (lens_x - resting_lens_x).abs() > tab_width * 0.75;
-                            let lens_activity_target = if lens_pressed.get() || lens_settling {
-                                1.0
-                            } else {
-                                0.0
-                            };
+                            let lens_in_flight = !lens_axis.is_dragging()
+                                && (lens_x - resting_lens_x).abs() > tab_width * 0.15;
+                            let lens_raised = lens_pressed.get() || lens_in_flight;
+                            let lens_activity_target = if lens_raised { 1.0 } else { 0.0 };
                             let lens_activity_anim = cranpose_animation::animateFloatAsState(
                                 lens_activity_target,
                                 tab_lens_activity_motion(),
                                 "tabbar-lens-activity",
                             );
-                            let lens_activity = lens_activity_anim.get();
+                            // Contact and controlled flight raise the optic in
+                            // the delivered frame. Only the return into the bar
+                            // is animated, by continuously reducing the same
+                            // material channels after motion has settled.
+                            let lens_activity = if lens_raised {
+                                1.0
+                            } else {
+                                lens_activity_anim.get()
+                            };
                             let visual_selection = tab_visual_selection(
                                 selected,
                                 lens_x,
@@ -734,8 +736,9 @@ fn LiquidTabBarLayout(
                     // smooth-union neck.
                     let (lens_px, lens_activity, lens_tab_w, pose, visual_selection) =
                         lens_x_outer.get();
-                    let lens_w = lens_tab_w * FLIGHT_LENS_WIDTH_FACTOR;
-                    let lens_h = BAR_HEIGHT * FLIGHT_LENS_HEIGHT_FACTOR;
+                    let lens_w =
+                        lens_tab_w * TAB_LENS_REST_WIDTH_FACTOR * FLIGHT_LENS_PROJECTION_SCALE;
+                    let lens_h = BLOB_HEIGHT * FLIGHT_LENS_PROJECTION_SCALE;
                     // Node headroom for the deformation extremes (max axis
                     // stretch + leading bulge, max ortho swell) and rim glow.
                     let deformation_headroom =
@@ -986,22 +989,19 @@ mod tests {
     }
 
     #[test]
-    fn one_lens_morphs_between_rest_and_full_flight_footprints() {
-        let width = TAB_WIDTH * FLIGHT_LENS_WIDTH_FACTOR;
-        let height = BAR_HEIGHT * FLIGHT_LENS_HEIGHT_FACTOR;
-        assert!(
-            (1.23..=1.27).contains(&(width / TAB_WIDTH)),
-            "the undeformed optic must span the target's measured active footprint: {width}"
-        );
-        assert!(
-            (1.18..=1.22).contains(&(height / BAR_HEIGHT)),
-            "the active optic must rise beyond the resting bar footprint: {height}"
-        );
+    fn lens_depth_is_an_isotropic_projection_separate_from_fluid_strain() {
+        let resting = tab_lens_base_size(TAB_WIDTH, 0.0);
+        let raised = tab_lens_base_size(TAB_WIDTH, 1.0);
         assert_eq!(
-            tab_lens_base_size(TAB_WIDTH, 0.0),
-            (TAB_WIDTH * 1.08, BLOB_HEIGHT)
+            resting,
+            (TAB_WIDTH * TAB_LENS_REST_WIDTH_FACTOR, BLOB_HEIGHT)
         );
-        assert_eq!(tab_lens_base_size(TAB_WIDTH, 1.0), (width, height));
+        assert!((raised.0 / resting.0 - FLIGHT_LENS_PROJECTION_SCALE).abs() < 0.001);
+        assert!((raised.1 / resting.1 - FLIGHT_LENS_PROJECTION_SCALE).abs() < 0.001);
+        assert!(
+            raised.0 * raised.1 / (resting.0 * resting.1) < 1.38,
+            "depth projection must not masquerade as fluid volume inflation"
+        );
     }
 
     #[test]

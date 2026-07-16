@@ -9,7 +9,8 @@ use cranpose_ui::Modifier;
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
-    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
+    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM,
+    GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
     GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
 };
 use std::rc::Rc;
@@ -114,8 +115,11 @@ pub struct GlassDynamics {
     pub resting_tint: Option<Color>,
     /// Extra specular intensity (0 = spec default; e.g. press boost).
     pub highlight_boost: f32,
-    /// Optional per-frame multiplier for the material tint alpha. This lets a
-    /// resting selection wash clear continuously as its lens enters flight.
+    /// Per-frame saturation added to the resolved material. Interactive
+    /// surfaces use this to raise chroma without changing their base tint.
+    pub saturation_boost: f32,
+    /// Optional per-frame multiplier for the material tint alpha. Values
+    /// below one clear a resting wash; values above one densify a raised tint.
     pub tint_alpha_multiplier: Option<f32>,
     /// Shape morph: when set, the glass geometry is these node-local rects
     /// instead of the node cover — the shapeshift channel.
@@ -126,6 +130,20 @@ fn foreground_is_dark(foreground: Color) -> bool {
     let foreground_luma =
         0.2126 * foreground.r() + 0.7152 * foreground.g() + 0.0722 * foreground.b();
     foreground_luma < 0.5
+}
+
+fn boost_tint_saturation(tint: Color, boost: f32) -> Color {
+    if boost.abs() <= f32::EPSILON {
+        return tint;
+    }
+    let luma = 0.2126 * tint.r() + 0.7152 * tint.g() + 0.0722 * tint.b();
+    let saturation = (1.0 + boost).max(0.0);
+    Color::rgba(
+        (luma + (tint.r() - luma) * saturation).clamp(0.0, 1.0),
+        (luma + (tint.g() - luma) * saturation).clamp(0.0, 1.0),
+        (luma + (tint.b() - luma) * saturation).clamp(0.0, 1.0),
+        tint.a(),
+    )
 }
 
 pub(crate) fn neutral_surface_tint(foreground: Color, light_alpha: f32, dark_alpha: f32) -> Color {
@@ -247,6 +265,9 @@ pub struct Glass {
     /// Fraction of the wcKSRD displacement applied to the transmitted
     /// backdrop. The mirrored meniscus follows its own optical path.
     pub transmission_refraction: f32,
+    /// Energy removed from the transmitted ray at the meniscus. Reflection
+    /// and spectral return follow independent paths.
+    pub meniscus_absorption: f32,
     /// Specular rim intensity.
     pub highlight: f32,
     /// Screen-lift override (brightening toward white; negative darkens).
@@ -278,6 +299,7 @@ impl Glass {
             refraction_curve: 0.25,
             dispersion: 0.0,
             transmission_refraction: 1.0,
+            meniscus_absorption: 1.0,
             highlight: 0.9,
             lift: None,
             shadow: true,
@@ -309,6 +331,7 @@ impl Glass {
             refraction_curve: 1.0,
             dispersion: 0.30,
             transmission_refraction: 1.0,
+            meniscus_absorption: 1.0,
             highlight: 1.15,
             lift: None,
             shadow: true,
@@ -356,6 +379,11 @@ impl Glass {
 
     pub fn transmission_refraction(mut self, strength: f32) -> Self {
         self.transmission_refraction = strength.clamp(0.0, 1.0);
+        self
+    }
+
+    pub fn meniscus_absorption(mut self, strength: f32) -> Self {
+        self.meniscus_absorption = strength.clamp(0.0, 1.0);
         self
     }
 
@@ -463,6 +491,7 @@ impl Glass {
             refraction_curve: self.refraction_curve,
             dispersion: self.dispersion,
             transmission_refraction: self.transmission_refraction,
+            meniscus_absorption: self.meniscus_absorption,
             highlight: self.highlight,
             lift,
             contrast: if self.variant == GlassVariant::Lens {
@@ -507,6 +536,7 @@ pub(crate) struct ResolvedGlass {
     pub refraction_curve: f32,
     pub dispersion: f32,
     pub transmission_refraction: f32,
+    pub meniscus_absorption: f32,
     pub highlight: f32,
     pub lift: f32,
     pub contrast: f32,
@@ -605,24 +635,29 @@ impl ResolvedGlass {
             GLASS_TRANSMISSION_REFRACTION_UNIFORM,
             self.transmission_refraction * activity,
         );
+        shader.set_float(GLASS_MENISCUS_ABSORPTION_UNIFORM, self.meniscus_absorption);
         shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, density);
         shader.set_float(
             11,
             (self.highlight + dynamics.highlight_boost).clamp(0.0, 2.0) * activity,
         );
+        let dynamic_tint = boost_tint_saturation(self.tint, dynamics.saturation_boost);
+        let dynamic_tint_alpha = (dynamic_tint.a()
+            * dynamics
+                .tint_alpha_multiplier
+                .unwrap_or(1.0)
+                .clamp(0.0, 2.0)
+            * activity)
+            .clamp(0.0, 1.0);
         shader.set_float4(
             14,
-            self.tint.r(),
-            self.tint.g(),
-            self.tint.b(),
-            self.tint.a()
-                * dynamics
-                    .tint_alpha_multiplier
-                    .unwrap_or(1.0)
-                    .clamp(0.0, 1.0)
-                * activity,
+            dynamic_tint.r(),
+            dynamic_tint.g(),
+            dynamic_tint.b(),
+            dynamic_tint_alpha,
         );
-        shader.set_float(18, 1.0 + (self.saturation - 1.0) * activity);
+        let saturation = (self.saturation + dynamics.saturation_boost).max(0.0);
+        shader.set_float(18, 1.0 + (saturation - 1.0) * activity);
         shader.set_float(20, self.lift * activity);
         shader.set_float(21, 0.5 * activity);
         shader.set_float2(22, 0.0, 1.0);
@@ -867,6 +902,7 @@ mod tests {
             .refraction_curve(2.0)
             .dispersion(2.0)
             .transmission_refraction(2.0)
+            .meniscus_absorption(2.0)
             .highlight(0.4)
             .lift(-0.2)
             .adaptive_frost(Color::WHITE, 2.0)
@@ -880,6 +916,7 @@ mod tests {
         assert_eq!(glass.refraction_curve, 1.0);
         assert_eq!(glass.dispersion, 1.0);
         assert_eq!(glass.transmission_refraction, 1.0);
+        assert_eq!(glass.meniscus_absorption, 1.0);
         assert_eq!(glass.highlight, 0.4);
         assert_eq!(glass.lift, Some(-0.2));
         assert_eq!(glass.adaptive_frost, 1.0);
@@ -917,12 +954,23 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_saturation_reaches_the_material_tint() {
+        let resting = Color::from_rgb_u8(0, 199, 208);
+        let raised = boost_tint_saturation(resting, 0.55);
+        assert_eq!(raised.r(), 0.0);
+        assert!(raised.g() > resting.g());
+        assert!(raised.b() > resting.b());
+        assert_eq!(raised.a(), resting.a());
+    }
+
+    #[test]
     fn resolved_material_packs_wcksrd_and_dynamic_tint() {
         let resolved = Glass::lens()
             .refraction_depth(0.72)
             .refraction_curve(0.8)
             .dispersion(0.42)
             .transmission_refraction(0.35)
+            .meniscus_absorption(0.3)
             .blur_radius(3.0)
             .tint(Color::BLACK.with_alpha(0.8))
             .resolve(&light_colors());
@@ -930,6 +978,7 @@ mod tests {
             2.0,
             GlassDynamics {
                 highlight_boost: 0.2,
+                saturation_boost: 0.35,
                 tint_alpha_multiplier: Some(0.25),
                 ..Default::default()
             },
@@ -953,13 +1002,30 @@ mod tests {
             shader.uniforms()[GLASS_TRANSMISSION_REFRACTION_UNIFORM],
             0.35
         );
+        assert_eq!(shader.uniforms()[GLASS_MENISCUS_ABSORPTION_UNIFORM], 0.3);
         assert_eq!(shader.uniforms()[11], resolved.highlight + 0.2);
+        assert_eq!(shader.uniforms()[18], resolved.saturation + 0.35);
         assert!((shader.uniforms()[17] - 0.2).abs() < 1.0e-6);
         assert_eq!(
             shader.uniforms()[GLASS_BLUR_RADIUS_UNIFORM],
             WCKSRD_OPTICAL_BLUR_RADIUS_PX
         );
         assert_eq!(shader.uniforms()[GLASS_EFFECT_DENSITY_UNIFORM], 2.0);
+    }
+
+    #[test]
+    fn raised_tint_density_stays_premultiplied_alpha_safe() {
+        let effect = Glass::lens()
+            .tint(Color::WHITE.with_alpha(0.8))
+            .resolve(&light_colors())
+            .backdrop_effect(
+                1.0,
+                GlassDynamics {
+                    tint_alpha_multiplier: Some(2.0),
+                    ..Default::default()
+                },
+            );
+        assert_eq!(terminal_shader(effect).uniforms()[17], 1.0);
     }
 
     #[test]

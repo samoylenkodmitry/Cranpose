@@ -173,7 +173,6 @@ fn TouchedUpReferenceStage() {
                 Modifier::empty(),
                 GlassIconButtonGroupSpec::new(44.0)
                     .with_spacing(8.0)
-                    .with_pressed_scale(1.32)
                     .with_glue_radius(12.0),
                 vec![
                     GlassIconButtonGroupItem::new(icons::MORE_HORIZ, "More grouped action", || {}),

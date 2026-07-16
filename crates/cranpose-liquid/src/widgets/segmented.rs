@@ -28,12 +28,13 @@ const LENS_OVERFLOW: f32 = 8.0;
 /// Touch raises the whole optical body before directional deformation. This
 /// preserves the control's volume without letting maximum horizontal strain
 /// squash the lens below the track height.
-const LENS_LIFT_SCALE: f32 = 1.22;
+const LENS_WIDTH_LIFT_SCALE: f32 = 1.06;
+const LENS_HEIGHT_LIFT_SCALE: f32 = 1.22;
 /// Glass node span beyond the lens shape (rim glow + bulge live here).
 const LENS_PAD: f32 = 10.0;
 /// A segmented selection stays recognizably one cell wide while its surface
 /// carries the shared incompressible fluid strain.
-const SEGMENTED_STRAIN_RESPONSE: f32 = 0.36;
+const SEGMENTED_STRAIN_RESPONSE: f32 = 0.18;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
 
@@ -43,6 +44,20 @@ fn plain_indicator_alpha(lens_progress: f32) -> f32 {
 
 fn segment_lens_left(pointer_x: f32, segment_width: f32, count: usize) -> f32 {
     (pointer_x - segment_width * 0.5).clamp(0.0, segment_width * (count.saturating_sub(1)) as f32)
+}
+
+fn segmented_lens_base_size(segment_width: f32, progress: f32) -> Size {
+    let progress = progress.clamp(0.0, 1.2);
+    let width_lift = 1.0 + (LENS_WIDTH_LIFT_SCALE - 1.0) * progress;
+    let height_lift = 1.0 + (LENS_HEIGHT_LIFT_SCALE - 1.0) * progress;
+    Size::new(
+        (segment_width + 4.0 * progress) * width_lift,
+        (SEGMENT_HEIGHT + LENS_OVERFLOW * progress) * height_lift,
+    )
+}
+
+fn segmented_strain(stretch: f32) -> f32 {
+    1.0 + (stretch - 1.0) * SEGMENTED_STRAIN_RESPONSE
 }
 
 /// A segmented control. `labels` are equal-width segments; `selected` is the
@@ -303,14 +318,13 @@ pub fn LiquidSegmentedControl(
 
             // The interaction lens riding the indicator: a glass capsule that
             // magnifies the label under it and bulges along the travel.
-            let lens_h = SEGMENT_HEIGHT + LENS_OVERFLOW;
-            let response_stretch = |stretch: f32| 1.0 + (stretch - 1.0) * SEGMENTED_STRAIN_RESPONSE;
-            let deformation_headroom = response_stretch(crate::dynamics::STRETCH_MAX)
-                .max(1.0 / response_stretch(crate::dynamics::STRETCH_MIN));
-            let node_w = (segment_width + 4.0) * LENS_LIFT_SCALE * deformation_headroom
+            let raised_size = segmented_lens_base_size(segment_width, 1.2);
+            let deformation_headroom = segmented_strain(crate::dynamics::STRETCH_MAX)
+                .max(1.0 / segmented_strain(crate::dynamics::STRETCH_MIN));
+            let node_w = raised_size.width * deformation_headroom
                 + crate::dynamics::BULGE_MAX
                 + LENS_PAD * 2.0;
-            let node_h = lens_h * LENS_LIFT_SCALE * deformation_headroom
+            let node_h = raised_size.height * deformation_headroom
                 + crate::dynamics::BULGE_MAX
                 + LENS_PAD * 2.0;
             let lens_for_layer = lens_progress;
@@ -336,9 +350,7 @@ pub fn LiquidSegmentedControl(
                         .no_clip(),
                     move || {
                         let grow = lens_for_layer.get().clamp(0.0, 1.2);
-                        let lift = 1.0 + (LENS_LIFT_SCALE - 1.0) * grow;
-                        let base_w = (segment_width + 4.0 * grow) * lift;
-                        let base_h = (SEGMENT_HEIGHT + LENS_OVERFLOW * grow) * lift;
+                        let base_size = segmented_lens_base_size(segment_width, grow);
                         // Droplet law over the indicator ride
                         // (crate::dynamics): speed stretches the capsule
                         // along the travel, braking swells its front.
@@ -347,7 +359,13 @@ pub fn LiquidSegmentedControl(
                             activity: Some(grow.clamp(0.0, 1.0)),
                             morph: Some(GlassMorph {
                                 node_size: (node_w, node_h),
-                                primary: (node_w * 0.5, node_h * 0.5, base_w, base_h, -1.0),
+                                primary: (
+                                    node_w * 0.5,
+                                    node_h * 0.5,
+                                    base_size.width,
+                                    base_size.height,
+                                    -1.0,
+                                ),
                                 shapes: Vec::new(),
                                 glue: 0.0,
                                 wobble_amplitude: 0.0,
@@ -358,7 +376,7 @@ pub fn LiquidSegmentedControl(
                                 deformation: Some(
                                     crate::material::GlassDeformation::incompressible(
                                         pose.axis,
-                                        response_stretch(pose.stretch),
+                                        segmented_strain(pose.stretch),
                                     ),
                                 ),
                             }),
@@ -392,5 +410,15 @@ mod tests {
         assert_eq!(plain_indicator_alpha(0.2), 0.0);
         assert!(plain_indicator_alpha(0.05) > 0.8);
         assert_eq!(plain_indicator_alpha(0.0), 1.0);
+    }
+
+    #[test]
+    fn raised_lens_lifts_in_depth_without_becoming_a_wide_worm() {
+        let resting = segmented_lens_base_size(120.0, 0.0);
+        let raised = segmented_lens_base_size(120.0, 1.0);
+        assert_eq!(resting, Size::new(120.0, SEGMENT_HEIGHT));
+        assert!(raised.width < resting.width * 1.10);
+        assert!(raised.height > resting.height * 1.45);
+        assert!(segmented_strain(crate::dynamics::STRETCH_MAX) < 1.10);
     }
 }
