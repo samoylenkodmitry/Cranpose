@@ -528,6 +528,8 @@ mod tests {
         assert_eq!(spec.delay_millis, LENS_RELEASE_LINGER_MS);
         assert_eq!(spec.duration_millis, LENS_RELEASE_FADE_MS);
         assert_eq!(spec.easing, Easing::EaseIn);
-        assert!((1_050..=1_200).contains(&(spec.delay_millis + spec.duration_millis)));
+        // The flight itself now carries the raised lens; the post-arrival tail
+        // is short so the thumb returns on the reference clock.
+        assert!((550..=750).contains(&(spec.delay_millis + spec.duration_millis)));
     }
 }

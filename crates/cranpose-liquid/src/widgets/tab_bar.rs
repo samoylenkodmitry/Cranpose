@@ -1057,7 +1057,7 @@ mod tests {
         let glass = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
         assert_eq!(glass.blur_radius, Some(4.0));
         assert_eq!(glass.saturation, Some(1.12));
-        assert_eq!(glass.lift, Some(0.34));
+        assert_eq!(glass.lift, Some(0.30));
         assert_eq!(glass.refraction_depth, 0.34);
         assert_eq!(glass.adaptive_frost, 0.28);
     }
@@ -1065,7 +1065,7 @@ mod tests {
     #[test]
     fn bar_surface_lift_tracks_the_local_foreground_polarity() {
         let light_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
-        assert_eq!(light_surface.lift, Some(0.34));
+        assert_eq!(light_surface.lift, Some(0.30));
 
         let dark_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::WHITE);
         assert_eq!(dark_surface.lift, Some(-0.24));
