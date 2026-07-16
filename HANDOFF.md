@@ -123,38 +123,6 @@ Workspace is at **0.1.59** (last published, `c5e9e733`). **This round's 18 commi
 
 Zero warnings everywhere; all tests pass ("never *not yours*"); no `git reset` (stash); no `rm -rf` (mv to `_old`); no "migration"/"legacy"/"deprecate" wording (there is a source guard test); fix root causes, failing test first for bugs; robot suite sequential with the thermal knobs above. Commit trailer:
 
-## Key files touched this round
-
-`crates/cranpose-liquid/src/dynamics.rs` (new), `.../widgets/{tab_bar,toggle,segmented,slider}.rs`, `.../material.rs`, `.../motion.rs`; `crates/cranpose-ui-graphics/shaders/liquid_glass.wgsl`; `crates/cranpose-ui/src/{text_selection,text_field_modifier_node}.rs`, `.../widgets/{basic_text_field,text_selection_menu}.rs`; `crates/cranpose-core/src/runtime.rs`; `crates/cranpose/src/desktop.rs`; `apps/desktop-demo/src/app/liquid_ui.rs`; `apps/desktop-demo/robot-runners/robot_{liquid_bubble_physics,menu_slide,adaptive_frost}.rs` + `robot_liquid_motion_contract.rs`.
-
-## Unified rim-fold optic (landed 2cb451fc, 546f33e2, d3300fc1)
-
-`example/screenshots_from_iphone_pay_attention/` are iPhone REFERENCE
-screenshots (the target look, annotated) — match them by vision, not by
-metric-chasing. Cover-mode lenses (`glass_effect(Glass::lens())`, the
-playground optics preview) fold via the same in-shader inradius resolution
-as morph lenses (uniform 88 depth dp / 85 peak / 86 strength); the bar body
-folds at depth 9dp strength 0.9. Details below still apply.
-
-Measured from `example/target/toggle-press` (see memory `liquid-rim-fold-optic`):
-every raised lens rim is the loupe's inward fold run radially — `fold_source_units`
-in `liquid_glass.wgsl` shared by loupe + generic lenses (uniform 84 band-start
-fraction, 85 fold peak 0.94; `Glass::fold_depth(dp)`, lens default 6dp).
-Replaced: gray meniscus multiply → self-tinted grazing absorption
-(`rgb *= mix(1, rgb, absorb)`), opposite-wall reflection paths → REMOVED,
-face_light ×0.25 and edge_light ×0.55 for rim lenses. Mode-2 refracted content
-samples the SAME map as the backdrop (uniform magnification caused doubling).
-Tab lens copy renders ALL cells in selection color (reference f_0455 tints
-covered neighbors; single-cell copy left dark base-icon rim sweeps).
-Toggle: 58×39 lens (was 109/3), centered; leans 7dp toward gesture travel side
-(`travel_dir` state — the fluid axis holds stale directions below 60dp/s).
-Bubble-physics skew metric is now boundary-based (interior-mass skew was a
-single-cell-copy artifact). robot_liquid_motion_contract + bubble + loupe all
-PASS locally (NVIDIA/X11). Toggle lens tuning still slightly paler than
-reference; menu (Glass::regular, no fold) still owes findings6 end-distortions.
-Validate WGSL edits with `cargo test -p cranpose-render-wgpu --lib shader_cache`
-BEFORE robot runs (bad WGSL silently disables all glass).
-
 
 Checkpoint gates:
 
