@@ -98,11 +98,51 @@ fn smin(a: f32, b: f32, k: f32) -> f32 {
     return mix(b, a, h) - k * h * (1.0 - h);
 }
 
+fn catmull_rom_weight(distance: f32) -> f32 {
+    let x = abs(distance);
+    if x <= 1.0 {
+        return ((1.5 * x - 2.5) * x) * x + 1.0;
+    }
+    if x < 2.0 {
+        return ((-0.5 * x + 2.5) * x - 4.0) * x + 2.0;
+    }
+    return 0.0;
+}
+
+// A refractive lookup is a resample, not a blur. A single bilinear tap loses
+// the high-frequency glyph and icon detail as soon as the coordinate field
+// magnifies it. Catmull-Rom reconstructs the sharp source path from the same
+// backdrop texture; intentionally blurred glass continues through the 9x9
+// wcKSRD footprint below.
+fn sample_wcksrd_sharp_path(uv: vec2<f32>, tex_size: vec2<f32>) -> vec4<f32> {
+    let sample_position = uv * tex_size - vec2<f32>(0.5);
+    let base = floor(sample_position);
+    let fraction = sample_position - base;
+    var reconstructed = vec4<f32>(0.0);
+    for (var y = -1; y <= 2; y = y + 1) {
+        let weight_y = catmull_rom_weight(f32(y) - fraction.y);
+        for (var x = -1; x <= 2; x = x + 1) {
+            let weight_x = catmull_rom_weight(f32(x) - fraction.x);
+            let sample_uv = clamp(
+                (base + vec2<f32>(f32(x), f32(y)) + vec2<f32>(0.5)) / tex_size,
+                vec2<f32>(0.0),
+                vec2<f32>(1.0),
+            );
+            reconstructed = reconstructed
+                + textureSampleLevel(input_texture, input_sampler, sample_uv, 0.0)
+                    * weight_x
+                    * weight_y;
+        }
+    }
+    return clamp(reconstructed, vec4<f32>(0.0), vec4<f32>(1.0));
+}
+
 fn sample_wcksrd_path(
     uv: vec2<f32>,
     tex_size: vec2<f32>,
     base_displacement: vec2<f32>,
     blur_radius: f32,
+    reconstruct_sharp: bool,
 ) -> vec4<f32> {
     let center_uv = clamp(
         uv + base_displacement / tex_size,
@@ -110,12 +150,10 @@ fn sample_wcksrd_path(
         vec2<f32>(1.0),
     );
     if blur_radius <= 0.0 {
-        return textureSampleLevel(
-            input_texture,
-            input_sampler,
-            center_uv,
-            0.0,
-        );
+        if reconstruct_sharp {
+            return sample_wcksrd_sharp_path(center_uv, tex_size);
+        }
+        return textureSampleLevel(input_texture, input_sampler, center_uv, 0.0);
     }
     let blur_step = blur_radius / 4.0;
     var accumulated = vec4<f32>(0.0);
@@ -645,6 +683,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         tex_size,
         base_displacement,
         wcksrd_blur_radius,
+        loupe_mode > 0.5,
     );
     let plain_path = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
     var rgb = transmitted_path.rgb;
@@ -661,15 +700,21 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // transmitted ray loses energy before the mirrored and spectral returns
     // are added; this creates the target's dark upper/left inner caustic and
     // bright lower return without displacing the face transmission.
-    let meniscus_distance = d + gradient_extent * 0.5;
+    let meniscus_distance = d;
+    // The meniscus and the exterior bevel are distinct optical paths.  The
+    // face return is concentrated inside the body; carrying the same broad
+    // mask through the exterior bevel turns backdrop detail into a painted
+    // outline instead of the target's thin independent light return.
     let meniscus_core = pow(
         clamp(
             wcksrd_meniscus(meniscus_distance, lens_refraction, gradient_extent),
             0.0,
             1.0,
         ),
-        2.0,
+        6.0,
     );
+    let face_meniscus = meniscus_core * coverage;
+    let bevel_meniscus = optical_sample.edge_light;
     let long_edge_caustic = 0.18 + 0.82 * pow(abs(outward_normal.y), 1.5);
     let left_cap_absorption = pow(max(-outward_normal.x, 0.0), 2.0);
     let meniscus_transmission_axis = max(
@@ -677,14 +722,13 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         left_cap_absorption,
     );
     let meniscus_absorption = clamp(get_float(100u), 0.0, 1.0);
-    let meniscus_transmission_loss = meniscus_core
+    let meniscus_transmission_loss = face_meniscus
         * rim_style
         * (1.0 - lens_edge_incidence)
         * meniscus_transmission_axis
         * meniscus_absorption
-        * 0.45;
+        * 0.72;
     rgb = rgb * (1.0 - meniscus_transmission_loss);
-    outer_rgb = outer_rgb * (1.0 - meniscus_transmission_loss * 0.12);
 
     // The meniscus returns the ray from the opposite wall of the same glass
     // body. This is the mirrored image visible along the target's long edges;
@@ -712,14 +756,21 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let reflection_rgb = reflection_path.rgb * internal_reflection_transmittance;
     let long_edge_return = 0.40 + 0.60 * pow(abs(outward_normal.y), 1.5);
     let meniscus_reflection = clamp(
-        wcksrd_meniscus(meniscus_distance, lens_refraction, gradient_extent)
+        face_meniscus
             * long_edge_return
-            * mix(0.10, 0.18, rim_style),
+            * mix(0.14, 0.24, rim_style),
         0.0,
         0.24,
     ) * select(1.0, 0.0, loupe_mode > 0.5);
+    let bevel_reflection = clamp(
+        bevel_meniscus
+            * long_edge_return
+            * mix(0.035, 0.065, rim_style),
+        0.0,
+        0.08,
+    ) * select(1.0, 0.0, loupe_mode > 0.5);
     rgb = mix(rgb, reflection_rgb, meniscus_reflection);
-    outer_rgb = mix(outer_rgb, reflection_rgb, meniscus_reflection);
+    outer_rgb = mix(outer_rgb, reflection_rgb, bevel_reflection);
 
     if rim_style > 0.0 && dispersion_strength > 0.0 {
         let grazing_displacement = -p;
@@ -761,15 +812,24 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         let dispersed =
             mix(forward_dispersion, reflected_dispersion, spectral_reflection_mix);
         let dispersion_weight = clamp(
-            meniscus_core
+            face_meniscus
                 * rim_style
                 * dispersion_strength
                 * long_edge_caustic,
             0.0,
             1.0,
         );
+        let bevel_dispersion_weight = clamp(
+            bevel_meniscus
+                * rim_style
+                * dispersion_strength
+                * long_edge_caustic
+                * 0.24,
+            0.0,
+            0.20,
+        );
         rgb = mix(rgb, dispersed, dispersion_weight);
-        outer_rgb = mix(outer_rgb, dispersed, dispersion_weight);
+        outer_rgb = mix(outer_rgb, dispersed, bevel_dispersion_weight);
     }
 
     let inner_meniscus = clamp(

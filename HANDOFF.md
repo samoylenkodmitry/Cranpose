@@ -803,3 +803,66 @@ loupe remains slightly flatter than the native steady dome and the toggle's
 left meniscus remains less sharply defined than the target. Those are visual
 deltas for the next breadth pass, not reasons to reintroduce the rejected
 profile playground or broaden screen-space reflection masks.
+
+## 2026-07-16 narrow-meniscus breadth pass
+
+This pass reused the existing paired target/current sheets rather than
+regenerating reference grids. The shared defect was a broad exterior optical
+response: face absorption, opposite-wall return, and exterior bevel all used
+the same meniscus mask. Dark backdrop content consequently became a painted
+outline on the toggle, tab lens, and segmented selector.
+
+The shader now keeps the paths distinct. The face owns a concentrated
+meniscus for transmission loss, reflection, and spectral separation. The
+exterior bevel owns a thinner, lower-energy return and never receives face
+absorption. The high-energy face band is centered on the actual SDF surface;
+the rejected half-extent inward shift darkened a broad region of the fixed
+toggle track. The loupe's zero-blur magnified path uses Catmull-Rom
+reconstruction so text does not inherit bilinear softness. Ordinary lenses
+retain the wcKSRD bilinear path, and intentionally blurred material retains
+the 9x9 footprint.
+
+Component results from the breadth pass:
+
+- Toggle: 0.92 meniscus absorption through the narrower face path produces
+  the target's dark left inner crescent without restoring the rejected broad
+  stadium reflection. The phase-aligned working sheet that guided the pass is
+  `/tmp/toggle-target-current-surface.png`; the final incremental material pair
+  is `/tmp/toggle-target-current-final.png`. The unchanged liquid-motion judge
+  confirms that the complete fixed track still interpolates as one field.
+- Tab flight: spectral separation is stronger, but the Account-side shoulder
+  still expands dark content more than `tab-swipe/f_055`; this remains a
+  source-path delta, not a reason to increase global magnification.
+- Segmented control: it now uses the calmer tab-class depth, return curve,
+  dispersion, and light gain. Its geometry is unchanged, but the black
+  stitched outline is gone in `/tmp/segmented-target-old-new-v1.png`.
+- Text loupe: the existing gesture, wrapped-line coordinate, birth, and
+  collapse contracts still pass with the reconstructed sharp path. The 3x
+  render is visually stable; a live 1x inspection remains the authority for
+  the reported desktop softness.
+- Desktop optics controls: the label column now fits `Chroma` at the live
+  1083px window instead of wrapping. The verified live capture is
+  `/tmp/cranpose-live-bfs-layout.png`.
+
+The full robot run initially exposed a one-pixel timing edge in the toggle:
+the current inner crescent reached a fixed-track probe and produced a 43-level
+left/right spread. The target/current material pair
+`/tmp/toggle-target-current-final.png` showed a thicker, darker current
+crescent rather than a moving track fill. Concentrating the face lobe and
+using 0.92 toggle absorption preserved the peak and prismatic return while
+reducing the full-run spread to 38. The binding unchanged judge then passed in
+the complete suite.
+
+Final gates on the exact installed sources:
+
+- workspace `cargo test > 1.tmp 2>&1`: pass, zero warnings;
+- workspace `cargo clippy > 2.tmp 2>&1`: pass, zero warnings;
+- `cargo fmt` and `git diff --check`: pass;
+- desktop-demo WASM build: pass;
+- Android `:app:assembleRelease`: pass;
+- sequential real-X11 robot suite on samarch: 128/128 pass;
+- optimized desktop release: pass.
+
+The installed release SHA-256 is
+`93749b38bc985ec0c402fbf1c75b8b200ba5762c906349d1ae70c49156231714`.
+`cranpose-desktop-demo.service` runs that exact executable as PID `2805794`.

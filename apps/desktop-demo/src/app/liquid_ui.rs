@@ -235,7 +235,7 @@ fn OpticalParameterRow(label: &'static str, value: f32, on_change: impl Fn(f32) 
             let slider_change = std::rc::Rc::clone(&on_change);
             Text(
                 label,
-                Modifier::empty().width(52.0),
+                Modifier::empty().width(64.0),
                 body_style(colors.label),
             );
             LiquidSlider(

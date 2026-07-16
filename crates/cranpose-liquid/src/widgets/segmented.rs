@@ -346,7 +346,12 @@ pub fn LiquidSegmentedControl(
                     Glass::lens()
                         .shape(LiquidShape::Capsule)
                         .tint(Color::rgba(1.0, 1.0, 1.0, 0.05))
-                        .highlight(0.52)
+                        .blur_radius(0.0)
+                        .refraction_depth(0.26)
+                        .refraction_curve(0.25)
+                        .dispersion(0.24)
+                        .highlight(0.24)
+                        .lift(0.0)
                         .no_clip(),
                     move || {
                         let grow = lens_for_layer.get().clamp(0.0, 1.2);
