@@ -646,8 +646,19 @@ pub fn GlassIconButtonGroup(
                         .unwrap_or(rest_center);
                     let center_x = pad + rest_center + (ridden - rest_center) * progress;
                     let diameter = spec.diameter * (1.0 + (spec.pressed_scale - 1.0) * progress);
+                    // The reference press concentrates saturation + a soft
+                    // gradient light under the FINGER (touched-up-state
+                    // recording), riding press activity.
+                    let touch = drag_x.get().map(|x| {
+                        (
+                            pad + x.clamp(0.0, node_width - 2.0 * pad),
+                            center_y,
+                            progress,
+                        )
+                    });
                     GlassDynamics {
                         activity: Some(progress),
+                        touch,
                         morph: Some(GlassMorph {
                             node_size: (node_width, node_height),
                             primary: (center_x, center_y, diameter, diameter, -1.0),

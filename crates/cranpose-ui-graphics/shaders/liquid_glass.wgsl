@@ -706,12 +706,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             );
             // The reference folds over a continuously curved surface: even
             // dead-center strokes bow sideways slightly and pick up
-            // horizontal chroma. A pure normal displacement leaves vertical
-            // stems ruler-straight and fringe-free at the band's center —
-            // and a center-symmetric bow (p.x-proportional) still vanishes
-            // exactly there, so a small uniform drift rides along.
+            // horizontal chroma. Keep the bow GENTLE — the earlier strong
+            // drift (0.08/0.12) waved the mirrored line and hooked glyphs
+            // at the shoulders (the live "broken edges" report); the
+            // reference's mirrored text is near-straight.
             fold_displacement.x = fold_displacement.x
-                + (p.x * 0.08 + r_in * 0.12) * tau * fold_weight;
+                + (p.x * 0.04 + r_in * 0.03) * tau * fold_weight;
             base_displacement = base_displacement + fold_displacement;
         }
     }
@@ -982,6 +982,23 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // surface glass retains a uniform tint across its body.
     let optical_tint_alpha = tint_color.a * mix(1.0, interior, rim_style);
     rgb = mix(rgb, tint_color.rgb, optical_tint_alpha);
+
+    // Touch glow (uniforms 118-119 node-local dp, 120 intensity): a pressed
+    // liquid surface concentrates saturation and a soft light in a radial
+    // gradient UNDER THE FINGER — never a flat surface recolor. Saturation
+    // of white is white and the light is a small screen-ish add, so bright
+    // backdrops stay safe.
+    let touch_strength = clamp(get_float(120u), 0.0, 1.0);
+    if touch_strength > 0.0 {
+        let touch_px = vec2<f32>(get_float(118u), get_float(119u)) * dp_scale;
+        let touch_reach = 58.0 * optical_scale;
+        let touch_falloff =
+            1.0 - smoothstep(0.0, touch_reach, distance(coord, touch_px));
+        let glow = touch_falloff * touch_falloff * touch_strength * coverage;
+        let touch_luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        rgb = mix(rgb, mix(vec3<f32>(touch_luma), rgb, 1.65), glow);
+        rgb = rgb + vec3<f32>(0.09) * glow;
+    }
 
     // Adaptive frost (91 strength, 97 foreground luma) protects either
     // foreground polarity. It reacts only when the post-material backdrop is

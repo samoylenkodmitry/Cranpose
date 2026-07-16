@@ -124,6 +124,10 @@ pub struct GlassDynamics {
     /// Shape morph: when set, the glass geometry is these node-local rects
     /// instead of the node cover — the shapeshift channel.
     pub morph: Option<GlassMorph>,
+    /// Touch glow: `(x_dp, y_dp, intensity)` in node-local dp. A pressed
+    /// surface concentrates saturation and a soft light in a radial
+    /// gradient under the finger (never a flat recolor).
+    pub touch: Option<(f32, f32, f32)>,
 }
 
 fn foreground_is_dark(foreground: Color) -> bool {
@@ -672,6 +676,11 @@ impl ResolvedGlass {
                 GLASS_OPTICAL_ZOOM_UNIFORM,
                 1.0 + (self.optical_zoom - 1.0) * activity,
             );
+        }
+        if let Some((touch_x, touch_y, intensity)) = dynamics.touch {
+            shader.set_float(118, touch_x);
+            shader.set_float(119, touch_y);
+            shader.set_float(120, intensity.clamp(0.0, 1.0));
         }
         shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, density);
         shader.set_float(

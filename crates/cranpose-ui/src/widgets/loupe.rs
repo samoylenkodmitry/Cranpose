@@ -228,9 +228,12 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     state.last_focus_x.set(shown.focus_x);
     let travel = state.travel.get() * 0.72 + dx * 0.28;
     state.travel.set(travel);
-    let stretch = 1.0 + (travel.abs() * 0.022).clamp(0.0, 0.10);
+    // Droplet law: stretch along travel, contract orthogonally, AREA
+    // CONSERVED (w*s * h/s = w*h) — the reference bubble visibly deforms
+    // while following and never gains volume.
+    let stretch = 1.0 + (travel.abs() * 0.030).clamp(0.0, 0.12);
     let width = LOUPE_WIDTH * pose.width_frac * stretch;
-    let height = LOUPE_HEIGHT * pose.height_frac / stretch.sqrt();
+    let height = LOUPE_HEIGHT * pose.height_frac / stretch;
     let center_x = shown.focus_x;
     let center_y = shown.line_mid_y - LOUPE_RISE * pose.rise_frac;
     // The lens looks at the line (the focus), which sits below the risen
