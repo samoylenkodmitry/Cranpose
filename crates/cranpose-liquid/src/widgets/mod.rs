@@ -22,6 +22,7 @@ pub use glass_surface::GlassSurface;
 pub use menu::{
     remember_liquid_menu_gesture, LiquidMenu, LiquidMenuAbsorbedIconButton,
     LiquidMenuAbsorbedSource, LiquidMenuGesture, LiquidMenuIconButton, LiquidMenuItem,
+    LiquidMenuSpec,
 };
 pub use nav_bar::{liquid_nav_bar_expanded_height, LiquidNavBar, LiquidNavBarSpec};
 pub use search_field::{LiquidSearchField, LiquidSearchFieldSpec};

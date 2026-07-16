@@ -740,6 +740,271 @@ fn StoreBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
     );
 }
 
+/// The menu-expand reference composition: a deep-purple header hosting a
+/// bright magenta filter pill; tapping it opens a DARK sort/filter menu
+/// whose "Sort by" / "Filter" rows expand the container in place (the
+/// accordion morph from the 16-jul recording).
+#[composable]
+fn SortFilterReferenceStage() {
+    let menu_open = remember(|| mutableStateOf(false)).with(|s| *s);
+    // 0 = collapsed, 1 = "Sort by" expanded, 2 = "Filter" expanded.
+    let section = remember(|| mutableStateOf(0usize)).with(|s| *s);
+    let sort_choice = remember(|| mutableStateOf(0usize)).with(|s| *s);
+    let filter_choice = remember(|| mutableStateOf(0usize)).with(|s| *s);
+    let anchor_rect = remember(|| {
+        std::rc::Rc::new(std::cell::Cell::new(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }))
+    })
+    .with(std::rc::Rc::clone);
+    let menu_gesture = remember_liquid_menu_gesture();
+
+    LiquidTheme(
+        LiquidThemeSpec {
+            scheme: SchemeMode::Dark,
+            accent: Color::from_rgb_u8(233, 30, 196),
+            ..LiquidThemeSpec::default()
+        },
+        move || {
+            let anchor_rect = std::rc::Rc::clone(&anchor_rect);
+            let menu_gesture = menu_gesture.clone();
+            Box(
+                Modifier::empty().width(440.0).height(300.0),
+                BoxSpec::default(),
+                move || {
+                    let anchor_sink = std::rc::Rc::clone(&anchor_rect);
+                    Column(Modifier::empty().fill_max_size(), ColumnSpec::default(), {
+                        move || {
+                            // Header band: deep purple with the magenta pill.
+                            let pill_open = menu_open;
+                            Box(
+                                Modifier::empty().fill_max_width().height(74.0).draw_behind(
+                                    |scope| {
+                                        scope.draw_rect(Brush::linear_gradient_range(
+                                            vec![
+                                                Color::from_rgb_u8(52, 8, 46),
+                                                Color::from_rgb_u8(88, 14, 74),
+                                            ],
+                                            Point::new(0.0, 0.0),
+                                            Point::new(0.0, scope.size().height),
+                                        ));
+                                    },
+                                ),
+                                BoxSpec::default().content_alignment(Alignment::new(
+                                    HorizontalAlignment::End,
+                                    VerticalAlignment::CenterVertically,
+                                )),
+                                {
+                                    let anchor_sink = std::rc::Rc::clone(&anchor_sink);
+                                    move || {
+                                        let pill = Modifier::empty()
+                                            .size(Size::new(96.0, 40.0))
+                                            .offset(-16.0, 0.0)
+                                            .report_window_rect(std::rc::Rc::clone(&anchor_sink))
+                                            .semantics(|config| {
+                                                config.is_button = true;
+                                                config.is_clickable = true;
+                                                config.content_description =
+                                                    Some("Sort filter pill".to_string());
+                                            })
+                                            .pointer_input(
+                                                0usize,
+                                                move |scope: PointerInputScope| async move {
+                                                    scope
+                                                        .await_pointer_event_scope(
+                                                            |await_scope| async move {
+                                                                loop {
+                                                                    let event = await_scope
+                                                                        .await_pointer_event()
+                                                                        .await;
+                                                                    match event.kind {
+                                                                        PointerEventKind::Down => {
+                                                                            event.consume();
+                                                                        }
+                                                                        PointerEventKind::Up => {
+                                                                            pill_open.set(true);
+                                                                            event.consume();
+                                                                        }
+                                                                        _ => {}
+                                                                    }
+                                                                }
+                                                            },
+                                                        )
+                                                        .await;
+                                                },
+                                            )
+                                            .draw_behind(|scope| {
+                                                scope.draw_round_rect(
+                                                    Brush::solid(Color::from_rgb_u8(233, 30, 196)),
+                                                    CornerRadii::uniform(20.0),
+                                                );
+                                            });
+                                        Box(
+                                            pill,
+                                            BoxSpec::default().content_alignment(Alignment::CENTER),
+                                            || {
+                                                Row(Modifier::empty(), RowSpec::default(), || {
+                                                    icons::Icon(icons::FILTER, 20.0, Color::WHITE);
+                                                    Box(
+                                                        Modifier::empty().width(14.0),
+                                                        BoxSpec::default(),
+                                                        || {},
+                                                    );
+                                                    icons::Icon(
+                                                        icons::ACCOUNT_CIRCLE,
+                                                        28.0,
+                                                        Color::WHITE,
+                                                    );
+                                                });
+                                            },
+                                        );
+                                    }
+                                },
+                            );
+                            // Light page under the header: the two suggestion
+                            // tiles from the recording.
+                            Box(
+                                Modifier::empty()
+                                    .fill_max_width()
+                                    .height(226.0)
+                                    .draw_behind(|scope| {
+                                        scope.draw_rect(Brush::solid(Color::from_rgb_u8(
+                                            250, 250, 252,
+                                        )));
+                                    }),
+                                BoxSpec::default(),
+                                || {
+                                    Row(
+                                        Modifier::empty().padding_each(16.0, 18.0, 16.0, 0.0),
+                                        RowSpec::default(),
+                                        || {
+                                            SuggestionTile("Later", "1 item");
+                                            Box(
+                                                Modifier::empty().width(12.0),
+                                                BoxSpec::default(),
+                                                || {},
+                                            );
+                                            SuggestionTile("Drafts & sent", "0 items");
+                                        },
+                                    );
+                                },
+                            );
+                        }
+                    });
+
+                    // The dark accordion menu out of the pill.
+                    let items = sort_filter_menu_items(
+                        section.get(),
+                        sort_choice.get(),
+                        filter_choice.get(),
+                    );
+                    let labels: Vec<String> = items.iter().map(|item| item.label.clone()).collect();
+                    let dismiss_open = menu_open;
+                    let dismiss_section = section;
+                    LiquidMenu(
+                        menu_open.get(),
+                        anchor_rect.get(),
+                        LiquidMenuSpec::new(290.0),
+                        Vec::new(),
+                        items,
+                        menu_gesture.clone(),
+                        move |index| match labels.get(index).map(String::as_str) {
+                            Some("Sort by") => section.set(if section.get() == 1 { 0 } else { 1 }),
+                            Some("Filter") => section.set(if section.get() == 2 { 0 } else { 2 }),
+                            Some("Sections") => sort_choice.set(0),
+                            Some("Newest to oldest") => sort_choice.set(1),
+                            Some("All conversations") => filter_choice.set(0),
+                            Some("External people") => filter_choice.set(1),
+                            _ => {}
+                        },
+                        move || {
+                            dismiss_open.set(false);
+                            dismiss_section.set(0);
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+/// One white suggestion tile ("Later / 1 item") from the recording's page.
+#[composable]
+fn SuggestionTile(title: &'static str, subtitle: &'static str) {
+    Box(
+        Modifier::empty()
+            .width(120.0)
+            .height(64.0)
+            .draw_behind(|scope| {
+                scope.draw_round_rect(Brush::solid(Color::WHITE), CornerRadii::uniform(12.0));
+            }),
+        BoxSpec::default(),
+        move || {
+            Column(
+                Modifier::empty().padding_each(12.0, 10.0, 8.0, 0.0),
+                ColumnSpec::default(),
+                move || {
+                    Text(
+                        title,
+                        Modifier::empty(),
+                        TextStyle {
+                            span_style: SpanStyle {
+                                color: Some(Color::from_rgb_u8(30, 30, 36)),
+                                font_size: TextUnit::Sp(13.0),
+                                font_weight: Some(cranpose::text::FontWeight::MEDIUM),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                    );
+                    Text(
+                        subtitle,
+                        Modifier::empty(),
+                        TextStyle {
+                            span_style: SpanStyle {
+                                color: Some(Color::from_rgb_u8(120, 120, 128)),
+                                font_size: TextUnit::Sp(12.0),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+/// The item list for the sort/filter accordion at a given expansion state.
+fn sort_filter_menu_items(
+    section: usize,
+    sort_choice: usize,
+    filter_choice: usize,
+) -> Vec<LiquidMenuItem> {
+    let mut items = vec![LiquidMenuItem::new("Sort by").keeps_open()];
+    if section == 1 {
+        items.push(
+            LiquidMenuItem::new("Sections")
+                .icon(icons::LIST_OUTLINE)
+                .checked(sort_choice == 0),
+        );
+        items.push(
+            LiquidMenuItem::new("Newest to oldest")
+                .icon(icons::GRID_OUTLINE)
+                .checked(sort_choice == 1),
+        );
+    }
+    items.push(LiquidMenuItem::new("Filter").keeps_open().section_start());
+    if section == 2 {
+        items.push(LiquidMenuItem::new("All conversations").checked(filter_choice == 0));
+        items.push(LiquidMenuItem::new("External people").checked(filter_choice == 1));
+    }
+    items
+}
+
 /// The reference `bar_headers_folded` composition: colored section headers
 /// whose bold white titles cross the floating bar's top edge, so the bar's
 /// fold renders them mirrored inside the glass.
@@ -1295,6 +1560,9 @@ pub fn LiquidUiTab() {
                             StoreHeadersBarExample(headers_state.get(), move |index| {
                                 headers_state.set(index);
                             });
+
+                            SectionTitle("SORT FILTER MENU");
+                            SortFilterReferenceStage();
                             let on_white_state = on_white_tab_state;
                             OnWhiteBottomBarExample(on_white_state.get(), move |index| {
                                 on_white_state.set(index);
@@ -1570,6 +1838,7 @@ pub fn LiquidUiTab() {
                     LiquidMenu(
                         menu_state.get(),
                         menu_anchor,
+                        LiquidMenuSpec::default(),
                         vec![LiquidMenuAbsorbedSource::new(
                             menu_absorbed,
                             absorbed_button_spec.clone(),

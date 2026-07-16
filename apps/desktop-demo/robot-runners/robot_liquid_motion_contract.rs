@@ -958,7 +958,12 @@ fn main() -> ExitCode {
             // Scroll offset is measured via the first card's semantic y.
             let nav_drag_x = WINDOW_WIDTH as f32 - 50.0;
             let nav_drag_y = WINDOW_HEIGHT as f32 * 0.31;
-            scroll(&robot, nav_drag_x, nav_drag_y, 2400.0);
+            // Scroll until the page tops out (the demo page keeps growing;
+            // a fixed delta goes stale).
+            for _ in 0..4 {
+                scroll(&robot, nav_drag_x, nav_drag_y, 2400.0);
+                settle(&robot, 300);
+            }
             settle(&robot, 900);
             let Some((_, card_y_top, _, _)) = find_text_in_semantics(&robot, "iPadOS") else {
                 fail(&robot, "'iPadOS' card not found in semantics");

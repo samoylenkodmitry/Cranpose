@@ -40,6 +40,7 @@ fn main() -> ExitCode {
             capture_menu_open(&robot, &shot_dir);
             capture_tab_swipe_and_form(&robot, &shot_dir);
             capture_segmented(&robot, &shot_dir);
+            capture_menu_expand(&robot, &shot_dir);
             capture_on_white(&robot, &shot_dir);
             capture_touched_up(&robot, &shot_dir);
 
@@ -273,6 +274,54 @@ fn capture_segmented(robot: &cranpose::Robot, shot_dir: &Path) {
     save_series(shot_dir, "segmented-drag", crop, ride.iter());
     settle(robot, 600);
     robot.click(rx, y).expect("restore receiving");
+    settle(robot, 800);
+}
+
+/// Reference `menu-expand` (dark sort/filter menu @60fps): open from the
+/// magenta pill, expand "Sort by" in place (accordion size morph), collapse
+/// back, then close into the pill. One ms timeline: open 0+, expand 1000+,
+/// collapse 2000+, close 3000+.
+fn capture_menu_expand(robot: &cranpose::Robot, shot_dir: &Path) {
+    let Some(pill) = scroll_to_button(robot, "Sort filter pill", 260.0) else {
+        eprintln!("SKIP menu-expand: stage not found");
+        return;
+    };
+    let (px, py) = center(pill);
+    // The stage is 440x300 with the pill inset 16dp from its top-right.
+    let crop = (
+        px + pill.2 * 0.5 + 16.0 - 440.0,
+        pill.1 - 17.0,
+        440.0,
+        300.0,
+    );
+
+    robot.click(px, py).expect("open sort menu");
+    let mut open_offsets = dense(25.0, 13);
+    open_offsets.extend_from_slice(&[(50.0, true), (100.0, true), (200.0, true)]);
+    let mut frames = keyframe_series(robot, &open_offsets, 0.0);
+    settle(robot, 500);
+
+    let Some(sort_row) = robot.find_button_bounds_exact("Sort by").ok().flatten() else {
+        eprintln!("SKIP menu-expand: sort row not found");
+        return;
+    };
+    let (sx, sy) = center(sort_row);
+    robot.click(sx, sy).expect("expand sort section");
+    let mut expand_offsets = dense(25.0, 13);
+    expand_offsets.extend_from_slice(&[(50.0, true), (100.0, true), (200.0, true)]);
+    frames.extend(keyframe_series(robot, &expand_offsets, 1000.0));
+    settle(robot, 500);
+
+    robot.click(sx, sy).expect("collapse sort section");
+    frames.extend(keyframe_series(robot, &expand_offsets.clone(), 2000.0));
+    settle(robot, 500);
+
+    // Dismiss with a tap on the stage's light page, outside the menu.
+    robot
+        .click(crop.0 + 50.0, crop.1 + 270.0)
+        .expect("dismiss sort menu");
+    frames.extend(keyframe_series(robot, &dense(25.0, 12), 3000.0));
+    save_series(shot_dir, "menu-expand", crop, frames.iter());
     settle(robot, 800);
 }
 

@@ -217,9 +217,9 @@ menu_expand_phase "$T/menu-expand/collapse-row" "$WORK/me3.png" "collapse-row (b
 menu_expand_phase "$T/menu-expand/close" "$WORK/me4.png" "close (sucked into the pill)"
 magick "$WORK/me1.png" "$WORK/me2.png" "$WORK/me3.png" "$WORK/me4.png" \
     -background gray10 -smush 6 "$WORK/me_t.png"
-mapfile -t mea < <(actual_series "$CAP/menu-open")
-strip "$WORK/me_a.png" 10 "${mea[@]}"
-SHEET_NOTE="accordion expand not yet in cranpose-liquid; actual = open/close only" \
+mapfile -t mea < <(actual_series "$CAP/menu-expand")
+strip "$WORK/me_a.png" 12 "${mea[@]}"
+SHEET_NOTE="actual timeline: open 0+, expand 1000+, collapse 2000+, close 3000+" \
     sheet menu-expand "$WORK/me_t.png" "$WORK/me_a.png"
 
 # ---- still components -------------------------------------------------------

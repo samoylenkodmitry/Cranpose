@@ -35,6 +35,9 @@ pub struct LiquidMenuItem {
     pub section_start: bool,
     /// A non-interactive gray section header ("Show").
     pub header: bool,
+    /// Selecting this row keeps the menu open (an accordion row: the caller
+    /// swaps `items` and the surface morphs to the new size in place).
+    pub keeps_open: bool,
 }
 
 impl LiquidMenuItem {
@@ -46,6 +49,7 @@ impl LiquidMenuItem {
             destructive: false,
             section_start: false,
             header: false,
+            keeps_open: false,
         }
     }
 
@@ -76,6 +80,13 @@ impl LiquidMenuItem {
         self.section_start = true;
         self
     }
+
+    /// Marks an accordion row: selecting it keeps the menu open while the
+    /// caller swaps the item list (the surface morphs to the new size).
+    pub fn keeps_open(mut self) -> Self {
+        self.keeps_open = true;
+        self
+    }
 }
 
 /// A neighboring glass icon control whose volume and foreground are absorbed
@@ -100,6 +111,32 @@ impl LiquidMenuAbsorbedSource {
             spec,
             diameter,
             icon_path,
+        }
+    }
+}
+
+/// Layout parameters for a [`LiquidMenu`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiquidMenuSpec {
+    /// Settled card width in dp (the reference menus vary: the App Store
+    /// List/Grid menu is 250, the sort/filter menu ~66% of screen width).
+    pub width: f32,
+}
+
+impl Default for LiquidMenuSpec {
+    fn default() -> Self {
+        Self { width: MENU_WIDTH }
+    }
+}
+
+impl LiquidMenuSpec {
+    pub fn new(width: f32) -> Self {
+        Self {
+            width: if width.is_finite() {
+                width.max(120.0)
+            } else {
+                MENU_WIDTH
+            },
         }
     }
 }
@@ -840,15 +877,18 @@ fn AbsorbedSourceVisual(
 /// are gray non-interactive rows.
 #[composable]
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 pub fn LiquidMenu(
     expanded: bool,
     anchor: Rect,
+    spec: LiquidMenuSpec,
     absorbed: Vec<LiquidMenuAbsorbedSource>,
     items: Vec<LiquidMenuItem>,
     gesture: LiquidMenuGesture,
     on_item: impl Fn(usize) + 'static,
     on_dismiss: impl Fn() + 'static,
 ) {
+    let menu_width = spec.width;
     // The menu outlives `expanded` by one collapse animation: dismissing
     // deflates the droplet back into the anchor (the reference close morph)
     // before the popup unmounts.
@@ -872,11 +912,14 @@ pub fn LiquidMenu(
         if handled_release.get() != sequence {
             handled_release.set(sequence);
             if let Some(index) = gesture.item_at(point, &items) {
+                let keeps_open = items.get(index).is_some_and(|item| item.keeps_open);
                 let on_item = Rc::clone(&on_item);
                 let on_dismiss = Rc::clone(&on_dismiss);
                 SideEffect(move || {
                     on_item(index);
-                    on_dismiss();
+                    if !keeps_open {
+                        on_dismiss();
+                    }
                 });
             }
         }
@@ -925,6 +968,47 @@ pub fn LiquidMenu(
     let anchor_zone = anchor.height * ANCHOR_OVERLAP;
     let node_size =
         remember(|| Rc::new(Cell::new(cranpose_ui_graphics::Size::ZERO))).with(Rc::clone);
+    // Accordion: swapping `items` while the menu is open morphs the surface
+    // to its new measured size in place (the reference expand grows the
+    // container with overshoot while the incoming rows materialize). The
+    // resize spring runs 0 -> 1 from the previous measured height.
+    let resize_anim = remember(|| {
+        let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
+        Rc::new(RefCell::new(cranpose_animation::Animatable::new(
+            1.0f32, runtime,
+        )))
+    })
+    .with(Rc::clone);
+    let resize_from_h = remember(|| Rc::new(Cell::new(0.0f32))).with(Rc::clone);
+    let items_signature: String = items
+        .iter()
+        .map(|item| {
+            format!(
+                "{}|{}{}{}{}{};",
+                item.label,
+                item.checked as u8,
+                item.destructive as u8,
+                item.section_start as u8,
+                item.header as u8,
+                item.keeps_open as u8,
+            )
+        })
+        .collect();
+    let last_signature = remember(|| Rc::new(RefCell::new(String::new()))).with(Rc::clone);
+    if *last_signature.borrow() != items_signature {
+        let was_open = !last_signature.borrow().is_empty()
+            && expanded
+            && grow.get() > 0.5
+            && node_size.get().height > 1.0;
+        *last_signature.borrow_mut() = items_signature;
+        if was_open {
+            resize_from_h.set(node_size.get().height);
+            let mut anim = resize_anim.borrow_mut();
+            anim.snapTo(0.0);
+            anim.animateTo(1.0, cranpose_animation::spring(0.78, 170.0));
+        }
+    }
+    let resize_state = resize_anim.borrow().state();
     // Right-align the card under the anchor (menus morph out of trailing
     // buttons), staying on-screen for anchors near the right edge. The host
     // renders the outside-tap scrim (PopupDismissable). While collapsing the
@@ -933,7 +1017,7 @@ pub fn LiquidMenu(
     let scrim_active = expanded;
     PopupDismissable(
         anchor,
-        Point::new(anchor.width - MENU_WIDTH, 0.0),
+        Point::new(anchor.width - menu_width, 0.0),
         move || {
             if scrim_active {
                 scrim_dismiss()
@@ -952,14 +1036,14 @@ pub fn LiquidMenu(
                 // bubble inflates into the menu card as one droplet. The
                 // anchor starts as its birth lobe and melts flat into the
                 // settled edge.
-                let anchor_center = (MENU_WIDTH - anchor.width * 0.5, anchor.height * 0.5);
+                let anchor_center = (menu_width - anchor.width * 0.5, anchor.height * 0.5);
                 let anchor_shape = MenuShape::capsule(
                     anchor_center.0,
                     anchor_center.1,
                     anchor.width,
                     anchor.height,
                 );
-                let node_origin = Point::new(anchor.x + anchor.width - MENU_WIDTH, anchor.y);
+                let node_origin = Point::new(anchor.x + anchor.width - menu_width, anchor.y);
                 let absorbed_shapes: Vec<MenuShape> = absorbed
                     .iter()
                     .filter_map(|source| MenuShape::from_window_rect(source.rect, node_origin))
@@ -967,11 +1051,14 @@ pub fn LiquidMenu(
                 let morph_size = Rc::clone(&node_size);
                 // Muted vibrancy: the absorbed button must read as a soft
                 // smudge beneath the glass, not a hot saturated orb.
+                // Scheme-aware body: the light menu lifts toward white; the
+                // dark reference menu (sort/filter recording) deepens instead
+                // and lets the colored backdrop wash through.
                 let glass = Glass::regular()
                     .shape(LiquidShape::RoundedRect(MENU_RADIUS))
                     .blur_radius(8.0)
-                    .saturation(1.55)
-                    .lift(0.58)
+                    .saturation(if colors.is_dark { 1.05 } else { 1.55 })
+                    .lift(if colors.is_dark { -0.48 } else { 0.58 })
                     .highlight(0.14)
                     .shadow_style(GlassShadow::new(
                         Color::BLACK.with_alpha(if colors.is_dark { 0.22 } else { 0.11 }),
@@ -980,19 +1067,30 @@ pub fn LiquidMenu(
                         0.0,
                     ))
                     .no_clip();
+                let resize_from = Rc::clone(&resize_from_h);
                 let card = Modifier::empty()
                     .report_size(Rc::clone(&node_size))
                     .glass_effect_with(glass, move || {
                         let size = morph_size.get();
-                        let menu_h = (size.height - anchor_zone).max(24.0);
+                        let measured_h = (size.height - anchor_zone).max(24.0);
+                        // Accordion resize: spring from the previous measured
+                        // height toward the new one; damping 0.78 gives the
+                        // reference's visible size overshoot.
+                        let resize_t = resize_state.get();
+                        let from_h = (resize_from.get() - anchor_zone).max(24.0);
+                        let menu_h = if resize_from.get() > 1.0 {
+                            from_h + (measured_h - from_h) * resize_t.max(0.0)
+                        } else {
+                            measured_h
+                        };
                         // Pillowy settled corners (the reference menu's radius
                         // is ~0.26 of its height — far rounder than a desktop
                         // popup).
                         let settle_radius = (menu_h * 0.32).clamp(26.0, MENU_RADIUS);
                         let target = MenuShape {
-                            center_x: MENU_WIDTH * 0.5,
+                            center_x: menu_width * 0.5,
                             center_y: anchor_zone + menu_h * 0.5,
-                            width: MENU_WIDTH,
+                            width: menu_width,
                             height: menu_h,
                             radius: settle_radius,
                         };
@@ -1065,7 +1163,7 @@ pub fn LiquidMenu(
                             ..Default::default()
                         }
                     })
-                    .width(MENU_WIDTH);
+                    .width(menu_width);
 
                 let has_checks = items.iter().any(|item| item.checked);
                 // Finger/pointer sliding through the menu highlights the row
@@ -1110,6 +1208,12 @@ pub fn LiquidMenu(
                                 // settle. While closing it rides the fast glass clock
                                 // so it contracts with the panel.
                                 let content = menu_content_progress(expanded, appear, reveal);
+                                // During an accordion resize the rows dip back
+                                // into the smudge and re-materialize as the
+                                // growth settles (reference expand frames).
+                                let resize_t = resize_state.get().clamp(0.0, 1.0);
+                                let content =
+                                    content * (0.45 + 0.55 * smoothstep(0.35, 1.0, resize_t));
                                 // Rows materialize from behind the glass and scale with
                                 // the droplet from the anchor corner; the content lives
                                 // on the growing surface instead of fading at full size.
@@ -1285,6 +1389,7 @@ fn menu_item_row(
         cranpose_ui_graphics::Color::from_rgba_u8(120, 120, 128, 48)
     };
     let row_label = item.label.clone();
+    let keeps_open = item.keeps_open;
     let row = Modifier::empty()
         .fill_max_width()
         .report_window_rect(rect_sink)
@@ -1318,7 +1423,9 @@ fn menu_item_row(
                                     PointerEventKind::Up => {
                                         hovered.set(None);
                                         on_item(index);
-                                        on_dismiss();
+                                        if !keeps_open {
+                                            on_dismiss();
+                                        }
                                         event.consume();
                                     }
                                     _ => {}
