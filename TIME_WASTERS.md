@@ -330,3 +330,13 @@ green, and the local suite passes 129/129. DO NOT debug this blind through
 mesa-vulkan-drivers stack in a container first, then chase the headless
 target/surface format path (surface_format.rs prefers non-sRGB but headless
 offscreen targets pick their format elsewhere).
+
+## robot_regression_shader_visual_contract only means something under the harness
+One-off `cargo run --example robot_regression_shader_visual_contract`
+invocations fail DETERMINISTICALLY (left_blue 2924 vs right_blue 1466,
+bit-identical on workstation and builder) because this non-headless X11
+test's drags depend on WM window placement, which differs outside
+run_robot_test.sh. Under `./run_robot_test.sh --sequential --example ...`
+it passes on the same tree. Hours were spent bisecting shader commits that
+were provably innocent (the metrics never changed across variants). Judge
+this test ONLY through the harness.

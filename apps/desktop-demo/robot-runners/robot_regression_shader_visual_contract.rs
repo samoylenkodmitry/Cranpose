@@ -106,37 +106,71 @@ fn run_interactive_overlap() {
             let _ = robot.wait_for_idle();
 
             let path = output_paths::diagnostic_path("shader_overlap_glass_blur.png");
-            let image = capture_x11_window(&window_id, &path);
             let glass_crop = (
                 (glass_target.0 - 70.0).max(0.0) as u32,
                 (glass_target.1 - 50.0).max(0.0) as u32,
                 150,
                 110,
             );
-            let left_half = crop_rgba(&image, (glass_crop.0, glass_crop.1, 75, glass_crop.3));
-            let right_half = crop_rgba(
-                &image,
-                (glass_crop.0 + 75, glass_crop.1, glass_crop.2 - 75, glass_crop.3),
-            );
-            let left_edge = edge_energy_rgba(&left_half);
-            let right_edge = edge_energy_rgba(&right_half);
-            let blur_label_pixels = feature_stats_rgba(&image, glass_crop, is_bright_label_pixel)
+            // Slow software-GPU hosts (CI lavapipe) can capture before the
+            // dragged rects and their backdrop composite settle: poll the
+            // SAME metrics the contract asserts until they read composed
+            // (with a deadline), then judge the final capture.
+            let measure = |image: &image::RgbaImage| {
+                let left_half =
+                    crop_rgba(image, (glass_crop.0, glass_crop.1, 75, glass_crop.3));
+                let right_half = crop_rgba(
+                    image,
+                    (glass_crop.0 + 75, glass_crop.1, glass_crop.2 - 75, glass_crop.3),
+                );
+                let left_edge = edge_energy_rgba(&left_half);
+                let right_edge = edge_energy_rgba(&right_half);
+                let blur_label_pixels =
+                    feature_stats_rgba(image, glass_crop, is_bright_label_pixel)
+                        .map(|stats| stats.count)
+                        .unwrap_or(0);
+                let left_blue_blur_pixels = feature_stats_rgba(
+                    image,
+                    (glass_crop.0, glass_crop.1, 75, glass_crop.3),
+                    is_blue_blur_pixel,
+                )
                 .map(|stats| stats.count)
                 .unwrap_or(0);
-            let left_blue_blur_pixels = feature_stats_rgba(
-                &image,
-                (glass_crop.0, glass_crop.1, 75, glass_crop.3),
-                is_blue_blur_pixel,
-            )
-            .map(|stats| stats.count)
-            .unwrap_or(0);
-            let right_blue_blur_pixels = feature_stats_rgba(
-                &image,
-                (glass_crop.0 + 75, glass_crop.1, glass_crop.2 - 75, glass_crop.3),
-                is_blue_blur_pixel,
-            )
-            .map(|stats| stats.count)
-            .unwrap_or(0);
+                let right_blue_blur_pixels = feature_stats_rgba(
+                    image,
+                    (glass_crop.0 + 75, glass_crop.1, glass_crop.2 - 75, glass_crop.3),
+                    is_blue_blur_pixel,
+                )
+                .map(|stats| stats.count)
+                .unwrap_or(0);
+                (
+                    left_edge,
+                    right_edge,
+                    blur_label_pixels,
+                    left_blue_blur_pixels,
+                    right_blue_blur_pixels,
+                )
+            };
+            let composed = |metrics: &(f32, f32, usize, usize, usize)| {
+                let (left_edge, right_edge, labels, left_blue, right_blue) = *metrics;
+                labels >= 18
+                    && right_blue >= 500
+                    && right_blue >= left_blue.saturating_mul(3)
+                    && right_edge >= 0.65 * left_edge.max(1.0)
+            };
+            let mut image = capture_x11_window(&window_id, &path);
+            let mut metrics = measure(&image);
+            for _ in 0..40 {
+                if composed(&metrics) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+                let _ = robot.wait_for_idle();
+                image = capture_x11_window(&window_id, &path);
+                metrics = measure(&image);
+            }
+            let (left_edge, right_edge, blur_label_pixels, left_blue_blur_pixels, right_blue_blur_pixels) =
+                metrics;
             println!(
                 "shader_overlap crop={glass_crop:?} left_edge={left_edge:.3} right_edge={right_edge:.3} bright_label_pixels={blur_label_pixels} left_blue_blur_pixels={left_blue_blur_pixels} right_blue_blur_pixels={right_blue_blur_pixels} screenshot={}",
                 path.display()

@@ -40,7 +40,25 @@ fn main() -> ExitCode {
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(900));
             let _ = robot.wait_for_idle();
-            let shot = robot.screenshot().expect("shot");
+            // Slow software-GPU hosts (CI lavapipe) can present frames before
+            // the backdrop composite is warm — both capsules then read a
+            // fallback face (~140 luma) while the raw panels render fine.
+            // Poll the RAW panel strips (above the capsules, clear of glass)
+            // until the scene actually reads settled, then measure.
+            let mut shot = robot.screenshot().expect("shot");
+            for _ in 0..60 {
+                let bright_panel = mean_luma(&shot, PANEL_W * 0.5 - 30.0, 6.0, 60.0, 18.0);
+                let dark_panel = mean_luma(&shot, PANEL_W * 1.5 - 30.0, 6.0, 60.0, 18.0);
+                let plain_dark_face =
+                    mean_luma(&shot, PANEL_W + (PANEL_W - GLASS_W) * 0.5 + 18.0, PLAIN_Y + 14.0, 22.0, GLASS_H - 28.0);
+                if bright_panel > 225.0 && dark_panel < 30.0 && plain_dark_face < 90.0 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+                let _ = robot.wait_for_idle();
+                shot = robot.screenshot().expect("shot");
+            }
+            let shot = shot;
             let image = RgbaImage::from_raw(shot.width, shot.height, shot.pixels.clone())
                 .expect("adaptive frost screenshot buffer");
             image
