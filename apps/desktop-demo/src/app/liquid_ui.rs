@@ -1267,12 +1267,12 @@ pub fn LiquidUiTab() {
                                         || {},
                                         icons::FILTER,
                                     );
-                                    Box(Modifier::empty().width(8.0), BoxSpec::default(), || {});
+                                    Box(Modifier::empty().width(6.0), BoxSpec::default(), || {});
                                     LiquidMenuIconButton(
                                         Modifier::empty()
                                             .report_window_rect(std::rc::Rc::clone(&anchor_sink)),
                                         GlassButtonSpec::glass(),
-                                        44.0,
+                                        54.0,
                                         menu.get(),
                                         menu_gesture,
                                         move || menu.set(true),

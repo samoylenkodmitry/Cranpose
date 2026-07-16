@@ -107,6 +107,7 @@ impl LiquidMenuAbsorbedSource {
 const MENU_WIDTH: f32 = 250.0;
 const MENU_RADIUS: f32 = 32.0;
 const MENU_GROW_DELAY: f32 = 0.050;
+const MENU_SOURCE_SEPARATE_END: f32 = 0.12;
 const MENU_OVERSHOOT_SCALE: f32 = 0.30;
 const MENU_GROW_STIFFNESS: f32 = 15.0;
 const MENU_REVEAL_STIFFNESS: f32 = 50.0;
@@ -481,13 +482,13 @@ fn menu_morph_geometry(
 ) -> MenuMorphGeometry {
     let phase = menu_geometry_phase(expanded, appear);
     let source = menu_source_shape(anchor, absorbed, target);
-    let mut primary = if expanded && appear < MENU_GROW_DELAY {
-        interpolate_menu_shape(anchor, source, phase.width, phase.height)
+    let mut primary = if expanded && phase.path < MENU_SOURCE_SEPARATE_END {
+        anchor
     } else {
         let start = if expanded { source } else { anchor };
         interpolate_menu_shape(start, target, phase.width, phase.height)
     };
-    if expanded {
+    if expanded && phase.path >= MENU_SOURCE_SEPARATE_END {
         primary.center_y += menu_vertical_rebound(phase.path);
     }
     let blob_radius = primary.height * 0.5;
@@ -594,6 +595,10 @@ fn menu_surface_phase(expanded: bool, appear: f32, path: f32) -> MenuSurfacePhas
         wobble: 0.04 * activity,
         bulge: 0.25 * activity,
     }
+}
+
+fn menu_absorbed_shape_presence(path: f32) -> f32 {
+    1.0 - smoothstep(MENU_SOURCE_SEPARATE_END, 0.30, path)
 }
 
 fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
@@ -1017,6 +1022,18 @@ pub fn LiquidMenu(
                                 -1.0,
                             ));
                         }
+                        let absorbed_presence = menu_absorbed_shape_presence(t);
+                        if expanded && absorbed_presence > 0.01 {
+                            shapes.extend(absorbed_shapes.iter().map(|shape| {
+                                (
+                                    shape.center_x,
+                                    shape.center_y,
+                                    shape.width * absorbed_presence,
+                                    shape.height * absorbed_presence,
+                                    -1.0,
+                                )
+                            }));
+                        }
                         let glue = surface.glue;
                         let activity = if expanded {
                             smoothstep(0.0, MENU_GROW_DELAY, appear)
@@ -1390,22 +1407,20 @@ mod tests {
         assert_eq!((initial.width, initial.height), (44.0, 44.0));
 
         let merged = pose(0.028_576);
-        assert!(
-            (94.0..=98.0).contains(&merged.width) && (46.0..=50.0).contains(&merged.height),
-            "the aggregate source must preserve the two-button footprint: {merged:?}"
-        );
-        assert!(
-            (merged.center_y - anchor.center_y).abs() < 0.1,
-            "the source cluster must not jump toward the card before expansion: {merged:?}"
-        );
+        assert_eq!(merged, initial);
+        let source = menu_source_shape(anchor, &absorbed, target);
+        assert_eq!((source.width, source.height), (96.0, 48.0));
+        assert_eq!(source.center_y, anchor.center_y);
+        assert_eq!(menu_absorbed_shape_presence(0.0), 1.0);
+        assert_eq!(menu_absorbed_shape_presence(0.30), 0.0);
 
         let early = pose(0.070_208);
         let middle = pose(0.199_019);
         let broad = pose(0.539_174);
-        assert!(early.width > merged.width && early.height > merged.height);
-        assert!(middle.width > early.width && middle.height > early.height);
+        assert_eq!(early, initial);
+        assert!(middle.width > source.width && middle.height > source.height);
         assert!(broad.width > middle.width && broad.height <= target.height * 1.1);
-        assert!(early.width > early.height);
+        assert!(middle.width > middle.height);
         assert!(broad.width > broad.height * 2.0);
 
         let swell = pose(0.701_903);
@@ -1454,7 +1469,7 @@ mod tests {
         };
 
         let source = menu_source_shape(anchor, &absorbed, target);
-        for appear in [0.070_208, 0.199_019, 0.296_780, 0.412_956, 0.539_174] {
+        for appear in [0.199_019, 0.296_780, 0.412_956, 0.539_174] {
             let geometry = menu_morph_geometry(true, appear, anchor, &absorbed, target);
             let phase = menu_geometry_phase(true, appear);
             let interpolated_y =
