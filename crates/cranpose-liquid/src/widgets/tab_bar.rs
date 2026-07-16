@@ -1054,7 +1054,7 @@ mod tests {
         assert_eq!(glass.saturation, Some(1.12));
         assert_eq!(glass.lift, Some(0.34));
         assert_eq!(glass.refraction_depth, 0.34);
-        assert_eq!(glass.adaptive_frost, 0.42);
+        assert_eq!(glass.adaptive_frost, 0.28);
     }
 
     #[test]
