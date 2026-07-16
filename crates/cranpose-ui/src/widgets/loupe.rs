@@ -15,8 +15,8 @@
 //!   increase from one continuous progress value over roughly 200 ms;
 //! * every active frame uses the current finger x directly while the vertical
 //!   rise supplies the stable grab offset;
-//! * release reverses that same physical path, sinking into the handle while
-//!   the shell and its optics fade over roughly 200 ms.
+//! * release retains the broad face briefly, then sinks into the handle while
+//!   the shell and its optics drain over roughly 250 ms.
 //!
 //! Visibility (also from the recording): the loupe shows only while the
 //! finger covers the text line — dragging a handle by its dot below the line
@@ -31,7 +31,7 @@ use crate::composable;
 use crate::modifier::Modifier;
 use crate::widgets::box_widget::{Box, BoxSpec};
 use crate::widgets::popup::Popup;
-use cranpose_animation::{spring, Animatable, AnimationSpec, AnimationType};
+use cranpose_animation::{spring, Animatable, AnimationSpec, AnimationType, Easing};
 use cranpose_core::{remember, with_current_composer};
 use cranpose_ui_graphics::{
     liquid_loupe_effect, GraphicsLayer, LayerShape, LiquidLoupeSpec, Point, Rect,
@@ -58,7 +58,7 @@ fn loupe_grow_spring() -> AnimationType {
 }
 
 fn loupe_collapse_tween() -> AnimationType {
-    AnimationType::Tween(AnimationSpec::linear(LOUPE_COLLAPSE_MS))
+    AnimationType::Tween(AnimationSpec::tween(LOUPE_COLLAPSE_MS, Easing::EaseInOut))
 }
 
 /// What the loupe magnifies: the finger x and the grabbed line's vertical
@@ -106,21 +106,31 @@ struct LoupePose {
     rise_frac: f32,
 }
 
-/// One reversible material coordinate. Height leads width so the first
-/// visible shell is the narrow capsule in the recording; rise follows between
-/// them and therefore keeps the shell attached to the handle during birth and
-/// collapse.
-fn loupe_pose(progress: f32) -> LoupePose {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoupePhase {
+    Birth,
+    Collapse,
+}
+
+/// One material coordinate drives every axis. Birth gains height first so the
+/// initial shell is a narrow bulb; collapse retains more width and height until
+/// its eased drain, matching the pressure response in the recording.
+fn loupe_pose(progress: f32, phase: LoupePhase) -> LoupePose {
     let p = progress.max(0.0);
+    let bounded = p.min(1.0);
+    let (width_exponent, height_exponent, rise_exponent) = match phase {
+        LoupePhase::Birth => (0.60, 0.18, 0.60),
+        LoupePhase::Collapse => (0.80, 0.50, 1.0),
+    };
     let width = if p <= 1.0 {
-        staged_smoothstep(p, 0.08, 1.0)
+        bounded.powf(width_exponent)
     } else {
         p
     };
     LoupePose {
         width_frac: width,
-        height_frac: staged_smoothstep(p, 0.0, 0.42),
-        rise_frac: staged_smoothstep(p, 0.06, 0.78),
+        height_frac: bounded.powf(height_exponent),
+        rise_frac: bounded.powf(rise_exponent),
     }
 }
 
@@ -131,10 +141,6 @@ fn loupe_optical_activity(progress: f32) -> f32 {
 fn smoothstep01(value: f32) -> f32 {
     let t = value.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-fn staged_smoothstep(value: f32, start: f32, end: f32) -> f32 {
-    smoothstep01((value - start) / (end - start).max(f32::EPSILON))
 }
 
 /// Animated loupe state living across recompositions. One progress value owns
@@ -193,7 +199,14 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
         return;
     }
 
-    let pose = loupe_pose(p);
+    let pose = loupe_pose(
+        p,
+        if active {
+            LoupePhase::Birth
+        } else {
+            LoupePhase::Collapse
+        },
+    );
     let optic = loupe_optical_activity(p);
 
     let width = LOUPE_WIDTH * pose.width_frac;
@@ -269,14 +282,14 @@ mod tests {
     #[test]
     fn growth_starts_at_the_handle_as_a_vertical_capsule() {
         assert_eq!(
-            loupe_pose(0.0),
+            loupe_pose(0.0, LoupePhase::Birth),
             LoupePose {
                 width_frac: 0.0,
                 height_frac: 0.0,
                 rise_frac: 0.0,
             }
         );
-        let emerging = loupe_pose(0.20);
+        let emerging = loupe_pose(0.20, LoupePhase::Birth);
         let width = LOUPE_WIDTH * emerging.width_frac;
         let height = LOUPE_HEIGHT * emerging.height_frac;
         assert!(
@@ -285,7 +298,7 @@ mod tests {
         );
         assert!(emerging.rise_frac < 0.5);
 
-        let settled = loupe_pose(1.0);
+        let settled = loupe_pose(1.0, LoupePhase::Birth);
         assert_eq!(settled.width_frac, 1.0);
         assert_eq!(settled.height_frac, 1.0);
         assert_eq!(settled.rise_frac, 1.0);
@@ -293,7 +306,7 @@ mod tests {
 
     #[test]
     fn width_can_overshoot_without_inflating_height_or_rise() {
-        let pose = loupe_pose(1.04);
+        let pose = loupe_pose(1.04, LoupePhase::Birth);
         assert!((pose.width_frac - 1.04).abs() < 1.0e-6);
         assert!((pose.height_frac - 1.0).abs() < 1e-6);
         assert!((pose.rise_frac - 1.0).abs() < 1e-6);
@@ -313,13 +326,12 @@ mod tests {
     }
 
     #[test]
-    fn shell_and_optics_share_one_reversible_progress() {
-        let early = loupe_pose(0.10);
-        let middle = loupe_pose(0.50);
-        let late = loupe_pose(0.90);
+    fn shell_and_optics_share_one_continuous_progress() {
+        let early = loupe_pose(0.10, LoupePhase::Birth);
+        let middle = loupe_pose(0.50, LoupePhase::Birth);
+        let late = loupe_pose(0.90, LoupePhase::Birth);
         assert!(early.width_frac < middle.width_frac && middle.width_frac < late.width_frac);
-        assert!(early.height_frac < middle.height_frac);
-        assert_eq!(middle.height_frac, late.height_frac);
+        assert!(early.height_frac < middle.height_frac && middle.height_frac < late.height_frac);
         assert!(early.rise_frac < middle.rise_frac && middle.rise_frac < late.rise_frac);
         assert!(loupe_optical_activity(0.10) < loupe_optical_activity(0.50));
         assert!(loupe_optical_activity(0.50) < loupe_optical_activity(0.90));
