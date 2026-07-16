@@ -46,7 +46,9 @@ pub const LOUPE_HEIGHT: f32 = 82.0;
 pub const LOUPE_RISE: f32 = 75.0;
 /// Magnification of the lens (uniform; measured on the reference).
 pub const LOUPE_MAGNIFICATION: f32 = 1.25;
-const LOUPE_COLLAPSE_MS: u64 = 250;
+// The reference loupe deflates into the line over ~100 ms (loupe-dissolve
+// frames b_024..b_036 at native 120 fps).
+const LOUPE_COLLAPSE_MS: u64 = 120;
 /// How far below the line bottom (in line heights) the finger still counts
 /// as covering the line. The end/cursor dot's center sits ~0.29 line heights
 /// below the bottom (16 dp dot on a 20 dp line), so a dot-center grab falls

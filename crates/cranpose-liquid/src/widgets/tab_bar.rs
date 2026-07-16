@@ -3,8 +3,7 @@
 //! circular accessory (the iOS 26 search button).
 
 use crate::material::{
-    liquid_content_mask_with, neutral_surface_lift, neutral_surface_tint, Glass, GlassDynamics,
-    GlassMorph, LiquidModifierExt,
+    neutral_surface_lift, neutral_surface_tint, Glass, GlassDynamics, GlassMorph, LiquidModifierExt,
 };
 use crate::motion::{liquid_axis_owns_visual_selection, liquid_visual_index, LiquidMotion};
 use crate::theme::{liquid_colors, liquid_typography, LiquidTypography};
@@ -83,26 +82,6 @@ fn tab_selection_content_color(colors: crate::theme::LiquidColors) -> Color {
     colors.accent
 }
 
-fn mix_color(from: Color, to: Color, amount: f32) -> Color {
-    let amount = amount.clamp(0.0, 1.0);
-    if amount <= 0.0 {
-        return from;
-    }
-    if amount >= 1.0 {
-        return to;
-    }
-    Color::rgba(
-        from.r() + (to.r() - from.r()) * amount,
-        from.g() + (to.g() - from.g()) * amount,
-        from.b() + (to.b() - from.b()) * amount,
-        from.a() + (to.a() - from.a()) * amount,
-    )
-}
-
-fn tab_base_selected_color(colors: crate::theme::LiquidColors, activity: f32) -> Color {
-    mix_color(colors.accent, colors.label, activity)
-}
-
 const BAR_HEIGHT: f32 = 64.0;
 const BLOB_HEIGHT: f32 = 52.0;
 const BLOB_MARGIN: f32 = 8.0;
@@ -149,6 +128,9 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         .refraction_depth(0.26)
         .refraction_curve(0.25)
         .fold_depth(6.0)
+        // Mid-ride the reference lens shows the icon under it clearly
+        // enlarged (~1.6x, tab-swipe sheet); rim mapping stays wcKSRD.
+        .optical_zoom(1.5)
         .dispersion(0.24)
         .lift(0.0)
         .highlight(0.24)
@@ -509,7 +491,6 @@ fn LiquidTabBarLayout(
                     0.0f32,
                     0.0f32,
                     crate::dynamics::LiquidPose::default(),
-                    0usize,
                 ))
             })
             .with(|state| *state);
@@ -523,8 +504,6 @@ fn LiquidTabBarLayout(
                     let tabs = Rc::clone(&tabs);
                     let typography = typography.clone();
                     let on_select = Rc::clone(&on_select);
-                    let selection_tabs = Rc::clone(&tabs);
-                    let selection_typography = typography.clone();
                     // The bar's edge is defined by shadow and contrast, not a
                     // bright rim stroke.
                     let pill = Modifier::empty()
@@ -587,6 +566,13 @@ fn LiquidTabBarLayout(
                                 count,
                                 lens_axis.is_dragging(),
                             );
+                            // The lens-owned cell carries the accent in the
+                            // BASE bar: the flight lens samples this backdrop,
+                            // so the icon it magnifies mid-ride is already
+                            // blue (tab-swipe reference flips the whole cell
+                            // to accent on ownership). An overlay copy can't
+                            // do this — the lens's backdrop snapshot never
+                            // contains layers of its own composite unit.
                             TabCells(
                                 Modifier::empty(),
                                 Rc::clone(&tabs),
@@ -594,8 +580,8 @@ fn LiquidTabBarLayout(
                                 tab_width,
                                 TabCellsSpec {
                                     base_color: tab_base_content_color(colors),
-                                    selected: Some(selected),
-                                    selected_color: tab_base_selected_color(colors, lens_activity),
+                                    selected: Some(visual_selection),
+                                    selected_color: tab_selection_content_color(colors),
                                     interactive: true,
                                     selection_only: false,
                                 },
@@ -721,13 +707,7 @@ fn LiquidTabBarLayout(
                             // Publish the lens springs for the overlay rendered
                             // ABOVE the finished bar (outside this glass layer, so
                             // the lens magnifies icons and glass together).
-                            let published = (
-                                lens_x,
-                                lens_activity,
-                                tab_width,
-                                lens_pose,
-                                visual_selection,
-                            );
+                            let published = (lens_x, lens_activity, tab_width, lens_pose);
                             if lens_x_outer.get() != published {
                                 lens_x_outer.set(published);
                             }
@@ -742,8 +722,7 @@ fn LiquidTabBarLayout(
                     // search accessory's circle joins its liquid field: drag the
                     // lens to the bar's end and the two glue through a
                     // smooth-union neck.
-                    let (lens_px, lens_activity, lens_tab_w, pose, visual_selection) =
-                        lens_x_outer.get();
+                    let (lens_px, lens_activity, lens_tab_w, pose) = lens_x_outer.get();
                     let lens_w =
                         lens_tab_w * TAB_LENS_REST_WIDTH_FACTOR * FLIGHT_LENS_PROJECTION_SCALE;
                     let lens_h = BLOB_HEIGHT * FLIGHT_LENS_PROJECTION_SCALE;
@@ -770,36 +749,10 @@ fn LiquidTabBarLayout(
                             BAR_HEIGHT * 0.5,
                         )),
                     };
-                    let mask_node = TabFlightNode {
-                        origin: (0.0, 0.0),
-                        size: Size::new(pill_w, BAR_HEIGHT),
-                    };
                     let lens_node = TabFlightNode {
                         origin: (node_x, node_top),
                         size: Size::new(node_w, node_h),
                     };
-
-                    let selection_geometry = geometry;
-                    let selection_mask = liquid_content_mask_with(
-                        Modifier::empty().required_size(mask_node.size),
-                        tab_flight_lens_material(colors.label),
-                        move || tab_flight_dynamics(selection_geometry, mask_node),
-                    );
-                    Box(selection_mask, BoxSpec::default(), move || {
-                        TabCells(
-                            Modifier::empty().offset(BLOB_MARGIN, BLOB_MARGIN),
-                            Rc::clone(&selection_tabs),
-                            selection_typography.clone(),
-                            lens_tab_w,
-                            TabCellsSpec {
-                                base_color: tab_selection_content_color(colors),
-                                selected: Some(visual_selection),
-                                selected_color: tab_selection_content_color(colors),
-                                interactive: false,
-                                selection_only: true,
-                            },
-                        );
-                    });
 
                     let lens_geometry = geometry;
                     let lens = Modifier::empty()
@@ -910,19 +863,6 @@ mod tests {
         ));
         assert_eq!(tab_base_content_color(colors), colors.label);
         assert_eq!(tab_selection_content_color(colors), colors.accent);
-    }
-
-    #[test]
-    fn selected_tab_accent_crossfades_into_the_persistent_flight_layer() {
-        let colors = crate::theme::LiquidColors::light(cranpose_ui_graphics::Color::from_rgb_u8(
-            0, 122, 255,
-        ));
-        assert_eq!(tab_base_selected_color(colors, 0.0), colors.accent);
-        assert_eq!(tab_base_selected_color(colors, 1.0), colors.label);
-        let halfway = tab_base_selected_color(colors, 0.5);
-        assert!((halfway.r() - (colors.accent.r() + colors.label.r()) * 0.5).abs() < 1.0e-6);
-        assert!((halfway.g() - (colors.accent.g() + colors.label.g()) * 0.5).abs() < 1.0e-6);
-        assert!((halfway.b() - (colors.accent.b() + colors.label.b()) * 0.5).abs() < 1.0e-6);
     }
 
     #[test]

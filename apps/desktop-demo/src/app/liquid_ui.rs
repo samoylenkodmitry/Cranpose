@@ -740,6 +740,117 @@ fn StoreBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
     );
 }
 
+/// The reference `bar_headers_folded` composition: colored section headers
+/// whose bold white titles cross the floating bar's top edge, so the bar's
+/// fold renders them mirrored inside the glass.
+#[composable]
+fn StoreHeadersBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
+    let on_select: std::rc::Rc<dyn Fn(usize)> = std::rc::Rc::new(on_select);
+    Box(
+        Modifier::empty()
+            .width(440.0)
+            .height(112.0)
+            .semantics(|config| {
+                config.is_button = true;
+                config.is_clickable = true;
+                config.content_description = Some("Headers fold stage".to_string());
+            }),
+        BoxSpec::default().content_alignment(Alignment::new(
+            HorizontalAlignment::CenterHorizontally,
+            VerticalAlignment::Bottom,
+        )),
+        {
+            let on_select = std::rc::Rc::clone(&on_select);
+            move || {
+                Row(
+                    Modifier::empty()
+                        .width(440.0)
+                        .height(112.0)
+                        .padding_symmetric(20.0, 0.0),
+                    RowSpec::default(),
+                    || {
+                        HeaderBlock(
+                            Modifier::empty().weight(1.0).fill_max_height(),
+                            "Puzzle Games",
+                            Color::from_rgb_u8(63, 169, 214),
+                            Color::from_rgb_u8(38, 128, 178),
+                        );
+                        Box(Modifier::empty().width(10.0), BoxSpec::default(), || {});
+                        HeaderBlock(
+                            Modifier::empty().weight(1.0).fill_max_height(),
+                            "Strategy Games",
+                            Color::from_rgb_u8(104, 189, 91),
+                            Color::from_rgb_u8(58, 141, 66),
+                        );
+                    },
+                );
+                Box(
+                    Modifier::empty()
+                        .fill_max_size()
+                        .padding_each(0.0, 0.0, 0.0, 10.0),
+                    BoxSpec::default().content_alignment(Alignment::new(
+                        HorizontalAlignment::CenterHorizontally,
+                        VerticalAlignment::Bottom,
+                    )),
+                    {
+                        let on_select = std::rc::Rc::clone(&on_select);
+                        move || {
+                            let on_select = std::rc::Rc::clone(&on_select);
+                            LiquidTabBar(
+                                Modifier::empty(),
+                                LiquidTabBarSpec::default(),
+                                vec![
+                                    LiquidTab::new(icons::DOCUMENT, "Today"),
+                                    LiquidTab::new(icons::ROCKET, "Games"),
+                                    LiquidTab::new(icons::LAYERS, "Apps"),
+                                    LiquidTab::new(icons::JOYSTICK, "Arcade"),
+                                    LiquidTab::new(icons::SEARCH, "Search"),
+                                ],
+                                selected,
+                                move |index| on_select(index),
+                            );
+                        }
+                    },
+                );
+            }
+        },
+    );
+}
+
+/// One colored section-header block; the title sits low enough to cross the
+/// floating bar's top edge (the fold's subject).
+#[composable]
+fn HeaderBlock(modifier: Modifier, title: &'static str, start: Color, end: Color) {
+    Box(
+        modifier.draw_behind(move |scope| {
+            scope.draw_round_rect(
+                Brush::linear_gradient_range(
+                    vec![start, end],
+                    Point::new(0.0, 0.0),
+                    Point::new(0.0, scope.size().height),
+                ),
+                CornerRadii::uniform(16.0),
+            );
+        }),
+        BoxSpec::default(),
+        move || {
+            Text(
+                title,
+                Modifier::empty().offset(14.0, 26.0),
+                TextStyle {
+                    span_style: SpanStyle {
+                        color: Some(Color::WHITE),
+                        font_size: TextUnit::Sp(19.0),
+                        font_weight: Some(cranpose::text::FontWeight::BOLD),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+        },
+    );
+}
+
 #[composable]
 fn OnWhiteBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
     let on_select: std::rc::Rc<dyn Fn(usize)> = std::rc::Rc::new(on_select);
@@ -858,7 +969,13 @@ fn SessionCard(icon: &'static str, title: &'static str, subtitle: &'static str) 
 /// the nav's filter/"..." circles sit directly above it at rest scroll, so
 /// the composed frame matches `example/target/menu-open`.
 #[composable]
-fn FeaturedVideosReferenceStage() {
+fn FeaturedVideosReferenceStage(
+    menu_open: cranpose_core::MutableState<bool>,
+    menu_gesture: LiquidMenuGesture,
+    anchor_sink: std::rc::Rc<std::cell::Cell<Rect>>,
+    absorbed_sink: std::rc::Rc<std::cell::Cell<Rect>>,
+    absorbed_button_spec: GlassButtonSpec,
+) {
     Box(
         Modifier::empty().fill_max_width(),
         BoxSpec::default().content_alignment(Alignment::new(
@@ -866,19 +983,33 @@ fn FeaturedVideosReferenceStage() {
             VerticalAlignment::Top,
         )),
         move || {
-            FeaturedVideosReferenceCard();
+            FeaturedVideosReferenceCard(
+                menu_open,
+                menu_gesture.clone(),
+                std::rc::Rc::clone(&anchor_sink),
+                std::rc::Rc::clone(&absorbed_sink),
+                absorbed_button_spec.clone(),
+            );
         },
     );
     Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
 }
 
 #[composable]
-fn FeaturedVideosReferenceCard() {
+fn FeaturedVideosReferenceCard(
+    menu_open: cranpose_core::MutableState<bool>,
+    menu_gesture: LiquidMenuGesture,
+    anchor_sink: std::rc::Rc<std::cell::Cell<Rect>>,
+    absorbed_sink: std::rc::Rc<std::cell::Cell<Rect>>,
+    absorbed_button_spec: GlassButtonSpec,
+) {
     let colors = liquid_colors();
     Column(
         Modifier::empty()
-            .required_size(Size::new(330.0, 210.0))
+            .required_size(Size::new(330.0, 226.0))
             .semantics(|config| {
+                config.is_button = true;
+                config.is_clickable = true;
                 config.content_description = Some("Featured videos".to_string());
             })
             .draw_behind(|scope| {
@@ -887,25 +1018,61 @@ fn FeaturedVideosReferenceCard() {
             .padding(14.0),
         ColumnSpec::default(),
         move || {
-            Text(
-                "Featured videos",
-                Modifier::empty(),
-                TextStyle {
-                    span_style: SpanStyle {
-                        color: Some(colors.label),
-                        font_size: TextUnit::Sp(17.0),
-                        font_weight: Some(cranpose::text::FontWeight::BOLD),
-                        ..Default::default()
-                    },
-                    ..Default::default()
+            // Reference header row: the title column with the filter and
+            // "..." circles inline at its right — the droplet grows from
+            // THIS anchor over the session rows below.
+            let row_menu = menu_open;
+            let row_gesture = menu_gesture.clone();
+            let row_anchor = std::rc::Rc::clone(&anchor_sink);
+            let row_absorbed = std::rc::Rc::clone(&absorbed_sink);
+            let row_spec = absorbed_button_spec.clone();
+            Row(
+                Modifier::empty().fill_max_width(),
+                RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
+                move || {
+                    Column(Modifier::empty().weight(1.0), ColumnSpec::default(), {
+                        move || {
+                            Text(
+                                "Featured videos",
+                                Modifier::empty(),
+                                TextStyle {
+                                    span_style: SpanStyle {
+                                        color: Some(colors.label),
+                                        font_size: TextUnit::Sp(17.0),
+                                        font_weight: Some(cranpose::text::FontWeight::BOLD),
+                                        ..Default::default()
+                                    },
+                                    ..Default::default()
+                                },
+                            );
+                            Text(
+                                "1.328 of 1.328 Sessions",
+                                Modifier::empty(),
+                                body_style(colors.secondary_label),
+                            );
+                        }
+                    });
+                    LiquidMenuAbsorbedIconButton(
+                        Modifier::empty().report_window_rect(std::rc::Rc::clone(&row_absorbed)),
+                        row_spec.clone(),
+                        36.0,
+                        row_menu.get(),
+                        || {},
+                        icons::FILTER,
+                    );
+                    Box(Modifier::empty().width(6.0), BoxSpec::default(), || {});
+                    LiquidMenuIconButton(
+                        Modifier::empty().report_window_rect(std::rc::Rc::clone(&row_anchor)),
+                        GlassButtonSpec::glass(),
+                        40.0,
+                        row_menu.get(),
+                        row_gesture.clone(),
+                        move || row_menu.set(true),
+                        icons::MORE_HORIZ,
+                    );
                 },
             );
-            Text(
-                "1.328 of 1.328 Sessions",
-                Modifier::empty(),
-                body_style(colors.secondary_label),
-            );
-            Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
+            Box(Modifier::empty().height(10.0), BoxSpec::default(), || {});
             for (index, day) in ["Dub Dub Daily: Day 5", "Dub Dub Daily: Day 4"]
                 .into_iter()
                 .enumerate()
@@ -998,6 +1165,40 @@ pub fn LiquidUiTab() {
             let colors = liquid_colors();
             let scroll = remember(|| ScrollState::new(0.0)).with(|s| s.clone());
             let scroll_for_bar = scroll.clone();
+            // The menu anchors to the REAL composited rects of the Featured
+            // videos card's trailing circles (window coords via
+            // report_window_rect) — never guessed offsets.
+            let menu_anchor_rect = cranpose_core::remember(|| {
+                std::rc::Rc::new(std::cell::Cell::new(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                }))
+            })
+            .with(std::rc::Rc::clone);
+            let menu_absorbed_rect = cranpose_core::remember(|| {
+                std::rc::Rc::new(std::cell::Cell::new(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                }))
+            })
+            .with(std::rc::Rc::clone);
+            let absorbed_button_spec = GlassButtonSpec::glass()
+                .with_glass(
+                    Glass::regular()
+                        .lift(0.05)
+                        .highlight(0.30)
+                        .adaptive_frost(colors.label, 0.35),
+                )
+                .with_icon_backplate(colors.accent)
+                .with_content_color(Color::WHITE);
+            let stage_menu_gesture = menu_gesture.clone();
+            let stage_anchor = std::rc::Rc::clone(&menu_anchor_rect);
+            let stage_absorbed = std::rc::Rc::clone(&menu_absorbed_rect);
+            let stage_button_spec = absorbed_button_spec.clone();
 
             cranpose::widgets::Box(
                 Modifier::empty().fill_max_size().draw_behind(move |scope| {
@@ -1015,6 +1216,10 @@ pub fn LiquidUiTab() {
                     let store_tab_state = store_tab;
                     let on_white_tab_state = on_white_tab;
                     let clicks_state = clicks;
+                    let stage_menu_gesture = stage_menu_gesture.clone();
+                    let stage_anchor = std::rc::Rc::clone(&stage_anchor);
+                    let stage_absorbed = std::rc::Rc::clone(&stage_absorbed);
+                    let stage_button_spec = stage_button_spec.clone();
                     Column(
                         Modifier::empty()
                             .fill_max_size()
@@ -1027,7 +1232,13 @@ pub fn LiquidUiTab() {
                             ),
                         ColumnSpec::default(),
                         move || {
-                            FeaturedVideosReferenceStage();
+                            FeaturedVideosReferenceStage(
+                                menu_open,
+                                stage_menu_gesture.clone(),
+                                std::rc::Rc::clone(&stage_anchor),
+                                std::rc::Rc::clone(&stage_absorbed),
+                                stage_button_spec.clone(),
+                            );
 
                             SectionTitle("wcKSRD OPTICS");
                             OpticalShaderPreview();
@@ -1079,6 +1290,10 @@ pub fn LiquidUiTab() {
                             let store_state = store_tab_state;
                             StoreBottomBarExample(store_state.get(), move |index| {
                                 store_state.set(index);
+                            });
+                            let headers_state = store_tab_state;
+                            StoreHeadersBarExample(headers_state.get(), move |index| {
+                                headers_state.set(index);
                             });
                             let on_white_state = on_white_tab_state;
                             OnWhiteBottomBarExample(on_white_state.get(), move |index| {
@@ -1231,12 +1446,14 @@ pub fn LiquidUiTab() {
 
                             SectionTitle("SEGMENTED");
                             let seg = segment_state;
+                            // The reference segmented recording's exact labels
+                            // (Transfers page) so cheatsheet frames align.
                             LiquidSegmentedControl(
                                 Modifier::empty().width(420.0),
                                 vec![
-                                    "All".to_string(),
-                                    "Receipts".to_string(),
-                                    "Docs".to_string(),
+                                    "Receiving".to_string(),
+                                    "Sending".to_string(),
+                                    "Errored".to_string(),
                                 ],
                                 seg.get(),
                                 move |index| seg.set(index),
@@ -1333,81 +1550,15 @@ pub fn LiquidUiTab() {
                     );
 
                     // ---- Nav bar over the content ----
-                    // The menu anchors to the REAL composited rects of the
-                    // trailing buttons (window coords via report_window_rect)
-                    // — never guessed offsets.
-                    let menu_anchor_rect = cranpose_core::remember(|| {
-                        std::rc::Rc::new(std::cell::Cell::new(Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: 0.0,
-                            height: 0.0,
-                        }))
-                    })
-                    .with(std::rc::Rc::clone);
-                    let menu_absorbed_rect = cranpose_core::remember(|| {
-                        std::rc::Rc::new(std::cell::Cell::new(Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: 0.0,
-                            height: 0.0,
-                        }))
-                    })
-                    .with(std::rc::Rc::clone);
-                    let menu_for_nav = menu_open;
-                    let menu_gesture_for_nav = menu_gesture.clone();
-                    let anchor_sink = std::rc::Rc::clone(&menu_anchor_rect);
-                    let absorbed_sink = std::rc::Rc::clone(&menu_absorbed_rect);
-                    let absorbed_button_spec = GlassButtonSpec::glass()
-                        .with_glass(
-                            Glass::regular()
-                                .lift(0.05)
-                                .highlight(0.30)
-                                .adaptive_frost(colors.label, 0.35),
-                        )
-                        .with_icon_backplate(colors.accent)
-                        .with_content_color(Color::WHITE);
-                    let nav_absorbed_button_spec = absorbed_button_spec.clone();
+                    // The menu's anchor circles live in the Featured videos
+                    // card header (the reference composition); the nav keeps
+                    // only the title.
                     LiquidNavBar(
                         Modifier::empty().fill_max_width(),
                         LiquidNavBarSpec::new("WWDC"),
                         scroll_for_bar.clone(),
                         || {},
-                        move || {
-                            let menu = menu_for_nav;
-                            let menu_gesture = menu_gesture_for_nav.clone();
-                            let anchor_sink = std::rc::Rc::clone(&anchor_sink);
-                            let absorbed_sink = std::rc::Rc::clone(&absorbed_sink);
-                            let absorbed_button_spec = nav_absorbed_button_spec.clone();
-                            Row(
-                                Modifier::empty(),
-                                RowSpec::default()
-                                    .vertical_alignment(VerticalAlignment::CenterVertically),
-                                move || {
-                                    let menu_gesture = menu_gesture.clone();
-                                    LiquidMenuAbsorbedIconButton(
-                                        Modifier::empty()
-                                            .report_window_rect(std::rc::Rc::clone(&absorbed_sink)),
-                                        absorbed_button_spec.clone(),
-                                        44.0,
-                                        menu.get(),
-                                        || {},
-                                        icons::FILTER,
-                                    );
-                                    Box(Modifier::empty().width(6.0), BoxSpec::default(), || {});
-                                    LiquidMenuIconButton(
-                                        Modifier::empty()
-                                            .report_window_rect(std::rc::Rc::clone(&anchor_sink)),
-                                        GlassButtonSpec::glass(),
-                                        54.0,
-                                        menu.get(),
-                                        menu_gesture,
-                                        move || menu.set(true),
-                                        icons::MORE_HORIZ,
-                                    );
-                                },
-                            );
-                        },
+                        || {},
                     );
 
                     // ---- Morphing menu ----
@@ -1421,8 +1572,8 @@ pub fn LiquidUiTab() {
                         menu_anchor,
                         vec![LiquidMenuAbsorbedSource::new(
                             menu_absorbed,
-                            absorbed_button_spec,
-                            44.0,
+                            absorbed_button_spec.clone(),
+                            36.0,
                             icons::FILTER,
                         )],
                         vec![

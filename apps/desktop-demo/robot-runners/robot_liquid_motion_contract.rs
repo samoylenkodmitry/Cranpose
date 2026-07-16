@@ -47,11 +47,21 @@ fn main() -> ExitCode {
             settle(&robot, 1000);
 
             // ---------- Menu morph: growing droplet, clean close ----------
+            // The menu's "..." anchor lives in the Featured videos card
+            // header at rest scroll.
+            let card = robot
+                .find_button_bounds_exact("Featured videos")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| fail(&robot, "featured videos card not in semantics"));
+            let menu_anchor = (card.0 + card.2 - 34.0, card.1 + 34.0);
             let clean = robot.screenshot().expect("clean shot");
             if find_text_in_semantics(&robot, "Grid").is_some() {
                 fail(&robot, "menu items in semantics before opening the menu");
             }
-            robot.click(858.0, 122.0).expect("open menu");
+            robot
+                .click(menu_anchor.0, menu_anchor.1)
+                .expect("open menu");
             // Exact-clock samples of the whole droplet growth (a wall-clock
             // sleep stretches under host load and lands past the opening
             // phase): 54ms pins the departing source, 75ms the horizontal
@@ -145,9 +155,11 @@ fn main() -> ExitCode {
                 fail(&robot, "open menu drew almost no pixels over the clean page");
             }
             let early_aspect = early_extent.0 / early_extent.1.max(1.0);
-            if !(0.36..=0.48).contains(&early_width_fraction)
-                || !(0.78..=0.95).contains(&early_height_fraction)
-                || !(1.05..=1.60).contains(&early_aspect)
+            // Ratios re-pinned for the 40dp card-header anchor (was the
+            // 54dp nav circle): height still arrives well before width.
+            if !(0.30..=0.48).contains(&early_width_fraction)
+                || !(0.68..=0.95).contains(&early_height_fraction)
+                || !(1.02..=1.60).contains(&early_aspect)
             {
                 save(absorbed, &shot_dir, "menu-early");
                 save(&open, &shot_dir, "menu-open");
@@ -164,7 +176,7 @@ fn main() -> ExitCode {
             // verify that the shader rendered the expected width progression
             // without mistaking travel distance for contour height.
             if !(0.36..=0.65).contains(&oval_width_fraction)
-                || !(0.95..=1.12).contains(&oval_height_fraction)
+                || !(0.86..=1.12).contains(&oval_height_fraction)
             {
                 save(wide_oval, &shot_dir, "menu-wide-oval");
                 fail(
@@ -280,7 +292,9 @@ fn main() -> ExitCode {
             // The actual Liquid UI menu must also use one continuous mouse
             // gesture: hold the anchor, slide the still-owned pointer onto a
             // row, and release to fire it. No second press is allowed.
-            robot.mouse_move(858.0, 122.0).expect("hover menu trigger");
+            robot
+                .mouse_move(menu_anchor.0, menu_anchor.1)
+                .expect("hover menu trigger");
             robot.mouse_down().expect("hold menu trigger");
             std::thread::sleep(Duration::from_millis(700));
             let grid = find_text_in_semantics(&robot, "Grid")
@@ -309,7 +323,9 @@ fn main() -> ExitCode {
                     "held mouse release over a menu row did not fire and dismiss it",
                 );
             }
-            robot.click(858.0, 122.0).expect("reopen fired menu state");
+            robot
+                .click(menu_anchor.0, menu_anchor.1)
+                .expect("reopen fired menu state");
             settle(&robot, 600);
             let list_after = find_text_in_semantics(&robot, "List")
                 .unwrap_or_else(|| fail(&robot, "List row missing after gesture fired"));
@@ -711,9 +727,9 @@ fn main() -> ExitCode {
             // cannot prove pointer coordination.
             scroll(&robot, 450.0, 500.0, -220.0);
             settle(&robot, 500);
-            let Some((seg_x, seg_y, seg_w, seg_h)) = find_text_in_semantics(&robot, "Receipts")
+            let Some((seg_x, seg_y, seg_w, seg_h)) = find_text_in_semantics(&robot, "Sending")
             else {
-                fail(&robot, "'Receipts' segment not found in semantics");
+                fail(&robot, "'Sending' segment not found in semantics");
             };
             let seg_cy = seg_y + seg_h * 0.5;
             let control_left = seg_x - seg_w;
@@ -726,7 +742,7 @@ fn main() -> ExitCode {
             );
             let seg_rest = robot.screenshot().expect("segmented rest");
             save(&seg_rest, &shot_dir, "segmented-rest");
-            // Press on the selected "All" third and drag to the "Docs" third.
+            // Press on the selected "Receiving" third and drag to the "Errored" third.
             robot
                 .mouse_move(control_left + seg_w * 0.5, seg_cy)
                 .expect("hover segmented");
@@ -796,7 +812,7 @@ fn main() -> ExitCode {
                     "segmented lens is vertically offset from the pointer/control center",
                 );
             }
-            // The drag committed a new segment: restore "All" for idempotence.
+            // The drag committed a new segment: restore "Receiving" for idempotence.
             robot
                 .mouse_move(control_left + seg_w * 0.5, seg_cy)
                 .expect("restore segmented");

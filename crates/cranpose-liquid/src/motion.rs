@@ -77,11 +77,12 @@ impl LiquidMotion {
         spring(0.9, 380.0)
     }
 
-    /// A released lens flying to its committed slot: the reference tab-bar
-    /// transit crosses ~3 cells in ~330 ms (measured from the iphone17
-    /// recording) — much gentler than the finger-chase spring.
+    /// A released lens flying to its committed slot: the reference
+    /// bottom-bar transfer arrives in ~170 ms (on-white-click sheet,
+    /// f_0040 departure to f_0050 arrival at 60 fps) with no visible
+    /// overshoot; the optical settle continues after the geometry lands.
     pub fn glide() -> AnimationType {
-        spring(1.0, 120.0)
+        spring(1.0, 500.0)
     }
 }
 
@@ -389,10 +390,12 @@ mod tests {
 
     #[test]
     fn released_flight_is_critically_damped() {
+        // Stiffness 500 ~= 90% travel at ~175 ms: the reference bottom-bar
+        // transfer arrives in ~170 ms with no visible overshoot.
         let AnimationType::Spring(spec) = LiquidMotion::glide() else {
             panic!("released flight must use a spring");
         };
         assert_eq!(spec.damping_ratio, 1.0);
-        assert_eq!(spec.stiffness, 120.0);
+        assert_eq!(spec.stiffness, 500.0);
     }
 }

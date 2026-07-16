@@ -4,6 +4,7 @@
 use crate::material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape};
 use crate::motion::{liquid_press_scale, LiquidMotion};
 use crate::theme::{liquid_colors, liquid_typography};
+use cranpose_animation::{AnimationSpec, AnimationType, Easing};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
 use cranpose_services::{default_haptics, HapticFeedback};
@@ -468,6 +469,42 @@ pub fn GlassIconButtonGroup(
     let colors = liquid_colors();
     let live_items: Rc<RefCell<Vec<GlassIconButtonGroupItem>>> =
         remember(|| Rc::new(RefCell::new(Vec::new()))).with(Rc::clone);
+    // A member that leaves the group dissolves in place instead of popping:
+    // the reference confirm disc turns translucent over the surviving "…"
+    // and is gone ~250 ms later (touched-up-state frames f_0350..f_0370).
+    let ghosts: Rc<RefCell<Vec<(GlassIconButtonGroupItem, usize)>>> =
+        remember(|| Rc::new(RefCell::new(Vec::new()))).with(Rc::clone);
+    let ghost_fade = remember(|| {
+        let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
+        Rc::new(RefCell::new(cranpose_animation::Animatable::new(
+            0.0f32, runtime,
+        )))
+    })
+    .with(Rc::clone);
+    {
+        let previous = live_items.borrow();
+        if !previous.is_empty() && *previous != items {
+            let leavers: Vec<(GlassIconButtonGroupItem, usize)> = previous
+                .iter()
+                .enumerate()
+                .filter(|(_, member)| !items.contains(member))
+                .map(|(index, member)| (member.clone(), index))
+                .collect();
+            if !leavers.is_empty() {
+                *ghosts.borrow_mut() = leavers;
+                let mut fade = ghost_fade.borrow_mut();
+                fade.snapTo(1.0);
+                fade.animateTo(
+                    0.0,
+                    AnimationType::Tween(AnimationSpec::tween(250, Easing::EaseIn)),
+                );
+            }
+        }
+    }
+    let ghost_alpha = ghost_fade.borrow().state();
+    if !ghosts.borrow().is_empty() && ghost_alpha.get() <= 0.01 {
+        ghosts.borrow_mut().clear();
+    }
     *live_items.borrow_mut() = items;
     let render_items = live_items.borrow().clone();
 
@@ -605,7 +642,7 @@ pub fn GlassIconButtonGroup(
                     // the shapes overlapping outright.
                     let ridden = drag_x
                         .get()
-                        .map(|x| x.clamp(rest_center - pitch * 0.5, rest_center + pitch * 0.5))
+                        .map(|x| x.clamp(rest_center - pitch * 0.35, rest_center + pitch * 0.35))
                         .unwrap_or(rest_center);
                     let center_x = pad + rest_center + (ridden - rest_center) * progress;
                     let diameter = spec.diameter * (1.0 + (spec.pressed_scale - 1.0) * progress);
@@ -649,7 +686,7 @@ pub fn GlassIconButtonGroup(
                 let ridden = if item_is_active {
                     drag_x
                         .get()
-                        .map(|x| x.clamp(rest_center - pitch * 0.5, rest_center + pitch * 0.5))
+                        .map(|x| x.clamp(rest_center - pitch * 0.35, rest_center + pitch * 0.35))
                         .unwrap_or(rest_center)
                 } else {
                     rest_center
@@ -716,6 +753,41 @@ pub fn GlassIconButtonGroup(
                 BoxSpec::default().content_alignment(Alignment::CENTER),
                 move || {
                     GlassIconForeground(foreground_spec.clone(), spec.diameter, icon_path);
+                },
+            );
+        }
+
+        // Departed members: the same surface + glyph at their old slot,
+        // riding one shared fade to transparent. No gestures, no union
+        // membership — a purely optical afterimage.
+        for (ghost, ghost_index) in ghosts.borrow().iter() {
+            let x = *ghost_index as f32 * pitch;
+            let fade = ghost_alpha;
+            let ghost_layer = Modifier::empty()
+                .size(Size::new(spec.diameter, spec.diameter))
+                .offset(x, 0.0)
+                .graphics_layer(move || GraphicsLayer {
+                    alpha: fade.get().clamp(0.0, 1.0),
+                    ..Default::default()
+                });
+            let ghost_spec = ghost.spec.clone();
+            let ghost_icon = ghost.icon_path;
+            let surface = ghost
+                .spec
+                .resolve_material(&colors, ghost.spec.icon_color(&colors))
+                .map(|material| {
+                    Modifier::empty()
+                        .size(Size::new(spec.diameter, spec.diameter))
+                        .glass_effect(material.shape(LiquidShape::Circle))
+                });
+            Box(
+                ghost_layer,
+                BoxSpec::default().content_alignment(Alignment::CENTER),
+                move || {
+                    if let Some(surface) = surface.clone() {
+                        Box(surface, BoxSpec::default(), || {});
+                    }
+                    GlassIconForeground(ghost_spec.clone(), spec.diameter, ghost_icon);
                 },
             );
         }

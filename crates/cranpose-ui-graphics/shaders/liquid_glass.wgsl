@@ -587,8 +587,13 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // origin with its live SDF center instead of refracting toward the screen.
     let sampling_position = p;
     // Interactive lenses draw the reference's crisp ~1px rim line; surface
-    // glass keeps its finer band.
-    let edge_sharpness = mix(16.0, 8.0, rim_style);
+    // glass keeps its finer band. The loupe keeps the tight border — its
+    // rim hugs bright content (selection accent, the handle dot) and the
+    // wider band smears them along the caps.
+    var edge_sharpness = mix(16.0, 8.0, rim_style);
+    if loupe_mode > 0.5 {
+        edge_sharpness = 16.0;
+    }
     let optical_sample = wcksrd_optics(
         p,
         sampling_position,
@@ -605,6 +610,18 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let transmission_refraction = clamp(get_float(96u), 0.0, 1.0);
     var base_displacement = optical_sample.source_displacement
         * transmission_refraction;
+    // Uniform face magnification (uniform 89, dp-free ratio): the riding
+    // lens projects its backdrop enlarged across the whole face. Blended by
+    // `interior` so the rim band keeps the wcKSRD edge mapping, and applied
+    // outside the transmission attenuation — the face zoom is a projection
+    // property, not an edge-refraction one. Pure displacement: white stays
+    // white.
+    let optical_zoom = max(get_float(89u), 1.0);
+    if optical_zoom > 1.0 && loupe_mode <= 0.5 {
+        base_displacement += sampling_position
+            * (1.0 / optical_zoom - 1.0)
+            * optical_sample.interior;
+    }
     var loupe_seam_mask = 0.0;
     if loupe_mode > 0.5 {
         let loupe_activity = clamp(get_float(90u), 0.0, 1.0);
@@ -869,7 +886,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // toggle rims), not the hairline the pow-6 transmission band traces:
         // the spectral return follows the same meniscus at half the falloff
         // exponent (sqrt of the shared pow-6 value — no second evaluation).
-        let dispersion_band = sqrt(meniscus_core) * coverage;
+        // The loupe keeps the hairline: its wide band smears the selection
+        // accent and handle dot along the rim.
+        var dispersion_band = sqrt(meniscus_core) * coverage;
+        if loupe_mode > 0.5 {
+            dispersion_band = meniscus_core * coverage;
+        }
         let dispersion_weight = clamp(
             dispersion_band
                 * rim_style

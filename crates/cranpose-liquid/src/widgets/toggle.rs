@@ -40,13 +40,17 @@ const LENS_TRAVEL_LEAN: f32 = 7.0;
 const LENS_PAD: f32 = 10.0;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
-// The flight itself now carries the raised lens; the tail after arrival
-// stays short so the thumb rematerializes on the reference clock.
-const LENS_RELEASE_LINGER_MS: u64 = 250;
+// The flight itself now carries the raised lens; the reference keeps the
+// lens clearly readable ~750 ms after release (toggle-press sheet still
+// shows it at 883 ms) before the thumb rematerializes.
+const LENS_RELEASE_LINGER_MS: u64 = 400;
 const LENS_RELEASE_FADE_MS: u64 = 400;
 
 fn toggle_track_motion() -> AnimationType {
-    AnimationType::Tween(AnimationSpec::tween(300, Easing::EaseInOut).with_delay(33))
+    // The reference track crosses into sage ~17 ms after release and reaches
+    // full green ~150 ms later (toggle-press sheet, 60 fps): a fast-start
+    // sweep with no delay.
+    AnimationType::Tween(AnimationSpec::tween(150, Easing::EaseOut))
 }
 
 fn toggle_lens_material() -> Glass {
@@ -63,8 +67,13 @@ fn toggle_lens_material() -> Glass {
         .transmission_refraction(0.35)
         .meniscus_absorption(0.70)
         .fold_depth(6.0)
+        // The pressed lens shows the track end-cap mildly enlarged
+        // (toggle-press detail frames).
+        .optical_zoom(1.18)
         .dispersion(0.60)
-        .highlight(0.22)
+        // The reference press face is the magnified track, not a lit dome —
+        // its luma matches the sampled backdrop (toggle-press detail).
+        .highlight(0.14)
         .lift(0.0)
         .shadow_style(GlassShadow::new(
             cranpose_ui_graphics::Color::BLACK.with_alpha(0.14),
@@ -493,12 +502,16 @@ mod tests {
     }
 
     #[test]
-    fn toggle_track_color_has_the_reference_lag() {
+    fn toggle_track_color_sweeps_on_the_reference_clock() {
+        // Measured on the toggle-press sheet (60 fps): sage appears ~17 ms
+        // after release and the sweep completes ~150 ms later — no delay,
+        // fast start.
         let AnimationType::Tween(spec) = toggle_track_motion() else {
             panic!("toggle track color needs a bounded transition");
         };
-        assert_eq!(spec.delay_millis, 33);
-        assert_eq!(spec.duration_millis, 300);
+        assert_eq!(spec.delay_millis, 0);
+        assert_eq!(spec.duration_millis, 150);
+        assert_eq!(spec.easing, Easing::EaseOut);
     }
 
     #[test]
@@ -528,8 +541,9 @@ mod tests {
         assert_eq!(spec.delay_millis, LENS_RELEASE_LINGER_MS);
         assert_eq!(spec.duration_millis, LENS_RELEASE_FADE_MS);
         assert_eq!(spec.easing, Easing::EaseIn);
-        // The flight itself now carries the raised lens; the post-arrival tail
-        // is short so the thumb returns on the reference clock.
-        assert!((550..=750).contains(&(spec.delay_millis + spec.duration_millis)));
+        // The reference lens stays readable ~750 ms after release
+        // (toggle-press sheet still shows it at 883 ms) before the thumb
+        // rematerializes.
+        assert!((700..=900).contains(&(spec.delay_millis + spec.duration_millis)));
     }
 }

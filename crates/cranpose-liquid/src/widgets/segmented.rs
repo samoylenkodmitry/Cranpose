@@ -343,15 +343,20 @@ pub fn LiquidSegmentedControl(
                     ..Default::default()
                 })
                 .glass_effect_with(
+                    // The reference lens body is nearly invisible on the
+                    // white bar — no readable outline, no tint; it shows
+                    // itself only through strong glyph refraction and
+                    // saturated RGB fringes at the strokes (segmented-drag
+                    // sheet, T 500/2000ms).
                     Glass::lens()
                         .shape(LiquidShape::Capsule)
-                        .tint(Color::rgba(1.0, 1.0, 1.0, 0.05))
+                        .tint(Color::rgba(1.0, 1.0, 1.0, 0.02))
                         .blur_radius(0.0)
-                        .refraction_depth(0.26)
+                        .refraction_depth(0.42)
                         .refraction_curve(0.25)
                         .fold_depth(5.0)
-                        .dispersion(0.24)
-                        .highlight(0.24)
+                        .dispersion(0.65)
+                        .highlight(0.10)
                         .lift(0.0)
                         .no_clip(),
                     move || {

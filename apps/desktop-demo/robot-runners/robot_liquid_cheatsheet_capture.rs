@@ -39,6 +39,7 @@ fn main() -> ExitCode {
             capture_toggle_press(&robot, &shot_dir);
             capture_menu_open(&robot, &shot_dir);
             capture_tab_swipe_and_form(&robot, &shot_dir);
+            capture_segmented(&robot, &shot_dir);
             capture_on_white(&robot, &shot_dir);
             capture_touched_up(&robot, &shot_dir);
 
@@ -51,7 +52,8 @@ fn main() -> ExitCode {
 }
 
 /// Reference `toggle-press`: 54 frames @60fps (0.9 s) — press the OFF
-/// toggle, flip, settle. Nine frames across the same window.
+/// toggle, flip, settle. Captured at ~33 ms steps (every 2nd reference
+/// frame) so the flight physics reads off the sheet.
 fn capture_toggle_press(robot: &cranpose::Robot, shot_dir: &Path) {
     let Some(toggle) = scroll_to_button(robot, "Wi-Fi switch", 320.0) else {
         eprintln!("SKIP toggle-press: stage not found");
@@ -65,31 +67,14 @@ fn capture_toggle_press(robot: &cranpose::Robot, shot_dir: &Path) {
 
     robot.mouse_move(cx, cy).expect("hover toggle");
     robot.mouse_down().expect("press toggle");
-    let held = robot
-        .capture_keyframes(1.0, &[(0.0, true), (120.0, true), (130.0, true)])
-        .expect("press keyframes");
+    let mut frames = keyframe_series(robot, &dense(33.0, 5), 0.0);
     robot.mouse_up().expect("release toggle");
-    let flight = robot
-        .capture_keyframes(
-            1.0,
-            &[
-                (0.0, true),
-                (110.0, true),
-                (110.0, true),
-                (110.0, true),
-                (110.0, true),
-                (200.0, true),
-            ],
-        )
-        .expect("flight keyframes");
+    let mut flight_offsets = dense(33.0, 17);
+    flight_offsets.extend_from_slice(&[(100.0, true), (150.0, true)]);
+    frames.extend(keyframe_series(robot, &flight_offsets, 132.0));
     settle(robot, 900);
     let crop = (cx - 62.0, cy - 32.0, 113.0, 63.0);
-    save_series(
-        shot_dir,
-        "toggle-press",
-        crop,
-        held.iter().chain(flight.iter()),
-    );
+    save_series(shot_dir, "toggle-press", crop, frames.iter());
     // Restore the stage's resting state for later sections.
     robot.click(cx, cy).expect("restore toggle");
     settle(robot, 1200);
@@ -100,8 +85,8 @@ fn capture_toggle_press(robot: &cranpose::Robot, shot_dir: &Path) {
 /// droplet grows over WHITE list content, so park the session cards under
 /// the nav anchor first.
 fn capture_menu_open(robot: &cranpose::Robot, shot_dir: &Path) {
-    // Rest scroll: the Featured videos stage sits right under the nav's
-    // filter/"..." circles, composing the reference page.
+    // Rest scroll: the Featured videos card hosts the filter/"..." anchor
+    // circles in its header, composing the reference page.
     for _ in 0..30 {
         robot
             .mouse_move(450.0, 400.0)
@@ -110,31 +95,33 @@ fn capture_menu_open(robot: &cranpose::Robot, shot_dir: &Path) {
         settle(robot, 60);
     }
     settle(robot, 400);
-    robot.click(858.0, 122.0).expect("open menu");
-    let grow = robot
-        .capture_keyframes(
-            1.0,
-            &[
-                (0.0, true),
-                (60.0, true),
-                (60.0, true),
-                (80.0, true),
-                (100.0, true),
-                (150.0, true),
-                (250.0, true),
-                (400.0, true),
-                (700.0, true),
-            ],
-        )
-        .expect("menu keyframes");
+    let Some(card) = robot
+        .find_button_bounds_exact("Featured videos")
+        .ok()
+        .flatten()
+    else {
+        eprintln!("SKIP menu-open: featured videos card not found");
+        return;
+    };
+    // The "..." circle sits at the header row's right edge.
+    robot
+        .click(card.0 + card.2 - 34.0, card.1 + 34.0)
+        .expect("open menu");
+    // Open: dense 25 ms sweep over the droplet growth + materialize tail.
+    let mut grow_offsets = dense(25.0, 13);
+    grow_offsets.extend_from_slice(&[(50.0, true), (50.0, true), (100.0, true), (200.0, true)]);
+    let mut frames = keyframe_series(robot, &grow_offsets, 0.0);
+    settle(robot, 500);
+    // Close: the reference segment ends with the ~220 ms suck-back; put it
+    // on the same timeline after the hold (labels ~1200 ms+).
+    robot.click(450.0, 640.0).expect("dismiss menu");
+    frames.extend(keyframe_series(robot, &dense(25.0, 11), 1200.0));
     save_series(
         shot_dir,
         "menu-open",
-        (540.0, 70.0, 350.0, 260.0),
-        grow.iter(),
+        (card.0 - 10.0, card.1 - 40.0, card.2 + 20.0, card.3 + 60.0),
+        frames.iter(),
     );
-    settle(robot, 500);
-    robot.click(450.0, 640.0).expect("dismiss menu");
     settle(robot, 900);
 }
 
@@ -160,19 +147,26 @@ fn capture_tab_swipe_and_form(robot: &cranpose::Robot, shot_dir: &Path) {
 
     robot.mouse_move(start_x, bar_y).expect("hover discover");
     robot.mouse_down().expect("grab main lens");
+    let clock = std::time::Instant::now();
     std::thread::sleep(Duration::from_millis(220));
-    let steps = 7usize;
+    // The reference drag spans ~1.9 s; each screenshot costs ~250-300 ms of
+    // wall clock, so the step count IS the drag speed — no extra sleeps.
+    // Real elapsed time lands on each tile.
+    let steps = 6usize;
     let mut frames = Vec::new();
     for step in 0..=steps {
         let t = step as f32 / steps as f32;
         let x = start_x + (end_x - start_x) * t;
         robot.mouse_move(x, bar_y).expect("drag main lens");
-        std::thread::sleep(Duration::from_millis(200));
-        frames.push(robot.screenshot().expect("swipe frame"));
+        let shot = robot.screenshot().expect("swipe frame");
+        frames.push((clock.elapsed().as_millis() as f32, shot));
     }
     robot.mouse_up().expect("release main lens");
-    std::thread::sleep(Duration::from_millis(350));
-    frames.push(robot.screenshot().expect("swipe settle"));
+    for wait in [120u64, 230] {
+        std::thread::sleep(Duration::from_millis(wait));
+        let shot = robot.screenshot().expect("swipe settle");
+        frames.push((clock.elapsed().as_millis() as f32, shot));
+    }
     save_series(shot_dir, "tab-swipe", main_bar_crop, frames.iter());
     settle(robot, 800);
     // Return the selection home for later sections.
@@ -187,12 +181,99 @@ fn capture_tab_swipe_and_form(robot: &cranpose::Robot, shot_dir: &Path) {
     let (today_x, y) = center(today);
     let bar_crop = (0.0, y - 66.0, WINDOW_WIDTH as f32, 133.0);
     let rest = robot.screenshot().expect("bar form rest");
-    save(&rest, shot_dir, "bottom-bar-form", bar_crop, 0);
+    save(&rest, shot_dir, "bottom-bar-form", bar_crop, 0, 0.0);
     robot.click(today_x, y).expect("select today");
     settle(robot, 1500);
     let today_selected = robot.screenshot().expect("bar form today");
-    save(&today_selected, shot_dir, "bottom-bar-form", bar_crop, 1);
+    save(
+        &today_selected,
+        shot_dir,
+        "bottom-bar-form",
+        bar_crop,
+        1,
+        1500.0,
+    );
     settle(robot, 400);
+
+    // Headers-fold still: the bar over the colored section headers whose
+    // titles cross its top edge (bar_headers_folded reference).
+    let Some(stage) = scroll_to_button(robot, "Headers fold stage", 430.0) else {
+        eprintln!("SKIP bottom-bar-form headers: stage not found");
+        return;
+    };
+    settle(robot, 600);
+    let folded = robot.screenshot().expect("bar headers folded");
+    save(
+        &folded,
+        shot_dir,
+        "bottom-bar-form",
+        (stage.0, stage.1, stage.2, stage.3),
+        2,
+        3000.0,
+    );
+}
+
+/// Reference `segmented` (Receiving | Sending | Errored @60fps): a tap
+/// flight across cells, then a continuous ride Receiving <-> Sending with
+/// the lens magnifying the glyphs under it.
+fn capture_segmented(robot: &cranpose::Robot, shot_dir: &Path) {
+    let Some(receiving) = scroll_to_button(robot, "Receiving", 380.0) else {
+        eprintln!("SKIP segmented: control not found");
+        return;
+    };
+    let Some(sending) = robot.find_button_bounds_exact("Sending").ok().flatten() else {
+        eprintln!("SKIP segmented: sending cell not found");
+        return;
+    };
+    let Some(errored) = robot.find_button_bounds_exact("Errored").ok().flatten() else {
+        eprintln!("SKIP segmented: errored cell not found");
+        return;
+    };
+    let (rx, y) = center(receiving);
+    let (sx, _) = center(sending);
+    let (ex, _) = center(errored);
+    let crop = (
+        receiving.0 - 20.0,
+        y - 34.0,
+        (ex - rx) + errored.2 + 40.0,
+        68.0,
+    );
+
+    // Prime: select Errored so the tap flight crosses Errored -> Sending
+    // like the reference.
+    robot.click(ex, y).expect("prime errored");
+    settle(robot, 900);
+    robot.click(sx, y).expect("tap sending");
+    let mut tap_offsets = dense(25.0, 13);
+    tap_offsets.extend_from_slice(&[(50.0, true), (100.0, true), (150.0, true)]);
+    let frames = keyframe_series(robot, &tap_offsets, 0.0);
+    save_series(shot_dir, "segmented-tap-flight", crop, frames.iter());
+    settle(robot, 700);
+
+    // Ride: grab Sending, drag to Receiving, back toward Sending, release.
+    robot.mouse_move(sx, y).expect("hover sending");
+    robot.mouse_down().expect("grab segment lens");
+    let clock = std::time::Instant::now();
+    std::thread::sleep(Duration::from_millis(150));
+    let mut ride = Vec::new();
+    let waypoints = [0.25f32, 0.5, 0.75, 1.0, 0.75, 0.5, 0.25, 0.0, 0.35, 0.7];
+    for t in waypoints {
+        let x = sx + (rx - sx) * t;
+        robot.mouse_move(x, y).expect("ride segment lens");
+        let shot = robot.screenshot().expect("segment ride frame");
+        ride.push((clock.elapsed().as_millis() as f32, shot));
+    }
+    robot.mouse_up().expect("release segment lens");
+    let release_base = clock.elapsed().as_millis() as f32;
+    ride.extend(keyframe_series(
+        robot,
+        &[(0.0, true), (60.0, true), (120.0, true), (250.0, true)],
+        release_base,
+    ));
+    save_series(shot_dir, "segmented-drag", crop, ride.iter());
+    settle(robot, 600);
+    robot.click(rx, y).expect("restore receiving");
+    settle(robot, 800);
 }
 
 /// Reference `on-white/bottom-bar-click` (tap transfer, ~0.9 s) and
@@ -219,44 +300,32 @@ fn capture_on_white(robot: &cranpose::Robot, shot_dir: &Path) {
     robot.click(tr_x, y).expect("prime translate");
     settle(robot, 1500);
     robot.click(conv_x, y).expect("click conversation");
-    let transfer = robot
-        .capture_keyframes(
-            1.0,
-            &[
-                (0.0, true),
-                (80.0, true),
-                (80.0, true),
-                (80.0, true),
-                (120.0, true),
-                (120.0, true),
-                (150.0, true),
-                (150.0, true),
-                (200.0, true),
-            ],
-        )
-        .expect("click transfer keyframes");
+    let mut transfer_offsets = dense(25.0, 13);
+    transfer_offsets.extend_from_slice(&[(50.0, true), (100.0, true), (150.0, true)]);
+    let transfer = keyframe_series(robot, &transfer_offsets, 0.0);
     let bar_crop = (cam_x - 175.0, y - 62.0, 380.0, 124.0);
     save_series(shot_dir, "on-white-click", bar_crop, transfer.iter());
     settle(robot, 900);
 
     robot.mouse_move(cam_x, y).expect("hover camera");
     robot.mouse_down().expect("press camera");
-    let hold = robot
-        .capture_keyframes(1.0, &[(0.0, true), (150.0, true), (350.0, true)])
-        .expect("hold keyframes");
-    let mut held: Vec<_> = hold;
-    for step in 1..=3 {
-        let t = step as f32 / 3.0;
+    let clock = std::time::Instant::now();
+    let mut raise_offsets = dense(40.0, 5);
+    raise_offsets.extend_from_slice(&[(75.0, true), (115.0, true)]);
+    let mut held = keyframe_series(robot, &raise_offsets, 0.0);
+    for step in 1..=6 {
+        let t = step as f32 / 6.0;
         let x = cam_x + (conv_x - cam_x) * t;
         robot.mouse_move(x, y).expect("drag held lens");
-        std::thread::sleep(Duration::from_millis(180));
-        held.push(robot.screenshot().expect("held drag frame"));
+        std::thread::sleep(Duration::from_millis(90));
+        let shot = robot.screenshot().expect("held drag frame");
+        held.push((clock.elapsed().as_millis() as f32, shot));
     }
     robot.mouse_up().expect("release held lens");
-    let release = robot
-        .capture_keyframes(1.0, &[(30.0, true), (150.0, true), (400.0, true)])
-        .expect("release keyframes");
-    held.extend(release);
+    let release_base = clock.elapsed().as_millis() as f32;
+    let mut release_offsets = dense(25.0, 5);
+    release_offsets.extend_from_slice(&[(100.0, true), (250.0, true)]);
+    held.extend(keyframe_series(robot, &release_offsets, release_base));
     save_series(shot_dir, "on-white-click-hold", bar_crop, held.iter());
     settle(robot, 900);
 }
@@ -283,32 +352,31 @@ fn capture_touched_up(robot: &cranpose::Robot, shot_dir: &Path) {
     // the neighboring "..." circle as the finger drifts toward it.
     robot.mouse_move(confirm_x, y).expect("hover action");
     robot.mouse_down().expect("press action");
-    let mut frames = robot
-        .capture_keyframes(1.0, &[(0.0, true), (120.0, true), (250.0, true)])
-        .expect("touch keyframes");
-    for step in 1..=2 {
-        let t = step as f32 / 2.0;
+    let clock = std::time::Instant::now();
+    let mut swell_offsets = dense(40.0, 5);
+    swell_offsets.push((90.0, true));
+    let mut frames = keyframe_series(robot, &swell_offsets, 0.0);
+    for step in 1..=4 {
+        let t = step as f32 / 4.0;
         let x = confirm_x + (more_x - confirm_x) * 0.55 * t;
         robot.mouse_move(x, y).expect("drag action");
-        std::thread::sleep(Duration::from_millis(160));
-        frames.push(robot.screenshot().expect("action drag frame"));
+        std::thread::sleep(Duration::from_millis(80));
+        let shot = robot.screenshot().expect("action drag frame");
+        frames.push((clock.elapsed().as_millis() as f32, shot));
     }
     robot.mouse_up().expect("release action");
-    let release = robot
-        .capture_keyframes(
-            1.0,
-            &[(30.0, true), (120.0, true), (250.0, true), (450.0, true)],
-        )
-        .expect("action release keyframes");
-    frames.extend(release);
+    let release_base = clock.elapsed().as_millis() as f32;
+    let mut release_offsets = dense(25.0, 5);
+    release_offsets.extend_from_slice(&[(50.0, true), (100.0, true), (200.0, true)]);
+    frames.extend(keyframe_series(robot, &release_offsets, release_base));
     settle(robot, 600);
     // Confirming collapses the pair down to the lone "..." (the reference
-    // dissolve tail); pressing "..." expands the actions again.
+    // dissolve tail); pressing "..." expands the actions again. Collapse
+    // labels continue the timeline from 2000 ms.
     robot.click(confirm_x, y).expect("confirm action");
-    let collapse = robot
-        .capture_keyframes(1.0, &[(60.0, true), (250.0, true), (500.0, true)])
-        .expect("collapse keyframes");
-    frames.extend(collapse);
+    let mut collapse_offsets = dense(30.0, 6);
+    collapse_offsets.extend_from_slice(&[(100.0, true), (250.0, true)]);
+    frames.extend(keyframe_series(robot, &collapse_offsets, 2000.0));
     let crop = (more_x - 90.0, y - 55.0, 260.0, 110.0);
     save_series(shot_dir, "touched-up-state", crop, frames.iter());
     settle(robot, 600);
@@ -351,25 +419,64 @@ fn scroll_to_button(
     robot.find_button_bounds_exact(label).ok().flatten()
 }
 
+/// Runs `capture_keyframes` and pairs every captured shot with its
+/// millisecond position on the interaction timeline (`base_ms` + the
+/// cumulative exact-clock offsets), so cheatsheet tiles carry real timing.
+fn keyframe_series(
+    robot: &cranpose::Robot,
+    offsets: &[(f32, bool)],
+    base_ms: f32,
+) -> Vec<(f32, cranpose::RobotScreenshot)> {
+    let shots = robot
+        .capture_keyframes(1.0, offsets)
+        .expect("capture keyframes");
+    let mut shot_iter = shots.into_iter();
+    let mut t = base_ms;
+    let mut out = Vec::new();
+    for (delay, capture) in offsets {
+        t += delay;
+        if *capture {
+            if let Some(shot) = shot_iter.next() {
+                out.push((t, shot));
+            }
+        }
+    }
+    out
+}
+
+/// Dense keyframe schedule: `count` captures spaced `step_ms` apart,
+/// starting at t=0 of the capture window.
+fn dense(step_ms: f32, count: usize) -> Vec<(f32, bool)> {
+    let mut offsets = vec![(0.0, true)];
+    offsets.extend(std::iter::repeat_n(
+        (step_ms, true),
+        count.saturating_sub(1),
+    ));
+    offsets
+}
+
 fn save_series<'a>(
     shot_dir: &Path,
     component: &str,
     crop: (f32, f32, f32, f32),
-    frames: impl Iterator<Item = &'a cranpose::RobotScreenshot>,
+    frames: impl Iterator<Item = &'a (f32, cranpose::RobotScreenshot)>,
 ) {
-    for (index, frame) in frames.enumerate() {
-        save(frame, shot_dir, component, crop, index);
+    for (index, (ms, frame)) in frames.enumerate() {
+        save(frame, shot_dir, component, crop, index, *ms);
     }
 }
 
 /// Saves the frame cropped to the stage region so cheatsheet tiles frame the
 /// component exactly like the reference crops, wherever the page scrolled.
+/// Filenames carry the timeline position (`NN-TTTTms.png`) so the cheatsheet
+/// labels every tile with its millisecond for physics matching.
 fn save(
     shot: &cranpose::RobotScreenshot,
     shot_dir: &Path,
     component: &str,
     crop: (f32, f32, f32, f32),
     index: usize,
+    ms: f32,
 ) {
     let dir = shot_dir.join(component);
     std::fs::create_dir_all(&dir).expect("create component dir");
@@ -381,7 +488,7 @@ fn save(
     let w = ((crop.2 * scale) as u32).min(shot.width - x);
     let h = ((crop.3 * scale) as u32).min(shot.height - y);
     let cropped = image::imageops::crop_imm(&image, x, y, w.max(1), h.max(1)).to_image();
-    let path = dir.join(format!("{index:02}.png"));
+    let path = dir.join(format!("{index:02}-{:04}ms.png", ms.round() as i64));
     cropped.save(&path).expect("save frame");
     println!("saved {}", path.display());
 }
