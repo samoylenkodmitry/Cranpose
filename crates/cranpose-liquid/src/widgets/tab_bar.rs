@@ -147,7 +147,7 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         .tint(neutral_surface_tint(foreground, 0.13, 0.10))
         .blur_radius(0.0)
         .refraction_depth(0.26)
-        .refraction_curve(0.82)
+        .refraction_curve(0.25)
         .dispersion(0.16)
         .lift(0.0)
         .highlight(0.24)
