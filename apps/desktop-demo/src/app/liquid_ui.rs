@@ -165,20 +165,36 @@ fn TouchedUpReferenceStage() {
                 .adaptive_frost(Color::WHITE, 0.12),
         )
         .with_content_color(Color::WHITE);
+    // Reference touched-up lifecycle: confirming dissolves the pair down to
+    // the lone "..." (f_0360-0400); pressing "..." expands the actions again.
+    let confirmed = remember(|| mutableStateOf(false)).with(|s| *s);
     Box(
         Modifier::empty().fill_max_width().height(82.0),
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || {
+            let more_confirmed = confirmed;
+            let check_confirmed = confirmed;
+            let mut items = vec![GlassIconButtonGroupItem::new(
+                icons::MORE_HORIZ,
+                "More grouped action",
+                move || more_confirmed.set(false),
+            )];
+            if !confirmed.get() {
+                items.push(
+                    GlassIconButtonGroupItem::new(
+                        icons::CHECK,
+                        "Confirm grouped action",
+                        move || check_confirmed.set(true),
+                    )
+                    .with_spec(action_spec.clone()),
+                );
+            }
             GlassIconButtonGroup(
                 Modifier::empty(),
                 GlassIconButtonGroupSpec::new(44.0)
                     .with_spacing(8.0)
                     .with_glue_radius(12.0),
-                vec![
-                    GlassIconButtonGroupItem::new(icons::MORE_HORIZ, "More grouped action", || {}),
-                    GlassIconButtonGroupItem::new(icons::CHECK, "Confirm grouped action", || {})
-                        .with_spec(action_spec.clone()),
-                ],
+                items,
             );
         },
     );

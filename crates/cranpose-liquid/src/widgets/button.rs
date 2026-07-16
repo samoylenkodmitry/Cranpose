@@ -600,9 +600,12 @@ pub fn GlassIconButtonGroup(
                     let rest_center = active_index as f32 * pitch + spec.diameter * 0.5;
                     // Ride the finger toward a neighbor, one pitch at most:
                     // approaching the next circle necks the union field.
+                    // Half a pitch keeps the neighbor distinct: the disc
+                    // leans and the glue stretches a thin neck instead of
+                    // the shapes overlapping outright.
                     let ridden = drag_x
                         .get()
-                        .map(|x| x.clamp(rest_center - pitch, rest_center + pitch))
+                        .map(|x| x.clamp(rest_center - pitch * 0.5, rest_center + pitch * 0.5))
                         .unwrap_or(rest_center);
                     let center_x = pad + rest_center + (ridden - rest_center) * progress;
                     let diameter = spec.diameter * (1.0 + (spec.pressed_scale - 1.0) * progress);
@@ -646,7 +649,7 @@ pub fn GlassIconButtonGroup(
                 let ridden = if item_is_active {
                     drag_x
                         .get()
-                        .map(|x| x.clamp(rest_center - pitch, rest_center + pitch))
+                        .map(|x| x.clamp(rest_center - pitch * 0.5, rest_center + pitch * 0.5))
                         .unwrap_or(rest_center)
                 } else {
                     rest_center

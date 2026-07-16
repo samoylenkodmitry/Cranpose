@@ -301,9 +301,19 @@ fn capture_touched_up(robot: &cranpose::Robot, shot_dir: &Path) {
         )
         .expect("action release keyframes");
     frames.extend(release);
+    settle(robot, 600);
+    // Confirming collapses the pair down to the lone "..." (the reference
+    // dissolve tail); pressing "..." expands the actions again.
+    robot.click(confirm_x, y).expect("confirm action");
+    let collapse = robot
+        .capture_keyframes(1.0, &[(60.0, true), (250.0, true), (500.0, true)])
+        .expect("collapse keyframes");
+    frames.extend(collapse);
     let crop = (more_x - 90.0, y - 55.0, 260.0, 110.0);
     save_series(shot_dir, "touched-up-state", crop, frames.iter());
     settle(robot, 600);
+    robot.click(more_x, y).expect("restore actions");
+    settle(robot, 900);
 }
 
 // ---------------------------------------------------------------------------
