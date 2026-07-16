@@ -279,14 +279,16 @@ fn capture_touched_up(robot: &cranpose::Robot, shot_dir: &Path) {
     let (more_x, y) = center(more);
     let (confirm_x, _) = center(confirm);
 
-    robot.mouse_move(more_x, y).expect("hover action");
+    // The reference presses the CONFIRM disc: it swells, then necks into
+    // the neighboring "..." circle as the finger drifts toward it.
+    robot.mouse_move(confirm_x, y).expect("hover action");
     robot.mouse_down().expect("press action");
     let mut frames = robot
         .capture_keyframes(1.0, &[(0.0, true), (120.0, true), (250.0, true)])
         .expect("touch keyframes");
     for step in 1..=2 {
         let t = step as f32 / 2.0;
-        let x = more_x + (confirm_x - more_x) * 0.6 * t;
+        let x = confirm_x + (more_x - confirm_x) * 0.6 * t;
         robot.mouse_move(x, y).expect("drag action");
         std::thread::sleep(Duration::from_millis(160));
         frames.push(robot.screenshot().expect("action drag frame"));
