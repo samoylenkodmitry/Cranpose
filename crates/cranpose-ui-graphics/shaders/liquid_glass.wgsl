@@ -226,6 +226,7 @@ fn wcksrd_optics(
     refraction_curve: f32,
     gradient_extent: f32,
     edge_extent: f32,
+    edge_sharpness: f32,
 ) -> OpticalSample {
     let inradius = max(min(half_size.x, half_size.y), 1.0);
     let lens_refraction = max(inradius * refraction_depth, 0.001);
@@ -237,8 +238,8 @@ fn wcksrd_optics(
         0.0,
         1.0,
     );
-    let border = clamp(outer_interior * 16.0, 0.0, 1.0)
-        - clamp(interior * 16.0, 0.0, 1.0);
+    let border = clamp(outer_interior * edge_sharpness, 0.0, 1.0)
+        - clamp(interior * edge_sharpness, 0.0, 1.0);
     let gradient_band = wcksrd_meniscus(
         distance,
         lens_refraction,
@@ -567,6 +568,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // viewport midpoint. Components move that box, so translate the optical
     // origin with its live SDF center instead of refracting toward the screen.
     let sampling_position = p;
+    // Interactive lenses draw the reference's crisp ~1px rim line; surface
+    // glass keeps its finer band.
+    let edge_sharpness = mix(16.0, 8.0, rim_style);
     let optical_sample = wcksrd_optics(
         p,
         sampling_position,
@@ -576,6 +580,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         refraction_curve,
         gradient_extent,
         edge_extent,
+        edge_sharpness,
     );
     let interior = optical_sample.interior;
 
