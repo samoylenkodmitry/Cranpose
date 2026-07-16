@@ -472,6 +472,9 @@ pub fn GlassIconButtonGroup(
     let render_items = live_items.borrow().clone();
 
     let active = remember(|| mutableStateOf(None::<usize>)).with(|state| *state);
+    // The held disc rides the finger toward a neighbor (the reference press
+    // drifts and necks into the adjacent circle); None between gestures.
+    let drag_x = remember(|| mutableStateOf(None::<f32>)).with(|state| *state);
     let last_active = remember(|| Rc::new(Cell::new(0usize))).with(Rc::clone);
     if let Some(index) = active.get() {
         last_active.set(index.min(count - 1));
@@ -504,16 +507,19 @@ pub fn GlassIconButtonGroup(
                                     );
                                     if let Some(index) = down_index {
                                         active.set(Some(index));
+                                        drag_x.set(Some(event.position.x));
                                         default_haptics().perform(HapticFeedback::Selection);
                                         event.consume();
                                     }
                                 }
                                 PointerEventKind::Move if down_index.is_some() => {
+                                    drag_x.set(Some(event.position.x));
                                     event.consume();
                                 }
                                 PointerEventKind::Up => {
                                     let pressed_index = down_index.take();
                                     active.set(None);
+                                    drag_x.set(None);
                                     if let Some(index) = pressed_index {
                                         let released_index = icon_group_item_at(
                                             event.position.x,
@@ -537,6 +543,7 @@ pub fn GlassIconButtonGroup(
                                 }
                                 PointerEventKind::Cancel if down_index.take().is_some() => {
                                     active.set(None);
+                                    drag_x.set(None);
                                     event.consume();
                                 }
                                 _ => {}
@@ -552,28 +559,52 @@ pub fn GlassIconButtonGroup(
         let pitch = spec.diameter + spec.spacing;
         let active_index = last_active.get().min(count - 1);
 
-        // The union field owns only the connection and shared refraction. It
-        // sits behind the item faces so a prominent action keeps its own tint
-        // instead of being washed through a second white lens.
+        // The union field owns the connection and shared refraction. It sits
+        // behind the item faces, and while pressed it carries the ACTIVE
+        // item's tint so the neck toward a neighbor flows in that material
+        // (the reference bridge is the confirm action's cyan, not plain
+        // glass); the tint alpha rides press activity, so the resting field
+        // stays a whisper.
         let pad = spec.glue_radius + spec.diameter * (spec.pressed_scale - 1.0) * 0.5 + 4.0;
         let node_width = width + pad * 2.0;
         let node_height = spec.diameter * spec.pressed_scale + pad * 2.0;
         let shared_progress = press_progress;
         let shared_last_active = Rc::clone(&last_active);
+        let union_tint = render_items
+            .get(active_index)
+            .and_then(|item| {
+                item.spec
+                    .resolve_material(&colors, item.spec.icon_color(&colors))
+            })
+            .and_then(|material| material.tint)
+            .map(|tint| tint.with_alpha(0.45))
+            .unwrap_or(Color::WHITE.with_alpha(0.035));
         let shared = Modifier::empty()
             .required_size(Size::new(node_width, node_height))
             .offset(-pad, (spec.diameter - node_height) * 0.5)
             .glass_effect_with(
-                Glass::lens()
-                    .shape(LiquidShape::Circle)
-                    .tint(Color::WHITE.with_alpha(0.035))
+                // Regular variant: the tint covers the whole union field
+                // uniformly, so the thin neck carries the material — the
+                // lens variant's interior ramp fades tint exactly there.
+                Glass::regular()
+                    .blur_radius(0.0)
+                    .tint(union_tint)
+                    .lift(0.0)
                     .highlight(0.48)
+                    .shadow(false)
                     .no_clip(),
                 move || {
                     let progress = shared_progress.get().clamp(0.0, 1.0);
                     let active_index = shared_last_active.get().min(count - 1);
                     let center_y = node_height * 0.5;
-                    let center_x = pad + active_index as f32 * pitch + spec.diameter * 0.5;
+                    let rest_center = active_index as f32 * pitch + spec.diameter * 0.5;
+                    // Ride the finger toward a neighbor, one pitch at most:
+                    // approaching the next circle necks the union field.
+                    let ridden = drag_x
+                        .get()
+                        .map(|x| x.clamp(rest_center - pitch, rest_center + pitch))
+                        .unwrap_or(rest_center);
+                    let center_x = pad + rest_center + (ridden - rest_center) * progress;
                     let diameter = spec.diameter * (1.0 + (spec.pressed_scale - 1.0) * progress);
                     GlassDynamics {
                         activity: Some(progress),
@@ -604,6 +635,7 @@ pub fn GlassIconButtonGroup(
             let outer = Modifier::empty()
                 .size(Size::new(spec.diameter, spec.diameter))
                 .offset(x, 0.0);
+            let rest_center = index as f32 * pitch + spec.diameter * 0.5;
             let scale_layer = Modifier::empty().graphics_layer(move || {
                 let progress = if item_is_active {
                     surface_progress.get().clamp(0.0, 1.0)
@@ -611,7 +643,16 @@ pub fn GlassIconButtonGroup(
                     0.0
                 };
                 let scale = 1.0 + (spec.pressed_scale - 1.0) * progress;
+                let ridden = if item_is_active {
+                    drag_x
+                        .get()
+                        .map(|x| x.clamp(rest_center - pitch, rest_center + pitch))
+                        .unwrap_or(rest_center)
+                } else {
+                    rest_center
+                };
                 GraphicsLayer {
+                    translation_x: (ridden - rest_center) * progress,
                     scale_x: scale,
                     scale_y: scale,
                     ..Default::default()

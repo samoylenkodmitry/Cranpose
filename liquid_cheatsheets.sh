@@ -32,6 +32,8 @@ fi
 # Tiles are normalized to one height so TARGET (iPhone 3x) and ACTUAL
 # (robot scale 1) frames compare at equal visual size.
 TILE_HEIGHT=200
+# grid <out> <tiles> <files...>; set GRID_CROP=WxH+X+Y to crop every frame
+# (robot full-window shots) before the tile resize.
 grid() {
     local out="$1" tiles="$2"
     shift 2
@@ -40,7 +42,12 @@ grid() {
     local i=0
     for f in "$@"; do
         [ -f "$f" ] || continue
-        magick "$f" -resize "x$TILE_HEIGHT" "$tmp/$(printf '%03d' $i).png"
+        if [ -n "${GRID_CROP:-}" ]; then
+            magick "$f" -crop "$GRID_CROP" +repage -resize "x$TILE_HEIGHT" \
+                "$tmp/$(printf '%03d' $i).png"
+        else
+            magick "$f" -resize "x$TILE_HEIGHT" "$tmp/$(printf '%03d' $i).png"
+        fi
         i=$((i + 1))
     done
     if [ "$i" -eq 0 ]; then
@@ -120,7 +127,7 @@ grid "$OUT/_loupe_t.png" 3x3 \
     "$T"/text-selection/loupe-grow/g_0{01,05,09}.png \
     "$T"/text-selection/loupe-steady/h_0{01,30,61}.png \
     "$T"/text-selection/loupe-dissolve/i_0{01,07,13}.png
-grid "$OUT/_loupe_a.png" 3x3 \
+GRID_CROP="620x460+330+10" grid "$OUT/_loupe_a.png" 3x3 \
     "$SHOTS"/loupe/02-birth-017ms.png "$SHOTS"/loupe/03-grow-100ms.png \
     "$SHOTS"/loupe/05-grow-200ms.png "$SHOTS"/loupe/06-follow-a.png \
     "$SHOTS"/loupe/08-steady.png "$SHOTS"/loupe/09-collapse-033ms.png \
@@ -130,7 +137,7 @@ pair text-selection-loupe "$OUT/_loupe_t.png" "$OUT/_loupe_a.png"
 
 mapfile -t menu_mat < <(subsample "$T/text-selection/menu-materialize" 4)
 grid "$OUT/_mm_t.png" 2x2 "${menu_mat[@]}"
-grid "$OUT/_mm_a.png" 2x2 \
+GRID_CROP="1060x260+40+300" grid "$OUT/_mm_a.png" 2x2 \
     "$SHOTS"/loupe/11b-gone-270ms.png "$SHOTS"/loupe/11c-menu-350ms.png \
     "$SHOTS"/loupe/11d-menu-450ms.png "$SHOTS"/loupe/12-menu-returned.png
 pair menu-materialize "$OUT/_mm_t.png" "$OUT/_mm_a.png"

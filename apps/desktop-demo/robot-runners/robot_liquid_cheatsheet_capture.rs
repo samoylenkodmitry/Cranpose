@@ -288,7 +288,7 @@ fn capture_touched_up(robot: &cranpose::Robot, shot_dir: &Path) {
         .expect("touch keyframes");
     for step in 1..=2 {
         let t = step as f32 / 2.0;
-        let x = confirm_x + (more_x - confirm_x) * 0.6 * t;
+        let x = confirm_x + (more_x - confirm_x) * 0.55 * t;
         robot.mouse_move(x, y).expect("drag action");
         std::thread::sleep(Duration::from_millis(160));
         frames.push(robot.screenshot().expect("action drag frame"));
