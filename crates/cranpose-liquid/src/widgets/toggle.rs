@@ -52,13 +52,16 @@ fn toggle_lens_material() -> Glass {
         .shape(LiquidShape::Capsule)
         .tint(cranpose_ui_graphics::Color::WHITE.with_alpha(0.02))
         .blur_radius(0.0)
-        .saturation(0.90)
+        // The reference lens transmits the track at full saturation with a
+        // clear face and vivid chromatic rim (toggle-press cheatsheet); the
+        // milky wash came from over-absorbing the transmitted ray.
+        .saturation(1.0)
         .refraction_depth(0.24)
         .refraction_curve(0.25)
-        .transmission_refraction(0.22)
-        .meniscus_absorption(0.92)
-        .dispersion(0.42)
-        .highlight(0.36)
+        .transmission_refraction(0.35)
+        .meniscus_absorption(0.70)
+        .dispersion(0.60)
+        .highlight(0.22)
         .lift(0.0)
         .shadow_style(GlassShadow::new(
             cranpose_ui_graphics::Color::BLACK.with_alpha(0.14),
