@@ -163,6 +163,11 @@ fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         .saturation(1.12)
         .lift(neutral_surface_lift(foreground, 0.34, -0.24))
         .highlight(0.20)
+        // The reference bar folds nearby content inside its long edges:
+        // section headers under the top edge render mirrored upside-down
+        // (bar_headers_folded) — the same pure-displacement fold as the
+        // toggle, shallower.
+        .fold_depth(8.0)
         .adaptive_frost(foreground, 0.28)
 }
 
