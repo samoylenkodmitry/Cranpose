@@ -892,11 +892,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         if loupe_mode > 0.5 {
             dispersion_band = meniscus_core * coverage;
         }
+        // The reference lens ring carries color AROUND the whole rim — the
+        // caps included (toggle-press frames) — so the spectral term keeps
+        // a higher axis floor than the specular caustic.
+        let dispersion_axis = 0.45 + 0.55 * pow(abs(outward_normal.y), 1.5);
         let dispersion_weight = clamp(
             dispersion_band
                 * rim_style
                 * dispersion_strength
-                * long_edge_caustic,
+                * dispersion_axis,
             0.0,
             1.0,
         );
