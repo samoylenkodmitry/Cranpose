@@ -639,14 +639,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     var fold_presence = 0.0;
     var fold_tau = 0.0;
     let fold_strength = get_float(86u);
-    if loupe_mode <= 0.5 && fold_strength > 0.0 {
-        let fold_band_start = get_float(84u);
-        if fold_band_start > 0.0 && fold_band_start < 1.0 {
+    let fold_depth_px = get_float(88u) * optical_scale;
+    if loupe_mode <= 0.5 && fold_strength > 0.0 && fold_depth_px > 0.0 {
+        let r_in_fold = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
+        let fold_band_start = clamp(1.0 - fold_depth_px / r_in_fold, 0.05, 0.95);
+        {
             var fold_peak = get_float(85u);
             if fold_peak <= 0.0 {
                 fold_peak = 0.94;
             }
-            let r_in_fold = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
             let xr = 1.0 - clamp(-d / r_in_fold, 0.0, 1.0);
             if xr > fold_band_start {
                 let crest_xr = fold_band_start + 0.3 * (1.0 - fold_band_start);

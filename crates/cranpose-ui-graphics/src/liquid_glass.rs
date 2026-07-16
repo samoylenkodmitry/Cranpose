@@ -22,10 +22,8 @@ pub const GLASS_EFFECT_DENSITY_UNIFORM: usize = 99;
 /// Uniform slot controlling energy absorbed by the meniscus transmission
 /// path. Reflection and spectral return remain independent.
 pub const GLASS_MENISCUS_ABSORPTION_UNIFORM: usize = 100;
-/// Uniform slot containing the rim-fold band start as a depth fraction of the
-/// shape inradius (0..1). Shared by the loupe and interactive lenses; zero
-/// leaves interactive rims fold-free while the loupe falls back to its own
-/// default.
+/// Uniform slot containing the loupe's fold band start as a depth fraction
+/// of the shape inradius (0..1).
 pub const GLASS_FOLD_BAND_START_UNIFORM: usize = 84;
 /// Uniform slot containing the fold's sampling reach at the crest, in
 /// inradius units.
@@ -34,6 +32,10 @@ pub const GLASS_FOLD_PEAK_UNIFORM: usize = 85;
 /// interactive rim fold; independent of the rim styling so quiet surfaces
 /// can fold without adopting lens edge lighting).
 pub const GLASS_FOLD_STRENGTH_UNIFORM: usize = 86;
+/// Uniform slot containing the interactive rim-fold band depth in dp. The
+/// shader resolves it against the live shape inradius, so morphing and
+/// cover-mode lenses share one optic.
+pub const GLASS_FOLD_DEPTH_UNIFORM: usize = 88;
 /// Uniform slot containing the uniform magnification of refracted foreground
 /// content riding a lens (input mode 2). Zero or negative reads as identity.
 pub const GLASS_CONTENT_MAGNIFICATION_UNIFORM: usize = 92;
@@ -334,11 +336,7 @@ pub fn liquid_menu_glass_effect(
     // findings' "distortions at the ends") without the interactive lenses'
     // edge lighting — the measured top bevel stays untouched. The band
     // spans the outer ~5dp of the capsule inradius.
-    let menu_inradius = 0.5 * w.min(h);
-    shader.set_float(
-        GLASS_FOLD_BAND_START_UNIFORM,
-        (1.0 - 5.0 / menu_inradius.max(1.0)).clamp(0.0, 0.95),
-    );
+    shader.set_float(GLASS_FOLD_DEPTH_UNIFORM, 5.0);
     shader.set_float(GLASS_FOLD_PEAK_UNIFORM, 0.94);
     shader.set_float(GLASS_FOLD_STRENGTH_UNIFORM, 0.35 * p);
     shader.set_float(11, 0.19 * p); // rim intensity (the reference settled

@@ -9,7 +9,7 @@ use cranpose_ui::Modifier;
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
-    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_BAND_START_UNIFORM, GLASS_FOLD_PEAK_UNIFORM,
+    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM, GLASS_FOLD_PEAK_UNIFORM,
     GLASS_FOLD_STRENGTH_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
     GLASS_RESTING_TINT_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
 };
@@ -277,6 +277,9 @@ pub struct Glass {
     /// interior mirrored toward the edge (the loupe optic run radially);
     /// zero disables the fold.
     pub fold_depth: f32,
+    /// Mirror strength of the fold band (1 = the full lens fold; quiet
+    /// surfaces fold subtler without adopting lens edge lighting).
+    pub fold_strength: f32,
     /// Specular rim intensity.
     pub highlight: f32,
     /// Screen-lift override (brightening toward white; negative darkens).
@@ -310,6 +313,7 @@ impl Glass {
             transmission_refraction: 1.0,
             meniscus_absorption: 1.0,
             fold_depth: 0.0,
+            fold_strength: 1.0,
             highlight: 0.9,
             lift: None,
             shadow: true,
@@ -343,6 +347,7 @@ impl Glass {
             transmission_refraction: 1.0,
             meniscus_absorption: 1.0,
             fold_depth: 6.0,
+            fold_strength: 1.0,
             highlight: 1.15,
             lift: None,
             shadow: true,
@@ -401,6 +406,12 @@ impl Glass {
     /// Sets the rim fold band depth in dp (zero disables the fold).
     pub fn fold_depth(mut self, depth_dp: f32) -> Self {
         self.fold_depth = depth_dp.max(0.0);
+        self
+    }
+
+    /// Sets the fold band's mirror strength (1 = the full lens fold).
+    pub fn fold_strength(mut self, strength: f32) -> Self {
+        self.fold_strength = strength.clamp(0.0, 1.0);
         self
     }
 
@@ -510,6 +521,7 @@ impl Glass {
             transmission_refraction: self.transmission_refraction,
             meniscus_absorption: self.meniscus_absorption,
             fold_depth: self.fold_depth,
+            fold_strength: self.fold_strength,
             highlight: self.highlight,
             lift,
             contrast: if self.variant == GlassVariant::Lens {
@@ -556,6 +568,7 @@ pub(crate) struct ResolvedGlass {
     pub transmission_refraction: f32,
     pub meniscus_absorption: f32,
     pub fold_depth: f32,
+    pub fold_strength: f32,
     pub highlight: f32,
     pub lift: f32,
     pub contrast: f32,
@@ -645,16 +658,6 @@ impl ResolvedGlass {
             shader.set_float(31, morph.glue);
             shader.set_float(32, morph.wobble_amplitude * activity);
             shader.set_float(33, morph.wobble_phase);
-            // The rim fold band: its dp depth is expressed as a depth fraction
-            // of the live primary inradius so the band rides the morphing
-            // shape. Zero depth leaves the uniforms unset (fold off).
-            if self.fold_depth > 0.0 {
-                let min_half = (w.min(h) * 0.5).max(f32::EPSILON);
-                let band_start = (1.0 - self.fold_depth / min_half).clamp(0.0, 0.95);
-                shader.set_float(GLASS_FOLD_BAND_START_UNIFORM, band_start);
-                shader.set_float(GLASS_FOLD_PEAK_UNIFORM, WCKSRD_FOLD_PEAK);
-                shader.set_float(GLASS_FOLD_STRENGTH_UNIFORM, self.rim_style * activity);
-            }
             shader.set_float(26, morph.bulge_amplitude * activity);
             shader.set_float(27, morph.bulge_direction);
             shader.set_float(110, morph.ellipse_blend.clamp(0.0, 1.0) * activity);
@@ -674,6 +677,15 @@ impl ResolvedGlass {
             // the platform density (node size only known at render time).
             shader.set_float2(0, 0.0, 0.0);
             shader.set_float(6, self.shape.shader_radius_px(density));
+        }
+        // The rim fold band travels with every geometry mode: its dp depth is
+        // resolved against the live shape inradius in-shader, so morphing
+        // lenses and cover-mode lenses share one optic. Zero depth leaves the
+        // uniforms unset (fold off).
+        if self.fold_depth > 0.0 {
+            shader.set_float(GLASS_FOLD_DEPTH_UNIFORM, self.fold_depth);
+            shader.set_float(GLASS_FOLD_PEAK_UNIFORM, WCKSRD_FOLD_PEAK);
+            shader.set_float(GLASS_FOLD_STRENGTH_UNIFORM, self.fold_strength * activity);
         }
         shader.set_float(9, self.refraction_depth * activity);
         shader.set_float(
