@@ -58,10 +58,12 @@ fn main() {
             );
             shot(&robot, &shot_dir, "01-top");
 
-            if std::env::var_os("CRANPOSE_LIQUID_SEGMENTED_ONLY").is_some() {
+            let focused_controls = std::env::var_os("CRANPOSE_LIQUID_SEGMENTED_ONLY").is_some()
+                || std::env::var_os("CRANPOSE_LIQUID_HEADER_ONLY").is_some();
+            if focused_controls {
                 capture_control_visuals(&robot, &shot_dir);
                 println!(
-                    "PASS: liquid segmented comparison written to {}",
+                    "PASS: focused liquid control comparison written to {}",
                     shot_dir.display()
                 );
                 robot.exit().expect("exit");
@@ -403,6 +405,9 @@ fn capture_control_visuals(robot: &cranpose::Robot, shot_dir: &Path) {
             &format!("01d-header-scroll-{frame:02}"),
             2.0,
         );
+    }
+    if std::env::var_os("CRANPOSE_LIQUID_HEADER_ONLY").is_some() {
+        return;
     }
     scroll_text_to_y(robot, "SEGMENTED", 300.0);
     settle(robot, 500);

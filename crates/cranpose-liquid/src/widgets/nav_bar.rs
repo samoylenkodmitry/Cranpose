@@ -109,9 +109,12 @@ pub fn LiquidNavBar(
             .glass_effect_with(
                 Glass::regular()
                     .shape(LiquidShape::RoundedRect(0.0))
-                    .blur_radius(8.0)
-                    .saturation(1.0)
+                    .blur_radius(16.0)
+                    .saturation(1.15)
+                    .refraction_depth(0.0)
                     .transmission_refraction(0.0)
+                    .highlight(0.18)
+                    .adaptive_frost(colors.label, 0.75)
                     .shadow(false),
                 move || GlassDynamics {
                     activity: Some(progress),
