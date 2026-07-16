@@ -1183,9 +1183,20 @@ pub fn LiquidMenu(
                     ))
                     .no_clip();
                 let resize_from = Rc::clone(&resize_from_h);
+                // The hovered/drag-through row lights the SURFACE via the
+                // touch glow (saturation + soft light under the finger),
+                // not just a flat recolor: composition publishes the active
+                // row's center; the glass reads it per frame.
+                let glow_point: Rc<Cell<Option<(f32, f32)>>> =
+                    remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
+                let glow_for_glass = Rc::clone(&glow_point);
+                let glass_node_origin = node_origin;
                 let card = Modifier::empty()
                     .report_size(Rc::clone(&node_size))
                     .glass_effect_with(glass, move || {
+                        let glow_touch = glow_for_glass.get().map(|(x, y)| {
+                            (x - glass_node_origin.x, y - glass_node_origin.y, 1.0f32)
+                        });
                         let size = morph_size.get();
                         let measured_h = (size.height - anchor_zone).max(24.0);
                         // Accordion resize: spring from the previous measured
@@ -1263,6 +1274,7 @@ pub fn LiquidMenu(
                         };
                         GlassDynamics {
                             activity: Some(activity),
+                            touch: glow_touch,
                             morph: Some(GlassMorph {
                                 node_size: (size.width.max(1.0), size.height.max(1.0)),
                                 primary,
@@ -1284,6 +1296,11 @@ pub fn LiquidMenu(
                 // Finger/pointer sliding through the menu highlights the row
                 // under it (release selects) — the iOS drag-through-menu.
                 let hovered = remember(|| mutableStateOf(Option::<usize>::None)).with(|s| *s);
+                let glow_row = gesture_hover.or(hovered.get());
+                glow_point.set(glow_row.map(|index| {
+                    let rect = gesture.item_rect(index).get();
+                    (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5)
+                }));
                 let gesture = gesture.clone();
                 let source_phase =
                     menu_absorbed_visual_phase(appear, menu_geometry_phase(expanded, appear).path);
@@ -1499,9 +1516,9 @@ fn menu_item_row(
     };
     let is_hovered = hovered.get() == Some(index) || gesture_hover == Some(index);
     let highlight = if colors.is_dark {
-        cranpose_ui_graphics::Color::from_rgba_u8(120, 120, 128, 72)
+        cranpose_ui_graphics::Color::from_rgba_u8(120, 120, 128, 44)
     } else {
-        cranpose_ui_graphics::Color::from_rgba_u8(120, 120, 128, 48)
+        cranpose_ui_graphics::Color::from_rgba_u8(120, 120, 128, 30)
     };
     let row_label = item.label.clone();
     let keeps_open = item.keeps_open;
