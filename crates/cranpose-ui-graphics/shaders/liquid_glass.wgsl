@@ -813,15 +813,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             mix(forward_dispersion, reflected_dispersion, spectral_reflection_mix);
         // The reference fringe is a WIDE saturated band (~2-3dp on the
         // toggle rims), not the hairline the pow-6 transmission band traces:
-        // the spectral return gets its own gentler falloff.
-        let dispersion_band = pow(
-            clamp(
-                wcksrd_meniscus(meniscus_distance, lens_refraction, gradient_extent),
-                0.0,
-                1.0,
-            ),
-            3.0,
-        ) * coverage;
+        // the spectral return follows the same meniscus at half the falloff
+        // exponent (sqrt of the shared pow-6 value — no second evaluation).
+        let dispersion_band = sqrt(meniscus_core) * coverage;
         let dispersion_weight = clamp(
             dispersion_band
                 * rim_style
