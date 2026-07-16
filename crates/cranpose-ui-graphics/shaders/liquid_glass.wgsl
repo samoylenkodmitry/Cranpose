@@ -704,6 +704,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // the rim, the reference toggle's "U". No color terms ride on it, so
     // white surround mirrors white and colored tracks mirror themselves.
     let fold_depth_px = get_float(88u) * optical_scale;
+    var fold_absorb = 0.0;
     if loupe_mode <= 0.5 && fold_depth_px > 0.0 {
         let r_in_fold = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
         let fold_band_start = clamp(1.0 - fold_depth_px / r_in_fold, 0.05, 0.95);
@@ -719,6 +720,10 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             let fold_presence = smoothstep(0.0, 0.12, fold_tau);
             base_displacement = base_displacement
                 + outward_normal * (s_units - xr) * r_in_fold * fold_presence;
+            // Grazing rays traverse the folded material twice: the return
+            // darkens by the transmitted color itself near the rim (sage
+            // doubles into its saturated turn line; white stays white).
+            fold_absorb = smoothstep(0.62, 1.0, fold_tau) * 0.35;
         }
     }
 
@@ -733,6 +738,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     );
     let plain_path = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
     var rgb = transmitted_path.rgb;
+    if fold_absorb > 0.0 {
+        rgb = rgb * mix(vec3<f32>(1.0), rgb, fold_absorb);
+    }
     var outer_rgb = plain_path.rgb;
     var alpha = transmitted_path.a;
     if loupe_seam_mask > 0.0 {

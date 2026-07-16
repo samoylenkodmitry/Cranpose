@@ -40,8 +40,10 @@ const LENS_TRAVEL_LEAN: f32 = 7.0;
 const LENS_PAD: f32 = 10.0;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
-const LENS_RELEASE_LINGER_MS: u64 = 650;
-const LENS_RELEASE_FADE_MS: u64 = 500;
+// The flight itself now carries the raised lens; the tail after arrival
+// stays short so the thumb rematerializes on the reference clock.
+const LENS_RELEASE_LINGER_MS: u64 = 250;
+const LENS_RELEASE_FADE_MS: u64 = 400;
 
 fn toggle_track_motion() -> AnimationType {
     AnimationType::Tween(AnimationSpec::tween(300, Easing::EaseInOut).with_delay(33))
@@ -195,10 +197,18 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     // Lens presence: springs to 1 fast on press (the glass materializes in
     // ~120ms), decays slowly after release (the reference lens lingers
     // through the settle flight for ~0.6s before the white thumb returns).
-    let lens_target = if pressed.get() { 1.0 } else { 0.0 };
+    // A quick TAP holds the lens raised through the whole flip flight —
+    // the reference shows the full glass riding the thumb to the far end,
+    // not a faint trace of a barely-risen press.
+    let thumb_in_flight = (thumb_x.get() - target_x).abs() > 1.5;
+    let lens_target = if pressed.get() || thumb_in_flight {
+        1.0
+    } else {
+        0.0
+    };
     let lens_progress = animateFloatAsState(
         lens_target,
-        if pressed.get() {
+        if pressed.get() || thumb_in_flight {
             spring(0.9, 1400.0)
         } else {
             toggle_lens_release()

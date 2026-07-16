@@ -147,6 +147,10 @@ fn smoothstep01(value: f32) -> f32 {
 /// shape, rise, and optical opacity in both directions.
 struct LoupeState {
     progress: RefCell<Animatable<f32>>,
+    /// Low-passed horizontal travel (dp/frame) — the loupe is a droplet and
+    /// stretches along its motion instead of gliding rigidly.
+    travel: Cell<f32>,
+    last_focus_x: Cell<f32>,
     /// The last target shown; kept while the bubble deflates after release.
     shown: RefCell<Option<LoupeTarget>>,
     /// Whether the loupe was active on the previous recomposition.
@@ -162,6 +166,8 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
         let runtime = with_current_composer(|composer| composer.runtime_handle());
         Rc::new(LoupeState {
             progress: RefCell::new(Animatable::new(0.0, runtime)),
+            travel: Cell::new(0.0),
+            last_focus_x: Cell::new(f32::NAN),
             shown: RefCell::new(None),
             was_active: Cell::new(false),
         })
@@ -209,8 +215,20 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     );
     let optic = loupe_optical_activity(p);
 
-    let width = LOUPE_WIDTH * pose.width_frac;
-    let height = LOUPE_HEIGHT * pose.height_frac;
+    // Droplet motion: stretch along travel with the low-passed drag speed
+    // (the reference loupe visibly deforms while following, area conserved).
+    let last_x = state.last_focus_x.get();
+    let dx = if last_x.is_finite() {
+        shown.focus_x - last_x
+    } else {
+        0.0
+    };
+    state.last_focus_x.set(shown.focus_x);
+    let travel = state.travel.get() * 0.72 + dx * 0.28;
+    state.travel.set(travel);
+    let stretch = 1.0 + (travel.abs() * 0.022).clamp(0.0, 0.10);
+    let width = LOUPE_WIDTH * pose.width_frac * stretch;
+    let height = LOUPE_HEIGHT * pose.height_frac / stretch.sqrt();
     let center_x = shown.focus_x;
     let center_y = shown.line_mid_y - LOUPE_RISE * pose.rise_frac;
     // The lens looks at the line (the focus), which sits below the risen

@@ -148,6 +148,7 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         .blur_radius(0.0)
         .refraction_depth(0.26)
         .refraction_curve(0.25)
+        .fold_depth(6.0)
         .dispersion(0.24)
         .lift(0.0)
         .highlight(0.24)
@@ -161,7 +162,7 @@ fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         // orange/purple vivid through the glass (bottom-bar-form sheet);
         // the stronger wash read pale.
         .saturation(1.12)
-        .lift(neutral_surface_lift(foreground, 0.34, -0.24))
+        .lift(neutral_surface_lift(foreground, 0.30, -0.24))
         .highlight(0.20)
         // The reference bar folds nearby content inside its long edges:
         // section headers under the top edge render mirrored upside-down
@@ -629,13 +630,12 @@ fn LiquidTabBarLayout(
                                                                     active_pointer = Some(event.id);
                                                                     moved = false;
                                                                     down_x = event.position.x;
+                                                                    // Raise IN PLACE: a tap on
+                                                                    // another cell must FLY the
+                                                                    // lens there on release, not
+                                                                    // teleport it to the finger.
                                                                     lens_axis.begin(
-                                                                        tab_lens_left(
-                                                                            event.position.x,
-                                                                            tab_width,
-                                                                            count,
-                                                                            has_accessory,
-                                                                        ),
+                                                                        lens_axis.value(),
                                                                         event.time_ms,
                                                                     );
                                                                     lens_pressed.set(true);
