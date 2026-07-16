@@ -96,8 +96,12 @@ fn capture_toggle_press(robot: &cranpose::Robot, shot_dir: &Path) {
 }
 
 /// Reference `menu-open`: 108 frames @60fps (1.8 s) — the nav "..." button
-/// swells into the droplet; content materializes near settle.
+/// swells into the droplet; content materializes near settle. The reference
+/// droplet grows over WHITE list content, so park the session cards under
+/// the nav anchor first.
 fn capture_menu_open(robot: &cranpose::Robot, shot_dir: &Path) {
+    let _ = scroll_to_button(robot, "Today", 740.0);
+    settle(robot, 400);
     robot.click(858.0, 122.0).expect("open menu");
     let grow = robot
         .capture_keyframes(
