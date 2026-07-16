@@ -303,3 +303,14 @@ the target track center. Align a stable internal feature first (the track
 center, bar top, or text baseline), keep both images at native device scale,
 and only then measure the optical silhouette. Shadows and white-on-white glass
 edges are not reliable geometry anchors.
+
+## Editing liquid_glass.wgsl: validate with render-wgpu tests FIRST
+
+`cargo test -p cranpose-ui-graphics -p cranpose-liquid` does NOT parse the
+WGSL — the naga validation lives in
+`cargo test -p cranpose-render-wgpu --lib shader_cache`. A shader that fails
+validation does not panic the robot runners: every glass effect silently
+disappears, so morphs render as full-rect cards, lenses stop following the
+finger, and the loupe never raises. If several unrelated liquid robots start
+failing with "frozen geometry" symptoms at once, suspect a WGSL identifier
+error before debugging any widget.

@@ -22,6 +22,17 @@ pub const GLASS_EFFECT_DENSITY_UNIFORM: usize = 99;
 /// Uniform slot controlling energy absorbed by the meniscus transmission
 /// path. Reflection and spectral return remain independent.
 pub const GLASS_MENISCUS_ABSORPTION_UNIFORM: usize = 100;
+/// Uniform slot containing the rim-fold band start as a depth fraction of the
+/// shape inradius (0..1). Shared by the loupe and interactive lenses; zero
+/// leaves interactive rims fold-free while the loupe falls back to its own
+/// default.
+pub const GLASS_FOLD_BAND_START_UNIFORM: usize = 84;
+/// Uniform slot containing the fold's sampling reach at the crest, in
+/// inradius units.
+pub const GLASS_FOLD_PEAK_UNIFORM: usize = 85;
+/// Uniform slot containing the uniform magnification of refracted foreground
+/// content riding a lens (input mode 2). Zero or negative reads as identity.
+pub const GLASS_CONTENT_MAGNIFICATION_UNIFORM: usize = 92;
 /// Uniform slot containing continuous optical activity (identity at zero).
 pub const GLASS_ACTIVITY_UNIFORM: usize = 111;
 /// Uniform slot containing the base surface tint that remains when optical
@@ -55,9 +66,11 @@ pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 ///  80: loupe mode (>0.5 replaces the lens terms with the drop optic)
 ///  81,82: loupe focus offset from the shape center (dp)
 ///  83: loupe center magnification (m0)
-///  84: loupe band start (depth fraction 0..1 where the rim fold begins)
-///  85: loupe fold peak (sampling reach at the fold crest, in inradius units)
+///  84: fold band start (depth fraction 0..1 where the rim fold begins;
+///      shared by the loupe and interactive lens rims)
+///  85: fold peak (sampling reach at the fold crest, in inradius units)
 ///  90: loupe optical activity (0 = identity, 1 = fully raised drop)
+///  92: refracted-content magnification (input mode 2; <=0 = identity)
 ///  93: wcKSRD blur reach in physical pixels
 /// 111: continuous optical activity (0 = exact backdrop identity, 1 = full)
 /// 113..116: resting surface tint RGBA (transparent = no resting surface)
@@ -224,13 +237,13 @@ impl Default for LiquidLoupeSpec {
         Self {
             magnification: 1.25,
             focus_offset: (0.0, 75.0),
-            band_start: 0.82,
+            band_start: 0.50,
             fold_peak: 0.94,
             dispersion: 0.36,
             seam_lift: 26.0,
             // The rim is a distinct light path, but its gain stays low enough
             // that the transmitted face remains transparent and high-contrast.
-            highlight: 0.42,
+            highlight: 0.55,
             activity: 1.0,
             corner_radius: 0.0,
         }
@@ -274,8 +287,8 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     shader.set_float(80, 1.0); // loupe mode
     shader.set_float2(81, spec.focus_offset.0, spec.focus_offset.1);
     shader.set_float(83, 1.0 + (spec.magnification.max(0.2) - 1.0) * activity);
-    shader.set_float(84, spec.band_start);
-    shader.set_float(85, spec.fold_peak);
+    shader.set_float(GLASS_FOLD_BAND_START_UNIFORM, spec.band_start);
+    shader.set_float(GLASS_FOLD_PEAK_UNIFORM, spec.fold_peak);
     shader.set_float(87, spec.seam_lift);
     shader.set_float(90, activity);
     // The capture must cover the farthest sample: the focus offset plus the

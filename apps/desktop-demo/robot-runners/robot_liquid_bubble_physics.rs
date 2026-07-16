@@ -515,6 +515,8 @@ fn silhouette_sample(
         let mut max_x = f32::MIN;
         let mut min_y = f32::MAX;
         let mut max_y = f32::MIN;
+        let mut column_min_y = vec![f32::MAX; scan_width];
+        let mut column_max_y = vec![f32::MIN; scan_width];
         while let Some(index) = stack.pop() {
             let local_x = index % scan_width;
             let local_y = index / scan_width;
@@ -526,6 +528,8 @@ fn silhouette_sample(
             max_x = max_x.max(logical_x);
             min_y = min_y.min(logical_y);
             max_y = max_y.max(logical_y);
+            column_min_y[local_x] = column_min_y[local_x].min(logical_y);
+            column_max_y[local_x] = column_max_y[local_x].max(logical_y);
 
             let start_x = local_x.saturating_sub(1);
             let end_x = (local_x + 1).min(scan_width.saturating_sub(1));
@@ -547,8 +551,33 @@ fn silhouette_sample(
             continue;
         }
         let centroid_x = sum_x / count as f32;
-        let leading_skew = if width > 0.0 {
-            ((min_x + max_x) * 0.5 - centroid_x) / width
+        // Boundary-based skew: the viscous leading-edge lobe makes the
+        // leading half's outline TALLER than the trailing half's. Interior
+        // recolors (the lens copy tints everything it covers) are symmetric
+        // mass and must not dilute the physics signal.
+        let bbox_center_x = (min_x + max_x) * 0.5;
+        let mut leading_height_sum = 0.0f32;
+        let mut leading_columns = 0usize;
+        let mut trailing_height_sum = 0.0f32;
+        let mut trailing_columns = 0usize;
+        for local_x in 0..scan_width {
+            if column_max_y[local_x] < column_min_y[local_x] {
+                continue;
+            }
+            let logical_x = (x0 + local_x) as f32 / sx;
+            let column_height = column_max_y[local_x] - column_min_y[local_x];
+            if logical_x < bbox_center_x {
+                trailing_height_sum += column_height;
+                trailing_columns += 1;
+            } else {
+                leading_height_sum += column_height;
+                leading_columns += 1;
+            }
+        }
+        let leading_skew = if height > 0.0 && leading_columns > 0 && trailing_columns > 0 {
+            (leading_height_sum / leading_columns as f32
+                - trailing_height_sum / trailing_columns as f32)
+                / height
         } else {
             0.0
         };

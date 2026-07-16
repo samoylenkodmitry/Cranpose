@@ -29,10 +29,15 @@ const THUMB_MARGIN: f32 = 1.5;
 /// The pressed lens capsule rides the full track width and grows past the
 /// track edges, matching the reference's refractive chamber.
 const LENS_WIDTH: f32 = 58.0;
-const LENS_HEIGHT: f32 = 109.0 / 3.0;
-const LENS_VERTICAL_OFFSET: f32 = -2.0 / 3.0;
-/// Small outward lean at each resting end, measured from the thumb center.
-const LENS_OUTWARD_LEAN: f32 = 4.0;
+/// Settled reference lens: 58×39, centered on the track (f_048 rims at
+/// y=34..150 @3x around the track center).
+const LENS_HEIGHT: f32 = 39.0;
+const LENS_VERTICAL_OFFSET: f32 = 0.0;
+/// The raised lens leans toward the travel side, measured from the thumb
+/// center on the reference press and settle frames (~6-8dp in every phase:
+/// press leans toward the destination, flight leads the thumb, settle
+/// overhangs the arrival end).
+const LENS_TRAVEL_LEAN: f32 = 7.0;
 /// Glass node span beyond the lens shape (rim glow + wobble live here).
 const LENS_PAD: f32 = 10.0;
 /// Pointer travel below this is a tap, not a swipe.
@@ -54,7 +59,7 @@ fn toggle_lens_material() -> Glass {
         .refraction_curve(0.25)
         .transmission_refraction(0.22)
         .meniscus_absorption(0.92)
-        .dispersion(0.42)
+        .dispersion(0.60)
         .highlight(0.36)
         .lift(0.0)
         .shadow_style(GlassShadow::new(
@@ -99,17 +104,20 @@ fn interpolate_track_color(
     )
 }
 
-fn lens_translation_x(thumb_x: f32, node_width: f32, outward_lean: f32) -> f32 {
-    thumb_x + (THUMB_WIDTH - node_width) * 0.5 + lens_outward_side(thumb_x) * outward_lean
+fn lens_translation_x(thumb_x: f32, node_width: f32) -> f32 {
+    thumb_x + (THUMB_WIDTH - node_width) * 0.5
 }
 
-fn lens_outward_side(thumb_x: f32) -> f32 {
-    let min_x = THUMB_MARGIN;
-    let max_x = TRACK_WIDTH - THUMB_MARGIN - THUMB_WIDTH;
-    if max_x > min_x {
-        ((thumb_x - min_x) / (max_x - min_x) * 2.0 - 1.0).clamp(-1.0, 1.0)
+/// The gesture's travel side. The fluid motion axis is unusable here: a slow
+/// robot-speed drag stays under its direction threshold and holds whatever
+/// the previous flight left behind. The gesture itself always knows its
+/// destination — a fresh press heads to the flip side, movement follows the
+/// finger, and release heads to the committed end.
+fn lens_press_travel(checked: bool) -> f32 {
+    if checked {
+        -1.0
     } else {
-        0.0
+        1.0
     }
 }
 
@@ -133,6 +141,10 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     // Some(progress 0..1) while the finger drags the thumb.
     let drag_progress = remember(|| mutableStateOf(Option::<f32>::None)).with(|s| *s);
     let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
+    // ±1: which end the gesture is heading to. Press aims at the flip side,
+    // movement follows the finger, release holds the committed side through
+    // the linger (the settled lens keeps overhanging its arrival end).
+    let travel_dir = remember(|| mutableStateOf(1.0f32)).with(|s| *s);
     let off_track = colors.toggle_off;
     // Mid-drag the complete track interpolates with the finger. Its capsule
     // geometry is fixed; the glass is a separate optical layer above it.
@@ -219,6 +231,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                         down_x = event.position.x;
                                         lens_axis.begin(thumb_x.get(), event.time_ms);
                                         pressed.set(true);
+                                        travel_dir.set(lens_press_travel(checked));
                                         default_haptics().perform(HapticFeedback::Selection);
                                         event.consume();
                                     }
@@ -227,6 +240,11 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                             ((event.position.x - THUMB_MARGIN - THUMB_WIDTH * 0.5)
                                                 / (TRACK_WIDTH - 2.0 * THUMB_MARGIN - THUMB_WIDTH))
                                                 .clamp(0.0, 1.0);
+                                        if let Some(previous) = drag_progress.get() {
+                                            if (progress - previous).abs() > 0.005 {
+                                                travel_dir.set((progress - previous).signum());
+                                            }
+                                        }
                                         drag_progress.set(Some(progress));
                                         lens_axis.move_to(
                                             lens_ride_x(Some(progress), thumb_x.get()),
@@ -247,6 +265,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                         } else {
                                             !checked
                                         };
+                                        travel_dir.set(if next { 1.0 } else { -1.0 });
                                         lens_axis.release_to(
                                             if next { max_x } else { min_x },
                                             event.time_ms,
@@ -262,6 +281,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                     PointerEventKind::Cancel if dragging => {
                                         dragging = false;
                                         pressed.set(false);
+                                        travel_dir.set(if checked { 1.0 } else { -1.0 });
                                         lens_axis.release_to(
                                             if checked { max_x } else { min_x },
                                             event.time_ms,
@@ -342,13 +362,9 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             // constraints, clamping the SDF and slicing the lens.
             .required_size(Size::new(node_w, node_h))
             .offset(0.0, (TRACK_HEIGHT - node_h) * 0.5 + LENS_VERTICAL_OFFSET)
-            .graphics_layer(move || {
-                // The lens leans past the thumb toward its side of
-                // travel (the reference lens overhangs the track end).
-                GraphicsLayer {
-                    translation_x: lens_translation_x(lens_x, node_w, LENS_OUTWARD_LEAN),
-                    ..Default::default()
-                }
+            .graphics_layer(move || GraphicsLayer {
+                translation_x: lens_translation_x(lens_x, node_w),
+                ..Default::default()
             })
             .glass_effect_with(toggle_lens_material(), move || {
                 let grow = lens_for_layer.get().clamp(0.0, 1.2);
@@ -358,11 +374,16 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                 // stretches the lens along the track, braking swells
                 // its leading edge (crate::dynamics).
                 let pose = physics_axis.liquid_pose();
+                // The lens leans toward its travel side in every raised
+                // phase (the reference press leans toward the destination,
+                // the settle overhangs the arrival end). The lean lives in
+                // the SDF center so the optics tilt while the node holds.
+                let lean = travel_dir.get() * LENS_TRAVEL_LEAN * grow.clamp(0.0, 1.0);
                 GlassDynamics {
                     activity: Some(grow.clamp(0.0, 1.0)),
                     morph: Some(GlassMorph {
                         node_size: (node_w, node_h),
-                        primary: (node_w * 0.5, node_h * 0.5, base_w, base_h, -1.0),
+                        primary: (node_w * 0.5 + lean, node_h * 0.5, base_w, base_h, -1.0),
                         shapes: Vec::new(),
                         glue: 0.0,
                         wobble_amplitude: 0.0,
@@ -387,19 +408,16 @@ mod tests {
     fn toggle_geometry_matches_the_reference_proportions() {
         assert_eq!((TRACK_WIDTH, TRACK_HEIGHT), (63.0, 28.0));
         assert_eq!((THUMB_WIDTH, THUMB_HEIGHT), (37.0, 25.0));
-        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (58.0, 109.0 / 3.0));
+        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (58.0, 39.0));
         assert_eq!(
             toggle_lens_material().shape,
             LiquidShape::Capsule,
             "the pressed switch thumb remains a capsule while its optical body inflates"
         );
-        assert!((LENS_VERTICAL_OFFSET + 2.0 / 3.0).abs() < 1.0e-6);
-        assert!(
-            ((LENS_HEIGHT - TRACK_HEIGHT) * 0.5 - LENS_VERTICAL_OFFSET - 29.0 / 6.0).abs() < 1.0e-6
-        );
-        assert!(
-            ((LENS_HEIGHT - TRACK_HEIGHT) * 0.5 + LENS_VERTICAL_OFFSET - 7.0 / 2.0).abs() < 1.0e-6
-        );
+        // The settled reference lens sits centered on the track and overhangs
+        // it by 5.5dp above and below (f_048 rims at y=34..150 @3x).
+        assert_eq!(LENS_VERTICAL_OFFSET, 0.0);
+        assert!(((LENS_HEIGHT - TRACK_HEIGHT) * 0.5 - 5.5).abs() < 1.0e-6);
 
         let mid = interpolate_track_color(
             cranpose_ui_graphics::Color::from_rgb_u8(187, 186, 188),
@@ -412,22 +430,39 @@ mod tests {
     }
 
     #[test]
-    fn toggle_lens_growth_and_translation_are_outward_and_symmetric() {
-        assert_eq!(LENS_OUTWARD_LEAN, 4.0);
+    fn toggle_lens_leans_toward_the_travel_side() {
+        // Reference press/settle frames: the lens center sits ~6-8dp toward
+        // the side the gesture heads to, in every phase.
+        assert_eq!(LENS_TRAVEL_LEAN, 7.0);
+        // A fresh press has no motion yet: the only travel side is the
+        // opposite end of the track.
+        assert_eq!(lens_press_travel(false), 1.0);
+        assert_eq!(lens_press_travel(true), -1.0);
+
+        // Mid-drag the leaning lens frees the departed track region: its
+        // trailing edge must clear the whole-track interpolation samples
+        // (the traveling-fill contract probes 5dp in from the track end).
+        let min = THUMB_MARGIN;
+        let max = TRACK_WIDTH - THUMB_MARGIN - THUMB_WIDTH;
+        let mid_thumb_center = (min + max) * 0.5 + THUMB_WIDTH * 0.5;
+        let lens_trailing_edge = mid_thumb_center + LENS_TRAVEL_LEAN - LENS_WIDTH * 0.5;
+        assert!(lens_trailing_edge > 5.0);
+
+        // Settled at ON the lens overhangs the arrival end like the
+        // reference (its center ~7dp past the resting thumb center).
+        let settled_center = max + THUMB_WIDTH * 0.5 + LENS_TRAVEL_LEAN;
+        assert!(settled_center + LENS_WIDTH * 0.5 > TRACK_WIDTH);
+
+        // The node itself never leans — the lean lives in the SDF center so
+        // the oversized node's padding absorbs it on both sides.
         let node_width = LENS_WIDTH
             * crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN)
             + crate::dynamics::BULGE_MAX
             + LENS_PAD * 2.0;
-        let min = THUMB_MARGIN;
-        let max = TRACK_WIDTH - THUMB_MARGIN - THUMB_WIDTH;
-        let midpoint = (min + max) * 0.5;
-        let centered = lens_translation_x(midpoint, node_width, LENS_OUTWARD_LEAN);
-        let off = lens_translation_x(min, node_width, LENS_OUTWARD_LEAN);
-        let on = lens_translation_x(max, node_width, LENS_OUTWARD_LEAN);
-        assert_eq!(max + THUMB_WIDTH * 0.5 + LENS_OUTWARD_LEAN, 47.0);
-        assert!((centered * 2.0 - off - on).abs() < 1.0e-5);
-        assert!(off < lens_translation_x(min, node_width, 0.0));
-        assert!(on > lens_translation_x(max, node_width, 0.0));
+        let node_left = lens_translation_x(max, node_width);
+        let node_center = node_left + node_width * 0.5;
+        assert!((node_center - (max + THUMB_WIDTH * 0.5)).abs() < 1.0e-5);
+        assert!(node_width * 0.5 - LENS_WIDTH * 0.5 - LENS_TRAVEL_LEAN > 0.0);
     }
 
     #[test]
