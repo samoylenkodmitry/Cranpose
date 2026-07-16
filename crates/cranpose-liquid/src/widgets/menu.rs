@@ -38,6 +38,10 @@ pub struct LiquidMenuItem {
     /// Selecting this row keeps the menu open (an accordion row: the caller
     /// swaps `items` and the surface morphs to the new size in place).
     pub keeps_open: bool,
+    /// Optional gray second line under the label (the reference sort/filter
+    /// rows describe their current state: "Sections. Unread messages on
+    /// top."). Accordion rows draw a trailing chevron when present.
+    pub subtitle: Option<String>,
 }
 
 impl LiquidMenuItem {
@@ -50,6 +54,7 @@ impl LiquidMenuItem {
             section_start: false,
             header: false,
             keeps_open: false,
+            subtitle: None,
         }
     }
 
@@ -85,6 +90,12 @@ impl LiquidMenuItem {
     /// caller swaps the item list (the surface morphs to the new size).
     pub fn keeps_open(mut self) -> Self {
         self.keeps_open = true;
+        self
+    }
+
+    /// Gray descriptive second line under the label.
+    pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
+        self.subtitle = Some(subtitle.into());
         self
     }
 }
@@ -1087,8 +1098,9 @@ pub fn LiquidMenu(
         .iter()
         .map(|item| {
             format!(
-                "{}|{}{}{}{}{};",
+                "{}|{}|{}{}{}{}{};",
                 item.label,
+                item.subtitle.as_deref().unwrap_or(""),
                 item.checked as u8,
                 item.destructive as u8,
                 item.section_start as u8,
@@ -1159,9 +1171,9 @@ pub fn LiquidMenu(
                 // and lets the colored backdrop wash through.
                 let glass = Glass::regular()
                     .shape(LiquidShape::RoundedRect(MENU_RADIUS))
-                    .blur_radius(8.0)
-                    .saturation(if colors.is_dark { 1.05 } else { 1.55 })
-                    .lift(if colors.is_dark { -0.48 } else { 0.58 })
+                    .blur_radius(12.0)
+                    .saturation(if colors.is_dark { 1.30 } else { 1.55 })
+                    .lift(if colors.is_dark { -0.32 } else { 0.58 })
                     .highlight(0.14)
                     .shadow_style(GlassShadow::new(
                         Color::BLACK.with_alpha(if colors.is_dark { 0.22 } else { 0.11 }),
@@ -1547,14 +1559,18 @@ fn menu_item_row(
         .padding_symmetric(ROW_PADDING_X, ROW_PADDING_Y);
 
     let label = item.label.clone();
+    let subtitle = item.subtitle.clone();
     let icon = item.icon;
     let checked = item.checked;
+    let accordion_chevron = item.keeps_open && subtitle.is_some();
+    let secondary = colors.secondary_label;
     let typography = typography.clone();
     Row(
         row,
         RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
             let label = label.clone();
+            let subtitle = subtitle.clone();
             if has_checks {
                 // Leading checkmark column, reserved on every row so icons
                 // and labels align (the reference "Show" menu).
@@ -1580,7 +1596,31 @@ fn menu_item_row(
                 },
                 ..typography.body.clone()
             };
-            Text(label, Modifier::empty().weight(1.0), style);
+            if let Some(subtitle) = subtitle {
+                // Two-line row: the reference sort/filter headers describe
+                // their current state in a gray second line.
+                let subtitle_style = TextStyle {
+                    span_style: SpanStyle {
+                        color: Some(secondary),
+                        font_size: TextUnit::Sp(13.0),
+                        ..typography.footnote.span_style.clone()
+                    },
+                    ..typography.footnote.clone()
+                };
+                Column(
+                    Modifier::empty().weight(1.0),
+                    ColumnSpec::default(),
+                    move || {
+                        Text(label.clone(), Modifier::empty(), style.clone());
+                        Text(subtitle.clone(), Modifier::empty(), subtitle_style.clone());
+                    },
+                );
+            } else {
+                Text(label, Modifier::empty().weight(1.0), style);
+            }
+            if accordion_chevron {
+                crate::icons::Icon(crate::icons::CHEVRON_DOWN, 18.0, secondary);
+            }
         },
     );
 }

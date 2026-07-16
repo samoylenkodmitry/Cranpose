@@ -966,7 +966,9 @@ fn sort_filter_menu_items(
     sort_choice: usize,
     filter_choice: usize,
 ) -> Vec<LiquidMenuItem> {
-    let mut items = vec![LiquidMenuItem::new("Sort by").keeps_open()];
+    let mut items = vec![LiquidMenuItem::new("Sort by")
+        .keeps_open()
+        .subtitle("Sections. Unread messages on top.")];
     if section == 1 {
         items.push(
             LiquidMenuItem::new("Sections")
@@ -979,7 +981,12 @@ fn sort_filter_menu_items(
                 .checked(sort_choice == 1),
         );
     }
-    items.push(LiquidMenuItem::new("Filter").keeps_open().section_start());
+    items.push(
+        LiquidMenuItem::new("Filter")
+            .keeps_open()
+            .section_start()
+            .subtitle("All conversations"),
+    );
     if section == 2 {
         items.push(LiquidMenuItem::new("All conversations").checked(filter_choice == 0));
         items.push(LiquidMenuItem::new("External people").checked(filter_choice == 1));
