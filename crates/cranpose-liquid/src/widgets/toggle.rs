@@ -60,6 +60,7 @@ fn toggle_lens_material() -> Glass {
         .refraction_curve(0.25)
         .transmission_refraction(0.35)
         .meniscus_absorption(0.70)
+        .fold_depth(6.0)
         .dispersion(0.60)
         .highlight(0.22)
         .lift(0.0)

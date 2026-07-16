@@ -22,6 +22,9 @@ pub const GLASS_EFFECT_DENSITY_UNIFORM: usize = 99;
 /// Uniform slot controlling energy absorbed by the meniscus transmission
 /// path. Reflection and spectral return remain independent.
 pub const GLASS_MENISCUS_ABSORPTION_UNIFORM: usize = 100;
+/// Uniform slot containing the interactive rim-fold band depth in dp (the
+/// shader resolves it against the live shape inradius; zero = fold off).
+pub const GLASS_FOLD_DEPTH_UNIFORM: usize = 88;
 /// Uniform slot containing continuous optical activity (identity at zero).
 pub const GLASS_ACTIVITY_UNIFORM: usize = 111;
 /// Uniform slot containing the base surface tint that remains when optical

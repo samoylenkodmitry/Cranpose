@@ -88,6 +88,24 @@ fn opposite_side_reflection_displacement(
     return opposite_surface - local_position;
 }
 
+// The rim FOLD: within the band the sampling distance reaches out fast
+// (band start -> crest just inside the rim), then walks back down a long
+// descending branch — replaying the lens interior mirrored toward the edge.
+// Measured on the reference toggle (band 6dp of inradius, crest 0.94,
+// slope -1 keeps mirrored content near its original scale).
+fn fold_source_units(
+    xr: f32,
+    band_start: f32,
+    crest_xr: f32,
+    fold_peak: f32,
+    mirror_slope: f32,
+) -> f32 {
+    if xr <= crest_xr {
+        return mix(band_start, fold_peak, smoothstep(band_start, crest_xr, xr));
+    }
+    return fold_peak + mirror_slope * (xr - crest_xr);
+}
+
 // Polynomial smooth minimum — SDF metaball gluing: shapes within `k` of
 // each other neck together like merging droplets.
 fn smin(a: f32, b: f32, k: f32) -> f32 {
@@ -678,6 +696,29 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             fold_displacement.x = fold_displacement.x
                 + (p.x * 0.08 + r_in * 0.12) * tau * fold_weight;
             base_displacement = base_displacement + fold_displacement;
+        }
+    }
+
+    // Interactive rim fold (uniform 88 = band depth in dp; zero = off):
+    // a PURE displacement — the band replays the interior mirrored toward
+    // the rim, the reference toggle's "U". No color terms ride on it, so
+    // white surround mirrors white and colored tracks mirror themselves.
+    let fold_depth_px = get_float(88u) * optical_scale;
+    if loupe_mode <= 0.5 && rim_style > 0.0 && fold_depth_px > 0.0 {
+        let r_in_fold = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
+        let fold_band_start = clamp(1.0 - fold_depth_px / r_in_fold, 0.05, 0.95);
+        let xr = 1.0 - clamp(-d / r_in_fold, 0.0, 1.0);
+        if xr > fold_band_start {
+            let crest_xr = fold_band_start + 0.3 * (1.0 - fold_band_start);
+            let s_units = fold_source_units(xr, fold_band_start, crest_xr, 0.94, -1.0);
+            let fold_tau = clamp(
+                (xr - fold_band_start) / max(1.0 - fold_band_start, 0.001),
+                0.0,
+                1.0,
+            );
+            let fold_presence = smoothstep(0.0, 0.12, fold_tau) * rim_style;
+            base_displacement = base_displacement
+                + outward_normal * (s_units - xr) * r_in_fold * fold_presence;
         }
     }
 

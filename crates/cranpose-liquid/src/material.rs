@@ -9,7 +9,7 @@ use cranpose_ui::Modifier;
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
-    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM,
+    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM,
     GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
     GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
 };
@@ -268,6 +268,10 @@ pub struct Glass {
     /// Energy removed from the transmitted ray at the meniscus. Reflection
     /// and spectral return follow independent paths.
     pub meniscus_absorption: f32,
+    /// Depth of the rim fold band in dp: the raised lens rim replays its
+    /// interior mirrored toward the edge (a pure displacement). Zero
+    /// disables the fold.
+    pub fold_depth: f32,
     /// Specular rim intensity.
     pub highlight: f32,
     /// Screen-lift override (brightening toward white; negative darkens).
@@ -300,6 +304,7 @@ impl Glass {
             dispersion: 0.0,
             transmission_refraction: 1.0,
             meniscus_absorption: 1.0,
+            fold_depth: 0.0,
             highlight: 0.9,
             lift: None,
             shadow: true,
@@ -332,6 +337,7 @@ impl Glass {
             dispersion: 0.30,
             transmission_refraction: 1.0,
             meniscus_absorption: 1.0,
+            fold_depth: 0.0,
             highlight: 1.15,
             lift: None,
             shadow: true,
@@ -384,6 +390,12 @@ impl Glass {
 
     pub fn meniscus_absorption(mut self, strength: f32) -> Self {
         self.meniscus_absorption = strength.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Sets the rim fold band depth in dp (zero disables the fold).
+    pub fn fold_depth(mut self, depth_dp: f32) -> Self {
+        self.fold_depth = depth_dp.max(0.0);
         self
     }
 
@@ -492,6 +504,7 @@ impl Glass {
             dispersion: self.dispersion,
             transmission_refraction: self.transmission_refraction,
             meniscus_absorption: self.meniscus_absorption,
+            fold_depth: self.fold_depth,
             highlight: self.highlight,
             lift,
             contrast: if self.variant == GlassVariant::Lens {
@@ -537,6 +550,7 @@ pub(crate) struct ResolvedGlass {
     pub dispersion: f32,
     pub transmission_refraction: f32,
     pub meniscus_absorption: f32,
+    pub fold_depth: f32,
     pub highlight: f32,
     pub lift: f32,
     pub contrast: f32,
@@ -636,6 +650,9 @@ impl ResolvedGlass {
             self.transmission_refraction * activity,
         );
         shader.set_float(GLASS_MENISCUS_ABSORPTION_UNIFORM, self.meniscus_absorption);
+        if self.fold_depth > 0.0 {
+            shader.set_float(GLASS_FOLD_DEPTH_UNIFORM, self.fold_depth);
+        }
         shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, density);
         shader.set_float(
             11,
