@@ -638,15 +638,25 @@ fn LiquidTabBarLayout(
                                                                         - down_x)
                                                                         .abs()
                                                                         > TAP_SLOP;
-                                                                    lens_axis.move_to(
-                                                                        tab_lens_left(
-                                                                            event.position.x,
-                                                                            tab_width,
-                                                                            count,
-                                                                            has_accessory,
-                                                                        ),
-                                                                        event.time_ms,
-                                                                    );
+                                                                    // Below the slop this is
+                                                                    // still a tap: keep the lens
+                                                                    // anchored so release FLIES
+                                                                    // it. Feeding micro-jitter
+                                                                    // into the direct axis
+                                                                    // teleported the lens to the
+                                                                    // finger — the intermittent
+                                                                    // "snap instead of flight".
+                                                                    if moved {
+                                                                        lens_axis.move_to(
+                                                                            tab_lens_left(
+                                                                                event.position.x,
+                                                                                tab_width,
+                                                                                count,
+                                                                                has_accessory,
+                                                                            ),
+                                                                            event.time_ms,
+                                                                        );
+                                                                    }
                                                                     event.consume();
                                                                 }
                                                                 PointerEventKind::Up

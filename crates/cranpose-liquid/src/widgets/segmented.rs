@@ -235,6 +235,7 @@ pub fn LiquidSegmentedControl(
                             scope
                                 .await_pointer_event_scope(|await_scope| async move {
                                     let mut down_x = 0.0f32;
+                                    let mut moved = false;
                                     let mut active_pointer = Option::<PointerId>::None;
                                     loop {
                                         let event = await_scope.await_pointer_event().await;
@@ -242,15 +243,13 @@ pub fn LiquidSegmentedControl(
                                             PointerEventKind::Down if active_pointer.is_none() => {
                                                 active_pointer = Some(event.id);
                                                 down_x = event.position.x;
+                                                moved = false;
                                                 pressed.set(true);
-                                                lens_axis.begin(
-                                                    segment_lens_left(
-                                                        event.position.x,
-                                                        segment_width,
-                                                        count,
-                                                    ),
-                                                    event.time_ms,
-                                                );
+                                                // Raise IN PLACE: a tap on another
+                                                // cell must FLY the lens there on
+                                                // release (reference tap-flight),
+                                                // never teleport it to the finger.
+                                                lens_axis.begin(lens_axis.value(), event.time_ms);
                                                 default_haptics()
                                                     .perform(HapticFeedback::Selection);
                                                 event.consume();
@@ -258,14 +257,21 @@ pub fn LiquidSegmentedControl(
                                             PointerEventKind::Move
                                                 if active_pointer == Some(event.id) =>
                                             {
-                                                lens_axis.move_to(
-                                                    segment_lens_left(
-                                                        event.position.x,
-                                                        segment_width,
-                                                        count,
-                                                    ),
-                                                    event.time_ms,
-                                                );
+                                                moved |=
+                                                    (event.position.x - down_x).abs() > TAP_SLOP;
+                                                // Below the slop this is still a tap:
+                                                // feeding micro-jitter into the direct
+                                                // axis teleports the lens to the finger.
+                                                if moved {
+                                                    lens_axis.move_to(
+                                                        segment_lens_left(
+                                                            event.position.x,
+                                                            segment_width,
+                                                            count,
+                                                        ),
+                                                        event.time_ms,
+                                                    );
+                                                }
                                                 event.consume();
                                             }
                                             PointerEventKind::Up
