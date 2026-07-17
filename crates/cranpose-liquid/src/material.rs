@@ -7,7 +7,7 @@ use crate::theme::LiquidColors;
 use cranpose_ui::current_density;
 use cranpose_ui::Modifier;
 use cranpose_ui_graphics::{
-    Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader,
+    Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader, TileMode,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
     GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM, GLASS_LIGHT_DIRECTION_UNIFORM,
     GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
@@ -826,7 +826,14 @@ impl ResolvedGlass {
 
         let optical_effect = RenderEffect::runtime_shader(shader);
         if gaussian_blur_radius > f32::EPSILON {
-            RenderEffect::blur(gaussian_blur_radius).then(optical_effect)
+            // Mirror at the capture boundary: a backdrop capture is clipped
+            // at the surface's own edge (a top nav band's capture cannot
+            // extend above the page), and clamp-to-edge there stretches a
+            // single jittering content row across half the kernel — the
+            // band's top pixels pulse ~12 gray levels per scroll step
+            // (measured live). Mirroring keeps the edge statistics stable.
+            RenderEffect::blur_with_edge_treatment(gaussian_blur_radius, TileMode::Mirror)
+                .then(optical_effect)
         } else {
             optical_effect
         }
