@@ -83,14 +83,17 @@ fn tab_selection_content_color(colors: crate::theme::LiquidColors) -> Color {
 }
 
 const BAR_HEIGHT: f32 = 64.0;
-const BLOB_HEIGHT: f32 = 52.0;
-const BLOB_MARGIN: f32 = 8.0;
+/// Resting bubble height: the reference bubble fills the bar to ~4dp
+/// insets (56/64 — a 52dp blob read as a floating pill with odd gaps,
+/// user screenshots on both bars).
+const BLOB_HEIGHT: f32 = 56.0;
+const BLOB_MARGIN: f32 = 4.0;
 /// Raised bubble projection over the resting blob. The reference bubble
 /// GROWS PAST THE BAR: at full contact it stands ~1.2x the bar height
-/// (52dp blob * 1.48 = 77dp vs the 64dp bar — poking ~6.5dp beyond both
-/// edges), it barely magnifies what it covers, and the light does the
-/// depth (top arc + lower lip), not the zoom.
-const FLIGHT_LENS_PROJECTION_SCALE: f32 = 1.48;
+/// (56dp blob * 1.375 = 77dp vs the 64dp bar — poking ~6.5dp beyond
+/// both edges), it barely magnifies what it covers, and the light does
+/// the depth (top arc + lower lip), not the zoom.
+const FLIGHT_LENS_PROJECTION_SCALE: f32 = 1.375;
 const TAB_LENS_REST_WIDTH_FACTOR: f32 = 1.16;
 /// Width allotted to each tab inside the pill.
 const TAB_WIDTH: f32 = 78.0;
@@ -1034,7 +1037,10 @@ mod tests {
 
     #[test]
     fn tab_grid_matches_the_reference_inner_inset() {
-        assert_eq!(BLOB_MARGIN, 8.0);
+        // The bubble fills the bar to ~4dp insets (56/64, re-judged
+        // against the user's reference frames).
+        assert_eq!(BLOB_MARGIN, 4.0);
+        assert_eq!(BLOB_HEIGHT + 2.0 * BLOB_MARGIN, BAR_HEIGHT);
     }
 
     #[test]
