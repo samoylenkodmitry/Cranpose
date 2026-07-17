@@ -340,3 +340,21 @@ run_robot_test.sh. Under `./run_robot_test.sh --sequential --example ...`
 it passes on the same tree. Hours were spent bisecting shader commits that
 were provably innocent (the metrics never changed across variants). Judge
 this test ONLY through the harness.
+
+## Discrete move+capture loops CANNOT verify continuous-gesture physics
+Interleaving `xdotool mousemove_relative` with `import` screenshots inserts
+a ~150ms pause per capture — any spring/tracker catches up during the pause
+and the sequence looks like perfect following even when the live behavior
+freezes during real continuous motion (the loupe-follow bug shipped
+"verified" this way). To verify tracking: run the mouse stream in a
+BACKGROUND loop (`( for i in $(seq 1 120); do xdotool mousemove_relative -- -2 0; done ) &`)
+and capture frames concurrently in the foreground, logging
+`getmouselocation` before each capture to measure the live trail.
+
+## Animatable retargets used to starve springs (fixed, keep the test)
+`animateTo` reset `last_frame_nanos`, so a spring retargeted every frame
+(continuous gesture tracking) integrated dt=0 forever and froze until the
+gesture stopped. Fixed by preserving the spring frame chain across
+retargets; `spring_retargeted_every_frame_tracks_a_moving_target` in
+cranpose-animation pins it. If a widget tracks a moving target, retarget
+per move with `animate_to_with_velocity` — no rate limiting needed.

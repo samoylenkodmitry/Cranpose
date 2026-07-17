@@ -72,9 +72,6 @@ fn loupe_collapse_tween() -> AnimationType {
 pub struct LoupeTarget {
     pub focus_x: f32,
     pub line_mid_y: f32,
-    /// Fold floor: how far below the line mid the dragged handle's dot
-    /// reaches (dp) — the lens's mirror band must sample past it.
-    pub dot_clearance: f32,
 }
 
 /// The measured visibility rule: the loupe shows while the finger covers the
@@ -91,11 +88,6 @@ pub fn loupe_target_for_drag(
         Some(LoupeTarget {
             focus_x: finger.x,
             line_mid_y: line_bottom - 0.5 * line_height,
-            // The end/cursor dot hangs (2·radius − overlap) below the line
-            // box; the mirror must clear its bottom (plus an AA margin).
-            dot_clearance: 0.5 * line_height + 2.0 * crate::text_selection::HANDLE_RADIUS
-                - crate::text_selection::HANDLE_DOT_LINE_OVERLAP
-                + 1.0,
         })
     } else {
         None
@@ -231,11 +223,12 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
         if !follow_anim.state().value().is_finite() {
             follow_anim.snapTo(shown.focus_x);
         } else if (follow_anim.target() - shown.focus_x).abs() > f32::EPSILON {
-            // Retarget WITH the current velocity: a plain animateTo restarts
-            // the spring from rest, and per-move restarts crawl instead of
-            // following (live regression report).
+            // Retarget on every move, carrying velocity: springs keep their
+            // frame chain across retargets, so this is a true continuous
+            // tracker (steady-state trail 2v/omega, ~22dp at the reference's
+            // 356dp/s drag).
             let velocity = follow_anim.velocity();
-            follow_anim.animate_to_with_velocity(shown.focus_x, velocity, spring(1.0, 650.0));
+            follow_anim.animate_to_with_velocity(shown.focus_x, velocity, spring(1.0, 1050.0));
         }
     }
     let follow = state.follow_x.borrow().state().value();
@@ -253,7 +246,6 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     let spec = LiquidLoupeSpec {
         magnification: LOUPE_MAGNIFICATION,
         focus_offset: (0.0, focus_offset_y),
-        seam_lift: shown.dot_clearance,
         corner_radius,
         activity: optic,
         ..LiquidLoupeSpec::default()
@@ -395,12 +387,6 @@ mod tests {
         assert_eq!(u[28], relaxed.activity);
         assert_eq!(u[90], relaxed.activity);
         assert_eq!(u[cranpose_ui_graphics::GLASS_BLUR_RADIUS_UNIFORM], 0.0);
-        assert_eq!(u[84], relaxed.band_start);
-        assert!(
-            (24.0..=29.0).contains(&u[87]),
-            "the center seam must clear the source handle dot, got {}",
-            u[87]
-        );
 
         let grown = LiquidLoupeSpec::default();
         let effect = liquid_loupe_effect((LOUPE_WIDTH, LOUPE_HEIGHT), &grown);
@@ -422,7 +408,7 @@ mod tests {
             "container = node dp"
         );
         assert_eq!(u[6], -1.0, "capsule sentinel");
-        // The capture must reach the focus area plus the fold overshoot.
+        // The capture must reach the offset focus area.
         assert!(
             shader.input_padding() >= 75.0,
             "capture must cover the offset focus, got {}",

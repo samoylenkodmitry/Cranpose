@@ -61,8 +61,6 @@ pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 ///  80: loupe mode (>0.5 replaces the lens terms with the drop optic)
 ///  81,82: loupe focus offset from the shape center (dp)
 ///  83: loupe center magnification (m0)
-///  84: loupe band start (depth fraction 0..1 where the rim fold begins)
-///  85: loupe fold peak (sampling reach at the fold crest, in inradius units)
 ///  90: loupe optical activity (0 = identity, 1 = fully raised drop)
 ///  93: wcKSRD blur reach in physical pixels
 /// 111: continuous optical activity (0 = exact backdrop identity, 1 = full)
@@ -190,10 +188,10 @@ fn liquid_glass_input_padding(spec: &LiquidGlassSpec) -> f32 {
 
 /// The text-drag loupe material: a solid glass drop magnifying an offset
 /// focus (the grab point under the finger), displayed inside a capsule
-/// floating above it. Measured against the reference recording:
-/// dome magnification (`magnification` at the center easing to exactly 1
-/// where the rim band starts), a rim FOLD that paints an inverted compressed
-/// image of the content just beyond the bubble and the thin wcKSRD rim line.
+/// floating above it. ONE continuous wcKSRD field (example/shaders.txt):
+/// `sample = focus + p·lens_scale/m` — the magnified face, the rim's
+/// descending-branch inversion and the rim line all come from the same
+/// displacement mapping, with no band boundaries.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidLoupeSpec {
     /// Magnification (the reference loupe measures a uniform ~1.25×).
@@ -201,18 +199,8 @@ pub struct LiquidLoupeSpec {
     /// Focus offset from the bubble center, dp (the reference samples 75 dp
     /// below its center: content from under the finger, displayed above).
     pub focus_offset: (f32, f32),
-    /// Depth fraction (0..1 of the inradius) where the rim fold band begins.
-    pub band_start: f32,
-    /// Sampling reach at the fold crest, in inradius units (>1 reaches past
-    /// the bubble edge before folding back — the inversion).
-    pub fold_peak: f32,
     /// Spectral separation of the meniscus return.
     pub dispersion: f32,
-    /// The fold floor: the bottom band never re-displays content nearer the
-    /// focus line than this clearance (dp). The dragged handle's dot hangs
-    /// just below the line; the caller sets this past the dot's bottom so
-    /// the mirror shows the next line, never a second pink lobe.
-    pub seam_lift: f32,
     /// Specular rim intensity.
     pub highlight: f32,
     /// Continuous optical activity. Geometry is owned by the caller; this
@@ -230,10 +218,7 @@ impl Default for LiquidLoupeSpec {
         Self {
             magnification: 1.25,
             focus_offset: (0.0, 75.0),
-            band_start: 0.82,
-            fold_peak: 0.94,
             dispersion: 0.36,
-            seam_lift: 26.0,
             // The rim is a distinct light path, but its gain stays low enough
             // that the transmitted face remains transparent and high-contrast.
             highlight: 0.42,
@@ -280,16 +265,11 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     shader.set_float(80, 1.0); // loupe mode
     shader.set_float2(81, spec.focus_offset.0, spec.focus_offset.1);
     shader.set_float(83, 1.0 + (spec.magnification.max(0.2) - 1.0) * activity);
-    shader.set_float(84, spec.band_start);
-    shader.set_float(85, spec.fold_peak);
-    shader.set_float(87, spec.seam_lift);
     shader.set_float(90, activity);
-    // The capture must cover the farthest sample: the focus offset plus the
-    // fold reach past the bubble edge (in dp; paddings are logical units).
-    let r_in = 0.5 * w.min(h);
+    // The capture must cover the farthest sample: the single field never
+    // reaches beyond the focus offset plus the node's own footprint.
     let focus_reach = (spec.focus_offset.0.powi(2) + spec.focus_offset.1.powi(2)).sqrt();
-    let fold_reach = (spec.fold_peak.max(1.0) - 1.0) * r_in;
-    shader.set_input_padding((focus_reach + fold_reach + 8.0).ceil());
+    shader.set_input_padding((focus_reach + 8.0).ceil());
     RenderEffect::runtime_shader(shader)
 }
 

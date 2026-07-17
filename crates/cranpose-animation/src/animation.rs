@@ -784,7 +784,14 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             inner.target = target;
             inner.animation_type = animation;
             inner.start_time_nanos = None;
-            inner.last_frame_nanos = None;
+            // The spring frame chain (`last_frame_nanos`) survives a
+            // retarget: a mid-flight spring keeps integrating real frame
+            // deltas toward the new target. Clearing it made the first
+            // frame after every retarget a dt=0 clock-set — under
+            // continuous per-move retargeting (gesture tracking) that
+            // starved the spring to a standstill. Tweens read only
+            // `start_time_nanos`, which does reset. A settled or fresh
+            // animatable enters with `last_frame_nanos == None` anyway.
         }
 
         Self::schedule_frame(&self.inner);

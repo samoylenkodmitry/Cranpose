@@ -454,6 +454,50 @@ fn spring_retarget_preserves_value_space_velocity() {
 }
 
 #[test]
+fn spring_retargeted_every_frame_tracks_a_moving_target() {
+    // Continuous-gesture tracking: the target is retargeted before EVERY
+    // frame (a pointer move per frame). The spring must keep integrating
+    // real frame deltas across retargets — resetting the frame chain on
+    // retarget makes every frame a dt=0 no-op and the value freezes until
+    // the finger stops (the live loupe-follow bug).
+    let spec = SpringSpec::new(1.0, 1050.0);
+    let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+    let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());
+    let runtime = composition.runtime_handle();
+
+    let mut frame_time = 0u64;
+    let mut target = 0.0f32;
+    for _ in 0..30 {
+        target += 10.0; // 600 units/s ramp
+        let velocity = animatable.velocity();
+        animatable.animate_to_with_velocity(target, velocity, AnimationType::Spring(spec));
+        frame_time += 16_666_667;
+        runtime.drain_frame_callbacks(frame_time);
+    }
+
+    let tracked = animatable.state().get();
+    // Steady-state ramp lag for critical damping is 2v/ω ≈ 37 units here;
+    // anything close to zero means the spring never integrated.
+    assert!(
+        tracked > target - 80.0,
+        "spring must track a per-frame-retargeted ramp (target {target}, got {tracked})"
+    );
+
+    // And once the target stops, it must settle there.
+    let velocity = animatable.velocity();
+    animatable.animate_to_with_velocity(target, velocity, AnimationType::Spring(spec));
+    for _ in 0..60 {
+        frame_time += 16_666_667;
+        runtime.drain_frame_callbacks(frame_time);
+    }
+    let settled = animatable.state().get();
+    assert!(
+        (settled - target).abs() < 0.5,
+        "spring should settle at the final target, got {settled} vs {target}"
+    );
+}
+
+#[test]
 fn animate_to_with_velocity_seeds_gesture_handoff() {
     let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
     let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());

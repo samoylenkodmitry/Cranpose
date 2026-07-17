@@ -566,15 +566,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let grad_len = length(grad);
     let outward_normal = select(vec2<f32>(0.0), grad / grad_len, grad_len > 0.001);
 
-    // Refraction uses the wcKSRD source mapping. Loupe focus/fold offsets are
-    // applied to that one path rather than selecting another optical model.
+    // Refraction uses the wcKSRD source mapping. Loupe focus/magnification
+    // are applied to that one path rather than selecting another optical
+    // model.
     //
     // - LOUPE mode (uniform 80): the text-drag magnifier — a solid glass
-    //   drop over an offset focus. Dome magnification (strongest at the
-    //   center, easing to exactly 1 where the rim band starts) and a rim
-    //   FOLD: the sampling distance overshoots past the rim then walks back,
-    //   painting an inverted, compressed image of what lies just beyond
-    //   (the next text line upside-down at the bubble's bottom edge).
+    //   drop over an offset focus. ONE continuous mapping (shaders.txt):
+    //   sample = focus + p·lens_scale/m — the magnified face, the
+    //   descending-branch inversion at the rim and the rim line all come
+    //   from the same displacement field, with no band boundaries.
     let rim_style = clamp(get_float(28u), 0.0, 1.0);
     let dispersion_strength = clamp(get_float(95u), 0.0, 1.0);
     let loupe_mode = get_float(80u);
@@ -622,100 +622,23 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             * (1.0 / optical_zoom - 1.0)
             * optical_sample.interior;
     }
-    var loupe_seam_mask = 0.0;
     if loupe_mode > 0.5 {
         let loupe_activity = clamp(get_float(90u), 0.0, 1.0);
-        // The bubble's inradius: capsule half-height (the SDF's deepest
-        // point), the natural unit of the drop optic.
-        let r_in = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
         let focus_px = get_vec2(81u) * dp_scale;
         var m0 = get_float(83u);
         if m0 <= 0.0 {
             m0 = 1.0;
         }
-        var band_start = get_float(84u);
-        if band_start <= 0.0 {
-            band_start = 0.78;
-        }
-        var fold_peak = get_float(85u);
-        if fold_peak <= 0.0 {
-            fold_peak = 1.25;
-        }
-        // 0 deep inside → 1 at the rim.
-        let xr = 1.0 - clamp(-d / r_in, 0.0, 1.0);
-        // Magnification: UNIFORM m0 across the whole interior (the measured
-        // reference is a flat ~1.25x — the primary line, the handle dot and
-        // everything between share one scale; a varying magnification arced the
-        // baseline or squashed the dot).
         let m = max(m0, 0.2);
-        // Magnify about the shape center, looking at the offset focus. The
-        // whole interior shows the focus neighbourhood (the loupe displays
-        // content from under the finger, offset up).
-        base_displacement = base_displacement + focus_px + p * (1.0 / m - 1.0);
-        // The FOLD: an anisotropic vertical mirror — measured on the
-        // reference, the band starts ~45% of the depth in on the long edges
-        // (showing the NEXT text line inverted, near 1:1 and legible) and
-        // barely exists at the end caps (weighting by the normal's
-        // verticality also kills the rainbow bullseyes the caps produced
-        // under a radial fold).
-        let vert = outward_normal.y * outward_normal.y;
-        // Vertical-edge weighting (caps barely fold), and the drop optic is
-        // asymmetric: the fold below the focus is full strength, the one
-        // above much weaker (the reference's top edge shows only a whisper
-        // of mirrored ascenders).
-        let below = select(0.35, 1.0, outward_normal.y > 0.0);
-        // sqrt shaping: the reference visibly bends content at the SHOULDER
-        // regions (diagonal normals) — vert-squared starved them — while
-        // pure end caps stay near-quiet.
-        let vert_weight = pow(vert, 0.60) * below;
-        if xr > band_start {
-            let tau = clamp((xr - band_start) / max(1.0 - band_start, 0.001), 0.0, 1.0);
-            // A fast reach-out (first ~30% of the band) followed by a LONG
-            // descending branch — the inversion. The descent's slope is what
-            // sets the mirrored image's scale: the reference fold shows the
-            // next line at essentially MAIN-TEXT scale, so the descent walks
-            // back through the content at ~1 content-dp per display-dp.
-            var g = 0.0;
-            if tau <= 0.3 {
-                g = smoothstep(0.0, 0.3, tau);
-            } else {
-                // This source-space slope is approximately -1 for the
-                // calibrated band and reach, preserving legible mirrored
-                // glyph bodies instead of stretching them into streaks.
-                g = 1.0 - 0.48 * ((tau - 0.3) / 0.7);
-            }
-            // The mirror lives ONLY on the FLAT run of the long edges: at the
-        // curved shoulders a vertical mirror meets a curving border and
-        // drags glyphs along the arc — the user-highlighted "crashed
-        // glass" smear. Fade the fold out entirely over the cap curvature.
-        let flat_half = max(rect_size.x * 0.5 - r_in, 0.0);
-        let flat_mask = 1.0
-            - smoothstep(flat_half * 0.75, flat_half + r_in * 0.25, abs(p.x));
-        let fold_weight = vert_weight * flat_mask * 0.62 * loupe_activity;
-            let s_band0 = band_start / m;
-            let s_units = s_band0 + (fold_peak - s_band0) * g;
-            let fold_units = s_units - xr;
-            let seam_floor = max(get_float(87u), 0.0) * dp_scale.y;
-            let guard_radius = clamp(seam_floor * 1.15 / r_in, 0.28, 0.42);
-            let center_column = 1.0
-                - smoothstep(max(guard_radius - 0.05, 0.0), guard_radius + 0.08, abs(p.x) / r_in);
-            let seam_avoid = center_column
-                * smoothstep(0.45, 0.78, outward_normal.y)
-                * smoothstep(0.35, 0.70, tau);
-            loupe_seam_mask = seam_avoid * 0.55 * loupe_activity;
-            // The target fold is anisotropic: it mirrors vertically across the
-            // long edges. Using the radial normal here applies its vertical
-            // component a second time and starves the shoulder glyphs.
-            let fold_sign = select(-1.0, 1.0, outward_normal.y > 0.0);
-            var fold_displacement = vec2<f32>(
-                0.0,
-                fold_sign * fold_units * r_in * fold_weight,
-            );
-            // The reference's mirrored text is straight: a pure vertical
-            // mirror, no sideways drift (any x-term bends strokes into the
-            // border smear the user highlighted).
-            base_displacement = base_displacement + fold_displacement;
-        }
+        // The single wcKSRD field, centered on the offset focus: deep in the
+        // face lens_scale = 1 and the whole interior shows the focus
+        // neighbourhood magnified by m; toward the rim the SAME sweep that
+        // shapes surface glass walks the sample back to the focus point,
+        // replaying the content between them inverted — the drop optic's
+        // bottom-edge wrap — with C1 continuity everywhere.
+        let lens_scale = sin(pow(interior, refraction_curve) * 1.57);
+        let single_field = focus_px + p * (lens_scale / m - 1.0);
+        base_displacement = mix(base_displacement, single_field, loupe_activity);
     }
 
     // Interactive rim fold (uniform 88 = band depth in dp; zero = off):
@@ -762,9 +685,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     var outer_rgb = plain_path.rgb;
     var alpha = transmitted_path.a;
-    if loupe_seam_mask > 0.0 {
-        rgb = mix(rgb, plain_path.rgb, loupe_seam_mask);
-    }
 
     let lens_light_direction = normalize(vec2<f32>(1.0, 1.0));
     let lens_edge_incidence = 0.18
