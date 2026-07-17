@@ -27,7 +27,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.62"
+version = "0.1.63"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/samoylenkodmitry/cranpose"
@@ -40,24 +40,24 @@ categories = ["gui"]
 [workspace.dependencies]
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.6", features = ["native-activity"] }
-cranpose-animation = { path = "crates/cranpose-animation", version = "0.1.62" }
-cranpose-liquid = { path = "crates/cranpose-liquid", version = "0.1.62" }
-cranpose = { path = "crates/cranpose", version = "0.1.62", default-features = false }
-cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.1.62" }
-cranpose-core = { path = "crates/cranpose-core", version = "0.1.62" }
-cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.1.62" }
-cranpose-macros = { path = "crates/cranpose-macros", version = "0.1.62" }
-cranpose-platform-android = { path = "crates/cranpose-platform/android", version = "0.1.62" }
-cranpose-platform-desktop-winit = { path = "crates/cranpose-platform/desktop-winit", version = "0.1.62", default-features = false }
-cranpose-platform-web = { path = "crates/cranpose-platform/web", version = "0.1.62" }
-cranpose-render-common = { path = "crates/cranpose-render/common", version = "0.1.62", default-features = false }
-cranpose-render-pixels = { path = "crates/cranpose-render/pixels", version = "0.1.62" }
-cranpose-render-wgpu = { path = "crates/cranpose-render/wgpu", version = "0.1.62" }
-cranpose-runtime-std = { path = "crates/cranpose-runtime-std", version = "0.1.62" }
-cranpose-services = { path = "crates/cranpose-services", version = "0.1.62", default-features = false }
-cranpose-ui = { path = "crates/cranpose-ui", version = "0.1.62" }
-cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.1.62" }
-cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.1.62" }
+cranpose-animation = { path = "crates/cranpose-animation", version = "0.1.63" }
+cranpose-liquid = { path = "crates/cranpose-liquid", version = "0.1.63" }
+cranpose = { path = "crates/cranpose", version = "0.1.63", default-features = false }
+cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.1.63" }
+cranpose-core = { path = "crates/cranpose-core", version = "0.1.63" }
+cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.1.63" }
+cranpose-macros = { path = "crates/cranpose-macros", version = "0.1.63" }
+cranpose-platform-android = { path = "crates/cranpose-platform/android", version = "0.1.63" }
+cranpose-platform-desktop-winit = { path = "crates/cranpose-platform/desktop-winit", version = "0.1.63", default-features = false }
+cranpose-platform-web = { path = "crates/cranpose-platform/web", version = "0.1.63" }
+cranpose-render-common = { path = "crates/cranpose-render/common", version = "0.1.63", default-features = false }
+cranpose-render-pixels = { path = "crates/cranpose-render/pixels", version = "0.1.63" }
+cranpose-render-wgpu = { path = "crates/cranpose-render/wgpu", version = "0.1.63" }
+cranpose-runtime-std = { path = "crates/cranpose-runtime-std", version = "0.1.63" }
+cranpose-services = { path = "crates/cranpose-services", version = "0.1.63", default-features = false }
+cranpose-ui = { path = "crates/cranpose-ui", version = "0.1.63" }
+cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.1.63" }
+cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.1.63" }
 web-time = "1.1"
 
 [patch.crates-io]
