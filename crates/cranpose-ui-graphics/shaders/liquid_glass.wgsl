@@ -501,7 +501,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let inradius = max(min(half_size.x, half_size.y), 1.0);
     let lens_refraction = max(inradius * refraction_depth, 0.001);
     let rounded_box = clamp(-d / lens_refraction, 0.0, 1.0);
-    let coverage = smoothstep(0.0, 1.0, clamp(rounded_box * 32.0, 0.0, 1.0));
+    // Coverage AA rides the material's refraction band (wcKSRD's rb1·32),
+    // which for a small shallow shape shrinks below a pixel — a 44dp disc
+    // at depth 0.1 gets a 0.09px ramp, i.e. STAIRS (user-reported crashed
+    // edges). The silhouette always keeps at least a physical pixel of AA.
+    let coverage_ramp = max(lens_refraction / 32.0, 0.75);
+    let coverage = smoothstep(0.0, 1.0, clamp(-d / coverage_ramp, 0.0, 1.0));
     let optical_coverage = smoothstep(
         0.0,
         1.0,
@@ -622,6 +627,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             * (1.0 / optical_zoom - 1.0)
             * optical_sample.interior;
     }
+    var loupe_rim_softening = 0.0;
     if loupe_mode > 0.5 {
         let loupe_activity = clamp(get_float(90u), 0.0, 1.0);
         let focus_px = get_vec2(81u) * dp_scale;
@@ -639,6 +645,13 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         let lens_scale = sin(pow(interior, refraction_curve) * 1.57);
         let single_field = focus_px + p * (lens_scale / m - 1.0);
         base_displacement = mix(base_displacement, single_field, loupe_activity);
+        // Near the rim the sweep minifies the face text hard enough that
+        // single sharp taps hit isolated white glyph pixels as round
+        // specks (live report: "white dots"). The original shader blurs
+        // inside the lens; here the blur fades in only over the
+        // compression zone so the face keeps its Catmull-Rom crispness.
+        let rim_compression = 1.0 - smoothstep(0.70, 0.95, lens_scale);
+        loupe_rim_softening = 4.5 * optical_scale * rim_compression * loupe_activity;
     }
 
     // Interactive rim fold (uniform 88 = band depth in dp; zero = off):
@@ -670,7 +683,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // wcKSRD owns source mapping and backdrop blur.
-    let wcksrd_blur_radius = max(get_float(93u), 0.0);
+    let wcksrd_blur_radius = max(max(get_float(93u), 0.0), loupe_rim_softening);
     let transmitted_path = sample_wcksrd_path(
         uv,
         tex_size,
@@ -930,7 +943,11 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // it first buried it under an 82%-alpha tint).
     let bevel_source_arc = bevel_band * bevel_source_axis * bevel_gain * 0.10;
     let bevel_return_glow = bevel_band * bevel_return_axis * bevel_gain * 0.62;
-    let bevel_light = clamp(bevel_source_arc + bevel_return_glow, 0.0, 0.60);
+    // The loupe keeps its own calibrated rim: the white lip lands on its
+    // mirrored-text band and fuses with glyph strokes into white blobs
+    // over dark backdrops (live report).
+    let bevel_light = clamp(bevel_source_arc + bevel_return_glow, 0.0, 0.60)
+        * select(1.0, 0.0, loupe_mode > 0.5);
     alpha = max(alpha, bevel_light);
     // Tone pipeline: vibrancy first, then a gentle contrast pivot, then the
     // scheme lift. The lift is a SCREEN blend toward white (or a multiply
