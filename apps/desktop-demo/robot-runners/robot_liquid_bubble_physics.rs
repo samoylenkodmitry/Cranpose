@@ -295,8 +295,19 @@ fn main() -> ExitCode {
                 .iter()
                 .map(|sample| sample.width * sample.height)
                 .collect();
-            let min_area = areas.iter().copied().fold(f32::MAX, f32::min);
+            // Contact raises the droplet CONTINUOUSLY (reference gesture
+            // rows): a flight launched off a robot-instant tap still grows
+            // through its launch frames. Volume conservation is the law of
+            // the RAISED droplet — it applies from the first frame at
+            // (near-)full volume onward; the monotonic raise before it is
+            // the reference's own contact behavior.
             let max_area = areas.iter().copied().fold(0.0f32, f32::max);
+            let raised_from = areas
+                .iter()
+                .position(|area| *area >= max_area * 0.90)
+                .unwrap_or(0);
+            let raised_areas = &areas[raised_from..];
+            let min_area = raised_areas.iter().copied().fold(f32::MAX, f32::min);
             if max_area > min_area * 1.38 {
                 fail(
                     &robot,

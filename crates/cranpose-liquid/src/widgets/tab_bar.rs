@@ -160,8 +160,15 @@ fn tab_flight_tint_multiplier(activity: f32) -> f32 {
     1.0 - 0.25 * activity.clamp(0.0, 1.0)
 }
 
-fn tab_lens_activity_motion() -> cranpose_animation::AnimationType {
-    cranpose_animation::spring(1.0, 900.0)
+fn tab_lens_activity_motion(raised: bool) -> cranpose_animation::AnimationType {
+    if raised {
+        // Continuous contact rise on the toggle's calibrated spring (~10
+        // frames to full, the reference on-white gesture rows).
+        cranpose_animation::spring(0.9, 1400.0)
+    } else {
+        // The return into the bar keeps its slower material drain.
+        cranpose_animation::spring(1.0, 900.0)
+    }
 }
 
 fn tab_lens_left(pointer_x: f32, tab_width: f32, count: usize, has_accessory: bool) -> f32 {
@@ -579,18 +586,14 @@ fn LiquidTabBarLayout(
                             let lens_activity_target = if lens_raised { 1.0 } else { 0.0 };
                             let lens_activity_anim = cranpose_animation::animateFloatAsState(
                                 lens_activity_target,
-                                tab_lens_activity_motion(),
+                                tab_lens_activity_motion(lens_raised),
                                 "tabbar-lens-activity",
                             );
-                            // Contact and controlled flight raise the optic in
-                            // the delivered frame. Only the return into the bar
-                            // is animated, by continuously reducing the same
-                            // material channels after motion has settled.
-                            let lens_activity = if lens_raised {
-                                1.0
-                            } else {
-                                lens_activity_anim.get()
-                            };
+                            // The reference raises the surface CONTINUOUSLY:
+                            // depth, chroma and scale rise together over ~10
+                            // frames (on-white gesture rows) — contact and
+                            // return ride the same animated channel.
+                            let lens_activity = lens_activity_anim.get();
                             let visual_selection = tab_visual_selection(
                                 selected,
                                 lens_x,
@@ -1084,8 +1087,13 @@ mod tests {
     }
 
     #[test]
-    fn arrival_contraction_uses_the_measured_fast_settle() {
-        let cranpose_animation::AnimationType::Spring(settle) = tab_lens_activity_motion() else {
+    fn contact_rises_continuously_and_returns_on_the_measured_settle() {
+        let cranpose_animation::AnimationType::Spring(rise) = tab_lens_activity_motion(true) else {
+            panic!("contact rise must use a spring");
+        };
+        assert_eq!(rise.stiffness, 1400.0);
+        let cranpose_animation::AnimationType::Spring(settle) = tab_lens_activity_motion(false)
+        else {
             panic!("arrival contraction must use a spring");
         };
         assert_eq!(settle.damping_ratio, 1.0);
