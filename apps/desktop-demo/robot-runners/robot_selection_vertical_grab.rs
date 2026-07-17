@@ -105,6 +105,10 @@ fn main() -> ExitCode {
                     selection.1, expected_end,
                     "{name}: wrong endpoint for the predicted visual line"
                 );
+                // Let the handle's draw glide settle before pixel-exact
+                // sampling (the visual trails its anchor on a spring).
+                std::thread::sleep(Duration::from_millis(260));
+                let _ = robot.wait_for_idle();
                 let shot = robot.screenshot().expect("phase frame");
                 save(&shot, &shot_dir, name);
                 let dot = lower_handle_center(&shot, bounds)

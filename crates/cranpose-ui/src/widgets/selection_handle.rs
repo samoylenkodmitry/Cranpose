@@ -13,7 +13,7 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::composable;
@@ -24,8 +24,7 @@ use crate::text_selection::{
 use crate::widgets::box_widget::{Box, BoxSpec};
 use crate::widgets::popup::Popup;
 use crate::PointerInputScope;
-use cranpose_animation::{spring, Animatable};
-use cranpose_core::{remember, with_current_composer};
+use cranpose_core::remember;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::{Brush, Color, DrawScope, Point, Rect, Size, VectorPath};
 
@@ -161,6 +160,24 @@ pub(crate) fn handle_grab_rect(
     }
 }
 
+/// Draw-phase glide state for a handle: position/velocity of the drawn
+/// lollipop trailing its true anchor, integrated on real time per redraw.
+#[derive(Clone, Copy)]
+struct GlideState {
+    x: f32,
+    y: f32,
+    vx: f32,
+    vy: f32,
+    last_nanos: u64,
+}
+
+fn glide_clock_nanos() -> u64 {
+    use std::sync::OnceLock;
+    use web_time::Instant;
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
+}
+
 /// A finger-draggable selection/cursor handle rendered in the overlay.
 ///
 /// * `kind` — which lollipop to draw (cursor dot, selection start/end).
@@ -193,53 +210,49 @@ pub fn SelectionHandle(
     on_tap: impl Fn() + 'static,
 ) {
     let shape = handle_shape(kind, radius, line_height);
-    // The handle GLIDES between character positions on a stiff spring (the
-    // reference handle never teleports char-to-char); a jump farther than
-    // ~1.5 line heights is a fresh placement (double-tap, new selection)
-    // and snaps. Springs keep their frame chain across retargets, so the
-    // glide integrates continuously through a fast drag.
-    let glide: Rc<RefCell<(Animatable<f32>, Animatable<f32>)>> = remember(|| {
-        let runtime = with_current_composer(|composer| composer.runtime_handle());
-        Rc::new(RefCell::new((
-            Animatable::new(f32::NAN, runtime.clone()),
-            Animatable::new(f32::NAN, runtime),
-        )))
+    // The handle GLIDES between character positions (the reference handle
+    // never teleports char-to-char); a jump farther than ~1.5 line heights
+    // is a fresh placement (double-tap, new selection) and snaps. The
+    // spring lives ENTIRELY in the draw phase on a plain Cell — no
+    // animation-state writes from composition or effects: such writes at
+    // the composition boundary can swallow pending invalidations and
+    // freeze the field's press feed (the edit-menu slide regression).
+    let glide: Rc<Cell<GlideState>> = remember(|| {
+        Rc::new(Cell::new(GlideState {
+            x: f32::NAN,
+            y: f32::NAN,
+            vx: 0.0,
+            vy: 0.0,
+            last_nanos: 0,
+        }))
     })
     .with(Rc::clone);
-    let (glide_x, glide_y) = {
-        let mut pair = glide.borrow_mut();
-        let (ref mut ax, ref mut ay) = *pair;
-        let current = Point {
-            x: ax.state().value(),
-            y: ay.state().value(),
-        };
+    {
+        let state = glide.get();
         let snap_distance = (line_height * 1.5).max(24.0);
-        let jump = ((tip.x - current.x).powi(2) + (tip.y - current.y).powi(2)).sqrt();
-        if !current.x.is_finite() || !current.y.is_finite() || jump > snap_distance {
-            ax.snapTo(tip.x);
-            ay.snapTo(tip.y);
-        } else {
-            if (ax.target() - tip.x).abs() > f32::EPSILON {
-                let velocity = ax.velocity();
-                ax.animate_to_with_velocity(tip.x, velocity, spring(1.0, 1600.0));
-            }
-            if (ay.target() - tip.y).abs() > f32::EPSILON {
-                let velocity = ay.velocity();
-                ay.animate_to_with_velocity(tip.y, velocity, spring(1.0, 1600.0));
-            }
+        let jump = ((tip.x - state.x).powi(2) + (tip.y - state.y).powi(2)).sqrt();
+        if !state.x.is_finite() || !state.y.is_finite() || jump > snap_distance {
+            glide.set(GlideState {
+                x: tip.x,
+                y: tip.y,
+                vx: 0.0,
+                vy: 0.0,
+                last_nanos: 0,
+            });
         }
-        (ax.state().value(), ay.state().value())
-    };
+    }
     // Snap the box to whole logical pixels: the stem is a 2dp bar whose
     // box-local coordinates are integral, so a fractional anchor gives one
     // handle a 7px stem and the other a 6px one at 3x (anti-aliased
     // asymmetry the reference never shows).
     let anchor = Rect {
-        x: (glide_x - shape.tip_in_box.x).round(),
-        y: (glide_y - shape.tip_in_box.y).round(),
+        x: (tip.x - shape.tip_in_box.x).round(),
+        y: (tip.y - shape.tip_in_box.y).round(),
         width: 0.0,
         height: 0.0,
     };
+    let glide_tip = tip;
+    let glide_for_draw = Rc::clone(&glide);
     let path_data = shape.path_data;
     let box_size = shape.box_size;
     let on_drag: Rc<dyn Fn(Point)> = Rc::new(on_drag);
@@ -253,12 +266,69 @@ pub fn SelectionHandle(
         let on_drag_end = Rc::clone(&on_drag_end);
         let on_long_press = Rc::clone(&on_long_press);
         let on_tap = Rc::clone(&on_tap);
+        let glide_for_draw = Rc::clone(&glide_for_draw);
         Box(
             Modifier::empty()
                 .size(box_size)
                 .draw_behind(move |scope: &mut dyn DrawScope| {
+                    // Render-only glide: a critically damped spring toward
+                    // the true anchor, integrated on real dt per redraw.
+                    // The hit box stays exact at the anchor; only the drawn
+                    // lollipop trails.
+                    let mut state = glide_for_draw.get();
+                    let settled = state.x.is_finite()
+                        && (state.x - glide_tip.x).abs() < 0.25
+                        && (state.y - glide_tip.y).abs() < 0.25
+                        && state.vx.abs() < 2.0
+                        && state.vy.abs() < 2.0;
+                    if settled {
+                        // Byte-stable draw at rest: keep writing/moving here
+                        // and the retained overlay scene churns every frame,
+                        // resetting pointer routing mid-gesture (the edit
+                        // menu's slide feed regression).
+                        if state.last_nanos != 0 {
+                            state = GlideState {
+                                x: glide_tip.x,
+                                y: glide_tip.y,
+                                vx: 0.0,
+                                vy: 0.0,
+                                last_nanos: 0,
+                            };
+                            glide_for_draw.set(state);
+                        }
+                    } else {
+                        let now_nanos = glide_clock_nanos();
+                        let dt = if state.last_nanos == 0 {
+                            0.0
+                        } else {
+                            ((now_nanos - state.last_nanos) as f32 / 1.0e9).min(0.05)
+                        };
+                        state.last_nanos = now_nanos;
+                        if dt > 0.0 && state.x.is_finite() {
+                            let omega = 40.0f32;
+                            let ax =
+                                omega * omega * (glide_tip.x - state.x) - 2.0 * omega * state.vx;
+                            let ay =
+                                omega * omega * (glide_tip.y - state.y) - 2.0 * omega * state.vy;
+                            state.vx += ax * dt;
+                            state.vy += ay * dt;
+                            state.x += state.vx * dt;
+                            state.y += state.vy * dt;
+                        }
+                        glide_for_draw.set(state);
+                        // Keep frames coming while the glide is in flight: a
+                        // stationary hold otherwise stops redraws and the
+                        // spring freezes mid-transition. Render-side only —
+                        // no composition state is touched.
+                        crate::request_render_invalidation();
+                    }
+                    let (dx, dy) = if state.x.is_finite() {
+                        (state.x - glide_tip.x, state.y - glide_tip.y)
+                    } else {
+                        (0.0, 0.0)
+                    };
                     if let Ok(path) = VectorPath::parse(&path_data) {
-                        scope.draw_vector_path(&path, Brush::solid(color));
+                        scope.draw_vector_path(&path.translated(dx, dy), Brush::solid(color));
                     }
                 })
                 .then(selection_handle_pointer_input(

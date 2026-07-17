@@ -122,6 +122,21 @@ impl VectorPath {
         Self::from_subpaths(subpaths, self.fill_rule)
     }
 
+    /// A copy of this path translated by `(dx, dy)`.
+    pub fn translated(&self, dx: f32, dy: f32) -> Self {
+        let subpaths = self
+            .subpaths
+            .iter()
+            .map(|subpath| {
+                subpath
+                    .iter()
+                    .map(|point| Point::new(point.x + dx, point.y + dy))
+                    .collect()
+            })
+            .collect();
+        Self::from_subpaths(subpaths, self.fill_rule)
+    }
+
     /// The fill rule used by [`coverage_mask`](Self::coverage_mask).
     pub fn fill_rule(&self) -> PathFillRule {
         self.fill_rule
