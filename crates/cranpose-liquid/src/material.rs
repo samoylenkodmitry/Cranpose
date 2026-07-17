@@ -280,6 +280,9 @@ pub struct Glass {
     /// backdrop projects enlarged across the whole face while the rim band
     /// keeps the wcKSRD edge mapping.
     pub optical_zoom: f32,
+    /// Meniscus rim reflectivity multiplier (1.0 = the reference toggle's
+    /// visible rim line; near 0 = the segmented lens's invisible body).
+    pub rim_reflection: f32,
     /// Specular rim intensity.
     pub highlight: f32,
     /// Screen-lift override (brightening toward white; negative darkens).
@@ -314,6 +317,7 @@ impl Glass {
             meniscus_absorption: 1.0,
             fold_depth: 0.0,
             optical_zoom: 1.0,
+            rim_reflection: 1.0,
             highlight: 0.9,
             lift: None,
             shadow: true,
@@ -348,6 +352,7 @@ impl Glass {
             meniscus_absorption: 1.0,
             fold_depth: 0.0,
             optical_zoom: 1.0,
+            rim_reflection: 1.0,
             highlight: 1.15,
             lift: None,
             shadow: true,
@@ -412,6 +417,12 @@ impl Glass {
     /// Sets the uniform face magnification of a riding lens (1.0 = none).
     pub fn optical_zoom(mut self, zoom: f32) -> Self {
         self.optical_zoom = zoom.max(1.0);
+        self
+    }
+
+    /// Sets the meniscus rim reflectivity (1.0 = full reference line).
+    pub fn rim_reflection(mut self, reflectivity: f32) -> Self {
+        self.rim_reflection = reflectivity.clamp(0.0, 2.0);
         self
     }
 
@@ -522,6 +533,7 @@ impl Glass {
             meniscus_absorption: self.meniscus_absorption,
             fold_depth: self.fold_depth,
             optical_zoom: self.optical_zoom,
+            rim_reflection: self.rim_reflection,
             highlight: self.highlight,
             lift,
             contrast: if self.variant == GlassVariant::Lens {
@@ -569,6 +581,7 @@ pub(crate) struct ResolvedGlass {
     pub meniscus_absorption: f32,
     pub fold_depth: f32,
     pub optical_zoom: f32,
+    pub rim_reflection: f32,
     pub highlight: f32,
     pub lift: f32,
     pub contrast: f32,
@@ -676,6 +689,7 @@ impl ResolvedGlass {
             GLASS_OPTICAL_ZOOM_UNIFORM,
             1.0 + (self.optical_zoom - 1.0).max(0.0) * activity,
         );
+        shader.set_float(121, self.rim_reflection.max(0.001));
         let (touch_x, touch_y, touch_intensity) = dynamics.touch.unwrap_or((0.0, 0.0, 0.0));
         shader.set_float(118, touch_x);
         shader.set_float(119, touch_y);

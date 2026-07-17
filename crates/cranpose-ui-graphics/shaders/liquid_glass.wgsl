@@ -840,8 +840,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         0.0,
         0.08,
     ) * select(1.0, 0.0, loupe_mode > 0.5);
-    rgb = mix(rgb, reflection_rgb, meniscus_reflection);
-    outer_rgb = mix(outer_rgb, reflection_rgb, bevel_reflection);
+    // Rim reflectivity (uniform 121, 0 = unset -> full): the toggle's
+    // reference rim draws this line, the segmented lens body is invisible.
+    var rim_reflectivity = get_float(121u);
+    if rim_reflectivity <= 0.0 {
+        rim_reflectivity = 1.0;
+    }
+    rgb = mix(rgb, reflection_rgb, meniscus_reflection * rim_reflectivity);
+    outer_rgb = mix(outer_rgb, reflection_rgb, bevel_reflection * rim_reflectivity);
 
     if rim_style > 0.0 && dispersion_strength > 0.0 {
         let grazing_displacement = -p;

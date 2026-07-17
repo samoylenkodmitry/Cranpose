@@ -357,10 +357,14 @@ pub fn LiquidSegmentedControl(
                     Glass::lens()
                         .shape(LiquidShape::Capsule)
                         .tint(Color::rgba(1.0, 1.0, 1.0, 0.02))
+                        // The reference body is invisible inside the track:
+                        // no drop shadow under the riding lens.
+                        .shadow(false)
+                        .rim_reflection(0.12)
                         .blur_radius(0.0)
                         .refraction_depth(0.52)
                         .refraction_curve(0.25)
-                        .fold_depth(5.0)
+                        .fold_depth(0.0)
                         .dispersion(0.85)
                         .highlight(0.04)
                         .lift(0.0)
