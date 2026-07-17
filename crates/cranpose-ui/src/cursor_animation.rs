@@ -114,6 +114,15 @@ pub fn reset_cursor_blink() {
     start_cursor_blink();
 }
 
+/// Holds the cursor solid with NO scheduled toggle — a caret being dragged
+/// never blinks. Call [`reset_cursor_blink`] on release to restart a clean
+/// blink cycle.
+pub fn suspend_cursor_blink() {
+    crate::render_state::with_cursor_animation(|state| {
+        state.stop();
+    });
+}
+
 /// Returns whether the cursor should be visible right now.
 pub fn is_cursor_visible() -> bool {
     crate::render_state::with_cursor_animation(|state| state.is_visible())

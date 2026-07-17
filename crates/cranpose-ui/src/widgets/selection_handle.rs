@@ -271,6 +271,15 @@ pub fn SelectionHandle(
             Modifier::empty()
                 .size(box_size)
                 .draw_behind(move |scope: &mut dyn DrawScope| {
+                    // The CURSOR handle never glides: its stem IS the
+                    // field's caret and the dot must move as one object
+                    // with it (the caret itself is state-driven).
+                    if kind == HandleKind::Cursor {
+                        if let Ok(path) = VectorPath::parse(&path_data) {
+                            scope.draw_vector_path(&path, Brush::solid(color));
+                        }
+                        return;
+                    }
                     // Render-only glide: a critically damped spring toward
                     // the true anchor, integrated on real dt per redraw.
                     // The hit box stays exact at the anchor; only the drawn
@@ -305,15 +314,21 @@ pub fn SelectionHandle(
                         };
                         state.last_nanos = now_nanos;
                         if dt > 0.0 && state.x.is_finite() {
+                            // Closed-form critically damped step: exact for
+                            // any frame gap. The Euler step was unstable
+                            // past its bound (omega*dt > 1) and a long gap
+                            // overshot 4x — the user-reported one-frame
+                            // far jump that then retracted.
                             let omega = 40.0f32;
-                            let ax =
-                                omega * omega * (glide_tip.x - state.x) - 2.0 * omega * state.vx;
-                            let ay =
-                                omega * omega * (glide_tip.y - state.y) - 2.0 * omega * state.vy;
-                            state.vx += ax * dt;
-                            state.vy += ay * dt;
-                            state.x += state.vx * dt;
-                            state.y += state.vy * dt;
+                            let decay = (-omega * dt).exp();
+                            let sx = state.x - glide_tip.x;
+                            let sy = state.y - glide_tip.y;
+                            let cx = state.vx + omega * sx;
+                            let cy = state.vy + omega * sy;
+                            state.x = glide_tip.x + (sx + cx * dt) * decay;
+                            state.y = glide_tip.y + (sy + cy * dt) * decay;
+                            state.vx = (state.vx - omega * cx * dt) * decay;
+                            state.vy = (state.vy - omega * cy * dt) * decay;
                         }
                         glide_for_draw.set(state);
                         // Keep frames coming while the glide is in flight: a

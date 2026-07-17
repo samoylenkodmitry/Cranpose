@@ -560,6 +560,9 @@ fn SelectionHandles(
             move || {
                 drag_pos.set(None);
                 end_bias.set(None);
+                // The released caret resumes a clean blink cycle: solid
+                // for one full interval, then blinking on schedule.
+                crate::cursor_animation::reset_cursor_blink();
             },
             on_long_press,
             on_tap,
@@ -803,10 +806,10 @@ fn drag_caret_closure(
         let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
         let offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
         state.set_selection(TextRange::new(offset, offset));
-        // A moved caret holds steady: every drag event resets the blink,
-        // keeping the cursor solid while it moves and for a full interval
-        // after (the reference caret never flickers under the finger).
-        crate::cursor_animation::reset_cursor_blink();
+        // A dragged caret never blinks: suspend the cycle entirely while
+        // the finger owns it; the release restarts a clean cycle (per-event
+        // resets fought the scheduler and produced irregular periods).
+        crate::cursor_animation::suspend_cursor_blink();
         crate::request_render_invalidation();
     })
 }
