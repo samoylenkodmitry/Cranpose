@@ -37,7 +37,9 @@ const LENS_VERTICAL_OFFSET: f32 = -2.0 / 3.0;
 /// overhangs the arrival end).
 const LENS_TRAVEL_LEAN: f32 = 7.0;
 /// Glass node span beyond the lens shape (rim glow + wobble live here).
-const LENS_PAD: f32 = 10.0;
+/// The full dome plus the travel lean needs real headroom — 10dp cut the
+/// leaning edge flat (live report).
+const LENS_PAD: f32 = 18.0;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
 // The flight itself now carries the raised lens; the reference keeps the
@@ -244,6 +246,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                     scope
                         .await_pointer_event_scope(|await_scope| async move {
                             let mut down_x = 0.0f32;
+                            let mut grab_offset = 0.0f32;
                             let mut dragging = false;
                             loop {
                                 let event = await_scope.await_pointer_event().await;
@@ -251,6 +254,12 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                     PointerEventKind::Down => {
                                         dragging = true;
                                         down_x = event.position.x;
+                                        // The finger grabs the thumb WHERE it
+                                        // touched it: without this offset the
+                                        // first move snaps the thumb center
+                                        // under the finger (live report).
+                                        grab_offset =
+                                            event.position.x - (thumb_x.get() + THUMB_WIDTH * 0.5);
                                         lens_axis.begin(thumb_x.get(), event.time_ms);
                                         pressed.set(true);
                                         travel_dir.set(lens_press_travel(checked));
@@ -258,10 +267,12 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                         event.consume();
                                     }
                                     PointerEventKind::Move if dragging => {
-                                        let progress =
-                                            ((event.position.x - THUMB_MARGIN - THUMB_WIDTH * 0.5)
-                                                / (TRACK_WIDTH - 2.0 * THUMB_MARGIN - THUMB_WIDTH))
-                                                .clamp(0.0, 1.0);
+                                        let progress = ((event.position.x
+                                            - grab_offset
+                                            - THUMB_MARGIN
+                                            - THUMB_WIDTH * 0.5)
+                                            / (TRACK_WIDTH - 2.0 * THUMB_MARGIN - THUMB_WIDTH))
+                                            .clamp(0.0, 1.0);
                                         if let Some(previous) = drag_progress.get() {
                                             if (progress - previous).abs() > 0.005 {
                                                 travel_dir.set((progress - previous).signum());
@@ -291,7 +302,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                         lens_axis.release_to(
                                             if next { max_x } else { min_x },
                                             event.time_ms,
-                                            LiquidMotion::snappy(),
+                                            LiquidMotion::glide(),
                                         );
                                         drag_progress.set(None);
                                         if next != checked {

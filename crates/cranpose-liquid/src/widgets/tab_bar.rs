@@ -5,7 +5,7 @@
 use crate::material::{
     neutral_surface_lift, neutral_surface_tint, Glass, GlassDynamics, GlassMorph, LiquidModifierExt,
 };
-use crate::motion::{liquid_axis_owns_visual_selection, liquid_visual_index, LiquidMotion};
+use crate::motion::LiquidMotion;
 use crate::theme::{liquid_colors, liquid_typography, LiquidTypography};
 use cranpose_foundation::PointerId;
 use cranpose_macros::composable;
@@ -131,7 +131,6 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         // smeared the riding icon.
         .refraction_depth(0.26)
         .refraction_curve(0.25)
-        .fold_depth(6.0)
         .optical_zoom(1.5)
         .dispersion(0.24)
         .lift(0.0)
@@ -180,26 +179,6 @@ fn tab_lens_left(pointer_x: f32, tab_width: f32, count: usize, has_accessory: bo
         last_tab
     };
     (pointer_x - tab_width * 0.5).clamp(min, max)
-}
-
-fn tab_visual_selection(
-    selected: usize,
-    lens_position: f32,
-    tab_width: f32,
-    count: usize,
-    direct: bool,
-) -> usize {
-    let selected = selected.min(count.saturating_sub(1));
-    let state_position = tab_width * selected as f32;
-    let lens_owns_selection =
-        liquid_axis_owns_visual_selection(direct, lens_position, state_position, tab_width);
-    liquid_visual_index(
-        selected,
-        lens_position,
-        tab_width,
-        count,
-        lens_owns_selection,
-    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -546,8 +525,8 @@ fn LiquidTabBarLayout(
                                 let press = bar_press.get().clamp(0.0, 1.0);
                                 let (touch_x, touch_y) = bar_touch.get();
                                 GlassDynamics {
-                                    highlight_boost: 0.16 * press,
-                                    saturation_boost: 0.22 * press,
+                                    highlight_boost: 0.45 * press,
+                                    saturation_boost: 0.12 * press,
                                     touch: (press > 0.01).then_some((touch_x, touch_y, press)),
                                     ..Default::default()
                                 }
@@ -577,7 +556,14 @@ fn LiquidTabBarLayout(
                             let resting_lens_x = tab_width * selected as f32;
                             let lens_axis =
                                 crate::motion::remember_liquid_drag_axis(resting_lens_x);
-                            lens_axis.settle_to(resting_lens_x, LiquidMotion::glide());
+                            // Controlled-state restore only: while a finger
+                            // holds the bar the axis belongs to the gesture
+                            // (an unconditional settle re-targeted the lens
+                            // back every frame and cancelled the touch-down
+                            // attract — live report).
+                            if !lens_pressed.get() {
+                                lens_axis.settle_to(resting_lens_x, LiquidMotion::glide());
+                            }
                             let lens_x = lens_axis.value();
                             let lens_pose = lens_axis.liquid_pose();
                             let lens_in_flight = !lens_axis.is_dragging()
@@ -594,20 +580,10 @@ fn LiquidTabBarLayout(
                             // frames (on-white gesture rows) — contact and
                             // return ride the same animated channel.
                             let lens_activity = lens_activity_anim.get();
-                            let visual_selection = tab_visual_selection(
-                                selected,
-                                lens_x,
-                                tab_width,
-                                count,
-                                lens_axis.is_dragging(),
-                            );
-                            // The lens-owned cell carries the accent in the
-                            // BASE bar: the flight lens samples this backdrop,
-                            // so the icon it magnifies mid-ride is already
-                            // blue (tab-swipe reference flips the whole cell
-                            // to accent on ownership). An overlay copy can't
-                            // do this — the lens's backdrop snapshot never
-                            // contains layers of its own composite unit.
+                            // Activation is a SETTLE event (user-corrected
+                            // against the target frames): the COMMITTED cell
+                            // wears the accent; a riding lens never recolors
+                            // the cells beneath it.
                             TabCells(
                                 Modifier::empty(),
                                 Rc::clone(&tabs),
@@ -615,7 +591,7 @@ fn LiquidTabBarLayout(
                                 tab_width,
                                 TabCellsSpec {
                                     base_color: tab_base_content_color(colors),
-                                    selected: Some(visual_selection),
+                                    selected: Some(selected),
                                     selected_color: tab_selection_content_color(colors),
                                     interactive: true,
                                     selection_only: false,
@@ -651,13 +627,22 @@ fn LiquidTabBarLayout(
                                                                     active_pointer = Some(event.id);
                                                                     moved = false;
                                                                     down_x = event.position.x;
-                                                                    // Raise IN PLACE: a tap on
-                                                                    // another cell must FLY the
-                                                                    // lens there on release, not
-                                                                    // teleport it to the finger.
-                                                                    lens_axis.begin(
-                                                                        lens_axis.value(),
+                                                                    // Touch-down ATTRACTS the
+                                                                    // lens: it glides toward the
+                                                                    // held finger immediately
+                                                                    // (live report) — never a
+                                                                    // teleport; a real drag
+                                                                    // attaches directly once
+                                                                    // past the slop.
+                                                                    lens_axis.release_to(
+                                                                        tab_lens_left(
+                                                                            event.position.x,
+                                                                            tab_width,
+                                                                            count,
+                                                                            has_accessory,
+                                                                        ),
                                                                         event.time_ms,
+                                                                        LiquidMotion::glide(),
                                                                     );
                                                                     lens_pressed.set(true);
                                                                     bar_held.set(true);
@@ -689,6 +674,13 @@ fn LiquidTabBarLayout(
                                                                     // finger — the intermittent
                                                                     // "snap instead of flight".
                                                                     if moved {
+                                                                        if !lens_axis.is_dragging()
+                                                                        {
+                                                                            lens_axis.begin(
+                                                                                lens_axis.value(),
+                                                                                event.time_ms,
+                                                                            );
+                                                                        }
                                                                         lens_axis.move_to(
                                                                             tab_lens_left(
                                                                                 event.position.x,
@@ -923,17 +915,6 @@ mod tests {
         ));
         assert_eq!(tab_base_content_color(colors), colors.label);
         assert_eq!(tab_selection_content_color(colors), colors.accent);
-    }
-
-    #[test]
-    fn flight_overlay_accents_only_the_lens_owned_cell() {
-        assert_eq!(
-            tab_visual_selection(3, TAB_WIDTH * 2.5, TAB_WIDTH, 4, true),
-            2
-        );
-        assert!(tab_cell_is_visible(2, Some(2), true));
-        assert!(!tab_cell_is_visible(3, Some(2), true));
-        assert!(tab_cell_is_visible(3, Some(2), false));
     }
 
     #[test]

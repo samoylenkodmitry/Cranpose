@@ -823,7 +823,43 @@ fn SortFilterReferenceStage() {
                                                 Brush::solid(Color::from_rgb_u8(233, 30, 196)),
                                                 CornerRadii::uniform(20.0),
                                             );
-                                        });
+                                        })
+                                        // Touched glass answers with its
+                                        // material: HDR-like highlight +
+                                        // saturation and the under-finger
+                                        // glow while the gesture is down.
+                                        .glass_effect_with(
+                                            Glass::clear()
+                                                .shape(LiquidShape::Capsule)
+                                                .blur_radius(0.0)
+                                                .shadow(false)
+                                                .highlight(0.0)
+                                                .no_clip(),
+                                            {
+                                                let glow_gesture = pill_gesture.clone();
+                                                let glow_rect = std::rc::Rc::clone(&anchor_sink);
+                                                move || {
+                                                    let pressed = glow_gesture.is_pressed();
+                                                    let press = if pressed { 1.0 } else { 0.0 };
+                                                    let touch =
+                                                        glow_gesture.press_point().map(|point| {
+                                                            let rect = glow_rect.get();
+                                                            (
+                                                                point.x - rect.x,
+                                                                point.y - rect.y,
+                                                                1.0f32,
+                                                            )
+                                                        });
+                                                    GlassDynamics {
+                                                        activity: Some(press),
+                                                        highlight_boost: 0.55 * press,
+                                                        saturation_boost: 0.45 * press,
+                                                        touch,
+                                                        ..Default::default()
+                                                    }
+                                                }
+                                            },
+                                        );
                                         Box(
                                             pill,
                                             BoxSpec::default().content_alignment(Alignment::CENTER),

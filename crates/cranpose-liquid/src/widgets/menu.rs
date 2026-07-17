@@ -233,6 +233,19 @@ impl PartialEq for LiquidMenuGesture {
 }
 
 impl LiquidMenuGesture {
+    /// Whether a pointer currently owns this gesture (pressed on the
+    /// trigger or sliding through the menu).
+    pub fn is_pressed(&self) -> bool {
+        self.inner.snapshot.get().active
+    }
+
+    /// The live pointer position while the gesture is active (window
+    /// coordinates) — the trigger surface's touch-glow anchor.
+    pub fn press_point(&self) -> Option<Point> {
+        let snapshot = self.inner.snapshot.get();
+        snapshot.active.then_some(snapshot.position)
+    }
+
     fn new() -> Self {
         Self {
             inner: Rc::new(LiquidMenuGestureInner {
@@ -1021,6 +1034,47 @@ pub fn LiquidMenu(
     let gesture_hover = (gesture_snapshot.active && gesture_snapshot.claimed)
         .then(|| gesture.item_at(gesture_snapshot.position, &items))
         .flatten();
+    // A continuous gesture HOLDING on an accordion row expands it without
+    // releasing (the reference single-gesture submenu): a dwell gate arms
+    // while the claimed gesture rests on a keeps-open row and fires its
+    // action once, keeping the stream alive.
+    let dwell_gate = remember(|| {
+        let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
+        Rc::new(RefCell::new(cranpose_animation::Animatable::new(
+            0.0f32, runtime,
+        )))
+    })
+    .with(Rc::clone);
+    let dwell_row = remember(|| Rc::new(Cell::new(Option::<usize>::None))).with(Rc::clone);
+    let dwell_fired = remember(|| Rc::new(Cell::new(Option::<usize>::None))).with(Rc::clone);
+    {
+        let hover_accordion =
+            gesture_hover.filter(|index| items.get(*index).is_some_and(|item| item.keeps_open));
+        if hover_accordion != dwell_row.get() {
+            dwell_row.set(hover_accordion);
+            dwell_fired.set(None);
+            let mut gate = dwell_gate.borrow_mut();
+            gate.snapTo(0.0);
+            if hover_accordion.is_some() {
+                gate.animateTo(
+                    1.0,
+                    cranpose_animation::AnimationType::Tween(
+                        cranpose_animation::AnimationSpec::linear(450),
+                    ),
+                );
+            }
+        }
+        let gate_value = dwell_gate.borrow().state().get();
+        if gate_value >= 1.0 {
+            if let Some(index) = dwell_row.get() {
+                if dwell_fired.get() != Some(index) {
+                    dwell_fired.set(Some(index));
+                    let on_item_dwell = Rc::clone(&on_item);
+                    SideEffect(move || on_item_dwell(index));
+                }
+            }
+        }
+    }
     let handled_release = remember(|| Rc::new(Cell::new(0u64))).with(Rc::clone);
     if let Some((sequence, point)) = gesture_snapshot.release {
         if handled_release.get() != sequence {

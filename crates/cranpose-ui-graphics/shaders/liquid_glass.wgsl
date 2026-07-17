@@ -684,7 +684,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                 // glyph bodies instead of stretching them into streaks.
                 g = 1.0 - 0.48 * ((tau - 0.3) / 0.7);
             }
-            let fold_weight = vert_weight * 0.62 * loupe_activity;
+            // The mirror lives ONLY on the FLAT run of the long edges: at the
+        // curved shoulders a vertical mirror meets a curving border and
+        // drags glyphs along the arc — the user-highlighted "crashed
+        // glass" smear. Fade the fold out entirely over the cap curvature.
+        let flat_half = max(rect_size.x * 0.5 - r_in, 0.0);
+        let flat_mask = 1.0
+            - smoothstep(flat_half * 0.75, flat_half + r_in * 0.25, abs(p.x));
+        let fold_weight = vert_weight * flat_mask * 0.62 * loupe_activity;
             let s_band0 = band_start / m;
             let s_units = s_band0 + (fold_peak - s_band0) * g;
             let fold_units = s_units - xr;
@@ -704,14 +711,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                 0.0,
                 fold_sign * fold_units * r_in * fold_weight,
             );
-            // The reference folds over a continuously curved surface: even
-            // dead-center strokes bow sideways slightly and pick up
-            // horizontal chroma. Keep the bow GENTLE — the earlier strong
-            // drift (0.08/0.12) waved the mirrored line and hooked glyphs
-            // at the shoulders (the live "broken edges" report); the
-            // reference's mirrored text is near-straight.
-            fold_displacement.x = fold_displacement.x
-                + (p.x * 0.04 + r_in * 0.03) * tau * fold_weight;
+            // The reference's mirrored text is straight: a pure vertical
+            // mirror, no sideways drift (any x-term bends strokes into the
+            // border smear the user highlighted).
             base_displacement = base_displacement + fold_displacement;
         }
     }
@@ -901,7 +903,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // The reference lens ring carries color AROUND the whole rim — the
         // caps included (toggle-press frames) — so the spectral term keeps
         // a higher axis floor than the specular caustic.
-        let dispersion_axis = 0.45 + 0.55 * pow(abs(outward_normal.y), 1.5);
+        var dispersion_axis = 0.45 + 0.55 * pow(abs(outward_normal.y), 1.5);
+        if loupe_mode > 0.5 {
+            // The loupe keeps the quiet caps — the raised floor reads as
+            // noisy "crashed glass" on its rim (live report).
+            dispersion_axis = long_edge_caustic;
+        }
         let dispersion_weight = clamp(
             dispersion_band
                 * rim_style

@@ -102,7 +102,9 @@ pub fn LiquidSegmentedControl(
             let segment_width = total_width / count as f32;
             let selected_x = segment_width * selected as f32;
             let lens_axis = crate::motion::remember_liquid_drag_axis(selected_x);
-            lens_axis.settle_to(selected_x, LiquidMotion::glide());
+            if !pressed.get() {
+                lens_axis.settle_to(selected_x, LiquidMotion::glide());
+            }
             let lens_x = lens_axis.value();
             let visual_index = crate::motion::liquid_visual_index(
                 selected,
@@ -248,11 +250,20 @@ pub fn LiquidSegmentedControl(
                                                 down_x = event.position.x;
                                                 moved = false;
                                                 pressed.set(true);
-                                                // Raise IN PLACE: a tap on another
-                                                // cell must FLY the lens there on
-                                                // release (reference tap-flight),
-                                                // never teleport it to the finger.
-                                                lens_axis.begin(lens_axis.value(), event.time_ms);
+                                                // Touch-down ATTRACTS the lens: it
+                                                // glides toward the held finger
+                                                // (live report) — never a teleport;
+                                                // a real drag attaches directly
+                                                // once past the slop.
+                                                lens_axis.release_to(
+                                                    segment_lens_left(
+                                                        event.position.x,
+                                                        segment_width,
+                                                        count,
+                                                    ),
+                                                    event.time_ms,
+                                                    LiquidMotion::glide(),
+                                                );
                                                 default_haptics()
                                                     .perform(HapticFeedback::Selection);
                                                 event.consume();
@@ -266,6 +277,12 @@ pub fn LiquidSegmentedControl(
                                                 // feeding micro-jitter into the direct
                                                 // axis teleports the lens to the finger.
                                                 if moved {
+                                                    if !lens_axis.is_dragging() {
+                                                        lens_axis.begin(
+                                                            lens_axis.value(),
+                                                            event.time_ms,
+                                                        );
+                                                    }
                                                     lens_axis.move_to(
                                                         segment_lens_left(
                                                             event.position.x,

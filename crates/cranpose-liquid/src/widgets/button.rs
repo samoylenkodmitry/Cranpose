@@ -718,10 +718,12 @@ pub fn GlassIconButtonGroup(
                 surface =
                     surface.glass_effect_with(material.shape(LiquidShape::Circle), move || {
                         let progress = surface_progress.get().clamp(0.0, 1.0);
+                        // The reference touch-up is an HDR-like lift of the
+                        // SAME material — highlight and saturation surge, no
+                        // recolor (tint stays put).
                         GlassDynamics {
-                            highlight_boost: if item_is_active { 0.22 * progress } else { 0.0 },
-                            saturation_boost: if item_is_active { 0.55 * progress } else { 0.0 },
-                            tint_alpha_multiplier: item_is_active.then_some(1.0 + 0.22 * progress),
+                            highlight_boost: if item_is_active { 0.60 * progress } else { 0.0 },
+                            saturation_boost: if item_is_active { 0.85 * progress } else { 0.0 },
                             ..Default::default()
                         }
                     });

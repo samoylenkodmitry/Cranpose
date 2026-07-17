@@ -56,7 +56,10 @@ const LOUPE_COLLAPSE_MS: u64 = 120;
 const LOUPE_LINE_GRAB_MARGIN: f32 = 0.15;
 
 fn loupe_grow_spring() -> AnimationType {
-    spring(0.85, 270.0)
+    // The reference birth carries ENERGY: the bubble overshoots and wobbles
+    // a beat before settling (target loupe-grow frames) — underdamped on
+    // purpose.
+    spring(0.55, 320.0)
 }
 
 fn loupe_collapse_tween() -> AnimationType {
@@ -228,7 +231,11 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
         if !follow_anim.state().value().is_finite() {
             follow_anim.snapTo(shown.focus_x);
         } else if (follow_anim.target() - shown.focus_x).abs() > f32::EPSILON {
-            follow_anim.animateTo(shown.focus_x, spring(1.0, 650.0));
+            // Retarget WITH the current velocity: a plain animateTo restarts
+            // the spring from rest, and per-move restarts crawl instead of
+            // following (live regression report).
+            let velocity = follow_anim.velocity();
+            follow_anim.animate_to_with_velocity(shown.focus_x, velocity, spring(1.0, 650.0));
         }
     }
     let follow = state.follow_x.borrow().state().value();
@@ -338,12 +345,14 @@ mod tests {
     }
 
     #[test]
-    fn grow_and_release_clocks_match_the_on_white_timeline() {
+    fn grow_carries_energy_and_release_uses_the_measured_clock() {
+        // No value pins while the look is still being matched by vision —
+        // only the BEHAVIOR: the birth must be an underdamped spring (the
+        // reference bubble overshoots and wobbles a beat).
         let AnimationType::Spring(grow) = loupe_grow_spring() else {
             panic!("loupe grow must use a spring");
         };
-        assert_eq!(grow.damping_ratio, 0.85);
-        assert_eq!(grow.stiffness, 270.0);
+        assert!(grow.damping_ratio < 1.0, "birth must carry visible energy");
         let AnimationType::Tween(collapse) = loupe_collapse_tween() else {
             panic!("loupe collapse must use the measured linear clock");
         };
