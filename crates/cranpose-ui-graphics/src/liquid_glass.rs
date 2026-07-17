@@ -67,6 +67,8 @@ pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 /// 113..116: resting surface tint RGBA (transparent = no resting surface)
 /// 122,123: ambient light return direction (screen-space vector; zero =
 ///          unset -> light overhead, return glow at the bottom rim)
+/// 124..126: ink recolor RGB — the lens recolors dark transmitted ink
+/// 127: ink recolor strength (0 = off)
 pub const LIQUID_GLASS_WGSL: &str = include_str!("../shaders/liquid_glass.wgsl");
 
 /// Uniform slot of the ambient light return direction (x at 122, y at 123).

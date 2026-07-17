@@ -308,6 +308,10 @@ pub struct Glass {
     /// Meniscus rim reflectivity multiplier (1.0 = the reference toggle's
     /// visible rim line; near 0 = the segmented lens's invisible body).
     pub rim_reflection: f32,
+    /// Optical ink recolor: the lens recolors dark transmitted ink toward
+    /// this color at the given strength (the reference tab bubble's
+    /// color-mask act). None = off.
+    pub ink_recolor: Option<(Color, f32)>,
     /// Specular rim intensity.
     pub highlight: f32,
     /// Screen-lift override (brightening toward white; negative darkens).
@@ -343,6 +347,7 @@ impl Glass {
             fold_depth: 0.0,
             optical_zoom: 1.0,
             rim_reflection: 1.0,
+            ink_recolor: None,
             highlight: 0.9,
             lift: None,
             shadow: true,
@@ -378,6 +383,7 @@ impl Glass {
             fold_depth: 0.0,
             optical_zoom: 1.0,
             rim_reflection: 1.0,
+            ink_recolor: None,
             highlight: 1.15,
             lift: None,
             shadow: true,
@@ -448,6 +454,13 @@ impl Glass {
     /// Sets the meniscus rim reflectivity (1.0 = full reference line).
     pub fn rim_reflection(mut self, reflectivity: f32) -> Self {
         self.rim_reflection = reflectivity.clamp(0.0, 2.0);
+        self
+    }
+
+    /// The lens recolors dark transmitted ink toward `color` at `strength`
+    /// (0..1) — the reference bubble's color-mask act as a material optic.
+    pub fn ink_recolor(mut self, color: Color, strength: f32) -> Self {
+        self.ink_recolor = Some((color, strength.clamp(0.0, 1.0)));
         self
     }
 
@@ -559,6 +572,7 @@ impl Glass {
             fold_depth: self.fold_depth,
             optical_zoom: self.optical_zoom,
             rim_reflection: self.rim_reflection,
+            ink_recolor: self.ink_recolor,
             highlight: self.highlight,
             lift,
             contrast: if self.variant == GlassVariant::Lens {
@@ -607,6 +621,7 @@ pub(crate) struct ResolvedGlass {
     pub fold_depth: f32,
     pub optical_zoom: f32,
     pub rim_reflection: f32,
+    pub ink_recolor: Option<(Color, f32)>,
     pub highlight: f32,
     pub lift: f32,
     pub contrast: f32,
@@ -715,6 +730,14 @@ impl ResolvedGlass {
             1.0 + (self.optical_zoom - 1.0).max(0.0) * activity,
         );
         shader.set_float(121, self.rim_reflection.max(0.001));
+        let (ink_color, ink_strength) = self
+            .ink_recolor
+            .map(|(color, strength)| (color, strength * activity))
+            .unwrap_or((Color::TRANSPARENT, 0.0));
+        shader.set_float(124, ink_color.r());
+        shader.set_float(125, ink_color.g());
+        shader.set_float(126, ink_color.b());
+        shader.set_float(127, ink_strength);
         let (light_x, light_y) = glass_light_direction();
         shader.set_float(GLASS_LIGHT_DIRECTION_UNIFORM, light_x);
         shader.set_float(GLASS_LIGHT_DIRECTION_UNIFORM + 1, light_y);

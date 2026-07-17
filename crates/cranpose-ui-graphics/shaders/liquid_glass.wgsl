@@ -696,6 +696,20 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     if fold_absorb > 0.0 {
         rgb = rgb * mix(vec3<f32>(1.0), rgb, fold_absorb);
     }
+    // Ink recolor (uniforms 124..126 color, 127 strength): the lens itself
+    // recolors the dark INK it transmits — the reference tab bubble shows
+    // the icon beneath in the accent as a pure optical act. The mask keys
+    // on transmitted luminance, so the light bar surface passes through
+    // untouched and only glyph ink takes the color. This lives in the
+    // MATERIAL: recoloring the elements instead refracts their accent
+    // into smears around the bubble rim (live report).
+    let ink_recolor_strength = clamp(get_float(127u), 0.0, 1.0);
+    if ink_recolor_strength > 0.0 {
+        let ink_color = vec3<f32>(get_float(124u), get_float(125u), get_float(126u));
+        let transmitted_luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let ink_mask = 1.0 - smoothstep(0.30, 0.62, transmitted_luma);
+        rgb = mix(rgb, ink_color, ink_mask * ink_recolor_strength);
+    }
     var outer_rgb = plain_path.rgb;
     var alpha = transmitted_path.a;
 

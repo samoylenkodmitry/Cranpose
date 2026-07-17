@@ -120,10 +120,14 @@ impl Default for LiquidTabBarSpec {
     }
 }
 
-fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color) -> Glass {
+fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Color) -> Glass {
     Glass::lens()
         .no_clip()
         .tint(neutral_surface_tint(foreground, 0.13, 0.10))
+        // The color-mask act is the LENS's own optic: dark ink transmitted
+        // through the bubble takes the accent (reference behavior); the
+        // cells beneath keep their honest colors.
+        .ink_recolor(accent, 0.85)
         .blur_radius(0.0)
         // Sheet-verified tab optic (tab-swipe rounds 3-5): the wide lens
         // keeps the shallow rim mapping with face zoom + fold — the full
@@ -253,10 +257,6 @@ struct TabCellsSpec {
     base_color: Color,
     selected: Option<usize>,
     selected_color: Color,
-    /// The tab currently under the LIVE lens bubble. The reference recolors
-    /// the hovered item as a pure color-mask act while the bubble rides
-    /// above it — activation stays a settle event on `selected`.
-    masked: Option<usize>,
     interactive: bool,
     selection_only: bool,
 }
@@ -277,7 +277,7 @@ fn TabCells(
     Row(modifier, RowSpec::default(), move || {
         for (index, tab) in tabs.iter().enumerate() {
             let visible = tab_cell_is_visible(index, spec.selected, spec.selection_only);
-            let color = if spec.selected == Some(index) || spec.masked == Some(index) {
+            let color = if spec.selected == Some(index) {
                 spec.selected_color
             } else {
                 spec.base_color
@@ -597,15 +597,12 @@ fn LiquidTabBarLayout(
                             // return ride the same animated channel.
                             let lens_activity = lens_activity_anim.get();
                             // Activation is a SETTLE event: only `selected`
-                            // commits. The item under the LIVE bubble wears
-                            // the accent as a pure color-mask act while the
-                            // lens rides it (reference behavior) and reverts
-                            // the moment the bubble moves on.
-                            let lens_engaged = lens_pressed.get() || lens_in_flight;
-                            let masked = lens_engaged.then(|| {
-                                let lens_center = lens_x + tab_width * 0.5;
-                                ((lens_center / tab_width).floor().max(0.0) as usize).min(count - 1)
-                            });
+                            // commits. The color-mask act under the LIVE
+                            // bubble is the LENS MATERIAL's own optic — the
+                            // shader recolors the ink it transmits — never a
+                            // recolor of the cells themselves (an element
+                            // recolor gets refracted into accent smears
+                            // around the bubble rim).
                             TabCells(
                                 Modifier::empty(),
                                 Rc::clone(&tabs),
@@ -615,7 +612,6 @@ fn LiquidTabBarLayout(
                                     base_color: tab_base_content_color(colors),
                                     selected: Some(selected),
                                     selected_color: tab_selection_content_color(colors),
-                                    masked,
                                     interactive: true,
                                     selection_only: false,
                                 },
@@ -837,9 +833,13 @@ fn LiquidTabBarLayout(
                         // offset centers it on the pill.
                         .required_size(lens_node.size)
                         .offset(node_x, node_top)
-                        .glass_effect_with(tab_flight_lens_material(colors.label), move || {
-                            tab_flight_dynamics(lens_geometry, lens_node)
-                        });
+                        .glass_effect_with(
+                            tab_flight_lens_material(
+                                colors.label,
+                                tab_selection_content_color(colors),
+                            ),
+                            move || tab_flight_dynamics(lens_geometry, lens_node),
+                        );
                     Box(lens, BoxSpec::default(), || {});
                 },
             );
@@ -1028,7 +1028,10 @@ mod tests {
 
     #[test]
     fn flight_lens_uses_the_clear_wcksrd_contract() {
-        let glass = tab_flight_lens_material(cranpose_ui_graphics::Color::BLACK);
+        let glass = tab_flight_lens_material(
+            cranpose_ui_graphics::Color::BLACK,
+            cranpose_ui_graphics::Color::from_rgb_u8(0, 122, 255),
+        );
         let generic_lens = Glass::lens();
         assert!(glass
             .lift
