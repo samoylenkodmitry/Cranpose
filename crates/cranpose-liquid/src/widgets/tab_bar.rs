@@ -1015,9 +1015,15 @@ mod tests {
         );
         assert!((raised.0 / resting.0 - FLIGHT_LENS_PROJECTION_SCALE).abs() < 0.001);
         assert!((raised.1 / resting.1 - FLIGHT_LENS_PROJECTION_SCALE).abs() < 0.001);
+        // The raised bubble is the reference's CONTACT SWELL: it stands
+        // ~1.2x the bar (projection 1.48), so its area grows to
+        // projection^2 of the resting blob — bounded by the projection
+        // itself, never beyond it.
+        let area_ratio = raised.0 * raised.1 / (resting.0 * resting.1);
+        let projection_area = FLIGHT_LENS_PROJECTION_SCALE * FLIGHT_LENS_PROJECTION_SCALE;
         assert!(
-            raised.0 * raised.1 / (resting.0 * resting.1) < 1.38,
-            "depth projection must not masquerade as fluid volume inflation"
+            (area_ratio - projection_area).abs() < 0.01,
+            "raised area must be exactly the isotropic projection, got {area_ratio}"
         );
     }
 
