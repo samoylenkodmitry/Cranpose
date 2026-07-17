@@ -141,7 +141,10 @@ pub fn LiquidSegmentedControl(
             };
             let lens_progress = animateFloatAsState(
                 lens_target,
-                if pressed.get() {
+                if pressed.get() || lens_settling {
+                    // A tap must FLY the raised lens (reference tap-flight:
+                    // ~220ms crossing with the glyphs warping through it) —
+                    // the rise has to win the race against the flight.
                     spring(0.9, 1400.0)
                 } else {
                     spring(1.0, 170.0)
