@@ -151,15 +151,19 @@ fn run_interactive_overlap() {
                     right_blue_blur_pixels,
                 )
             };
+            // The regression guard is the RATIO (backdrop detail present
+            // in the right half) plus edges and labels; the absolute count
+            // is only a some-content sanity floor — software renderers
+            // legitimately color ~4x fewer pixels than real GPUs here
+            // (CI 376 vs NVIDIA 1466 on the same scene). The poll gate and
+            // the final assert MUST share this floor: when they diverged
+            // (poll 200, assert 500) every CI run landing between them
+            // polled to "composed" and then failed the contract.
+            const RIGHT_BLUE_FLOOR: usize = 200;
             let composed = |metrics: &(f32, f32, usize, usize, usize)| {
                 let (left_edge, right_edge, labels, left_blue, right_blue) = *metrics;
-                // The regression guard is the RATIO (backdrop detail present
-                // in the right half) plus edges and labels; the absolute
-                // count is only a some-content sanity floor — software
-                // renderers legitimately color ~4x fewer pixels than real
-                // GPUs here (CI 376 vs NVIDIA 1466 on the same scene).
                 labels >= 18
-                    && right_blue >= 200
+                    && right_blue >= RIGHT_BLUE_FLOOR
                     && right_blue >= left_blue.saturating_mul(3)
                     && right_edge >= 0.65 * left_edge.max(1.0)
             };
@@ -181,7 +185,7 @@ fn run_interactive_overlap() {
                 path.display()
             );
             if blur_label_pixels < 18
-                || right_blue_blur_pixels < 500
+                || right_blue_blur_pixels < RIGHT_BLUE_FLOOR
                 || right_blue_blur_pixels < left_blue_blur_pixels.saturating_mul(3)
                 || right_edge < 0.65 * left_edge.max(1.0)
             {
