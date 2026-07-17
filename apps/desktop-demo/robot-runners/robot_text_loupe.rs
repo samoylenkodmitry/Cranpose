@@ -307,26 +307,24 @@ fn main() -> ExitCode {
             let after = robot.screenshot_with_scale(3.0).expect("after");
             save(&after, &shot_dir, "12-menu-returned");
 
-            // ---- Dot-grab drag: NO loupe ----
+            // ---- Dot-grab drag: the loupe rises for EVERY handle touch ----
             let end2_x = FIELD_X + width_of("Silence. Melody. Then");
             let dot_y = line1_bottom + 6.0; // end dot center
             robot.touch_down(end2_x, dot_y).expect("grab end dot");
             std::thread::sleep(Duration::from_millis(240));
             let dot_drag = robot.screenshot_with_scale(3.0).expect("dot drag");
-            save(&dot_drag, &shot_dir, "13-dot-grab-no-loupe");
-            // While a dot-drag is in flight the band above the line must be
-            // EMPTY: the menu is hidden and no bubble may appear — plain
-            // backdrop only (structure there means a loupe wrongly grew).
-            // Band strictly ABOVE the ghost toolbar text (which lives at
-            // y≈122..138): only a wrongly-grown bubble reaches up here.
+            save(&dot_drag, &shot_dir, "13-dot-grab-loupe");
+            // A dot grab below the line floats the magnifier like any other
+            // handle touch (user-directed rule): the band above the grabbed
+            // line must show the bubble's structure.
             let dot_loupe_region = (
                 end2_x - 70.0,
                 line1_mid - 120.0,
                 end2_x + 70.0,
                 line1_mid - 72.0,
             );
-            if region_has_structure(&dot_drag, dot_loupe_region) {
-                fail(&robot, "a loupe appeared for a dot grab below the line");
+            if !region_has_structure(&dot_drag, dot_loupe_region) {
+                fail(&robot, "no loupe rose for a dot grab below the line");
             }
             robot
                 .touch_move(wrap_boundary_x, dot_y)

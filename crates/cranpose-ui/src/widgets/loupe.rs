@@ -20,7 +20,7 @@
 //!
 //! Visibility (also from the recording): the loupe shows only while the
 //! finger covers the text line — dragging a handle by its dot below the line
-//! magnifies nothing (see [`loupe_target_for_drag`]).
+//! rises for every handle interaction (see [`loupe_target_for_drag`]).
 
 #![allow(non_snake_case)]
 
@@ -49,12 +49,6 @@ pub const LOUPE_MAGNIFICATION: f32 = 1.25;
 // The reference loupe deflates into the line over ~100 ms (loupe-dissolve
 // frames b_024..b_036 at native 120 fps).
 const LOUPE_COLLAPSE_MS: u64 = 120;
-/// How far below the line bottom (in line heights) the finger still counts
-/// as covering the line. The end/cursor dot's center sits ~0.29 line heights
-/// below the bottom (16 dp dot on a 20 dp line), so a dot-center grab falls
-/// outside this margin and shows no loupe — the measured behavior.
-const LOUPE_LINE_GRAB_MARGIN: f32 = 0.15;
-
 fn loupe_grow_spring() -> AnimationType {
     // The reference birth carries ENERGY: the bubble overshoots and wobbles
     // a beat before settling (target loupe-grow frames) — underdamped on
@@ -74,24 +68,21 @@ pub struct LoupeTarget {
     pub line_mid_y: f32,
 }
 
-/// The measured visibility rule: the loupe shows while the finger covers the
-/// dragged line (grabbing the stem/edge on the line, or the start handle's
-/// dot above it), and hides when the drag rides the dot BELOW the line —
-/// there the finger obscures nothing.
+/// The loupe rises for EVERY handle interaction — touch-down on any handle
+/// (stem, edge, or the dot hanging below the line) floats the magnifier
+/// over the dragged line. The magnified line is derived from the grabbed
+/// line, not the raw finger, so riding the dot below still focuses the
+/// line the drag manipulates.
 pub fn loupe_target_for_drag(
     finger: Point,
     line_bottom: f32,
     line_height: f32,
 ) -> Option<LoupeTarget> {
     let line_height = line_height.max(1.0);
-    if finger.y <= line_bottom + LOUPE_LINE_GRAB_MARGIN * line_height {
-        Some(LoupeTarget {
-            focus_x: finger.x,
-            line_mid_y: line_bottom - 0.5 * line_height,
-        })
-    } else {
-        None
-    }
+    Some(LoupeTarget {
+        focus_x: finger.x,
+        line_mid_y: line_bottom - 0.5 * line_height,
+    })
 }
 
 /// The bubble's shape/place at one instant: width and height as fractions of
@@ -279,7 +270,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loupe_shows_only_while_the_finger_covers_the_line() {
+    fn loupe_rises_for_every_handle_interaction() {
         let line_bottom = 100.0;
         let line_height = 20.0;
         // Finger on the line: loupe up, focused on the line mid.
@@ -287,16 +278,11 @@ mod tests {
             .expect("a finger on the line raises the loupe");
         assert_eq!(on_line.focus_x, 40.0);
         assert_eq!(on_line.line_mid_y, 90.0);
-        // Finger slightly under the line bottom (within the margin): still up.
-        assert!(
-            loupe_target_for_drag(Point { x: 40.0, y: 102.0 }, line_bottom, line_height).is_some()
-        );
-        // Finger on the dot below the line (dot center ≈ bottom + 6dp on a
-        // 20dp line): no loupe — the reference drags the end handle by its
-        // dot with nothing magnified.
-        assert!(
-            loupe_target_for_drag(Point { x: 40.0, y: 106.0 }, line_bottom, line_height).is_none()
-        );
+        // Finger on the dot below the line: the loupe STILL rises, focused
+        // on the grabbed line (any handle touch floats the magnifier).
+        let on_dot = loupe_target_for_drag(Point { x: 40.0, y: 106.0 }, line_bottom, line_height)
+            .expect("a dot grab raises the loupe too");
+        assert_eq!(on_dot.line_mid_y, 90.0);
         // Finger above the line (the start handle's dot): loupe up.
         assert!(
             loupe_target_for_drag(Point { x: 40.0, y: 70.0 }, line_bottom, line_height).is_some()

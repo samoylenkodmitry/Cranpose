@@ -13,6 +13,7 @@
 
 #![allow(non_snake_case)]
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::composable;
@@ -23,6 +24,8 @@ use crate::text_selection::{
 use crate::widgets::box_widget::{Box, BoxSpec};
 use crate::widgets::popup::Popup;
 use crate::PointerInputScope;
+use cranpose_animation::{spring, Animatable};
+use cranpose_core::{remember, with_current_composer};
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::{Brush, Color, DrawScope, Point, Rect, Size, VectorPath};
 
@@ -190,13 +193,50 @@ pub fn SelectionHandle(
     on_tap: impl Fn() + 'static,
 ) {
     let shape = handle_shape(kind, radius, line_height);
+    // The handle GLIDES between character positions on a stiff spring (the
+    // reference handle never teleports char-to-char); a jump farther than
+    // ~1.5 line heights is a fresh placement (double-tap, new selection)
+    // and snaps. Springs keep their frame chain across retargets, so the
+    // glide integrates continuously through a fast drag.
+    let glide: Rc<RefCell<(Animatable<f32>, Animatable<f32>)>> = remember(|| {
+        let runtime = with_current_composer(|composer| composer.runtime_handle());
+        Rc::new(RefCell::new((
+            Animatable::new(f32::NAN, runtime.clone()),
+            Animatable::new(f32::NAN, runtime),
+        )))
+    })
+    .with(Rc::clone);
+    let (glide_x, glide_y) = {
+        let mut pair = glide.borrow_mut();
+        let (ref mut ax, ref mut ay) = *pair;
+        let current = Point {
+            x: ax.state().value(),
+            y: ay.state().value(),
+        };
+        let snap_distance = (line_height * 1.5).max(24.0);
+        let jump = ((tip.x - current.x).powi(2) + (tip.y - current.y).powi(2)).sqrt();
+        if !current.x.is_finite() || !current.y.is_finite() || jump > snap_distance {
+            ax.snapTo(tip.x);
+            ay.snapTo(tip.y);
+        } else {
+            if (ax.target() - tip.x).abs() > f32::EPSILON {
+                let velocity = ax.velocity();
+                ax.animate_to_with_velocity(tip.x, velocity, spring(1.0, 1600.0));
+            }
+            if (ay.target() - tip.y).abs() > f32::EPSILON {
+                let velocity = ay.velocity();
+                ay.animate_to_with_velocity(tip.y, velocity, spring(1.0, 1600.0));
+            }
+        }
+        (ax.state().value(), ay.state().value())
+    };
     // Snap the box to whole logical pixels: the stem is a 2dp bar whose
     // box-local coordinates are integral, so a fractional anchor gives one
     // handle a 7px stem and the other a 6px one at 3x (anti-aliased
     // asymmetry the reference never shows).
     let anchor = Rect {
-        x: (tip.x - shape.tip_in_box.x).round(),
-        y: (tip.y - shape.tip_in_box.y).round(),
+        x: (glide_x - shape.tip_in_box.x).round(),
+        y: (glide_y - shape.tip_in_box.y).round(),
         width: 0.0,
         height: 0.0,
     };

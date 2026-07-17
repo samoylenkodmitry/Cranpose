@@ -484,6 +484,16 @@ fn SelectionHandles(
     // can own the pointer at a time.
     let drag_bias: Rc<Cell<Option<HandleGrabOffset>>> =
         remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
+    // LIVE tip-y holders, refreshed every composition. The pointer-input
+    // gesture task starts once per handle kind and holds its first
+    // composition's closures — a tip snapshot captured by value goes stale
+    // the moment the handle moves to another wrapped line, and the next
+    // grab computes its finger-to-line bias against the OLD line (taps on
+    // the handle land on the wrong Y; drags fight the selection and read
+    // as a stuck handle). The closures read these cells at event time.
+    let cursor_tip_y: Rc<Cell<f32>> = remember(|| Rc::new(Cell::new(0.0f32))).with(Rc::clone);
+    let start_tip_y: Rc<Cell<f32>> = remember(|| Rc::new(Cell::new(0.0f32))).with(Rc::clone);
+    let end_tip_y: Rc<Cell<f32>> = remember(|| Rc::new(Cell::new(0.0f32))).with(Rc::clone);
 
     if selection.collapsed() {
         // Collapsed caret: a single cursor handle (a dot below the caret).
@@ -514,7 +524,8 @@ fn SelectionHandles(
         let on_long_press = open_caret_menu;
         let grab_bias = Rc::clone(&drag_bias);
         let end_bias = Rc::clone(&drag_bias);
-        let tip_y = tip.y;
+        cursor_tip_y.set(tip.y);
+        let tip_y = Rc::clone(&cursor_tip_y);
         SelectionHandle(
             HandleKind::Cursor,
             tip,
@@ -522,7 +533,7 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                track_handle_grab(&grab_bias, tip_y, pos.y);
+                track_handle_grab(&grab_bias, tip_y.get(), pos.y);
                 drag_pos.set(Some(pos));
                 on_drag(pos);
             },
@@ -590,7 +601,8 @@ fn SelectionHandles(
         );
         let grab_bias = Rc::clone(&drag_bias);
         let end_bias = Rc::clone(&drag_bias);
-        let start_tip_y = start_tip.y;
+        start_tip_y.set(start_tip.y);
+        let start_tip_live = Rc::clone(&start_tip_y);
         SelectionHandle(
             HandleKind::SelectionStart,
             start_tip,
@@ -598,7 +610,7 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                track_handle_grab(&grab_bias, start_tip_y, pos.y);
+                track_handle_grab(&grab_bias, start_tip_live.get(), pos.y);
                 drag_pos.set(Some(pos));
                 on_drag_start(pos);
             },
@@ -623,7 +635,8 @@ fn SelectionHandles(
         );
         let grab_bias = Rc::clone(&drag_bias);
         let end_bias = Rc::clone(&drag_bias);
-        let end_tip_y = end_tip.y;
+        end_tip_y.set(end_tip.y);
+        let end_tip_live = Rc::clone(&end_tip_y);
         SelectionHandle(
             HandleKind::SelectionEnd,
             end_tip,
@@ -631,7 +644,7 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                track_handle_grab(&grab_bias, end_tip_y, pos.y);
+                track_handle_grab(&grab_bias, end_tip_live.get(), pos.y);
                 drag_pos.set(Some(pos));
                 on_drag_end(pos);
             },
@@ -774,6 +787,32 @@ fn drag_edge_closure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handle_grab_bias_reads_the_live_tip_not_a_snapshot() {
+        // The pointer gesture task holds its first composition's closures;
+        // a tip-y captured by value goes stale when the handle moves to
+        // another wrapped line and the next grab computes its bias against
+        // the OLD line (wrong-Y taps, stuck-handle drags). The closures
+        // read a live Cell that composition refreshes.
+        let tip_y: Rc<Cell<f32>> = Rc::new(Cell::new(100.0));
+        let drag_bias: Rc<Cell<Option<HandleGrabOffset>>> = Rc::new(Cell::new(None));
+        let grab = {
+            let tip_y = Rc::clone(&tip_y);
+            let drag_bias = Rc::clone(&drag_bias);
+            move |finger_y: f32| track_handle_grab(&drag_bias, tip_y.get(), finger_y)
+        };
+
+        // The handle has since moved two wrapped lines down (tip 100 -> 148);
+        // composition refreshed the cell, the gesture task did not restart.
+        tip_y.set(148.0);
+        let bias = grab(160.0);
+        assert_eq!(
+            bias,
+            148.0 - 160.0,
+            "the grab bias must anchor on the handle's CURRENT line"
+        );
+    }
     use cranpose_core::{location_key, Composition, DefaultScheduler, MemoryApplier, Runtime};
     use std::sync::Arc;
 
