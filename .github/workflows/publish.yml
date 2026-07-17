@@ -15,8 +15,10 @@ permissions:
 
 jobs:
   sync_versions:
-    name: Verify versions with tag
+    name: Sync versions with tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       should_publish: ${{ steps.sync.outputs.should_publish }}
     steps:
@@ -227,9 +229,27 @@ jobs:
 
           if git diff --quiet; then
             echo "No version changes needed for ${tag}."
+          elif [[ "$IS_TAG_PUSH" == "true" ]]; then
+            # A bare web-UI tag on an unbumped main is the NORMAL release
+            # flow: land the bump on the default branch and move the tag
+            # onto it so the tag tree matches the published crates. Pushes
+            # made with GITHUB_TOKEN do not retrigger workflows, so the
+            # moved tag cannot recurse into a second Publish run.
+            git diff --stat -- Cargo.toml Cargo.lock apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Cargo.toml Cargo.lock apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
+            git commit -m "release: ${tag}"
+            if ! git push origin "HEAD:$DEFAULT_BRANCH"; then
+              echo "$DEFAULT_BRANCH moved while preparing ${tag}; re-tag from the new HEAD." >&2
+              exit 1
+            fi
+            git tag -f "$tag" HEAD
+            git push origin -f "refs/tags/$tag"
+            echo "Landed release metadata for ${tag} on $DEFAULT_BRANCH and moved the tag."
           else
             git diff -- Cargo.toml Cargo.lock apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
-            echo "$DEFAULT_BRANCH must already contain the release metadata for ${tag} before publishing." >&2
+            echo "$DEFAULT_BRANCH must already contain the release metadata for ${tag} for a manual dispatch." >&2
             exit 1
           fi
 
