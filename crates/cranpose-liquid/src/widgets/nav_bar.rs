@@ -109,7 +109,10 @@ pub fn LiquidNavBar(
             .glass_effect_with(
                 Glass::regular()
                     .shape(LiquidShape::RoundedRect(0.0))
-                    .blur_radius(16.0)
+                    // Strong diffusion: passing section headers must melt
+                    // into the material — at 16dp they stayed readable and
+                    // pulsed the band during scroll (the reported flicker).
+                    .blur_radius(30.0)
                     .saturation(1.15)
                     .refraction_depth(0.0)
                     .transmission_refraction(0.0)
