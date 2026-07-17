@@ -195,6 +195,16 @@ trait ScrollTarget: Clone {
         true
     }
 
+    /// Whether the target can consume a gesture moving in the direction of
+    /// `gesture_delta` RIGHT NOW. A target pinned at one end must yield the
+    /// drag to its enclosing scrollable instead of capturing a gesture it
+    /// cannot consume — otherwise an exhausted inner list swallows every
+    /// event and the page around it goes dead.
+    fn can_consume(&self, gesture_delta: f32) -> bool {
+        let _ = gesture_delta;
+        self.can_scroll()
+    }
+
     /// Settle policy remapping the post-interaction rest offset (see
     /// [`ScrollSettlePolicy`]). `None` keeps natural rest positions.
     fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
@@ -222,6 +232,17 @@ impl ScrollTarget for ScrollState {
 
     fn can_scroll(&self) -> bool {
         self.max_value() > 0.0
+    }
+
+    fn can_consume(&self, gesture_delta: f32) -> bool {
+        // apply_delta maps a gesture delta to dispatch_raw_delta(-delta):
+        // finger up (negative) raises the offset toward max_value.
+        let raw = -gesture_delta;
+        if raw > 0.0 {
+            self.value_non_reactive() < self.max_value()
+        } else {
+            self.value_non_reactive() > 0.0
+        }
     }
 
     fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
@@ -265,6 +286,20 @@ impl ScrollTarget for LazyListState {
         self.layout_info().total_items_count == 0
             || self.can_scroll_forward_non_reactive()
             || self.can_scroll_backward_non_reactive()
+    }
+
+    fn can_consume(&self, gesture_delta: f32) -> bool {
+        // The list scrolls FORWARD on a NEGATIVE dispatch_scroll_delta
+        // (`pushing_forward = delta < 0`), and apply_delta passes the
+        // gesture delta straight through.
+        if self.layout_info().total_items_count == 0 {
+            return true;
+        }
+        if gesture_delta < 0.0 {
+            self.can_scroll_forward_non_reactive()
+        } else {
+            self.can_scroll_backward_non_reactive()
+        }
     }
 }
 
@@ -421,10 +456,13 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         // direction never capture, so enclosing scrollables receive the
         // gesture instead.
         if !gs.is_dragging && !gs.axis_locked_out {
-            let main_delta = calculate_total_delta(down_pos, position, self.is_vertical).abs();
+            let signed_main_delta = calculate_total_delta(down_pos, position, self.is_vertical);
+            let main_delta = signed_main_delta.abs();
             let cross_delta = calculate_total_delta(down_pos, position, !self.is_vertical).abs();
             if main_delta > DRAG_THRESHOLD && main_delta >= cross_delta {
-                if self.scroll_target.can_scroll() {
+                // Direction-aware capture: a target pinned at one end yields
+                // gestures it cannot consume to its enclosing scrollable.
+                if self.scroll_target.can_consume(signed_main_delta) {
                     gs.is_dragging = true;
                     self.motion_context.set_active(true);
                 }

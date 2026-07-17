@@ -804,11 +804,30 @@ fn SortFilterReferenceStage() {
                                     let pill_gesture = column_gesture.clone();
                                     move || {
                                         let pill_open = pill_open;
+                                        // Touched glass rises toward the user
+                                        // (reference lift) on a spring, and
+                                        // the same coordinate drives the HDR
+                                        // glow so light and geometry move as
+                                        // one.
+                                        let pill_press = cranpose_animation::animateFloatAsState(
+                                            if pill_gesture.is_pressed() { 1.0 } else { 0.0 },
+                                            cranpose_animation::spring(1.0, 600.0),
+                                            "sortfilter-pill-press",
+                                        );
                                         let pill = liquid_menu_trigger_input(
                                             Modifier::empty(),
                                             pill_gesture.clone(),
                                             move || pill_open.set(true),
                                         )
+                                        .graphics_layer(move || {
+                                            let press = pill_press.get().clamp(0.0, 1.0);
+                                            GraphicsLayer {
+                                                scale_x: 1.0 + 0.05 * press,
+                                                scale_y: 1.0 + 0.05 * press,
+                                                translation_y: -1.5 * press,
+                                                ..Default::default()
+                                            }
+                                        })
                                         .size(Size::new(96.0, 40.0))
                                         .offset(-16.0, 0.0)
                                         .report_window_rect(std::rc::Rc::clone(&anchor_sink))
@@ -839,8 +858,11 @@ fn SortFilterReferenceStage() {
                                                 let glow_gesture = pill_gesture.clone();
                                                 let glow_rect = std::rc::Rc::clone(&anchor_sink);
                                                 move || {
-                                                    let pressed = glow_gesture.is_pressed();
-                                                    let press = if pressed { 1.0 } else { 0.0 };
+                                                    let press = if glow_gesture.is_pressed() {
+                                                        1.0
+                                                    } else {
+                                                        0.0
+                                                    };
                                                     let touch =
                                                         glow_gesture.press_point().map(|point| {
                                                             let rect = glow_rect.get();

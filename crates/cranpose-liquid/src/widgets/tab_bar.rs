@@ -509,11 +509,22 @@ fn LiquidTabBarLayout(
                     );
                     // The bar's edge is defined by shadow and contrast, not a
                     // bright rim stroke.
-                    // "Comes closer" reads through light, not geometry: a
-                    // geometric scale shifts the lens's finger-tracking
-                    // coordinates (bubble-physics contract). The held lift
-                    // rides the shader: stronger highlight, saturation and
-                    // the under-finger glow.
+                    // Held glass comes CLOSER in geometry AND light: the
+                    // whole bar rises ~3% toward the user (the reference's
+                    // touched-panel lift) while the shader concentrates
+                    // highlight, saturation and the under-finger glow. At
+                    // this scale the render-only transform shifts the
+                    // lens's finger mapping by under a pixel.
+                    let bar_lift = Modifier::empty().graphics_layer(move || {
+                        let press = bar_press.get().clamp(0.0, 1.0);
+                        let rise = 1.0 + 0.03 * press;
+                        cranpose_ui_graphics::GraphicsLayer {
+                            scale_x: rise,
+                            scale_y: rise,
+                            translation_y: -2.5 * press,
+                            ..Default::default()
+                        }
+                    });
                     let pill = Modifier::empty()
                         .glass_effect_with(
                             // Dark labels must never sink into dark content
@@ -533,6 +544,7 @@ fn LiquidTabBarLayout(
                             },
                         )
                         .height(BAR_HEIGHT);
+                    let pill = bar_lift.then(pill);
                     Box(pill, BoxSpec::default(), move || {
                         let tabs = Rc::clone(&tabs);
                         let typography = typography.clone();

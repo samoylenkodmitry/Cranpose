@@ -200,6 +200,81 @@ fn dispatch_nested(
 }
 
 #[test]
+fn exhausted_inner_scrollable_yields_the_drag_to_its_parent() {
+    // A list nested in a page, with the LIST pinned at its end: dragging
+    // further in that direction cannot be consumed by the list, so the
+    // PAGE must scroll. Capturing on `max_value > 0` alone made the
+    // exhausted inner list swallow every gesture and the page went dead
+    // (live report: whole sections unreachable, buttons "not active").
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let inner = ScrollState::new(400.0);
+        inner.set_max_value(400.0); // pinned at the end
+        let outer = ScrollState::new(0.0);
+        outer.set_max_value(600.0);
+        let (child, _child_chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(inner.clone(), false));
+        let (parent, _parent_chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(outer.clone(), false));
+
+        // Finger up = scroll onward, beyond the inner's limit.
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Down, 100.0, 300.0),
+        );
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Move, 100.0, 240.0),
+        );
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Move, 100.0, 180.0),
+        );
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Up, 100.0, 180.0),
+        );
+
+        assert_eq!(
+            inner.value_non_reactive(),
+            400.0,
+            "the exhausted inner list has nothing to consume"
+        );
+        assert!(
+            outer.value_non_reactive() > 50.0,
+            "the enclosing page must receive the drag the inner list cannot              consume, got {}",
+            outer.value_non_reactive()
+        );
+
+        // And the opposite direction still belongs to the inner list.
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Down, 100.0, 100.0),
+        );
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Move, 100.0, 160.0),
+        );
+        dispatch_nested(
+            &child,
+            &parent,
+            scroll_pointer_event(PointerEventKind::Up, 100.0, 160.0),
+        );
+        assert!(
+            inner.value_non_reactive() < 400.0,
+            "a drag back toward the inner list's range must scroll the inner              list again, got {}",
+            inner.value_non_reactive()
+        );
+    });
+}
+
+#[test]
 fn horizontal_drag_with_jitter_scrolls_nested_horizontal_not_vertical_parent() {
     // A chips row (horizontal scroll) nested in a screen list (vertical
     // scroll): a mostly-horizontal drag with vertical jitter must scroll the
