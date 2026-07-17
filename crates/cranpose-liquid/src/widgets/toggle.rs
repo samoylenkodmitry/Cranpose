@@ -66,7 +66,7 @@ fn toggle_lens_material() -> Glass {
         .refraction_curve(0.25)
         .transmission_refraction(0.70)
         .meniscus_absorption(0.70)
-        .fold_depth(6.0)
+        .fold_depth(9.0)
         // The pressed lens shows the track end-cap mildly enlarged
         // (toggle-press detail frames).
         .optical_zoom(1.35)
