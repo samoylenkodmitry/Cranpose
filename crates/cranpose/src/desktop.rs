@@ -5245,16 +5245,37 @@ fn resolve_robot_screenshot_params(
     buffer_size: (u32, u32),
     fallback_logical_size: Option<(f32, f32)>,
 ) -> (u32, u32, f32) {
-    // CRANPOSE_ROBOT_CAPTURE_SCALE renders captures at a chosen density.
-    // Scale-1 captures under-resolve sub-dp optics (a 1.3dp glass bevel
-    // band lands between pixel centers and reads at ~1/3 strength), which
-    // makes them useless for judging edge light against 2-3x reference
-    // recordings.
-    let capture_scale = std::env::var("CRANPOSE_ROBOT_CAPTURE_SCALE")
-        .ok()
+    resolve_robot_screenshot_params_with_scale(
+        buffer_size,
+        fallback_logical_size,
+        robot_capture_scale_from_env(),
+    )
+}
+
+/// CRANPOSE_ROBOT_CAPTURE_SCALE renders captures at a chosen density.
+/// Scale-1 captures under-resolve sub-dp optics (a 1.3dp glass bevel band
+/// lands between pixel centers and reads at ~1/3 strength), which makes
+/// them useless for judging edge light against 2-3x reference recordings.
+fn robot_capture_scale_from_env() -> f32 {
+    parse_robot_capture_scale(
+        std::env::var("CRANPOSE_ROBOT_CAPTURE_SCALE")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_robot_capture_scale(value: Option<&str>) -> f32 {
+    value
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|scale| scale.is_finite() && *scale >= 0.5 && *scale <= 4.0)
-        .unwrap_or(1.0);
+        .unwrap_or(1.0)
+}
+
+fn resolve_robot_screenshot_params_with_scale(
+    buffer_size: (u32, u32),
+    fallback_logical_size: Option<(f32, f32)>,
+    capture_scale: f32,
+) -> (u32, u32, f32) {
     if let Some((logical_width, logical_height)) = fallback_logical_size {
         let width = (logical_width * capture_scale).ceil().max(1.0) as u32;
         let height = (logical_height * capture_scale).ceil().max(1.0) as u32;
@@ -5287,7 +5308,8 @@ mod tests {
 
     #[cfg(feature = "robot")]
     use super::{
-        resolve_robot_screenshot_params, robot_visible_present_target,
+        parse_robot_capture_scale, resolve_robot_screenshot_params,
+        resolve_robot_screenshot_params_with_scale, robot_visible_present_target,
         robot_visible_pump_present_target, RobotController,
     };
 
@@ -5968,15 +5990,20 @@ mod tests {
 
     #[cfg(feature = "robot")]
     #[test]
-    fn robot_screenshot_honors_capture_scale_env() {
-        std::env::set_var("CRANPOSE_ROBOT_CAPTURE_SCALE", "2");
-        let resolved = resolve_robot_screenshot_params((0, 0), Some((100.0, 50.0)));
-        std::env::remove_var("CRANPOSE_ROBOT_CAPTURE_SCALE");
+    fn robot_screenshot_honors_capture_scale() {
+        // Pure-parameter path: tests never mutate the process env (parallel
+        // test threads share it — an env-writing test raced the other
+        // screenshot tests on CI).
+        let resolved = resolve_robot_screenshot_params_with_scale((0, 0), Some((100.0, 50.0)), 2.0);
         assert_eq!(resolved, (200, 100, 2.0));
 
-        std::env::set_var("CRANPOSE_ROBOT_CAPTURE_SCALE", "999");
-        let clamped = resolve_robot_screenshot_params((0, 0), Some((100.0, 50.0)));
-        std::env::remove_var("CRANPOSE_ROBOT_CAPTURE_SCALE");
-        assert_eq!(clamped, (100, 50, 1.0), "out-of-range scale is ignored");
+        assert_eq!(parse_robot_capture_scale(Some("2")), 2.0);
+        assert_eq!(
+            parse_robot_capture_scale(Some("999")),
+            1.0,
+            "out-of-range scale is ignored"
+        );
+        assert_eq!(parse_robot_capture_scale(Some("junk")), 1.0);
+        assert_eq!(parse_robot_capture_scale(None), 1.0);
     }
 }
