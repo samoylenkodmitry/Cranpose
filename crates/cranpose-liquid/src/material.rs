@@ -668,20 +668,18 @@ impl ResolvedGlass {
             self.transmission_refraction * activity,
         );
         shader.set_float(GLASS_MENISCUS_ABSORPTION_UNIFORM, self.meniscus_absorption);
-        if self.fold_depth > 0.0 {
-            shader.set_float(GLASS_FOLD_DEPTH_UNIFORM, self.fold_depth);
-        }
-        if self.optical_zoom > 1.0 {
-            shader.set_float(
-                GLASS_OPTICAL_ZOOM_UNIFORM,
-                1.0 + (self.optical_zoom - 1.0) * activity,
-            );
-        }
-        if let Some((touch_x, touch_y, intensity)) = dynamics.touch {
-            shader.set_float(118, touch_x);
-            shader.set_float(119, touch_y);
-            shader.set_float(120, intensity.clamp(0.0, 1.0));
-        }
+        // Always write optional channels — a conditional write leaves stale
+        // values behind if a shader instance is ever pooled or reused, and
+        // that leak class renders one surface with another's optics.
+        shader.set_float(GLASS_FOLD_DEPTH_UNIFORM, self.fold_depth.max(0.0));
+        shader.set_float(
+            GLASS_OPTICAL_ZOOM_UNIFORM,
+            1.0 + (self.optical_zoom - 1.0).max(0.0) * activity,
+        );
+        let (touch_x, touch_y, touch_intensity) = dynamics.touch.unwrap_or((0.0, 0.0, 0.0));
+        shader.set_float(118, touch_x);
+        shader.set_float(119, touch_y);
+        shader.set_float(120, touch_intensity.clamp(0.0, 1.0));
         shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, density);
         shader.set_float(
             11,
