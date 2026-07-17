@@ -253,6 +253,10 @@ struct TabCellsSpec {
     base_color: Color,
     selected: Option<usize>,
     selected_color: Color,
+    /// The tab currently under the LIVE lens bubble. The reference recolors
+    /// the hovered item as a pure color-mask act while the bubble rides
+    /// above it — activation stays a settle event on `selected`.
+    masked: Option<usize>,
     interactive: bool,
     selection_only: bool,
 }
@@ -273,7 +277,7 @@ fn TabCells(
     Row(modifier, RowSpec::default(), move || {
         for (index, tab) in tabs.iter().enumerate() {
             let visible = tab_cell_is_visible(index, spec.selected, spec.selection_only);
-            let color = if spec.selected == Some(index) {
+            let color = if spec.selected == Some(index) || spec.masked == Some(index) {
                 spec.selected_color
             } else {
                 spec.base_color
@@ -592,10 +596,16 @@ fn LiquidTabBarLayout(
                             // frames (on-white gesture rows) — contact and
                             // return ride the same animated channel.
                             let lens_activity = lens_activity_anim.get();
-                            // Activation is a SETTLE event (user-corrected
-                            // against the target frames): the COMMITTED cell
-                            // wears the accent; a riding lens never recolors
-                            // the cells beneath it.
+                            // Activation is a SETTLE event: only `selected`
+                            // commits. The item under the LIVE bubble wears
+                            // the accent as a pure color-mask act while the
+                            // lens rides it (reference behavior) and reverts
+                            // the moment the bubble moves on.
+                            let lens_engaged = lens_pressed.get() || lens_in_flight;
+                            let masked = lens_engaged.then(|| {
+                                let lens_center = lens_x + tab_width * 0.5;
+                                ((lens_center / tab_width).floor().max(0.0) as usize).min(count - 1)
+                            });
                             TabCells(
                                 Modifier::empty(),
                                 Rc::clone(&tabs),
@@ -605,6 +615,7 @@ fn LiquidTabBarLayout(
                                     base_color: tab_base_content_color(colors),
                                     selected: Some(selected),
                                     selected_color: tab_selection_content_color(colors),
+                                    masked,
                                     interactive: true,
                                     selection_only: false,
                                 },
