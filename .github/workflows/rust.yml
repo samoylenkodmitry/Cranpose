@@ -476,6 +476,13 @@ jobs:
           CRANPOSE_ROBOT_SOFTWARE_RENDERER: "1"
           WGPU_BACKEND: vulkan
           WINIT_UNIX_BACKEND: x11
+          # Pin lavapipe's LLVM JIT to the AVX2 code paths: the identical
+          # binary + driver render shard 1's frost scene correctly on every
+          # non-AVX-512 configuration (NVIDIA, llvmpipe-GL, local lavapipe
+          # via the exact Ubuntu debs under Xvfb); only these AVX-512
+          # runners produce the deterministic wrong frame
+          # (memory: ci-shard1-frost-frame diagnosis trail).
+          GALLIUM_OVERRIDE_CPU_CAPS: "avx2"
         run: |
           chmod +x target/robot/examples/robot_*
           timeout 600s xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh --skip-build --sequential --shard "${{ matrix.shard_index }}/16"
