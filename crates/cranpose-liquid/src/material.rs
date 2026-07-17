@@ -9,11 +9,36 @@ use cranpose_ui::Modifier;
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
-    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM,
-    GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
-    GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
+    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM, GLASS_LIGHT_DIRECTION_UNIFORM,
+    GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
+    GLASS_RESTING_TINT_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
 };
+use std::cell::Cell;
 use std::rc::Rc;
+
+// The ambient light environment shared by every glass material. The
+// reference material's bevel arcs rotate with the device: platforms feed
+// the current attitude here (Android: rotation sensor; desktop: the
+// default overhead light) and every glass surface re-lights on the next
+// frame — materials read it in their per-frame effect resolvers.
+//
+// The vector is the light's RETURN direction in screen space (where the
+// wide bright glow lands); the default (0, 1) is the reference's overhead
+// light with the return at the bottom rim.
+thread_local! {
+    static GLASS_LIGHT_RETURN: Cell<(f32, f32)> = const { Cell::new((0.0, 1.0)) };
+}
+
+/// Sets the ambient glass light return direction (screen space, need not be
+/// normalized — the shader normalizes). Feed device attitude here.
+pub fn set_glass_light_direction(direction: (f32, f32)) {
+    GLASS_LIGHT_RETURN.with(|cell| cell.set(direction));
+}
+
+/// The current ambient glass light return direction.
+pub fn glass_light_direction() -> (f32, f32) {
+    GLASS_LIGHT_RETURN.with(|cell| cell.get())
+}
 
 /// Corner radius large enough that [`cranpose_ui_graphics::CornerRadii::resolve`]
 /// clamps it to half the shape's size — i.e. a capsule.
@@ -690,6 +715,9 @@ impl ResolvedGlass {
             1.0 + (self.optical_zoom - 1.0).max(0.0) * activity,
         );
         shader.set_float(121, self.rim_reflection.max(0.001));
+        let (light_x, light_y) = glass_light_direction();
+        shader.set_float(GLASS_LIGHT_DIRECTION_UNIFORM, light_x);
+        shader.set_float(GLASS_LIGHT_DIRECTION_UNIFORM + 1, light_y);
         let (touch_x, touch_y, touch_intensity) = dynamics.touch.unwrap_or((0.0, 0.0, 0.0));
         shader.set_float(118, touch_x);
         shader.set_float(119, touch_y);
@@ -900,6 +928,27 @@ mod tests {
             RenderEffect::Chain { second, .. } => terminal_shader(*second),
             effect => panic!("expected runtime shader, got {effect:?}"),
         }
+    }
+
+    #[test]
+    fn glass_light_direction_defaults_overhead_and_reaches_the_shader() {
+        assert_eq!(glass_light_direction(), (0.0, 1.0));
+        let resolved = Glass::regular().resolve(&light_colors());
+        let effect = resolved.backdrop_effect(2.0, GlassDynamics::default());
+        let shader = terminal_shader(effect);
+        let u = shader.uniforms();
+        assert_eq!(u[GLASS_LIGHT_DIRECTION_UNIFORM], 0.0);
+        assert_eq!(u[GLASS_LIGHT_DIRECTION_UNIFORM + 1], 1.0);
+
+        // Rotating the environment (device attitude) re-lights the next
+        // resolved effect.
+        set_glass_light_direction((1.0, 0.0));
+        let effect = resolved.backdrop_effect(2.0, GlassDynamics::default());
+        let u_rotated = terminal_shader(effect);
+        let u_rotated = u_rotated.uniforms();
+        assert_eq!(u_rotated[GLASS_LIGHT_DIRECTION_UNIFORM], 1.0);
+        assert_eq!(u_rotated[GLASS_LIGHT_DIRECTION_UNIFORM + 1], 0.0);
+        set_glass_light_direction((0.0, 1.0));
     }
 
     #[test]

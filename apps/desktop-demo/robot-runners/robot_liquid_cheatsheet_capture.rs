@@ -471,13 +471,24 @@ fn scroll_to_button(
 /// Runs `capture_keyframes` and pairs every captured shot with its
 /// millisecond position on the interaction timeline (`base_ms` + the
 /// cumulative exact-clock offsets), so cheatsheet tiles carry real timing.
+/// Capture density for every sheet frame: CRANPOSE_ROBOT_CAPTURE_SCALE
+/// (default 1). Sub-dp optics (the glass bevel band) are invisible at
+/// scale 1 — judge edge light at 2x like the reference recordings.
+fn capture_scale() -> f32 {
+    std::env::var("CRANPOSE_ROBOT_CAPTURE_SCALE")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|scale| scale.is_finite() && *scale >= 0.5 && *scale <= 4.0)
+        .unwrap_or(1.0)
+}
+
 fn keyframe_series(
     robot: &cranpose::Robot,
     offsets: &[(f32, bool)],
     base_ms: f32,
 ) -> Vec<(f32, cranpose::RobotScreenshot)> {
     let shots = robot
-        .capture_keyframes(1.0, offsets)
+        .capture_keyframes(capture_scale(), offsets)
         .expect("capture keyframes");
     let mut shot_iter = shots.into_iter();
     let mut t = base_ms;

@@ -65,7 +65,12 @@ pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 ///  93: wcKSRD blur reach in physical pixels
 /// 111: continuous optical activity (0 = exact backdrop identity, 1 = full)
 /// 113..116: resting surface tint RGBA (transparent = no resting surface)
+/// 122,123: ambient light return direction (screen-space vector; zero =
+///          unset -> light overhead, return glow at the bottom rim)
 pub const LIQUID_GLASS_WGSL: &str = include_str!("../shaders/liquid_glass.wgsl");
+
+/// Uniform slot of the ambient light return direction (x at 122, y at 123).
+pub const GLASS_LIGHT_DIRECTION_UNIFORM: usize = 122;
 
 /// Configuration for the LiquidGlass effect.
 #[derive(Clone, Debug, PartialEq)]

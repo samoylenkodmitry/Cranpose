@@ -686,7 +686,20 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     var outer_rgb = plain_path.rgb;
     var alpha = transmitted_path.a;
 
-    let lens_light_direction = normalize(vec2<f32>(1.0, 1.0));
+    // Ambient light return direction (uniforms 122,123): screen-space unit
+    // vector pointing from the light source THROUGH the glass — the rim
+    // facing it carries the wide bright return glow, the rim facing the
+    // source its crisp arc. Zero = unset -> the reference default (light
+    // overhead, return at the bottom). Device attitude feeds this, rotating
+    // every bevel arc in real time.
+    var light_return = get_vec2(122u);
+    let light_return_len = length(light_return);
+    if light_return_len < 0.001 {
+        light_return = vec2<f32>(0.0, 1.0);
+    } else {
+        light_return = light_return / light_return_len;
+    }
+    let lens_light_direction = light_return;
     let lens_edge_incidence = 0.18
         + 0.82 * max(dot(outward_normal, lens_light_direction), 0.0);
     // The meniscus is a separate light path. At grazing incidence the
@@ -887,6 +900,38 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let wcksrd_face_light = clamp(optical_sample.face_light * highlight, 0.0, 0.35);
     rgb = rgb + vec3<f32>(wcksrd_face_light);
     alpha = max(alpha, wcksrd_face_light);
+    // The BEVEL (measured on the on-white reference discs): a directional
+    // pair riding the existing meniscus bands. The rim facing the light
+    // source draws a crisp arc; the opposite rim a WIDER, stronger return
+    // glow — the dominant edge feature of the reference material. Both
+    // brighten the transmitted color itself (the teal disc's bottom lip
+    // stays saturated teal, never washes to white) with only a whisper of
+    // additive white, and both rotate with the light input.
+    let bevel_source_axis = pow(max(dot(outward_normal, -light_return), 0.0), 2.5);
+    let bevel_return_axis = pow(max(dot(outward_normal, light_return), 0.0), 1.8);
+    // The bevel is STRUCTURAL: the reference discs carry it fully at rest,
+    // independent of the material's specular highlight knob — so it takes
+    // its own floor and only grows past it when the material is explicitly
+    // more specular. Measured on the on-white teal disc: the arcs are THIN
+    // (the raw ~1.3dp meniscus band, no falloff sharpening — the pow-6
+    // core crushed them to invisibility) and STRONG (body 184 -> lip 237
+    // green, ~+50% luminance at highlight 0.72, hue preserved).
+    let bevel_gain = max(highlight, 0.18);
+    let bevel_band = clamp(
+        wcksrd_meniscus(meniscus_distance, lens_refraction, gradient_extent),
+        0.0,
+        1.0,
+    ) * coverage;
+    // The lip is a SPECULAR return of the (white) environment light, not a
+    // brightening of the body color: the reference teal disc's lip lifts
+    // its red channel 0 -> 112 — a screen blend toward white at ~0.44 lip
+    // weight (top arc measured ~0.08). Applied AFTER the tint below: the
+    // reflection rides the glass SURFACE, above the tinted body (applying
+    // it first buried it under an 82%-alpha tint).
+    let bevel_source_arc = bevel_band * bevel_source_axis * bevel_gain * 0.10;
+    let bevel_return_glow = bevel_band * bevel_return_axis * bevel_gain * 0.62;
+    let bevel_light = clamp(bevel_source_arc + bevel_return_glow, 0.0, 0.60);
+    alpha = max(alpha, bevel_light);
     // Tone pipeline: vibrancy first, then a gentle contrast pivot, then the
     // scheme lift. The lift is a SCREEN blend toward white (or a multiply
     // toward black when negative) — unlike an alpha-mix it keeps the ghosts
@@ -919,6 +964,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // surface glass retains a uniform tint across its body.
     let optical_tint_alpha = tint_color.a * mix(1.0, interior, rim_style);
     rgb = mix(rgb, tint_color.rgb, optical_tint_alpha);
+    // The bevel's specular return, on the outermost surface of the glass.
+    rgb = vec3<f32>(1.0) - (vec3<f32>(1.0) - rgb) * (1.0 - bevel_light);
 
     // Touch glow (uniforms 118-119 node-local dp, 120 intensity): a pressed
     // liquid surface concentrates saturation and a soft light in a radial

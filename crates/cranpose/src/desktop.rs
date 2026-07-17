@@ -5245,10 +5245,20 @@ fn resolve_robot_screenshot_params(
     buffer_size: (u32, u32),
     fallback_logical_size: Option<(f32, f32)>,
 ) -> (u32, u32, f32) {
+    // CRANPOSE_ROBOT_CAPTURE_SCALE renders captures at a chosen density.
+    // Scale-1 captures under-resolve sub-dp optics (a 1.3dp glass bevel
+    // band lands between pixel centers and reads at ~1/3 strength), which
+    // makes them useless for judging edge light against 2-3x reference
+    // recordings.
+    let capture_scale = std::env::var("CRANPOSE_ROBOT_CAPTURE_SCALE")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|scale| scale.is_finite() && *scale >= 0.5 && *scale <= 4.0)
+        .unwrap_or(1.0);
     if let Some((logical_width, logical_height)) = fallback_logical_size {
-        let width = logical_width.ceil().max(1.0) as u32;
-        let height = logical_height.ceil().max(1.0) as u32;
-        return (width, height, 1.0);
+        let width = (logical_width * capture_scale).ceil().max(1.0) as u32;
+        let height = (logical_height * capture_scale).ceil().max(1.0) as u32;
+        return (width, height, capture_scale);
     }
 
     let (buffer_width, buffer_height) = buffer_size;
@@ -5954,5 +5964,19 @@ mod tests {
     fn robot_screenshot_clamps_to_non_zero_target() {
         let resolved = resolve_robot_screenshot_params((0, 0), Some((10.0, 20.0)));
         assert_eq!(resolved, (10, 20, 1.0));
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_screenshot_honors_capture_scale_env() {
+        std::env::set_var("CRANPOSE_ROBOT_CAPTURE_SCALE", "2");
+        let resolved = resolve_robot_screenshot_params((0, 0), Some((100.0, 50.0)));
+        std::env::remove_var("CRANPOSE_ROBOT_CAPTURE_SCALE");
+        assert_eq!(resolved, (200, 100, 2.0));
+
+        std::env::set_var("CRANPOSE_ROBOT_CAPTURE_SCALE", "999");
+        let clamped = resolve_robot_screenshot_params((0, 0), Some((100.0, 50.0)));
+        std::env::remove_var("CRANPOSE_ROBOT_CAPTURE_SCALE");
+        assert_eq!(clamped, (100, 50, 1.0), "out-of-range scale is ignored");
     }
 }

@@ -28,8 +28,8 @@ pub mod widgets;
 
 pub use dynamics::{remember_liquid_dynamics, LiquidDynamics, LiquidPose};
 pub use material::{
-    Glass, GlassDeformation, GlassDynamics, GlassShadow, GlassVariant, LiquidModifierExt,
-    LiquidShape,
+    glass_light_direction, set_glass_light_direction, Glass, GlassDeformation, GlassDynamics,
+    GlassShadow, GlassVariant, LiquidModifierExt, LiquidShape,
 };
 pub use motion::{liquid_press_scale, LiquidMotion};
 pub use theme::{
