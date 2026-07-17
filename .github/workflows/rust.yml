@@ -480,6 +480,22 @@ jobs:
           chmod +x target/robot/examples/robot_*
           timeout 600s xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh --skip-build --sequential --shard "${{ matrix.shard_index }}/16"
 
+      # Failures on this software-GPU environment have repeatedly needed the
+      # actual frames to diagnose (luma numbers alone mislead) — ship every
+      # screenshot the failing runners saved.
+      - name: Upload shard failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: robot-shard-${{ matrix.shard_index }}-failure-shots
+          path: |
+            target/adaptive-frost/
+            target/liquid-shots/
+            target/liquid-motion/
+            .cranpose-tmp/
+            robot_test.log
+          if-no-files-found: ignore
+
   robot-e2e:
     name: robot e2e
     runs-on: ubuntu-latest
