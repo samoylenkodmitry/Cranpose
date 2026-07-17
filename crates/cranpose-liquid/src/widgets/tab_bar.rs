@@ -85,7 +85,12 @@ fn tab_selection_content_color(colors: crate::theme::LiquidColors) -> Color {
 const BAR_HEIGHT: f32 = 64.0;
 const BLOB_HEIGHT: f32 = 52.0;
 const BLOB_MARGIN: f32 = 8.0;
-const FLIGHT_LENS_PROJECTION_SCALE: f32 = 1.15;
+/// Raised bubble projection over the resting blob. The reference bubble
+/// GROWS PAST THE BAR: at full contact it stands ~1.2x the bar height
+/// (52dp blob * 1.48 = 77dp vs the 64dp bar — poking ~6.5dp beyond both
+/// edges), it barely magnifies what it covers, and the light does the
+/// depth (top arc + lower lip), not the zoom.
+const FLIGHT_LENS_PROJECTION_SCALE: f32 = 1.48;
 const TAB_LENS_REST_WIDTH_FACTOR: f32 = 1.16;
 /// Width allotted to each tab inside the pill.
 const TAB_WIDTH: f32 = 78.0;
@@ -135,10 +140,10 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         // smeared the riding icon.
         .refraction_depth(0.26)
         .refraction_curve(0.25)
-        .optical_zoom(1.5)
+        .optical_zoom(1.15)
         .dispersion(0.24)
         .lift(0.0)
-        .highlight(0.24)
+        .highlight(0.35)
 }
 
 fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
