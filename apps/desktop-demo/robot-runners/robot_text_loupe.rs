@@ -199,13 +199,33 @@ fn main() -> ExitCode {
             println!(
                 "loupe direct follow held={held_center:.2} pointer={jump_x:.2} frame={jumped_center:.2}"
             );
-            if (jumped_center - jump_x).abs() > 8.0
-                || jumped_center - held_center < jump_x - end_x - 12.0
-            {
+            // Reference physics (text-selection README): the bubble trails
+            // the touch with a measured 20-35px lag at drag speed and
+            // converges with no overshoot — an abrupt step must neither
+            // teleport the bubble in the same frame nor leave it stalled.
+            let step = jump_x - end_x;
+            let moved = jumped_center - held_center;
+            if moved < -2.0 || moved > step * 0.75 {
                 fail(
                     &robot,
                     &format!(
-                        "loupe animated toward the pointer instead of following the input frame: held={held_center:.2}, pointer={jump_x:.2}, frame={jumped_center:.2}"
+                        "loupe step response outside the measured follow envelope: held={held_center:.2}, pointer={jump_x:.2}, frame={jumped_center:.2}"
+                    ),
+                );
+            }
+            std::thread::sleep(Duration::from_millis(350));
+            let _ = robot.wait_for_idle();
+            let converged = robot
+                .screenshot_with_scale(3.0)
+                .expect("converged follow frame");
+            save(&converged, &shot_dir, "05c-follow-converged");
+            let converged_center = loupe_top_rim_center_x(&converged)
+                .unwrap_or_else(|| fail(&robot, "converged loupe top rim was not measurable"));
+            if (converged_center - jump_x).abs() > 8.0 {
+                fail(
+                    &robot,
+                    &format!(
+                        "loupe follow did not converge on the pointer: pointer={jump_x:.2}, settled={converged_center:.2}"
                     ),
                 );
             }

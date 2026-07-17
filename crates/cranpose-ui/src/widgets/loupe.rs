@@ -149,10 +149,11 @@ fn smoothstep01(value: f32) -> f32 {
 /// shape, rise, and optical opacity in both directions.
 struct LoupeState {
     progress: RefCell<Animatable<f32>>,
-    /// Low-passed horizontal travel (dp/frame) — the loupe is a droplet and
-    /// stretches along its motion instead of gliding rigidly.
-    travel: Cell<f32>,
-    last_focus_x: Cell<f32>,
+    /// The bubble's center x trails the touch on the animation clock: a
+    /// non-oscillating spring calibrated to the reference's measured trail
+    /// (20-35px at ~356px/s => stiffness ~650 critically damped). The live
+    /// TRAIL is the drag force: it drives the droplet's stretch.
+    follow_x: RefCell<Animatable<f32>>,
     /// The last target shown; kept while the bubble deflates after release.
     shown: RefCell<Option<LoupeTarget>>,
     /// Whether the loupe was active on the previous recomposition.
@@ -167,9 +168,8 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     let state = remember(|| {
         let runtime = with_current_composer(|composer| composer.runtime_handle());
         Rc::new(LoupeState {
-            progress: RefCell::new(Animatable::new(0.0, runtime)),
-            travel: Cell::new(0.0),
-            last_focus_x: Cell::new(f32::NAN),
+            progress: RefCell::new(Animatable::new(0.0, runtime.clone())),
+            follow_x: RefCell::new(Animatable::new(f32::NAN, runtime)),
             shown: RefCell::new(None),
             was_active: Cell::new(false),
         })
@@ -217,24 +217,26 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     );
     let optic = loupe_optical_activity(p);
 
-    // Droplet motion: stretch along travel with the low-passed drag speed
-    // (the reference loupe visibly deforms while following, area conserved).
-    let last_x = state.last_focus_x.get();
-    let dx = if last_x.is_finite() {
-        shown.focus_x - last_x
-    } else {
-        0.0
-    };
-    state.last_focus_x.set(shown.focus_x);
-    let travel = state.travel.get() * 0.72 + dx * 0.28;
-    state.travel.set(travel);
-    // Droplet law: stretch along travel, contract orthogonally, AREA
-    // CONSERVED (w*s * h/s = w*h) — the reference bubble visibly deforms
-    // while following and never gains volume.
-    let stretch = 1.0 + (travel.abs() * 0.030).clamp(0.0, 0.12);
+    // Droplet physics: the bubble CENTER trails the touch on the
+    // animation clock (non-oscillating spring; the reference measures a
+    // 20-35px trail at ~356px/s and convergence with no overshoot), and
+    // the live trail IS the drag force — it stretches the bubble along
+    // travel and contracts it orthogonally, AREA CONSERVED
+    // (w*s * h/s = w*h).
+    {
+        let mut follow_anim = state.follow_x.borrow_mut();
+        if !follow_anim.state().value().is_finite() {
+            follow_anim.snapTo(shown.focus_x);
+        } else if (follow_anim.target() - shown.focus_x).abs() > f32::EPSILON {
+            follow_anim.animateTo(shown.focus_x, spring(1.0, 650.0));
+        }
+    }
+    let follow = state.follow_x.borrow().state().value();
+    let trail = shown.focus_x - follow;
+    let stretch = 1.0 + (trail.abs() * 0.004).clamp(0.0, 0.12);
     let width = LOUPE_WIDTH * pose.width_frac * stretch;
     let height = LOUPE_HEIGHT * pose.height_frac / stretch;
-    let center_x = shown.focus_x;
+    let center_x = follow;
     let center_y = shown.line_mid_y - LOUPE_RISE * pose.rise_frac;
     // The lens looks at the line (the focus), which sits below the risen
     // center.
