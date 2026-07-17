@@ -263,10 +263,20 @@ pub struct HandleGrabOffset {
     start_y: f32,
     furthest_y: f32,
     drift_progress: f32,
+    /// The visibility drift only applies to handles whose dot hangs BELOW
+    /// the line (end/cursor): there the finger covers the content and the
+    /// handle floats clear of it. The start handle's dot rides ABOVE the
+    /// line — nothing is covered, so its drag follows the finger directly
+    /// (user-directed).
+    drifts: bool,
 }
 
 impl HandleGrabOffset {
     pub fn begin(handle_tip_y: f32, finger_y: f32) -> Self {
+        Self::begin_for(handle_tip_y, finger_y, true)
+    }
+
+    pub fn begin_for(handle_tip_y: f32, finger_y: f32, drifts: bool) -> Self {
         let initial_bias = handle_tip_y - finger_y;
         Self {
             initial_bias,
@@ -274,10 +284,15 @@ impl HandleGrabOffset {
             start_y: finger_y,
             furthest_y: finger_y,
             drift_progress: 0.0,
+            drifts,
         }
     }
 
     pub fn track(&mut self, finger_y: f32) -> f32 {
+        if !self.drifts {
+            self.bias = self.initial_bias;
+            return self.bias;
+        }
         self.furthest_y = self.furthest_y.max(finger_y);
         let travel = (self.furthest_y - self.start_y - GRAB_DIRECT_FOLLOW_DISTANCE).max(0.0);
         let t = (travel / GRAB_VISIBILITY_DRIFT_DISTANCE).clamp(0.0, 1.0);
@@ -690,6 +705,17 @@ mod tests {
             caret_visual_line(&ranges, 12, LineAffinity::Downstream),
             (2, 10)
         );
+    }
+
+    #[test]
+    fn start_handle_grab_never_drifts() {
+        // The start handle's dot rides ABOVE the line: the finger covers
+        // nothing, so its drag follows the finger with the captured offset
+        // exactly — no visibility drift (user-directed).
+        let mut grab = HandleGrabOffset::begin_for(108.0, 100.0, false);
+        assert_eq!(grab.track(108.0), 8.0);
+        assert_eq!(grab.track(160.0), 8.0, "no drift on long downward travel");
+        assert_eq!(grab.drift_progress(), 0.0);
     }
 
     #[test]

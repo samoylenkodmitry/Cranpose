@@ -484,6 +484,26 @@ fn SelectionHandles(
     // can own the pointer at a time.
     let drag_bias: Rc<Cell<Option<HandleGrabOffset>>> =
         remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
+    // Which handle the user moved last: the contextual menu rises above it
+    // (the reference re-anchors the actions near the finger's work). A
+    // fresh selection (range changed with no handle drag in flight, e.g. a
+    // double-tap) re-centers the menu.
+    let last_dragged: Rc<Cell<Option<HandleKind>>> =
+        remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
+    let menu_anchor_range: Rc<Cell<(usize, usize)>> =
+        remember(|| Rc::new(Cell::new(current_range))).with(Rc::clone);
+    {
+        let last_dragged = Rc::clone(&last_dragged);
+        let menu_anchor_range = Rc::clone(&menu_anchor_range);
+        SideEffect(move || {
+            if menu_anchor_range.get() != current_range {
+                menu_anchor_range.set(current_range);
+                if drag_pos.value().is_none() {
+                    last_dragged.set(None);
+                }
+            }
+        });
+    }
     // LIVE tip-y holders, refreshed every composition. The pointer-input
     // gesture task starts once per handle kind and holds its first
     // composition's closures — a tip snapshot captured by value goes stale
@@ -533,7 +553,7 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                track_handle_grab(&grab_bias, tip_y.get(), pos.y);
+                track_handle_grab(&grab_bias, HandleKind::Cursor, tip_y.get(), pos.y);
                 drag_pos.set(Some(pos));
                 on_drag(pos);
             },
@@ -592,6 +612,8 @@ fn SelectionHandles(
             handle_tip_window_pos(&text, &style, &metrics, start, LineAffinity::Downstream);
         let end_tip = handle_tip_window_pos(&text, &style, &metrics, end, LineAffinity::Upstream);
 
+        let last_dragged_start = Rc::clone(&last_dragged);
+        let last_dragged_end = Rc::clone(&last_dragged);
         let on_drag_start = drag_edge_closure(
             HandleKind::SelectionStart,
             state.clone(),
@@ -610,7 +632,13 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                track_handle_grab(&grab_bias, start_tip_live.get(), pos.y);
+                track_handle_grab(
+                    &grab_bias,
+                    HandleKind::SelectionStart,
+                    start_tip_live.get(),
+                    pos.y,
+                );
+                last_dragged_start.set(Some(HandleKind::SelectionStart));
                 drag_pos.set(Some(pos));
                 on_drag_start(pos);
             },
@@ -644,7 +672,13 @@ fn SelectionHandles(
             HANDLE_RADIUS,
             accent,
             move |pos| {
-                track_handle_grab(&grab_bias, end_tip_live.get(), pos.y);
+                track_handle_grab(
+                    &grab_bias,
+                    HandleKind::SelectionEnd,
+                    end_tip_live.get(),
+                    pos.y,
+                );
+                last_dragged_end.set(Some(HandleKind::SelectionEnd));
                 drag_pos.set(Some(pos));
                 on_drag_end(pos);
             },
@@ -670,10 +704,24 @@ fn SelectionHandles(
             } else {
                 None
             };
+            // The menu rises above the handle the user moved last (their
+            // attention is there); a fresh selection centers over its
+            // first line as before.
+            let (menu_x, menu_top) = match last_dragged.get() {
+                Some(HandleKind::SelectionStart) => {
+                    (start_tip.x, start_tip.y - metrics.glyph_box.1)
+                }
+                Some(HandleKind::SelectionEnd) | Some(HandleKind::Cursor) => {
+                    (end_tip.x, end_tip.y - metrics.glyph_box.1)
+                }
+                None => (
+                    (start_tip.x + end_tip.x) * 0.5,
+                    start_tip.y - metrics.glyph_box.1,
+                ),
+            };
             TextSelectionMenu(
-                // Centered over the selection, above its first line.
-                (start_tip.x + end_tip.x) * 0.5,
-                start_tip.y - metrics.glyph_box.1,
+                menu_x,
+                menu_top,
                 drag_pos.value().is_none(),
                 slide_point,
                 can_paste,
@@ -723,12 +771,16 @@ fn SelectionHandles(
 
 fn track_handle_grab(
     drag_bias: &Cell<Option<HandleGrabOffset>>,
+    kind: HandleKind,
     handle_tip_y: f32,
     finger_y: f32,
 ) -> f32 {
+    // Only handles whose dot hangs below the line drift clear of the
+    // finger; the start handle follows it directly.
+    let drifts = kind != HandleKind::SelectionStart;
     let mut grab = drag_bias
         .get()
-        .unwrap_or_else(|| HandleGrabOffset::begin(handle_tip_y, finger_y));
+        .unwrap_or_else(|| HandleGrabOffset::begin_for(handle_tip_y, finger_y, drifts));
     let bias = grab.track(finger_y);
     drag_bias.set(Some(grab));
     bias
@@ -751,6 +803,10 @@ fn drag_caret_closure(
         let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
         let offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
         state.set_selection(TextRange::new(offset, offset));
+        // A moved caret holds steady: every drag event resets the blink,
+        // keeping the cursor solid while it moves and for a full interval
+        // after (the reference caret never flickers under the finger).
+        crate::cursor_animation::reset_cursor_blink();
         crate::request_render_invalidation();
     })
 }
@@ -800,7 +856,9 @@ mod tests {
         let grab = {
             let tip_y = Rc::clone(&tip_y);
             let drag_bias = Rc::clone(&drag_bias);
-            move |finger_y: f32| track_handle_grab(&drag_bias, tip_y.get(), finger_y)
+            move |finger_y: f32| {
+                track_handle_grab(&drag_bias, HandleKind::SelectionEnd, tip_y.get(), finger_y)
+            }
         };
 
         // The handle has since moved two wrapped lines down (tip 100 -> 148);
