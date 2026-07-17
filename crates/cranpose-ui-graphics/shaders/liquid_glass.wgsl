@@ -256,8 +256,13 @@ fn wcksrd_optics(
         0.0,
         1.0,
     );
-    let border = clamp(outer_interior * edge_sharpness, 0.0, 1.0)
-        - clamp(interior * edge_sharpness, 0.0, 1.0);
+    // The border line's transition width is lens_refraction/edge_sharpness
+    // px — on a shallow small material that collapses to ~0.2px and the
+    // rim quantizes into staircase arcs (user report). Cap the sharpness
+    // so the line always keeps ~a physical pixel of AA.
+    let border_sharpness = min(edge_sharpness, lens_refraction / 0.9);
+    let border = clamp(outer_interior * border_sharpness, 0.0, 1.0)
+        - clamp(interior * border_sharpness, 0.0, 1.0);
     let gradient_band = wcksrd_meniscus(
         distance,
         lens_refraction,
