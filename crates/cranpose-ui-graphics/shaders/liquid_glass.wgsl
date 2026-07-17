@@ -52,23 +52,28 @@ struct OpticalSample {
 const WCKSRD_GRADIENT_EXTENT_DP: f32 = 1.3333334;
 const WCKSRD_EDGE_EXTENT_DP: f32 = 0.33333334;
 
+// ONE anti-aliasing policy for every optical band: a transition narrower
+// than a physical pixel quantizes into staircase arcs, so every band
+// width in px passes through this floor. The original wcKSRD ran at one
+// fixed screen scale where its constants were safe; this port derives
+// band widths from material and density, and each can go sub-pixel
+// independently.
+const MIN_BAND_WIDTH_PX: f32 = 0.75;
+
+fn floored_band_width(width_px: f32) -> f32 {
+    return max(width_px, MIN_BAND_WIDTH_PX);
+}
+
 fn wcksrd_meniscus(
     distance: f32,
     lens_refraction: f32,
     gradient_extent: f32,
 ) -> f32 {
-    let gradient_outer = clamp(
-        -(distance - gradient_extent) / lens_refraction,
-        0.0,
-        1.0,
-    );
-    let gradient_inner = clamp(
-        -(distance + gradient_extent) / lens_refraction,
-        0.0,
-        1.0,
-    );
-    return clamp(gradient_outer * 4.0, 0.0, 1.0)
-        - clamp(gradient_inner * 4.0, 0.0, 1.0);
+    // Each edge ramp spans lens_refraction/4 px; keep it >= a pixel.
+    let ramp = floored_band_width(lens_refraction * 0.25);
+    let gradient_outer = clamp(-(distance - gradient_extent) / ramp, 0.0, 1.0);
+    let gradient_inner = clamp(-(distance + gradient_extent) / ramp, 0.0, 1.0);
+    return gradient_outer - gradient_inner;
 }
 
 fn opposite_side_reflection_displacement(
@@ -256,13 +261,10 @@ fn wcksrd_optics(
         0.0,
         1.0,
     );
-    // The border line's transition width is lens_refraction/edge_sharpness
-    // px — on a shallow small material that collapses to ~0.2px and the
-    // rim quantizes into staircase arcs (user report). Cap the sharpness
-    // so the line always keeps ~a physical pixel of AA.
-    let border_sharpness = min(edge_sharpness, lens_refraction / 0.9);
-    let border = clamp(outer_interior * border_sharpness, 0.0, 1.0)
-        - clamp(interior * border_sharpness, 0.0, 1.0);
+    // The border line's ramp spans lens_refraction/edge_sharpness px.
+    let border_ramp = floored_band_width(lens_refraction / max(edge_sharpness, 1.0));
+    let border = clamp(-(distance - edge_extent) / border_ramp, 0.0, 1.0)
+        - clamp(-distance / border_ramp, 0.0, 1.0);
     let gradient_band = wcksrd_meniscus(
         distance,
         lens_refraction,
@@ -506,17 +508,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let inradius = max(min(half_size.x, half_size.y), 1.0);
     let lens_refraction = max(inradius * refraction_depth, 0.001);
     let rounded_box = clamp(-d / lens_refraction, 0.0, 1.0);
-    // Coverage AA rides the material's refraction band (wcKSRD's rb1·32),
-    // which for a small shallow shape shrinks below a pixel — a 44dp disc
-    // at depth 0.1 gets a 0.09px ramp, i.e. STAIRS (user-reported crashed
-    // edges). The silhouette always keeps at least a physical pixel of AA.
-    let coverage_ramp = max(lens_refraction / 32.0, 0.75);
+    // Coverage AA rides the material's refraction band (wcKSRD's rb1·32).
+    let coverage_ramp = floored_band_width(lens_refraction / 32.0);
     let coverage = smoothstep(0.0, 1.0, clamp(-d / coverage_ramp, 0.0, 1.0));
     let optical_coverage = smoothstep(
         0.0,
         1.0,
         clamp(
-            (gradient_extent - d) / max(edge_extent, 0.001),
+            (gradient_extent - d) / floored_band_width(edge_extent),
             0.0,
             1.0,
         ),
