@@ -361,10 +361,12 @@ pub fn LiquidSegmentedControl(
                         // no drop shadow under the riding lens.
                         .shadow(false)
                         .rim_reflection(0.12)
-                        .blur_radius(0.0)
-                        .refraction_depth(0.52)
+                        // The full continuous wcKSRD dome (example/
+                        // shaders.txt): glyph warps and rim replay come from
+                        // ONE mapping; soft interior per the original's blur.
+                        .blur_radius(0.5)
+                        .refraction_depth(1.0)
                         .refraction_curve(0.25)
-                        .fold_depth(0.0)
                         .dispersion(0.85)
                         .highlight(0.04)
                         .lift(0.0)

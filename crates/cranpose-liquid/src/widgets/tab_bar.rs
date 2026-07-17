@@ -125,11 +125,13 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         .no_clip()
         .tint(neutral_surface_tint(foreground, 0.13, 0.10))
         .blur_radius(0.0)
+        // Sheet-verified tab optic (tab-swipe rounds 3-5): the wide lens
+        // keeps the shallow rim mapping with face zoom + fold — the full
+        // dome inflated the rendered droplet volume (bubble contract) and
+        // smeared the riding icon.
         .refraction_depth(0.26)
         .refraction_curve(0.25)
         .fold_depth(6.0)
-        // Mid-ride the reference lens shows the icon under it clearly
-        // enlarged (~1.6x, tab-swipe sheet); rim mapping stays wcKSRD.
         .optical_zoom(1.5)
         .dispersion(0.24)
         .lift(0.0)

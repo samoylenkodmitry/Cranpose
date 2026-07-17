@@ -57,19 +57,21 @@ fn toggle_lens_material() -> Glass {
     Glass::lens()
         .shape(LiquidShape::Capsule)
         .tint(cranpose_ui_graphics::Color::WHITE.with_alpha(0.02))
-        .blur_radius(0.0)
+        // The original wcKSRD blurs inside the lens (its 9x9 loop at half-px
+        // steps): content edges under the dome read soft, never cut.
+        .blur_radius(2.0)
         // The reference lens transmits the track at full saturation with a
         // clear face and vivid chromatic rim (toggle-press cheatsheet); the
         // milky wash came from over-absorbing the transmitted ray.
         .saturation(1.0)
-        .refraction_depth(0.24)
+        // The FULL wcKSRD dome (example/shaders.txt): interior ramps across
+        // the whole inradius, so the face magnifies and the rim replays the
+        // interior in ONE continuous mapping — no fold band, no zoom term,
+        // no scratches on the surface.
+        .refraction_depth(1.0)
         .refraction_curve(0.25)
-        .transmission_refraction(0.70)
+        .transmission_refraction(1.0)
         .meniscus_absorption(0.70)
-        .fold_depth(9.0)
-        // The pressed lens shows the track end-cap mildly enlarged
-        // (toggle-press detail frames).
-        .optical_zoom(1.35)
         .dispersion(0.85)
         // The reference press face is the magnified track, not a lit dome —
         // its luma matches the sampled backdrop (toggle-press detail).
