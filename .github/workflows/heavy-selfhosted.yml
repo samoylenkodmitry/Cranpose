@@ -6,6 +6,7 @@ name: heavy (self-hosted)
 # is safe for every trigger.
 on:
   push:
+    branches: ["main"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:
