@@ -10,7 +10,7 @@ use cranpose_foundation::PointerId;
 use cranpose_macros::composable;
 use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle, TextUnit};
 use cranpose_ui::widgets::{
-    Box, BoxSpec, Column, ColumnSpec, PopupDismissable, Row, RowSpec, Text,
+    Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text,
 };
 use cranpose_ui::{
     rememberMutableInteractionSource, Modifier, PointerEventKind, PointerInputScope,
@@ -1183,18 +1183,16 @@ pub fn LiquidMenu(
     let resize_state = resize_anim.borrow().state();
     // Right-align the card under the anchor (menus morph out of trailing
     // buttons), staying on-screen for anchors near the right edge. The host
-    // renders the outside-tap scrim (PopupDismissable). While collapsing the
-    // scrim must not re-fire the caller's dismiss.
+    // renders the outside-tap scrim only while the menu is interactive. The
+    // visual popup outlives `expanded` for its close morph, but its modal hit
+    // surface must disappear immediately or a suspended screen can restore an
+    // invisible scrim that absorbs the user's next action.
     let scrim_dismiss = Rc::clone(&on_dismiss);
-    let scrim_active = expanded;
-    PopupDismissable(
+    PopupDismissableWhen(
+        expanded,
         anchor,
         Point::new(anchor.width - menu_width, 0.0),
-        move || {
-            if scrim_active {
-                scrim_dismiss()
-            }
-        },
+        move || scrim_dismiss(),
         {
             let absorbed = absorbed.clone();
             let items = items.clone();

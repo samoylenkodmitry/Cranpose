@@ -352,7 +352,29 @@ pub fn PopupDismissable<F>(anchor: Rect, offset: Point, on_dismiss: impl Fn() + 
 where
     F: Fn() + 'static,
 {
-    popup_impl(anchor, offset, Some(Rc::new(on_dismiss)), Rc::new(content));
+    PopupDismissableWhen(true, anchor, offset, on_dismiss, content);
+}
+
+/// A dismissable popup whose modal scrim can be disabled without unmounting
+/// its visual content. Controls with an exit animation use this to stop
+/// intercepting the rest of the UI as soon as dismissal begins while their
+/// popup surface finishes animating out.
+#[composable]
+pub fn PopupDismissableWhen<F>(
+    dismissable: bool,
+    anchor: Rect,
+    offset: Point,
+    on_dismiss: impl Fn() + 'static,
+    content: F,
+) where
+    F: Fn() + 'static,
+{
+    let on_dismiss = popup_dismiss_callback(dismissable, Rc::new(on_dismiss));
+    popup_impl(anchor, offset, on_dismiss, Rc::new(content));
+}
+
+fn popup_dismiss_callback(dismissable: bool, on_dismiss: Rc<dyn Fn()>) -> Option<Rc<dyn Fn()>> {
+    dismissable.then_some(on_dismiss)
 }
 
 fn popup_impl(
@@ -391,6 +413,13 @@ mod tests {
     use super::*;
     use crate::modifier::collect_slices_from_modifier;
     use cranpose_foundation::PointerEvent;
+
+    #[test]
+    fn non_dismissable_exit_frame_has_no_modal_scrim_callback() {
+        let callback: Rc<dyn Fn()> = Rc::new(|| {});
+        assert!(popup_dismiss_callback(false, Rc::clone(&callback)).is_none());
+        assert!(popup_dismiss_callback(true, callback).is_some());
+    }
 
     #[test]
     fn dismiss_scrim_consumes_the_whole_tap_before_dismissing() {
