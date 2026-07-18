@@ -317,8 +317,8 @@ fn binary_size_budget_targets_minimal_isolated_app() {
             && workflow.contains("--bin isolated-demo")
             && workflow.contains("--profile release-small")
             && workflow.contains("--patch-workspace-cranpose")
-            && workflow.contains("--max-bytes 13107200"),
-        "release-small binary-size gate must measure the minimal isolated app with local Cranpose patches before the release version is published"
+            && workflow.contains("--max-bytes 15728640"),
+        "release-small binary-size gate must measure the accessibility-enabled isolated app with local Cranpose patches before the release version is published"
     );
 }
 

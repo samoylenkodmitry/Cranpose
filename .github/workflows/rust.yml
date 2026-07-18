@@ -96,6 +96,9 @@ jobs:
           cargo xtask dependency-budget --strict --slice optional-features --explain
 
       - name: Check desktop binary size budget
+        # Desktop accessibility is part of the default facade and links the
+        # AccessKit platform adapter. Keep a measured 15 MiB ceiling for that
+        # supported baseline while still catching accidental dependency bloat.
         run: >
           cargo xtask binary-size
           --manifest-path apps/isolated-demo/Cargo.toml
@@ -103,7 +106,7 @@ jobs:
           --bin isolated-demo
           --profile release-small
           --patch-workspace-cranpose
-          --max-bytes 13107200
+          --max-bytes 15728640
 
   feature-smoke:
     name: ${{ matrix.feature }} feature (mac)
