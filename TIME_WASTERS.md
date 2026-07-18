@@ -429,3 +429,24 @@ activity lifecycle failure, but it happens during the first
 instance. The GL software path can take about 20 seconds to initialize on this
 emulator, so wait for `Rendering initialized successfully` before treating an
 initial black frame as another failure.
+
+## Wrong-node red herring in the menu gray-panel hunt (2026-07-18)
+
+Hours were lost chasing "stale popup layer bounds" because backdrop-diag
+lines for nodes sized 204.96x139.5 were assumed to be the open menu
+popup. They were IN-PAGE glass cards from other stages; the popup's own
+plan lines (580x282 -> 580x488) were correct and live the whole time.
+Lessons:
+- Before chasing a scene-staleness theory, CONFIRM NODE IDENTITY: match
+  the diag rect against the widget's real spec size AND its window
+  position, not just "a glass node with a backdrop".
+- `sort -u` over a whole-run diag log mixes stages and frames — filter
+  to the frames around one capture timestamp first.
+- The probes that actually cracked it, in order of decisiveness:
+  pure-red tint (is the material visible at all?), shader silhouette
+  probe (where does the SDF land?), plan-size vs backdrop-size diff in
+  CRANPOSE_BACKDROP_DIAG (`copied=false` every frame = the bug).
+- An off-by-one CAN silently disable a whole material pipeline: the
+  fallback path "worked" (no error, plausible blur), so nothing logged.
+  When a fast path has an equality guard against a separately computed
+  value, suspect the guard first and diff the two computations.
