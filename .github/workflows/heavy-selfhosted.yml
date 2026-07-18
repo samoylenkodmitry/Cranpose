@@ -31,7 +31,7 @@ jobs:
       ANDROID_NDK_HOME: /Volumes/files/sdk/ndk/27.0.12077973
       JAVA_HOME: /Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Configure toolchain paths and caches
         run: |
