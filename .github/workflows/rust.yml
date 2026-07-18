@@ -1,10 +1,8 @@
 name: Rust
 
 on:
-  # Validate every branch pushed to this repository. Fork pull requests still
-  # run through pull_request below, but remain on GitHub-hosted macOS runners
-  # so untrusted fork code is never executed on a persistent self-hosted Mac.
   push:
+    branches: ["main"]
   pull_request:
     branches: ["main"]
 
