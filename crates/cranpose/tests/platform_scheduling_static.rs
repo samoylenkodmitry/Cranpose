@@ -22,12 +22,13 @@ fn workspace_path(path: &str) -> PathBuf {
 #[test]
 fn ci_architecture_budget_runs_required_gates() {
     let workflow = workspace_source(".github/workflows/rust.yml");
+    let heavy_workflow = workspace_source(".github/workflows/heavy-selfhosted.yml");
     let release_workflow = workspace_source(".github/workflows/release.yml");
     let pages_workflow = workspace_source(".github/workflows/deploy-pages.yml");
 
     assert!(
         workflow.contains("architecture-budget:")
-            && workflow.contains("linux / stable / architecture budgets"),
+            && workflow.contains("name: architecture budgets (linux)"),
         "Rust CI should keep a dedicated architecture budget job"
     );
     assert!(
@@ -61,8 +62,8 @@ fn ci_architecture_budget_runs_required_gates() {
     );
     assert!(
         workflow.contains("wasm-build:")
-            && workflow.contains("Install binaryen 120")
-            && workflow.contains("cargo install wasm-pack --version 0.13.1")
+            && workflow.contains("wasm-opt --version")
+            && workflow.contains("cargo install wasm-pack --version 0.13.1 --locked")
             && workflow.contains("run: apps/desktop-demo/build-web.sh --release"),
         "Rust CI should keep the web release build job wired through explicit build-web.sh --release so the wasm-release profile and WASM size budget cannot depend on ambient CI defaults"
     );
@@ -80,9 +81,11 @@ fn ci_architecture_budget_runs_required_gates() {
         "Android CI should install only required SDK packages instead of running the broad setup-android action"
     );
     assert!(
-        workflow.contains("bash scripts/ci/install_android_ndk.sh 27.0.12077973")
+        heavy_workflow.contains("ANDROID_NDK_HOME=$sdk_root/ndk/27.0.12077973")
+            && heavy_workflow.contains("sdkmanager \"ndk;27.0.12077973\"")
+            && heavy_workflow.contains("test -f \"$ANDROID_NDK_HOME/source.properties\"")
             && release_workflow.contains("bash scripts/ci/install_android_ndk.sh 27.0.12077973"),
-        "Android CI and release workflows should share the narrow NDK installer"
+        "self-hosted Android CI and hosted release builds should provision and validate the pinned NDK"
     );
 }
 
