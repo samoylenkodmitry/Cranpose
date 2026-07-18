@@ -90,7 +90,12 @@ const BLOB_MARGIN: f32 = 4.0;
 /// both edges), it barely magnifies what it covers, and the light does
 /// the depth (top arc + lower lip), not the zoom.
 const FLIGHT_LENS_PROJECTION_SCALE: f32 = 1.375;
-const TAB_LENS_REST_WIDTH_FACTOR: f32 = 1.16;
+/// Resting bubble width over the cell pitch. Measured on the reference
+/// (bottom-bar-click f_0000: bubble 96 over pitch 87.5): the bubble is
+/// barely wider than its cell, so a CELL-CENTERED rest keeps its edge
+/// flush inside the pill even at the end cells — the end overhang
+/// (tab·0.05) never exceeds [`BLOB_MARGIN`].
+const TAB_LENS_REST_WIDTH_FACTOR: f32 = 1.10;
 /// Width allotted to each tab inside the pill.
 const TAB_WIDTH: f32 = 78.0;
 /// Plain icon frame size (its path occupies about 25dp over 11dp labels).
@@ -189,22 +194,20 @@ fn tab_lens_left(pointer_x: f32, tab_width: f32, count: usize, has_accessory: bo
     (pointer_x - tab_width * 0.5).clamp(min, max)
 }
 
-/// The settled lens position for a selected cell. The resting bubble is
-/// wider than its cell ([`TAB_LENS_REST_WIDTH_FACTOR`]), so at the end
-/// cells the raw cell position would push it across the pill's rounded
-/// edge — the reference keeps the bubble inside the pill with the same
-/// [`BLOB_MARGIN`]-class gap it holds vertically. The clamp lands the
-/// bubble flush to the pill interior, slightly inboard of an end cell.
+/// The settled lens position for a selected cell: CELL-CENTERED at every
+/// index, exactly like the reference (bottom-bar-click f_0000 measures the
+/// end bubble's center on its cell center, its edge flush with the pill's
+/// rounded end). The rest width ([`TAB_LENS_REST_WIDTH_FACTOR`]) is what
+/// keeps the end cells legal — its overhang stays within [`BLOB_MARGIN`].
 /// Public so alignment tests assert the same rule the widget settles to.
 pub fn tab_lens_resting_left(selected: usize, tab_width: f32, count: usize) -> f32 {
-    let overhang = tab_width * (TAB_LENS_REST_WIDTH_FACTOR - 1.0) * 0.5;
-    let last_tab = tab_width * count.saturating_sub(1) as f32;
-    let (min, max) = (overhang, last_tab - overhang);
-    if min > max {
-        // A single-cell bar centers its bubble.
-        return last_tab * 0.5;
-    }
-    (tab_width * selected as f32).clamp(min, max)
+    tab_width * selected.min(count.saturating_sub(1)) as f32
+}
+
+/// The resting bubble's width for a cell pitch — the second half of the
+/// public resting contract ([`tab_lens_resting_left`] gives the position).
+pub fn tab_lens_rest_width(tab_width: f32) -> f32 {
+    tab_width * TAB_LENS_REST_WIDTH_FACTOR
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -803,22 +806,21 @@ mod tests {
     }
 
     #[test]
-    fn resting_lens_stays_inside_the_pill_at_the_end_cells() {
+    fn resting_lens_centers_on_its_cell_and_stays_inside_the_pill() {
         let tab = 78.0;
-        let half_rest = tab * TAB_LENS_REST_WIDTH_FACTOR * 0.5;
-        // Interior cells settle exactly on their cell.
+        // Every cell settles cell-centered, the reference behavior
+        // (bottom-bar-click f_0000: end bubble center == cell center).
+        assert_eq!(tab_lens_resting_left(0, tab, 5), 0.0);
         assert_eq!(tab_lens_resting_left(1, tab, 5), tab);
         assert_eq!(tab_lens_resting_left(3, tab, 5), 3.0 * tab);
-        // End cells pull inboard just enough that the bubble's edge lands
-        // on the pill interior instead of crossing the rounded end.
-        let first = tab_lens_resting_left(0, tab, 5);
-        assert!(first > 0.0);
-        assert!((first + tab * 0.5 - half_rest).abs() < 1.0e-4);
-        let last = tab_lens_resting_left(4, tab, 5);
-        assert!(last < 4.0 * tab);
-        assert!((last + tab * 0.5 + half_rest - 5.0 * tab).abs() < 1.0e-4);
-        // A single-cell bar centers.
-        assert_eq!(tab_lens_resting_left(0, tab, 1), 0.0);
+        assert_eq!(tab_lens_resting_left(4, tab, 5), 4.0 * tab);
+        assert_eq!(tab_lens_resting_left(9, tab, 5), 4.0 * tab);
+        // What makes the cell-centered end legal: the rest bubble's
+        // overhang past its cell never exceeds the pill inset, so the
+        // bubble edge lands flush inside the pill's rounded end instead
+        // of crossing it (the reference gap).
+        let overhang = tab * (TAB_LENS_REST_WIDTH_FACTOR - 1.0) * 0.5;
+        assert!(overhang <= BLOB_MARGIN + 1.0e-4);
     }
 
     #[test]

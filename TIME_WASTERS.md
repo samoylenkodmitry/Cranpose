@@ -371,3 +371,17 @@ per move with `animate_to_with_velocity` — no rate limiting needed.
   so perf resolves names without a rebuild. Also: a "45s cooldown" is NOT
   frame-free in robot/NoVsync mode — the render loop free-runs, so don't
   use it to reason about frame-drained accumulators.
+
+- Bubble-"misplacement" hunts: MEASURE THE REFERENCE FIRST. Hours went
+  into an inboard end-clamp model invented from screenshots; one pixel
+  scan of the reference frame (bubble center vs cell center, width vs
+  pitch) settled the contract in minutes: cell-centered, width 1.10x
+  pitch. Also two traps from the same hunt: (1) the "crown above the
+  bar" was the tile artwork's own pale gradient + content seen through
+  translucent glass — proven only by rendering the scene with the bar
+  REMOVED; when an artifact survives every component-disable experiment,
+  render the scene without the component before blaming the renderer.
+  (2) Robot offscreen captures were geometry-faithful the whole time;
+  the suspected presented-vs-offscreen divergence was an eyeballing
+  error over busy artwork. Numeric scans on flat backgrounds beat zoomed
+  eyeballing over gradients.

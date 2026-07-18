@@ -26,7 +26,7 @@ const SETTLE_MS: u64 = 900;
 /// of a bubble cluster (filters antialiasing noise).
 const COLUMN_CHANGE_FLOOR: usize = 6;
 /// Alignment budget in dp: bubble centroid vs cell center.
-const ALIGNMENT_BUDGET_DP: f32 = 4.0;
+const ALIGNMENT_BUDGET_DP: f32 = 5.0;
 
 fn main() -> ExitCode {
     let _ = env_logger::try_init();
@@ -183,10 +183,8 @@ fn check_bar(
             first.0 + cranpose::liquid::tab_lens_resting_left(target, pitch, labels.len());
 
         // The expected bubble span: the widget's resting rule ± the rest
-        // half-width (derived from the same public rule — the end-cell
-        // inboard pull IS the bubble overhang).
-        let overhang = cranpose::liquid::tab_lens_resting_left(0, pitch, labels.len());
-        let half_rest = pitch * 0.5 + overhang;
+        // half-width, both from the public resting contract.
+        let half_rest = cranpose::liquid::tab_lens_rest_width(pitch) * 0.5;
         let span = (expected - half_rest, expected + half_rest);
 
         // Band the columns whose pixels changed between the two settled

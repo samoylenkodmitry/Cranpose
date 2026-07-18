@@ -29,7 +29,7 @@ pub use search_field::{LiquidSearchField, LiquidSearchFieldSpec};
 pub use segmented::LiquidSegmentedControl;
 pub use slider::LiquidSlider;
 pub use tab_bar::{
-    tab_lens_resting_left, LiquidTab, LiquidTabBar, LiquidTabBarSearchAccessory, LiquidTabBarSpec,
-    LiquidTabBarWithAccessory, LiquidTabIconStyle,
+    tab_lens_rest_width, tab_lens_resting_left, LiquidTab, LiquidTabBar,
+    LiquidTabBarSearchAccessory, LiquidTabBarSpec, LiquidTabBarWithAccessory, LiquidTabIconStyle,
 };
 pub use toggle::LiquidToggle;
