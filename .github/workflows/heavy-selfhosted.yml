@@ -77,8 +77,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim,aarch64-apple-ios
+
       - name: Provision iOS Rust targets
         run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustup run stable rustc --version
           rustup target add --toolchain stable \
@@ -115,6 +120,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
       - name: Configure machine-local SDK and cache paths
         env:
           RUNNER_NAME: ${{ runner.name }}
@@ -147,6 +156,7 @@ jobs:
 
       - name: Provision toolchains and start sccache
         run: |
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           rustup run stable rustc --version
           rustup target add --toolchain stable \
             aarch64-linux-android \
