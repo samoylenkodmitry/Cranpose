@@ -20,6 +20,13 @@ use std::rc::Rc;
 const ICON_BACKPLATE_DIAMETER_RATIO: f32 = 0.50;
 const ICON_BACKPLATE_GLYPH_RATIO: f32 = 0.28;
 
+fn with_button_semantics(modifier: Modifier) -> Modifier {
+    modifier.semantics(|config| {
+        config.is_button = true;
+        config.is_clickable = true;
+    })
+}
+
 /// Visual style of a [`GlassButton`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum GlassButtonStyle {
@@ -318,13 +325,14 @@ pub fn GlassButton(
     }
 
     let on_click = Rc::new(RefCell::new(on_click));
-    let base = base
-        .press_interaction_source(interaction)
-        .clickable(move |_point| {
-            default_haptics().perform(HapticFeedback::ImpactLight);
-            (on_click.borrow_mut())();
-        })
-        .padding_symmetric(16.0, 10.0);
+    let base = with_button_semantics(
+        base.press_interaction_source(interaction)
+            .clickable(move |_point| {
+                default_haptics().perform(HapticFeedback::ImpactLight);
+                (on_click.borrow_mut())();
+            })
+            .padding_symmetric(16.0, 10.0),
+    );
 
     // Touched glass turns more transparent: the label ghosts while pressed.
     let content_layer = Modifier::empty().graphics_layer(move || GraphicsLayer {
@@ -829,6 +837,15 @@ pub fn GlassIconButtonGroup(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glass_buttons_expose_button_semantics_to_every_platform_bridge() {
+        let semantics =
+            cranpose_ui::collect_semantics_from_modifier(&with_button_semantics(Modifier::empty()))
+                .expect("glass button semantics");
+        assert!(semantics.is_button);
+        assert!(semantics.is_clickable);
+    }
 
     #[test]
     fn icon_backplate_colors_only_the_compact_foreground_core() {
