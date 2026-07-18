@@ -57,8 +57,8 @@ fn ci_architecture_budget_runs_required_gates() {
             && workflow.contains("--package isolated-demo")
             && workflow.contains("--bin isolated-demo")
             && workflow.contains("--profile release-small")
-            && workflow.contains("--max-bytes 13107200"),
-        "architecture budget job should enforce the minimal release-small binary size ceiling"
+            && workflow.contains("--max-bytes 15728640"),
+        "architecture budget job should enforce the accessibility-enabled release-small binary size ceiling"
     );
     assert!(
         workflow.contains("wasm-build:")
