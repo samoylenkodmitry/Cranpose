@@ -948,12 +948,19 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // toward black when negative) — unlike an alpha-mix it keeps the ghosts
     // of what's behind the glass colored, which is what makes the material
     // read bright yet alive.
+    // Tone: vibrancy, then a LUMA compression toward the mid pivot that
+    // carries chroma unchanged — the reference dark menu blooms saturated
+    // magenta out of a deep purple backdrop while dimming white through the
+    // same law (menu-expand f_020); a per-channel pivot crushes exactly the
+    // chroma that bloom needs.
     let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     rgb = mix(vec3<f32>(luma), rgb, max(saturation, 0.0));
-    rgb = (rgb - vec3<f32>(0.5)) * contrast + vec3<f32>(0.5);
+    let tone_luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    rgb = rgb + vec3<f32>((tone_luma - 0.5) * (contrast - 1.0));
     let outer_luma = dot(outer_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     outer_rgb = mix(vec3<f32>(outer_luma), outer_rgb, max(saturation, 0.0));
-    outer_rgb = (outer_rgb - vec3<f32>(0.5)) * contrast + vec3<f32>(0.5);
+    let outer_tone_luma = dot(outer_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    outer_rgb = outer_rgb + vec3<f32>((outer_tone_luma - 0.5) * (contrast - 1.0));
     // Interactive lenses frost their face without bleaching the meniscus:
     // the target toggle keeps saturated green/cyan at the outer rise while
     // its recessed chamber approaches white. Surface glass uses uniform lift.

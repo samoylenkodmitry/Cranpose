@@ -783,18 +783,22 @@ fn SortFilterReferenceStage() {
                             // Header band: deep purple with the magenta pill.
                             let pill_open = menu_open;
                             Box(
-                                Modifier::empty().fill_max_width().height(74.0).draw_behind(
-                                    |scope| {
+                                // Reference proportions (menu-expand f_001):
+                                // the header spans ~29% of the screen and the
+                                // opened panel's top third overlaps it.
+                                Modifier::empty()
+                                    .fill_max_width()
+                                    .height(120.0)
+                                    .draw_behind(|scope| {
                                         scope.draw_rect(Brush::linear_gradient_range(
                                             vec![
-                                                Color::from_rgb_u8(52, 8, 46),
-                                                Color::from_rgb_u8(88, 14, 74),
+                                                Color::from_rgb_u8(30, 4, 28),
+                                                Color::from_rgb_u8(62, 18, 62),
                                             ],
                                             Point::new(0.0, 0.0),
                                             Point::new(0.0, scope.size().height),
                                         ));
-                                    },
-                                ),
+                                    }),
                                 BoxSpec::default().content_alignment(Alignment::new(
                                     HorizontalAlignment::End,
                                     VerticalAlignment::CenterVertically,
@@ -886,19 +890,48 @@ fn SortFilterReferenceStage() {
                                             pill,
                                             BoxSpec::default().content_alignment(Alignment::CENTER),
                                             || {
-                                                Row(Modifier::empty(), RowSpec::default(), || {
-                                                    icons::Icon(icons::FILTER, 20.0, Color::WHITE);
-                                                    Box(
-                                                        Modifier::empty().width(14.0),
-                                                        BoxSpec::default(),
-                                                        || {},
-                                                    );
-                                                    icons::Icon(
-                                                        icons::ACCOUNT_CIRCLE,
-                                                        28.0,
-                                                        Color::WHITE,
-                                                    );
-                                                });
+                                                // Reference pill (menu-expand
+                                                // f_001): a dark capsule ringed
+                                                // by the magenta accent, not a
+                                                // solid magenta slab.
+                                                Box(
+                                                    Modifier::empty()
+                                                        .fill_max_size()
+                                                        .padding(1.5)
+                                                        .draw_behind(|scope| {
+                                                            scope.draw_round_rect(
+                                                                Brush::solid(Color::from_rgb_u8(
+                                                                    58, 14, 54,
+                                                                )),
+                                                                CornerRadii::uniform(18.5),
+                                                            );
+                                                        }),
+                                                    BoxSpec::default()
+                                                        .content_alignment(Alignment::CENTER),
+                                                    || {
+                                                        Row(
+                                                            Modifier::empty(),
+                                                            RowSpec::default(),
+                                                            || {
+                                                                icons::Icon(
+                                                                    icons::FILTER,
+                                                                    20.0,
+                                                                    Color::WHITE,
+                                                                );
+                                                                Box(
+                                                                    Modifier::empty().width(14.0),
+                                                                    BoxSpec::default(),
+                                                                    || {},
+                                                                );
+                                                                icons::Icon(
+                                                                    icons::ACCOUNT_CIRCLE,
+                                                                    28.0,
+                                                                    Color::WHITE,
+                                                                );
+                                                            },
+                                                        );
+                                                    },
+                                                );
                                             },
                                         );
                                     }
@@ -909,7 +942,7 @@ fn SortFilterReferenceStage() {
                             Box(
                                 Modifier::empty()
                                     .fill_max_width()
-                                    .height(226.0)
+                                    .height(180.0)
                                     .draw_behind(|scope| {
                                         scope.draw_rect(Brush::solid(Color::from_rgb_u8(
                                             250, 250, 252,

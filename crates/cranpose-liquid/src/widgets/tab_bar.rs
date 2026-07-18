@@ -96,6 +96,10 @@ const FLIGHT_LENS_PROJECTION_SCALE: f32 = 1.375;
 /// flush inside the pill even at the end cells — the end overhang
 /// (tab·0.05) never exceeds [`BLOB_MARGIN`].
 const TAB_LENS_REST_WIDTH_FACTOR: f32 = 1.10;
+/// Fraction of the shared droplet stretch the tab bubble surface carries:
+/// the reference mid-swipe bubble elongates to ~1.15x its rest width
+/// (tab-swipe T400), never a multi-cell worm.
+const TAB_STRAIN_RESPONSE: f32 = 0.30;
 /// Width allotted to each tab inside the pill.
 const TAB_WIDTH: f32 = 78.0;
 /// Plain icon frame size (its path occupies about 25dp over 11dp labels).
@@ -408,8 +412,10 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
     let shapes = geometry
         .accessory_center
         .filter(|(x, _)| {
+            let effective_stretch =
+                1.0 + (geometry.pose.stretch.max(geometry.pose.ortho) - 1.0) * TAB_STRAIN_RESPONSE;
             let edge_gap = (*x - geometry.center.0).abs()
-                - geometry.base_size.width * geometry.pose.stretch.max(geometry.pose.ortho) * 0.5
+                - geometry.base_size.width * effective_stretch * 0.5
                 - BAR_HEIGHT * 0.5;
             accessory_surfaces_touch(edge_gap)
         })
@@ -442,7 +448,10 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
             ellipse_blend: 0.0,
             deformation: Some(crate::material::GlassDeformation::incompressible(
                 geometry.pose.axis,
-                1.0 + (geometry.pose.stretch - 1.0) * activity,
+                // Reference mid-swipe bubble elongates to ~1.15x its rest
+                // width (tab-swipe T400) — the raw droplet stretch (up to
+                // 1.5) read as a two-cell worm.
+                1.0 + (geometry.pose.stretch - 1.0) * activity * TAB_STRAIN_RESPONSE,
             )),
         }),
         activity: Some(activity),

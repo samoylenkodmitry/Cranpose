@@ -1223,20 +1223,29 @@ pub fn LiquidMenu(
                 let morph_size = Rc::clone(&node_size);
                 // Muted vibrancy: the absorbed button must read as a soft
                 // smudge beneath the glass, not a hot saturated orb.
-                // Scheme-aware body: the light menu lifts toward white; the
-                // dark reference menu (sort/filter recording) is a HEAVY
-                // dark glass — a near-opaque deep body with crisp white
-                // rows, the colored backdrop only ghosting through
-                // (cheatsheet round: a multiply-lift alone left the panel
-                // reading as frosted white over the purple header).
+                // Scheme-aware body. The dark reference menu is NOT a heavy
+                // dark tint: measured on menu-expand f_020, deep purple
+                // (58,17,58) beneath reads (155,76,154) and the white page
+                // reads (189) through the same panel — a strong tone
+                // compression toward a bright pivot (out=(in-0.60)*0.37+0.60)
+                // with vibrancy, so dark saturated backdrops BLOOM while
+                // light ones dim. The old 205-alpha tint painted that band
+                // instead of transmitting it.
                 let glass = Glass::regular()
                     .shape(LiquidShape::RoundedRect(MENU_RADIUS))
-                    .blur_radius(12.0)
-                    .saturation(if colors.is_dark { 1.30 } else { 1.55 })
-                    .lift(if colors.is_dark { -0.52 } else { 0.58 })
+                    // iOS-scale frost: the reference panel smears the bright
+                    // magenta pill beneath into a full-width bloom band
+                    // (menu-expand f_020 top third) and washes mid-phase
+                    // backdrop text into uniform haze (menu-open T166) — a
+                    // 12dp blur kept both as localized ghosts.
+                    .blur_radius(30.0)
+                    .saturation(if colors.is_dark { 1.90 } else { 1.55 })
+                    .lift(if colors.is_dark { 0.10 } else { 0.58 })
                     .highlight(0.14);
                 let glass = if colors.is_dark {
-                    glass.tint(Color::from_rgba_u8(24, 12, 28, 205))
+                    glass
+                        .contrast(0.37)
+                        .tint(Color::from_rgba_u8(24, 12, 28, 38))
                 } else {
                     glass
                 };

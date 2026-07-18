@@ -317,6 +317,11 @@ pub struct Glass {
     /// Screen-lift override (brightening toward white; negative darkens).
     /// Defaults per variant.
     pub lift: Option<f32>,
+    /// Tone-compression override around the shader's mid pivot (<1 pulls
+    /// every backdrop toward mid-luminance — the reference dark menu reads
+    /// bright magenta over deep purple AND dim gray over white through one
+    /// law). Defaults per variant.
+    pub contrast: Option<f32>,
     /// Drop shadow below the glass.
     pub shadow: bool,
     /// Per-surface shadow override.
@@ -350,6 +355,7 @@ impl Glass {
             ink_recolor: None,
             highlight: 0.9,
             lift: None,
+            contrast: None,
             shadow: true,
             shadow_style: None,
             clip: true,
@@ -386,6 +392,7 @@ impl Glass {
             ink_recolor: None,
             highlight: 1.15,
             lift: None,
+            contrast: None,
             shadow: true,
             shadow_style: None,
             clip: true,
@@ -473,6 +480,13 @@ impl Glass {
     /// shows; the bar lens uses a near-zero lift to stay transmissive).
     pub fn lift(mut self, lift: f32) -> Self {
         self.lift = Some(lift);
+        self
+    }
+
+    /// Overrides the tone compression around the shader's mid pivot
+    /// (values below one pull every backdrop toward mid-luminance).
+    pub fn contrast(mut self, contrast: f32) -> Self {
+        self.contrast = Some(contrast.max(0.05));
         self
     }
 
@@ -575,11 +589,10 @@ impl Glass {
             ink_recolor: self.ink_recolor,
             highlight: self.highlight,
             lift,
-            contrast: if self.variant == GlassVariant::Lens {
-                1.0
-            } else {
-                1.03
-            },
+            contrast: self.contrast.unwrap_or(match self.variant {
+                GlassVariant::Lens => 1.0,
+                _ => 1.03,
+            }),
             shadow: self.shadow,
             clip: self.clip,
             foreground_luma: 0.2126 * foreground.r()
