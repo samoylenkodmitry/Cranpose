@@ -653,6 +653,26 @@ fn heavy_shell_entrypoints_use_local_resource_guards() {
     );
 }
 
+#[test]
+fn robot_runner_enforces_timeouts_without_gnu_coreutils() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("desktop demo should live under workspace/apps");
+    let source = fs::read_to_string(workspace_root.join("run_robot_test.sh"))
+        .expect("failed to read run_robot_test.sh");
+
+    assert!(
+        source.contains("run_with_portable_timeout")
+            && source.contains("timeout_marker")
+            && source.contains("kill -TERM")
+            && source.contains("exit_code=124")
+            && source.contains("robot_regression_fused_viewport_contract"),
+        "robot runners must still time out on macOS hosts without GNU timeout"
+    );
+}
+
 fn manifest_feature_value(source: &str, feature: &str) -> Option<String> {
     let prefix = format!("{feature} = ");
     let mut lines = source.lines();

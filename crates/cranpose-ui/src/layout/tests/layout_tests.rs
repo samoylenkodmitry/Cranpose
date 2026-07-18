@@ -9,7 +9,7 @@ use std::{
     rc::Rc,
 };
 
-use super::core::Measurable;
+use super::core::{Alignment, Measurable};
 
 fn measure_layout(
     applier: &mut MemoryApplier,
@@ -1814,11 +1814,15 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
 }
 
 #[test]
-fn flex_parent_data_uses_resolved_weight() {
+fn parent_data_uses_resolved_layout_properties() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
     let layout_node = LayoutNode::new(
-        Modifier::empty().columnWeight(1.0, true),
+        Modifier::empty()
+            .columnWeight(1.0, true)
+            .alignInBox(Alignment::BOTTOM_END)
+            .alignInRow(VerticalAlignment::Bottom)
+            .alignInColumn(HorizontalAlignment::End),
         Rc::new(MaxSizePolicy),
     );
     let cache = layout_node.cache_handles();
@@ -1844,6 +1848,11 @@ fn flex_parent_data_uses_resolved_weight() {
         .expect("expected weight to propagate via resolved modifiers");
     assert_eq!(parent_data.weight, 1.0);
     assert!(parent_data.fill);
+
+    let parent_data = measurable.parent_data();
+    assert_eq!(parent_data.box_alignment, Some(Alignment::BOTTOM_END));
+    assert_eq!(parent_data.row_alignment, Some(VerticalAlignment::Bottom));
+    assert_eq!(parent_data.column_alignment, Some(HorizontalAlignment::End));
 }
 
 #[test]

@@ -5,6 +5,7 @@ struct MockMeasurable {
     width: f32,
     height: f32,
     node_id: usize,
+    parent_data: cranpose_ui_layout::ParentData,
 }
 
 impl MockMeasurable {
@@ -13,7 +14,13 @@ impl MockMeasurable {
             width,
             height,
             node_id,
+            parent_data: cranpose_ui_layout::ParentData::default(),
         }
+    }
+
+    fn with_parent_data(mut self, parent_data: cranpose_ui_layout::ParentData) -> Self {
+        self.parent_data = parent_data;
+        self
     }
 }
 
@@ -36,6 +43,10 @@ impl Measurable for MockMeasurable {
 
     fn max_intrinsic_height(&self, _width: f32) -> f32 {
         self.height
+    }
+
+    fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+        self.parent_data
     }
 }
 
@@ -60,6 +71,52 @@ fn box_measure_policy_takes_max_size() {
     assert_eq!(result.size.width, 60.0);
     assert_eq!(result.size.height, 30.0);
     assert_eq!(result.placements.len(), 2);
+}
+
+#[test]
+fn box_child_alignment_overrides_content_alignment() {
+    let policy = BoxMeasurePolicy::new(Alignment::TOP_START, false);
+    let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
+        MockMeasurable::new(20.0, 10.0, 1).with_parent_data(cranpose_ui_layout::ParentData {
+            box_alignment: Some(Alignment::BOTTOM_END),
+            ..Default::default()
+        }),
+    )];
+
+    let result = policy.measure(&measurables, Constraints::tight(100.0, 100.0));
+
+    assert_eq!(result.placements[0].x, 80.0);
+    assert_eq!(result.placements[0].y, 90.0);
+}
+
+#[test]
+fn row_child_alignment_overrides_vertical_alignment() {
+    let policy = FlexMeasurePolicy::row(LinearArrangement::Start, VerticalAlignment::Top);
+    let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
+        MockMeasurable::new(20.0, 10.0, 1).with_parent_data(cranpose_ui_layout::ParentData {
+            row_alignment: Some(VerticalAlignment::Bottom),
+            ..Default::default()
+        }),
+    )];
+
+    let result = policy.measure(&measurables, Constraints::tight(100.0, 100.0));
+
+    assert_eq!(result.placements[0].y, 90.0);
+}
+
+#[test]
+fn column_child_alignment_overrides_horizontal_alignment() {
+    let policy = FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start);
+    let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
+        MockMeasurable::new(20.0, 10.0, 1).with_parent_data(cranpose_ui_layout::ParentData {
+            column_alignment: Some(HorizontalAlignment::End),
+            ..Default::default()
+        }),
+    )];
+
+    let result = policy.measure(&measurables, Constraints::tight(100.0, 100.0));
+
+    assert_eq!(result.placements[0].x, 80.0);
 }
 
 #[test]

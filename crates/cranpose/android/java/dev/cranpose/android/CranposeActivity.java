@@ -5,6 +5,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.graphics.Rect;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -15,6 +16,9 @@ import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.WindowInsets;
 import android.content.UriPermission;
 import android.database.Cursor;
@@ -28,6 +32,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * A {@link NativeActivity} that exposes the Storage Access Framework to
@@ -65,6 +72,174 @@ public class CranposeActivity extends NativeActivity {
     private static final String WRITABLE_PROBE_NAME = ".cranpose-write-probe";
 
     private long pendingToken;
+    private CranposeAccessibilityProvider cranposeAccessibilityProvider;
+
+    private static native void nativeOnAccessibilityActivate(float x, float y);
+
+    /** Publishes Cranpose's semantic tree through Android's native virtual-view API. */
+    public void cranposeSetAccessibilityElements(String payload) {
+        final List<CranposeAccessibilityElement> elements = parseAccessibilityElements(payload);
+        runOnUiThread(() -> {
+            View host = getWindow().getDecorView();
+            if (cranposeAccessibilityProvider == null) {
+                cranposeAccessibilityProvider = new CranposeAccessibilityProvider(host);
+                host.setFocusable(true);
+                host.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+                host.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+                    @Override
+                    public AccessibilityNodeProvider getAccessibilityNodeProvider(View ignored) {
+                        return cranposeAccessibilityProvider;
+                    }
+                });
+            }
+            cranposeAccessibilityProvider.setElements(elements);
+        });
+    }
+
+    private static List<CranposeAccessibilityElement> parseAccessibilityElements(String payload) {
+        if (payload == null || payload.isEmpty()) return Collections.emptyList();
+        ArrayList<CranposeAccessibilityElement> result = new ArrayList<>();
+        for (String record : payload.split("\\n", -1)) {
+            String[] fields = record.split("\\t", -1);
+            if (fields.length != 11) continue;
+            try {
+                result.add(new CranposeAccessibilityElement(
+                        Integer.parseInt(fields[0]), Integer.parseInt(fields[1]),
+                        new Rect(Integer.parseInt(fields[2]), Integer.parseInt(fields[3]),
+                                Integer.parseInt(fields[4]), Integer.parseInt(fields[5])),
+                        Float.parseFloat(fields[6]), Float.parseFloat(fields[7]),
+                        "1".equals(fields[8]), unescapeAccessibility(fields[9]),
+                        unescapeAccessibility(fields[10])));
+            } catch (RuntimeException ignored) {
+                // A malformed record must not make the host Activity inaccessible.
+            }
+        }
+        return result;
+    }
+
+    private static String unescapeAccessibility(String value) {
+        return value.replace("%0D", "\r").replace("%0A", "\n")
+                .replace("%09", "\t").replace("%25", "%");
+    }
+
+    private static final class CranposeAccessibilityElement {
+        final int id;
+        final int role;
+        final Rect bounds;
+        final float centerX;
+        final float centerY;
+        final boolean clickable;
+        final String label;
+        final String value;
+
+        CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
+                float centerY, boolean clickable, String label, String value) {
+            this.id = id;
+            this.role = role;
+            this.bounds = bounds;
+            this.centerX = centerX;
+            this.centerY = centerY;
+            this.clickable = clickable;
+            this.label = label;
+            this.value = value;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static final class CranposeAccessibilityProvider extends AccessibilityNodeProvider {
+        private static final int HOST_ID = View.NO_ID;
+        private final View host;
+        private List<CranposeAccessibilityElement> elements = Collections.emptyList();
+        private int focusedId = HOST_ID;
+
+        CranposeAccessibilityProvider(View host) {
+            this.host = host;
+        }
+
+        void setElements(List<CranposeAccessibilityElement> elements) {
+            this.elements = elements;
+            host.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+        }
+
+        @Override
+        public AccessibilityNodeInfo createAccessibilityNodeInfo(int virtualViewId) {
+            if (virtualViewId == HOST_ID) {
+                AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(host);
+                info.setClassName(CranposeActivity.class.getName());
+                info.setPackageName(host.getContext().getPackageName());
+                for (CranposeAccessibilityElement element : elements) {
+                    info.addChild(host, element.id);
+                }
+                return info;
+            }
+            CranposeAccessibilityElement element = find(virtualViewId);
+            if (element == null) return null;
+            AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain();
+            info.setSource(host, element.id);
+            info.setParent(host);
+            info.setPackageName(host.getContext().getPackageName());
+            info.setEnabled(true);
+            info.setVisibleToUser(true);
+            info.setFocusable(true);
+            info.setAccessibilityFocused(focusedId == element.id);
+            info.setContentDescription(element.label);
+            if (element.role == 1) info.setClassName("android.widget.Button");
+            else if (element.role == 3) {
+                info.setClassName("android.widget.EditText");
+                info.setEditable(true);
+                info.setText(element.value);
+            } else info.setClassName("android.widget.TextView");
+            info.setBoundsInParent(element.bounds);
+            int[] location = new int[2];
+            host.getLocationOnScreen(location);
+            Rect screen = new Rect(element.bounds);
+            screen.offset(location[0], location[1]);
+            info.setBoundsInScreen(screen);
+            info.setClickable(element.clickable);
+            if (element.clickable) info.addAction(AccessibilityNodeInfo.ACTION_CLICK);
+            info.addAction(focusedId == element.id
+                    ? AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+                    : AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
+            return info;
+        }
+
+        @Override
+        public boolean performAction(int virtualViewId, int action, Bundle arguments) {
+            CranposeAccessibilityElement element = find(virtualViewId);
+            if (element == null) return false;
+            if (action == AccessibilityNodeInfo.ACTION_CLICK && element.clickable) {
+                nativeOnAccessibilityActivate(element.centerX, element.centerY);
+                sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_CLICKED);
+                return true;
+            }
+            if (action == AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS) {
+                focusedId = element.id;
+                sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
+                return true;
+            }
+            if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {
+                focusedId = HOST_ID;
+                sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED);
+                return true;
+            }
+            return false;
+        }
+
+        private CranposeAccessibilityElement find(int id) {
+            for (CranposeAccessibilityElement element : elements) {
+                if (element.id == id) return element;
+            }
+            return null;
+        }
+
+        private void sendEvent(int id, int type) {
+            if (!host.isShown()) return;
+            AccessibilityEvent event = AccessibilityEvent.obtain(type);
+            event.setPackageName(host.getContext().getPackageName());
+            event.setSource(host, id);
+            host.getParent().requestSendAccessibilityEvent(host, event);
+        }
+    }
 
     /** Number of files to accumulate before flushing a streaming batch. */
     private static final int FOLDER_BATCH_SIZE = 32;

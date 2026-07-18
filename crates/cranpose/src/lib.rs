@@ -7,6 +7,16 @@
 mod android_file_picker;
 #[cfg(all(feature = "android", target_os = "android"))]
 pub use android_file_picker::open_content_uri;
+#[cfg(any(
+    test,
+    feature = "desktop-shell",
+    all(feature = "android", target_os = "android"),
+    all(feature = "ios", target_os = "ios"),
+    all(feature = "web", target_arch = "wasm32")
+))]
+mod accessibility;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+mod android_accessibility;
 #[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
 mod android_host_window;
 mod android_input;
@@ -140,6 +150,8 @@ pub(crate) mod gpu_limits;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub mod desktop;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+mod desktop_accessibility;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_input;
 
 #[cfg(any(feature = "desktop-shell", all(feature = "ios", target_os = "ios")))]
@@ -155,6 +167,9 @@ mod robot;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 pub mod ios;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_accessibility;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_file_picker;
@@ -200,6 +215,9 @@ pub mod recorder;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 pub mod web;
+
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_accessibility;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_services;

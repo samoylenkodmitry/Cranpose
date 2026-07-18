@@ -2797,6 +2797,28 @@ impl LayoutChildMeasurable {
     fn new(state: Rc<LayoutChildMeasureState>) -> Self {
         Self { state }
     }
+
+    fn resolved_parent_data(&self) -> Option<cranpose_ui_layout::ParentData> {
+        let applier = self.state.applier()?;
+        let node_id = self.state.node_id();
+        let Ok(mut applier) = applier.try_borrow_typed() else {
+            return None;
+        };
+
+        applier
+            .with_node::<LayoutNode, _>(node_id, |layout_node| {
+                let props = layout_node.resolved_modifiers().layout_properties();
+                let weight = props.weight().unwrap_or_default();
+                cranpose_ui_layout::ParentData {
+                    weight: weight.weight,
+                    fill: weight.fill,
+                    box_alignment: props.box_alignment(),
+                    row_alignment: props.row_alignment(),
+                    column_alignment: props.column_alignment(),
+                }
+            })
+            .ok()
+    }
 }
 
 impl Measurable for LayoutChildMeasurable {
@@ -3004,21 +3026,18 @@ impl Measurable for LayoutChildMeasurable {
     }
 
     fn flex_parent_data(&self) -> Option<cranpose_ui_layout::FlexParentData> {
-        let applier = self.state.applier()?;
-        let node_id = self.state.node_id();
-        let Ok(mut applier) = applier.try_borrow_typed() else {
+        let parent_data = self.resolved_parent_data()?;
+        if !parent_data.has_weight() {
             return None;
-        };
+        }
+        Some(cranpose_ui_layout::FlexParentData::new(
+            parent_data.weight,
+            parent_data.fill,
+        ))
+    }
 
-        applier
-            .with_node::<LayoutNode, _>(node_id, |layout_node| {
-                let props = layout_node.resolved_modifiers().layout_properties();
-                props.weight().map(|weight_data| {
-                    cranpose_ui_layout::FlexParentData::new(weight_data.weight, weight_data.fill)
-                })
-            })
-            .ok()
-            .flatten()
+    fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+        self.resolved_parent_data().unwrap_or_default()
     }
 }
 

@@ -1,0 +1,147 @@
+//! Browser accessibility bridge for the canvas renderer.
+
+use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
+use cranpose_app_shell::AppShell;
+use cranpose_render_wgpu::WgpuRenderer;
+use std::cell::RefCell;
+use std::rc::Rc;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::{JsCast, JsValue};
+use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, MouseEvent};
+
+/// Transparent DOM nodes mirroring the semantic controls painted on canvas.
+pub(crate) struct WebAccessibilityBridge {
+    root: HtmlElement,
+    canvas: HtmlCanvasElement,
+    previous: Vec<AccessibilityElement>,
+}
+
+impl WebAccessibilityBridge {
+    pub(crate) fn install(
+        document: &Document,
+        canvas: HtmlCanvasElement,
+        app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    ) -> Result<Self, JsValue> {
+        let root = document.create_element("div")?.dyn_into::<HtmlElement>()?;
+        root.set_attribute("data-cranpose-accessibility", "")?;
+        root.set_attribute("aria-label", "Application controls")?;
+        let style = root.style();
+        style.set_property("position", "fixed")?;
+        style.set_property("inset", "0")?;
+        style.set_property("z-index", "2147483647")?;
+        style.set_property("pointer-events", "none")?;
+
+        let click = Closure::wrap(Box::new(move |event: MouseEvent| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Some(x) = target
+                .get_attribute("data-cranpose-x")
+                .and_then(|value| value.parse::<f32>().ok())
+            else {
+                return;
+            };
+            let Some(y) = target
+                .get_attribute("data-cranpose-y")
+                .and_then(|value| value.parse::<f32>().ok())
+            else {
+                return;
+            };
+            if let Ok(mut shell) = app.try_borrow_mut() {
+                shell.set_cursor(x, y);
+                shell.pointer_pressed();
+                shell.pointer_released_at_position(x, y);
+            }
+        }) as Box<dyn FnMut(_)>);
+        root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+
+        document
+            .body()
+            .ok_or("document has no body")?
+            .append_child(&root)?;
+        Ok(Self {
+            root,
+            canvas,
+            previous: Vec::new(),
+        })
+    }
+
+    pub(crate) fn sync(
+        &mut self,
+        document: &Document,
+        shell: &mut AppShell<WgpuRenderer>,
+    ) -> Result<(), JsValue> {
+        let elements = accessibility::snapshot(shell);
+        if elements == self.previous {
+            return Ok(());
+        }
+        self.previous.clone_from(&elements);
+        self.root.set_inner_html("");
+
+        let canvas_rect = self.canvas.get_bounding_client_rect();
+        let viewport = shell.viewport_size();
+        let scale_x = canvas_rect.width() / viewport.0.max(1.0) as f64;
+        let scale_y = canvas_rect.height() / viewport.1.max(1.0) as f64;
+
+        for element in elements {
+            let node = document
+                .create_element(if element.clickable { "button" } else { "span" })?
+                .dyn_into::<HtmlElement>()?;
+            node.set_attribute("aria-label", &element.label)?;
+            node.set_attribute("data-cranpose-node", &element.node_id.to_string())?;
+            match element.role {
+                AccessibilityRole::Button => node.set_attribute("role", "button")?,
+                AccessibilityRole::StaticText => {
+                    node.set_attribute("role", "text")?;
+                    node.set_text_content(Some(&element.label));
+                }
+                AccessibilityRole::TextField => {
+                    node.set_attribute("role", "textbox")?;
+                    if let Some(value) = &element.value {
+                        node.set_attribute("aria-valuetext", value)?;
+                    }
+                }
+            }
+            if element.clickable {
+                let (x, y) = element.bounds.center();
+                node.set_attribute("data-cranpose-x", &x.to_string())?;
+                node.set_attribute("data-cranpose-y", &y.to_string())?;
+            } else {
+                node.set_attribute("tabindex", "-1")?;
+            }
+            let style = node.style();
+            style.set_property("position", "fixed")?;
+            style.set_property(
+                "left",
+                &format!(
+                    "{}px",
+                    canvas_rect.left() + element.bounds.x as f64 * scale_x
+                ),
+            )?;
+            style.set_property(
+                "top",
+                &format!(
+                    "{}px",
+                    canvas_rect.top() + element.bounds.y as f64 * scale_y
+                ),
+            )?;
+            style.set_property(
+                "width",
+                &format!("{}px", element.bounds.width as f64 * scale_x),
+            )?;
+            style.set_property(
+                "height",
+                &format!("{}px", element.bounds.height as f64 * scale_y),
+            )?;
+            style.set_property("opacity", "0.001")?;
+            style.set_property("pointer-events", "none")?;
+            style.set_property("overflow", "hidden")?;
+            self.root.append_child(&node)?;
+        }
+        Ok(())
+    }
+}

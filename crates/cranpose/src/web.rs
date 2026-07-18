@@ -118,21 +118,24 @@ pub async fn run(
     // Get device pixel ratio for proper scaling
     let scale_factor = window.device_pixel_ratio();
 
-    // Set canvas size
-    let width = settings.initial_width;
-    let height = settings.initial_height;
-
-    canvas.set_width((width as f64 * scale_factor) as u32);
-    canvas.set_height((height as f64 * scale_factor) as u32);
-
-    // Set CSS size and disable browser touch gesture handling on the canvas
+    // Keep the requested desktop-sized viewport as an upper bound while
+    // fitting phones and narrow browser windows without horizontal scrolling.
+    let requested_width = settings.initial_width;
+    let requested_height = settings.initial_height;
     if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
         let style = html_element.style();
-        style.set_property("width", &format!("{}px", width))?;
-        style.set_property("height", &format!("{}px", height))?;
+        style.set_property(
+            "width",
+            &format!("min({requested_width}px, calc(100vw - 36px))"),
+        )?;
+        style.set_property(
+            "height",
+            &format!("min({requested_height}px, calc(100vh - 36px))"),
+        )?;
         style.set_property("touch-action", "none")?;
     }
-
+    let width = canvas.client_width().max(1) as u32;
+    let height = canvas.client_height().max(1) as u32;
     let backend_preference = requested_web_backend(&window);
     let mut instance_desc =
         wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
@@ -160,6 +163,18 @@ pub async fn run(
         .map_err(|e| format!("failed to find suitable adapter: {:?}", e))?;
 
     let adapter_info = adapter.get_info();
+    // Browser WebGPU presents a high-DPI swapchain at the canvas' CSS size.
+    // The WebGL path already maps its drawing buffer to CSS pixels, so applying
+    // devicePixelRatio there a second time makes every scene render zoomed and
+    // clipped. Keep WebGL at CSS resolution while preserving Retina rendering
+    // for Browser WebGPU.
+    let render_scale = if adapter_info.backend == wgpu::Backend::BrowserWebGpu {
+        scale_factor
+    } else {
+        1.0
+    };
+    canvas.set_width((width as f64 * render_scale) as u32);
+    canvas.set_height((height as f64 * render_scale) as u32);
     let adapter_limits = adapter.limits();
     let required_limits =
         required_limits_for_web_backend(adapter_info.backend, adapter_limits.clone());
@@ -196,8 +211,8 @@ pub async fn run(
     let surface_config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
-        width: (width as f64 * scale_factor) as u32,
-        height: (height as f64 * scale_factor) as u32,
+        width: (width as f64 * render_scale) as u32,
+        height: (height as f64 * render_scale) as u32,
         present_mode,
         alpha_mode,
         view_formats: vec![],
@@ -209,7 +224,7 @@ pub async fn run(
     let mut surface_config = surface_config;
     let (actual_width, actual_height, effective_scale) =
         if adapter_info.backend == wgpu::Backend::BrowserWebGpu {
-            (surface_config.width, surface_config.height, scale_factor)
+            (surface_config.width, surface_config.height, render_scale)
         } else {
             // WebGL backends can cap the swapchain below the requested size.
             // Probe the actual surface once so layout and root scale match the
@@ -237,10 +252,19 @@ pub async fn run(
                     surface_config.height = actual_height;
                     s
                 } else {
-                    scale_factor
+                    render_scale
                 };
             (actual_width, actual_height, effective_scale)
         };
+    log::info!(
+        "Web canvas css={}x{}, buffer={}x{}, effective_scale={:.2}, device_scale={:.2}",
+        width,
+        height,
+        actual_width,
+        actual_height,
+        effective_scale,
+        scale_factor
+    );
 
     // Create renderer with fonts from settings
     let fonts: &[&[u8]] = settings.fonts.unwrap_or(&[]);
@@ -260,10 +284,18 @@ pub async fn run(
         content,
         (actual_width, actual_height),
         (width as f32, height as f32),
-        effective_scale as f32,
+        scale_factor as f32,
     )));
+    app.borrow_mut().set_semantics_enabled(true);
+    let accessibility = Rc::new(RefCell::new(
+        crate::web_accessibility::WebAccessibilityBridge::install(
+            &document,
+            canvas.clone(),
+            app.clone(),
+        )?,
+    ));
     let platform = Rc::new(RefCell::new(WebPlatform::default()));
-    platform.borrow_mut().set_scale_factor(effective_scale);
+    platform.borrow_mut().set_scale_factor(scale_factor);
 
     let surface = Rc::new(surface);
     let surface_config = Rc::new(RefCell::new(surface_config));
@@ -792,10 +824,20 @@ pub async fn run(
     let render_loop_for_deadline = render_loop.clone();
     let surface_dirty_for_loop = surface_dirty.clone();
     let request_frame_for_loop = request_frame.clone();
+    let document_for_loop = document.clone();
+    let accessibility_for_loop = accessibility.clone();
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         frame_pending_for_loop.set(false);
         let update_result = app.borrow_mut().update();
+        if let Ok(mut app_mut) = app.try_borrow_mut() {
+            if let Err(error) = accessibility_for_loop
+                .borrow_mut()
+                .sync(&document_for_loop, &mut app_mut)
+            {
+                log::error!("web accessibility sync failed: {error:?}");
+            }
+        }
 
         // Present when the surface still owes its first (or post-reconfigure)
         // frame, when `update()` produced visual work, or when the app otherwise

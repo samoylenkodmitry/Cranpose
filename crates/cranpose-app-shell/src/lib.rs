@@ -140,12 +140,7 @@ where
     /// Used to synthesize Enter/Exit events when the hover set changes.
     hovered_nodes: Vec<NodeId>,
     /// Persistent clipboard for desktop (Linux X11 requires clipboard to stay alive)
-    #[cfg(all(
-        feature = "clipboard-native",
-        not(target_arch = "wasm32"),
-        not(target_os = "android"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "clipboard-native", target_os = "linux"))]
     clipboard: Option<arboard::Clipboard>,
     /// Dev options for debugging and performance monitoring
     dev_options: DevOptions,
@@ -472,12 +467,7 @@ where
             pointer_source: PointerSource::Unknown,
             hit_path_tracker: HitPathTracker::new(),
             hovered_nodes: Vec::new(),
-            #[cfg(all(
-                feature = "clipboard-native",
-                not(target_arch = "wasm32"),
-                not(target_os = "android"),
-                not(target_os = "ios")
-            ))]
+            #[cfg(all(feature = "clipboard-native", target_os = "linux"))]
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
             dev_overlay_controls: Vec::new(),

@@ -44,6 +44,8 @@ struct IosApp<F: FnMut() + 'static> {
     window: Option<Arc<dyn Window>>,
     gpu: Option<GpuResources>,
     shell: Option<AppShell<WgpuRenderer>>,
+    /// Mirrors Cranpose semantics into UIKit and queues native activations.
+    accessibility: Option<crate::ios_accessibility::IosAccessibilityBridge>,
     platform: DesktopWinitPlatform,
     /// Live platform environment (safe-area/IME insets, system theme) provided
     /// to composition by the root wrapper. Shared with the content closure so
@@ -71,6 +73,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             window: None,
             gpu: None,
             shell: None,
+            accessibility: None,
             platform: DesktopWinitPlatform::default(),
             platform_env: crate::platform_env::PlatformEnvironment::new(),
             last_keyboard_bottom: 0.0,
@@ -148,6 +151,12 @@ impl<F: FnMut() + 'static> IosApp<F> {
             self.event_proxy.wake_up();
         }
 
+        if let (Some(accessibility), Some(shell)) =
+            (self.accessibility.as_mut(), self.shell.as_mut())
+        {
+            accessibility.drain_activations(shell);
+        }
+
         let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
             return;
         };
@@ -181,6 +190,9 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
         let dirty_before = gpu.surface_dirty;
         let update_result = shell.update();
+        if let Some(accessibility) = self.accessibility.as_mut() {
+            accessibility.sync(shell);
+        }
         if !surface_present_required(
             dirty_before,
             update_result.visual_changed,
@@ -331,6 +343,13 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         shell.app_context().enter(crate::ios_clipboard::register);
         shell.app_context().enter(crate::ios_keyboard::register);
         shell.app_context().enter(crate::ios_back_gesture::register);
+        shell.set_semantics_enabled(true);
+
+        let mut accessibility =
+            crate::ios_accessibility::IosAccessibilityBridge::new(self.event_proxy.clone());
+        if let Some(accessibility) = accessibility.as_mut() {
+            accessibility.sync(&mut shell);
+        }
 
         // Drive runtime-requested frames (animations, async results) through the
         // event-loop proxy. Calling `request_redraw` directly from the waker is
@@ -358,6 +377,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             surface_dirty: true,
         });
         self.shell = Some(shell);
+        self.accessibility = accessibility;
         self.window = Some(window.clone());
         window.request_redraw();
     }

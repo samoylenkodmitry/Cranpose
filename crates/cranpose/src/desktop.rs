@@ -121,6 +121,7 @@ fn robot_query_should_drain_frame(app: &AppShell<WgpuRenderer>) -> bool {
 struct RobotController {
     rx: mpsc::Receiver<RobotCommand>,
     tx: mpsc::Sender<RobotResponse>,
+    pending_command: Option<RobotCommand>,
     waiting_for_idle: bool,
     idle_iterations: u32,
     idle_structure_clean_frames: u32,
@@ -147,6 +148,7 @@ impl RobotController {
         let controller = RobotController {
             rx,
             tx,
+            pending_command: None,
             waiting_for_idle: false,
             idle_iterations: 0,
             idle_structure_clean_frames: 0,
@@ -175,6 +177,19 @@ impl RobotController {
         self.waiting_for_idle = true;
         self.idle_iterations = 0;
         self.idle_structure_clean_frames = 0;
+    }
+
+    fn stage_pending_command(&mut self) -> bool {
+        if self.pending_command.is_none() {
+            self.pending_command = self.rx.try_recv().ok();
+        }
+        self.pending_command.is_some()
+    }
+
+    fn next_command(&mut self) -> Option<RobotCommand> {
+        self.pending_command
+            .take()
+            .or_else(|| self.rx.try_recv().ok())
     }
 
     fn finish_idle_wait(&mut self) {
@@ -480,6 +495,8 @@ struct App {
     surface_caps: Option<wgpu::SurfaceCapabilities>,
     /// Compose app shell
     app: Option<AppShell<WgpuRenderer>>,
+    /// Platform-native AccessKit bridge for the primary window.
+    accessibility: Option<crate::desktop_accessibility::DesktopAccessibilityBridge>,
     /// Platform adapter
     platform: Option<DesktopWinitPlatform>,
     /// Shared GPU objects used by all desktop surfaces.
@@ -564,6 +581,7 @@ impl App {
             surface_config: None,
             surface_caps: None,
             app: None,
+            accessibility: None,
             platform: None,
             gpu_context: None,
             native_windows: HashMap::new(),
@@ -3753,6 +3771,15 @@ impl cranpose_app_shell::PlatformTextInputHandler for DesktopTextInput {
 
 impl ApplicationHandler for App {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        #[cfg(feature = "robot")]
+        if self
+            .robot_controller
+            .as_mut()
+            .is_some_and(RobotController::stage_pending_command)
+        {
+            self.about_to_wait(event_loop);
+            return;
+        }
         self.handle_primary_frame_requested(event_loop);
     }
 
@@ -3775,7 +3802,10 @@ impl ApplicationHandler for App {
                     initial_height as f64,
                 ))
                 // Hide window in headless mode for parallel robot testing
-                .with_visible(!headless && primary_window_visible),
+                // AccessKit must subclass/register the native view before its
+                // first show. The window is revealed after the initial
+                // semantic tree has been installed below.
+                .with_visible(false),
         ) {
             Ok(window) => window.into(),
             Err(error) => {
@@ -3895,8 +3925,16 @@ impl ApplicationHandler for App {
                 initial_scale as f32,
             )
         });
-        #[cfg(feature = "robot")]
-        app.set_semantics_enabled(self.robot_controller.is_some());
+        app.set_semantics_enabled(true);
+
+        let mut accessibility = crate::desktop_accessibility::DesktopAccessibilityBridge::new(
+            window.as_ref(),
+            self.event_proxy.clone(),
+        );
+        accessibility.sync(&mut app);
+        if !headless && primary_window_visible {
+            window.set_visible(true);
+        }
 
         // Apply dev options (FPS counter, etc.)
         let mut dev_options = self.settings.dev_options.clone();
@@ -3943,6 +3981,7 @@ impl ApplicationHandler for App {
         self.surface_config = Some(surface_config);
         self.surface_caps = Some(surface_caps);
         self.app = Some(app);
+        self.accessibility = Some(accessibility);
         self.platform = Some(platform);
         self.gpu_context = Some(DesktopGpuContext {
             instance,
@@ -3977,6 +4016,9 @@ impl ApplicationHandler for App {
             self.native_window_event(event_loop, window_id, event);
             return;
         }
+        if let Some(accessibility) = &mut self.accessibility {
+            accessibility.process_event(window.as_ref(), &event);
+        }
 
         let frame_interval = self.frame_interval();
         let last_frame_start_time = self.last_frame_start_time;
@@ -3987,6 +4029,13 @@ impl ApplicationHandler for App {
 
         let registry = Rc::clone(&self.native_window_registry);
         let Some(app) = &mut self.app else { return };
+        if let Some(accessibility) = &mut self.accessibility {
+            for (x, y) in accessibility.drain_clicks() {
+                app.set_cursor(x, y);
+                app.pointer_pressed();
+                app.pointer_released_at_position(x, y);
+            }
+        }
         let Some(platform) = &mut self.platform else {
             return;
         };
@@ -4273,6 +4322,9 @@ impl ApplicationHandler for App {
                 let primary_surface_dirty_before_update = self.primary_surface_dirty;
                 app.set_density(window.scale_factor() as f32);
                 let update_result = update_app_with_native_window_registry(app, &registry);
+                if let Some(accessibility) = &mut self.accessibility {
+                    accessibility.sync(app);
+                }
                 #[cfg(feature = "robot")]
                 if let Some(controller) = &mut self.robot_controller {
                     controller.record_idle_update_result(update_result);
@@ -4392,6 +4444,18 @@ impl ApplicationHandler for App {
         let Some(window) = self.window.clone() else {
             return;
         };
+        if let Some(accessibility) = &mut self.accessibility {
+            let mut activated = false;
+            for (x, y) in accessibility.drain_clicks() {
+                app.set_cursor(x, y);
+                app.pointer_pressed();
+                app.pointer_released_at_position(x, y);
+                activated = true;
+            }
+            if activated {
+                request_redraw_once(&window, &mut self.primary_redraw_pending);
+            }
+        }
 
         // The first frame still owes the surface a present, but the redraw
         // requested during `resumed` can be dropped on macOS, so re-request it
@@ -4408,7 +4472,7 @@ impl ApplicationHandler for App {
         if let Some(controller) = &mut self.robot_controller {
             let mut robot_visual_dirty = false;
             // Process new commands
-            while let Ok(cmd) = controller.rx.try_recv() {
+            while let Some(cmd) = controller.next_command() {
                 match cmd {
                     RobotCommand::Click { x, y } => {
                         app.set_pointer_source(PointerSource::Mouse);
@@ -4830,6 +4894,10 @@ impl ApplicationHandler for App {
                     RobotCommand::Exit => {
                         let _ = controller.tx.send(RobotResponse::Ok);
                         event_loop.exit();
+                        // Nothing after an exit request should reschedule the loop. In
+                        // particular, ControlFlow::Poll below can otherwise keep a
+                        // continuously animating headless robot app alive forever.
+                        return;
                     }
                 }
             }
@@ -5933,6 +6001,23 @@ mod tests {
         assert!(controller.synthetic_primary_down());
         controller.end_synthetic_primary_gesture();
         assert!(!controller.synthetic_primary_down());
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_controller_stages_commands_during_continuous_frame_wakes() {
+        let (mut controller, robot) = RobotController::new();
+        robot
+            .command_sender()
+            .send(crate::robot::RobotCommand::PumpFrames { count: 2 })
+            .expect("robot command channel should remain open");
+
+        assert!(controller.stage_pending_command());
+        assert!(matches!(
+            controller.next_command(),
+            Some(crate::robot::RobotCommand::PumpFrames { count: 2 })
+        ));
+        assert!(!controller.stage_pending_command());
     }
 
     #[cfg(feature = "robot")]

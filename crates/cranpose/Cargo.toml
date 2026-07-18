@@ -55,6 +55,7 @@ desktop-shell = [
     "cranpose-app-shell/clipboard-native",
     "cranpose-platform-desktop-winit",
     "dep:winit",
+    "dep:accesskit",
     "cranpose-services/uri-native",
     "cranpose-services/file-picker-native",
     "cranpose-services/system-theme",
@@ -115,9 +116,11 @@ web-sys = { version = "0.3", optional = true, features = [
     "Element",
     "HtmlElement",
     "HtmlCanvasElement",
+    "DomRect",
     "CanvasRenderingContext2d",
     "Performance",
     "MouseEvent",
+    "EventTarget",
     "Touch",
     "TouchList",
     "TouchEvent",
@@ -154,6 +157,7 @@ thiserror = "2.0.18"
 web-time = { workspace = true }
 cranpose-render-common.workspace = true
 raw-window-handle = "0.6"
+accesskit = { version = "0.24.1", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
@@ -177,6 +181,7 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
 ] }
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
+accesskit_unix = { version = "0.22.1", default-features = false, features = ["async-io"] }
 x11rb = { version = "0.13.2", optional = true }
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",
@@ -185,6 +190,7 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
 ] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+accesskit_windows = "0.34.0"
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
@@ -192,6 +198,7 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+accesskit_macos = "0.26.3"
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
@@ -232,6 +239,11 @@ objc2-ui-kit = { version = "0.3", default-features = false, optional = true, fea
     "UIScreen",
     "UIActivity",
     "UIActivityViewController",
+    "UIAccessibility",
+    "UIAccessibilityConstants",
+    "UIAccessibilityContainer",
+    "UIAccessibilityElement",
+    "UIAccessibilityIdentification",
     "UIApplication",
     "UIDocumentPickerViewController",
     "UIFeedbackGenerator",

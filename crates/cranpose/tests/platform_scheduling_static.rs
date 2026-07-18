@@ -22,12 +22,13 @@ fn workspace_path(path: &str) -> PathBuf {
 #[test]
 fn ci_architecture_budget_runs_required_gates() {
     let workflow = workspace_source(".github/workflows/rust.yml");
+    let heavy_workflow = workspace_source(".github/workflows/heavy-selfhosted.yml");
     let release_workflow = workspace_source(".github/workflows/release.yml");
     let pages_workflow = workspace_source(".github/workflows/deploy-pages.yml");
 
     assert!(
         workflow.contains("architecture-budget:")
-            && workflow.contains("linux / stable / architecture budgets"),
+            && workflow.contains("name: architecture budgets (linux)"),
         "Rust CI should keep a dedicated architecture budget job"
     );
     assert!(
@@ -61,8 +62,8 @@ fn ci_architecture_budget_runs_required_gates() {
     );
     assert!(
         workflow.contains("wasm-build:")
-            && workflow.contains("Install binaryen 120")
-            && workflow.contains("cargo install wasm-pack --version 0.13.1")
+            && workflow.contains("wasm-opt --version")
+            && workflow.contains("cargo install wasm-pack --version 0.13.1 --locked")
             && workflow.contains("run: apps/desktop-demo/build-web.sh --release"),
         "Rust CI should keep the web release build job wired through explicit build-web.sh --release so the wasm-release profile and WASM size budget cannot depend on ambient CI defaults"
     );
@@ -80,9 +81,11 @@ fn ci_architecture_budget_runs_required_gates() {
         "Android CI should install only required SDK packages instead of running the broad setup-android action"
     );
     assert!(
-        workflow.contains("bash scripts/ci/install_android_ndk.sh 27.0.12077973")
+        heavy_workflow.contains("ANDROID_NDK_HOME=$sdk_root/ndk/27.0.12077973")
+            && heavy_workflow.contains("sdkmanager \"ndk;27.0.12077973\"")
+            && heavy_workflow.contains("test -f \"$ANDROID_NDK_HOME/source.properties\"")
             && release_workflow.contains("bash scripts/ci/install_android_ndk.sh 27.0.12077973"),
-        "Android CI and release workflows should share the narrow NDK installer"
+        "self-hosted Android CI and hosted release builds should provision and validate the pinned NDK"
     );
 }
 
@@ -1023,11 +1026,12 @@ fn tick() {
 }
 
 #[test]
-fn unsafe_code_stays_in_android_boundary_modules() {
+fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source_dir = crate_dir.join("src");
     let allowed = [
         "android_jni.rs",
+        "android_accessibility.rs",
         "android_services.rs",
         "android_surface.rs",
         "android_file_picker.rs",
@@ -1044,6 +1048,8 @@ fn unsafe_code_stays_in_android_boundary_modules() {
         "ios_keyboard.rs",
         "ios_back_gesture.rs",
         "ios_background.rs",
+        "ios_accessibility.rs",
+        "desktop_accessibility.rs",
     ];
     let mut offenders = Vec::new();
 
@@ -1067,7 +1073,7 @@ fn unsafe_code_stays_in_android_boundary_modules() {
 
     assert!(
         offenders.is_empty(),
-        "unsafe code must stay in Android boundary modules; found in {offenders:?}"
+        "unsafe code must stay in reviewed platform boundary modules; found in {offenders:?}"
     );
 }
 
@@ -1204,6 +1210,7 @@ fn workspace_ffi_boundaries_are_explicit() {
     let source_roots = ["crates", "apps", "xtask"];
     let allowed = [
         "crates/cranpose/src/android_jni.rs",
+        "crates/cranpose/src/android_accessibility.rs",
         "crates/cranpose/src/android_services.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/android_file_picker.rs",
@@ -1220,6 +1227,8 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/ios_keyboard.rs",
         "crates/cranpose/src/ios_back_gesture.rs",
         "crates/cranpose/src/ios_background.rs",
+        "crates/cranpose/src/ios_accessibility.rs",
+        "crates/cranpose/src/desktop_accessibility.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];
@@ -1262,6 +1271,7 @@ fn unsafe_blocks_have_nearby_safety_invariants() {
     let boundary_modules = [
         "crates/cranpose/src/android_jni.rs",
         "crates/cranpose/src/android_surface.rs",
+        "crates/cranpose/src/ios_accessibility.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];

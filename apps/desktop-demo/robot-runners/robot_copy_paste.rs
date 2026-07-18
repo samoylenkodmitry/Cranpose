@@ -46,6 +46,11 @@ fn main() {
             }
 
             let mut all_passed = true;
+            let (command_ctrl, command_meta) = if cfg!(target_os = "macos") {
+                (false, true)
+            } else {
+                (true, false)
+            };
 
             // =========================================================
             // TEST 1: Switch to Text Input tab
@@ -102,7 +107,8 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
 
                 // Select all text (Ctrl+A) and replace with our test content
-                let _ = robot.send_key_with_modifiers("a", false, true, false, false);
+                let _ =
+                    robot.send_key_with_modifiers("a", false, command_ctrl, false, command_meta);
                 std::thread::sleep(Duration::from_millis(100));
 
                 // Type initial text "abcdef" (replaces selection)
@@ -167,7 +173,7 @@ fn main() {
             // =========================================================
             println!("--- Test 4: Copy Selected Text (Ctrl+C) ---");
 
-            match robot.send_key_with_modifiers("c", false, true, false, false) {
+            match robot.send_key_with_modifiers("c", false, command_ctrl, false, command_meta) {
                 Ok(_) => {
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(200));
@@ -189,7 +195,7 @@ fn main() {
             std::thread::sleep(Duration::from_millis(100));
 
             // Paste first time
-            match robot.send_key_with_modifiers("v", false, true, false, false) {
+            match robot.send_key_with_modifiers("v", false, command_ctrl, false, command_meta) {
                 Ok(_) => {
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(200));
@@ -202,7 +208,7 @@ fn main() {
             }
 
             // Paste second time
-            match robot.send_key_with_modifiers("v", false, true, false, false) {
+            match robot.send_key_with_modifiers("v", false, command_ctrl, false, command_meta) {
                 Ok(_) => {
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(200));
