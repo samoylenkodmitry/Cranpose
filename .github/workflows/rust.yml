@@ -1,8 +1,10 @@
 name: Rust
 
 on:
+  # Validate every branch pushed to this repository. Fork pull requests still
+  # run through pull_request below, but remain on GitHub-hosted macOS runners
+  # so untrusted fork code is never executed on a persistent self-hosted Mac.
   push:
-    branches: ["main"]
   pull_request:
     branches: ["main"]
 
@@ -204,7 +206,9 @@ jobs:
 
   ios-build:
     name: iOS build
-    runs-on: macos-latest
+    # Repository branches and same-repository PRs use either registered Mac.
+    # Fork PRs retain an isolated ephemeral runner for self-hosted safety.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64"]') || 'macos-latest' }}
     timeout-minutes: 45
 
     steps:
