@@ -4588,9 +4588,14 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     } else {
         backend.record_layer_cache_miss(backdrop_width, backdrop_height);
         let snapshot = backend.acquire_frame_surface(backdrop_width, backdrop_height);
+        // The effect geometry anchors to the FULL node rect: a viewport or
+        // scroll clip shrinks the visible/capture rects, and a shader
+        // handed the clipped rect rescales its whole dp mapping (the
+        // window-bottom bar's lens drew its capsule ~9dp high). Clipping
+        // belongs to the scissor, never to the effect rect.
         let copy_plan = axis_aligned_backdrop_snapshot_copy_plan(
             capture_rect,
-            visible_rect,
+            layer.rect,
             root_scale,
             (target.width, target.height),
             backend.max_texture_dim(),
@@ -4637,7 +4642,7 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
                 .map(|plan| plan.effect_pixel_rect)
                 .unwrap_or_else(|| {
                     let capture = surface_pixel_rect(capture_rect, backdrop_scale);
-                    let effect = surface_pixel_rect(visible_rect, backdrop_scale);
+                    let effect = surface_pixel_rect(layer.rect, backdrop_scale);
                     [
                         effect.x - capture.x,
                         effect.y - capture.y,
@@ -4775,7 +4780,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
         if backdrop_underlay.is_none() && (backdrop_scale - root_scale).abs() <= 0.01 {
             axis_aligned_backdrop_snapshot_copy_plan(
                 capture_rect,
-                visible_rect,
+                layer.rect,
                 root_scale,
                 (target.width, target.height),
                 backend.max_texture_dim(),
@@ -4791,7 +4796,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
         .map(|plan| plan.effect_pixel_rect)
         .unwrap_or_else(|| {
             let capture = surface_pixel_rect(capture_rect, backdrop_scale);
-            let effect = surface_pixel_rect(visible_rect, backdrop_scale);
+            let effect = surface_pixel_rect(layer.rect, backdrop_scale);
             [
                 effect.x - capture.x,
                 effect.y - capture.y,

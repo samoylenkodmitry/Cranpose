@@ -509,7 +509,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let lens_refraction = max(inradius * refraction_depth, 0.001);
     let rounded_box = clamp(-d / lens_refraction, 0.0, 1.0);
     // Coverage AA rides the material's refraction band (wcKSRD's rb1·32).
-    let coverage_ramp = floored_band_width(lens_refraction / 32.0);
+    // A DRAINED lens (material activity 0) is a soft tint pool, not
+    // defined glass: the reference's resting bar bubble edge fades over
+    // ~8dp (bar_over_orange_purple) — a crisp resting edge doubles with
+    // the pill's rim line into an onion contour. Activity sharpens the
+    // edge back to the AA band as the lens rises.
+    let rest_feather = 8.0 * optical_scale;
+    let coverage_ramp = floored_band_width(
+        mix(rest_feather, lens_refraction / 32.0, material_activity),
+    );
     let coverage = smoothstep(0.0, 1.0, clamp(-d / coverage_ramp, 0.0, 1.0));
     let optical_coverage = smoothstep(
         0.0,
@@ -940,14 +948,18 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // additive white, and both rotate with the light input.
     let bevel_source_axis = pow(max(dot(outward_normal, -light_return), 0.0), 2.5);
     let bevel_return_axis = pow(max(dot(outward_normal, light_return), 0.0), 1.8);
-    // The bevel is STRUCTURAL: the reference discs carry it fully at rest,
-    // independent of the material's specular highlight knob — so it takes
-    // its own floor and only grows past it when the material is explicitly
-    // more specular. Measured on the on-white teal disc: the arcs are THIN
-    // (the raw ~1.3dp meniscus band, no falloff sharpening — the pow-6
-    // core crushed them to invisibility) and STRONG (body 184 -> lip 237
-    // green, ~+50% luminance at highlight 0.72, hue preserved).
-    let bevel_gain = max(highlight, 0.18);
+    // The bevel is STRUCTURAL for fully-active glass: the reference discs
+    // carry it at rest independent of the material's specular highlight
+    // knob — so it takes its own floor and only grows past it when the
+    // material is explicitly more specular. Measured on the on-white teal
+    // disc: the arcs are THIN (the raw ~1.3dp meniscus band, no falloff
+    // sharpening — the pow-6 core crushed them to invisibility) and
+    // STRONG (body 184 -> lip 237 green, ~+50% luminance at highlight
+    // 0.72, hue preserved). A DRAINED lens is not structural: the
+    // reference's resting bar bubble is a soft tint capsule with no rim
+    // pair (bar_over_orange_purple), so the floor scales with the
+    // material's activity and vanishes with it.
+    let bevel_gain = max(highlight, 0.18 * material_activity);
     let bevel_band = clamp(
         wcksrd_meniscus(meniscus_distance, lens_refraction, gradient_extent),
         0.0,
