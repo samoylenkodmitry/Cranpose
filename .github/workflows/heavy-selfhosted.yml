@@ -59,8 +59,9 @@ jobs:
             armv7-linux-androideabi \
             i686-linux-android \
             x86_64-linux-android
+          command -v sccache >/dev/null \
+            || RUSTC_WRAPPER= cargo install sccache --locked
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
-          command -v sccache >/dev/null || cargo install sccache --locked
           if [[ ! -f "$ANDROID_NDK_HOME/source.properties" ]]; then
             yes | sdkmanager "ndk;27.0.12077973"
           fi
@@ -82,4 +83,4 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: sccache --show-stats
+        run: command -v sccache >/dev/null && sccache --show-stats || true
