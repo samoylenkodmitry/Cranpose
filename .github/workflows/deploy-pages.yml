@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, cranpose-heavy]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -33,11 +33,6 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           targets: wasm32-unknown-unknown
-
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
 
       - name: Install binaryen (wasm-opt) for size optimization
         run: |
@@ -69,12 +64,14 @@ jobs:
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
+        with:
+          retention-days: 1
 
   deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, cranpose-heavy]
     needs: build
     steps:
       - name: Deploy to GitHub Pages
