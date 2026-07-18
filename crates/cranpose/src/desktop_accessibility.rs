@@ -161,44 +161,6 @@ fn tree_update(elements: &[AccessibilityElement]) -> TreeUpdate {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::accessibility::AccessibilityRect;
-
-    #[test]
-    fn desktop_tree_maps_controls_to_native_roles_and_click_actions() {
-        let elements = vec![
-            AccessibilityElement {
-                node_id: 7,
-                label: "Items".into(),
-                value: None,
-                bounds: AccessibilityRect::new(10.0, 20.0, 80.0, 44.0),
-                role: AccessibilityRole::Button,
-                clickable: true,
-            },
-            AccessibilityElement {
-                node_id: 8,
-                label: "Receipts".into(),
-                value: None,
-                bounds: AccessibilityRect::new(10.0, 70.0, 120.0, 24.0),
-                role: AccessibilityRole::StaticText,
-                clickable: false,
-            },
-        ];
-
-        let update = tree_update(&elements);
-        assert_eq!(update.tree.as_ref().map(|tree| tree.root), Some(ROOT_ID));
-        let button = &update.nodes[1].1;
-        assert_eq!(button.role(), Role::Button);
-        assert_eq!(button.label(), Some("Items"));
-        assert!(button.supports_action(Action::Click));
-        let label = &update.nodes[2].1;
-        assert_eq!(label.role(), Role::Label);
-        assert_eq!(label.value(), Some("Receipts"));
-    }
-}
-
 #[cfg(target_os = "macos")]
 struct PlatformAdapter(accesskit_macos::SubclassingAdapter);
 
@@ -312,5 +274,43 @@ impl PlatformAdapter {
 
     fn update_if_active(&mut self, update: impl FnOnce() -> TreeUpdate) {
         self.0.update_if_active(update);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::accessibility::AccessibilityRect;
+
+    #[test]
+    fn desktop_tree_maps_controls_to_native_roles_and_click_actions() {
+        let elements = vec![
+            AccessibilityElement {
+                node_id: 7,
+                label: "Items".into(),
+                value: None,
+                bounds: AccessibilityRect::new(10.0, 20.0, 80.0, 44.0),
+                role: AccessibilityRole::Button,
+                clickable: true,
+            },
+            AccessibilityElement {
+                node_id: 8,
+                label: "Receipts".into(),
+                value: None,
+                bounds: AccessibilityRect::new(10.0, 70.0, 120.0, 24.0),
+                role: AccessibilityRole::StaticText,
+                clickable: false,
+            },
+        ];
+
+        let update = tree_update(&elements);
+        assert_eq!(update.tree.as_ref().map(|tree| tree.root), Some(ROOT_ID));
+        let button = &update.nodes[1].1;
+        assert_eq!(button.role(), Role::Button);
+        assert_eq!(button.label(), Some("Items"));
+        assert!(button.supports_action(Action::Click));
+        let label = &update.nodes[2].1;
+        assert_eq!(label.role(), Role::Label);
+        assert_eq!(label.value(), Some("Receipts"));
     }
 }
