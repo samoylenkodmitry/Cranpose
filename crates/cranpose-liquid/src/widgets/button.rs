@@ -292,10 +292,29 @@ pub fn GlassButton(
     let mut base = Modifier::empty();
     if let Some(glass) = material {
         let pressed_for_glass = pressed;
-        base = base.glass_effect_with(glass, move || GlassDynamics {
-            highlight_boost: if pressed_for_glass.get() { 0.85 } else { 0.0 },
-            ..Default::default()
-        });
+        // Held glass lights from WITHIN: the reference's pressed disc
+        // carries a luminous core (touched-up-state sheet), not a flat
+        // fill — the centered touch glow supplies the HDR heart while
+        // highlight_boost lifts the specular shell.
+        let glow_size = cranpose_core::remember(|| {
+            std::rc::Rc::new(std::cell::Cell::new(cranpose_ui_graphics::Size {
+                width: 0.0,
+                height: 0.0,
+            }))
+        })
+        .with(std::rc::Rc::clone);
+        let glow_size_for_glass = std::rc::Rc::clone(&glow_size);
+        base = base
+            .report_size(std::rc::Rc::clone(&glow_size))
+            .glass_effect_with(glass, move || {
+                let size = glow_size_for_glass.get();
+                GlassDynamics {
+                    highlight_boost: if pressed_for_glass.get() { 0.85 } else { 0.0 },
+                    touch: (pressed_for_glass.get() && size.width > 0.0 && size.height > 0.0)
+                        .then_some((size.width * 0.5, size.height * 0.5, 1.0)),
+                    ..Default::default()
+                }
+            });
     }
 
     let on_click = Rc::new(RefCell::new(on_click));

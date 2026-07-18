@@ -1221,14 +1221,23 @@ pub fn LiquidMenu(
                 // Muted vibrancy: the absorbed button must read as a soft
                 // smudge beneath the glass, not a hot saturated orb.
                 // Scheme-aware body: the light menu lifts toward white; the
-                // dark reference menu (sort/filter recording) deepens instead
-                // and lets the colored backdrop wash through.
+                // dark reference menu (sort/filter recording) is a HEAVY
+                // dark glass — a near-opaque deep body with crisp white
+                // rows, the colored backdrop only ghosting through
+                // (cheatsheet round: a multiply-lift alone left the panel
+                // reading as frosted white over the purple header).
                 let glass = Glass::regular()
                     .shape(LiquidShape::RoundedRect(MENU_RADIUS))
                     .blur_radius(12.0)
                     .saturation(if colors.is_dark { 1.30 } else { 1.55 })
-                    .lift(if colors.is_dark { -0.32 } else { 0.58 })
-                    .highlight(0.14)
+                    .lift(if colors.is_dark { -0.52 } else { 0.58 })
+                    .highlight(0.14);
+                let glass = if colors.is_dark {
+                    glass.tint(Color::from_rgba_u8(24, 12, 28, 205))
+                } else {
+                    glass
+                };
+                let glass = glass
                     .shadow_style(GlassShadow::new(
                         Color::BLACK.with_alpha(if colors.is_dark { 0.22 } else { 0.11 }),
                         26.0,

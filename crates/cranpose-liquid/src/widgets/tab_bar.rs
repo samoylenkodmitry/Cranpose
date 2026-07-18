@@ -146,7 +146,12 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         .refraction_depth(0.26)
         .refraction_curve(0.25)
         .dispersion(0.24)
-        .lift(0.0)
+        // Raised milk: the reference's held bubble face lifts modestly
+        // toward white as it rises (on-white-click-hold sheet, held rows
+        // f_0240+); lift scales by activity, so the verified resting look
+        // is untouched. Kept subtle — the fully clear face read flat, the
+        // heavy wash of earlier rounds read foggy.
+        .lift(0.12)
         .highlight(0.35)
 }
 
@@ -158,7 +163,7 @@ fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         // orange/purple vivid through the glass (bottom-bar-form sheet);
         // the stronger wash read pale.
         .saturation(1.12)
-        .lift(neutral_surface_lift(foreground, 0.30, -0.24))
+        .lift(neutral_surface_lift(foreground, 0.35, -0.24))
         .highlight(0.20)
         // The reference bar folds nearby content inside its long edges:
         // section headers under the top edge render mirrored upside-down
@@ -971,9 +976,9 @@ mod tests {
             cranpose_ui_graphics::Color::from_rgb_u8(0, 122, 255),
         );
         let generic_lens = Glass::lens();
-        assert!(glass
-            .lift
-            .is_some_and(|lift| (-0.02..=0.02).contains(&lift)));
+        // A modest raised milk (activity-scaled) — clear enough to keep
+        // the wcKSRD face readable, lifted enough to match the held rows.
+        assert!(glass.lift.is_some_and(|lift| (0.0..=0.15).contains(&lift)));
         assert!(glass.refraction_depth < generic_lens.refraction_depth);
         assert!(glass.refraction_curve < generic_lens.refraction_curve);
         assert!(glass.dispersion < generic_lens.dispersion);
@@ -1002,7 +1007,7 @@ mod tests {
         let glass = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
         assert_eq!(glass.blur_radius, Some(4.0));
         assert_eq!(glass.saturation, Some(1.12));
-        assert_eq!(glass.lift, Some(0.30));
+        assert_eq!(glass.lift, Some(0.35));
         assert_eq!(glass.refraction_depth, 0.34);
         assert_eq!(glass.adaptive_frost, 0.28);
     }
@@ -1010,7 +1015,7 @@ mod tests {
     #[test]
     fn bar_surface_lift_tracks_the_local_foreground_polarity() {
         let light_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
-        assert_eq!(light_surface.lift, Some(0.30));
+        assert_eq!(light_surface.lift, Some(0.35));
 
         let dark_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::WHITE);
         assert_eq!(dark_surface.lift, Some(-0.24));

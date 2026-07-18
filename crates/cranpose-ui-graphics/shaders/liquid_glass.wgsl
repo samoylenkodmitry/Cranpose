@@ -959,7 +959,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // reference's resting bar bubble is a soft tint capsule with no rim
     // pair (bar_over_orange_purple), so the floor scales with the
     // material's activity and vanishes with it.
-    let bevel_gain = max(highlight, 0.18 * material_activity);
+    // Interactive lenses (rim_style -> 1) carry NO structural floor: their
+    // rim is the chromatic dispersion band (toggle-press reference), and
+    // the white bevel lip both buried those fringes and clipped to white
+    // over light wells. Surface glass (discs, pills, toggles' wells) keeps
+    // the structural bevel.
+    let bevel_gain = max(
+        highlight,
+        0.18 * material_activity * (1.0 - clamp(rim_style, 0.0, 1.0)),
+    );
     let bevel_band = clamp(
         wcksrd_meniscus(meniscus_distance, lens_refraction, gradient_extent),
         0.0,

@@ -71,7 +71,12 @@ fn toggle_lens_material() -> Glass {
         // interior in ONE continuous mapping — no fold band, no zoom term,
         // no scratches on the surface.
         .refraction_depth(1.0)
-        .refraction_curve(0.25)
+        // The FULL dome curve: sin(interior * pi/2) — the face magnifies
+        // the thumb across the lens so the green fills it to a THIN
+        // mirrored rim (toggle-press T266). The shallow 0.25 curve left
+        // the face barely magnifying: a wide un-magnified band of the
+        // white well drowned the dispersion fringes into a solid bloom.
+        .refraction_curve(1.0)
         .transmission_refraction(1.0)
         .meniscus_absorption(0.70)
         .dispersion(0.85)

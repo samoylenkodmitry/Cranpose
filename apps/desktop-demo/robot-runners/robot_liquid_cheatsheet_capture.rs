@@ -36,13 +36,35 @@ fn main() -> ExitCode {
                 .expect("select liquid tab");
             settle(&robot, 900);
 
-            capture_toggle_press(&robot, &shot_dir);
-            capture_menu_open(&robot, &shot_dir);
-            capture_tab_swipe_and_form(&robot, &shot_dir);
-            capture_segmented(&robot, &shot_dir);
-            capture_menu_expand(&robot, &shot_dir);
-            capture_on_white(&robot, &shot_dir);
-            capture_touched_up(&robot, &shot_dir);
+            // CRANPOSE_CHEATSHEET_STAGES=menu-expand,segmented narrows a
+            // recapture to the named stage groups for fast tuning loops.
+            let stage_filter = std::env::var("CRANPOSE_CHEATSHEET_STAGES").ok();
+            let run_stage = |name: &str| {
+                stage_filter
+                    .as_deref()
+                    .is_none_or(|filter| filter.split(',').any(|s| s.trim() == name))
+            };
+            if run_stage("toggle-press") {
+                capture_toggle_press(&robot, &shot_dir);
+            }
+            if run_stage("menu-open") {
+                capture_menu_open(&robot, &shot_dir);
+            }
+            if run_stage("tab-swipe") {
+                capture_tab_swipe_and_form(&robot, &shot_dir);
+            }
+            if run_stage("segmented") {
+                capture_segmented(&robot, &shot_dir);
+            }
+            if run_stage("menu-expand") {
+                capture_menu_expand(&robot, &shot_dir);
+            }
+            if run_stage("on-white") {
+                capture_on_white(&robot, &shot_dir);
+            }
+            if run_stage("touched-up") {
+                capture_touched_up(&robot, &shot_dir);
+            }
 
             println!("PASS: liquid cheatsheet capture");
             let _ = robot.exit();
