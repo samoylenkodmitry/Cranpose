@@ -23,6 +23,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          # Release publication can move a tag onto the generated version-bump
+          # commit. Resolve the selected ref at job start so queued deployments
+          # do not reject that intentional move as a stale event SHA.
+          ref: ${{ github.ref_name }}
 
       - name: Install Rust (nightly for wasm-pack artifact output)
         uses: dtolnay/rust-toolchain@nightly

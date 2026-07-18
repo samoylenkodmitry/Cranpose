@@ -32,6 +32,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          # publish.yml may move the release tag onto its generated version-bump
+          # commit while this matrix is queued. Resolve the tag when the runner
+          # starts instead of pinning checkout to the event's original SHA.
+          ref: ${{ github.ref_name }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -114,6 +119,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Keep Android on the same final tag commit as the desktop matrix.
+          ref: ${{ github.ref_name }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
