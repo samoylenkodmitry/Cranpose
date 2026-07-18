@@ -316,7 +316,18 @@ fn main() -> ExitCode {
                 .iter()
                 .position(|area| *area >= max_area * 0.90)
                 .unwrap_or(0);
-            let raised_areas = &areas[raised_from..];
+            // The law ENDS where the arrival drain begins: the reference
+            // bubble contracts from its raised projection back to the
+            // resting blob (77dp -> 56dp with the width projection
+            // draining too), so the settle frames are a material
+            // relaxation, not a volume violation. A drop below 55% of the
+            // raised peak is unambiguous drain.
+            let drain_start = areas[raised_from..]
+                .iter()
+                .position(|area| *area < max_area * 0.55)
+                .map(|offset| raised_from + offset)
+                .unwrap_or(areas.len());
+            let raised_areas = &areas[raised_from..drain_start];
             let min_area = raised_areas.iter().copied().fold(f32::MAX, f32::min);
             if max_area > min_area * 1.38 {
                 fail(

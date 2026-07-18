@@ -199,12 +199,17 @@ fn check_bar(
         match arrived {
             // A locally flat backdrop can hide one side of the zoom-free
             // lens from the diff, so alignment is proven by EITHER band
-            // edge landing on its expected bubble edge.
+            // edge landing on its expected bubble edge; the resting edge
+            // FEATHER also shaves the detected band symmetrically on
+            // low-contrast renderers, so an on-center band of plausible
+            // width proves alignment equally.
             Some(band)
                 if (band.0 - span.0).abs() <= ALIGNMENT_BUDGET_DP
-                    || (band.1 - span.1).abs() <= ALIGNMENT_BUDGET_DP => {}
+                    || (band.1 - span.1).abs() <= ALIGNMENT_BUDGET_DP
+                    || ((band_center(band) - expected).abs() <= ALIGNMENT_BUDGET_DP
+                        && band.1 - band.0 >= half_rest * 1.2) => {}
             Some(band) => failures.push(format!(
-                "{bar}: bubble band {band:?} matches neither edge of {label}'s rest span {span:?}"
+                "{bar}: bubble band {band:?} matches neither edge nor center of {label}'s rest span {span:?}"
             )),
             None => failures.push(format!("{bar}: no change cluster near {label}")),
         }
