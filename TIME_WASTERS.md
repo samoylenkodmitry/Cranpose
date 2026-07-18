@@ -358,3 +358,16 @@ gesture stopped. Fixed by preserving the spring frame chain across
 retargets; `spring_retargeted_every_frame_tracks_a_moving_target` in
 cranpose-animation pins it. If a widget tracks a moving target, retarget
 per move with `animate_to_with_velocity` — no rate limiting needed.
+
+- Progressive-fps-decay hunts: when EVERY tracked counter is flat (nodes,
+  scopes, caches, frame callbacks, heap bytes) but frame work grows
+  monotonically across interaction cycles, suspect the snapshot record
+  chains — they had no length counter and every state READ walks the full
+  chain (`readable_record_for`). Method that pinpointed it in minutes:
+  drive N repeated cycles headless (robot runner), then `perf record
+  -p <pid> --call-graph dwarf` an early window vs a late window and diff
+  the top self-cost symbols (18% → 51% told the whole story). The robot
+  binary keeps its symbol table (robot profile debug=0 but not stripped),
+  so perf resolves names without a rebuild. Also: a "45s cooldown" is NOT
+  frame-free in robot/NoVsync mode — the render loop free-runs, so don't
+  use it to reason about frame-drained accumulators.

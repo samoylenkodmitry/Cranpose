@@ -381,6 +381,15 @@ run_test() {
         robot_text_input)
             timeout_secs=120
             ;;
+        robot_text_handle_cycle_stability)
+            # 30 select/sweep/release cycles with per-cycle stat sampling.
+            timeout_secs=480
+            ;;
+        robot_liquid_bar_alignment)
+            # Far-anchor selection sweeps across two bars with settled
+            # captures per cell.
+            timeout_secs=180
+            ;;
         robot_hacker_news_scroll_exact_external_contract|robot_markdown_scroll_exact_external_contract|robot_text_scroll_exact_external_contract)
             timeout_secs=180
             ;;

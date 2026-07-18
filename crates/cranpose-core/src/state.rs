@@ -1109,10 +1109,17 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
                     );
                     return Err("child record value missing or wrong type");
                 };
+                // Publish through the reuse primitive: every apply retires
+                // the previous head, so an unconditional allocation here
+                // grows the record chain by one per UI event — the chain is
+                // scanned linearly on every read, so frames decay for the
+                // whole session (user-visible as sinking fps under repeated
+                // handle drags).
                 let new_id = allocate_record_id();
-                let current_head = self.head.clone_head();
-                let new_head = StateRecord::new(new_id, cloned, Some(current_head));
-                self.head.replace(new_head);
+                let promoted = new_overwritable_record_as_head_locked(self);
+                promoted.replace_value(cloned);
+                promoted.set_tombstone(false);
+                promoted.set_snapshot_id(new_id);
                 advance_global_snapshot(new_id);
                 self.notify_applied();
                 self.assert_chain_integrity("promote_record", Some(child_id));
@@ -1137,10 +1144,13 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
             );
             return Err("merged record value missing or wrong type");
         };
+        // Same reuse discipline as `promote_record`: merged commits happen
+        // per conflicting apply and must not grow the chain.
         let new_id = allocate_record_id();
-        let current_head = self.head.clone_head();
-        let new_head = StateRecord::new(new_id, value, Some(current_head));
-        self.head.replace(new_head);
+        let committed = new_overwritable_record_as_head_locked(self);
+        committed.replace_value(value);
+        committed.set_tombstone(false);
+        committed.set_snapshot_id(new_id);
         advance_global_snapshot(new_id);
         self.notify_applied();
         self.assert_chain_integrity("commit_merged_record", Some(new_id));
@@ -2549,6 +2559,38 @@ mod tests {
         record.with_value(|val: &i32| {
             assert_eq!(*val, 42);
         });
+    }
+
+    /// The user-visible leak behind "fps got lower and lower" during
+    /// repeated text-handle drags: every pointer event writes drag state
+    /// through `run_in_mutable_snapshot` (the `dispatch_ui_event` path).
+    /// Each write must leave the record chain bounded — a growing chain
+    /// makes every subsequent state read a longer linear scan, degrading
+    /// every later frame.
+    #[test]
+    fn event_loop_writes_keep_the_record_chain_bounded() {
+        crate::snapshot_pinning::reset_pinning_table();
+        let state = SnapshotMutableState::new_in_arc(0.0f32, Arc::new(NeverEqual));
+
+        let mut lens = Vec::new();
+        for event in 0..3000usize {
+            crate::run_in_mutable_snapshot(|| {
+                state.set(event as f32);
+            })
+            .expect("event snapshot applies");
+            // The renderer reads the value from the global snapshot between
+            // events (draw + layout consume the state each frame).
+            let _ = state.get();
+            if event % 500 == 499 {
+                lens.push(state.record_chain_debug().len());
+            }
+        }
+
+        let final_len = *lens.last().expect("sampled chain lengths");
+        assert!(
+            final_len <= 16,
+            "record chain grew without bound across event-loop writes: {lens:?}"
+        );
     }
 
     #[test]
