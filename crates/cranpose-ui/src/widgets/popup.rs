@@ -29,12 +29,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::composable;
 use crate::modifier::Modifier;
+use crate::{composable, PointerInputScope};
 use cranpose_core::{
     mutableStateOf, remember, staticCompositionLocalOf, CompositionLocalProvider, MutableState,
     SideEffect, StaticCompositionLocal,
 };
+use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{Point, Rect};
 
 use super::box_widget::{Box, BoxSpec};
@@ -263,10 +264,14 @@ fn PopupOverlay(registry: PopupRegistry) {
         if let Some(on_dismiss) = entry.on_dismiss {
             // Outside-tap scrim: fills the host (the viewport), beneath the
             // popup content, so any tap that misses the popup dismisses it.
+            // Consume the press as well as the release: a regular `clickable`
+            // leaves Down unconsumed so scroll ancestors can participate, but
+            // a modal scrim has no such ancestor and must not capture covered
+            // sibling controls (for example a tab bar) into the same gesture.
             Box(
                 Modifier::empty()
                     .fill_max_size()
-                    .clickable(move |_point| on_dismiss()),
+                    .then(popup_scrim_pointer_input(entry.id, on_dismiss)),
                 BoxSpec::default(),
                 || {},
             );
@@ -278,6 +283,46 @@ fn PopupOverlay(registry: PopupRegistry) {
             move || content(),
         );
     }
+}
+
+/// Modal outside-tap handling for dismissable popups. Consuming Down prevents
+/// lower z-order siblings from joining the shell's captured hit path; consuming
+/// every follow-up keeps the entire gesture inside the overlay even when the
+/// dismiss callback removes the popup on release.
+fn popup_scrim_pointer_input(id: u64, on_dismiss: Rc<dyn Fn()>) -> Modifier {
+    Modifier::empty().pointer_input(id, move |scope: PointerInputScope| {
+        let on_dismiss = Rc::clone(&on_dismiss);
+        async move {
+            scope
+                .await_pointer_event_scope(|await_scope| async move {
+                    let mut pressed = false;
+                    loop {
+                        let event = await_scope.await_pointer_event().await;
+                        match event.kind {
+                            PointerEventKind::Down => {
+                                pressed = true;
+                                event.consume();
+                            }
+                            PointerEventKind::Move => event.consume(),
+                            PointerEventKind::Up => {
+                                let should_dismiss = pressed;
+                                pressed = false;
+                                event.consume();
+                                if should_dismiss {
+                                    on_dismiss();
+                                }
+                            }
+                            PointerEventKind::Cancel => {
+                                pressed = false;
+                                event.consume();
+                            }
+                            _ => {}
+                        }
+                    }
+                })
+                .await;
+        }
+    })
 }
 
 /// Composes `content` in the top-level overlay layer, positioned at
@@ -339,4 +384,49 @@ fn popup_impl(
         let dispose_registry = dispose_registry.clone();
         scope.on_dispose(move || dispose_registry.remove(id))
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modifier::collect_slices_from_modifier;
+    use cranpose_foundation::PointerEvent;
+
+    #[test]
+    fn dismiss_scrim_consumes_the_whole_tap_before_dismissing() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let dismissed = Rc::new(Cell::new(false));
+        let action: Rc<dyn Fn()> = {
+            let dismissed = Rc::clone(&dismissed);
+            Rc::new(move || dismissed.set(true))
+        };
+        let modifier = popup_scrim_pointer_input(7, action);
+        let slices = collect_slices_from_modifier(&modifier);
+        assert_eq!(slices.pointer_inputs().len(), 1);
+        let handler = slices.pointer_inputs()[0].clone();
+
+        let down = PointerEvent::new(
+            PointerEventKind::Down,
+            Point { x: 12.0, y: 18.0 },
+            Point { x: 12.0, y: 18.0 },
+        );
+        handler(down.clone());
+        assert!(
+            down.is_consumed(),
+            "covered controls must never receive Down"
+        );
+        assert!(!dismissed.get(), "dismissal fires on release");
+
+        let up = PointerEvent::new(
+            PointerEventKind::Up,
+            Point { x: 12.0, y: 18.0 },
+            Point { x: 12.0, y: 18.0 },
+        );
+        handler(up.clone());
+        assert!(up.is_consumed(), "the release stays inside the scrim");
+        assert!(
+            dismissed.get(),
+            "a completed outside tap dismisses the popup"
+        );
+    }
 }
