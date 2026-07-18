@@ -1,10 +1,9 @@
 name: Rust
 
 # Fleet-only CI: every job runs on the repo's self-hosted runners (two
-# ARM64 MacBooks + the Linux GPU server). Forks are disabled on this
-# repository, so pull_request events only ever come from the owner's own
-# branches — self-hosted execution is safe for both triggers. The robot
-# suite lives in heavy-selfhosted.yml where it runs on the real GPU.
+# ARM64 MacBooks + the Linux GPU server). Every job explicitly rejects fork
+# heads before allocating a runner; same-repository pull requests remain safe.
+# The robot suite lives in heavy-selfhosted.yml where it runs on the real GPU.
 on:
   push:
     branches: ["main"]
@@ -25,6 +24,7 @@ env:
 jobs:
   checks:
     name: fmt + tests + clippy (mac)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS]
     timeout-minutes: 45
     steps:
@@ -53,6 +53,7 @@ jobs:
 
   architecture-budget:
     name: architecture budgets (linux)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # The binary-size budget is pinned against Linux codegen.
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 45
@@ -106,6 +107,7 @@ jobs:
 
   feature-smoke:
     name: ${{ matrix.feature }} feature (mac)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS]
     timeout-minutes: 30
     strategy:
@@ -126,6 +128,7 @@ jobs:
 
   property-smoke:
     name: property smoke (mac)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS]
     timeout-minutes: 20
     steps:
@@ -145,6 +148,7 @@ jobs:
 
   criterion-smoke:
     name: criterion smoke (mac)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS]
     timeout-minutes: 30
     steps:
@@ -161,6 +165,7 @@ jobs:
 
   wasm-build:
     name: wasm build (linux)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # binaryen + wasm-pack are provisioned on the Linux runner.
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 45
