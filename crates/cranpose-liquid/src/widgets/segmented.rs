@@ -9,9 +9,7 @@ use crate::motion::LiquidMotion;
 use crate::theme::{liquid_colors, liquid_typography};
 use cranpose_animation::{animateFloatAsState, spring};
 use cranpose_core::{mutableStateOf, remember};
-use cranpose_foundation::{PointerEventKind, PointerId};
 use cranpose_macros::composable;
-use cranpose_services::{default_haptics, HapticFeedback};
 use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle};
 use cranpose_ui::widgets::{
     Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Row, RowSpec, Text,
@@ -227,7 +225,8 @@ pub fn LiquidSegmentedControl(
                 }
             });
 
-            // Swipe/tap surface across the whole control.
+            // Swipe/tap surface across the whole control: the shared lens
+            // gesture (crate::motion) with the segment clamp rules.
             let gesture = Modifier::empty()
                 .size(Size::new(total_width, SEGMENT_HEIGHT))
                 .pointer_input(selected, {
@@ -236,108 +235,23 @@ pub fn LiquidSegmentedControl(
                     move |scope: PointerInputScope| {
                         let on_select = Rc::clone(&on_select);
                         let lens_axis = Rc::clone(&lens_axis);
-                        async move {
-                            scope
-                                .await_pointer_event_scope(|await_scope| async move {
-                                    let mut down_x = 0.0f32;
-                                    let mut moved = false;
-                                    let mut active_pointer = Option::<PointerId>::None;
-                                    loop {
-                                        let event = await_scope.await_pointer_event().await;
-                                        match event.kind {
-                                            PointerEventKind::Down if active_pointer.is_none() => {
-                                                active_pointer = Some(event.id);
-                                                down_x = event.position.x;
-                                                moved = false;
-                                                pressed.set(true);
-                                                // Touch-down ATTRACTS the lens: it
-                                                // glides toward the held finger
-                                                // (live report) — never a teleport;
-                                                // a real drag attaches directly
-                                                // once past the slop.
-                                                lens_axis.release_to(
-                                                    segment_lens_left(
-                                                        event.position.x,
-                                                        segment_width,
-                                                        count,
-                                                    ),
-                                                    event.time_ms,
-                                                    LiquidMotion::glide(),
-                                                );
-                                                default_haptics()
-                                                    .perform(HapticFeedback::Selection);
-                                                event.consume();
-                                            }
-                                            PointerEventKind::Move
-                                                if active_pointer == Some(event.id) =>
-                                            {
-                                                moved |=
-                                                    (event.position.x - down_x).abs() > TAP_SLOP;
-                                                // Below the slop this is still a tap:
-                                                // feeding micro-jitter into the direct
-                                                // axis teleports the lens to the finger.
-                                                if moved {
-                                                    if !lens_axis.is_dragging() {
-                                                        lens_axis.begin(
-                                                            lens_axis.value(),
-                                                            event.time_ms,
-                                                        );
-                                                    }
-                                                    lens_axis.move_to(
-                                                        segment_lens_left(
-                                                            event.position.x,
-                                                            segment_width,
-                                                            count,
-                                                        ),
-                                                        event.time_ms,
-                                                    );
-                                                }
-                                                event.consume();
-                                            }
-                                            PointerEventKind::Up
-                                                if active_pointer == Some(event.id) =>
-                                            {
-                                                active_pointer = None;
-                                                pressed.set(false);
-                                                let travelled =
-                                                    (event.position.x - down_x).abs() > TAP_SLOP;
-                                                let position = if travelled {
-                                                    event.position.x
-                                                } else {
-                                                    down_x
-                                                };
-                                                let index =
-                                                    ((position / segment_width).floor().max(0.0)
-                                                        as usize)
-                                                        .min(count - 1);
-                                                lens_axis.release_to(
-                                                    segment_width * index as f32,
-                                                    event.time_ms,
-                                                    LiquidMotion::glide(),
-                                                );
-                                                default_haptics()
-                                                    .perform(HapticFeedback::ImpactLight);
-                                                on_select(index);
-                                                event.consume();
-                                            }
-                                            PointerEventKind::Cancel
-                                                if active_pointer == Some(event.id) =>
-                                            {
-                                                active_pointer = None;
-                                                pressed.set(false);
-                                                lens_axis.release_to(
-                                                    selected_x,
-                                                    event.time_ms,
-                                                    LiquidMotion::glide(),
-                                                );
-                                                event.consume();
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                })
-                                .await;
-                        }
+                        crate::motion::liquid_lens_gesture(
+                            scope,
+                            crate::motion::LiquidLensGesture {
+                                axis: lens_axis,
+                                cell_width: segment_width,
+                                count,
+                                tap_slop: TAP_SLOP,
+                                drag_left: Rc::new(move |x| {
+                                    segment_lens_left(x, segment_width, count)
+                                }),
+                                rest_left: Rc::new(move |index| segment_width * index as f32),
+                                selected,
+                                on_pressed: Rc::new(move |down| pressed.set(down)),
+                                on_touch: Rc::new(|_, _| {}),
+                                on_select,
+                            },
+                        )
                     }
                 });
             Box(gesture, BoxSpec::default(), || {});

@@ -7,17 +7,13 @@ use crate::material::{
 };
 use crate::motion::LiquidMotion;
 use crate::theme::{liquid_colors, liquid_typography, LiquidTypography};
-use cranpose_foundation::PointerId;
 use cranpose_macros::composable;
-use cranpose_services::{default_haptics, HapticFeedback};
 use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle};
 use cranpose_ui::widgets::{
     Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Column, ColumnSpec, Row, RowSpec,
     Text,
 };
-use cranpose_ui::{
-    Brush, Color, CornerRadii, Modifier, PointerEventKind, PointerInputScope, Rect, Size,
-};
+use cranpose_ui::{Brush, Color, CornerRadii, Modifier, PointerInputScope, Rect, Size};
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, VerticalAlignment};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -137,13 +133,13 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         // cells beneath keep their honest colors.
         .ink_recolor(accent, 0.85)
         .blur_radius(0.0)
-        // Sheet-verified tab optic (tab-swipe rounds 3-5): the wide lens
-        // keeps the shallow rim mapping with face zoom + fold — the full
-        // dome inflated the rendered droplet volume (bubble contract) and
-        // smeared the riding icon.
+        // Reference bubble optic (bottom-bar-click f_0635..f_0665): the
+        // face passes the covered cells through at 1:1 — NO magnification;
+        // depth reads from rim refraction + dispersion + edge light alone.
+        // A zoomed face displaces the covered artwork against its
+        // surroundings and the bubble itself reads misplaced.
         .refraction_depth(0.26)
         .refraction_curve(0.25)
-        .optical_zoom(1.15)
         .dispersion(0.24)
         .lift(0.0)
         .highlight(0.35)
@@ -191,6 +187,24 @@ fn tab_lens_left(pointer_x: f32, tab_width: f32, count: usize, has_accessory: bo
         last_tab
     };
     (pointer_x - tab_width * 0.5).clamp(min, max)
+}
+
+/// The settled lens position for a selected cell. The resting bubble is
+/// wider than its cell ([`TAB_LENS_REST_WIDTH_FACTOR`]), so at the end
+/// cells the raw cell position would push it across the pill's rounded
+/// edge — the reference keeps the bubble inside the pill with the same
+/// [`BLOB_MARGIN`]-class gap it holds vertically. The clamp lands the
+/// bubble flush to the pill interior, slightly inboard of an end cell.
+/// Public so alignment tests assert the same rule the widget settles to.
+pub fn tab_lens_resting_left(selected: usize, tab_width: f32, count: usize) -> f32 {
+    let overhang = tab_width * (TAB_LENS_REST_WIDTH_FACTOR - 1.0) * 0.5;
+    let last_tab = tab_width * count.saturating_sub(1) as f32;
+    let (min, max) = (overhang, last_tab - overhang);
+    if min > max {
+        // A single-cell bar centers its bubble.
+        return last_tab * 0.5;
+    }
+    (tab_width * selected as f32).clamp(min, max)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -494,49 +508,48 @@ fn LiquidTabBarLayout(
                 ))
             })
             .with(|state| *state);
+            // Held glass comes CLOSER and lights up: while a finger rests
+            // on the bar the whole surface scales up a touch and the shader
+            // concentrates saturation + a gradient highlight under the
+            // finger (user-observed reference behavior of every touched
+            // glass surface).
+            let bar_touch =
+                cranpose_core::remember(|| cranpose_core::mutableStateOf((0.0f32, 0.0f32)))
+                    .with(|state| *state);
+            let bar_held = cranpose_core::remember(|| cranpose_core::mutableStateOf(false))
+                .with(|state| *state);
+            let bar_press = cranpose_animation::animateFloatAsState(
+                if bar_held.get() { 1.0 } else { 0.0 },
+                cranpose_animation::spring(1.0, 600.0),
+                "tabbar-hold-press",
+            );
+            // The rise transforms the WHOLE stack — pill, cells, and the
+            // floating lens are one optical body. Lifting only the pill
+            // scaled the cells away from the unscaled lens, drifting the
+            // bubble off its cell in proportion to the cell's distance
+            // from the pill center.
+            let bar_lift = Modifier::empty().graphics_layer(move || {
+                let press = bar_press.get().clamp(0.0, 1.0);
+                let rise = 1.0 + 0.03 * press;
+                cranpose_ui_graphics::GraphicsLayer {
+                    scale_x: rise,
+                    scale_y: rise,
+                    translation_y: -2.5 * press,
+                    ..Default::default()
+                }
+            });
             // The stack is pinned to the pill height so the mounting lens
             // (taller than the bar) can never inflate it — an unpinned stack
             // grew on press and the centering Row shifted the whole bar down.
             Box(
-                Modifier::empty().height(BAR_HEIGHT),
+                bar_lift.then(Modifier::empty().height(BAR_HEIGHT)),
                 BoxSpec::default(),
                 move || {
                     let tabs = Rc::clone(&tabs);
                     let typography = typography.clone();
                     let on_select = Rc::clone(&on_select);
-                    // Held glass comes CLOSER and lights up: while a finger
-                    // rests on the bar the whole surface scales up a touch
-                    // and the shader concentrates saturation + a gradient
-                    // highlight under the finger (user-observed reference
-                    // behavior of every touched glass surface).
-                    let bar_touch =
-                        cranpose_core::remember(|| cranpose_core::mutableStateOf((0.0f32, 0.0f32)))
-                            .with(|state| *state);
-                    let bar_held = cranpose_core::remember(|| cranpose_core::mutableStateOf(false))
-                        .with(|state| *state);
-                    let bar_press = cranpose_animation::animateFloatAsState(
-                        if bar_held.get() { 1.0 } else { 0.0 },
-                        cranpose_animation::spring(1.0, 600.0),
-                        "tabbar-hold-press",
-                    );
                     // The bar's edge is defined by shadow and contrast, not a
                     // bright rim stroke.
-                    // Held glass comes CLOSER in geometry AND light: the
-                    // whole bar rises ~3% toward the user (the reference's
-                    // touched-panel lift) while the shader concentrates
-                    // highlight, saturation and the under-finger glow. At
-                    // this scale the render-only transform shifts the
-                    // lens's finger mapping by under a pixel.
-                    let bar_lift = Modifier::empty().graphics_layer(move || {
-                        let press = bar_press.get().clamp(0.0, 1.0);
-                        let rise = 1.0 + 0.03 * press;
-                        cranpose_ui_graphics::GraphicsLayer {
-                            scale_x: rise,
-                            scale_y: rise,
-                            translation_y: -2.5 * press,
-                            ..Default::default()
-                        }
-                    });
                     let pill = Modifier::empty()
                         .glass_effect_with(
                             // Dark labels must never sink into dark content
@@ -556,7 +569,6 @@ fn LiquidTabBarLayout(
                             },
                         )
                         .height(BAR_HEIGHT);
-                    let pill = bar_lift.then(pill);
                     Box(pill, BoxSpec::default(), move || {
                         let tabs = Rc::clone(&tabs);
                         let typography = typography.clone();
@@ -577,7 +589,7 @@ fn LiquidTabBarLayout(
                             let lens_pressed =
                                 cranpose_core::remember(|| cranpose_core::mutableStateOf(false))
                                     .with(|state| *state);
-                            let resting_lens_x = tab_width * selected as f32;
+                            let resting_lens_x = tab_lens_resting_left(selected, tab_width, count);
                             let lens_axis =
                                 crate::motion::remember_liquid_drag_axis(resting_lens_x);
                             // Controlled-state restore only: while a finger
@@ -625,7 +637,9 @@ fn LiquidTabBarLayout(
                                 },
                             );
 
-                            // Swipe/tap surface across the whole pill interior.
+                            // Swipe/tap surface across the whole pill interior:
+                            // the shared lens gesture (crate::motion) with the
+                            // bar's clamp rules and hold feedback.
                             let row_width = tab_width * count as f32;
                             let gesture = Modifier::empty()
                                 .size(Size::new(row_width, BLOB_HEIGHT))
@@ -635,150 +649,36 @@ fn LiquidTabBarLayout(
                                     move |scope: PointerInputScope| {
                                         let on_select = Rc::clone(&on_select);
                                         let lens_axis = Rc::clone(&lens_axis);
-                                        async move {
-                                            scope
-                                                .await_pointer_event_scope(
-                                                    |await_scope| async move {
-                                                        let mut down_x = 0.0f32;
-                                                        let mut active_pointer =
-                                                            Option::<PointerId>::None;
-                                                        let mut moved = false;
-                                                        loop {
-                                                            let event = await_scope
-                                                                .await_pointer_event()
-                                                                .await;
-                                                            match event.kind {
-                                                                PointerEventKind::Down
-                                                                    if active_pointer.is_none() =>
-                                                                {
-                                                                    active_pointer = Some(event.id);
-                                                                    moved = false;
-                                                                    down_x = event.position.x;
-                                                                    // Touch-down ATTRACTS the
-                                                                    // lens: it glides toward the
-                                                                    // held finger immediately
-                                                                    // (live report) — never a
-                                                                    // teleport; a real drag
-                                                                    // attaches directly once
-                                                                    // past the slop.
-                                                                    lens_axis.release_to(
-                                                                        tab_lens_left(
-                                                                            event.position.x,
-                                                                            tab_width,
-                                                                            count,
-                                                                            has_accessory,
-                                                                        ),
-                                                                        event.time_ms,
-                                                                        LiquidMotion::glide(),
-                                                                    );
-                                                                    lens_pressed.set(true);
-                                                                    bar_held.set(true);
-                                                                    bar_touch.set((
-                                                                        event.position.x
-                                                                            + BLOB_MARGIN,
-                                                                        event.position.y
-                                                                            + BLOB_MARGIN,
-                                                                    ));
-                                                                    default_haptics().perform(
-                                                                        HapticFeedback::Selection,
-                                                                    );
-                                                                    event.consume();
-                                                                }
-                                                                PointerEventKind::Move
-                                                                    if active_pointer
-                                                                        == Some(event.id) =>
-                                                                {
-                                                                    moved |= (event.position.x
-                                                                        - down_x)
-                                                                        .abs()
-                                                                        > TAP_SLOP;
-                                                                    // Below the slop this is
-                                                                    // still a tap: keep the lens
-                                                                    // anchored so release FLIES
-                                                                    // it. Feeding micro-jitter
-                                                                    // into the direct axis
-                                                                    // teleported the lens to the
-                                                                    // finger — the intermittent
-                                                                    // "snap instead of flight".
-                                                                    if moved {
-                                                                        if !lens_axis.is_dragging()
-                                                                        {
-                                                                            lens_axis.begin(
-                                                                                lens_axis.value(),
-                                                                                event.time_ms,
-                                                                            );
-                                                                        }
-                                                                        lens_axis.move_to(
-                                                                            tab_lens_left(
-                                                                                event.position.x,
-                                                                                tab_width,
-                                                                                count,
-                                                                                has_accessory,
-                                                                            ),
-                                                                            event.time_ms,
-                                                                        );
-                                                                    }
-                                                                    bar_touch.set((
-                                                                        event.position.x
-                                                                            + BLOB_MARGIN,
-                                                                        event.position.y
-                                                                            + BLOB_MARGIN,
-                                                                    ));
-                                                                    event.consume();
-                                                                }
-                                                                PointerEventKind::Up
-                                                                    if active_pointer
-                                                                        == Some(event.id) =>
-                                                                {
-                                                                    active_pointer = None;
-                                                                    lens_pressed.set(false);
-                                                                    bar_held.set(false);
-                                                                    let commit_x = if moved {
-                                                                        event.position.x
-                                                                    } else {
-                                                                        down_x
-                                                                    };
-                                                                    let index = ((commit_x
-                                                                        / tab_width)
-                                                                        .floor()
-                                                                        as isize)
-                                                                        .clamp(
-                                                                            0,
-                                                                            count as isize - 1,
-                                                                        )
-                                                                        as usize;
-                                                                    lens_axis.release_to(
-                                                                        tab_width * index as f32,
-                                                                        event.time_ms,
-                                                                        LiquidMotion::glide(),
-                                                                    );
-                                                                    default_haptics().perform(
-                                                                        HapticFeedback::ImpactLight,
-                                                                    );
-                                                                    on_select(index);
-                                                                    event.consume();
-                                                                }
-                                                                PointerEventKind::Cancel
-                                                                    if active_pointer
-                                                                        == Some(event.id) =>
-                                                                {
-                                                                    active_pointer = None;
-                                                                    lens_pressed.set(false);
-                                                                    bar_held.set(false);
-                                                                    lens_axis.release_to(
-                                                                        resting_lens_x,
-                                                                        event.time_ms,
-                                                                        LiquidMotion::glide(),
-                                                                    );
-                                                                    event.consume();
-                                                                }
-                                                                _ => {}
-                                                            }
-                                                        }
-                                                    },
-                                                )
-                                                .await;
-                                        }
+                                        crate::motion::liquid_lens_gesture(
+                                            scope,
+                                            crate::motion::LiquidLensGesture {
+                                                axis: lens_axis,
+                                                cell_width: tab_width,
+                                                count,
+                                                tap_slop: TAP_SLOP,
+                                                drag_left: Rc::new(move |x| {
+                                                    tab_lens_left(
+                                                        x,
+                                                        tab_width,
+                                                        count,
+                                                        has_accessory,
+                                                    )
+                                                }),
+                                                rest_left: Rc::new(move |index| {
+                                                    tab_lens_resting_left(index, tab_width, count)
+                                                }),
+                                                selected,
+                                                on_pressed: Rc::new(move |down| {
+                                                    lens_pressed.set(down);
+                                                    bar_held.set(down);
+                                                }),
+                                                on_touch: Rc::new(move |x, y| {
+                                                    bar_touch
+                                                        .set((x + BLOB_MARGIN, y + BLOB_MARGIN));
+                                                }),
+                                                on_select,
+                                            },
+                                        )
                                     }
                                 });
                             Box(gesture, BoxSpec::default(), || {});
@@ -900,6 +800,25 @@ mod tests {
 
         assert_eq!(tab_lens_left(-100.0, width, 4, false), 0.0);
         assert_eq!(tab_lens_left(500.0, width, 4, false), 300.0);
+    }
+
+    #[test]
+    fn resting_lens_stays_inside_the_pill_at_the_end_cells() {
+        let tab = 78.0;
+        let half_rest = tab * TAB_LENS_REST_WIDTH_FACTOR * 0.5;
+        // Interior cells settle exactly on their cell.
+        assert_eq!(tab_lens_resting_left(1, tab, 5), tab);
+        assert_eq!(tab_lens_resting_left(3, tab, 5), 3.0 * tab);
+        // End cells pull inboard just enough that the bubble's edge lands
+        // on the pill interior instead of crossing the rounded end.
+        let first = tab_lens_resting_left(0, tab, 5);
+        assert!(first > 0.0);
+        assert!((first + tab * 0.5 - half_rest).abs() < 1.0e-4);
+        let last = tab_lens_resting_left(4, tab, 5);
+        assert!(last < 4.0 * tab);
+        assert!((last + tab * 0.5 + half_rest - 5.0 * tab).abs() < 1.0e-4);
+        // A single-cell bar centers.
+        assert_eq!(tab_lens_resting_left(0, tab, 1), 0.0);
     }
 
     #[test]

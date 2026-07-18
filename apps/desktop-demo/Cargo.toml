@@ -262,6 +262,11 @@ path = "robot-runners/robot_text_handle_cycle_stability.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_liquid_bar_alignment"
+path = "robot-runners/robot_liquid_bar_alignment.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_double_click"
 path = "robot-runners/robot_double_click.rs"
 required-features = ["robot-app"]

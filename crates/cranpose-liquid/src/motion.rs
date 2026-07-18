@@ -237,6 +237,122 @@ pub(crate) fn remember_liquid_drag_axis(initial: f32) -> Rc<LiquidDragAxis> {
     })
 }
 
+/// Wiring for [`liquid_lens_gesture`]: the one tap/swipe state machine every
+/// lens-carrying strip control shares (tab bar, segmented control).
+pub(crate) struct LiquidLensGesture {
+    pub axis: Rc<LiquidDragAxis>,
+    /// Cell pitch, for committing a release position to an index.
+    pub cell_width: f32,
+    pub count: usize,
+    /// Pointer travel below this is a tap, not a swipe.
+    pub tap_slop: f32,
+    /// Clamped lens-left for a live pointer x (drag bounds — may allow
+    /// overdrag past the ends, e.g. toward a bar accessory).
+    pub drag_left: Rc<dyn Fn(f32) -> f32>,
+    /// Settled lens-left for a committed index (rest bounds — keeps the
+    /// bubble inside the pill).
+    pub rest_left: Rc<dyn Fn(usize) -> f32>,
+    /// The index the control rests on if the gesture cancels.
+    pub selected: usize,
+    /// Pressed-state feedback (lift, highlight). Called with `true` on
+    /// touch-down and `false` on release/cancel.
+    pub on_pressed: Rc<dyn Fn(bool)>,
+    /// Live touch point feedback (the under-finger glow). No-op for
+    /// controls without one.
+    pub on_touch: Rc<dyn Fn(f32, f32)>,
+    pub on_select: Rc<dyn Fn(usize)>,
+}
+
+impl LiquidLensGesture {
+    fn commit_index(&self, position: f32) -> usize {
+        ((position / self.cell_width.max(1.0)).floor() as isize)
+            .clamp(0, self.count.saturating_sub(1) as isize) as usize
+    }
+}
+
+/// Drives one pointer interaction for a lens strip: touch-down ATTRACTS the
+/// lens toward the finger (a glide, never a teleport), movement past the
+/// slop attaches the lens directly, release commits the covered cell and
+/// glides the lens to its resting place, cancel returns to the controlled
+/// selection. The tab bar and segmented control both run exactly this
+/// machine — only their clamp rules and feedback hooks differ.
+pub(crate) async fn liquid_lens_gesture(
+    scope: cranpose_ui::PointerInputScope,
+    gesture: LiquidLensGesture,
+) {
+    use cranpose_foundation::{PointerEventKind, PointerId};
+    use cranpose_services::{default_haptics, HapticFeedback};
+
+    scope
+        .await_pointer_event_scope(|await_scope| async move {
+            let mut down_x = 0.0f32;
+            let mut moved = false;
+            let mut active_pointer = Option::<PointerId>::None;
+            loop {
+                let event = await_scope.await_pointer_event().await;
+                match event.kind {
+                    PointerEventKind::Down if active_pointer.is_none() => {
+                        active_pointer = Some(event.id);
+                        down_x = event.position.x;
+                        moved = false;
+                        (gesture.on_pressed)(true);
+                        (gesture.on_touch)(event.position.x, event.position.y);
+                        gesture.axis.release_to(
+                            (gesture.drag_left)(event.position.x),
+                            event.time_ms,
+                            LiquidMotion::glide(),
+                        );
+                        default_haptics().perform(HapticFeedback::Selection);
+                        event.consume();
+                    }
+                    PointerEventKind::Move if active_pointer == Some(event.id) => {
+                        moved |= (event.position.x - down_x).abs() > gesture.tap_slop;
+                        // Below the slop this is still a tap: keep the lens
+                        // anchored so release FLIES it. Feeding micro-jitter
+                        // into the direct axis teleports the lens to the
+                        // finger — the intermittent "snap instead of flight".
+                        if moved {
+                            if !gesture.axis.is_dragging() {
+                                gesture.axis.begin(gesture.axis.value(), event.time_ms);
+                            }
+                            gesture
+                                .axis
+                                .move_to((gesture.drag_left)(event.position.x), event.time_ms);
+                        }
+                        (gesture.on_touch)(event.position.x, event.position.y);
+                        event.consume();
+                    }
+                    PointerEventKind::Up if active_pointer == Some(event.id) => {
+                        active_pointer = None;
+                        (gesture.on_pressed)(false);
+                        let commit_x = if moved { event.position.x } else { down_x };
+                        let index = gesture.commit_index(commit_x);
+                        gesture.axis.release_to(
+                            (gesture.rest_left)(index),
+                            event.time_ms,
+                            LiquidMotion::glide(),
+                        );
+                        default_haptics().perform(HapticFeedback::ImpactLight);
+                        (gesture.on_select)(index);
+                        event.consume();
+                    }
+                    PointerEventKind::Cancel if active_pointer == Some(event.id) => {
+                        active_pointer = None;
+                        (gesture.on_pressed)(false);
+                        gesture.axis.release_to(
+                            (gesture.rest_left)(gesture.selected),
+                            event.time_ms,
+                            LiquidMotion::glide(),
+                        );
+                        event.consume();
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await;
+}
+
 /// Press feedback for glass controls, per the Liquid Glass law: touched glass
 /// GROWS (spring scale toward `pressed_scale` — never smaller) and turns MORE
 /// TRANSPARENT (the returned content alpha dips while pressed, the reference
