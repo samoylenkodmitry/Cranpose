@@ -10,6 +10,63 @@ on:
   workflow_dispatch:
 
 jobs:
+  robot-e2e-gpu:
+    name: robot e2e (self-hosted GPU)
+    # X11 suite: Linux runners only — the macOS boxes serve the Android
+    # builds. The workspace persists between runs on a self-hosted runner,
+    # so the robot-profile target stays warm; the suite's own paths assume
+    # the workspace target dir, so no CARGO_TARGET_DIR override here.
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      RUSTC_WRAPPER: sccache
+      SCCACHE_CACHE_SIZE: 40G
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure machine-local knobs
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+        run: |
+          if [[ "$RUNNER_NAME" == "samarch-1-cranpose" ]]; then
+            # This host idles near 91-93C ambient; the suite's thermal
+            # governor needs both knobs raised or the resume wait arms
+            # against an unreachable temperature.
+            echo "CRANPOSE_HOST_MAX_TEMP_C=97" >> "$GITHUB_ENV"
+            echo "CRANPOSE_HOST_RESUME_TEMP_C=93" >> "$GITHUB_ENV"
+            echo "SCCACHE_DIR=/home/s/ci-cache/cranpose/sccache" >> "$GITHUB_ENV"
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Start sccache
+        run: |
+          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          sccache --start-server || true
+          sccache --zero-stats || true
+
+      - name: Run the robot suite on the GPU
+        # CRANPOSE_ROBOT_SOFTWARE_RENDERER only relaxes the
+        # environment-sensitive assertions (the same relaxation the cloud
+        # shards run with); the Vulkan ICD still selects the real GPU.
+        # The three external-framebuffer capture tests are cloud-only: a
+        # GPU swapchain under Xvfb never lands pixels in the X server's
+        # buffer, so they can only read their screenshots on software
+        # present — the rust.yml shards keep them covered.
+        env:
+          CRANPOSE_ROBOT_SOFTWARE_RENDERER: "1"
+        run: >
+          xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh
+          --sequential
+          --skip robot_underline_screenshot
+          --skip robot_text_strikeout_presented
+          --skip robot_leetcodedaily_full_layout_scroll_stability
+
+      - name: sccache stats
+        if: always()
+        run: command -v sccache >/dev/null && sccache --show-stats || true
+
   android-release:
     name: Android release build (self-hosted)
     runs-on: [self-hosted, cranpose-heavy]

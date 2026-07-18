@@ -10,6 +10,7 @@
 #   --parallel N    Run N tests in parallel
 #   --sequential    Run tests one at a time (default)
 #   --example NAME  Run only the named robot example (repeatable)
+#   --skip NAME     Exclude the named robot example (repeatable)
 #   --shard N/M     Run the deterministic shard N of M
 #   --build-only    Build matching robot examples and exit
 #   --skip-build    Reuse existing robot example binaries
@@ -46,6 +47,7 @@ ROBOT_TEST_ATTEMPTS="${CRANPOSE_ROBOT_TEST_ATTEMPTS:-1}"
 ROBOT_FAILURE_LOG_LINES="${CRANPOSE_ROBOT_FAILURE_LOG_LINES:-220}"
 ROBOT_KEEP_FAILURE_RESULTS="${CRANPOSE_ROBOT_KEEP_FAILURE_RESULTS:-1}"
 SELECTED_EXAMPLES=()
+SKIPPED_EXAMPLES=()
 SHARD_INDEX=""
 SHARD_COUNT=""
 BUILD_ONLY=0
@@ -110,6 +112,10 @@ while [[ $# -gt 0 ]]; do
             SELECTED_EXAMPLES+=("$2")
             shift 2
             ;;
+        --skip)
+            SKIPPED_EXAMPLES+=("$2")
+            shift 2
+            ;;
         --shard)
             parse_shard_spec "$2"
             shift 2
@@ -139,12 +145,13 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --help)
-            echo "Usage: $0 [--parallel N] [--sequential] [--example robot_name] [--shard INDEX/TOTAL] [--build-only] [--skip-build]"
+            echo "Usage: $0 [--parallel N] [--sequential] [--example robot_name] [--skip robot_name] [--shard INDEX/TOTAL] [--build-only] [--skip-build]"
             echo ""
             echo "Options:"
             echo "  --parallel N    Run N tests in parallel"
             echo "  --sequential    Run tests one at a time (default)"
             echo "  --example NAME  Run only the named robot example (repeatable)"
+            echo "  --skip NAME     Exclude the named robot example (repeatable)"
             echo "  --shard N/M     Run the deterministic shard N of M"
             echo "  --build-only    Build matching robot examples and exit"
             echo "  --skip-build    Reuse existing robot example binaries"
@@ -221,6 +228,25 @@ if [ ${#SELECTED_EXAMPLES[@]} -gt 0 ]; then
         fi
     done
     EXAMPLES=("${FILTERED_EXAMPLES[@]}")
+fi
+
+if [ ${#SKIPPED_EXAMPLES[@]} -gt 0 ]; then
+    UNSKIPPED_EXAMPLES=()
+    for example in "${EXAMPLES[@]}"; do
+        skipped=false
+        for skip in "${SKIPPED_EXAMPLES[@]}"; do
+            if [ "$example" = "$skip" ]; then
+                skipped=true
+                break
+            fi
+        done
+        if [ "$skipped" = false ]; then
+            UNSKIPPED_EXAMPLES+=("$example")
+        else
+            echo "Skipping robot example: $example" | tee -a "$LOG_FILE"
+        fi
+    done
+    EXAMPLES=("${UNSKIPPED_EXAMPLES[@]}")
 fi
 
 if [ -n "$SHARD_INDEX" ] || [ -n "$SHARD_COUNT" ]; then
