@@ -1,9 +1,7 @@
 use crate::layout::core::{
     Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, VerticalAlignment,
 };
-use cranpose_ui_layout::{
-    Axis, Constraints, FlexParentData, MeasurePolicy, MeasureResult, Placement,
-};
+use cranpose_ui_layout::{Axis, Constraints, MeasurePolicy, MeasureResult, ParentData, Placement};
 use smallvec::SmallVec;
 
 /// MeasurePolicy for Box layout - overlays children according to alignment.
@@ -53,30 +51,35 @@ impl MeasurePolicy for BoxMeasurePolicy {
 
         let mut max_width = 0.0_f32;
         let mut max_height = 0.0_f32;
-        let mut placeables: SmallVec<[cranpose_ui_layout::Placeable; 8]> = SmallVec::new();
+        let mut placeables: SmallVec<[(cranpose_ui_layout::Placeable, Alignment); 8]> =
+            SmallVec::new();
 
         for measurable in measurables {
             let placeable = measurable.measure(child_constraints);
             max_width = max_width.max(placeable.width());
             max_height = max_height.max(placeable.height());
-            placeables.push(placeable);
+            let alignment = measurable
+                .parent_data()
+                .box_alignment
+                .unwrap_or(self.content_alignment);
+            placeables.push((placeable, alignment));
         }
 
         let width = max_width.clamp(constraints.min_width, constraints.max_width);
         let height = max_height.clamp(constraints.min_height, constraints.max_height);
 
         placements.reserve(placeables.len());
-        for placeable in placeables {
+        for (placeable, alignment) in placeables {
             let child_width = placeable.width();
             let child_height = placeable.height();
 
-            let x = match self.content_alignment.horizontal {
+            let x = match alignment.horizontal {
                 HorizontalAlignment::Start => 0.0,
                 HorizontalAlignment::CenterHorizontally => ((width - child_width) / 2.0).max(0.0),
                 HorizontalAlignment::End => (width - child_width).max(0.0),
             };
 
-            let y = match self.content_alignment.vertical {
+            let y = match alignment.vertical {
                 VerticalAlignment::Top => 0.0,
                 VerticalAlignment::CenterVertically => ((height - child_height) / 2.0).max(0.0),
                 VerticalAlignment::Bottom => (height - child_height).max(0.0),
@@ -343,12 +346,15 @@ impl MeasurePolicy for FlexMeasurePolicy {
 
         // Separate children into fixed and weighted
         let mut fixed_children: SmallVec<[usize; 8]> = SmallVec::new();
-        let mut weighted_children: SmallVec<[(usize, FlexParentData); 8]> = SmallVec::new();
+        let parent_data: SmallVec<[ParentData; 8]> = measurables
+            .iter()
+            .map(|child| child.parent_data())
+            .collect();
+        let mut weighted_children: SmallVec<[(usize, ParentData); 8]> = SmallVec::new();
 
-        for (idx, measurable) in measurables.iter().enumerate() {
-            let parent_data = measurable.flex_parent_data().unwrap_or_default();
-            if parent_data.has_weight() {
-                weighted_children.push((idx, parent_data));
+        for (idx, data) in parent_data.iter().copied().enumerate() {
+            if data.has_weight() {
+                weighted_children.push((idx, data));
             } else {
                 fixed_children.push(idx);
             }
@@ -470,11 +476,19 @@ impl MeasurePolicy for FlexMeasurePolicy {
 
         // Place children
         placements.reserve(placeables.len());
-        for (placeable, main_pos) in placeables.into_iter().zip(main_positions) {
+        for (idx, (placeable, main_pos)) in placeables.into_iter().zip(main_positions).enumerate() {
             let child_cross = self.get_cross_axis_size(placeable.width(), placeable.height());
-            let cross_pos = self
-                .cross_axis_alignment
-                .align(container_cross, child_cross);
+            let cross_axis_alignment = match self.axis {
+                Axis::Horizontal => parent_data[idx]
+                    .row_alignment
+                    .map(Into::into)
+                    .unwrap_or(self.cross_axis_alignment),
+                Axis::Vertical => parent_data[idx]
+                    .column_alignment
+                    .map(Into::into)
+                    .unwrap_or(self.cross_axis_alignment),
+            };
+            let cross_pos = cross_axis_alignment.align(container_cross, child_cross);
 
             let (x, y) = match self.axis {
                 Axis::Horizontal => (main_pos, cross_pos),

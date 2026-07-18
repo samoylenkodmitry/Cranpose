@@ -668,7 +668,6 @@ where
 
         // Only process KeyDown events for clipboard shortcuts
         if event.event_type == KeyDown && event.modifiers.command_or_ctrl() {
-            // Use persistent self.clipboard to keep content alive on Linux X11.
             #[cfg(all(
                 feature = "clipboard-native",
                 not(target_arch = "wasm32"),
@@ -679,19 +678,15 @@ where
                 match event.key_code {
                     // Ctrl+C - Copy
                     KeyCode::C => {
-                        // Get text first, then access clipboard to avoid borrow conflict
-                        let text = self.on_copy_inner();
-                        if let (Some(text), Some(clipboard)) = (text, self.clipboard.as_mut()) {
-                            let _ = clipboard.set_text(&text);
+                        if let Some(text) = self.on_copy_inner() {
+                            cranpose_ui::clipboard_session::clipboard_write_text(&text);
                             return true;
                         }
                     }
                     // Ctrl+X - Cut
                     KeyCode::X => {
-                        // Get text first (this also deletes it), then access clipboard
-                        let text = self.on_cut_inner();
-                        if let (Some(text), Some(clipboard)) = (text, self.clipboard.as_mut()) {
-                            let _ = clipboard.set_text(&text);
+                        if let Some(text) = self.on_cut_inner() {
+                            cranpose_ui::clipboard_session::clipboard_write_text(&text);
                             self.mark_dirty();
                             self.request_layout_pass();
                             return true;
@@ -699,9 +694,7 @@ where
                     }
                     // Ctrl+V - Paste
                     KeyCode::V => {
-                        // Get text from clipboard first, then paste
-                        let text = self.clipboard.as_mut().and_then(|cb| cb.get_text().ok());
-                        if let Some(text) = text {
+                        if let Some(text) = cranpose_ui::clipboard_session::clipboard_read_text() {
                             if self.on_paste_inner(&text) {
                                 return true;
                             }

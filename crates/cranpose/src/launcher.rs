@@ -9,7 +9,7 @@ use cranpose_app_shell::FramePacingMode;
 use std::path::PathBuf;
 #[cfg(all(
     feature = "renderer-wgpu",
-    any(feature = "desktop-shell", feature = "ios")
+    any(feature = "desktop-shell", all(feature = "ios", target_os = "ios"))
 ))]
 use thiserror::Error;
 
@@ -154,7 +154,7 @@ impl AndroidOverlayWindowOptions {
 /// Errors that can occur while launching a windowed (desktop or iOS) application.
 #[cfg(all(
     feature = "renderer-wgpu",
-    any(feature = "desktop-shell", feature = "ios")
+    any(feature = "desktop-shell", all(feature = "ios", target_os = "ios"))
 ))]
 #[derive(Debug, Error)]
 pub enum LaunchError {

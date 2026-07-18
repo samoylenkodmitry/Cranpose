@@ -358,7 +358,6 @@ gesture stopped. Fixed by preserving the spring frame chain across
 retargets; `spring_retargeted_every_frame_tracks_a_moving_target` in
 cranpose-animation pins it. If a widget tracks a moving target, retarget
 per move with `animate_to_with_velocity` — no rate limiting needed.
-
 - Progressive-fps-decay hunts: when EVERY tracked counter is flat (nodes,
   scopes, caches, frame callbacks, heap bytes) but frame work grows
   monotonically across interaction cycles, suspect the snapshot record
@@ -385,3 +384,48 @@ per move with `animate_to_with_velocity` — no rate limiting needed.
   the suspected presented-vs-offscreen divergence was an eyeballing
   error over busy artwork. Numeric scans on flat backgrounds beat zoomed
   eyeballing over gradients.
+
+## macOS robot hangs need a portable timeout and exit must stop scheduling
+
+macOS does not ship GNU `timeout`, so a continuously animating robot scenario
+can otherwise consume a core indefinitely. Use the portable timeout in
+`run_robot_test.sh`, cap focused debugging with
+`CRANPOSE_ROBOT_TEST_TIMEOUT_CAP_SECS`, and reuse a warm build with
+`--skip-build`. Also, after handling `RobotCommand::Exit`, return from the event
+callback immediately: setting `ControlFlow::Poll` later in the same callback
+keeps the animation loop alive even though the robot received `Ok(())`.
+
+## Universal Android verification needs every declared Rust target
+
+The release Gradle task builds arm64, x86_64, and armeabi-v7a in separate
+`cargo ndk` passes. A machine can finish both expensive 64-bit AI builds and
+then fail at the last pass with `can't find crate for core` if
+`armv7-linux-androideabi` is missing. Before starting the release task, run
+`rustup target add aarch64-linux-android x86_64-linux-android
+armv7-linux-androideabi` and ensure `ANDROID_NDK_HOME` points at the installed
+NDK. Also repair broken `~/.cargo/bin/{cargo,rustup}` proxies first; otherwise
+Gradle's nested shell reports misleading `cargo: command not found` failures.
+
+## Prefer in-process GPU telemetry for repeated physical-iOS profiling
+
+Detaching an Instruments `xctrace` recording can leave the phone listed as
+offline to `xctrace` even while CoreDevice and `devicectl` still communicate
+with it. For renderer iteration, launch through `devicectl --console` with
+`CRANPOSE_GPU_STATS=1`; it reports pass, isolated-layer, cache, and retained
+texture counts without repeatedly attaching Instruments. When Instruments is
+needed, use a unique `.trace` output path because `xctrace` will not overwrite
+an existing bundle.
+
+## Keep Android Vulkan-to-GL fallback in separate WGPU instances
+
+An Android API 37 arm64 emulator can expose a Vulkan loader but no usable
+render node. If Vulkan and GL are enabled in the same WGPU instance, adapter
+selection falls through to GL after Vulkan probing and EGL can fail with
+`native_window_api_connect ... already connected to another API`, followed by
+`EGL_BAD_ALLOC`, an invalid surface, and `SIGABRT`. This looks like an app or
+activity lifecycle failure, but it happens during the first
+`Surface::configure`. Probe with a Vulkan-only instance first; on
+`RequestAdapter` failure, drop that instance and create a fresh GL-only
+instance. The GL software path can take about 20 seconds to initialize on this
+emulator, so wait for `Rendering initialized successfully` before treating an
+initial black frame as another failure.

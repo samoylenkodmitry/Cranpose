@@ -1023,11 +1023,12 @@ fn tick() {
 }
 
 #[test]
-fn unsafe_code_stays_in_android_boundary_modules() {
+fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source_dir = crate_dir.join("src");
     let allowed = [
         "android_jni.rs",
+        "android_accessibility.rs",
         "android_services.rs",
         "android_surface.rs",
         "android_file_picker.rs",
@@ -1044,6 +1045,8 @@ fn unsafe_code_stays_in_android_boundary_modules() {
         "ios_keyboard.rs",
         "ios_back_gesture.rs",
         "ios_background.rs",
+        "ios_accessibility.rs",
+        "desktop_accessibility.rs",
     ];
     let mut offenders = Vec::new();
 
@@ -1067,7 +1070,7 @@ fn unsafe_code_stays_in_android_boundary_modules() {
 
     assert!(
         offenders.is_empty(),
-        "unsafe code must stay in Android boundary modules; found in {offenders:?}"
+        "unsafe code must stay in reviewed platform boundary modules; found in {offenders:?}"
     );
 }
 
@@ -1204,6 +1207,7 @@ fn workspace_ffi_boundaries_are_explicit() {
     let source_roots = ["crates", "apps", "xtask"];
     let allowed = [
         "crates/cranpose/src/android_jni.rs",
+        "crates/cranpose/src/android_accessibility.rs",
         "crates/cranpose/src/android_services.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/android_file_picker.rs",
@@ -1220,6 +1224,8 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/ios_keyboard.rs",
         "crates/cranpose/src/ios_back_gesture.rs",
         "crates/cranpose/src/ios_background.rs",
+        "crates/cranpose/src/ios_accessibility.rs",
+        "crates/cranpose/src/desktop_accessibility.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];
@@ -1262,6 +1268,7 @@ fn unsafe_blocks_have_nearby_safety_invariants() {
     let boundary_modules = [
         "crates/cranpose/src/android_jni.rs",
         "crates/cranpose/src/android_surface.rs",
+        "crates/cranpose/src/ios_accessibility.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];

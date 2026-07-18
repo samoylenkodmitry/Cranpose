@@ -381,6 +381,40 @@ cleanup_results_dir() {
 }
 trap cleanup_results_dir EXIT
 
+run_with_portable_timeout() {
+    local timeout_secs="$1"
+    local kill_after_secs="$2"
+    local output_file="$3"
+    shift 3
+
+    local timeout_marker="${output_file}.timeout"
+    rm -f -- "$timeout_marker"
+
+    "$@" > "$output_file" 2>&1 &
+    local command_pid=$!
+    (
+        sleep "$timeout_secs"
+        if kill -0 "$command_pid" 2>/dev/null; then
+            : > "$timeout_marker"
+            kill -TERM "$command_pid" 2>/dev/null || true
+            sleep "$kill_after_secs"
+            kill -KILL "$command_pid" 2>/dev/null || true
+        fi
+    ) &
+    local watchdog_pid=$!
+
+    wait "$command_pid"
+    local exit_code=$?
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+
+    if [ -f "$timeout_marker" ]; then
+        rm -f -- "$timeout_marker"
+        exit_code=124
+    fi
+    return "$exit_code"
+}
+
 # Function to run a single test
 run_test() {
     local example="$1"
@@ -443,6 +477,11 @@ run_test() {
             ;;
         robot_fling_edge_cases)
             timeout_secs=240
+            ;;
+        robot_regression_fused_viewport_contract)
+            # Multiple shader screenshots plus two three-position Liquid tab
+            # sweeps exceed the generic one-minute budget on Metal runners.
+            timeout_secs=180
             ;;
         robot_fling_precise)
             timeout_secs=180
@@ -566,7 +605,8 @@ run_test() {
             env -i "${robot_env_args[@]}" timeout --kill-after=15s "${timeout_secs}s" "$example_bin" > "$attempt_output" 2>&1
             local exit_code=$?
         else
-            env -i "${robot_env_args[@]}" "$example_bin" > "$attempt_output" 2>&1
+            run_with_portable_timeout "$timeout_secs" 15 "$attempt_output" \
+                env -i "${robot_env_args[@]}" "$example_bin"
             local exit_code=$?
         fi
 

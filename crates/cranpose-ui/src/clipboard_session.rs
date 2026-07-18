@@ -44,19 +44,22 @@ impl ClipboardSessionState {
     }
 
     fn write(&self, text: &str) {
+        // Keep a local copy even when a platform bridge is installed: native
+        // clipboards may be temporarily unavailable (notably headless desktop
+        // sessions), and copy/paste must still round-trip within this app.
+        *self.fallback.borrow_mut() = Some(text.to_string());
         if let Some(platform) = self.platform.borrow().clone() {
             platform.write_text(text);
-        } else {
-            *self.fallback.borrow_mut() = Some(text.to_string());
         }
     }
 
     fn read(&self) -> Option<String> {
         if let Some(platform) = self.platform.borrow().clone() {
-            platform.read_text()
-        } else {
-            self.fallback.borrow().clone()
+            if let Some(text) = platform.read_text() {
+                return Some(text);
+            }
         }
+        self.fallback.borrow().clone()
     }
 
     fn has_platform(&self) -> bool {
@@ -152,12 +155,22 @@ mod tests {
         value: RefCell<Option<String>>,
     }
 
+    struct UnavailableClipboard;
+
     impl PlatformClipboard for RecordingClipboard {
         fn write_text(&self, text: &str) {
             *self.value.borrow_mut() = Some(text.to_string());
         }
         fn read_text(&self) -> Option<String> {
             self.value.borrow().clone()
+        }
+    }
+
+    impl PlatformClipboard for UnavailableClipboard {
+        fn write_text(&self, _text: &str) {}
+
+        fn read_text(&self) -> Option<String> {
+            None
         }
     }
 
@@ -189,6 +202,18 @@ mod tests {
 
             clear_platform_clipboard();
             assert!(!clipboard.has_system_clipboard());
+        });
+    }
+
+    #[test]
+    fn manager_falls_back_when_the_installed_platform_is_unavailable() {
+        let context = crate::render_state::AppContext::new();
+        context.enter(|| {
+            set_platform_clipboard(Rc::new(UnavailableClipboard));
+
+            let clipboard = ClipboardManager;
+            clipboard.set_text("headless copy");
+            assert_eq!(clipboard.text().as_deref(), Some("headless copy"));
         });
     }
 }

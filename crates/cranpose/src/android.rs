@@ -704,6 +704,39 @@ struct AndroidGpuSetup {
     renderer_needs_init: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AndroidGpuBackend {
+    Vulkan,
+    Gl,
+}
+
+impl AndroidGpuBackend {
+    fn wgpu_backends(self) -> wgpu::Backends {
+        match self {
+            Self::Vulkan => wgpu::Backends::VULKAN,
+            Self::Gl => wgpu::Backends::GL,
+        }
+    }
+}
+
+struct AndroidWgpuContext {
+    instance: wgpu::Instance,
+    backend: AndroidGpuBackend,
+}
+
+impl AndroidWgpuContext {
+    fn new(backend: AndroidGpuBackend) -> Self {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = backend.wgpu_backends();
+        // No debug/validation: emulator Vulkan debug utils can crash on null labels.
+        descriptor.flags = wgpu::InstanceFlags::empty();
+        Self {
+            instance: wgpu::Instance::new(descriptor),
+            backend,
+        }
+    }
+}
+
 fn initialize_android_rendering<F>(
     instance: &wgpu::Instance,
     existing_resources: Option<GpuResources>,
@@ -743,7 +776,7 @@ where
         let content_clone = content.clone();
         let density = density.max(f32::EPSILON);
         let platform_env = android_platform_env();
-        let shell = AppShell::new_with_size_and_density(
+        let mut shell = AppShell::new_with_size_and_density(
             renderer,
             default_root_key(),
             move || {
@@ -756,6 +789,7 @@ where
             (width as f32 / density, height as f32 / density),
             density,
         );
+        shell.set_semantics_enabled(true);
 
         *app_shell = Some(shell);
 
@@ -790,6 +824,83 @@ where
     });
 
     Ok((setup.resources, actual_size))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn initialize_android_rendering_with_backend_fallback<F>(
+    wgpu_context: &mut AndroidWgpuContext,
+    existing_resources: Option<GpuResources>,
+    app_shell: &mut Option<AppShell<WgpuRenderer>>,
+    content: &Rc<RefCell<F>>,
+    settings: &AppSettings,
+    frame_driver: &AndroidFrameDriver,
+    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
+    native_window_ptr: NonNull<c_void>,
+    native_window_owner: Option<NativeWindow>,
+    width: u32,
+    height: u32,
+    density: f32,
+) -> Result<(GpuResources, Option<Size>), AndroidSurfaceError>
+where
+    F: FnMut() + 'static,
+{
+    if existing_resources.is_some() || wgpu_context.backend == AndroidGpuBackend::Gl {
+        return initialize_android_rendering(
+            &wgpu_context.instance,
+            existing_resources,
+            app_shell,
+            content,
+            settings,
+            frame_driver,
+            host_window_registry,
+            native_window_ptr,
+            native_window_owner,
+            width,
+            height,
+            density,
+        );
+    }
+
+    match initialize_android_rendering(
+        &wgpu_context.instance,
+        None,
+        app_shell,
+        content,
+        settings,
+        frame_driver,
+        host_window_registry,
+        native_window_ptr,
+        native_window_owner.clone(),
+        width,
+        height,
+        density,
+    ) {
+        Err(AndroidSurfaceError::RequestAdapter(error)) => {
+            // Keep the two backends in separate instances. On Android emulators
+            // where Vulkan probing fails, a combined Vulkan|GL instance can keep
+            // the ANativeWindow connected while WGPU falls through to EGL. EGL
+            // then aborts with BAD_ALLOC because the window belongs to another
+            // graphics API. Dropping the Vulkan-only instance before constructing
+            // the GL surface gives the fallback a clean native window.
+            log::warn!("No compatible Vulkan adapter ({error}); retrying with a fresh GL instance");
+            *wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::Gl);
+            initialize_android_rendering(
+                &wgpu_context.instance,
+                None,
+                app_shell,
+                content,
+                settings,
+                frame_driver,
+                host_window_registry,
+                native_window_ptr,
+                native_window_owner,
+                width,
+                height,
+                density,
+            )
+        }
+        result => result,
+    }
 }
 
 fn create_android_gpu_resources(
@@ -1176,6 +1287,7 @@ pub fn run(
 
     // App shell (created once, persists across window recreations)
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
+    let mut accessibility_elements = Vec::new();
 
     // Initialize logging
     android_logger::init_once(
@@ -1195,6 +1307,7 @@ pub fn run(
     log::info!("Starting Compose Android Application");
 
     let android_frame_driver = AndroidFrameDriver::new(app.create_waker());
+    crate::android_accessibility::set_waker(app.create_waker());
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
     let overlay_event_queue = Arc::new(android_overlay_window::AndroidOverlayEventQueue::default());
 
@@ -1208,16 +1321,11 @@ pub fn run(
     // Exit flag for Destroy event (can't break from inside poll_events closure)
     let should_exit = Arc::new(AtomicBool::new(false));
 
-    // Initialize wgpu instance with GL and Vulkan backends
-    // Use DISCARD_HAL_LABELS to prevent crash in emulator's Vulkan debug utils
-    // (vk_common_SetDebugUtilsObjectNameEXT crashes on null labels)
-    let backends = wgpu::Backends::GL | wgpu::Backends::VULKAN;
-
-    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_descriptor.backends = backends;
-    // No debug/validation: emulator Vulkan debug utils can crash on null labels.
-    instance_descriptor.flags = wgpu::InstanceFlags::empty();
-    let instance = wgpu::Instance::new(instance_descriptor);
+    // Probe Vulkan first, then create a fresh GL-only instance if no compatible
+    // adapter exists. Keeping the backends separate is important on emulators:
+    // a failed Vulkan probe can otherwise leave the ANativeWindow connected and
+    // make EGL surface creation abort with `EGL_BAD_ALLOC`.
+    let mut wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::Vulkan);
 
     // Platform abstraction for density/pointer conversion
     let mut android_platform = AndroidPlatform::new();
@@ -1325,8 +1433,8 @@ pub fn run(
                                     input_offset_y
                                 );
 
-                                match initialize_android_rendering(
-                                    &instance,
+                                match initialize_android_rendering_with_backend_fallback(
+                                    &mut wgpu_context,
                                     gpu_resources.take(),
                                     &mut app_shell,
                                     &content,
@@ -1572,8 +1680,8 @@ pub fn run(
                         if width > 0 && height > 0 {
                             let density =
                                 update_android_platform_geometry(&app, &mut android_platform);
-                            match initialize_android_rendering(
-                                &instance,
+                            match initialize_android_rendering_with_backend_fallback(
+                                &mut wgpu_context,
                                 gpu_resources.take(),
                                 &mut app_shell,
                                 &content,
@@ -1615,8 +1723,8 @@ pub fn run(
                         }
 
                         let native_window_ptr = native_window.ptr().cast();
-                        match initialize_android_rendering(
-                            &instance,
+                        match initialize_android_rendering_with_backend_fallback(
+                            &mut wgpu_context,
                             gpu_resources.take(),
                             &mut app_shell,
                             &content,
@@ -1729,6 +1837,11 @@ pub fn run(
         // Apply editing operations forwarded by the IME InputConnection
         // (commit/compose/delete/key/editor-action), in arrival order.
         if let Some(shell) = &mut app_shell {
+            for (x, y) in crate::android_accessibility::drain_activations() {
+                shell.set_cursor(x, y);
+                shell.pointer_pressed();
+                shell.pointer_released_at_position(x, y);
+            }
             for event in ime_event_queue.drain() {
                 dispatch_android_ime_event(shell, event);
             }
@@ -1822,6 +1935,14 @@ pub fn run(
                     &host_window_registry,
                     || shell.update(),
                 );
+                if let Err(error) = crate::android_accessibility::sync(
+                    &app,
+                    shell,
+                    android_platform.scale_factor() as f32,
+                    &mut accessibility_elements,
+                ) {
+                    log::warn!("{error}");
+                }
                 dispatch_registered_android_surface_size_request(
                     &app,
                     &host_window_registry,

@@ -33,7 +33,12 @@ fn main() {
         .with_robot_app_hook(set_tab_hook)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(700));
-            let _ = robot.wait_for_idle();
+            // The default Liquid tab owns a perpetual animation, so waiting
+            // for global idleness before switching to the contract's target
+            // tab can never be a valid synchronization point.
+            robot
+                .pump_frames(2)
+                .expect("initial Liquid frames should advance");
 
             // --- Case 1: ShaderRect "SDF Halo Border" visibility across scroll.
             robot
@@ -204,7 +209,9 @@ fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String
 
 fn settle(robot: &cranpose::Robot, ms: u64) {
     std::thread::sleep(Duration::from_millis(ms));
-    let _ = robot.wait_for_idle();
+    robot
+        .pump_frames(2)
+        .expect("animated contract frames should advance");
 }
 
 fn scroll(robot: &cranpose::Robot, x: f32, y: f32, delta_y: f32) {

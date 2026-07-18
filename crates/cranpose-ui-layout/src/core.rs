@@ -1,6 +1,7 @@
 //! Core layout traits and types shared by Compose UI widgets.
 
 use crate::constraints::Constraints;
+use crate::{Alignment, HorizontalAlignment, VerticalAlignment};
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
 use std::rc::Rc;
@@ -27,6 +28,35 @@ impl FlexParentData {
     }
 }
 
+/// Layout metadata supplied by a child for its direct parent.
+///
+/// Weight/fill apply to Row and Column. Alignment values override the
+/// corresponding parent layout's default alignment for this child only.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ParentData {
+    pub weight: f32,
+    pub fill: bool,
+    pub box_alignment: Option<Alignment>,
+    pub row_alignment: Option<VerticalAlignment>,
+    pub column_alignment: Option<HorizontalAlignment>,
+}
+
+impl From<FlexParentData> for ParentData {
+    fn from(value: FlexParentData) -> Self {
+        Self {
+            weight: value.weight,
+            fill: value.fill,
+            ..Self::default()
+        }
+    }
+}
+
+impl ParentData {
+    pub fn has_weight(&self) -> bool {
+        self.weight > 0.0
+    }
+}
+
 /// Object capable of measuring a layout child and exposing intrinsic sizes.
 pub trait Measurable {
     /// Measures the child with the provided constraints, returning a [`Placeable`].
@@ -48,6 +78,14 @@ pub trait Measurable {
     /// Default implementation returns None (no weight).
     fn flex_parent_data(&self) -> Option<FlexParentData> {
         None
+    }
+
+    /// Returns all metadata consumed by the direct parent layout.
+    ///
+    /// The default preserves the older `flex_parent_data` customization
+    /// point so existing custom measurables continue to provide weights.
+    fn parent_data(&self) -> ParentData {
+        self.flex_parent_data().map(Into::into).unwrap_or_default()
     }
 }
 
