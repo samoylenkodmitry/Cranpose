@@ -5256,6 +5256,7 @@ fn resolve_robot_screenshot_params(
 /// Scale-1 captures under-resolve sub-dp optics (a 1.3dp glass bevel band
 /// lands between pixel centers and reads at ~1/3 strength), which makes
 /// them useless for judging edge light against 2-3x reference recordings.
+#[cfg(any(test, feature = "robot"))]
 fn robot_capture_scale_from_env() -> f32 {
     parse_robot_capture_scale(
         std::env::var("CRANPOSE_ROBOT_CAPTURE_SCALE")
@@ -5264,6 +5265,7 @@ fn robot_capture_scale_from_env() -> f32 {
     )
 }
 
+#[cfg(any(test, feature = "robot"))]
 fn parse_robot_capture_scale(value: Option<&str>) -> f32 {
     value
         .and_then(|value| value.parse::<f32>().ok())
@@ -5271,6 +5273,7 @@ fn parse_robot_capture_scale(value: Option<&str>) -> f32 {
         .unwrap_or(1.0)
 }
 
+#[cfg(any(test, feature = "robot"))]
 fn resolve_robot_screenshot_params_with_scale(
     buffer_size: (u32, u32),
     fallback_logical_size: Option<(f32, f32)>,
