@@ -1010,6 +1010,18 @@ fn collect_layer_contents_into<'a>(
                         .inverse()
                         .map(|parent_to_child| parent_to_child.bounds_for_rect(clip))
                 });
+                if std::env::var_os("CRANPOSE_BACKDROP_DIAG").is_some()
+                    && child_layer.backdrop().is_some()
+                {
+                    eprintln!(
+                        "[backdrop-diag] child node={:?} local_bounds={:?} logical_rect={:?} offset={:?} transform={:?}",
+                        child_layer.node_id,
+                        child_layer.local_bounds,
+                        child_logical_rect,
+                        layer_offset,
+                        child_layer.transform_to_parent,
+                    );
+                }
                 child_layers.push(ChildLayerComposite {
                     z_index: local_scene.next_z,
                     layer: child_layer.as_ref(),

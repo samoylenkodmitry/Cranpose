@@ -375,6 +375,36 @@ fn set_measure_policy_marks_dirty() {
 }
 
 #[test]
+fn width_after_graphics_layer_constrains_measurement() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+    // The liquid menu chains `.glass_effect_with(..)` (a graphics-layer
+    // resolver) BEFORE `.width(..)`. The size element must constrain the
+    // node's measurement regardless of its position in the chain.
+    let root_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty()
+            .graphics_layer(cranpose_ui_graphics::GraphicsLayer::default)
+            .width(50.0),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 10.0,
+        })),
+    )));
+
+    measure_layout(&mut applier, root_id, Size::new(800.0, 600.0))?;
+
+    let size = applier
+        .with_node::<LayoutNode, _>(root_id, |node| node.layout_state().size)
+        .expect("root layout state");
+    assert_eq!(
+        size.width, 50.0,
+        "a width set after a graphics-layer modifier must constrain the node"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn insert_child_marks_dirty() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();

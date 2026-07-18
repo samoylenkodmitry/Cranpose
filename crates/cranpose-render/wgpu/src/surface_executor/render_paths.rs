@@ -4561,8 +4561,32 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
         root_scale,
         backend.max_texture_dim(),
     );
-    let (backdrop_width, backdrop_height) =
-        surface_target_size(capture_rect, backdrop_scale, backend.max_texture_dim());
+    // The effect geometry anchors to the FULL node rect: a viewport or
+    // scroll clip shrinks the visible/capture rects, and a shader
+    // handed the clipped rect rescales its whole dp mapping (the
+    // window-bottom bar's lens drew its capsule ~9dp high). Clipping
+    // belongs to the scissor, never to the effect rect.
+    //
+    // The copy plan is the single source of truth for the snapshot size: it
+    // spans floor(origin)..ceil(origin+extent) in texels, which runs one
+    // texel past ceil(extent) whenever the capture origin is fractional.
+    // Sizing the surface independently rejects the 1:1 copy every frame and
+    // the projective fallback hands the effect a backdrop with fractional
+    // alpha — the glass body then composites washed-out (menu-expand gray).
+    let copy_plan = if (backdrop_scale - root_scale).abs() <= 0.01 {
+        axis_aligned_backdrop_snapshot_copy_plan(
+            capture_rect,
+            layer.rect,
+            root_scale,
+            (target.width, target.height),
+            backend.max_texture_dim(),
+        )
+    } else {
+        None
+    };
+    let (backdrop_width, backdrop_height) = copy_plan.map(|plan| plan.size).unwrap_or_else(|| {
+        surface_target_size(capture_rect, backdrop_scale, backend.max_texture_dim())
+    });
     let Some(cache_key) = input_content_hash.and_then(|hash| {
         (backdrop_underlay.is_none()
             && backend.is_render_effect_supported(&layer.effect)
@@ -4588,28 +4612,9 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     } else {
         backend.record_layer_cache_miss(backdrop_width, backdrop_height);
         let snapshot = backend.acquire_frame_surface(backdrop_width, backdrop_height);
-        // The effect geometry anchors to the FULL node rect: a viewport or
-        // scroll clip shrinks the visible/capture rects, and a shader
-        // handed the clipped rect rescales its whole dp mapping (the
-        // window-bottom bar's lens drew its capsule ~9dp high). Clipping
-        // belongs to the scissor, never to the effect rect.
-        let copy_plan = axis_aligned_backdrop_snapshot_copy_plan(
-            capture_rect,
-            layer.rect,
-            root_scale,
-            (target.width, target.height),
-            backend.max_texture_dim(),
-        );
-        let copied_snapshot = copy_plan
-            .filter(|plan| plan.size == (backdrop_width, backdrop_height))
-            .is_some_and(|plan| {
-                backend.copy_texture_region_to_target(
-                    target,
-                    plan.source_origin,
-                    &snapshot,
-                    plan.size,
-                )
-            });
+        let copied_snapshot = copy_plan.is_some_and(|plan| {
+            backend.copy_texture_region_to_target(target, plan.source_origin, &snapshot, plan.size)
+        });
         if !copied_snapshot {
             copy_projective_backdrop_inputs_to_view(
                 backend,
@@ -5111,7 +5116,7 @@ mod tests {
         layer_source_cache_key, layer_source_uses_external_backdrop_underlay,
         layer_surface_dest_quad, layer_surface_translation_context,
         minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
-        retained_render_effect_hash, visible_backdrop_capture_rect,
+        retained_render_effect_hash, surface_target_size, visible_backdrop_capture_rect,
         BackdropPrefixChildContribution, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES,
         MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
         MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
@@ -5353,6 +5358,28 @@ mod tests {
             shadow_draws: Vec::new(),
             needs_nested_underlay: false,
         }
+    }
+
+    #[test]
+    fn fractional_origin_backdrop_snapshot_spans_more_than_ceiled_extent() {
+        // A capture rect whose scaled origin is fractional spans one texel
+        // more than ceil(extent): floor(origin)..ceil(origin + extent). The
+        // snapshot surface MUST be allocated from the copy plan's size — an
+        // independently ceiled extent rejects the 1:1 copy every frame and
+        // the projective fallback feeds the glass a broken backdrop (the
+        // menu-expand panel composited washed-out gray, tint-blind).
+        let capture = Rect {
+            x: 53.0,
+            y: 95.435,
+            width: 410.0,
+            height: 76.0,
+        };
+        let plan =
+            axis_aligned_backdrop_snapshot_copy_plan(capture, capture, 2.0, (1800, 1600), 4096)
+                .expect("axis-aligned capture must plan a 1:1 copy");
+        let ceiled = surface_target_size(capture, 2.0, 4096);
+        assert_eq!(plan.size.1, ceiled.1 + 1, "fractional origin adds a texel");
+        assert_eq!(plan.size.0, ceiled.0, "integral axis stays equal");
     }
 
     #[test]

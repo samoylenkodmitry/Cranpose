@@ -99,6 +99,10 @@ pub fn update_graph_from_applier_report(
         };
     }
 
+    if std::env::var_os("CRANPOSE_SCENE_UPDATE_DIAG").is_some() {
+        eprintln!("[scene-update-diag] dirty={dirty_nodes:?}");
+    }
+
     let mut remaining_dirty_nodes = dirty_nodes.iter().copied().collect::<HashSet<_>>();
     if let Some(root_id) = graph.root.node_id {
         if remaining_dirty_nodes.contains(&root_id) {
@@ -517,6 +521,15 @@ fn build_layer_node_from_data(
         width: layout_state.size.width,
         height: layout_state.size.height,
     };
+    if std::env::var_os("CRANPOSE_SCENE_UPDATE_DIAG").is_some() {
+        eprintln!(
+            "[scene-update-diag] build layer node={node_id:?} size=({:.2},{:.2}) pos=({:.2},{:.2})",
+            layout_state.size.width,
+            layout_state.size.height,
+            layout_state.position.x,
+            layout_state.position.y,
+        );
+    }
     let clip_to_bounds = modifier_slices.clip_to_bounds();
     let graphics_layer = graphics_layer_with_shaped_clip(
         modifier_slices.graphics_layer().unwrap_or_default(),
