@@ -16,7 +16,7 @@ permissions:
 jobs:
   sync_versions:
     name: Sync versions with tag
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, cranpose-heavy]
     permissions:
       contents: write
     outputs:
@@ -26,7 +26,6 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
 
       - name: Sync Cargo versions with tag
         id: sync
@@ -257,7 +256,7 @@ jobs:
 
   publish:
     name: Publish to crates.io
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, cranpose-heavy]
     needs: sync_versions
     if: needs.sync_versions.outputs.should_publish == 'true'
     env:
@@ -269,7 +268,6 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
 
       - name: Verify tag and workspace versions
         run: |
