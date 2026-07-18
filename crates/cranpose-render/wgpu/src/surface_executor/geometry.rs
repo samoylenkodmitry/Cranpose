@@ -39,12 +39,19 @@ pub(crate) fn local_effect_pixel_rect(width: u32, height: u32) -> [f32; 4] {
 /// shader handed the padded surface as its rect paints its optics into the
 /// padding band around the widget and scales its dp mapping by the padding
 /// ratio. `content_rect` and `surface_rect` share one logical space.
+#[track_caller]
 pub(crate) fn content_effect_pixel_rect(
     content_rect: Option<Rect>,
     surface_rect: Rect,
     width: u32,
     height: u32,
 ) -> [f32; 4] {
+    if std::env::var_os("CRANPOSE_BACKDROP_DIAG").is_some() {
+        eprintln!(
+            "[effect-rect-diag] caller={} content={content_rect:?} surface={surface_rect:?} tex=({width},{height})",
+            std::panic::Location::caller()
+        );
+    }
     let Some(content) = content_rect else {
         return local_effect_pixel_rect(width, height);
     };
