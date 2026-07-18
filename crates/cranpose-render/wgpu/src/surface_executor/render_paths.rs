@@ -2,10 +2,11 @@ use super::backend::{
     LayerSurface, LayerSurfaceRoundedClip, LayerSurfaceTexture, SurfaceExecutionBackend,
 };
 use super::geometry::{
-    axis_aligned_quad_rect, clamp_effect_surface_scale, fit_capture_rect_to_scale_budget_for_axes,
-    local_effect_pixel_rect, offscreen_byte_size, quantize_motion_stable_target_scale, scaled_quad,
-    snap_delta_for_anchor, snap_motion_stable_dest_quad, surface_pixel_rect, surface_target_size,
-    target_quad, visible_layer_rect,
+    axis_aligned_quad_rect, clamp_effect_surface_scale, content_effect_pixel_rect,
+    fit_capture_rect_to_scale_budget_for_axes, offscreen_byte_size,
+    quantize_motion_stable_target_scale, scaled_quad, snap_delta_for_anchor,
+    snap_motion_stable_dest_quad, surface_pixel_rect, surface_target_size, target_quad,
+    visible_layer_rect,
 };
 use crate::effect_renderer::{
     CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
@@ -1399,7 +1400,12 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
                     backend.apply_shader_and_composite_to_view(
                         &source,
                         shader,
-                        local_effect_pixel_rect(effect_width, effect_height),
+                        content_effect_pixel_rect(
+                            Some(layer.rect),
+                            capture_rect,
+                            effect_width,
+                            effect_height,
+                        ),
                         target_view,
                         layer.composite_alpha,
                         wgpu::LoadOp::Load,
@@ -1413,7 +1419,12 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
                     backend.apply_effect_and_composite_to_view(
                         &source,
                         effect,
-                        local_effect_pixel_rect(effect_width, effect_height),
+                        content_effect_pixel_rect(
+                            Some(layer.rect),
+                            capture_rect,
+                            effect_width,
+                            effect_height,
+                        ),
                         target_view,
                         layer.composite_alpha,
                         wgpu::LoadOp::Load,
@@ -1437,7 +1448,12 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
                     backend.apply_shader_and_composite_to_view_projective(
                         &source,
                         shader,
-                        local_effect_pixel_rect(effect_width, effect_height),
+                        content_effect_pixel_rect(
+                            Some(layer.rect),
+                            capture_rect,
+                            effect_width,
+                            effect_height,
+                        ),
                         target_view,
                         (width, height),
                         (source_rect.width, source_rect.height),
@@ -1454,7 +1470,12 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
                     backend.apply_effect_and_composite_to_view_projective(
                         &source,
                         effect,
-                        local_effect_pixel_rect(effect_width, effect_height),
+                        content_effect_pixel_rect(
+                            Some(layer.rect),
+                            capture_rect,
+                            effect_width,
+                            effect_height,
+                        ),
                         target_view,
                         (width, height),
                         (source_rect.width, source_rect.height),
@@ -2037,6 +2058,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
                 rounded_clip: LayerSurfaceRoundedClip::from_layer(layer),
                 backdrop: layer.backdrop().cloned(),
                 deferred_effect: None,
+                effect_content_rect: None,
                 sample_mode: composite_sample_mode,
             });
         }
@@ -2875,7 +2897,12 @@ fn pending_shader_layer_composite_batch_items(
                 ShaderCompositeBatchItem {
                     source,
                     shader: &pending.shader,
-                    layer_pixel_rect: local_effect_pixel_rect(source.width, source.height),
+                    layer_pixel_rect: content_effect_pixel_rect(
+                        pending.surface.effect_content_rect,
+                        pending.surface.logical_rect,
+                        source.width,
+                        source.height,
+                    ),
                     scissor: pending.scissor,
                     dest_viewport: pending.dest_viewport,
                 },
@@ -3315,6 +3342,7 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
         rounded_clip: None,
         backdrop: None,
         deferred_effect: None,
+        effect_content_rect: None,
         sample_mode: CompositeSampleMode::Linear,
     }))
 }
@@ -4133,7 +4161,12 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                         target.target(),
                         effect,
                         &effect_target,
-                        local_effect_pixel_rect(width, height),
+                        content_effect_pixel_rect(
+                            Some(layer.local_bounds),
+                            logical_rect,
+                            width,
+                            height,
+                        ),
                         composite_sample_mode,
                     )?;
                     backend.release_layer_surface_target(target);
@@ -4147,6 +4180,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                         rounded_clip,
                         backdrop,
                         deferred_effect: None,
+                        effect_content_rect: None,
                         sample_mode: composite_sample_mode,
                     });
                 }
@@ -4161,7 +4195,12 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                     target.target(),
                     &effect,
                     &effect_target,
-                    local_effect_pixel_rect(width, height),
+                    content_effect_pixel_rect(
+                        Some(layer.local_bounds),
+                        surface_rect,
+                        width,
+                        height,
+                    ),
                     composite_sample_mode,
                 );
                 if let Err(error) = materialized {
@@ -4192,6 +4231,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                             rounded_clip,
                             backdrop,
                             deferred_effect: None,
+                            effect_content_rect: None,
                             sample_mode: composite_sample_mode,
                         });
                     }
@@ -4208,6 +4248,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             rounded_clip,
             backdrop,
             deferred_effect,
+            effect_content_rect: Some(layer.local_bounds),
             sample_mode: composite_sample_mode,
         })
     })();
@@ -4376,7 +4417,12 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
                 backend.apply_shader_and_composite_to_view(
                     &source,
                     shader,
-                    local_effect_pixel_rect(effect_width, effect_height),
+                    content_effect_pixel_rect(
+                        Some(layer.rect),
+                        capture_rect,
+                        effect_width,
+                        effect_height,
+                    ),
                     &target.view,
                     layer.composite_alpha,
                     wgpu::LoadOp::Load,
@@ -4389,7 +4435,12 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
                 backend.apply_effect_and_composite_to_view(
                     &source,
                     effect,
-                    local_effect_pixel_rect(effect_width, effect_height),
+                    content_effect_pixel_rect(
+                        Some(layer.rect),
+                        capture_rect,
+                        effect_width,
+                        effect_height,
+                    ),
                     &target.view,
                     layer.composite_alpha,
                     wgpu::LoadOp::Load,
@@ -4412,7 +4463,12 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
             backend.apply_effect_and_composite_to_view_projective(
                 &source,
                 effect,
-                local_effect_pixel_rect(effect_width, effect_height),
+                content_effect_pixel_rect(
+                    Some(layer.rect),
+                    capture_rect,
+                    effect_width,
+                    effect_height,
+                ),
                 &target.view,
                 (width, height),
                 (source_rect.width, source_rect.height),
@@ -4608,6 +4664,7 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
             rounded_clip: None,
             backdrop: None,
             deferred_effect: None,
+            effect_content_rect: None,
             sample_mode: CompositeSampleMode::Linear,
         },
         dest_quad: scaled_quad(crate::rect_to_quad(capture_rect), root_scale),
@@ -4891,7 +4948,12 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
                 backend.apply_shader_and_composite_to_view(
                     source,
                     shader,
-                    local_effect_pixel_rect(source.width, source.height),
+                    content_effect_pixel_rect(
+                        surface.effect_content_rect,
+                        surface.logical_rect,
+                        source.width,
+                        source.height,
+                    ),
                     dest_view,
                     surface.composite_alpha,
                     load_op,
@@ -4920,7 +4982,12 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
             backend.apply_shader_and_composite_to_view_projective(
                 source,
                 shader,
-                local_effect_pixel_rect(source.width, source.height),
+                content_effect_pixel_rect(
+                    surface.effect_content_rect,
+                    surface.logical_rect,
+                    source.width,
+                    source.height,
+                ),
                 dest_view,
                 viewport,
                 (source_rect.width, source_rect.height),
@@ -4939,7 +5006,12 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
             backend.apply_effect_and_composite_to_view(
                 source,
                 effect,
-                local_effect_pixel_rect(source.width, source.height),
+                content_effect_pixel_rect(
+                    surface.effect_content_rect,
+                    surface.logical_rect,
+                    source.width,
+                    source.height,
+                ),
                 dest_view,
                 surface.composite_alpha,
                 load_op,
@@ -4968,7 +5040,12 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
         backend.apply_effect_and_composite_to_view_projective(
             source,
             effect,
-            local_effect_pixel_rect(source.width, source.height),
+            content_effect_pixel_rect(
+                surface.effect_content_rect,
+                surface.logical_rect,
+                source.width,
+                source.height,
+            ),
             dest_view,
             viewport,
             (source_rect.width, source_rect.height),

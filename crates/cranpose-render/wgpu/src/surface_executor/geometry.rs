@@ -32,6 +32,35 @@ pub(crate) fn local_effect_pixel_rect(width: u32, height: u32) -> [f32; 4] {
     [0.0, 0.0, width as f32, height as f32]
 }
 
+/// The effect rect a runtime shader must receive: the LAYER's content rect
+/// in surface-local pixels. Effect surfaces are padded (blur reach, rim
+/// glow, shadow headroom) and may be clipped (viewport, scroll clips), so
+/// the surface bounds themselves are NOT the effect geometry — a glass
+/// shader handed the padded surface as its rect paints its optics into the
+/// padding band around the widget and scales its dp mapping by the padding
+/// ratio. `content_rect` and `surface_rect` share one logical space.
+pub(crate) fn content_effect_pixel_rect(
+    content_rect: Option<Rect>,
+    surface_rect: Rect,
+    width: u32,
+    height: u32,
+) -> [f32; 4] {
+    let Some(content) = content_rect else {
+        return local_effect_pixel_rect(width, height);
+    };
+    if surface_rect.width <= f32::EPSILON || surface_rect.height <= f32::EPSILON {
+        return local_effect_pixel_rect(width, height);
+    }
+    let scale_x = width as f32 / surface_rect.width;
+    let scale_y = height as f32 / surface_rect.height;
+    [
+        (content.x - surface_rect.x) * scale_x,
+        (content.y - surface_rect.y) * scale_y,
+        content.width * scale_x,
+        content.height * scale_y,
+    ]
+}
+
 pub(crate) fn visible_layer_rect(
     rect: Rect,
     clip: Option<Rect>,

@@ -25,6 +25,10 @@ pub(crate) struct LayerSurface {
     pub(crate) rounded_clip: Option<LayerSurfaceRoundedClip>,
     pub(crate) backdrop: Option<RenderEffect>,
     pub(crate) deferred_effect: Option<RenderEffect>,
+    /// The owning layer's content bounds in `logical_rect`'s space. The
+    /// deferred effect's shader geometry anchors to THIS rect — the surface
+    /// itself is padded/clipped and must never define the effect geometry.
+    pub(crate) effect_content_rect: Option<Rect>,
     pub(crate) sample_mode: CompositeSampleMode,
 }
 
