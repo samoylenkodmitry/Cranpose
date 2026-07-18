@@ -67,6 +67,47 @@ jobs:
         if: always()
         run: command -v sccache >/dev/null && sccache --show-stats || true
 
+  ios-build:
+    name: iOS build (self-hosted)
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim,aarch64-apple-ios
+
+      - name: Provision iOS Rust targets
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustup run stable rustc --version
+          rustup target add --toolchain stable \
+            aarch64-apple-ios-sim \
+            aarch64-apple-ios
+
+      - name: Clippy iOS simulator
+        run: >
+          cargo clippy
+          -p desktop-app --bin cranpose-ios
+          --target aarch64-apple-ios-sim
+          --no-default-features --features ios
+          -- -D warnings -A clippy::question_mark
+
+      - name: Build iOS device binary
+        run: >
+          cargo build
+          -p desktop-app --bin cranpose-ios
+          --target aarch64-apple-ios
+          --no-default-features --features ios
+
+      - name: Assemble simulator app bundle
+        run: apps/ios-demo/ios/build-app.sh aarch64-apple-ios-sim
+
   android-release:
     name: Android release build (self-hosted)
     runs-on: [self-hosted, cranpose-heavy]
@@ -78,6 +119,10 @@ jobs:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
       - name: Configure machine-local SDK and cache paths
         env:
@@ -111,6 +156,7 @@ jobs:
 
       - name: Provision toolchains and start sccache
         run: |
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           rustup run stable rustc --version
           rustup target add --toolchain stable \
             aarch64-linux-android \
