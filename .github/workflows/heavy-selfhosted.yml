@@ -1,7 +1,7 @@
 name: heavy (self-hosted)
 
-# Fast, warm-cache build of the heavy Android job on the self-hosted samarch-1
-# runner. PUSH-ONLY (+ manual dispatch) on purpose: fork pull requests only fire
+# Fast, warm-cache build of the heavy Android job on the shared self-hosted
+# runner pool. PUSH-ONLY (+ manual dispatch) on purpose: fork pull requests only fire
 # `pull_request` events, so they can never run on the self-hosted box — the
 # safety requirement for a public repo. The cloud `rust.yml` still gates every
 # PR (forks included).
@@ -9,50 +9,69 @@ on:
   push:
   workflow_dispatch:
 
-concurrency:
-  group: heavy-selfhosted-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   android-release:
     name: Android release build (self-hosted)
-    runs-on: [self-hosted, samarch1]
+    runs-on: [self-hosted, cranpose-heavy]
     timeout-minutes: 90
     env:
-      # Scope the toolchain to this job only — does NOT change the machine's
-      # global rustup default (it stays nightly for other work on the box).
       RUSTUP_TOOLCHAIN: stable
       RUSTC_WRAPPER: sccache
-      SCCACHE_DIR: /home/s/ci-cache/cranpose/sccache
       SCCACHE_CACHE_SIZE: 40G
-      # Persistent target dir = warm incremental builds across runs.
-      CARGO_TARGET_DIR: /home/s/ci-cache/cranpose/target
       CARGO_INCREMENTAL: "0"
-      ANDROID_HOME: /home/s/develop/sdk
-      ANDROID_SDK_ROOT: /home/s/develop/sdk
-      ANDROID_NDK_HOME: /home/s/develop/sdk/ndk/27.0.12077973
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Put cargo/sccache on PATH
+      - name: Configure machine-local SDK and cache paths
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+          RUNNER_OS: ${{ runner.os }}
         run: |
+          if [[ "$RUNNER_OS" == "Linux" && "$RUNNER_NAME" == "samarch-1-cranpose" ]]; then
+            sdk_root="${ANDROID_SDK_ROOT:-/home/s/develop/sdk}"
+            cache_root=/home/s/ci-cache/cranpose
+          elif [[ "$RUNNER_OS" == "macOS" && -d /Volumes/files/sdk ]]; then
+            sdk_root=/Volumes/files/sdk
+            cache_root=/Volumes/files/ci-cache/cranpose
+          else
+            sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
+            cache_root="$HOME/ci-cache/cranpose"
+          fi
+
+          test -d "$sdk_root"
+          mkdir -p "$cache_root/sccache" "$cache_root/target"
+          {
+            echo "ANDROID_HOME=$sdk_root"
+            echo "ANDROID_SDK_ROOT=$sdk_root"
+            echo "ANDROID_NDK_HOME=$sdk_root/ndk/27.0.12077973"
+            echo "SCCACHE_DIR=$cache_root/sccache"
+            echo "CARGO_TARGET_DIR=$cache_root/target"
+          } >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$sdk_root/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
 
-      - name: Android targets + start sccache
+      - name: Provision toolchains and start sccache
         run: |
-          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+          rustup run stable rustc --version
+          rustup target add --toolchain stable \
+            aarch64-linux-android \
+            armv7-linux-androideabi \
+            i686-linux-android \
+            x86_64-linux-android
+          command -v sccache >/dev/null \
+            || RUSTC_WRAPPER= cargo install sccache --locked
+          command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
+          if [[ ! -f "$ANDROID_NDK_HOME/source.properties" ]]; then
+            yes | sdkmanager "ndk;27.0.12077973"
+          fi
+          cargo ndk --version
+          sccache --version
+          java -version
+          test -f "$ANDROID_NDK_HOME/source.properties"
           sccache --start-server || true
           sccache --zero-stats || true
-
-      # gradle's :app:buildRustRelease shells out to `cargo ndk`; the runner
-      # doesn't ship it globally, so install it here. `cargo install` is a no-op
-      # when the pinned version is already present, keeping warm runs fast.
-      - name: Install cargo-ndk (idempotent)
-        run: cargo install cargo-ndk --locked
-
-      - name: Install Android NDK (idempotent)
-        run: bash scripts/ci/install_android_ndk.sh 27.0.12077973
 
       - name: Build Android release APK
         working-directory: apps/android-demo/android
@@ -65,4 +84,4 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: sccache --show-stats
+        run: command -v sccache >/dev/null && sccache --show-stats || true
