@@ -1,36 +1,40 @@
 name: Rust
 
+# Fleet-only CI: every job runs on the repo's self-hosted runners (two
+# ARM64 MacBooks + the Linux GPU server). Forks are disabled on this
+# repository, so pull_request events only ever come from the owner's own
+# branches — self-hosted execution is safe for both triggers. The robot
+# suite lives in heavy-selfhosted.yml where it runs on the real GPU.
 on:
   push:
     branches: ["main"]
   pull_request:
     branches: ["main"]
 
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: stable
+  RUSTC_WRAPPER: sccache
+  SCCACHE_CACHE_SIZE: 40G
+  CARGO_INCREMENTAL: "0"
 
 jobs:
-  default-features:
-    name: linux / stable / default features
-    runs-on: ubuntu-latest
+  checks:
+    name: fmt + tests + clippy (mac)
+    runs-on: [self-hosted, macOS]
     timeout-minutes: 45
-
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: rust-default
-
-      - name: Install Linux dependencies
+      - name: Provision PATH and sccache
         run: |
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            libwayland-dev libxkbcommon-dev \
-            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          sccache --start-server || true
 
       - name: Check formatting
         run: cargo fmt --check
@@ -48,26 +52,18 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::question_mark
 
   architecture-budget:
-    name: linux / stable / architecture budgets
-    runs-on: ubuntu-latest
+    name: architecture budgets (linux)
+    # The binary-size budget is pinned against Linux codegen.
+    runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 45
-
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: rust-architecture-budget
-
-      - name: Install Linux dependencies
+      - name: Provision PATH and sccache
         run: |
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            libwayland-dev libxkbcommon-dev \
-            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          sccache --start-server || true
 
       # The winit adapter cannot build featureless on Linux (winit itself
       # requires a backend), so it is checked per-backend instead.
@@ -109,39 +105,37 @@ jobs:
           --max-bytes 13107200
 
   feature-smoke:
-    name: linux / stable / ${{ matrix.feature }} feature
-    runs-on: ubuntu-latest
+    name: ${{ matrix.feature }} feature (mac)
+    runs-on: [self-hosted, macOS]
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         feature: [std-hash, internal]
-
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: rust-${{ matrix.feature }}
+      - name: Provision PATH and sccache
+        run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          sccache --start-server || true
 
       - name: Run cranpose-core feature tests
         run: cargo test --profile ci -p cranpose-core --features ${{ matrix.feature }}
 
   property-smoke:
-    name: linux / stable / property smoke
-    runs-on: ubuntu-latest
+    name: property smoke (mac)
+    runs-on: [self-hosted, macOS]
     timeout-minutes: 20
-
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: rust-property-smoke
+      - name: Provision PATH and sccache
+        run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          sccache --start-server || true
 
       - name: Run deterministic slot-table model smoke
         run: >
@@ -150,373 +144,37 @@ jobs:
           deterministic_model_render_frames_match_slot_table
 
   criterion-smoke:
-    name: linux / stable / criterion smoke
-    runs-on: ubuntu-latest
+    name: criterion smoke (mac)
+    runs-on: [self-hosted, macOS]
     timeout-minutes: 30
-
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: rust-criterion-smoke
-
-      - name: Install Linux dependencies
+      - name: Provision PATH and sccache
         run: |
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            libwayland-dev libxkbcommon-dev \
-            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          sccache --start-server || true
 
       - name: Run slot-table Criterion smoke
         run: cargo bench --package cranpose-ui --bench slot_table_v2 -- --test
 
   wasm-build:
-    name: wasm build
-    runs-on: ubuntu-latest
+    name: wasm build (linux)
+    # binaryen + wasm-pack are provisioned on the Linux runner.
+    runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 45
-
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: rust-wasm
-
-      - name: Install binaryen 120
+      - name: Provision PATH and sccache
         run: |
-          curl -L https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-x86_64-linux.tar.gz | tar xz
-          sudo mv binaryen-version_120/bin/* /usr/local/bin/
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          sccache --start-server || true
+          rustup target add --toolchain stable wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
           wasm-opt --version
-
-      - name: Install wasm-pack
-        run: cargo install wasm-pack --version 0.13.1
 
       - name: Build web demo
         run: apps/desktop-demo/build-web.sh --release
-
-  ios-build:
-    name: iOS build
-    # Repository branches and same-repository PRs use either registered Mac.
-    # Fork PRs retain an isolated ephemeral runner for self-hosted safety.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64"]') || 'macos-latest' }}
-    timeout-minutes: 45
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios-sim,aarch64-apple-ios
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: rust-ios
-
-      - name: Clippy iOS (simulator)
-        run: >
-          cargo clippy
-          -p desktop-app --bin cranpose-ios
-          --target aarch64-apple-ios-sim
-          --no-default-features --features ios
-          -- -D warnings -A clippy::question_mark
-
-      - name: Build iOS device binary
-        run: >
-          cargo build
-          -p desktop-app --bin cranpose-ios
-          --target aarch64-apple-ios
-          --no-default-features --features ios
-
-      - name: Assemble simulator .app bundle
-        run: apps/ios-demo/ios/build-app.sh aarch64-apple-ios-sim
-
-  android-release:
-    name: Android release build
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: rust-android
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Install Android SDK packages
-        run: bash scripts/ci/install_android_ndk.sh 27.0.12077973
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
-
-      - name: Build Android release APK
-        working-directory: apps/android-demo/android
-        run: ./gradlew :app:assembleRelease
-
-  robot-e2e-build:
-    name: robot e2e build
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: rust-robot-build
-
-      - name: Install Linux dependencies
-        run: |
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
-            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev \
-            libegl1 libgl1-mesa-dri mesa-vulkan-drivers \
-            python3-pil \
-            xvfb xauth xdotool imagemagick
-
-      - name: Build robot examples
-        env:
-          CARGO_BUILD_JOBS: "1"
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          CRANPOSE_ROBOT_SOFTWARE_RENDERER: "1"
-          WGPU_BACKEND: vulkan
-          WINIT_UNIX_BACKEND: x11
-        run: >
-          timeout 6600s
-          ./run_robot_test.sh
-          --build-only
-          --stage-artifacts target/robot-artifacts
-          --stage-artifact-shards 16
-
-      - name: Upload robot examples shard 1
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-1
-          path: target/robot-artifacts/robot-examples-1.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 2
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-2
-          path: target/robot-artifacts/robot-examples-2.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 3
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-3
-          path: target/robot-artifacts/robot-examples-3.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 4
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-4
-          path: target/robot-artifacts/robot-examples-4.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 5
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-5
-          path: target/robot-artifacts/robot-examples-5.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 6
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-6
-          path: target/robot-artifacts/robot-examples-6.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 7
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-7
-          path: target/robot-artifacts/robot-examples-7.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 8
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-8
-          path: target/robot-artifacts/robot-examples-8.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 9
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-9
-          path: target/robot-artifacts/robot-examples-9.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 10
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-10
-          path: target/robot-artifacts/robot-examples-10.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 11
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-11
-          path: target/robot-artifacts/robot-examples-11.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 12
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-12
-          path: target/robot-artifacts/robot-examples-12.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 13
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-13
-          path: target/robot-artifacts/robot-examples-13.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 14
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-14
-          path: target/robot-artifacts/robot-examples-14.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 15
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-15
-          path: target/robot-artifacts/robot-examples-15.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Upload robot examples shard 16
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-examples-16
-          path: target/robot-artifacts/robot-examples-16.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-  robot-e2e-shard:
-    name: robot e2e shard ${{ matrix.shard_index }}/16
-    runs-on: ubuntu-latest
-    needs: robot-e2e-build
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        shard_index: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Linux dependencies
-        run: |
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
-            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev \
-            libegl1 libgl1-mesa-dri mesa-vulkan-drivers \
-            python3-pil \
-            xvfb xauth xdotool imagemagick
-
-      - name: Download robot examples
-        uses: actions/download-artifact@v8
-        with:
-          name: robot-examples-${{ matrix.shard_index }}
-          path: target/robot-artifacts
-
-      - name: Extract robot examples
-        run: |
-          mkdir -p target/robot/examples
-          tar -C target/robot/examples -xzf target/robot-artifacts/robot-examples-${{ matrix.shard_index }}.tar.gz
-
-      - name: Run robot shard
-        env:
-          CARGO_BUILD_JOBS: "1"
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          CRANPOSE_ROBOT_SOFTWARE_RENDERER: "1"
-          WGPU_BACKEND: vulkan
-          WINIT_UNIX_BACKEND: x11
-          # Pin lavapipe's LLVM JIT to the AVX2 code paths: the identical
-          # binary + driver render shard 1's frost scene correctly on every
-          # non-AVX-512 configuration (NVIDIA, llvmpipe-GL, local lavapipe
-          # via the exact Ubuntu debs under Xvfb); only these AVX-512
-          # runners produce the deterministic wrong frame
-          # (memory: ci-shard1-frost-frame diagnosis trail).
-          GALLIUM_OVERRIDE_CPU_CAPS: "avx2"
-        run: |
-          chmod +x target/robot/examples/robot_*
-          timeout 600s xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh --skip-build --sequential --shard "${{ matrix.shard_index }}/16"
-
-      # Failures on this software-GPU environment have repeatedly needed the
-      # actual frames to diagnose (luma numbers alone mislead) — ship every
-      # screenshot the failing runners saved.
-      - name: Upload shard failure screenshots
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: robot-shard-${{ matrix.shard_index }}-failure-shots
-          path: |
-            target/adaptive-frost/
-            target/liquid-shots/
-            target/liquid-motion/
-            .cranpose-tmp/
-            robot_test.log
-          if-no-files-found: ignore
-
-  robot-e2e:
-    name: robot e2e
-    runs-on: ubuntu-latest
-    needs: robot-e2e-shard
-    if: always()
-    timeout-minutes: 5
-
-    steps:
-      - name: Check robot shard results
-        run: |
-          if [ "${{ needs.robot-e2e-shard.result }}" != "success" ]; then
-            echo "robot e2e shards did not all pass"
-            exit 1
-          fi
-          echo "robot e2e shards passed"

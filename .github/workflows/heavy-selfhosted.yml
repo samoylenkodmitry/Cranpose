@@ -1,13 +1,19 @@
 name: heavy (self-hosted)
 
-# Fast, warm-cache build of the heavy Android job on the shared self-hosted
-# runner pool. PUSH-ONLY (+ manual dispatch) on purpose: fork pull requests only fire
-# `pull_request` events, so they can never run on the self-hosted box — the
-# safety requirement for a public repo. The cloud `rust.yml` still gates every
-# PR (forks included).
+# The fleet workflow: Android builds and the robot suite on the repo's
+# own runners. Forks are DISABLED on this repository, so pull_request
+# events only ever come from the owner's branches — self-hosted execution
+# is safe for every trigger.
 on:
   push:
+  pull_request:
+    branches: ["main"]
   workflow_dispatch:
+
+# Supersede older runs of the same ref: fleet minutes are real machines.
+concurrency:
+  group: heavy-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   robot-e2e-gpu:
@@ -48,12 +54,11 @@ jobs:
 
       - name: Run the robot suite on the GPU
         # CRANPOSE_ROBOT_SOFTWARE_RENDERER only relaxes the
-        # environment-sensitive assertions (the same relaxation the cloud
-        # shards run with); the Vulkan ICD still selects the real GPU.
-        # The three external-framebuffer capture tests are cloud-only: a
-        # GPU swapchain under Xvfb never lands pixels in the X server's
-        # buffer, so they can only read their screenshots on software
-        # present — the rust.yml shards keep them covered.
+        # environment-sensitive assertions; the Vulkan ICD still selects
+        # the real GPU. The three external-framebuffer capture tests run
+        # in robot-capture-software below: a GPU swapchain under Xvfb
+        # never lands pixels in the X server's buffer, so they can only
+        # read their screenshots on software present.
         env:
           CRANPOSE_ROBOT_SOFTWARE_RENDERER: "1"
         run: >
@@ -66,6 +71,49 @@ jobs:
       - name: sccache stats
         if: always()
         run: command -v sccache >/dev/null && sccache --show-stats || true
+
+  robot-capture-software:
+    name: robot external captures (software present)
+    # The external-framebuffer trio reads its pixels from the X server's
+    # buffer, which only software present fills under Xvfb — the GL
+    # backend on llvmpipe is the fleet's cloud-equivalent path.
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      RUSTC_WRAPPER: sccache
+      SCCACHE_CACHE_SIZE: 40G
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure machine-local knobs
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+        run: |
+          if [[ "$RUNNER_NAME" == "samarch-1-cranpose" ]]; then
+            echo "CRANPOSE_HOST_MAX_TEMP_C=97" >> "$GITHUB_ENV"
+            echo "CRANPOSE_HOST_RESUME_TEMP_C=93" >> "$GITHUB_ENV"
+            echo "SCCACHE_DIR=/home/s/ci-cache/cranpose/sccache" >> "$GITHUB_ENV"
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Start sccache
+        run: |
+          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          sccache --start-server || true
+
+      - name: Run the external capture trio on software present
+        env:
+          WGPU_BACKEND: gl
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          CRANPOSE_ROBOT_SOFTWARE_RENDERER: "1"
+        run: >
+          xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh
+          --sequential
+          --example robot_underline_screenshot
+          --example robot_text_strikeout_presented
+          --example robot_leetcodedaily_full_layout_scroll_stability
 
   ios-build:
     name: iOS build (self-hosted)
@@ -156,7 +204,6 @@ jobs:
 
       - name: Provision toolchains and start sccache
         run: |
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           rustup run stable rustc --version
           rustup target add --toolchain stable \
             aarch64-linux-android \
