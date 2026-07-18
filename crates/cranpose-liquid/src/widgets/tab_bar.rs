@@ -159,11 +159,13 @@ fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
     Glass::regular()
         .tint(neutral_surface_tint(foreground, 0.0, 0.04))
         .blur_radius(4.0)
-        // The reference bar body lifts toward white yet keeps the tiles'
-        // orange/purple vivid through the glass (bottom-bar-form sheet);
-        // the stronger wash read pale.
-        .saturation(1.12)
-        .lift(neutral_surface_lift(foreground, 0.35, -0.24))
+        // Measured on bar_over_orange_purple: tile (242,150,77) reads
+        // (253,210,168) through the bar. Saturation deepens the channels
+        // before the screen lift, so the lift knob runs higher than the
+        // per-channel solve (~0.52); this pair lands the measured composite
+        // and drowns the fold ghosts the way the reference does.
+        .saturation(1.15)
+        .lift(neutral_surface_lift(foreground, 0.60, -0.24))
         .highlight(0.20)
         // The reference bar folds nearby content inside its long edges:
         // section headers under the top edge render mirrored upside-down
@@ -1006,8 +1008,8 @@ mod tests {
     fn bar_surface_adapts_frost_to_its_foreground() {
         let glass = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
         assert_eq!(glass.blur_radius, Some(4.0));
-        assert_eq!(glass.saturation, Some(1.12));
-        assert_eq!(glass.lift, Some(0.35));
+        assert_eq!(glass.saturation, Some(1.15));
+        assert_eq!(glass.lift, Some(0.60));
         assert_eq!(glass.refraction_depth, 0.34);
         assert_eq!(glass.adaptive_frost, 0.28);
     }
@@ -1015,7 +1017,7 @@ mod tests {
     #[test]
     fn bar_surface_lift_tracks_the_local_foreground_polarity() {
         let light_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
-        assert_eq!(light_surface.lift, Some(0.35));
+        assert_eq!(light_surface.lift, Some(0.60));
 
         let dark_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::WHITE);
         assert_eq!(dark_surface.lift, Some(-0.24));

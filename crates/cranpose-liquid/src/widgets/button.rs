@@ -223,7 +223,9 @@ impl Default for GlassIconButtonGroupSpec {
         Self {
             diameter: 44.0,
             spacing: 8.0,
-            pressed_scale: 1.45,
+            // Measured on touched-up-state f_0250 vs f_0285: disc 62px ->
+            // held ball 96px.
+            pressed_scale: 1.55,
             glue_radius: 12.0,
         }
     }
@@ -747,10 +749,13 @@ pub fn GlassIconButtonGroup(
                         let progress = surface_progress.get().clamp(0.0, 1.0);
                         // The reference touch-up is an HDR-like lift of the
                         // SAME material — highlight and saturation surge, no
-                        // recolor (tint stays put).
+                        // recolor (tint stays put). The held ball densifies
+                        // toward the flat saturated accent (touched-up-state
+                        // f_0285: near-pure electric cyan, glyph dissolved).
                         GlassDynamics {
                             highlight_boost: if item_is_active { 0.60 * progress } else { 0.0 },
                             saturation_boost: if item_is_active { 0.85 * progress } else { 0.0 },
+                            tint_alpha_multiplier: item_is_active.then_some(1.0 + 0.85 * progress),
                             ..Default::default()
                         }
                     });

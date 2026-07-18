@@ -639,6 +639,11 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             * (1.0 / optical_zoom - 1.0)
             * optical_sample.interior;
     }
+    // Displacement that translates the image without bending the ray (the
+    // loupe's focus offset — optically a flat-slab shift). Translation does
+    // not disperse; only the ray-bend components in base_displacement carry
+    // the chromatic split below.
+    var achromatic_displacement = vec2<f32>(0.0);
     var loupe_rim_softening = 0.0;
     if loupe_mode > 0.5 {
         let loupe_activity = clamp(get_float(90u), 0.0, 1.0);
@@ -655,8 +660,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // replaying the content between them inverted — the drop optic's
         // bottom-edge wrap — with C1 continuity everywhere.
         let lens_scale = sin(pow(interior, refraction_curve) * 1.57);
-        let single_field = focus_px + p * (lens_scale / m - 1.0);
+        let single_field = p * (lens_scale / m - 1.0);
         base_displacement = mix(base_displacement, single_field, loupe_activity);
+        achromatic_displacement = focus_px * loupe_activity;
         // Near the rim the sweep minifies the face text hard enough that
         // single sharp taps hit isolated white glyph pixels as round
         // specks (live report: "white dots"). The original shader blurs
@@ -699,12 +705,40 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let transmitted_path = sample_wcksrd_path(
         uv,
         tex_size,
-        base_displacement,
+        achromatic_displacement + base_displacement,
         wcksrd_blur_radius,
         loupe_mode > 0.5,
     );
     let plain_path = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
     var rgb = transmitted_path.rgb;
+    if dispersion_strength > 0.0 {
+        // Chromatic transmission as ONE continuous ray model: each channel
+        // walks the SAME displacement field at a slightly different
+        // refractive power (blue bends more than red, as in real glass).
+        // The split is proportional to the local displacement, so it
+        // self-cancels on the flat face and grows exactly where the ray
+        // bends — the rim ring, the fold replay, the loupe sweep, the
+        // magnified thumb edge — with no band masks and no separate
+        // spectral path. Green rides the already-sampled transmitted ray;
+        // everything downstream (fold absorption, meniscus, ink recolor,
+        // tone) operates on the merged chromatic transmission.
+        let chroma = dispersion_strength * 0.16;
+        let red_path = sample_wcksrd_path(
+            uv,
+            tex_size,
+            achromatic_displacement + base_displacement * (1.0 - chroma),
+            wcksrd_blur_radius,
+            loupe_mode > 0.5,
+        );
+        let blue_path = sample_wcksrd_path(
+            uv,
+            tex_size,
+            achromatic_displacement + base_displacement * (1.0 + chroma),
+            wcksrd_blur_radius,
+            loupe_mode > 0.5,
+        );
+        rgb = vec3<f32>(red_path.r, rgb.g, blue_path.b);
+    }
     if fold_absorb > 0.0 {
         rgb = rgb * mix(vec3<f32>(1.0), rgb, fold_absorb);
     }
@@ -823,84 +857,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     rgb = mix(rgb, reflection_rgb, meniscus_reflection * rim_reflectivity);
     outer_rgb = mix(outer_rgb, reflection_rgb, bevel_reflection * rim_reflectivity);
 
-    if rim_style > 0.0 && dispersion_strength > 0.0 {
-        let grazing_displacement = -p;
-        let prism_bend = clamp(refraction_depth * 0.70, 0.0, 0.45);
-        let prism_split = clamp(
-            refraction_depth * dispersion_strength * 1.50,
-            0.0,
-            prism_bend * 0.85,
-        );
-        let non_wcksrd_displacement = base_displacement
-            - optical_sample.source_displacement * transmission_refraction;
-        let red_displacement = non_wcksrd_displacement
-            + grazing_displacement * (prism_bend - prism_split);
-        let blue_displacement = non_wcksrd_displacement
-            + grazing_displacement * (prism_bend + prism_split);
-        let red_path = textureSampleLevel(
-            input_texture,
-            input_sampler,
-            clamp(
-                uv + red_displacement / tex_size,
-                vec2<f32>(0.0),
-                vec2<f32>(1.0),
-            ),
-            0.0,
-        );
-        let blue_path = textureSampleLevel(
-            input_texture,
-            input_sampler,
-            clamp(
-                uv + blue_displacement / tex_size,
-                vec2<f32>(0.0),
-                vec2<f32>(1.0),
-            ),
-            0.0,
-        );
-        let forward_dispersion = vec3<f32>(red_path.r, red_path.g, blue_path.b);
-        let reflected_dispersion = vec3<f32>(blue_path.r, blue_path.g, red_path.b);
-        let spectral_reflection_mix = smoothstep(-0.20, 0.20, outward_normal.y);
-        let dispersed =
-            mix(forward_dispersion, reflected_dispersion, spectral_reflection_mix);
-        // The reference fringe is a WIDE saturated band (~2-3dp on the
-        // toggle rims), not the hairline the pow-6 transmission band traces:
-        // the spectral return follows the same meniscus at half the falloff
-        // exponent (sqrt of the shared pow-6 value — no second evaluation).
-        // The loupe keeps the hairline: its wide band smears the selection
-        // accent and handle dot along the rim.
-        var dispersion_band = sqrt(meniscus_core) * coverage;
-        if loupe_mode > 0.5 {
-            dispersion_band = meniscus_core * coverage;
-        }
-        // The reference lens ring carries color AROUND the whole rim — the
-        // caps included (toggle-press frames) — so the spectral term keeps
-        // a higher axis floor than the specular caustic.
-        var dispersion_axis = 0.45 + 0.55 * pow(abs(outward_normal.y), 1.5);
-        if loupe_mode > 0.5 {
-            // The loupe keeps the quiet caps — the raised floor reads as
-            // noisy "crashed glass" on its rim (live report).
-            dispersion_axis = long_edge_caustic;
-        }
-        let dispersion_weight = clamp(
-            dispersion_band
-                * rim_style
-                * dispersion_strength
-                * dispersion_axis,
-            0.0,
-            1.0,
-        );
-        let bevel_dispersion_weight = clamp(
-            bevel_meniscus
-                * rim_style
-                * dispersion_strength
-                * long_edge_caustic
-                * 0.24,
-            0.0,
-            0.20,
-        );
-        rgb = mix(rgb, dispersed, dispersion_weight);
-        outer_rgb = mix(outer_rgb, dispersed, bevel_dispersion_weight);
-    }
 
     let inner_meniscus = clamp(
         wcksrd_meniscus(

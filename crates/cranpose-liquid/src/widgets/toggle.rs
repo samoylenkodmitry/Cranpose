@@ -66,20 +66,23 @@ fn toggle_lens_material() -> Glass {
         // clear face and vivid chromatic rim (toggle-press cheatsheet); the
         // milky wash came from over-absorbing the transmitted ray.
         .saturation(1.0)
-        // The FULL wcKSRD dome (example/shaders.txt): interior ramps across
-        // the whole inradius, so the face magnifies and the rim replays the
-        // interior in ONE continuous mapping — no fold band, no zoom term,
-        // no scratches on the surface.
-        .refraction_depth(1.0)
-        // The FULL dome curve: sin(interior * pi/2) — the face magnifies
-        // the thumb across the lens so the green fills it to a THIN
-        // mirrored rim (toggle-press T266). The shallow 0.25 curve left
-        // the face barely magnifying: a wide un-magnified band of the
-        // white well drowned the dispersion fringes into a solid bloom.
-        .refraction_curve(1.0)
+        // The reference press optic decomposes as face zoom + etalon rim
+        // (toggle-press T133: the thumb magnified ~1.5x fills the face, the
+        // white well confined to a thin crescent hugging the rim). The
+        // full-dome curve tried to fake the zoom with a deep interior ramp
+        // and pulled the white well into a mid-face ball instead.
+        .refraction_depth(0.4)
+        .refraction_curve(0.25)
+        .optical_zoom(1.5)
+        // The rim wraps the content it crosses back toward the edge — the
+        // reference "U" replay on the dome's rim band.
+        .fold_depth(6.0)
         .transmission_refraction(1.0)
-        .meniscus_absorption(0.70)
-        .dispersion(0.85)
+        // The reference rim band reads LIGHT with a thin multi-hue edge
+        // (T133/T500) — the heavy absorption + full-strength split painted
+        // a dark arc and a hot wide amber crescent.
+        .meniscus_absorption(0.55)
+        .dispersion(0.50)
         // The reference press face is the magnified track, not a lit dome —
         // its luma matches the sampled backdrop (toggle-press detail).
         .highlight(0.04)

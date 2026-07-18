@@ -301,6 +301,10 @@ pub fn LiquidSegmentedControl(
                         .blur_radius(0.5)
                         .refraction_depth(1.0)
                         .refraction_curve(0.25)
+                        // The reference fold is a DEEP band: glyphs crossing
+                        // the rim collapse into a dense spectral blob
+                        // (segmented-drag f_011), not a thin outline.
+                        .fold_depth(5.0)
                         .dispersion(0.85)
                         .highlight(0.04)
                         .lift(0.0)
@@ -314,6 +318,13 @@ pub fn LiquidSegmentedControl(
                         let pose = physics_axis.liquid_pose();
                         GlassDynamics {
                             activity: Some(grow.clamp(0.0, 1.0)),
+                            // The lens IS the indicator pill at low optical
+                            // activity: the white body cross-fades into clear
+                            // glass as the lens rises, so the hand-off from
+                            // the plain indicator never leaves a no-pill gap
+                            // frame (reference tap-flight keeps one
+                            // continuous body through rise, flight, settle).
+                            resting_tint: Some(indicator_color),
                             morph: Some(GlassMorph {
                                 node_size: (node_w, node_h),
                                 primary: (

@@ -450,3 +450,14 @@ Lessons:
   fallback path "worked" (no error, plausible blur), so nothing logged.
   When a fast path has an equality guard against a separately computed
   value, suspect the guard first and diff the two computations.
+
+## Strip-downscale lies in cheatsheet judging (2026-07-18)
+
+Two wrong verdicts in one round came from judging the composed TARGET|ACTUAL
+strips instead of raw 2x capture frames: the segmented lens read as "milky
+capsule washing the label out" (raw frames: face +2 gray levels over the
+track, text crisp — the reference-matching state), and the touched-up held
+ball read "dull teal" (raw probe: (0,217,234) electric cyan). The strip
+downscale smears sub-pixel optics and mutes saturation. Always crop/zoom the
+raw `shots/capture` frames and pixel-probe with magick before concluding a
+material is wrong.

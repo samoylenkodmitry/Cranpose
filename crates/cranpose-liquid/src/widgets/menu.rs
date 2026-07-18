@@ -618,12 +618,15 @@ fn menu_absorbed_visual_phase(appear: f32, path: f32) -> MenuAbsorbedVisualPhase
     let stretch = smoothstep(0.30, 0.56, path);
     let handoff = smoothstep(0.0, 0.035, appear);
     let readable_alpha = 1.0 + (0.40 - 1.0) * handoff;
+    // Once swallowed, the source is a chip-sized smudge the droplet's own
+    // frost dissolves — the reference shows only a faint ghost of the blue
+    // chip through the growing glass, never a hot stretched orb.
     MenuAbsorbedVisualPhase {
         foreground_alpha: readable_alpha * (1.0 - smoothstep(0.16, 0.36, path)),
-        backdrop_alpha: smoothstep(0.16, 0.36, path),
-        foreground_blur: 4.0 * smoothstep(0.16, 0.36, path),
+        backdrop_alpha: 0.62 * smoothstep(0.16, 0.36, path),
+        foreground_blur: 7.0 * smoothstep(0.16, 0.36, path),
         scale_x: base_scale * (1.0 + 0.20 * stretch),
-        scale_y: base_scale * (1.0 + 0.933 * stretch),
+        scale_y: base_scale * (1.0 + 0.28 * stretch),
     }
 }
 
@@ -1333,7 +1336,12 @@ pub fn LiquidMenu(
                         let activity = if expanded {
                             smoothstep(0.0, MENU_GROW_DELAY, appear)
                         } else {
-                            smoothstep(0.0, 0.65, t)
+                            // The closing panel keeps its full dark material
+                            // until the geometry actually collapses (height
+                            // eases with pow 14, so the size only moves in
+                            // the last ~15% of the path). Draining from 0.65
+                            // left a full-size pale ghost through the close.
+                            smoothstep(0.0, 0.12, t)
                         };
                         GlassDynamics {
                             activity: Some(activity),
@@ -1950,21 +1958,21 @@ mod tests {
 
         let melt = menu_absorbed_visual_phase(0.54, 0.52);
         assert_eq!(melt.foreground_alpha, 0.0);
-        assert_eq!(melt.backdrop_alpha, 1.0);
-        assert!((1.36..=1.42).contains(&melt.scale_y));
+        assert_eq!(melt.backdrop_alpha, 0.62);
+        assert!((0.92..=0.97).contains(&melt.scale_y));
         assert!((0.87..=0.90).contains(&melt.scale_x));
 
         let smear = menu_absorbed_visual_phase(0.72, 0.69);
-        assert!((1.42..=1.46).contains(&smear.scale_y));
+        assert!((0.94..=0.98).contains(&smear.scale_y));
         assert!((0.89..=0.91).contains(&smear.scale_x));
         assert_eq!(smear.foreground_alpha, 0.0);
-        assert_eq!(smear.backdrop_alpha, 1.0);
+        assert_eq!(smear.backdrop_alpha, 0.62);
         let transition = menu_absorbed_visual_phase(0.42, 0.382);
         assert_eq!(transition.foreground_alpha, 0.0);
-        assert_eq!(transition.backdrop_alpha, 1.0);
+        assert_eq!(transition.backdrop_alpha, 0.62);
         let settled = menu_absorbed_visual_phase(1.0, 1.0);
         assert_eq!(settled.foreground_alpha, 0.0);
-        assert_eq!(settled.backdrop_alpha, 1.0);
+        assert_eq!(settled.backdrop_alpha, 0.62);
         assert_eq!(MENU_SOURCE_FOREGROUND_HIDE_MS, 200);
         assert_eq!(MENU_SOURCE_FOREGROUND_RESTORE_DELAY_MS, 205);
     }
