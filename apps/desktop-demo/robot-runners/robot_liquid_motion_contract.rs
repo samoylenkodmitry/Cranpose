@@ -174,9 +174,15 @@ fn main() -> ExitCode {
             // body follows its measured downward rebound. Exact live contour
             // dimensions are pinned in the menu geometry unit test; here we
             // verify that the shader rendered the expected width progression
-            // without mistaking travel distance for contour height.
+            // without mistaking travel distance for contour height. The 30dp
+            // frost and luma-compressed material intentionally make the outer
+            // white-on-white shoulder fall below this pixel-diff threshold,
+            // so retain a material-aware height floor and require visible
+            // growth from the preceding source frame instead of pinning the
+            // old 12dp-frost footprint.
             if !(0.36..=0.65).contains(&oval_width_fraction)
-                || !(0.86..=1.12).contains(&oval_height_fraction)
+                || !(0.72..=1.12).contains(&oval_height_fraction)
+                || oval_extent.1 < early_extent.1
             {
                 save(wide_oval, &shot_dir, "menu-wide-oval");
                 fail(
