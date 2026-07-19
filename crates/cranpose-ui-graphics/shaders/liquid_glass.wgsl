@@ -877,10 +877,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     outer_rgb = outer_rgb + vec3<f32>(long_edge_specular);
     alpha = max(alpha, long_edge_specular);
 
-    let wcksrd_edge_gain = mix(
-        highlight,
-        highlight * lens_edge_incidence,
-        rim_style,
+    // The etalon adds its rb2 border line UNGATED (+1.0*rb2); gating it by
+    // the material highlight erased the reference's crisp bright ring on
+    // low-highlight interactive lenses (the pressed toggle reads a thin
+    // white line the chromatic fringes color). The line rides rim
+    // reflectivity, so the segmented lens keeps its invisible body.
+    let etalon_border_gain = rim_style * rim_reflectivity * 0.7;
+    let wcksrd_edge_gain = max(
+        mix(highlight, highlight * lens_edge_incidence, rim_style),
+        etalon_border_gain,
     );
     let wcksrd_edge_light = clamp(
         optical_sample.edge_light
