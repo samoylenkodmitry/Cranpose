@@ -169,8 +169,18 @@ fn TouchedUpReferenceStage() {
     // the lone "..." (f_0360-0400); pressing "..." expands the actions again.
     let confirmed = remember(|| mutableStateOf(false)).with(|s| *s);
     Box(
-        Modifier::empty().fill_max_width().height(82.0),
-        BoxSpec::default().content_alignment(Alignment::CENTER),
+        // Trailing-anchored like the reference toolbar (buttons at the
+        // card's top-right): collapsing the pair makes the survivor glide
+        // INTO the fading ball's slot instead of splitting the contraction
+        // across both edges.
+        Modifier::empty()
+            .fill_max_width()
+            .height(82.0)
+            .padding_each(0.0, 0.0, 96.0, 0.0),
+        BoxSpec::default().content_alignment(Alignment::new(
+            HorizontalAlignment::End,
+            VerticalAlignment::CenterVertically,
+        )),
         move || {
             let more_confirmed = confirmed;
             let check_confirmed = confirmed;
@@ -192,8 +202,16 @@ fn TouchedUpReferenceStage() {
             GlassIconButtonGroup(
                 Modifier::empty(),
                 GlassIconButtonGroupSpec::new(44.0)
-                    .with_spacing(8.0)
-                    .with_glue_radius(12.0),
+                    // Measured on the raw recording (f_0280): circle pitch
+                    // 59dp for 45dp discs — the swollen ball keeps a ~9dp
+                    // gap that the capillary neck bridges. 8dp spacing made
+                    // the swell OVERLAP the neighbor outright, so no neck
+                    // could ever read.
+                    .with_spacing(14.0)
+                    // smin k: across the ~8.5dp held gap, k=18 leaves a
+                    // hairline (k/4 barely beats the half-gap); the
+                    // reference bridge is ~15dp thick, which needs k~36.
+                    .with_glue_radius(36.0),
                 items,
             );
         },

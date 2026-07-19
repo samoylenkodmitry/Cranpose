@@ -234,6 +234,19 @@ impl Default for GlassIconButtonGroupSpec {
     }
 }
 
+/// Surviving glyphs vanish for the body of a merge and rematerialize as
+/// the fused circle settles (reference touched-up f_0350..f_0390: the dots
+/// blur out at release and sharpen back only at the end of the fuse).
+fn merge_glyph_alpha(merge: f32) -> f32 {
+    let m = merge.clamp(0.0, 1.0);
+    if m <= 0.0 {
+        return 1.0;
+    }
+    let fade_out = 1.0 - ((m - 0.02) / 0.10).clamp(0.0, 1.0);
+    let fade_in = ((m - 0.78) / 0.18).clamp(0.0, 1.0);
+    fade_out.max(fade_in)
+}
+
 fn icon_group_width(count: usize, spec: GlassIconButtonGroupSpec) -> f32 {
     if count == 0 {
         0.0
@@ -593,7 +606,22 @@ pub fn GlassIconButtonGroup(
         .max()
         .unwrap_or(0);
     let layout_count = count.max(ghost_slots);
-    let width = icon_group_width(layout_count, spec);
+    // The collapse is a MERGE (reference f_0350..f_0390): as the departed
+    // ball dissolves, the group's span contracts from the old slot count to
+    // the new one — in the reference's trailing-anchored toolbar the
+    // survivor glides INTO the fading ball and the two fuse into one
+    // circle where the ball stood. Ghosts anchor to the TRAILING edge so
+    // the ball holds its screen position while the span contracts under a
+    // trailing-aligned host.
+    let merge = if layout_count > count {
+        (1.0 - ghost_alpha.get().clamp(0.0, 1.0)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let full_width = icon_group_width(layout_count, spec);
+    let settled_width = icon_group_width(count, spec);
+    let width = settled_width + (full_width - settled_width) * (1.0 - merge);
+    let ghost_trailing_shift = width - full_width;
     let gesture_items = Rc::clone(&live_items);
     let gesture_press_orphaned = Rc::clone(&press_orphaned);
     let gesture = Modifier::empty()
@@ -698,7 +726,10 @@ pub fn GlassIconButtonGroup(
                     .resolve_material(&colors, item.spec.icon_color(&colors))
             })
             .and_then(|material| material.tint)
-            .map(|tint| tint.with_alpha(0.45))
+            // The faces cover their own discs, so this alpha only ever
+            // shows in the BRIDGE between them — the reference neck is a
+            // solid run of the ball's cyan (f_0280), not a faint haze.
+            .map(|tint| tint.with_alpha(0.85))
             .unwrap_or(Color::WHITE.with_alpha(0.035));
         let shared = Modifier::empty()
             .required_size(Size::new(node_width, node_height))
@@ -843,15 +874,20 @@ pub fn GlassIconButtonGroup(
             let foreground_spec = item.spec.clone();
             let icon_path = item.icon_path;
             let description = item.content_description.clone();
+            // During a merge the surviving glyph rides out early and
+            // rematerializes once fused (reference: the "…" dots are gone
+            // by f_0356 and sharpen back f_0372+).
+            let merge_alpha = merge_glyph_alpha(merge);
             let foreground = Modifier::empty()
                 .size(Size::new(spec.diameter, spec.diameter))
                 .offset(x, 0.0)
                 .graphics_layer(move || GraphicsLayer {
-                    alpha: if item_is_active && !foreground_orphaned.get() {
-                        1.0 - foreground_progress.get().clamp(0.0, 1.0)
-                    } else {
-                        1.0
-                    },
+                    alpha: merge_alpha
+                        * if item_is_active && !foreground_orphaned.get() {
+                            1.0 - foreground_progress.get().clamp(0.0, 1.0)
+                        } else {
+                            1.0
+                        },
                     ..Default::default()
                 })
                 .semantics(move |config| {
@@ -872,7 +908,9 @@ pub fn GlassIconButtonGroup(
         // riding one shared fade to transparent. No gestures, no union
         // membership — a purely optical afterimage.
         for (ghost, ghost_index, departure) in ghosts.borrow().iter() {
-            let x = *ghost_index as f32 * pitch;
+            // Trailing-anchored: the ball keeps its screen slot while the
+            // group's span contracts past it (see the merge above).
+            let x = *ghost_index as f32 * pitch + ghost_trailing_shift;
             let fade = ghost_alpha;
             let departure = *departure;
             let ghost_layer = Modifier::empty()
