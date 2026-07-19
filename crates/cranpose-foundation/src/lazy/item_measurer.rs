@@ -165,8 +165,18 @@ where
         first_item_scroll_offset: f32,
     ) -> ItemMeasurePass {
         let start_time = Instant::now();
-        let start_offset = self.config.before_content_padding - first_item_scroll_offset;
-        let viewport_end = self.effective_viewport_size - self.config.after_content_padding;
+        // Content padding belongs to the scrollable content. It offsets item 0
+        // at rest, but must not become a permanent clipping boundary after the
+        // first item advances.
+        let leading_padding = if first_item_index == 0 {
+            self.config.before_content_padding
+        } else {
+            0.0
+        };
+        let start_offset = leading_padding - first_item_scroll_offset;
+        let viewport_end = self.effective_viewport_size;
+        let content_end =
+            (self.effective_viewport_size - self.config.after_content_padding).max(0.0);
 
         // Measure visible items
         let (mut visible_items, current_index, current_offset) =
@@ -183,7 +193,7 @@ where
                 &mut visible_items,
                 current_index,
                 current_offset,
-                viewport_end,
+                content_end,
                 first_item_index,
                 start_time,
             )

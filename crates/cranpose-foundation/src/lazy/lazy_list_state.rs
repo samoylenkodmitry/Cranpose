@@ -1192,10 +1192,10 @@ pub struct LazyListLayoutInfo {
     /// Size of the viewport in the main axis.
     pub viewport_size: f32,
 
-    /// Start offset of the viewport (content padding before).
+    /// Start offset of the viewport in layout coordinates.
     pub viewport_start_offset: f32,
 
-    /// End offset of the viewport (content padding after).
+    /// End offset of the viewport in layout coordinates.
     pub viewport_end_offset: f32,
 
     /// Content padding before the first item.

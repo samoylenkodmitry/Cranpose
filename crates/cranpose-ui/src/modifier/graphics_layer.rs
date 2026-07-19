@@ -1,9 +1,10 @@
 use super::{inspector_metadata, GraphicsLayer, Modifier};
 use crate::modifier_nodes::{GraphicsLayerElement, LazyGraphicsLayerElement};
 use cranpose_ui_graphics::{
-    gradient_cut_mask_effect, gradient_fade_dst_out_effect, rounded_alpha_mask_effect, BlendMode,
-    Color, ColorFilter, CompositingStrategy, Dp, GradientCutMaskSpec, GradientFadeMaskSpec,
-    LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader, TransformOrigin,
+    gradient_blur_effect, gradient_cut_mask_effect, gradient_fade_dst_out_effect,
+    rounded_alpha_mask_effect, BlendMode, Color, ColorFilter, CompositingStrategy, Dp,
+    GradientBlurDirection, GradientCutMaskSpec, GradientFadeMaskSpec, LayerShape, RenderEffect,
+    RoundedCornerShape, RuntimeShader, TransformOrigin,
 };
 use std::rc::Rc;
 
@@ -14,6 +15,23 @@ fn backdrop_blur_layer(radius: Dp, shape: LayerShape) -> GraphicsLayer {
     GraphicsLayer {
         backdrop_effect: (radius_px > 0.0).then(|| RenderEffect::blur(radius_px)),
         shape,
+        clip: true,
+        ..Default::default()
+    }
+}
+
+fn backdrop_gradient_blur_layer(
+    start_radius: Dp,
+    end_radius: Dp,
+    direction: GradientBlurDirection,
+) -> GraphicsLayer {
+    let density = crate::render_state::current_density();
+    let start_px = start_radius.to_px(density).max(0.0);
+    let end_px = end_radius.to_px(density).max(0.0);
+    GraphicsLayer {
+        backdrop_effect: (start_px > 0.0 || end_px > 0.0)
+            .then(|| gradient_blur_effect(start_px, end_px, direction)),
+        shape: LayerShape::Rectangle,
         clip: true,
         ..Default::default()
     }
@@ -221,6 +239,33 @@ impl Modifier {
         .with_inspector_metadata(inspector_metadata("backdropBlur", move |info| {
             info.add_property("radius", radius.0.to_string());
         }));
+        self.then(modifier)
+    }
+
+    /// Blur content behind this composable with a radius that changes across
+    /// its bounds. This is a true spatial blur gradient: the sampling kernel
+    /// interpolates from `start_radius` to `end_radius`; it is not an opacity
+    /// gradient over a uniformly blurred layer.
+    pub fn backdrop_gradient_blur(
+        self,
+        start_radius: Dp,
+        end_radius: Dp,
+        direction: GradientBlurDirection,
+    ) -> Self {
+        if start_radius.0 <= 0.0 && end_radius.0 <= 0.0 {
+            return self.clip_to_bounds();
+        }
+        let modifier = Self::with_element(LazyGraphicsLayerElement::new(Rc::new(move || {
+            backdrop_gradient_blur_layer(start_radius, end_radius, direction)
+        })))
+        .with_inspector_metadata(inspector_metadata(
+            "backdropGradientBlur",
+            move |info| {
+                info.add_property("startRadius", start_radius.0.to_string());
+                info.add_property("endRadius", end_radius.0.to_string());
+                info.add_property("direction", format!("{direction:?}"));
+            },
+        ));
         self.then(modifier)
     }
 

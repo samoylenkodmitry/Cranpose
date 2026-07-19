@@ -108,7 +108,18 @@ impl<'a> ScrollPositionResolver<'a> {
             let Some(item_size) = self.state.get_cached_size(index) else {
                 break;
             };
-            let item_extent = item_size + self.config.spacing;
+            // Leading content padding is scrollable content, not a permanent
+            // viewport inset. While item 0 is the anchor, its scroll extent
+            // therefore includes the padding that precedes it. Omitting this
+            // advanced the anchor as soon as item 0 reached the padded start
+            // line, recycling it while it was still visible between that line
+            // and the real viewport edge.
+            let leading_padding = if index == 0 {
+                self.config.before_content_padding
+            } else {
+                0.0
+            };
+            let item_extent = leading_padding + item_size + self.config.spacing;
             if offset + 0.001 < item_extent {
                 break;
             }
@@ -122,6 +133,21 @@ impl<'a> ScrollPositionResolver<'a> {
     pub(crate) fn normalize_forward(&self, mut index: usize, mut offset: f32) -> (usize, f32) {
         if offset <= 0.0 {
             return (index, offset);
+        }
+
+        // Consume the one-off leading padding before applying the average-size
+        // jump. It must never be treated as if it repeated for every item.
+        let original_offset = offset;
+        let leading_padding = if index == 0 {
+            self.config.before_content_padding
+        } else {
+            0.0
+        };
+        if leading_padding > 0.0 {
+            if offset <= leading_padding {
+                return (index, offset);
+            }
+            offset -= leading_padding;
         }
 
         let average_size = self.measure_state.average_item_size;
@@ -147,6 +173,10 @@ impl<'a> ScrollPositionResolver<'a> {
                     offset -= actual_skip as f32 * item_size_with_spacing;
                 }
             }
+        }
+
+        if index == 0 {
+            offset = original_offset;
         }
 
         (index, offset)

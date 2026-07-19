@@ -10,7 +10,8 @@ use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
 };
 use cranpose_ui_graphics::{
-    BlurredEdgeTreatment, Brush, ColorFilter, Dp, DrawPrimitive, ShadowPrimitive, TileMode,
+    BlurredEdgeTreatment, Brush, ColorFilter, Dp, DrawPrimitive, GradientBlurDirection,
+    ShadowPrimitive, TileMode,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -370,6 +371,29 @@ fn backdrop_blur_clips_backdrop_to_bounds() {
         }
         other => panic!("expected blur backdrop effect, got {other:?}"),
     }
+}
+
+#[test]
+fn backdrop_gradient_blur_converts_radii_and_clips_backdrop_to_bounds() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let _density = DensityGuard::set(2.0);
+    let modifier = Modifier::empty().backdrop_gradient_blur(
+        Dp(14.0),
+        Dp(0.5),
+        GradientBlurDirection::TopToBottom,
+    );
+    let slices = collect_slices_from_modifier(&modifier);
+
+    let layer = slices
+        .graphics_layer()
+        .expect("backdrop_gradient_blur should install a graphics layer");
+    assert!(layer.clip);
+    assert_eq!(layer.shape, LayerShape::Rectangle);
+    let Some(RenderEffect::Shader { shader }) = layer.backdrop_effect else {
+        panic!("expected spatial shader backdrop effect");
+    };
+    assert_eq!(&shader.uniforms()[..3], &[28.0, 1.0, 2.0]);
+    assert_eq!(shader.input_padding(), 28.0);
 }
 
 #[test]
