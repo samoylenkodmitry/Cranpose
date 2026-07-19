@@ -72,6 +72,7 @@ fn ProbeApp() {
                                 bulge_direction: 0.0,
                                 ellipse_blend: 0.0,
                                 deformation: None,
+                                zoom_anchor: (0.0, 0.0),
                             }),
                             ..Default::default()
                         },
