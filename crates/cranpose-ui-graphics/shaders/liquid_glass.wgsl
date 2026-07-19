@@ -665,9 +665,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // replaying the content between them inverted — the drop optic's
         // bottom-edge wrap — with C1 continuity everywhere.
         let lens_scale = sin(pow(interior, refraction_curve) * 1.57);
-        let single_field = p * (lens_scale / m - 1.0);
-        base_displacement = mix(base_displacement, single_field, loupe_activity);
-        achromatic_displacement = focus_px * loupe_activity;
+        // The single field p·(lens_scale/m − 1) decomposes exactly into a
+        // pure magnification p·(1/m − 1) plus the rim bend
+        // p·(lens_scale − 1)/m. Only the bend disperses: the reference
+        // loupe's magnified glyphs are fully achromatic inside the face
+        // (loupe sheet), while the rim sweep keeps its chromatic split.
+        let rim_bend = p * ((lens_scale - 1.0) / m);
+        let pure_zoom = p * (1.0 / m - 1.0);
+        base_displacement = mix(base_displacement, rim_bend, loupe_activity);
+        achromatic_displacement = (focus_px + pure_zoom) * loupe_activity;
         // Near the rim the sweep minifies the face text hard enough that
         // single sharp taps hit isolated white glyph pixels as round
         // specks (live report: "white dots"). The original shader blurs

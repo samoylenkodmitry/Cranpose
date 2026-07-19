@@ -21,6 +21,9 @@ use std::rc::Rc;
 
 const SEGMENT_HEIGHT: f32 = 36.0;
 const TRACK_PADDING: f32 = 2.0;
+/// Finger-halo circle diameter over the pill height while touched
+/// (segmented-drag f_025: the circle spans ~1.4x the track height).
+const SEGMENT_HALO_FACTOR: f32 = 1.4;
 /// How far the interaction lens pokes past the track vertically.
 const LENS_OVERFLOW: f32 = 8.0;
 /// Touch raises the whole optical body before directional deformation. This
@@ -150,6 +153,15 @@ pub fn LiquidSegmentedControl(
                     spring(1.0, 170.0)
                 },
                 "segmented-lens",
+            );
+            // The finger halo: while touched, a circle rides the pill center
+            // and the union silhouette bulges above/below the track
+            // (segmented-drag f_025/f_055 — visible through transit and a
+            // parked hold, gone at rest).
+            let halo_presence = animateFloatAsState(
+                if pressed.get() { 1.0 } else { 0.0 },
+                spring(1.0, 900.0),
+                "segmented-halo",
             );
 
             let indicator_color = if colors.is_dark {
@@ -316,6 +328,22 @@ pub fn LiquidSegmentedControl(
                         // (crate::dynamics): speed stretches the capsule
                         // along the travel, braking swells its front.
                         let pose = physics_axis.liquid_pose();
+                        // The halo circle grows concentric with the pill;
+                        // below the track height it hides inside the capsule,
+                        // so presence needs no alpha of its own.
+                        let halo = halo_presence.get().clamp(0.0, 1.0);
+                        let halo_diameter = base_size.height * SEGMENT_HALO_FACTOR * halo;
+                        let shapes = if halo_diameter > base_size.height {
+                            vec![(
+                                node_w * 0.5,
+                                node_h * 0.5,
+                                halo_diameter,
+                                halo_diameter,
+                                -1.0,
+                            )]
+                        } else {
+                            Vec::new()
+                        };
                         GlassDynamics {
                             activity: Some(grow.clamp(0.0, 1.0)),
                             // The lens IS the indicator pill at low optical
@@ -334,7 +362,7 @@ pub fn LiquidSegmentedControl(
                                     base_size.height,
                                     -1.0,
                                 ),
-                                shapes: Vec::new(),
+                                shapes,
                                 glue: 0.0,
                                 wobble_amplitude: 0.0,
                                 wobble_phase: 0.0,
