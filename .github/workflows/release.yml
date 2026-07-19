@@ -169,9 +169,10 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Configure Android SDK
-        uses: android-actions/setup-android@v3
-
+      # No broad setup-android action (repo contract:
+      # platform_scheduling_static): the pinned installer resolves the
+      # runner's SDK (incl. the macOS default ~/Library/Android/sdk) and
+      # provisions exactly the required packages.
       - name: Install Android SDK packages
         run: bash scripts/ci/install_android_ndk.sh 27.0.12077973
 

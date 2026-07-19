@@ -9,7 +9,9 @@ if [[ -z "$ndk_version" ]]; then
 fi
 
 sdk_root=""
-for candidate in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "/usr/local/lib/android/sdk" "$HOME/Android/Sdk"; do
+# Candidates cover GitHub-hosted Linux, Linux defaults, and the macOS
+# default used by the self-hosted Mac release runners.
+for candidate in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "/usr/local/lib/android/sdk" "$HOME/Android/Sdk" "$HOME/Library/Android/sdk"; do
   if [[ -n "$candidate" && -d "$candidate" ]]; then
     sdk_root="$candidate"
     break
