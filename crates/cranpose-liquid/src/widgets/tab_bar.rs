@@ -93,6 +93,12 @@ const BLOB_MARGIN: f32 = 4.0;
 /// capsule that sat over the neighbor cell and garbled its glyphs for the
 /// whole hold.
 const FLIGHT_LENS_HEIGHT_PROJECTION: f32 = 82.0 / BLOB_HEIGHT;
+/// How far the raised bubble's SDF blends from the rounded capsule toward
+/// a true ellipse (activity-scaled at the material layer, so the resting
+/// capsule is untouched). The reference held bubble is a continuously
+/// curved oval — with zero blend the taller body reads as a flat-topped
+/// rounded rectangle.
+const FLIGHT_ELLIPSE_BLEND: f32 = 0.55;
 /// Resting bubble width over the cell pitch. Measured on the reference
 /// (bottom-bar-click f_0000: bubble 96 over pitch 87.5): the bubble is
 /// barely wider than its cell, so a CELL-CENTERED rest keeps its edge
@@ -426,11 +432,12 @@ struct TabFlightNode {
 fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> GlassDynamics {
     let activity = geometry.lens_activity.clamp(0.0, 1.0);
     let energy = geometry.pose.energy() * activity;
-    // The rest bubble is a capsule (r = h/2); the raised bubble flattens
-    // toward the reference's held squircle (r ~= 0.38h on the raw hold
-    // recording — the taller body squares off, the light stays on the
-    // long edges).
-    let radius = geometry.base_size.height * (0.48 - 0.10 * activity + 0.02 * energy);
+    // The rest bubble is a capsule (r = h/2); the raised bubble keeps that
+    // full corner and additionally blends its SDF toward an ellipse
+    // (activity-scaled at the material layer), so the tall held body reads
+    // as the reference's continuously curved oval — a reduced corner
+    // radius squares the silhouette into a rounded rectangle instead.
+    let radius = geometry.base_size.height * (0.48 + 0.02 * energy);
     let glue = 20.0;
     let shapes = geometry
         .accessory_center
@@ -471,7 +478,7 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
             wobble_phase: geometry.lens_position * 0.045,
             bulge_amplitude: geometry.pose.bulge_amplitude.min(8.0) * activity,
             bulge_direction: geometry.pose.bulge_direction,
-            ellipse_blend: 0.0,
+            ellipse_blend: FLIGHT_ELLIPSE_BLEND,
             deformation: Some(crate::material::GlassDeformation::incompressible(
                 geometry.pose.axis,
                 // Reference mid-swipe bubble elongates to ~1.15x its rest

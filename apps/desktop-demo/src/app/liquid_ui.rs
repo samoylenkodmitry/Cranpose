@@ -1259,7 +1259,10 @@ fn OnWhiteBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static)
                     let on_select = std::rc::Rc::clone(&on_select);
                     LiquidTabBar(
                         Modifier::empty().offset(5.0, -10.0),
-                        LiquidTabBarSpec::new(85.0),
+                        // Reference on-white recording: cell pitch 319px over a
+                        // 185px bar = 1.72x, i.e. 110dp cells against the 64dp
+                        // bar. Narrower cells squash the held oval circular.
+                        LiquidTabBarSpec::new(110.0),
                         vec![
                             LiquidTab::new(icons::TRANSLATE, "Translate"),
                             LiquidTab::new(icons::CAMERA, "Camera"),
