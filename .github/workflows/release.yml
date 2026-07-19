@@ -35,11 +35,6 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: cranpose-demo-macos-aarch64
 
-          - name: windows-x86_64
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: cranpose-demo-windows-x86_64
-
     steps:
       - uses: actions/checkout@v6
         with:
@@ -103,14 +98,6 @@ jobs:
           tar czf ${{ matrix.artifact_name }}.tar.gz \
             -C target/${{ matrix.target }}/release-small desktop-app
 
-      - name: Package Windows binary
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive `
-            -Path target\${{ matrix.target }}\release-small\desktop-app.exe `
-            -DestinationPath ${{ matrix.artifact_name }}.zip
-
       # Release assets do not consume the Actions artifact quota. Upload each
       # platform directly instead of retaining a second copy for 90 days.
       - name: Attach to release
@@ -119,6 +106,48 @@ jobs:
           files: |
             *.tar.gz
             *.zip
+
+  build-windows:
+    name: Build windows-x86_64
+    needs: create-release
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux and Windows cross-build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev libxkbcommon-dev \
+            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev lld zip
+          cargo install cargo-xwin --locked --version 0.23.0
+
+      # Cross-compile the Windows MSVC binary on our Linux runner. cargo-xwin
+      # supplies Microsoft's CRT and SDK import libraries without a hosted
+      # Windows VM, so this artifact no longer consumes hosted-runner quota.
+      - name: Build Windows desktop on Linux
+        run: >
+          cargo xwin build
+          --package desktop-app
+          --bin desktop-app
+          --profile release-small
+          --target x86_64-pc-windows-msvc
+          --features desktop,renderer-wgpu
+          --no-default-features
+
+      - name: Package Windows binary
+        run: >
+          zip cranpose-demo-windows-x86_64.zip
+          target/x86_64-pc-windows-msvc/release-small/desktop-app.exe
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: cranpose-demo-windows-x86_64.zip
 
   build-android:
     name: Build Android APK
