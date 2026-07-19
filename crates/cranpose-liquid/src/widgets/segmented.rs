@@ -107,20 +107,37 @@ pub fn LiquidSegmentedControl(
 
     let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
 
-    // Light scheme: the reference control body is bare page white — only
-    // the recessed marker and the raised lens are visible. Dark keeps a
-    // filled track for contrast.
-    let track_fill = colors.is_dark.then_some(colors.fill);
-    let track = Modifier::empty()
-        .height(SEGMENT_HEIGHT + TRACK_PADDING * 2.0)
-        .draw_behind(move |scope| {
-            if let Some(fill) = track_fill {
-                scope.draw_round_rect(
-                    Brush::solid(fill),
-                    CornerRadii::uniform((SEGMENT_HEIGHT + TRACK_PADDING * 2.0) * 0.5),
-                );
-            }
-        });
+    // The light-scheme control body is a WHITE capsule floating on the
+    // page with a soft, below-biased drop shadow (drag f_130 corners:
+    // page ~235-240 falling to ~219-225 under the caps, body 254). The
+    // recessed marker and the raised lens live INSIDE this white body.
+    // Dark keeps a filled track for contrast.
+    let track_height = SEGMENT_HEIGHT + TRACK_PADDING * 2.0;
+    let track_fill = if colors.is_dark {
+        colors.fill
+    } else {
+        Color::WHITE
+    };
+    let track = if colors.is_dark {
+        Modifier::empty()
+    } else {
+        Modifier::empty().drop_shadow(
+            cranpose_ui_graphics::LayerShape::Rounded(
+                cranpose_ui_graphics::RoundedCornerShape::uniform(track_height * 0.5),
+            ),
+            |scope| {
+                scope.radius = 7.0;
+                scope.offset.y = 1.5;
+                scope.color = Color::BLACK.with_alpha(0.10);
+            },
+        )
+    };
+    let track = track.height(track_height).draw_behind(move |scope| {
+        scope.draw_round_rect(
+            Brush::solid(track_fill),
+            CornerRadii::uniform(track_height * 0.5),
+        );
+    });
 
     Box(track.then(modifier), BoxSpec::default(), move || {
         let labels = Rc::clone(&labels);
