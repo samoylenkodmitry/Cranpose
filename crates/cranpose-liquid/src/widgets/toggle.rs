@@ -26,10 +26,15 @@ pub(crate) const TRACK_HEIGHT: f32 = 28.0;
 const THUMB_WIDTH: f32 = 37.0;
 const THUMB_HEIGHT: f32 = 25.0;
 const THUMB_MARGIN: f32 = 1.5;
-/// The pressed lens capsule rides the full track width and grows past the
-/// track edges, matching the reference's refractive chamber.
-const LENS_WIDTH: f32 = 58.0;
-const LENS_HEIGHT: f32 = 109.0 / 3.0;
+/// The pressed dome is THUMB-sized, not a track-wide chamber: anchored
+/// to the 63dp track capsule in the hold tile (6.83 px/dp), the
+/// chromatic rim spans ~31.5 x 24dp — a wide-FLAT dome slightly
+/// narrower than the 37dp thumb, staying inside the track vertically,
+/// with the gray visibly sticking out past the rim. A wider lens spills
+/// its rim onto the white and reads inflated (user-arbitrated: target
+/// thinner, ours wider).
+const LENS_WIDTH: f32 = 34.0;
+const LENS_HEIGHT: f32 = 24.5;
 const LENS_VERTICAL_OFFSET: f32 = -2.0 / 3.0;
 /// The raised lens leans toward the travel side, measured from the thumb
 /// center on the reference press and settle frames (~6-8dp in every phase:
@@ -65,7 +70,7 @@ fn toggle_lens_material() -> Glass {
         // The original wcKSRD blurs inside the lens (its 9x9 loop at half-px
         // steps): content edges under the dome read soft, never cut. 2.0
         // washed the rim band's fringe pairs below visibility.
-        .blur_radius(1.5)
+        .blur_radius(0.8)
         // The reference lens transmits the track at full saturation with a
         // clear face and vivid chromatic rim (toggle-press cheatsheet); the
         // milky wash came from over-absorbing the transmitted ray.
@@ -73,8 +78,10 @@ fn toggle_lens_material() -> Glass {
         // The reference press optic decomposes as face zoom + etalon rim
         // (toggle-press T133: the magnified thumb fills the face, the white
         // well confined to a thin crescent hugging the rim). Coverage
-        // geometry with the zoom anchored on the thumb: the 37dp thumb must
-        // span the 58dp face past a 7dp lean — 18.5·z ≥ 29+7 ⇒ z ≈ 1.95.
+        // geometry with the zoom anchored on the thumb: the 37dp thumb
+        // must span the 34dp face past a 7dp lean — 18.5·z ≥ 17+7 ⇒
+        // z ≈ 1.3 (1.95 belonged to the old 58dp chamber and over-zoomed
+        // the smaller face into flat gray, erasing the crescent).
         // The rim band is the descending branch run to its boundary limit:
         // curve near 1 removes the x^0.25 step at the silhouette so the
         // sweep to the lens CENTER spans the whole ~6dp band (depth·29dp
@@ -84,13 +91,13 @@ fn toggle_lens_material() -> Glass {
         // separate band; the true branch replaces it.
         .refraction_depth(0.34)
         .refraction_curve(0.45)
-        .optical_zoom(1.95)
+        .optical_zoom(1.3)
         .transmission_refraction(1.0)
         // The reference rim band reads LIGHT with a thin multi-hue edge
         // (T133/T500) — the heavy absorption + full-strength split painted
         // a dark arc and a hot wide amber crescent.
         .meniscus_absorption(0.55)
-        .dispersion(0.9)
+        .dispersion(1.1)
         // The reference press face is the magnified track, not a lit dome —
         // its luma matches the sampled backdrop (toggle-press detail).
         .highlight(0.04)
@@ -506,19 +513,18 @@ mod tests {
     fn toggle_geometry_matches_the_reference_proportions() {
         assert_eq!((TRACK_WIDTH, TRACK_HEIGHT), (63.0, 28.0));
         assert_eq!((THUMB_WIDTH, THUMB_HEIGHT), (37.0, 25.0));
-        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (58.0, 109.0 / 3.0));
+        // Reference hold tile (6.83 px/dp): the dome rim spans
+        // ~31.5 x 24dp — narrower than the resting thumb, wide-flat,
+        // inside the track vertically.
+        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (34.0, 24.5));
+        const { assert!(LENS_WIDTH < THUMB_WIDTH) };
+        const { assert!(LENS_HEIGHT < TRACK_HEIGHT) };
         assert_eq!(
             toggle_lens_material().shape,
             LiquidShape::Capsule,
             "the pressed switch thumb remains a capsule while its optical body inflates"
         );
         assert!((LENS_VERTICAL_OFFSET + 2.0 / 3.0).abs() < 1.0e-6);
-        assert!(
-            ((LENS_HEIGHT - TRACK_HEIGHT) * 0.5 - LENS_VERTICAL_OFFSET - 29.0 / 6.0).abs() < 1.0e-6
-        );
-        assert!(
-            ((LENS_HEIGHT - TRACK_HEIGHT) * 0.5 + LENS_VERTICAL_OFFSET - 7.0 / 2.0).abs() < 1.0e-6
-        );
 
         let mid = interpolate_track_color(
             cranpose_ui_graphics::Color::from_rgb_u8(187, 186, 188),
