@@ -144,10 +144,13 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         .blur_radius(0.0)
         // Reference bubble optic (bottom-bar-click f_0635..f_0665): the
         // face passes the covered cells through at 1:1 — NO magnification;
-        // depth reads from rim refraction + dispersion + edge light alone.
-        // A zoomed face displaces the covered artwork against its
-        // surroundings and the bubble itself reads misplaced.
-        .refraction_depth(0.26)
+        // the etalon's full-face field (depth 1.0: interior spans edge to
+        // center, sin(pow(x,0.25))) leaves the exact center honest while
+        // the rest of the face pulls neighboring cells inward. A shallow
+        // band left a gap-centered flight frame transmitting blank bar
+        // white (the two-cell milk blob); the reference pulls both
+        // neighbor icons into the lens instead.
+        .refraction_depth(1.0)
         .refraction_curve(0.25)
         .dispersion(0.24)
         // Raised milk: the reference's held bubble face lifts modestly
@@ -453,6 +456,7 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
                 // 1.5) read as a two-cell worm.
                 1.0 + (geometry.pose.stretch - 1.0) * activity * TAB_STRAIN_RESPONSE,
             )),
+            zoom_anchor: (0.0, 0.0),
         }),
         activity: Some(activity),
         resting_tint: Some(geometry.resting_tint),
@@ -635,13 +639,30 @@ fn LiquidTabBarLayout(
                             // frames (on-white gesture rows) — contact and
                             // return ride the same animated channel.
                             let lens_activity = lens_activity_anim.get();
-                            // Activation is a SETTLE event: only `selected`
-                            // commits. The color-mask act under the LIVE
-                            // bubble is the LENS MATERIAL's own optic — the
-                            // shader recolors the ink it transmits — never a
-                            // recolor of the cells themselves (an element
-                            // recolor gets refracted into accent smears
-                            // around the bubble rim).
+                            // The color-mask act under the LIVE bubble is the
+                            // LENS MATERIAL's own optic — the shader recolors
+                            // the ink it transmits — never a recolor of the
+                            // cells themselves (an element recolor gets
+                            // refracted into accent smears around the bubble
+                            // rim). The accented CELL follows the lens center
+                            // crossing, not the committed model: a click
+                            // promotes the destination the instant `selected`
+                            // snaps while the bubble is still at the origin
+                            // (on-white-click 0ms: Conversation teal, bubble
+                            // parked at Translate — the reference hands the
+                            // accent off mid-flight).
+                            let visual_index = crate::motion::liquid_visual_index(
+                                selected,
+                                lens_x,
+                                tab_width,
+                                count,
+                                crate::motion::liquid_axis_owns_visual_selection(
+                                    lens_pressed.get(),
+                                    lens_x,
+                                    resting_lens_x,
+                                    tab_width,
+                                ),
+                            );
                             TabCells(
                                 Modifier::empty(),
                                 Rc::clone(&tabs),
@@ -649,7 +670,7 @@ fn LiquidTabBarLayout(
                                 tab_width,
                                 TabCellsSpec {
                                     base_color: tab_base_content_color(colors),
-                                    selected: Some(selected),
+                                    selected: Some(visual_index),
                                     selected_color: tab_selection_content_color(colors),
                                     interactive: true,
                                     selection_only: false,
@@ -990,7 +1011,10 @@ mod tests {
         // A modest raised milk (activity-scaled) — clear enough to keep
         // the wcKSRD face readable, lifted enough to match the held rows.
         assert!(glass.lift.is_some_and(|lift| (0.0..=0.15).contains(&lift)));
-        assert!(glass.refraction_depth < generic_lens.refraction_depth);
+        // The etalon's full-face field: interior spans edge to center so a
+        // gap-centered flight frame pulls both neighbor icons in instead of
+        // transmitting blank bar white (the two-cell milk blob).
+        assert_eq!(glass.refraction_depth, 1.0);
         assert!(glass.refraction_curve < generic_lens.refraction_curve);
         assert!(glass.dispersion < generic_lens.dispersion);
         assert_eq!(glass.blur_radius, Some(0.0));

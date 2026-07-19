@@ -10,8 +10,9 @@ use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader, TileMode,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
     GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM, GLASS_LIGHT_DIRECTION_UNIFORM,
-    GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
-    GLASS_RESTING_TINT_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
+    GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM,
+    GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
+    GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -230,6 +231,12 @@ pub struct GlassMorph {
     /// scene shapes remain fixed so nearby glass can join the travelling
     /// droplet without being dragged through its local deformation.
     pub deformation: Option<GlassDeformation>,
+    /// Offset (dp) of the optical-zoom axis from the primary SDF center. A
+    /// leaning droplet's silhouette shifts toward its travel side while its
+    /// curvature apex stays over the content it rides; anchoring the
+    /// magnification there keeps the face filled by that content instead of
+    /// pulling in whatever lies beyond it.
+    pub zoom_anchor: (f32, f32),
 }
 
 /// A normalized motion axis and reciprocal scales for incompressible glass.
@@ -741,6 +748,16 @@ impl ResolvedGlass {
         shader.set_float(
             GLASS_OPTICAL_ZOOM_UNIFORM,
             1.0 + (self.optical_zoom - 1.0).max(0.0) * activity,
+        );
+        let zoom_anchor = dynamics
+            .morph
+            .as_ref()
+            .map(|morph| morph.zoom_anchor)
+            .unwrap_or((0.0, 0.0));
+        shader.set_float2(
+            GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM,
+            zoom_anchor.0,
+            zoom_anchor.1,
         );
         shader.set_float(121, self.rim_reflection.max(0.001));
         let (ink_color, ink_strength) = self
@@ -1285,6 +1302,7 @@ mod tests {
             bulge_direction: 0.25,
             ellipse_blend: 0.3,
             deformation: Some(deformation),
+            zoom_anchor: (0.0, 0.0),
         };
         let RenderEffect::Shader { shader } = Glass::lens()
             .no_clip()

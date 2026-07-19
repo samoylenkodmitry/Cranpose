@@ -2,7 +2,7 @@
 //! Apache-2.0), rasterized through [`cranpose_ui_graphics::VectorPath`] and
 //! tinted at draw time.
 
-use cranpose_core::remember;
+use cranpose_core::remember_keyed;
 use cranpose_macros::composable;
 use cranpose_ui::widgets::{Box, BoxSpec};
 use cranpose_ui::{Modifier, Size};
@@ -46,6 +46,7 @@ pub const LIST: &str =
     "M4 5h3v3H4V5zm5 0h11v3H9V5zM4 10.5h3v3H4v-3zm5 0h11v3H9v-3zM4 16h3v3H4v-3zm5 0h11v3H9v-3z";
 pub const GRID_OUTLINE: &str = "M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm8-2h8v8h-8v-8zm2 2v4h4v-4h-4z";
 pub const LIST_OUTLINE: &str = "M4 5h2v2H4V5zm5 .25h11v1.5H9v-1.5zM4 11h2v2H4v-2zm5 .25h11v1.5H9v-1.5zM4 17h2v2H4v-2zm5 .25h11v1.5H9v-1.5z";
+pub const SCHEDULE: &str = "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z";
 pub const DOWNLOAD: &str = "M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z";
 pub const EDIT: &str = "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z";
 pub const GEAR: &str = SETTINGS;
@@ -60,9 +61,11 @@ const ICON_VIEW_BOX: f32 = 24.0;
 #[composable]
 #[allow(non_snake_case)]
 pub fn Icon(path: &'static str, size: f32, color: Color) {
-    // The parse is position-cached; scaling happens at draw time so a size
-    // change on recomposition is honored.
-    let parsed = remember(move || VectorPath::parse(path).ok()).with(|parsed| parsed.clone());
+    // The parse cache is keyed on the path: a position-only remember served
+    // a STALE glyph when a reused slot changed icons (the accordion's
+    // "Sections" row inherited the collapsed row's chevron). Scaling happens
+    // at draw time so a size change on recomposition is honored.
+    let parsed = remember_keyed(path, |path| VectorPath::parse(path).ok());
     Box(
         Modifier::empty()
             .size(Size::new(size, size))

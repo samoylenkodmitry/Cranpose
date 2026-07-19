@@ -50,8 +50,8 @@ pub use debug_trace::{
 };
 pub use hooks::{
     derivedStateOf, mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf,
-    mutableStateOf, ownedMutableStateOf, remember, rememberUpdatedState, try_mutableStateOf,
-    useState,
+    mutableStateOf, ownedMutableStateOf, remember, rememberUpdatedState, remember_keyed,
+    try_mutableStateOf, useState,
 };
 #[cfg(feature = "internal")]
 #[doc(hidden)]

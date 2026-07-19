@@ -347,6 +347,7 @@ pub fn LiquidSegmentedControl(
                                         segmented_strain(pose.stretch),
                                     ),
                                 ),
+                                zoom_anchor: (0.0, 0.0),
                             }),
                             ..Default::default()
                         }

@@ -1068,7 +1068,7 @@ fn sort_filter_menu_items(
         );
         items.push(
             LiquidMenuItem::new("Newest to oldest")
-                .icon(icons::GRID_OUTLINE)
+                .icon(icons::SCHEDULE)
                 .checked(sort_choice == 1),
         );
     }

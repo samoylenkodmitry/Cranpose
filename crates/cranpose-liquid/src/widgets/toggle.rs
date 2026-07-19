@@ -51,8 +51,11 @@ const LENS_RELEASE_FADE_MS: u64 = 400;
 fn toggle_track_motion() -> AnimationType {
     // The reference track crosses into sage ~17 ms after release and reaches
     // full green ~150 ms later (toggle-press sheet, 60 fps): a fast-start
-    // sweep with no delay.
-    AnimationType::Tween(AnimationSpec::tween(150, Easing::EaseOut))
+    // sweep with no delay. EaseOut at 150 front-loaded the change and read
+    // fully green ~70 ms in (sheet: ours full at 231 ms vs target 283-300);
+    // 260 keeps the instant sage onset while the tail spans the reference's
+    // ~150 ms of visible progression.
+    AnimationType::Tween(AnimationSpec::tween(260, Easing::EaseOut))
 }
 
 fn toggle_lens_material() -> Glass {
@@ -67,13 +70,16 @@ fn toggle_lens_material() -> Glass {
         // milky wash came from over-absorbing the transmitted ray.
         .saturation(1.0)
         // The reference press optic decomposes as face zoom + etalon rim
-        // (toggle-press T133: the thumb magnified ~1.5x fills the face, the
-        // white well confined to a thin crescent hugging the rim). The
-        // full-dome curve tried to fake the zoom with a deep interior ramp
-        // and pulled the white well into a mid-face ball instead.
+        // (toggle-press T133: the magnified thumb fills the face, the white
+        // well confined to a thin crescent hugging the rim). The full-dome
+        // curve tried to fake the zoom with a deep interior ramp and pulled
+        // the white well into a mid-face ball instead. Coverage geometry
+        // with the zoom anchored on the thumb: the 37dp thumb must span the
+        // 58dp face past a 7dp lean — 18.5·z ≥ 29+7 ⇒ z ≈ 1.95 leaves the
+        // reference's thin crescent at the rim band alone.
         .refraction_depth(0.4)
         .refraction_curve(0.25)
-        .optical_zoom(1.5)
+        .optical_zoom(1.95)
         // The rim wraps the content it crosses back toward the edge — the
         // reference "U" replay on the dome's rim band.
         .fold_depth(6.0)
@@ -433,6 +439,11 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                         bulge_direction: pose.bulge_direction,
                         ellipse_blend: 0.0,
                         deformation: Some(pose.deformation()),
+                        // The magnification stays anchored on the thumb the
+                        // lens rides: the leaning silhouette must not drag
+                        // the optical axis toward the empty well (the white
+                        // bloom on the trailing face).
+                        zoom_anchor: (-lean, 0.0),
                     }),
                     ..Default::default()
                 }
@@ -525,13 +536,14 @@ mod tests {
     #[test]
     fn toggle_track_color_sweeps_on_the_reference_clock() {
         // Measured on the toggle-press sheet (60 fps): sage appears ~17 ms
-        // after release and the sweep completes ~150 ms later — no delay,
-        // fast start.
+        // after release and the visible sweep spans ~150 ms (full green at
+        // 283-300 ms) — no delay, fast start, EaseOut tail stretched so the
+        // front-loaded curve doesn't finish the visible change in ~70 ms.
         let AnimationType::Tween(spec) = toggle_track_motion() else {
             panic!("toggle track color needs a bounded transition");
         };
         assert_eq!(spec.delay_millis, 0);
-        assert_eq!(spec.duration_millis, 150);
+        assert_eq!(spec.duration_millis, 260);
         assert_eq!(spec.easing, Easing::EaseOut);
     }
 

@@ -632,10 +632,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // `interior` so the rim band keeps the wcKSRD edge mapping, and applied
     // outside the transmission attenuation — the face zoom is a projection
     // property, not an edge-refraction one. Pure displacement: white stays
-    // white.
+    // white. The optical axis (uniform 128, dp offset from the SDF center)
+    // can trail a leaning silhouette: the droplet's body leans toward its
+    // travel side while its curvature apex stays over the content it rides
+    // (the toggle thumb) — anchoring the magnification there keeps the face
+    // filled by the ridden content instead of pulling in the well beyond it.
     let optical_zoom = max(get_float(89u), 1.0);
     if optical_zoom > 1.0 && loupe_mode <= 0.5 {
-        base_displacement += sampling_position
+        let zoom_anchor = get_vec2(128u) * dp_scale;
+        base_displacement += (sampling_position - zoom_anchor)
             * (1.0 / optical_zoom - 1.0)
             * optical_sample.interior;
     }

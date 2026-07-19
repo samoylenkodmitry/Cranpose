@@ -446,6 +446,8 @@ pub trait DrawScope {
     fn draw_rect_at_blend(&mut self, rect: Rect, brush: Brush, blend_mode: BlendMode);
     fn draw_round_rect(&mut self, brush: Brush, radii: CornerRadii);
     fn draw_round_rect_blend(&mut self, brush: Brush, radii: CornerRadii, blend_mode: BlendMode);
+    /// Draws a rounded rectangle at the specified position and size.
+    fn draw_round_rect_at(&mut self, rect: Rect, brush: Brush, radii: CornerRadii);
     fn draw_circle(&mut self, brush: Brush, center: Point, radius: f32);
     fn draw_circle_blend(
         &mut self,
@@ -598,6 +600,13 @@ impl DrawScope for DrawScopeDefault {
                 radii,
             },
             blend_mode,
+        );
+    }
+
+    fn draw_round_rect_at(&mut self, rect: Rect, brush: Brush, radii: CornerRadii) {
+        self.push_blended_primitive(
+            DrawPrimitive::RoundRect { rect, brush, radii },
+            BlendMode::SrcOver,
         );
     }
 

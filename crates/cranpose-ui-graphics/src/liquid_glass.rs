@@ -28,6 +28,10 @@ pub const GLASS_FOLD_DEPTH_UNIFORM: usize = 88;
 /// Uniform slot containing the uniform face magnification ratio of a riding
 /// lens (values <= 1 mean no zoom; the rim band keeps the wcKSRD mapping).
 pub const GLASS_OPTICAL_ZOOM_UNIFORM: usize = 89;
+/// Uniform slot (two floats) containing the optical-zoom axis offset from
+/// the SDF center, in dp — a leaning lens magnifies about the content it
+/// rides, not its shifted silhouette.
+pub const GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM: usize = 128;
 /// Uniform slot containing continuous optical activity (identity at zero).
 pub const GLASS_ACTIVITY_UNIFORM: usize = 111;
 /// Uniform slot containing the base surface tint that remains when optical

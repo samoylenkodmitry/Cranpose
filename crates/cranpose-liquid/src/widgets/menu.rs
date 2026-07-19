@@ -159,8 +159,12 @@ const MENU_SOURCE_SEPARATE_END: f32 = 0.06;
 const MENU_CARD_WIDTH_GROW_START: f32 = 0.16;
 const MENU_CARD_HEIGHT_GROW_START: f32 = 0.12;
 const MENU_OVERSHOOT_SCALE: f32 = 0.30;
-const MENU_GROW_STIFFNESS: f32 = 120.0;
-const MENU_REVEAL_STIFFNESS: f32 = 50.0;
+// Spring clocks timed against the menu-open sheet: the reference droplet is
+// still circular at 166 ms, a soft blur at 400 ms and crisp near 533-600 ms;
+// 120/50 had ours fully crisp by ~300-400 ms (~1.4x fast — spring time goes
+// as 1/sqrt(k), so both halve).
+const MENU_GROW_STIFFNESS: f32 = 62.0;
+const MENU_REVEAL_STIFFNESS: f32 = 26.0;
 const MENU_WIDTH_EASE_POWER: f32 = 4.5;
 const MENU_HEIGHT_EASE_POWER: f32 = 18.0;
 const MENU_HEIGHT_OVERSHOOT: f32 = 0.15;
@@ -176,6 +180,9 @@ const MENU_SOURCE_TARGET_Y_PROGRESS: f32 = 0.0;
 const ANCHOR_OVERLAP: f32 = 0.0;
 const ROW_PADDING_X: f32 = 20.0;
 const ROW_PADDING_Y: f32 = 9.25;
+/// Horizontal inset of the expanded accordion header's chip from the panel
+/// edges (menu-expand f_045).
+const CHIP_INSET_X: f32 = 10.0;
 const MENU_CONTENT_INSET_Y: f32 = 9.5;
 /// Width reserved for the leading checkmark column when any item is checkable.
 const CHECK_COLUMN: f32 = 24.0;
@@ -1254,17 +1261,25 @@ pub fn LiquidMenu(
                     .lift(if colors.is_dark { 0.10 } else { 0.58 })
                     .highlight(0.14);
                 let glass = if colors.is_dark {
+                    // Two-point solve on menu-expand f_045: face over the
+                    // dark header (128,83,132) and over the white page
+                    // (90,81,91) — our slope matched but both endpoints sat
+                    // ~+45 luma; the absorption tint carries the drop.
                     glass
                         .contrast(0.37)
-                        .tint(Color::from_rgba_u8(24, 12, 28, 38))
+                        .tint(Color::from_rgba_u8(24, 12, 28, 155))
                 } else {
                     glass
                 };
                 let glass = glass
                     .shadow_style(GlassShadow::new(
-                        Color::BLACK.with_alpha(if colors.is_dark { 0.22 } else { 0.11 }),
-                        26.0,
-                        8.0,
+                        // Measured on menu-expand f_045: the page 15dp from
+                        // the panel edge falls 254 -> ~85 (alpha ~0.65) and
+                        // recovers fully ~150dp out — the dark presentation
+                        // carries a strong, wide ambient, not a card hint.
+                        Color::BLACK.with_alpha(if colors.is_dark { 0.60 } else { 0.11 }),
+                        if colors.is_dark { 44.0 } else { 26.0 },
+                        if colors.is_dark { 10.0 } else { 8.0 },
                         0.0,
                     ))
                     .no_clip();
@@ -1377,6 +1392,7 @@ pub fn LiquidMenu(
                                 bulge_direction: bulge_dir,
                                 ellipse_blend: menu_ellipse_blend(t),
                                 deformation: None,
+                                zoom_anchor: (0.0, 0.0),
                             }),
                             ..Default::default()
                         }
@@ -1523,6 +1539,17 @@ pub fn LiquidMenu(
                                                             );
                                                             continue;
                                                         }
+                                                        // An accordion header with its children
+                                                        // present is EXPANDED: the reference lifts
+                                                        // it onto an inset rounded chip
+                                                        // (menu-expand f_045: chip 145,120,146
+                                                        // over body 90,81,91 — white ~0.33).
+                                                        let expanded_header = item.keeps_open
+                                                            && items.get(index + 1).is_some_and(
+                                                                |next| {
+                                                                    !next.keeps_open && !next.header
+                                                                },
+                                                            );
                                                         menu_item_row(
                                                             index,
                                                             item,
@@ -1531,6 +1558,7 @@ pub fn LiquidMenu(
                                                             colors,
                                                             hovered,
                                                             gesture_hover,
+                                                            expanded_header,
                                                             gesture.item_rect(index),
                                                             Rc::clone(&on_item),
                                                             Rc::clone(&on_dismiss),
@@ -1596,6 +1624,7 @@ fn menu_item_row(
     colors: crate::theme::LiquidColors,
     hovered: cranpose_core::MutableState<Option<usize>>,
     gesture_hover: Option<usize>,
+    expanded_header: bool,
     rect_sink: Rc<Cell<Rect>>,
     on_item: Rc<dyn Fn(usize)>,
     on_dismiss: Rc<dyn Fn()>,
@@ -1660,6 +1689,28 @@ fn menu_item_row(
             }
         })
         .draw_behind(move |scope| {
+            if expanded_header {
+                // The expanded accordion header rides an inset chip: white
+                // lift over the panel body (and over the header bleed at the
+                // panel top it lands on the reference's muted lavender
+                // instead of raw gradient heat).
+                let chip = if colors.is_dark {
+                    Color::WHITE.with_alpha(0.30)
+                } else {
+                    Color::BLACK.with_alpha(0.08)
+                };
+                let size = scope.size();
+                scope.draw_round_rect_at(
+                    Rect {
+                        x: CHIP_INSET_X,
+                        y: 0.0,
+                        width: (size.width - CHIP_INSET_X * 2.0).max(0.0),
+                        height: size.height,
+                    },
+                    Brush::solid(chip),
+                    CornerRadii::uniform(16.0),
+                );
+            }
             if is_hovered {
                 scope.draw_round_rect(Brush::solid(highlight), CornerRadii::uniform(14.0));
             }
@@ -1805,7 +1856,10 @@ mod tests {
         assert!((104.0..=106.0).contains(&overshoot.height));
         assert_eq!(MENU_RADIUS, 32.0);
         assert!((0.045..=0.055).contains(&MENU_GROW_DELAY));
-        assert!((110.0..=130.0).contains(&MENU_GROW_STIFFNESS));
+        // Sheet-timed: the reference droplet is still circular at 166 ms and
+        // crisp near 533-600 ms — stiffness 120 had the panel formed by
+        // ~300 ms.
+        assert!((55.0..=70.0).contains(&MENU_GROW_STIFFNESS));
     }
 
     #[test]
@@ -1817,13 +1871,13 @@ mod tests {
             "the departing oval must be visible by the target's early frame: {source_phase}"
         );
         let (broad_phase, _) =
-            cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.130);
+            cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.180);
         assert!(
             (0.35..=0.60).contains(&broad_phase),
-            "the broad menu body must be established by 130ms: {broad_phase}"
+            "the broad menu body must be established by 180ms: {broad_phase}"
         );
         let (settled_phase, _) =
-            cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.400);
+            cranpose_animation::advance_spring(0.0, 0.0, 1.0, 0.78, MENU_GROW_STIFFNESS, 0.600);
         assert!(settled_phase > 0.95);
     }
 
@@ -1903,7 +1957,9 @@ mod tests {
         assert!(menu_content_blur(birth) > 13.0);
         assert!((7.0..8.0).contains(&menu_content_blur(mid)));
         assert!(menu_content_blur(settle) < 0.5);
-        assert!((45.0..=55.0).contains(&MENU_REVEAL_STIFFNESS));
+        // Sheet-timed with the grow spring: rows sharpen no earlier than the
+        // reference's ~533-600 ms crisp point.
+        assert!((20.0..=32.0).contains(&MENU_REVEAL_STIFFNESS));
         assert!((0.34..=0.37).contains(&menu_content_alpha(0.10)));
         assert!((0.79..=0.82).contains(&menu_content_alpha(0.62)));
         assert_eq!(menu_content_alpha(1.0), 1.0);

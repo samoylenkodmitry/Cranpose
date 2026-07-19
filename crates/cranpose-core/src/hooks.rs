@@ -12,6 +12,33 @@ pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
     composer_context::with_composer(|composer| composer.remember(init))
 }
 
+/// Like [`remember`], but recomputes whenever `key` changes.
+///
+/// A plain `remember` is keyed only by composition position: when a slot is
+/// reused with different inputs (a list row that changes identity, an icon
+/// whose path prop changes), the stale value survives. `remember_keyed`
+/// stores the key beside the value and re-runs `init` on mismatch — the JC
+/// `remember(key1) { ... }` contract.
+#[allow(non_snake_case)]
+pub fn remember_keyed<K, T>(key: K, init: impl FnOnce(&K) -> T) -> T
+where
+    K: PartialEq + 'static,
+    T: Clone + 'static,
+{
+    let slot = remember(|| std::cell::RefCell::new(None::<(K, T)>));
+    slot.with(|cell| {
+        let mut stored = cell.borrow_mut();
+        match &*stored {
+            Some((stored_key, value)) if *stored_key == key => value.clone(),
+            _ => {
+                let value = init(&key);
+                *stored = Some((key, value.clone()));
+                value
+            }
+        }
+    })
+}
+
 /// Returns a [`MutableState`] that always holds the latest value.
 ///
 /// The state **reference** is stable across recompositions; only the **value** updates.
