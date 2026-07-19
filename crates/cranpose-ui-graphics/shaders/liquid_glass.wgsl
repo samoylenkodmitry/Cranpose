@@ -281,6 +281,66 @@ fn wcksrd_optics(
     );
 }
 
+// One wavelength's walk through the SAME continuous lens field: the
+// refractive index scales the ramp length (blue reaches closer to the
+// boundary limit — sample-from-center — than red), so the channels'
+// entire descending branches diverge across the rim band, painting the
+// reference's wide fringe pairs over the compressed re-image. On the
+// face every channel clamps to lens_scale 1 and the split self-cancels.
+// The zoom projection rides the same channel interior; the fold
+// re-image translates all wavelengths alike.
+fn channel_lens_displacement(
+    sampling_position: vec2<f32>,
+    distance: f32,
+    lens_refraction: f32,
+    index_scale: f32,
+    refraction_curve: f32,
+    transmission_refraction: f32,
+    optical_zoom: f32,
+    zoom_anchor: vec2<f32>,
+    loupe_mode: f32,
+    loupe_activity: f32,
+    loupe_magnification: f32,
+    fold_displacement: vec2<f32>,
+) -> vec2<f32> {
+    let interior = clamp(
+        -distance / max(lens_refraction * index_scale, 0.001),
+        0.0,
+        1.0,
+    );
+    let lens_scale = sin(pow(interior, refraction_curve) * 1.57);
+    // The optical axis (zoom_anchor, zero for plain glass) owns the whole
+    // ray: both the projection AND the descending branch pivot on it, so a
+    // leaning silhouette still re-images the RIDDEN content around its own
+    // center — at the boundary limit every rim point compresses to the
+    // anchor, ringing the lens with the content's compressed line
+    // uniformly instead of starving the trailing cap and overshooting the
+    // leading one.
+    let optical_position = sampling_position - zoom_anchor;
+    var displacement = optical_position * (lens_scale - 1.0)
+        * transmission_refraction;
+    if optical_zoom > 1.0 && loupe_mode <= 0.5 {
+        // The projection gate follows the 4th power of the interior — the
+        // dome is thickest at its apex and sheds the zoom well before the
+        // rim band. A linear gate held mid-band samples pinned inside the
+        // ridden content, so the descending branch never revisited the
+        // well around it and the rim re-image lost its white ring + dark
+        // line sequence (the reference "U"). With the steep gate the band
+        // walks OUT to the unzoomed rim content, then the branch carries
+        // it back to the boundary limit — one continuous sweep.
+        let projection_gate = interior * interior * interior * interior;
+        displacement += optical_position
+            * (1.0 / optical_zoom - 1.0)
+            * projection_gate;
+    }
+    if loupe_mode > 0.5 {
+        let rim_bend = sampling_position
+            * ((lens_scale - 1.0) / loupe_magnification);
+        displacement = mix(displacement, rim_bend, loupe_activity);
+    }
+    return displacement + fold_displacement;
+}
+
 // Cheap screen-space hash for the anti-banding dither.
 fn hash12(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
@@ -625,54 +685,47 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let interior = optical_sample.interior;
 
     let transmission_refraction = clamp(get_float(96u), 0.0, 1.0);
-    var base_displacement = optical_sample.source_displacement
-        * transmission_refraction;
     // Uniform face magnification (uniform 89, dp-free ratio): the riding
     // lens projects its backdrop enlarged across the whole face. Blended by
-    // `interior` so the rim band keeps the wcKSRD edge mapping, and applied
-    // outside the transmission attenuation — the face zoom is a projection
-    // property, not an edge-refraction one. Pure displacement: white stays
-    // white. The optical axis (uniform 128, dp offset from the SDF center)
-    // can trail a leaning silhouette: the droplet's body leans toward its
-    // travel side while its curvature apex stays over the content it rides
-    // (the toggle thumb) — anchoring the magnification there keeps the face
-    // filled by the ridden content instead of pulling in the well beyond it.
+    // the channel interior so the rim band keeps the wcKSRD edge mapping,
+    // and applied outside the transmission attenuation — the face zoom is a
+    // projection property, not an edge-refraction one. Pure displacement:
+    // white stays white. The optical axis (uniform 128, dp offset from the
+    // SDF center) can trail a leaning silhouette: the droplet's body leans
+    // toward its travel side while its curvature apex stays over the content
+    // it rides (the toggle thumb) — anchoring the magnification there keeps
+    // the face filled by the ridden content instead of pulling in the well
+    // beyond it.
     let optical_zoom = max(get_float(89u), 1.0);
-    if optical_zoom > 1.0 && loupe_mode <= 0.5 {
-        let zoom_anchor = get_vec2(128u) * dp_scale;
-        base_displacement += (sampling_position - zoom_anchor)
-            * (1.0 / optical_zoom - 1.0)
-            * optical_sample.interior;
-    }
+    let zoom_anchor = get_vec2(128u) * dp_scale;
     // Displacement that translates the image without bending the ray (the
     // loupe's focus offset — optically a flat-slab shift). Translation does
-    // not disperse; only the ray-bend components in base_displacement carry
-    // the chromatic split below.
+    // not disperse; only the ray-bend components built per channel below
+    // carry the chromatic split.
     var achromatic_displacement = vec2<f32>(0.0);
     var loupe_rim_softening = 0.0;
+    var loupe_activity = 0.0;
+    var loupe_magnification = 1.0;
     if loupe_mode > 0.5 {
-        let loupe_activity = clamp(get_float(90u), 0.0, 1.0);
+        loupe_activity = clamp(get_float(90u), 0.0, 1.0);
         let focus_px = get_vec2(81u) * dp_scale;
         var m0 = get_float(83u);
         if m0 <= 0.0 {
             m0 = 1.0;
         }
-        let m = max(m0, 0.2);
+        loupe_magnification = max(m0, 0.2);
         // The single wcKSRD field, centered on the offset focus: deep in the
         // face lens_scale = 1 and the whole interior shows the focus
         // neighbourhood magnified by m; toward the rim the SAME sweep that
         // shapes surface glass walks the sample back to the focus point,
         // replaying the content between them inverted — the drop optic's
-        // bottom-edge wrap — with C1 continuity everywhere.
+        // bottom-edge wrap — with C1 continuity everywhere. The field
+        // p·(lens_scale/m − 1) decomposes exactly into a pure magnification
+        // p·(1/m − 1) plus the rim bend p·(lens_scale − 1)/m; only the bend
+        // disperses (channel_lens_displacement), the magnified face stays
+        // achromatic like the reference loupe glyphs.
         let lens_scale = sin(pow(interior, refraction_curve) * 1.57);
-        // The single field p·(lens_scale/m − 1) decomposes exactly into a
-        // pure magnification p·(1/m − 1) plus the rim bend
-        // p·(lens_scale − 1)/m. Only the bend disperses: the reference
-        // loupe's magnified glyphs are fully achromatic inside the face
-        // (loupe sheet), while the rim sweep keeps its chromatic split.
-        let rim_bend = p * ((lens_scale - 1.0) / m);
-        let pure_zoom = p * (1.0 / m - 1.0);
-        base_displacement = mix(base_displacement, rim_bend, loupe_activity);
+        let pure_zoom = p * (1.0 / loupe_magnification - 1.0);
         achromatic_displacement = (focus_px + pure_zoom) * loupe_activity;
         // Near the rim the sweep minifies the face text hard enough that
         // single sharp taps hit isolated white glyph pixels as round
@@ -688,6 +741,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // the rim, the reference toggle's "U". No color terms ride on it, so
     // white surround mirrors white and colored tracks mirror themselves.
     let fold_depth_px = get_float(88u) * optical_scale;
+    var fold_displacement = vec2<f32>(0.0);
     var fold_absorb = 0.0;
     if loupe_mode <= 0.5 && fold_depth_px > 0.0 {
         let r_in_fold = max(0.5 * min(rect_size.x, rect_size.y), 1.0);
@@ -702,14 +756,27 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                 1.0,
             );
             let fold_presence = smoothstep(0.0, 0.12, fold_tau);
-            base_displacement = base_displacement
-                + outward_normal * (s_units - xr) * r_in_fold * fold_presence;
+            fold_displacement = outward_normal * (s_units - xr) * r_in_fold * fold_presence;
             // Grazing rays traverse the folded material twice: the return
             // darkens by the transmitted color itself near the rim (sage
             // doubles into its saturated turn line; white stays white).
             fold_absorb = smoothstep(0.62, 1.0, fold_tau) * 0.35;
         }
     }
+    let base_displacement = channel_lens_displacement(
+        sampling_position,
+        d,
+        lens_refraction,
+        1.0,
+        refraction_curve,
+        transmission_refraction,
+        optical_zoom,
+        zoom_anchor,
+        loupe_mode,
+        loupe_activity,
+        loupe_magnification,
+        fold_displacement,
+    );
 
     // wcKSRD owns source mapping and backdrop blur.
     let wcksrd_blur_radius = max(max(get_float(93u), 0.0), loupe_rim_softening);
@@ -724,27 +791,54 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     var rgb = transmitted_path.rgb;
     if dispersion_strength > 0.0 {
         // Chromatic transmission as ONE continuous ray model: each channel
-        // walks the SAME displacement field at a slightly different
-        // refractive power (blue bends more than red, as in real glass).
-        // The split is proportional to the local displacement, so it
-        // self-cancels on the flat face and grows exactly where the ray
-        // bends — the rim ring, the fold replay, the loupe sweep, the
-        // magnified thumb edge — with no band masks and no separate
-        // spectral path. Green rides the already-sampled transmitted ray;
-        // everything downstream (fold absorption, meniscus, ink recolor,
-        // tone) operates on the merged chromatic transmission.
-        let chroma = dispersion_strength * 0.16;
+        // walks the SAME lens field at its own refractive index (blue bends
+        // more than red, as in real glass). The index scales the ramp
+        // length, so blue lands nearer the boundary limit — the compressed
+        // re-image of the interior — than red, and the channels' whole
+        // descending branches diverge across the rim band. On the face
+        // every channel clamps to lens_scale 1 and the split self-cancels;
+        // no band masks and no separate spectral path. Green rides the
+        // already-sampled transmitted ray; everything downstream (fold
+        // absorption, meniscus, ink recolor, tone) operates on the merged
+        // chromatic transmission.
+        let index_spread = dispersion_strength * 0.16;
         let red_path = sample_wcksrd_path(
             uv,
             tex_size,
-            achromatic_displacement + base_displacement * (1.0 - chroma),
+            achromatic_displacement + channel_lens_displacement(
+                sampling_position,
+                d,
+                lens_refraction,
+                1.0 - index_spread,
+                refraction_curve,
+                transmission_refraction,
+                optical_zoom,
+                zoom_anchor,
+                loupe_mode,
+                loupe_activity,
+                loupe_magnification,
+                fold_displacement,
+            ),
             wcksrd_blur_radius,
             loupe_mode > 0.5,
         );
         let blue_path = sample_wcksrd_path(
             uv,
             tex_size,
-            achromatic_displacement + base_displacement * (1.0 + chroma),
+            achromatic_displacement + channel_lens_displacement(
+                sampling_position,
+                d,
+                lens_refraction,
+                1.0 + index_spread,
+                refraction_curve,
+                transmission_refraction,
+                optical_zoom,
+                zoom_anchor,
+                loupe_mode,
+                loupe_activity,
+                loupe_magnification,
+                fold_displacement,
+            ),
             wcksrd_blur_radius,
             loupe_mode > 0.5,
         );

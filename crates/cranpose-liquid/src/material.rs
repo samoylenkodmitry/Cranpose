@@ -154,6 +154,12 @@ pub struct GlassDynamics {
     /// surface concentrates saturation and a soft light in a radial
     /// gradient under the finger (never a flat recolor).
     pub touch: Option<(f32, f32, f32)>,
+    /// Dome press depth: how squashed the interactive dome is. At 1 the
+    /// pressed dome refracts deep and vivid (wide rim band, strong
+    /// chromatic split — the reference toggle's gray-hold rainbow); toward
+    /// 0 the released bead relaxes shallow and its split fades with it
+    /// (the reference's thin settled ring). `None` = 1.
+    pub press_depth: Option<f32>,
 }
 
 fn foreground_is_dark(foreground: Color) -> bool {
@@ -730,12 +736,16 @@ impl ResolvedGlass {
             shader.set_float2(0, 0.0, 0.0);
             shader.set_float(6, self.shape.shader_radius_px(density));
         }
-        shader.set_float(9, self.refraction_depth * activity);
+        let press_depth = dynamics.press_depth.unwrap_or(1.0).clamp(0.0, 1.0);
+        shader.set_float(9, self.refraction_depth * activity * press_depth);
         shader.set_float(
             GLASS_REFRACTION_CURVE_UNIFORM,
             self.refraction_curve * activity,
         );
-        shader.set_float(GLASS_DISPERSION_UNIFORM, self.dispersion * activity);
+        shader.set_float(
+            GLASS_DISPERSION_UNIFORM,
+            self.dispersion * activity * press_depth,
+        );
         shader.set_float(
             GLASS_TRANSMISSION_REFRACTION_UNIFORM,
             self.transmission_refraction * activity,

@@ -63,32 +63,34 @@ fn toggle_lens_material() -> Glass {
         .shape(LiquidShape::Capsule)
         .tint(cranpose_ui_graphics::Color::WHITE.with_alpha(0.02))
         // The original wcKSRD blurs inside the lens (its 9x9 loop at half-px
-        // steps): content edges under the dome read soft, never cut.
-        .blur_radius(2.0)
+        // steps): content edges under the dome read soft, never cut. 2.0
+        // washed the rim band's fringe pairs below visibility.
+        .blur_radius(1.5)
         // The reference lens transmits the track at full saturation with a
         // clear face and vivid chromatic rim (toggle-press cheatsheet); the
         // milky wash came from over-absorbing the transmitted ray.
         .saturation(1.0)
         // The reference press optic decomposes as face zoom + etalon rim
         // (toggle-press T133: the magnified thumb fills the face, the white
-        // well confined to a thin crescent hugging the rim). The full-dome
-        // curve tried to fake the zoom with a deep interior ramp and pulled
-        // the white well into a mid-face ball instead. Coverage geometry
-        // with the zoom anchored on the thumb: the 37dp thumb must span the
-        // 58dp face past a 7dp lean — 18.5·z ≥ 29+7 ⇒ z ≈ 1.95 leaves the
-        // reference's thin crescent at the rim band alone.
-        .refraction_depth(0.4)
-        .refraction_curve(0.25)
+        // well confined to a thin crescent hugging the rim). Coverage
+        // geometry with the zoom anchored on the thumb: the 37dp thumb must
+        // span the 58dp face past a 7dp lean — 18.5·z ≥ 29+7 ⇒ z ≈ 1.95.
+        // The rim band is the descending branch run to its boundary limit:
+        // curve near 1 removes the x^0.25 step at the silhouette so the
+        // sweep to the lens CENTER spans the whole ~6dp band (depth·29dp
+        // inradius) — the compressed dark thumb line rings the rim and the
+        // per-channel index split fans it into the reference's gray-phase
+        // rainbow (zoomed f_008). The fold is this same re-image faked as a
+        // separate band; the true branch replaces it.
+        .refraction_depth(0.34)
+        .refraction_curve(0.45)
         .optical_zoom(1.95)
-        // The rim wraps the content it crosses back toward the edge — the
-        // reference "U" replay on the dome's rim band.
-        .fold_depth(6.0)
         .transmission_refraction(1.0)
         // The reference rim band reads LIGHT with a thin multi-hue edge
         // (T133/T500) — the heavy absorption + full-strength split painted
         // a dark arc and a hot wide amber crescent.
         .meniscus_absorption(0.55)
-        .dispersion(0.50)
+        .dispersion(0.9)
         // The reference press face is the magnified track, not a lit dome —
         // its luma matches the sampled backdrop (toggle-press detail).
         .highlight(0.04)
@@ -241,6 +243,17 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             toggle_lens_release()
         },
         "toggle-lens",
+    );
+    // Dome press physics: the held dome is squashed deep (wide vivid rim
+    // band — the reference gray-hold rainbow); on release it relaxes to a
+    // shallow bead over the flight (the reference's thin settled ring with
+    // faint sparks). Raised-ness (lens_progress) and press depth are
+    // distinct: the lens stays raised through the whole flight while its
+    // optics relax the moment the finger lifts.
+    let press_depth = animateFloatAsState(
+        if pressed.get() { 1.0 } else { 0.45 },
+        AnimationType::Tween(AnimationSpec::tween(220, Easing::EaseOut)),
+        "toggle-press-depth",
     );
 
     let on_change = std::rc::Rc::new(on_change);
@@ -428,6 +441,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                 let lean = travel_dir.get() * LENS_TRAVEL_LEAN * grow.clamp(0.0, 1.0);
                 GlassDynamics {
                     activity: Some(grow.clamp(0.0, 1.0)),
+                    press_depth: Some(press_depth.get()),
                     morph: Some(GlassMorph {
                         node_size: (node_w, node_h),
                         primary: (node_w * 0.5 + lean, node_h * 0.5, base_w, base_h, -1.0),

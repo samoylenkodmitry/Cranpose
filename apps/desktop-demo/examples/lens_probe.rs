@@ -11,6 +11,8 @@ use std::time::Duration;
 
 const NODE_W: f32 = 78.0;
 const NODE_H: f32 = 59.0;
+const LENS_W: f32 = 58.0;
+const LENS_H: f32 = 109.0 / 3.0;
 
 #[cranpose::composable]
 #[allow(non_snake_case)]
@@ -22,7 +24,10 @@ fn ProbeApp() {
             }),
             BoxSpec::default(),
             || {
-                // Two-tone backdrop: green capsule (the "track") on white card.
+                // Toggle gray-HOLD backdrop, exactly like the live widget at
+                // 132ms: white card, light-gray track capsule, NO thumb (it
+                // melts into the glass). The only content transitions are the
+                // track<->card edges — the ring must be built from them.
                 CBox(
                     Modifier::empty()
                         .offset(80.0, 100.0)
@@ -42,15 +47,15 @@ fn ProbeApp() {
                         .size(Size::new(63.0, 28.0))
                         .draw_behind(|scope| {
                             scope.draw_round_rect(
-                                Brush::solid(Color::from_rgb_u8(52, 199, 89)),
+                                Brush::solid(Color::from_rgb_u8(229, 229, 234)),
                                 cranpose::CornerRadii::uniform(14.0),
                             );
                         }),
                     BoxSpec::default(),
                     || {},
                 );
-                // The lens node: overhangs the green capsule's right end,
-                // exactly like the pressed toggle lens.
+                // The lens node: the hold dome centered on the track's thumb
+                // side, node padded like the widget's headroom.
                 let lens = Modifier::empty()
                     .required_size(Size::new(NODE_W, NODE_H))
                     .offset(120.0, 140.0 + (28.0 - NODE_H) * 0.5)
@@ -59,11 +64,23 @@ fn ProbeApp() {
                         ..Default::default()
                     })
                     .glass_effect_with(
-                        Glass::lens().shape(LiquidShape::Capsule).no_clip(),
+                        Glass::lens()
+                            .shape(LiquidShape::Capsule)
+                            .tint(Color::WHITE.with_alpha(0.02))
+                            .blur_radius(1.2)
+                            .saturation(1.0)
+                            .refraction_depth(0.30)
+                            .refraction_curve(0.45)
+                            .optical_zoom(1.95)
+                            .transmission_refraction(1.0)
+                            .meniscus_absorption(0.55)
+                            .dispersion(1.0)
+                            .highlight(0.04)
+                            .no_clip(),
                         move || GlassDynamics {
                             morph: Some(GlassMorph {
                                 node_size: (NODE_W, NODE_H),
-                                primary: (NODE_W * 0.5, NODE_H * 0.5, 58.0, 39.0, -1.0),
+                                primary: (NODE_W * 0.5, NODE_H * 0.5, LENS_W, LENS_H, -1.0),
                                 shapes: Vec::new(),
                                 glue: 0.0,
                                 wobble_amplitude: 0.0,
