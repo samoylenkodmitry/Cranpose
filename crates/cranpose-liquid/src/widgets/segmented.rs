@@ -15,12 +15,26 @@ use cranpose_ui::widgets::{
     Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Row, RowSpec, Text,
 };
 use cranpose_ui::{Modifier, PointerInputScope, Size};
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, TileMode};
 use cranpose_ui_layout::Alignment;
 use std::rc::Rc;
 
-const SEGMENT_HEIGHT: f32 = 36.0;
+/// Reference control height: the marker capsule crop is 130px at the
+/// recording's 2.89 px/dp = 45dp total, 41dp inside the track padding.
+const SEGMENT_HEIGHT: f32 = 41.0;
 const TRACK_PADDING: f32 = 2.0;
+/// The light-scheme selection marker is a RECESSED capsule pressed into
+/// the white surface, not a white pill: base fill is black at 3.9%
+/// (marker 244 on the 254 page), deepening to 8.7% (232) across the top
+/// shade band — measured on segmented/drag f_130 and confirmed moving
+/// with the selection on tap-flight f_045. The surface outside the
+/// marker is bare page white; a filled gray track does not exist in the
+/// reference.
+const MARKER_FILL_ALPHA: f32 = 0.039;
+const MARKER_TOP_SHADE_ALPHA: f32 = 0.087;
+/// Top shade depth over the marker height (232 -> 244 across ~5.5dp of
+/// the 45dp capsule).
+const MARKER_TOP_SHADE_BAND: f32 = 0.12;
 /// How far the interaction lens pokes past the track vertically. With the
 /// lift scale this lands the raised body at ~1.4x the track height — the
 /// reference finger oval (segmented-drag f_025). The oval is ONE
@@ -93,14 +107,19 @@ pub fn LiquidSegmentedControl(
 
     let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
 
-    let track_fill = colors.fill;
+    // Light scheme: the reference control body is bare page white — only
+    // the recessed marker and the raised lens are visible. Dark keeps a
+    // filled track for contrast.
+    let track_fill = colors.is_dark.then_some(colors.fill);
     let track = Modifier::empty()
         .height(SEGMENT_HEIGHT + TRACK_PADDING * 2.0)
         .draw_behind(move |scope| {
-            scope.draw_round_rect(
-                Brush::solid(track_fill),
-                CornerRadii::uniform((SEGMENT_HEIGHT + TRACK_PADDING * 2.0) * 0.5),
-            );
+            if let Some(fill) = track_fill {
+                scope.draw_round_rect(
+                    Brush::solid(fill),
+                    CornerRadii::uniform((SEGMENT_HEIGHT + TRACK_PADDING * 2.0) * 0.5),
+                );
+            }
         });
 
     Box(track.then(modifier), BoxSpec::default(), move || {
@@ -166,10 +185,24 @@ pub fn LiquidSegmentedControl(
                 },
                 "segmented-lens",
             );
-            let indicator_color = if colors.is_dark {
-                Color::from_rgba_u8(90, 90, 96, 240)
+            let indicator_brush = if colors.is_dark {
+                Brush::solid(Color::from_rgba_u8(90, 90, 96, 240))
             } else {
-                Color::WHITE
+                // The recessed marker: translucent black over whatever
+                // surface hosts the control, so no gray is invented.
+                Brush::vertical_gradient_stops(
+                    vec![
+                        (0.0, Color::rgba(0.0, 0.0, 0.0, MARKER_TOP_SHADE_ALPHA)),
+                        (
+                            MARKER_TOP_SHADE_BAND,
+                            Color::rgba(0.0, 0.0, 0.0, MARKER_FILL_ALPHA),
+                        ),
+                        (1.0, Color::rgba(0.0, 0.0, 0.0, MARKER_FILL_ALPHA)),
+                    ],
+                    0.0,
+                    SEGMENT_HEIGHT,
+                    TileMode::Clamp,
+                )
             };
             let indicator_axis = Rc::clone(&lens_axis);
             // Direct manipulation: while the lens gesture owns the control
@@ -211,7 +244,7 @@ pub fn LiquidSegmentedControl(
                 })
                 .draw_behind(move |scope| {
                     scope.draw_round_rect(
-                        Brush::solid(indicator_color),
+                        indicator_brush.clone(),
                         CornerRadii::uniform(SEGMENT_HEIGHT * 0.5),
                     );
                 });
@@ -323,10 +356,12 @@ pub fn LiquidSegmentedControl(
                     // sheet, T 500/2000ms).
                     Glass::lens()
                         .shape(LiquidShape::Capsule)
-                        .tint(Color::rgba(1.0, 1.0, 1.0, 0.02))
-                        // The reference body is invisible inside the track:
-                        // no drop shadow under the riding lens.
-                        .shadow(false)
+                        // The raised oval's interior reads a few percent
+                        // darker than the page (segmented-drag f_025..f_055
+                        // interiors 236..244 on 254) and it casts a soft
+                        // drop shadow while lifted.
+                        .tint(Color::rgba(0.0, 0.0, 0.0, 0.03))
+                        .shadow(true)
                         .rim_reflection(0.12)
                         // The full continuous wcKSRD dome (example/
                         // shaders.txt): glyph warps and rim replay come from
