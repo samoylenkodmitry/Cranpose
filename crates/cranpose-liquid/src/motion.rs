@@ -273,12 +273,15 @@ impl LiquidLensGesture {
     }
 }
 
-/// Drives one pointer interaction for a lens strip: touch-down ATTRACTS the
-/// lens toward the finger (a glide, never a teleport), movement past the
-/// slop attaches the lens directly, release commits the covered cell and
-/// glides the lens to its resting place, cancel returns to the controlled
-/// selection. The tab bar and segmented control both run exactly this
-/// machine — only their clamp rules and feedback hooks differ.
+/// Drives one pointer interaction for a lens strip: touch-down lifts the
+/// lens IN PLACE (the reference press swells the selected pill where it
+/// rests — segmented tap-flight 0-380ms, on-white f_0040 — the finger's
+/// hold duration IS the visible dwell), movement past the slop ATTRACTS
+/// the lens toward the finger (a glide, never a teleport) and attaches it
+/// once caught, release commits the covered cell and FLIES the lens there,
+/// cancel returns to the controlled selection. The tab bar and segmented
+/// control both run exactly this machine — only their clamp rules and
+/// feedback hooks differ.
 pub(crate) async fn liquid_lens_gesture(
     scope: cranpose_ui::PointerInputScope,
     gesture: LiquidLensGesture,
@@ -298,13 +301,13 @@ pub(crate) async fn liquid_lens_gesture(
                         active_pointer = Some(event.id);
                         down_x = event.position.x;
                         moved = false;
+                        // The press lifts the pill where it RESTS — no axis
+                        // motion. The reference tap charges the selected
+                        // pill in place for the whole hold and only flies on
+                        // release; gliding toward the finger here departed
+                        // the origin within a frame of touch-down.
                         (gesture.on_pressed)(true);
                         (gesture.on_touch)(event.position.x, event.position.y);
-                        gesture.axis.release_to(
-                            (gesture.drag_left)(event.position.x),
-                            event.time_ms,
-                            LiquidMotion::glide(),
-                        );
                         default_haptics().perform(HapticFeedback::Selection);
                         event.consume();
                     }
@@ -315,12 +318,20 @@ pub(crate) async fn liquid_lens_gesture(
                         // into the direct axis teleports the lens to the
                         // finger — the intermittent "snap instead of flight".
                         if moved {
-                            if !gesture.axis.is_dragging() {
+                            let target = (gesture.drag_left)(event.position.x);
+                            if gesture.axis.is_dragging() {
+                                gesture.axis.move_to(target, event.time_ms);
+                            } else if (gesture.axis.value() - target).abs()
+                                <= gesture.cell_width * 0.6
+                            {
+                                // Caught up with the finger: attach directly.
                                 gesture.axis.begin(gesture.axis.value(), event.time_ms);
+                                gesture.axis.move_to(target, event.time_ms);
+                            } else {
+                                // Far grab: ATTRACT the lens toward the
+                                // finger first (a glide, never a teleport).
+                                gesture.axis.settle_to(target, LiquidMotion::glide());
                             }
-                            gesture
-                                .axis
-                                .move_to((gesture.drag_left)(event.position.x), event.time_ms);
                         }
                         (gesture.on_touch)(event.position.x, event.position.y);
                         event.consume();

@@ -266,10 +266,17 @@ fn capture_segmented(robot: &cranpose::Robot, shot_dir: &Path) {
     // like the reference.
     robot.click(ex, y).expect("prime errored");
     settle(robot, 900);
-    robot.click(sx, y).expect("tap sending");
-    let mut tap_offsets = dense(25.0, 13);
-    tap_offsets.extend_from_slice(&[(50.0, true), (100.0, true), (150.0, true)]);
-    let frames = keyframe_series(robot, &tap_offsets, 0.0);
+    // The reference tap is a HELD press (~380ms finger-down: the selected
+    // pill charges in place for the whole hold — tap-flight f_0000..0383 —
+    // and the flight leaves on release). Reproduce the recorded finger,
+    // not an instant click.
+    robot.mouse_move(sx, y).expect("hover sending");
+    robot.mouse_down().expect("press sending");
+    let mut frames = keyframe_series(robot, &dense(25.0, 16), 0.0);
+    robot.mouse_up().expect("release sending");
+    let mut flight_offsets = dense(25.0, 12);
+    flight_offsets.extend_from_slice(&[(50.0, true), (100.0, true), (150.0, true)]);
+    frames.extend(keyframe_series(robot, &flight_offsets, 400.0));
     save_series(shot_dir, "segmented-tap-flight", crop, frames.iter());
     settle(robot, 700);
 
