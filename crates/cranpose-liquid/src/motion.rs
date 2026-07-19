@@ -30,7 +30,10 @@ pub(crate) fn liquid_visual_index(
     if !lens_owns_selection || !lens_position.is_finite() || item_width <= f32::EPSILON {
         return selected;
     }
-    (lens_position / item_width)
+    // The cell containing the lens CENTER: flooring the left edge promoted
+    // the destination label the instant a leftward flight departed (the
+    // reference promotes as the bubble crosses into the cell, mid-flight).
+    ((lens_position + item_width * 0.5) / item_width)
         .floor()
         .clamp(0.0, count.saturating_sub(1) as f32) as usize
 }
@@ -418,8 +421,12 @@ mod tests {
     #[test]
     fn direct_manipulation_owns_visual_selection_until_the_lens_reaches_state() {
         assert_eq!(liquid_visual_index(2, 0.0, 78.0, 4, false), 2);
+        // Center-based: the lens LEFT at 2.0 cells puts its center in cell 2.
         assert_eq!(liquid_visual_index(0, 2.0 * 78.0, 78.0, 4, true), 2);
-        assert_eq!(liquid_visual_index(0, 2.71 * 78.0, 78.0, 4, true), 2);
+        // A leftward flight departing cell 2 keeps cell 2 until mid-crossing.
+        assert_eq!(liquid_visual_index(0, 1.6 * 78.0, 78.0, 4, true), 2);
+        assert_eq!(liquid_visual_index(0, 1.4 * 78.0, 78.0, 4, true), 1);
+        assert_eq!(liquid_visual_index(0, 2.71 * 78.0, 78.0, 4, true), 3);
         assert_eq!(liquid_visual_index(0, 3.0 * 78.0, 78.0, 4, true), 3);
         assert_eq!(liquid_visual_index(0, 99.0 * 78.0, 78.0, 4, true), 3);
         assert_eq!(liquid_visual_index(9, f32::NAN, 78.0, 4, true), 3);
