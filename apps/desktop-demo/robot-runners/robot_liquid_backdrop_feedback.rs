@@ -75,13 +75,9 @@ fn main() -> ExitCode {
                 .iter()
                 .map(|shot| luma(sample_rgb(shot, px, py)))
                 .collect();
-            println!(
-                "backdrop-feedback pill=({px:.1},{py:.1}) times={times:?} lumas={lumas:?}"
-            );
+            println!("backdrop-feedback pill=({px:.1},{py:.1}) times={times:?} lumas={lumas:?}");
 
-            let Some(first_materialized) = lumas
-                .iter()
-                .position(|&l| l >= MATERIALIZED_LUMA_FLOOR)
+            let Some(first_materialized) = lumas.iter().position(|&l| l >= MATERIALIZED_LUMA_FLOOR)
             else {
                 fail(
                     &robot,

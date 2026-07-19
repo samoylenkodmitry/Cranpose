@@ -1231,6 +1231,19 @@ pub fn LiquidMenu(
                 // instead of transmitting it.
                 let glass = Glass::regular()
                     .shape(LiquidShape::RoundedRect(MENU_RADIUS))
+                    // The frost foreground must be THIS menu's label color:
+                    // glass_effect_with re-resolves the theme inside the
+                    // popup content closure, which executes under the HOST
+                    // theme — a dark menu on a light app inherited the
+                    // light label (17,17,20) and the black-on-black
+                    // protection lifted the panel over its dark purple
+                    // header (+0.47 luma — the mauve band that defied every
+                    // tone calibration; identity-material probe matched the
+                    // frost arithmetic to 4 gray levels).
+                    // Strength 0.18: the reference body holds luma ~0.51
+                    // under white rows (menu-expand f_020 mid); 0.65 dimmed
+                    // it to 0.32.
+                    .adaptive_frost(colors.label, 0.18)
                     // iOS-scale frost: the reference panel smears the bright
                     // magenta pill beneath into a full-width bloom band
                     // (menu-expand f_020 top third) and washes mid-phase
