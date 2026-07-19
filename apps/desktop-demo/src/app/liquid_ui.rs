@@ -1919,12 +1919,25 @@ pub fn LiquidUiTab() {
                         menu_state.get(),
                         menu_anchor,
                         LiquidMenuSpec::default(),
-                        vec![LiquidMenuAbsorbedSource::new(
-                            menu_absorbed,
-                            absorbed_button_spec.clone(),
-                            36.0,
-                            icons::FILTER,
-                        )],
+                        vec![
+                            LiquidMenuAbsorbedSource::new(
+                                menu_absorbed,
+                                absorbed_button_spec.clone(),
+                                36.0,
+                                icons::FILTER,
+                            ),
+                            // The tapped "…" itself: its trigger backdrop
+                            // unmounts instantly, so without a replica the
+                            // glyph pops out within a frame — the reference
+                            // keeps it readable under the growing droplet
+                            // and ghosts it out gradually.
+                            LiquidMenuAbsorbedSource::new(
+                                menu_anchor,
+                                GlassButtonSpec::glass(),
+                                40.0,
+                                icons::MORE_HORIZ,
+                            ),
+                        ],
                         vec![
                             LiquidMenuItem::new("List")
                                 .icon(icons::LIST_OUTLINE)

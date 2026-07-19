@@ -564,7 +564,12 @@ fn menu_morph_geometry(
         interpolate_menu_shape(start, target, phase.width, phase.height)
     };
     if expanded && phase.path >= MENU_SOURCE_SEPARATE_END {
-        primary.center_y = source.center_y + (target.center_y - source.center_y) * phase.path;
+        // The droplet stays PINNED at its birth anchor while it swells
+        // (reference 66-166ms: the blob grows on the filter button) and
+        // only then descends to the panel position — a linear descent had
+        // it drifting low from the first frames.
+        let descent = smoothstep(0.10, 0.90, phase.path);
+        primary.center_y = source.center_y + (target.center_y - source.center_y) * descent;
         primary.center_y += menu_vertical_rebound(phase.path);
     }
     let blob_radius = primary.height * 0.5;
@@ -623,15 +628,19 @@ fn menu_absorbed_visual_phase(appear: f32, path: f32) -> MenuAbsorbedVisualPhase
     let shrink = smoothstep(0.0, 0.24, path);
     let base_scale = 1.0 - 0.25 * shrink;
     let stretch = smoothstep(0.30, 0.56, path);
-    let handoff = smoothstep(0.0, 0.035, appear);
+    // The neighbor stays fully readable past ~100ms of the open (menu-open
+    // sheet: the reference "…" is crisp at 66-100ms), dims to a ghost as
+    // the droplet thickens over it (~150-250ms on the grow spring), and
+    // melts away by ~350ms.
+    let handoff = smoothstep(0.30, 0.55, appear);
     let readable_alpha = 1.0 + (0.40 - 1.0) * handoff;
     // Once swallowed, the source is a chip-sized smudge the droplet's own
     // frost dissolves — the reference shows only a faint ghost of the blue
     // chip through the growing glass, never a hot stretched orb.
     MenuAbsorbedVisualPhase {
-        foreground_alpha: readable_alpha * (1.0 - smoothstep(0.16, 0.36, path)),
-        backdrop_alpha: 0.62 * smoothstep(0.16, 0.36, path),
-        foreground_blur: 7.0 * smoothstep(0.16, 0.36, path),
+        foreground_alpha: readable_alpha * (1.0 - smoothstep(0.45, 0.85, path)),
+        backdrop_alpha: 0.62 * smoothstep(0.45, 0.85, path),
+        foreground_blur: 7.0 * smoothstep(0.45, 0.85, path),
         scale_x: base_scale * (1.0 + 0.20 * stretch),
         scale_y: base_scale * (1.0 + 0.28 * stretch),
     }
@@ -1292,6 +1301,13 @@ pub fn LiquidMenu(
                     remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
                 let glow_for_glass = Rc::clone(&glow_point);
                 let glass_node_origin = node_origin;
+                // The dark menu's low-activity body: bright frosted milk
+                // (menu-expand 400-466ms reads a gray-white blob over the
+                // purple header). The light menu keeps its transparent
+                // birth — its material is already near-white.
+                let birth_milk = colors
+                    .is_dark
+                    .then(|| Color::from_rgba_u8(208, 204, 214, 240));
                 let card = Modifier::empty()
                     .report_size(Rc::clone(&node_size))
                     .glass_effect_with(glass, move || {
@@ -1369,7 +1385,14 @@ pub fn LiquidMenu(
                         }
                         let glue = surface.glue;
                         let activity = if expanded {
-                            smoothstep(0.0, MENU_GROW_DELAY, appear)
+                            // MILKY BIRTH: the droplet births as bright
+                            // frosted milk and the panel material matures in
+                            // as it grows (menu-expand target 400-533ms: a
+                            // gray-white blob first, the purple panel after;
+                            // menu-open births translucent). The old ramp
+                            // reached full material within ~30ms of the
+                            // touch, so the dark menu was born already dark.
+                            smoothstep(0.0, 0.42, t)
                         } else {
                             // The closing panel keeps its full dark material
                             // until the geometry actually collapses (height
@@ -1380,6 +1403,7 @@ pub fn LiquidMenu(
                         };
                         GlassDynamics {
                             activity: Some(activity),
+                            resting_tint: birth_milk,
                             touch: glow_touch,
                             morph: Some(GlassMorph {
                                 node_size: (size.width.max(1.0), size.height.max(1.0)),
@@ -1897,7 +1921,10 @@ mod tests {
         for appear in [0.199_019, 0.296_780, 0.412_956, 0.539_174] {
             let geometry = menu_morph_geometry(true, appear, anchor, &absorbed, target);
             let phase = menu_geometry_phase(true, appear);
-            let interpolated_y = source.center_y + (target.center_y - source.center_y) * phase.path;
+            // The body descends on the eased path (pinned at the birth
+            // anchor while swelling), plus the shared rebound.
+            let descent = smoothstep(0.10, 0.90, phase.path);
+            let interpolated_y = source.center_y + (target.center_y - source.center_y) * descent;
             let expected_y = interpolated_y + menu_vertical_rebound(phase.path);
             assert!(
                 (geometry.primary.center_y - expected_y).abs() < 0.001,
@@ -2025,27 +2052,36 @@ mod tests {
         assert_eq!(source.foreground_alpha, 1.0);
         assert_eq!(source.backdrop_alpha, 0.0);
 
-        let crisp = menu_absorbed_visual_phase(0.08, 0.15);
-        assert!((0.38..=0.42).contains(&crisp.foreground_alpha));
+        // Fully readable past ~100ms of the open (reference "…" is crisp
+        // at 66-100ms; the grow spring puts appear ~0.25 there).
+        let crisp = menu_absorbed_visual_phase(0.20, 0.20);
+        assert_eq!(crisp.foreground_alpha, 1.0);
         assert_eq!(crisp.backdrop_alpha, 0.0);
         assert_eq!(crisp.foreground_blur, 0.0);
-        assert!((0.81..=0.85).contains(&crisp.scale_x));
-        assert!((0.81..=0.85).contains(&crisp.scale_y));
+        assert!((0.76..=0.78).contains(&crisp.scale_x));
+        assert!((0.76..=0.78).contains(&crisp.scale_y));
+        // Ghosted to the resting 0.40 once the droplet thickens over it,
+        // before the melt band (path 0.45+) begins.
+        let dimmed = menu_absorbed_visual_phase(0.60, 0.30);
+        assert!((0.38..=0.42).contains(&dimmed.foreground_alpha));
 
-        let melt = menu_absorbed_visual_phase(0.54, 0.52);
+        let melt = menu_absorbed_visual_phase(0.95, 0.90);
         assert_eq!(melt.foreground_alpha, 0.0);
         assert_eq!(melt.backdrop_alpha, 0.62);
         assert!((0.92..=0.97).contains(&melt.scale_y));
-        assert!((0.87..=0.90).contains(&melt.scale_x));
+        assert!((0.87..=0.905).contains(&melt.scale_x));
 
+        // Mid-melt: the ghost is still fading (measured 220/255 glyph-min
+        // at 250ms on the 2x capture) and the backdrop smudge is rising.
         let smear = menu_absorbed_visual_phase(0.72, 0.69);
         assert!((0.94..=0.98).contains(&smear.scale_y));
         assert!((0.89..=0.91).contains(&smear.scale_x));
-        assert_eq!(smear.foreground_alpha, 0.0);
-        assert_eq!(smear.backdrop_alpha, 0.62);
+        assert!((0.10..=0.18).contains(&smear.foreground_alpha));
+        assert!((0.36..=0.44).contains(&smear.backdrop_alpha));
+        // Early growth: readable ghost, no smudge yet.
         let transition = menu_absorbed_visual_phase(0.42, 0.382);
-        assert_eq!(transition.foreground_alpha, 0.0);
-        assert_eq!(transition.backdrop_alpha, 0.62);
+        assert!((0.60..=0.75).contains(&transition.foreground_alpha));
+        assert_eq!(transition.backdrop_alpha, 0.0);
         let settled = menu_absorbed_visual_phase(1.0, 1.0);
         assert_eq!(settled.foreground_alpha, 0.0);
         assert_eq!(settled.backdrop_alpha, 0.62);
