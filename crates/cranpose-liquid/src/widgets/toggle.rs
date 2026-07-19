@@ -35,7 +35,7 @@ const THUMB_MARGIN: f32 = 1.5;
 /// thinner, ours wider).
 const LENS_WIDTH: f32 = 34.0;
 const LENS_HEIGHT: f32 = 24.5;
-const LENS_VERTICAL_OFFSET: f32 = -2.0 / 3.0;
+const LENS_VERTICAL_OFFSET: f32 = -1.3;
 /// The raised lens leans toward the travel side, measured from the thumb
 /// center on the reference press and settle frames (~6-8dp in every phase:
 /// press leans toward the destination, flight leads the thumb, settle
@@ -564,7 +564,10 @@ mod tests {
             LiquidShape::Capsule,
             "the pressed switch thumb remains a capsule while its optical body inflates"
         );
-        assert!((LENS_VERTICAL_OFFSET + 2.0 / 3.0).abs() < 1.0e-6);
+        // The dome rides high enough to expose the white face strip under
+        // its top rim (reference f_009: ~1.3dp of washed face between dome
+        // top and blob top feeds the luminous band).
+        assert!((LENS_VERTICAL_OFFSET + 1.3).abs() < 1.0e-6);
 
         let mid = interpolate_track_color(
             cranpose_ui_graphics::Color::from_rgb_u8(187, 186, 188),
