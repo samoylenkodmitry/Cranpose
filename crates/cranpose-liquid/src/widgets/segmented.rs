@@ -23,23 +23,16 @@ use std::rc::Rc;
 /// recording's 2.89 px/dp = 45dp total, 41dp inside the track padding.
 const SEGMENT_HEIGHT: f32 = 41.0;
 const TRACK_PADDING: f32 = 2.0;
-/// The light-scheme selection marker is a RECESSED well pressed into the
-/// white body: interior 244 on the 254 body (tap-flight f_045 mean
-/// 242.7), its depth told by an inner shadow arc hugging the top rim —
-/// never by darkening the fill. A filled gray track does not exist in
-/// the reference.
-const MARKER_INNER_SHADOW_ALPHA: f32 = 0.09;
-const MARKER_INNER_SHADOW_RADIUS: f32 = 1.0;
-/// Small top bias; the shade hugs the WHOLE perimeter softly (the
-/// reference rim is one narrow even gradient, slightly stronger on the
-/// upper arc — a bright inner lip ring is an artifact it never shows).
-const MARKER_INNER_SHADOW_DROP: f32 = 0.4;
-/// The resting marker is a big TRUE ELLIPSE, not a capsule: 120dp over
-/// the 103dp cell (tap-flight f_045, marker run 347px against the 299px
-/// cell at 2.89 px/dp), centered on its cell and overhanging both
-/// neighbors. A stadium's long flat top/bottom reads as a rounded
-/// rectangle — the reference silhouette crests continuously.
+/// The resting marker IS the glass lens at a shallow rest state — a
+/// clear puck sitting on the white body with its own bevel, drop shadow
+/// and rim iridescence from the one glass light path (user-arbitrated:
+/// no flat draw reproduces those). It spans 120dp over the 103dp cell
+/// (tap-flight f_045: 347px against the 299px cell at 2.89 px/dp).
 const MARKER_WIDTH_FACTOR: f32 = 1.16;
+/// How much of the glass activity survives at rest: enough for the
+/// shallow bevel, shadow and the iridescent whisper on the rim; the
+/// touch raise runs it to 1.
+const MARKER_REST_ACTIVITY: f32 = 0.55;
 /// The marker crests past the body top (f_045 column: the shade rides
 /// over the body edge) and only whispers past the bottom — the poke is
 /// asymmetric, biased up, and subtle.
@@ -69,27 +62,20 @@ const SEGMENTED_STRAIN_RESPONSE: f32 = 0.18;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
 
-/// The white pill dissolves with TRAVEL, never with the press itself: the
-/// reference keeps the pill (and the label through it) visible for the whole
-/// pressed dwell (tap-flight f_0000..f_0383), dissolves it at the origin as
-/// the lens departs, and re-materializes it under the destination as the
-/// lens arrives. Keying it on lens rise painted a white body over the label
-/// at the press instant.
-fn plain_indicator_alpha(travel_fraction: f32) -> f32 {
-    ((0.45 - travel_fraction.abs()) / 0.30).clamp(0.0, 1.0)
-}
-
 fn segment_lens_left(pointer_x: f32, segment_width: f32, count: usize) -> f32 {
     (pointer_x - segment_width * 0.5).clamp(0.0, segment_width * (count.saturating_sub(1)) as f32)
 }
 
 fn segmented_lens_base_size(segment_width: f32, progress: f32) -> Size {
     let progress = progress.clamp(0.0, 1.2);
+    // Rest: the shallow marker puck cresting past the body. Raised: the
+    // finger oval at ~1.4x the track height (segmented-drag f_025).
+    let rest_h = SEGMENT_HEIGHT + TRACK_PADDING * 2.0 + MARKER_POKE_TOP + MARKER_POKE_BOTTOM;
     let width_lift = 1.0 + (LENS_WIDTH_LIFT_SCALE - 1.0) * progress;
     let height_lift = 1.0 + (LENS_HEIGHT_LIFT_SCALE - 1.0) * progress;
     Size::new(
-        (segment_width + 4.0 * progress) * width_lift,
-        (SEGMENT_HEIGHT + LENS_OVERFLOW * progress) * height_lift,
+        (segment_width * MARKER_WIDTH_FACTOR + 2.0 * progress) * width_lift,
+        (rest_h + LENS_OVERFLOW * progress) * height_lift,
     )
 }
 
@@ -178,22 +164,9 @@ pub fn LiquidSegmentedControl(
                 ),
             );
 
-            // The resting indicator belongs to controlled state. The
-            // interaction lens has a separate direct-drag axis: it reads the
-            // raw pointer while held and only springs after release.
-            let leading = animateFloatAsState(
-                selected_x,
-                LiquidMotion::blob_leading(),
-                "segmented-leading",
-            );
-            let trailing = animateFloatAsState(
-                selected_x + segment_width,
-                LiquidMotion::blob_trailing(),
-                "segmented-trailing",
-            );
-
-            // Lens presence: up while touched, lingering decay on release
-            // (the indicator stays liquid through the settle flight).
+            // Raise state: up while touched, lingering decay on release
+            // (the glass stays deep through the settle flight, then
+            // relaxes back into the shallow resting puck).
             let lens_settling = !lens_axis.is_dragging() && (lens_x - selected_x).abs() > 1.0;
             let lens_target = if pressed.get() || lens_settling {
                 1.0
@@ -212,93 +185,8 @@ pub fn LiquidSegmentedControl(
                 },
                 "segmented-lens",
             );
-            let indicator_brush = if colors.is_dark {
-                Brush::solid(Color::from_rgba_u8(90, 90, 96, 240))
-            } else {
-                // The marker is a LIGHT SOLID well, not a translucent dark
-                // wash: a wash over the page turned the above-body crest
-                // into a harsh dark eyebrow (219 on the 242 card), while
-                // the reference crest is nearly page-light (232 on 237).
-                // The recessed depth reads from the rim-following inner
-                // shadow, not from the fill.
-                Brush::solid(Color::from_rgb_u8(244, 244, 246))
-            };
-            let indicator_axis = Rc::clone(&lens_axis);
-            // Direct manipulation: while the lens gesture owns the control
-            // (pressed, or still settling after release) the white pill IS
-            // the dragged body — it snaps to the lens's nearest cell and
-            // dissolves/materializes with the lens's distance to that cell
-            // (reference: pill visible through the pressed dwell AND parked
-            // mid-drag holds, gone mid-gap, re-forming under the landing
-            // cell). Controlled-state changes keep the blob springs.
-            let lens_engaged = pressed.get() || lens_settling;
-            let visual_cell_x = segment_width * visual_index as f32;
-            // The ellipse is a gradient CIRCLE stretched horizontally by
-            // the layer transform — the only path to a true oval with a
-            // gradient fill (vector paths drop gradients, round-rects cap
-            // at stadium).
-            let marker_h =
-                SEGMENT_HEIGHT + TRACK_PADDING * 2.0 + MARKER_POKE_TOP + MARKER_POKE_BOTTOM;
-            let marker_aspect = segment_width * MARKER_WIDTH_FACTOR / marker_h;
-            let indicator = Modifier::empty()
-                .size(Size::new(marker_h, marker_h))
-                // Center the circle node on cell 0, biased up so the
-                // stretched ellipse crests past the body top.
-                .offset(
-                    (segment_width - marker_h) * 0.5,
-                    -(TRACK_PADDING + MARKER_POKE_TOP),
-                )
-                .graphics_layer(move || {
-                    let lead = leading.get();
-                    let trail = trailing.get().max(lead + 1.0);
-                    let center_pivot = cranpose_ui_graphics::TransformOrigin {
-                        pivot_fraction_x: 0.5,
-                        pivot_fraction_y: 0.5,
-                    };
-                    if lens_engaged {
-                        let travel =
-                            (indicator_axis.value() - visual_cell_x) / segment_width.max(1.0);
-                        GraphicsLayer {
-                            translation_x: visual_cell_x,
-                            scale_x: marker_aspect,
-                            alpha: plain_indicator_alpha(travel),
-                            transform_origin: center_pivot,
-                            ..Default::default()
-                        }
-                    } else {
-                        // Blob morph: the ellipse centers on the moving
-                        // cell span and stretches with it.
-                        GraphicsLayer {
-                            translation_x: (lead + trail - segment_width) * 0.5,
-                            scale_x: marker_aspect
-                                * ((trail - lead) / segment_width.max(1.0)).max(0.01),
-                            alpha: 1.0,
-                            transform_origin: center_pivot,
-                            ..Default::default()
-                        }
-                    }
-                })
-                .draw_behind(move |scope| {
-                    scope.draw_round_rect(
-                        indicator_brush.clone(),
-                        CornerRadii::uniform(marker_h * 0.5),
-                    );
-                })
-                // The recess depth: a dark arc hugging the top rim (drawn
-                // on the circle, stretched with it into the ellipse).
-                .inner_shadow(
-                    cranpose_ui_graphics::LayerShape::Rounded(
-                        cranpose_ui_graphics::RoundedCornerShape::uniform(marker_h * 0.5),
-                    ),
-                    |scope| {
-                        scope.radius = MARKER_INNER_SHADOW_RADIUS;
-                        scope.offset.y = MARKER_INNER_SHADOW_DROP;
-                        scope.color = Color::BLACK.with_alpha(MARKER_INNER_SHADOW_ALPHA);
-                    },
-                );
-            Box(indicator, BoxSpec::default(), || {});
 
-            // Labels row on top of the indicator. The cells keep button
+            // Labels row under the glass. The cells keep button
             // semantics (robot/a11y); pointer handling lives on the swipe
             // surface below.
             Row(Modifier::empty(), RowSpec::default(), move || {
@@ -399,17 +287,9 @@ pub fn LiquidSegmentedControl(
                 )
                 .graphics_layer(move || GraphicsLayer {
                     translation_x: lens_x,
-                    // Hard-gate the tail of the decay: a few percent of
-                    // residual lens leaves chromatic dust on the settled
-                    // marker rim, where the reference is perfectly clean.
-                    alpha: {
-                        let lens = lens_for_layer.get();
-                        if lens < 0.04 {
-                            0.0
-                        } else {
-                            (lens * 2.5).clamp(0.0, 1.0)
-                        }
-                    },
+                    // The glass IS the resting marker — always present;
+                    // rest vs raised is a depth change, never an alpha one.
+                    alpha: 1.0,
                     ..Default::default()
                 })
                 .glass_effect_with(
@@ -424,7 +304,7 @@ pub fn LiquidSegmentedControl(
                         // darker than the page (segmented-drag f_025..f_055
                         // interiors 236..244 on 254) and it casts a soft
                         // drop shadow while lifted.
-                        .tint(Color::rgba(0.0, 0.0, 0.0, 0.03))
+                        .tint(Color::rgba(0.0, 0.0, 0.0, 0.08))
                         .shadow(true)
                         .rim_reflection(0.12)
                         // The full continuous wcKSRD dome (example/
@@ -449,7 +329,13 @@ pub fn LiquidSegmentedControl(
                         // along the travel, braking swells its front.
                         let pose = physics_axis.liquid_pose();
                         GlassDynamics {
-                            activity: Some(grow.clamp(0.0, 1.0)),
+                            // Rest keeps a shallow floor of glass presence
+                            // (bevel + shadow + rim whisper); touch raises
+                            // depth to full.
+                            activity: Some(
+                                MARKER_REST_ACTIVITY
+                                    + (1.0 - MARKER_REST_ACTIVITY) * grow.clamp(0.0, 1.0),
+                            ),
                             // The lens paints NO body of its own: the white
                             // pill lives BELOW the labels (plain indicator)
                             // and stays visible through the pressed dwell —
@@ -460,7 +346,7 @@ pub fn LiquidSegmentedControl(
                                 node_size: (node_w, node_h),
                                 primary: (
                                     node_w * 0.5,
-                                    node_h * 0.5,
+                                    node_h * 0.5 - (MARKER_POKE_TOP - MARKER_POKE_BOTTOM) * 0.5,
                                     base_size.width,
                                     base_size.height,
                                     -1.0,
@@ -504,27 +390,15 @@ mod tests {
     }
 
     #[test]
-    fn plain_indicator_dissolves_with_travel_not_with_the_press() {
-        // Pressed dwell (no travel): the pill and its label stay visible.
-        assert_eq!(plain_indicator_alpha(0.0), 1.0);
-        assert_eq!(plain_indicator_alpha(0.10), 1.0);
-        // Departing the origin: dissolved by mid-cell.
-        assert_eq!(plain_indicator_alpha(0.5), 0.0);
-        assert_eq!(plain_indicator_alpha(1.0), 0.0);
-        // Arriving works from either side.
-        assert_eq!(plain_indicator_alpha(-0.10), 1.0);
-        assert_eq!(plain_indicator_alpha(-0.5), 0.0);
-        // The fade band between dwell and gone is continuous.
-        assert!(plain_indicator_alpha(0.3) > 0.4);
-    }
-
-    #[test]
     fn raised_lens_lifts_in_depth_without_becoming_a_wide_worm() {
         let resting = segmented_lens_base_size(120.0, 0.0);
         let raised = segmented_lens_base_size(120.0, 1.0);
-        assert_eq!(resting, Size::new(120.0, SEGMENT_HEIGHT));
+        // Rest is the marker puck: 1.16x the cell, cresting past the body.
+        assert_eq!(resting.width, 120.0 * MARKER_WIDTH_FACTOR);
+        assert!(resting.height > SEGMENT_HEIGHT + TRACK_PADDING * 2.0);
+        // The raise deepens, it does not widen into a worm.
         assert!(raised.width < resting.width * 1.10);
-        assert!(raised.height > resting.height * 1.45);
+        assert!(raised.height > resting.height * 1.20);
         assert!(segmented_strain(crate::dynamics::STRETCH_MAX) < 1.10);
     }
 }
