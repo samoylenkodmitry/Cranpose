@@ -242,7 +242,7 @@ mod tests {
     use super::validate_runtime_shader_source;
     use crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER;
     use cranpose_ui_graphics::{
-        GRADIENT_CUT_MASK_WGSL, GRADIENT_FADE_DST_OUT_WGSL, LIQUID_GLASS_WGSL,
+        GRADIENT_BLUR_WGSL, GRADIENT_CUT_MASK_WGSL, GRADIENT_FADE_DST_OUT_WGSL, LIQUID_GLASS_WGSL,
         ROUNDED_ALPHA_MASK_WGSL,
     };
 
@@ -299,6 +299,7 @@ fn fullscreen_vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> 
     #[test]
     fn validator_accepts_gl_portable_builtin_runtime_shaders() {
         for (name, source) in [
+            ("gradient_blur", GRADIENT_BLUR_WGSL),
             ("gradient_cut_mask", GRADIENT_CUT_MASK_WGSL),
             ("rounded_alpha_mask", ROUNDED_ALPHA_MASK_WGSL),
             ("gradient_fade_dst_out", GRADIENT_FADE_DST_OUT_WGSL),

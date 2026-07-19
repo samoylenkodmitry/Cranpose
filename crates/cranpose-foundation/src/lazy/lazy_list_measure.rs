@@ -141,8 +141,8 @@ where
             raw_viewport_size,
             is_infinite_viewport,
             viewport_size,
-            viewport_start_offset: config.before_content_padding,
-            viewport_end_offset: config.after_content_padding,
+            viewport_start_offset: 0.0,
+            viewport_end_offset: viewport_size,
             before_content_padding: config.before_content_padding,
             after_content_padding: config.after_content_padding,
             snap_anchor_offset: 0.0,
@@ -162,8 +162,8 @@ where
             raw_viewport_size,
             is_infinite_viewport,
             viewport_size,
-            viewport_start_offset: config.before_content_padding,
-            viewport_end_offset: config.after_content_padding,
+            viewport_start_offset: 0.0,
+            viewport_end_offset: viewport_size.max(0.0),
             before_content_padding: config.before_content_padding,
             after_content_padding: config.after_content_padding,
             snap_anchor_offset: 0.0,
@@ -221,6 +221,9 @@ where
             first_index -= 1;
             let item = measure_item(first_index);
             first_offset += item.main_axis_size + config.spacing;
+            if first_index == 0 {
+                first_offset += config.before_content_padding;
+            }
             pre_measured.push(item);
         }
         pre_measured.reverse();
@@ -230,12 +233,17 @@ where
     first_offset = first_offset.max(0.0);
     (first_index, first_offset) = resolver.normalize_forward_with_cache(first_index, first_offset);
     let item_extent_at = |index: usize, item_size: f32| {
+        let leading_padding = if index == 0 {
+            config.before_content_padding
+        } else {
+            0.0
+        };
         let spacing_after = if index + 1 < items_count {
             config.spacing
         } else {
             0.0
         };
-        item_size + spacing_after
+        leading_padding + item_size + spacing_after
     };
     let mut offset_known_within_current_item = state
         .get_cached_size(first_index)
@@ -301,7 +309,8 @@ where
     );
 
     // Update scroll position - find actual first visible item
-    let viewport_end = effective_viewport_size - config.after_content_padding;
+    let viewport_start = 0.0;
+    let viewport_end = effective_viewport_size;
     let item_end_with_spacing = |item: &LazyListMeasuredItem| {
         let spacing_after = if item.index + 1 < items_count {
             config.spacing
@@ -312,27 +321,40 @@ where
     };
     let actual_first_visible = visible_items
         .iter()
-        .find(|item| item_end_with_spacing(item) > config.before_content_padding);
+        .find(|item| item_end_with_spacing(item) > viewport_start);
 
     let unresolved_pass = measurement_hit_time_budget
         && !measurement_viewport_filled
         && actual_first_visible.is_none();
 
     let (final_first_index, final_scroll_offset) = if let Some(first) = actual_first_visible {
-        let offset = config.before_content_padding - first.offset;
+        let leading_padding = if first.index == 0 {
+            config.before_content_padding
+        } else {
+            0.0
+        };
+        let offset = leading_padding - first.offset;
         (first.index, offset.max(0.0))
     } else if unresolved_pass {
         if pending_scroll_delta > 0.001 {
-            let preserved_offset =
-                (config.before_content_padding - measurement_start_offset).max(0.0);
+            let leading_padding = if measurement_start_index == 0 {
+                config.before_content_padding
+            } else {
+                0.0
+            };
+            let preserved_offset = (leading_padding - measurement_start_offset).max(0.0);
             (measurement_start_index, preserved_offset)
         } else {
             let next_index = measurement_next_index.min(items_count.saturating_sub(1));
             if next_index + 1 >= items_count {
                 (next_index, 0.0)
             } else {
-                let next_offset =
-                    (config.before_content_padding - measurement_next_offset).max(0.0);
+                let leading_padding = if next_index == 0 {
+                    config.before_content_padding
+                } else {
+                    0.0
+                };
+                let next_offset = (leading_padding - measurement_next_offset).max(0.0);
                 (next_index, next_offset)
             }
         }
@@ -367,7 +389,11 @@ where
             first_index,
             first_offset,
             measurement_start_index,
-            config.before_content_padding - measurement_start_offset,
+            if measurement_start_index == 0 {
+                config.before_content_padding - measurement_start_offset
+            } else {
+                -measurement_start_offset
+            },
             final_first_index,
             final_scroll_offset,
             measurement_measured_visible_items,
@@ -383,7 +409,7 @@ where
             .iter()
             .filter(|item| {
                 let item_end = item_end_with_spacing(item);
-                item_end > config.before_content_padding && item.offset < viewport_end
+                item_end > viewport_start && item.offset < viewport_end
             })
             .map(|i| i.to_item_info())
             .collect(),
@@ -391,8 +417,8 @@ where
         raw_viewport_size,
         is_infinite_viewport,
         viewport_size: effective_viewport_size,
-        viewport_start_offset: config.before_content_padding,
-        viewport_end_offset: config.after_content_padding,
+        viewport_start_offset: viewport_start,
+        viewport_end_offset: viewport_end,
         before_content_padding: config.before_content_padding,
         after_content_padding: config.after_content_padding,
         snap_anchor_offset: 0.0,
@@ -475,8 +501,8 @@ where
         raw_viewport_size,
         is_infinite_viewport: true,
         viewport_size: content_extent,
-        viewport_start_offset: config.before_content_padding,
-        viewport_end_offset: config.after_content_padding,
+        viewport_start_offset: 0.0,
+        viewport_end_offset: content_extent,
         before_content_padding: config.before_content_padding,
         after_content_padding: config.after_content_padding,
         snap_anchor_offset: 0.0,
@@ -1295,6 +1321,56 @@ mod tests {
             assert_eq!(result.first_visible_item_index, 0);
             assert_eq!(state.first_visible_item_index_non_reactive(), 0);
             assert!(state.layout_info().is_infinite_viewport);
+        });
+    }
+
+    #[test]
+    fn leading_content_padding_scrolls_away_without_recycling_visible_item() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            let config = LazyListMeasureConfig {
+                before_content_padding: 100.0,
+                after_content_padding: 24.0,
+                ..Default::default()
+            };
+            let measure = |index| create_test_item(index, 50.0);
+
+            let initial = measure_lazy_list(10, &state, 200.0, 300.0, &config, measure);
+            assert!((initial.visible_items[0].offset - 100.0).abs() < 0.01);
+
+            // The leading padding (100) plus 20 px of item 0 have scrolled
+            // above the viewport. The remaining 30 px of item 0 must stay
+            // composed and visible at -20..30; the old implementation treated
+            // y=100 as a permanent viewport start and recycled it here.
+            state.dispatch_scroll_delta(-120.0);
+            let partial = measure_lazy_list(10, &state, 200.0, 300.0, &config, measure);
+            let item0 = partial
+                .visible_items
+                .iter()
+                .find(|item| item.index == 0)
+                .expect("partially visible first item must remain measured");
+            assert!(
+                (item0.offset + 20.0).abs() < 0.01,
+                "offset={}",
+                item0.offset
+            );
+            assert_eq!(partial.first_visible_item_index, 0);
+            assert!((partial.first_visible_item_scroll_offset - 120.0).abs() < 0.01);
+            assert_eq!(state.layout_info().viewport_start_offset, 0.0);
+            assert_eq!(state.layout_info().viewport_end_offset, 200.0);
+
+            state.dispatch_scroll_delta(-31.0);
+            let gone = measure_lazy_list(10, &state, 200.0, 300.0, &config, measure);
+            assert_eq!(gone.first_visible_item_index, 1);
+            assert!(
+                state
+                    .layout_info()
+                    .visible_items_info
+                    .iter()
+                    .all(|item| item.index != 0),
+                "fully clipped item 0 may be retained for prewarm but must not be reported visible"
+            );
+            assert!((gone.first_visible_item_scroll_offset - 1.0).abs() < 0.01);
         });
     }
 }

@@ -255,8 +255,8 @@ fn changed_column_bands(
     let mut start: Option<usize> = None;
     let mut gap = 0usize;
     let max_gap = (6.0 * sx) as usize;
-    for px in 0..width {
-        if changed[px] >= COLUMN_CHANGE_FLOOR {
+    for (px, changed_pixels) in changed.iter().copied().enumerate() {
+        if changed_pixels >= COLUMN_CHANGE_FLOOR {
             if start.is_none() {
                 start = Some(px);
             }
