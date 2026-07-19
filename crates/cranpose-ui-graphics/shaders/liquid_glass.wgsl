@@ -908,7 +908,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     rgb = rgb + vec3<f32>(wcksrd_edge_light);
     outer_rgb = outer_rgb + vec3<f32>(wcksrd_edge_light);
     alpha = max(alpha, wcksrd_edge_light);
-    let wcksrd_face_light = clamp(optical_sample.face_light * highlight, 0.0, 0.35);
+    // The loupe face is PURE magnification: the reference preserves the
+    // backdrop's luminance (dark editor stays dark under the loupe) — the
+    // additive face light read as a milky film there. Every other lighting
+    // term is already gated off in loupe mode; this one leaked through.
+    let wcksrd_face_light = clamp(optical_sample.face_light * highlight, 0.0, 0.35)
+        * select(1.0, 0.0, loupe_mode > 0.5);
     rgb = rgb + vec3<f32>(wcksrd_face_light);
     alpha = max(alpha, wcksrd_face_light);
     // The BEVEL (measured on the on-white reference discs): a directional
