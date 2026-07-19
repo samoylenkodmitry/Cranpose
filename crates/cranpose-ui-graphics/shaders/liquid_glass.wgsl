@@ -653,7 +653,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     //   descending-branch inversion at the rim and the rim line all come
     //   from the same displacement field, with no band boundaries.
     let rim_style = clamp(get_float(28u), 0.0, 1.0);
-    let dispersion_strength = clamp(get_float(95u), 0.0, 1.0);
+    // Materials may push past 1 for stronger chromatic splits (the toggle
+    // hold runs 1.1); the spread factor keeps the split proportional.
+    let dispersion_strength = clamp(get_float(95u), 0.0, 2.0);
     let loupe_mode = get_float(80u);
     var refraction_curve = get_float(94u);
     if refraction_curve <= 0.0 {

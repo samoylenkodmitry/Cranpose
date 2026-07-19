@@ -318,7 +318,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     // optics relax the moment the finger lifts.
     let press_depth = animateFloatAsState(
         if pressed.get() { 1.0 } else { 0.45 },
-        AnimationType::Tween(AnimationSpec::tween(220, Easing::EaseOut)),
+        AnimationType::Tween(AnimationSpec::tween(120, Easing::EaseOut)),
         "toggle-press-depth",
     );
 
