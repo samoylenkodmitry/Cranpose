@@ -21,11 +21,17 @@ use std::rc::Rc;
 
 const SEGMENT_HEIGHT: f32 = 36.0;
 const TRACK_PADDING: f32 = 2.0;
-/// Finger-halo circle diameter over the pill height while touched
-/// (segmented-drag f_025: the circle spans ~1.4x the track height).
-const SEGMENT_HALO_FACTOR: f32 = 1.4;
-/// How far the interaction lens pokes past the track vertically.
+/// How far the interaction lens pokes past the track vertically. With the
+/// lift scale this lands the raised body at ~1.4x the track height — the
+/// reference finger oval (segmented-drag f_025). The oval is ONE
+/// continuous silhouette; a separate glued halo circle read as two-lobed
+/// "cheeks" bulging over the track.
 const LENS_OVERFLOW: f32 = 8.0;
+/// How far the raised lens SDF blends from the capsule toward a true
+/// ellipse (activity-scaled at the material layer; the resting lens is
+/// untouched). The reference riding body is a continuously curved oval,
+/// never a flat-topped capsule (segmented-drag f_025..f_055).
+const LENS_ELLIPSE_BLEND: f32 = 0.55;
 /// Touch raises the whole optical body before directional deformation. This
 /// preserves the control's volume without letting maximum horizontal strain
 /// squash the lens below the track height.
@@ -160,16 +166,6 @@ pub fn LiquidSegmentedControl(
                 },
                 "segmented-lens",
             );
-            // The finger halo: while touched, a circle rides the pill center
-            // and the union silhouette bulges above/below the track
-            // (segmented-drag f_025/f_055 — visible through transit and a
-            // parked hold, gone at rest).
-            let halo_presence = animateFloatAsState(
-                if pressed.get() { 1.0 } else { 0.0 },
-                spring(1.0, 900.0),
-                "segmented-halo",
-            );
-
             let indicator_color = if colors.is_dark {
                 Color::from_rgba_u8(90, 90, 96, 240)
             } else {
@@ -353,22 +349,6 @@ pub fn LiquidSegmentedControl(
                         // (crate::dynamics): speed stretches the capsule
                         // along the travel, braking swells its front.
                         let pose = physics_axis.liquid_pose();
-                        // The halo circle grows concentric with the pill;
-                        // below the track height it hides inside the capsule,
-                        // so presence needs no alpha of its own.
-                        let halo = halo_presence.get().clamp(0.0, 1.0);
-                        let halo_diameter = base_size.height * SEGMENT_HALO_FACTOR * halo;
-                        let shapes = if halo_diameter > base_size.height {
-                            vec![(
-                                node_w * 0.5,
-                                node_h * 0.5,
-                                halo_diameter,
-                                halo_diameter,
-                                -1.0,
-                            )]
-                        } else {
-                            Vec::new()
-                        };
                         GlassDynamics {
                             activity: Some(grow.clamp(0.0, 1.0)),
                             // The lens paints NO body of its own: the white
@@ -386,13 +366,13 @@ pub fn LiquidSegmentedControl(
                                     base_size.height,
                                     -1.0,
                                 ),
-                                shapes,
+                                shapes: Vec::new(),
                                 glue: 0.0,
                                 wobble_amplitude: 0.0,
                                 wobble_phase: 0.0,
                                 bulge_amplitude: pose.bulge_amplitude.min(4.0),
                                 bulge_direction: pose.bulge_direction,
-                                ellipse_blend: 0.0,
+                                ellipse_blend: LENS_ELLIPSE_BLEND,
                                 deformation: Some(
                                     crate::material::GlassDeformation::incompressible(
                                         pose.axis,
