@@ -461,3 +461,22 @@ ball read "dull teal" (raw probe: (0,217,234) electric cyan). The strip
 downscale smears sub-pixel optics and mutes saturation. Always crop/zoom the
 raw `shots/capture` frames and pixel-probe with magick before concluding a
 material is wrong.
+
+## Liquid-glass optics judged at capture scale 1 (2026-07-19, ~2 ticks lost)
+The toggle dome's refraction band is `inradius * refraction_depth` ≈ 2-4px
+at scale-1 robot captures. With ≤2 intermediate SDF pixels, `pow(interior,
+refraction_curve)` has nothing to shape — curve, dispersion and zoom read
+as byte-identical no-ops, which looks exactly like "the shader path is
+dead". It is not: the reference recordings run ~5.4 px/dp. ALWAYS capture
+glass-optics stages with CRANPOSE_ROBOT_CAPTURE_SCALE=2+ before judging
+or tuning rim materials.
+
+Compounding wasters from the same session, now protocol:
+- Never mv/reuse capture dirs mid-bisection: one experiment = one uniquely
+  named dir + a grep'd state echo beside it. Shuffled stale dirs produced
+  false "knob does nothing" byte-diffs (a red-tracer frame even ended up
+  in a dir labeled as a clean run).
+- python str.replace silently no-ops on a missed needle: assert the needle
+  is in the file before writing.
+- Byte-diff two captures before reasoning about any knob's effect; never
+  trust "looks identical" at small scales.
