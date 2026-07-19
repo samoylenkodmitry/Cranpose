@@ -16,7 +16,7 @@ permissions:
 jobs:
   sync_versions:
     name: Sync versions with tag
-    runs-on: [self-hosted, Linux, cranpose-heavy]
+    runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: write
     outputs:
@@ -50,7 +50,7 @@ jobs:
             exit 1
           fi
 
-          python - <<'PY'
+          python3 - <<'PY'
           import os
           import re
           from pathlib import Path
@@ -163,7 +163,7 @@ jobs:
               path.write_text(text)
           PY
 
-          python - <<'PY'
+          python3 - <<'PY'
           import os
           import re
           from pathlib import Path
@@ -235,7 +235,7 @@ jobs:
 
   publish:
     name: Publish to crates.io
-    runs-on: [self-hosted, Linux, cranpose-heavy]
+    runs-on: [self-hosted, macOS, ARM64]
     needs: sync_versions
     if: needs.sync_versions.outputs.should_publish == 'true'
     env:
@@ -257,7 +257,7 @@ jobs:
             echo "Tag $TAG_NAME does not point to HEAD." >&2
             exit 1
           fi
-          python - <<'PY'
+          python3 - <<'PY'
           import os
           import sys
           import tomllib
@@ -304,7 +304,7 @@ jobs:
           version="${TAG_NAME#v}"
 
           cargo metadata --format-version 1 --no-deps > publish-metadata.json
-          python - <<'PY'
+          python3 - <<'PY'
           import json
           from pathlib import Path
 
@@ -357,7 +357,7 @@ jobs:
           PY
 
           crate_exists() {
-            python - "$1" "$2" <<'PY'
+            python3 - "$1" "$2" <<'PY'
           import sys
           import urllib.error
           import urllib.request

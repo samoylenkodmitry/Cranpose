@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: [self-hosted, Linux, cranpose-heavy]
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -45,7 +45,7 @@ jobs:
             binaryen_root="$RUNNER_TEMP/binaryen-120"
             mkdir -p "$binaryen_root"
             curl -fL --retry 3 \
-              https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-x86_64-linux.tar.gz \
+              https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-arm64-macos.tar.gz \
               | tar xz -C "$binaryen_root" --strip-components=1
             echo "$binaryen_root/bin" >> "$GITHUB_PATH"
             "$binaryen_root/bin/wasm-opt" --version
@@ -80,7 +80,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: [self-hosted, Linux, cranpose-heavy]
+    runs-on: [self-hosted, macOS, ARM64]
     needs: build
     steps:
       - name: Deploy to GitHub Pages
