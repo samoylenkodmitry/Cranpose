@@ -324,10 +324,16 @@ fn capture_menu_expand(robot: &cranpose::Robot, shot_dir: &Path) {
         300.0,
     );
 
-    robot.click(px, py).expect("open sort menu");
+    // The reference open is a HELD press (~200ms finger-down: the pill
+    // charges bright magenta while pressed — open strip 200-366ms — and
+    // the droplet leaves on release). Reproduce the recorded finger.
+    robot.mouse_move(px, py).expect("hover sort pill");
+    robot.mouse_down().expect("press sort pill");
+    let mut frames = keyframe_series(robot, &dense(25.0, 9), 0.0);
+    robot.mouse_up().expect("release sort pill");
     let mut open_offsets = dense(25.0, 13);
     open_offsets.extend_from_slice(&[(50.0, true), (100.0, true), (200.0, true)]);
-    let mut frames = keyframe_series(robot, &open_offsets, 0.0);
+    frames.extend(keyframe_series(robot, &open_offsets, 225.0));
     settle(robot, 500);
 
     let Some(sort_row) = robot.find_button_bounds_exact("Sort by").ok().flatten() else {

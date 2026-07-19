@@ -808,10 +808,15 @@ fn SortFilterReferenceStage() {
                                     .fill_max_width()
                                     .height(120.0)
                                     .draw_behind(|scope| {
+                                        // Measured on menu-expand f_001: the
+                                        // header is nearly FLAT deep purple
+                                        // (53,13,54)..(58,17,58) — the old
+                                        // (30,4,28) top starved the panel's
+                                        // bloom curve of ~30% of its light.
                                         scope.draw_rect(Brush::linear_gradient_range(
                                             vec![
-                                                Color::from_rgb_u8(30, 4, 28),
-                                                Color::from_rgb_u8(62, 18, 62),
+                                                Color::from_rgb_u8(53, 13, 54),
+                                                Color::from_rgb_u8(58, 17, 58),
                                             ],
                                             Point::new(0.0, 0.0),
                                             Point::new(0.0, scope.size().height),
@@ -904,23 +909,37 @@ fn SortFilterReferenceStage() {
                                                 }
                                             },
                                         );
+                                        let pill_press_fill = pill_press;
                                         Box(
                                             pill,
                                             BoxSpec::default().content_alignment(Alignment::CENTER),
-                                            || {
+                                            move || {
                                                 // Reference pill (menu-expand
                                                 // f_001): a dark capsule ringed
                                                 // by the magenta accent, not a
-                                                // solid magenta slab.
+                                                // solid magenta slab. The PRESS
+                                                // floods the face with that
+                                                // accent (open strip 200-366ms:
+                                                // the whole capsule blazes hot
+                                                // magenta while held) — the dark
+                                                // inner yields to the ring's
+                                                // light instead of painting a
+                                                // new color.
                                                 Box(
                                                     Modifier::empty()
                                                         .fill_max_size()
                                                         .padding(1.5)
-                                                        .draw_behind(|scope| {
+                                                        .draw_behind(move |scope| {
+                                                            let press = pill_press_fill
+                                                                .get()
+                                                                .clamp(0.0, 1.0);
                                                             scope.draw_round_rect(
-                                                                Brush::solid(Color::from_rgb_u8(
-                                                                    58, 14, 54,
-                                                                )),
+                                                                Brush::solid(
+                                                                    Color::from_rgb_u8(58, 14, 54)
+                                                                        .with_alpha(
+                                                                            1.0 - 0.92 * press,
+                                                                        ),
+                                                                ),
                                                                 CornerRadii::uniform(18.5),
                                                             );
                                                         }),
