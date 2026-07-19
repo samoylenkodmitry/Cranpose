@@ -35,6 +35,15 @@ const MARKER_TOP_SHADE_ALPHA: f32 = 0.087;
 /// Top shade depth over the marker height (232 -> 244 across ~5.5dp of
 /// the 45dp capsule).
 const MARKER_TOP_SHADE_BAND: f32 = 0.12;
+/// The resting marker is a big oval, not a cell-sized sticker: 120dp
+/// over the 103dp cell (tap-flight f_045, marker run 347px against the
+/// 299px cell at 2.89 px/dp), centered on its cell and overhanging both
+/// neighbors.
+const MARKER_WIDTH_FACTOR: f32 = 1.16;
+/// The marker oval pokes past the white body's silhouette on BOTH edges
+/// (f_045/f_132: the gray crests above the body top) — it is taller than
+/// the body, never inset within it.
+const MARKER_POKE: f32 = 2.0;
 /// How far the interaction lens pokes past the track vertically. With the
 /// lift scale this lands the raised body at ~1.4x the track height — the
 /// reference finger oval (segmented-drag f_025). The oval is ONE
@@ -217,7 +226,7 @@ pub fn LiquidSegmentedControl(
                         (1.0, Color::rgba(0.0, 0.0, 0.0, MARKER_FILL_ALPHA)),
                     ],
                     0.0,
-                    SEGMENT_HEIGHT,
+                    SEGMENT_HEIGHT + (TRACK_PADDING + MARKER_POKE) * 2.0,
                     TileMode::Clamp,
                 )
             };
@@ -231,8 +240,18 @@ pub fn LiquidSegmentedControl(
             // cell). Controlled-state changes keep the blob springs.
             let lens_engaged = pressed.get() || lens_settling;
             let visual_cell_x = segment_width * visual_index as f32;
+            let marker_size = Size::new(
+                segment_width * MARKER_WIDTH_FACTOR,
+                SEGMENT_HEIGHT + (TRACK_PADDING + MARKER_POKE) * 2.0,
+            );
             let indicator = Modifier::empty()
-                .size(Size::new(segment_width, SEGMENT_HEIGHT))
+                .size(marker_size)
+                // Center the oversized oval on cell 0; translations then
+                // move it in cell-left units like before.
+                .offset(
+                    (segment_width - marker_size.width) * 0.5,
+                    (SEGMENT_HEIGHT - marker_size.height) * 0.5,
+                )
                 .graphics_layer(move || {
                     let lead = leading.get();
                     let trail = trailing.get().max(lead + 1.0);
@@ -262,7 +281,7 @@ pub fn LiquidSegmentedControl(
                 .draw_behind(move |scope| {
                     scope.draw_round_rect(
                         indicator_brush.clone(),
-                        CornerRadii::uniform(SEGMENT_HEIGHT * 0.5),
+                        CornerRadii::uniform(marker_size.height * 0.5),
                     );
                 });
             Box(indicator, BoxSpec::default(), || {});
@@ -362,7 +381,17 @@ pub fn LiquidSegmentedControl(
                 )
                 .graphics_layer(move || GraphicsLayer {
                     translation_x: lens_x,
-                    alpha: (lens_for_layer.get() * 2.5).clamp(0.0, 1.0),
+                    // Hard-gate the tail of the decay: a few percent of
+                    // residual lens leaves chromatic dust on the settled
+                    // marker rim, where the reference is perfectly clean.
+                    alpha: {
+                        let lens = lens_for_layer.get();
+                        if lens < 0.04 {
+                            0.0
+                        } else {
+                            (lens * 2.5).clamp(0.0, 1.0)
+                        }
+                    },
                     ..Default::default()
                 })
                 .glass_effect_with(

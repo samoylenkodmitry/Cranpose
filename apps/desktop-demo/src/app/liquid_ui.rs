@@ -1837,7 +1837,9 @@ pub fn LiquidUiTab() {
                             // The reference segmented recording's exact labels
                             // (Transfers page) so cheatsheet frames align.
                             LiquidSegmentedControl(
-                                Modifier::empty().width(420.0),
+                                // Reference control geometry: 900px over
+                                // 2.89 px/dp = 310dp, cells 103dp.
+                                Modifier::empty().width(310.0),
                                 vec![
                                     "Receiving".to_string(),
                                     "Sending".to_string(),
