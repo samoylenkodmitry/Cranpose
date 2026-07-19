@@ -89,7 +89,7 @@ fn toggle_lens_material() -> Glass {
         // per-channel index split fans it into the reference's gray-phase
         // rainbow (zoomed f_008). The fold is this same re-image faked as a
         // separate band; the true branch replaces it.
-        .refraction_depth(0.34)
+        .refraction_depth(0.43)
         .refraction_curve(0.45)
         .optical_zoom(1.3)
         .transmission_refraction(1.0)
@@ -146,6 +146,33 @@ fn interpolate_track_color(
 
 fn lens_translation_x(thumb_x: f32, node_width: f32) -> f32 {
     thumb_x + (THUMB_WIDTH - node_width) * 0.5
+}
+
+/// How far the pressed hold drains the track face toward white
+/// (reference f_009: the face around the blob reads 252-254 while the
+/// pigment concentrates in the pressed body).
+const PRESS_FACE_WASH: f32 = 0.95;
+const PRESS_FACE_WASH_TARGET: (u8, u8, u8) = (252, 252, 252);
+
+/// The pressed body under the dome: the track color washed up and
+/// desaturated (f_009 blob: near-neutral 181-187 at high luma against
+/// the saturated green rest track). This gray body is exactly what the
+/// dome's rim band compresses into its dark line — with the white face
+/// around it feeding the wide luminous band.
+fn toggle_press_blob_color(track: cranpose_ui_graphics::Color) -> cranpose_ui_graphics::Color {
+    let washed = interpolate_track_color(
+        track,
+        cranpose_ui_graphics::Color::from_rgb_u8(252, 252, 252),
+        0.45,
+    );
+    let luma = 0.2126 * washed.r() + 0.7152 * washed.g() + 0.0722 * washed.b();
+    let keep = 0.08;
+    cranpose_ui_graphics::Color::rgba(
+        (luma + (washed.r() - luma) * keep) * 0.93,
+        (luma + (washed.g() - luma) * keep) * 0.93,
+        (luma + (washed.b() - luma) * keep) * 0.93,
+        1.0,
+    )
 }
 
 /// The reference track is a recessed WELL, not a flat fill (rest frame
@@ -296,6 +323,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     );
 
     let on_change = std::rc::Rc::new(on_change);
+    let press_for_face = press_depth;
     let track = Modifier::empty()
         .size(Size::new(TRACK_WIDTH, TRACK_HEIGHT))
         // The controlled value is part of the gesture identity. Once a
@@ -398,8 +426,21 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             }
         })
         .draw_behind(move |scope| {
+            // The press drains the face toward white while the pigment
+            // concentrates into the blob (reference f_009); release floods
+            // the color back on the press-depth clock.
+            let wash = ((press_for_face.get() - 0.45) / 0.55).clamp(0.0, 1.0) * PRESS_FACE_WASH;
+            let face = interpolate_track_color(
+                track_color,
+                cranpose_ui_graphics::Color::from_rgb_u8(
+                    PRESS_FACE_WASH_TARGET.0,
+                    PRESS_FACE_WASH_TARGET.1,
+                    PRESS_FACE_WASH_TARGET.2,
+                ),
+                wash,
+            );
             scope.draw_round_rect(
-                track_well_brush(track_color),
+                track_well_brush(face),
                 CornerRadii::uniform(TRACK_HEIGHT * 0.5),
             );
         });
@@ -407,21 +448,17 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     Box(track.then(modifier), BoxSpec::default(), move || {
         let thumb_x_for_layer = thumb_x;
         let lens_for_thumb = lens_progress;
-        // Resting thumb: a plain white capsule. It dissolves into the glass
-        // as soon as the lens is up and only returns near the settle's end.
+        // The thumb NEVER vanishes: the raise crossfades the white capsule
+        // into the pressed gray body that stays visible UNDER the dome
+        // (reference f_009: the gray blob rides inside the glass while the
+        // white face surrounds it — vanishing it left the rim band nothing
+        // to re-image but flat track).
         let thumb = Modifier::empty()
             .size(Size::new(THUMB_WIDTH, THUMB_HEIGHT))
             .offset(0.0, (TRACK_HEIGHT - THUMB_HEIGHT) * 0.5)
-            .graphics_layer(move || {
-                // The thumb only rematerializes once the lens is nearly gone
-                // (one object melting into another, never two rims at once).
-                let lens = lens_for_thumb.get();
-                let alpha = ((0.30 - lens) / 0.22).clamp(0.0, 1.0);
-                GraphicsLayer {
-                    translation_x: thumb_x_for_layer.get(),
-                    alpha,
-                    ..Default::default()
-                }
+            .graphics_layer(move || GraphicsLayer {
+                translation_x: thumb_x_for_layer.get(),
+                ..Default::default()
             })
             // A soft whisper lifting the thumb off the track (the reference
             // thumb floats; nothing dark).
@@ -436,10 +473,13 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                 },
             )
             .draw_behind(move |scope| {
-                scope.draw_round_rect(
-                    Brush::solid(cranpose_ui_graphics::Color::WHITE),
-                    CornerRadii::uniform(THUMB_HEIGHT * 0.5),
+                let raise = lens_for_thumb.get().clamp(0.0, 1.0);
+                let body = interpolate_track_color(
+                    cranpose_ui_graphics::Color::WHITE,
+                    toggle_press_blob_color(track_color),
+                    raise,
                 );
+                scope.draw_round_rect(Brush::solid(body), CornerRadii::uniform(THUMB_HEIGHT * 0.5));
             });
         Box(thumb, BoxSpec::default(), || {});
 
