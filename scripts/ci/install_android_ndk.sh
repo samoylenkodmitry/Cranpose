@@ -21,16 +21,15 @@ if [[ -z "$sdk_root" ]]; then
   exit 1
 fi
 
-mapfile -t sdkmanager_candidates < <(
-  find "$sdk_root/cmdline-tools" -path "*/bin/sdkmanager" -type f 2>/dev/null | sort -V
-)
+sdkmanager=""
+while IFS= read -r candidate; do
+  sdkmanager="$candidate"
+done < <(find "$sdk_root/cmdline-tools" -path "*/bin/sdkmanager" -type f 2>/dev/null | sort)
 
-if [[ "${#sdkmanager_candidates[@]}" -eq 0 ]]; then
+if [[ -z "$sdkmanager" ]]; then
   echo "sdkmanager was not found under $sdk_root/cmdline-tools" >&2
   exit 1
 fi
-
-sdkmanager="${sdkmanager_candidates[-1]}"
 
 set +o pipefail
 yes | "$sdkmanager" --licenses
