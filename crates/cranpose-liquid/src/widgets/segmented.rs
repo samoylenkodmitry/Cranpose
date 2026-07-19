@@ -15,7 +15,7 @@ use cranpose_ui::widgets::{
     Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Row, RowSpec, Text,
 };
 use cranpose_ui::{Modifier, PointerInputScope, Size};
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, TileMode};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 use std::rc::Rc;
 
@@ -23,27 +23,28 @@ use std::rc::Rc;
 /// recording's 2.89 px/dp = 45dp total, 41dp inside the track padding.
 const SEGMENT_HEIGHT: f32 = 41.0;
 const TRACK_PADDING: f32 = 2.0;
-/// The light-scheme selection marker is a RECESSED capsule pressed into
-/// the white surface, not a white pill: base fill is black at 3.9%
-/// (marker 244 on the 254 page), deepening to 8.7% (232) across the top
-/// shade band — measured on segmented/drag f_130 and confirmed moving
-/// with the selection on tap-flight f_045. The surface outside the
-/// marker is bare page white; a filled gray track does not exist in the
-/// reference.
-const MARKER_FILL_ALPHA: f32 = 0.039;
-const MARKER_TOP_SHADE_ALPHA: f32 = 0.087;
-/// Top shade depth over the marker height (232 -> 244 across ~5.5dp of
-/// the 45dp capsule).
-const MARKER_TOP_SHADE_BAND: f32 = 0.12;
-/// The resting marker is a big oval, not a cell-sized sticker: 120dp
-/// over the 103dp cell (tap-flight f_045, marker run 347px against the
-/// 299px cell at 2.89 px/dp), centered on its cell and overhanging both
-/// neighbors.
+/// The light-scheme selection marker is a RECESSED well pressed into the
+/// white body: interior 244 on the 254 body (tap-flight f_045 mean
+/// 242.7), its depth told by an inner shadow arc hugging the top rim —
+/// never by darkening the fill. A filled gray track does not exist in
+/// the reference.
+const MARKER_INNER_SHADOW_ALPHA: f32 = 0.09;
+const MARKER_INNER_SHADOW_RADIUS: f32 = 1.0;
+/// Small top bias; the shade hugs the WHOLE perimeter softly (the
+/// reference rim is one narrow even gradient, slightly stronger on the
+/// upper arc — a bright inner lip ring is an artifact it never shows).
+const MARKER_INNER_SHADOW_DROP: f32 = 0.4;
+/// The resting marker is a big TRUE ELLIPSE, not a capsule: 120dp over
+/// the 103dp cell (tap-flight f_045, marker run 347px against the 299px
+/// cell at 2.89 px/dp), centered on its cell and overhanging both
+/// neighbors. A stadium's long flat top/bottom reads as a rounded
+/// rectangle — the reference silhouette crests continuously.
 const MARKER_WIDTH_FACTOR: f32 = 1.16;
-/// The marker oval pokes past the white body's silhouette on BOTH edges
-/// (f_045/f_132: the gray crests above the body top) — it is taller than
-/// the body, never inset within it.
-const MARKER_POKE: f32 = 2.0;
+/// The marker crests past the body top (f_045 column: the shade rides
+/// over the body edge) and only whispers past the bottom — the poke is
+/// asymmetric, biased up, and subtle.
+const MARKER_POKE_TOP: f32 = 1.5;
+const MARKER_POKE_BOTTOM: f32 = 0.5;
 /// How far the interaction lens pokes past the track vertically. With the
 /// lift scale this lands the raised body at ~1.4x the track height — the
 /// reference finger oval (segmented-drag f_025). The oval is ONE
@@ -214,21 +215,13 @@ pub fn LiquidSegmentedControl(
             let indicator_brush = if colors.is_dark {
                 Brush::solid(Color::from_rgba_u8(90, 90, 96, 240))
             } else {
-                // The recessed marker: translucent black over whatever
-                // surface hosts the control, so no gray is invented.
-                Brush::vertical_gradient_stops(
-                    vec![
-                        (0.0, Color::rgba(0.0, 0.0, 0.0, MARKER_TOP_SHADE_ALPHA)),
-                        (
-                            MARKER_TOP_SHADE_BAND,
-                            Color::rgba(0.0, 0.0, 0.0, MARKER_FILL_ALPHA),
-                        ),
-                        (1.0, Color::rgba(0.0, 0.0, 0.0, MARKER_FILL_ALPHA)),
-                    ],
-                    0.0,
-                    SEGMENT_HEIGHT + (TRACK_PADDING + MARKER_POKE) * 2.0,
-                    TileMode::Clamp,
-                )
+                // The marker is a LIGHT SOLID well, not a translucent dark
+                // wash: a wash over the page turned the above-body crest
+                // into a harsh dark eyebrow (219 on the 242 card), while
+                // the reference crest is nearly page-light (232 on 237).
+                // The recessed depth reads from the rim-following inner
+                // shadow, not from the fill.
+                Brush::solid(Color::from_rgb_u8(244, 244, 246))
             };
             let indicator_axis = Rc::clone(&lens_axis);
             // Direct manipulation: while the lens gesture owns the control
@@ -240,40 +233,47 @@ pub fn LiquidSegmentedControl(
             // cell). Controlled-state changes keep the blob springs.
             let lens_engaged = pressed.get() || lens_settling;
             let visual_cell_x = segment_width * visual_index as f32;
-            let marker_size = Size::new(
-                segment_width * MARKER_WIDTH_FACTOR,
-                SEGMENT_HEIGHT + (TRACK_PADDING + MARKER_POKE) * 2.0,
-            );
+            // The ellipse is a gradient CIRCLE stretched horizontally by
+            // the layer transform — the only path to a true oval with a
+            // gradient fill (vector paths drop gradients, round-rects cap
+            // at stadium).
+            let marker_h =
+                SEGMENT_HEIGHT + TRACK_PADDING * 2.0 + MARKER_POKE_TOP + MARKER_POKE_BOTTOM;
+            let marker_aspect = segment_width * MARKER_WIDTH_FACTOR / marker_h;
             let indicator = Modifier::empty()
-                .size(marker_size)
-                // Center the oversized oval on cell 0; translations then
-                // move it in cell-left units like before.
+                .size(Size::new(marker_h, marker_h))
+                // Center the circle node on cell 0, biased up so the
+                // stretched ellipse crests past the body top.
                 .offset(
-                    (segment_width - marker_size.width) * 0.5,
-                    (SEGMENT_HEIGHT - marker_size.height) * 0.5,
+                    (segment_width - marker_h) * 0.5,
+                    -(TRACK_PADDING + MARKER_POKE_TOP),
                 )
                 .graphics_layer(move || {
                     let lead = leading.get();
                     let trail = trailing.get().max(lead + 1.0);
+                    let center_pivot = cranpose_ui_graphics::TransformOrigin {
+                        pivot_fraction_x: 0.5,
+                        pivot_fraction_y: 0.5,
+                    };
                     if lens_engaged {
                         let travel =
                             (indicator_axis.value() - visual_cell_x) / segment_width.max(1.0);
                         GraphicsLayer {
                             translation_x: visual_cell_x,
+                            scale_x: marker_aspect,
                             alpha: plain_indicator_alpha(travel),
+                            transform_origin: center_pivot,
                             ..Default::default()
                         }
                     } else {
+                        // Blob morph: the ellipse centers on the moving
+                        // cell span and stretches with it.
                         GraphicsLayer {
-                            translation_x: lead,
-                            scale_x: ((trail - lead) / segment_width.max(1.0)).max(0.01),
+                            translation_x: (lead + trail - segment_width) * 0.5,
+                            scale_x: marker_aspect
+                                * ((trail - lead) / segment_width.max(1.0)).max(0.01),
                             alpha: 1.0,
-                            // Scale from the leading edge so translation
-                            // stays exact.
-                            transform_origin: cranpose_ui_graphics::TransformOrigin {
-                                pivot_fraction_x: 0.0,
-                                pivot_fraction_y: 0.5,
-                            },
+                            transform_origin: center_pivot,
                             ..Default::default()
                         }
                     }
@@ -281,9 +281,21 @@ pub fn LiquidSegmentedControl(
                 .draw_behind(move |scope| {
                     scope.draw_round_rect(
                         indicator_brush.clone(),
-                        CornerRadii::uniform(marker_size.height * 0.5),
+                        CornerRadii::uniform(marker_h * 0.5),
                     );
-                });
+                })
+                // The recess depth: a dark arc hugging the top rim (drawn
+                // on the circle, stretched with it into the ellipse).
+                .inner_shadow(
+                    cranpose_ui_graphics::LayerShape::Rounded(
+                        cranpose_ui_graphics::RoundedCornerShape::uniform(marker_h * 0.5),
+                    ),
+                    |scope| {
+                        scope.radius = MARKER_INNER_SHADOW_RADIUS;
+                        scope.offset.y = MARKER_INNER_SHADOW_DROP;
+                        scope.color = Color::BLACK.with_alpha(MARKER_INNER_SHADOW_ALPHA);
+                    },
+                );
             Box(indicator, BoxSpec::default(), || {});
 
             // Labels row on top of the indicator. The cells keep button
@@ -299,10 +311,16 @@ pub fn LiquidSegmentedControl(
                             // by weight and the pill, never by dimming the
                             // unselected cells.
                             color: Some(colors.label),
+                            // Reference "Sending" spans 63dp of the 103dp
+                            // cell; the subheadline's 15dp rendered 55dp.
+                            font_size: cranpose_ui::text::TextUnit::Sp(17.0),
+                            // The reference weight step is a whisper
+                            // (regular -> medium); semibold-vs-medium read
+                            // as a black blob against the airy target.
                             font_weight: Some(if is_selected {
-                                FontWeight::SEMI_BOLD
-                            } else {
                                 FontWeight::MEDIUM
+                            } else {
+                                FontWeight::NORMAL
                             }),
                             ..typography.subheadline.span_style.clone()
                         },
