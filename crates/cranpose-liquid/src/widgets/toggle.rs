@@ -141,6 +141,38 @@ fn lens_translation_x(thumb_x: f32, node_width: f32) -> f32 {
     thumb_x + (THUMB_WIDTH - node_width) * 0.5
 }
 
+/// The reference track is a recessed WELL, not a flat fill (rest frame
+/// f_001, center column at 3x): a cool-bright blue-tinted edge fading over
+/// ~2.5dp at the top, the base face, and a warm bright lip peaking ~1.5dp
+/// above the bottom edge with a neutral seam under it. These chromatic
+/// edges are exactly what the pressed dome's rim band re-images into its
+/// blue top / orange bottom arcs — the flat fill starved the ring.
+fn track_well_brush(track: cranpose_ui_graphics::Color) -> Brush {
+    let scale = |c: cranpose_ui_graphics::Color, r: f32, g: f32, b: f32| {
+        cranpose_ui_graphics::Color::rgba(
+            (c.r() * r).min(1.0),
+            (c.g() * g).min(1.0),
+            (c.b() * b).min(1.0),
+            c.a(),
+        )
+    };
+    let cool_top = scale(track, 1.12, 1.16, 1.20);
+    let lip = scale(track, 1.46, 1.40, 1.31);
+    let seam = scale(track, 1.09, 1.07, 1.02);
+    Brush::vertical_gradient_stops(
+        vec![
+            (0.0, cool_top),
+            (0.09, track),
+            (0.86, track),
+            (0.945, lip),
+            (1.0, seam),
+        ],
+        0.0,
+        TRACK_HEIGHT,
+        cranpose_ui_graphics::TileMode::Clamp,
+    )
+}
+
 /// The lean's travel side for a fresh press: the only end this switch can
 /// head to. Movement and release retarget it through the gesture handler —
 /// the fluid motion axis is unusable here because a slow drag stays under
@@ -360,7 +392,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
         })
         .draw_behind(move |scope| {
             scope.draw_round_rect(
-                Brush::solid(track_color),
+                track_well_brush(track_color),
                 CornerRadii::uniform(TRACK_HEIGHT * 0.5),
             );
         });

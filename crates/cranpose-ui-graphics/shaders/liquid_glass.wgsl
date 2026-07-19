@@ -801,7 +801,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // already-sampled transmitted ray; everything downstream (fold
         // absorption, meniscus, ink recolor, tone) operates on the merged
         // chromatic transmission.
-        let index_spread = dispersion_strength * 0.16;
+        let index_spread = dispersion_strength * 0.22;
         let red_path = sample_wcksrd_path(
             uv,
             tex_size,

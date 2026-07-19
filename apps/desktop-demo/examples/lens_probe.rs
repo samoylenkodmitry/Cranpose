@@ -69,7 +69,7 @@ fn ProbeApp() {
                             .tint(Color::WHITE.with_alpha(0.02))
                             .blur_radius(1.2)
                             .saturation(1.0)
-                            .refraction_depth(0.30)
+                            .refraction_depth(0.34)
                             .refraction_curve(0.45)
                             .optical_zoom(1.95)
                             .transmission_refraction(1.0)

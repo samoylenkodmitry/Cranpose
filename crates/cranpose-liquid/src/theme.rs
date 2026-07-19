@@ -83,7 +83,7 @@ impl LiquidColors {
             destructive: Color::from_rgb_u8(255, 59, 48),
             success: Color::from_rgb_u8(52, 199, 89),
             toggle_on: Color::from_rgb_u8(43, 189, 76),
-            toggle_off: Color::from_rgb_u8(187, 186, 188),
+            toggle_off: Color::from_rgb_u8(170, 170, 181),
             warning: Color::from_rgb_u8(255, 149, 0),
             glass_tint: Color::from_rgba_u8(255, 255, 255, 18),
             glass_stroke: Color::from_rgba_u8(255, 255, 255, 120),
