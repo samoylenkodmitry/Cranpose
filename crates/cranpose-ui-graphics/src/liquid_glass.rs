@@ -321,8 +321,14 @@ pub fn liquid_menu_glass_effect(
     shader.set_float(20, -0.06 * p);
     shader.set_float(24, 1.0 + 0.05 * p); // gentle contrast pivot
     shader.set_float(21, 0.5);
+    // The settled reference capsule keeps a HEAVY backdrop blur: the
+    // "Styles" pill behind it reads as an illegible ~10%-contrast smudge
+    // (menu-materialize c_072). The old (1-p) ramp drained the blur to
+    // ~1px at settle, so backdrop text interleaved sharply with the menu
+    // labels. Materialize still starts at full smudge and relaxes a
+    // little as the labels sharpen.
     let blur_radius = if blur_radius_px > 0.5 {
-        (blur_radius_px * (1.0 - p)).max(blur_radius_px * 0.08)
+        blur_radius_px * (1.0 - 0.4 * p)
     } else {
         0.0
     };
@@ -464,7 +470,9 @@ mod tests {
         };
         assert_eq!(menu.uniforms()[9], 0.10);
         assert_eq!(menu.uniforms()[GLASS_REFRACTION_CURVE_UNIFORM], 0.25);
-        assert!((menu.uniforms()[GLASS_BLUR_RADIUS_UNIFORM] - 0.64).abs() < 1.0e-6);
+        // Settled blur stays heavy (reference c_072: backdrop text is an
+        // illegible smudge through the settled capsule).
+        assert!((menu.uniforms()[GLASS_BLUR_RADIUS_UNIFORM] - 4.8).abs() < 1.0e-6);
     }
 
     #[test]

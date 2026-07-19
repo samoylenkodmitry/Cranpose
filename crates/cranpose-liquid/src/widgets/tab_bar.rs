@@ -84,12 +84,15 @@ const BAR_HEIGHT: f32 = 64.0;
 /// user screenshots on both bars).
 const BLOB_HEIGHT: f32 = 56.0;
 const BLOB_MARGIN: f32 = 4.0;
-/// Raised bubble projection over the resting blob. The reference bubble
-/// GROWS PAST THE BAR: at full contact it stands ~1.2x the bar height
-/// (56dp blob * 1.375 = 77dp vs the 64dp bar — poking ~6.5dp beyond
-/// both edges), it barely magnifies what it covers, and the light does
-/// the depth (top arc + lower lip), not the zoom.
-const FLIGHT_LENS_PROJECTION_SCALE: f32 = 1.375;
+/// Raised bubble growth over the resting blob — VERTICAL ONLY. Measured
+/// on the raw hold recording (bottom_bar_click_to_change_then_hold_a_
+/// little.mov, held frames f_0260/f_0300): the held bubble keeps its rest
+/// width (348px over a 319px cell pitch = the 1.09 rest factor) while its
+/// height grows 56dp -> ~82dp (238px against the 185px bar), poking ~9dp
+/// past BOTH bar edges. A uniform 1.375x projection made a 1.5-pitch-wide
+/// capsule that sat over the neighbor cell and garbled its glyphs for the
+/// whole hold.
+const FLIGHT_LENS_HEIGHT_PROJECTION: f32 = 82.0 / BLOB_HEIGHT;
 /// Resting bubble width over the cell pitch. Measured on the reference
 /// (bottom-bar-click f_0000: bubble 96 over pitch 87.5): the bubble is
 /// barely wider than its cell, so a CELL-CENTERED rest keeps its edge
@@ -152,6 +155,14 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         // neighbor icons into the lens instead.
         .refraction_depth(1.0)
         .refraction_curve(0.25)
+        // The raised bubble's rim is a FOLD band like the toggle's: the
+        // reference hold frames (raw recording f_0260) read a thin darker
+        // ring re-imaging the content just outside the silhouette, with
+        // chromatic micro-fringes — without it the bubble fades out as a
+        // soft white sticker over the white bar. Kept shallow: 4dp reached
+        // the covered cell's teal label and threw vivid cyan streaks along
+        // the lip where the reference shows a faint washed ghost.
+        .fold_depth(2.5)
         .dispersion(0.24)
         // Raised milk: the reference's held bubble face lifts modestly
         // toward white as it rises (on-white-click-hold sheet, held rows
@@ -165,7 +176,12 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
 fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
     Glass::regular()
         .tint(neutral_surface_tint(foreground, 0.0, 0.04))
-        .blur_radius(4.0)
+        // 4dp let bold section headers read through the face as strong
+        // dark smears; the reference face (bar_over_headers) drowns them
+        // to a faint ghost while the color wash survives. The flat-tile
+        // composite solve below is blur-invariant, so the measured
+        // tint/saturation/lift stay pinned.
+        .blur_radius(9.0)
         // Measured on bar_over_orange_purple: tile (242,150,77) reads
         // (253,210,168) through the bar. Saturation deepens the channels
         // before the screen lift, so the lift knob runs higher than the
@@ -386,8 +402,8 @@ fn tab_lens_base_size(tab_width: f32, activity: f32) -> (f32, f32) {
     let activity = activity.clamp(0.0, 1.0);
     let ease = activity * activity * (3.0 - 2.0 * activity);
     let rest_width = tab_width * TAB_LENS_REST_WIDTH_FACTOR;
-    let projection = 1.0 + (FLIGHT_LENS_PROJECTION_SCALE - 1.0) * ease;
-    (rest_width * projection, BLOB_HEIGHT * projection)
+    let projection = 1.0 + (FLIGHT_LENS_HEIGHT_PROJECTION - 1.0) * ease;
+    (rest_width, BLOB_HEIGHT * projection)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -410,7 +426,11 @@ struct TabFlightNode {
 fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> GlassDynamics {
     let activity = geometry.lens_activity.clamp(0.0, 1.0);
     let energy = geometry.pose.energy() * activity;
-    let radius = geometry.base_size.height * (0.48 + 0.02 * energy);
+    // The rest bubble is a capsule (r = h/2); the raised bubble flattens
+    // toward the reference's held squircle (r ~= 0.38h on the raw hold
+    // recording — the taller body squares off, the light stays on the
+    // long edges).
+    let radius = geometry.base_size.height * (0.48 - 0.10 * activity + 0.02 * energy);
     let glue = 20.0;
     let shapes = geometry
         .accessory_center
@@ -444,7 +464,10 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
             ),
             shapes,
             glue,
-            wobble_amplitude: 1.1 * energy,
+            // 1.1 was calibrated for the old 1.5-pitch-wide bubble; on the
+            // cell-width body the same amplitude curls the rim into marble
+            // swirls mid-travel where the reference keeps clean arc smears.
+            wobble_amplitude: 0.5 * energy,
             wobble_phase: geometry.lens_position * 0.045,
             bulge_amplitude: geometry.pose.bulge_amplitude.min(8.0) * activity,
             bulge_direction: geometry.pose.bulge_direction,
@@ -742,9 +765,8 @@ fn LiquidTabBarLayout(
                     // lens to the bar's end and the two glue through a
                     // smooth-union neck.
                     let (lens_px, lens_activity, lens_tab_w, pose) = lens_x_outer.get();
-                    let lens_w =
-                        lens_tab_w * TAB_LENS_REST_WIDTH_FACTOR * FLIGHT_LENS_PROJECTION_SCALE;
-                    let lens_h = BLOB_HEIGHT * FLIGHT_LENS_PROJECTION_SCALE;
+                    let lens_w = lens_tab_w * TAB_LENS_REST_WIDTH_FACTOR;
+                    let lens_h = BLOB_HEIGHT * FLIGHT_LENS_HEIGHT_PROJECTION;
                     // Node headroom for the deformation extremes (max axis
                     // stretch + leading bulge, max ortho swell) and rim glow.
                     let deformation_headroom =
@@ -967,25 +989,19 @@ mod tests {
     }
 
     #[test]
-    fn lens_depth_is_an_isotropic_projection_separate_from_fluid_strain() {
+    fn lens_contact_swell_is_vertical_only() {
         let resting = tab_lens_base_size(TAB_WIDTH, 0.0);
         let raised = tab_lens_base_size(TAB_WIDTH, 1.0);
         assert_eq!(
             resting,
             (TAB_WIDTH * TAB_LENS_REST_WIDTH_FACTOR, BLOB_HEIGHT)
         );
-        assert!((raised.0 / resting.0 - FLIGHT_LENS_PROJECTION_SCALE).abs() < 0.001);
-        assert!((raised.1 / resting.1 - FLIGHT_LENS_PROJECTION_SCALE).abs() < 0.001);
-        // The raised bubble is the reference's CONTACT SWELL: it stands
-        // ~1.2x the bar (projection 1.48), so its area grows to
-        // projection^2 of the resting blob — bounded by the projection
-        // itself, never beyond it.
-        let area_ratio = raised.0 * raised.1 / (resting.0 * resting.1);
-        let projection_area = FLIGHT_LENS_PROJECTION_SCALE * FLIGHT_LENS_PROJECTION_SCALE;
-        assert!(
-            (area_ratio - projection_area).abs() < 0.01,
-            "raised area must be exactly the isotropic projection, got {area_ratio}"
-        );
+        // Measured on the raw hold recording: the held bubble keeps its
+        // rest width (1.09x pitch held vs 1.10x at rest — no growth) and
+        // stands ~82dp against the 64dp bar, ~9dp past both edges.
+        assert_eq!(raised.0, resting.0);
+        assert!((raised.1 / resting.1 - FLIGHT_LENS_HEIGHT_PROJECTION).abs() < 0.001);
+        assert!((raised.1 - 82.0).abs() < 0.5);
     }
 
     #[test]
@@ -1040,7 +1056,9 @@ mod tests {
     #[test]
     fn bar_surface_adapts_frost_to_its_foreground() {
         let glass = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
-        assert_eq!(glass.blur_radius, Some(4.0));
+        // 9dp drowns bold section headers to the reference's faint ghost
+        // (bar_over_headers) — 4dp let them read as strong dark smears.
+        assert_eq!(glass.blur_radius, Some(9.0));
         assert_eq!(glass.saturation, Some(1.15));
         assert_eq!(glass.lift, Some(0.60));
         assert_eq!(glass.refraction_depth, 0.34);

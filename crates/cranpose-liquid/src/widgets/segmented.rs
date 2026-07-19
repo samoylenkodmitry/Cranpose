@@ -39,8 +39,14 @@ const SEGMENTED_STRAIN_RESPONSE: f32 = 0.18;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
 
-fn plain_indicator_alpha(lens_progress: f32) -> f32 {
-    ((0.18 - lens_progress) / 0.16).clamp(0.0, 1.0)
+/// The white pill dissolves with TRAVEL, never with the press itself: the
+/// reference keeps the pill (and the label through it) visible for the whole
+/// pressed dwell (tap-flight f_0000..f_0383), dissolves it at the origin as
+/// the lens departs, and re-materializes it under the destination as the
+/// lens arrives. Keying it on lens rise painted a white body over the label
+/// at the press instant.
+fn plain_indicator_alpha(travel_fraction: f32) -> f32 {
+    ((0.45 - travel_fraction.abs()) / 0.30).clamp(0.0, 1.0)
 }
 
 fn segment_lens_left(pointer_x: f32, segment_width: f32, count: usize) -> f32 {
@@ -169,23 +175,42 @@ pub fn LiquidSegmentedControl(
             } else {
                 Color::WHITE
             };
-            let lens_for_indicator = lens_progress;
+            let indicator_axis = Rc::clone(&lens_axis);
+            // Direct manipulation: while the lens gesture owns the control
+            // (pressed, or still settling after release) the white pill IS
+            // the dragged body — it snaps to the lens's nearest cell and
+            // dissolves/materializes with the lens's distance to that cell
+            // (reference: pill visible through the pressed dwell AND parked
+            // mid-drag holds, gone mid-gap, re-forming under the landing
+            // cell). Controlled-state changes keep the blob springs.
+            let lens_engaged = pressed.get() || lens_settling;
+            let visual_cell_x = segment_width * visual_index as f32;
             let indicator = Modifier::empty()
                 .size(Size::new(segment_width, SEGMENT_HEIGHT))
                 .graphics_layer(move || {
                     let lead = leading.get();
                     let trail = trailing.get().max(lead + 1.0);
-                    GraphicsLayer {
-                        translation_x: lead,
-                        scale_x: ((trail - lead) / segment_width.max(1.0)).max(0.01),
-                        // The plain fill hides while the lens is up.
-                        alpha: plain_indicator_alpha(lens_for_indicator.get()),
-                        // Scale from the leading edge so translation stays exact.
-                        transform_origin: cranpose_ui_graphics::TransformOrigin {
-                            pivot_fraction_x: 0.0,
-                            pivot_fraction_y: 0.5,
-                        },
-                        ..Default::default()
+                    if lens_engaged {
+                        let travel =
+                            (indicator_axis.value() - visual_cell_x) / segment_width.max(1.0);
+                        GraphicsLayer {
+                            translation_x: visual_cell_x,
+                            alpha: plain_indicator_alpha(travel),
+                            ..Default::default()
+                        }
+                    } else {
+                        GraphicsLayer {
+                            translation_x: lead,
+                            scale_x: ((trail - lead) / segment_width.max(1.0)).max(0.01),
+                            alpha: 1.0,
+                            // Scale from the leading edge so translation
+                            // stays exact.
+                            transform_origin: cranpose_ui_graphics::TransformOrigin {
+                                pivot_fraction_x: 0.0,
+                                pivot_fraction_y: 0.5,
+                            },
+                            ..Default::default()
+                        }
                     }
                 })
                 .draw_behind(move |scope| {
@@ -204,11 +229,11 @@ pub fn LiquidSegmentedControl(
                     let is_selected = index == visual_index;
                     let style = TextStyle {
                         span_style: SpanStyle {
-                            color: Some(if is_selected {
-                                colors.label
-                            } else {
-                                colors.secondary_label
-                            }),
+                            // Every reference label reads near-black
+                            // (tap-flight/drag strips) — selection is told
+                            // by weight and the pill, never by dimming the
+                            // unselected cells.
+                            color: Some(colors.label),
                             font_weight: Some(if is_selected {
                                 FontWeight::SEMI_BOLD
                             } else {
@@ -346,13 +371,12 @@ pub fn LiquidSegmentedControl(
                         };
                         GlassDynamics {
                             activity: Some(grow.clamp(0.0, 1.0)),
-                            // The lens IS the indicator pill at low optical
-                            // activity: the white body cross-fades into clear
-                            // glass as the lens rises, so the hand-off from
-                            // the plain indicator never leaves a no-pill gap
-                            // frame (reference tap-flight keeps one
-                            // continuous body through rise, flight, settle).
-                            resting_tint: Some(indicator_color),
+                            // The lens paints NO body of its own: the white
+                            // pill lives BELOW the labels (plain indicator)
+                            // and stays visible through the pressed dwell —
+                            // a white resting_tint here sat ABOVE the labels
+                            // and flashed an opaque capsule over "Errored"
+                            // at the press instant.
                             morph: Some(GlassMorph {
                                 node_size: (node_w, node_h),
                                 primary: (
@@ -401,12 +425,18 @@ mod tests {
     }
 
     #[test]
-    fn plain_indicator_stays_hidden_until_the_lens_is_almost_gone() {
-        assert_eq!(plain_indicator_alpha(1.0), 0.0);
-        assert_eq!(plain_indicator_alpha(0.5), 0.0);
-        assert_eq!(plain_indicator_alpha(0.2), 0.0);
-        assert!(plain_indicator_alpha(0.05) > 0.8);
+    fn plain_indicator_dissolves_with_travel_not_with_the_press() {
+        // Pressed dwell (no travel): the pill and its label stay visible.
         assert_eq!(plain_indicator_alpha(0.0), 1.0);
+        assert_eq!(plain_indicator_alpha(0.10), 1.0);
+        // Departing the origin: dissolved by mid-cell.
+        assert_eq!(plain_indicator_alpha(0.5), 0.0);
+        assert_eq!(plain_indicator_alpha(1.0), 0.0);
+        // Arriving works from either side.
+        assert_eq!(plain_indicator_alpha(-0.10), 1.0);
+        assert_eq!(plain_indicator_alpha(-0.5), 0.0);
+        // The fade band between dwell and gone is continuous.
+        assert!(plain_indicator_alpha(0.3) > 0.4);
     }
 
     #[test]
