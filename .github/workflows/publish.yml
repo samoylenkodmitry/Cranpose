@@ -40,8 +40,6 @@ jobs:
             echo "Expected tag starting with 'v', got '$tag'" >&2
             exit 1
           fi
-          version="${tag#v}"
-
           git fetch origin "$DEFAULT_BRANCH"
           git checkout "$DEFAULT_BRANCH"
 
@@ -201,30 +199,11 @@ jobs:
           lock_path.write_text("".join(lines))
           PY
 
-          # Update isolated-demo to point to latest cranpose version
-          python - <<'PY'
-          import os
-          import re
-          from pathlib import Path
-
-          version = os.environ["TAG_NAME"][1:]
-          toml_path = Path("apps/isolated-demo/Cargo.toml")
-          text = toml_path.read_text()
-          text = re.sub(
-              r'(cranpose\s*=\s*\{\s*version\s*=\s*")[^"]+(")',
-              rf"\g<1>{version}\g<2>",
-              text,
-          )
-          text = re.sub(
-              r'(cranpose-core\s*=\s*")[^"]+(")',
-              rf"\g<1>{version}\g<2>",
-              text,
-          )
-          toml_path.write_text(text)
-          PY
-
-          # Update isolated-demo lockfile
-          (cd apps/isolated-demo && cargo update -p cranpose -p cranpose-core 2>/dev/null || true)
+          # Do not update the isolated crates.io consumer before publishing.
+          # At this point the tagged version does not exist in the registry;
+          # suppressing that resolver failure and rewriting lockfile version
+          # strings would leave stale checksums. Update the isolated demo only
+          # after every crate in this release is available on crates.io.
 
           if git diff --quiet; then
             echo "No version changes needed for ${tag}."
@@ -234,10 +213,10 @@ jobs:
             # onto it so the tag tree matches the published crates. Pushes
             # made with GITHUB_TOKEN do not retrigger workflows, so the
             # moved tag cannot recurse into a second Publish run.
-            git diff --stat -- Cargo.toml Cargo.lock apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
+            git diff --stat -- Cargo.toml Cargo.lock
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add Cargo.toml Cargo.lock apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
+            git add Cargo.toml Cargo.lock
             git commit -m "release: ${tag}"
             if ! git push origin "HEAD:$DEFAULT_BRANCH"; then
               echo "$DEFAULT_BRANCH moved while preparing ${tag}; re-tag from the new HEAD." >&2
@@ -247,7 +226,7 @@ jobs:
             git push origin -f "refs/tags/$tag"
             echo "Landed release metadata for ${tag} on $DEFAULT_BRANCH and moved the tag."
           else
-            git diff -- Cargo.toml Cargo.lock apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
+            git diff -- Cargo.toml Cargo.lock
             echo "$DEFAULT_BRANCH must already contain the release metadata for ${tag} for a manual dispatch." >&2
             exit 1
           fi
