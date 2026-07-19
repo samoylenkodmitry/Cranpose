@@ -10,7 +10,7 @@ permissions:
 jobs:
   create-release:
     name: Create GitHub Release
-    runs-on: [self-hosted, Linux, cranpose-heavy]
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Create release
         uses: softprops/action-gh-release@v3
@@ -111,7 +111,7 @@ jobs:
   build-windows:
     name: Build windows-x86_64
     needs: create-release
-    runs-on: [self-hosted, Linux, cranpose-heavy]
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -151,12 +151,7 @@ jobs:
   build-android:
     name: Build Android APK
     needs: create-release
-    runs-on: [self-hosted, Linux, cranpose-heavy]
-    env:
-      # samarch-1-cranpose keeps the SDK outside the paths used by GitHub's
-      # hosted images. Point the installer at the persistent local SDK.
-      ANDROID_HOME: /home/s/develop/sdk
-      ANDROID_SDK_ROOT: /home/s/develop/sdk
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -171,6 +166,11 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+
+      - name: Configure machine-local Android SDK
+        run: |
+          echo "ANDROID_HOME=$HOME/Library/Android/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$HOME/Library/Android/sdk" >> "$GITHUB_ENV"
 
       - name: Install Android SDK packages
         run: bash scripts/ci/install_android_ndk.sh 27.0.12077973
