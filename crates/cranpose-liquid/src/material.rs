@@ -750,11 +750,21 @@ impl ResolvedGlass {
             GLASS_TRANSMISSION_REFRACTION_UNIFORM,
             self.transmission_refraction * activity,
         );
-        shader.set_float(GLASS_MENISCUS_ABSORPTION_UNIFORM, self.meniscus_absorption);
+        // Meniscus energy rides the dome depth like the fold: a shallow
+        // settled bead keeps only a whisper of its rim absorption.
+        shader.set_float(
+            GLASS_MENISCUS_ABSORPTION_UNIFORM,
+            self.meniscus_absorption * press_depth,
+        );
         // Always write optional channels — a conditional write leaves stale
         // values behind if a shader instance is ever pooled or reused, and
         // that leak class renders one surface with another's optics.
-        shader.set_float(GLASS_FOLD_DEPTH_UNIFORM, self.fold_depth.max(0.0));
+        // The fold band is part of the dome: a shallow bead folds shallow,
+        // so the rim band rides the same press-depth as the refraction.
+        shader.set_float(
+            GLASS_FOLD_DEPTH_UNIFORM,
+            self.fold_depth.max(0.0) * press_depth,
+        );
         shader.set_float(
             GLASS_OPTICAL_ZOOM_UNIFORM,
             1.0 + (self.optical_zoom - 1.0).max(0.0) * activity,

@@ -4,7 +4,9 @@
 //! it lifts the indicator into a magnifying glass lens that follows the finger
 //! across the segments (the reference control swipes, it doesn't just tap).
 
-use crate::material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape};
+use crate::material::{
+    Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape,
+};
 use crate::motion::LiquidMotion;
 use crate::theme::{liquid_colors, liquid_typography};
 use cranpose_animation::{animateFloatAsState, spring};
@@ -122,8 +124,11 @@ pub fn LiquidSegmentedControl(
                 cranpose_ui_graphics::RoundedCornerShape::uniform(track_height * 0.5),
             ),
             |scope| {
-                scope.radius = 7.0;
-                scope.offset.y = 1.5;
+                // Bottom-biased: the reference page is clean above the
+                // body's top edge (f_045 body-only column: 254 flat); the
+                // shadow pools only under the caps (219-225 on f_130).
+                scope.radius = 6.0;
+                scope.offset.y = 4.5;
                 scope.color = Color::BLACK.with_alpha(0.10);
             },
         )
@@ -305,8 +310,17 @@ pub fn LiquidSegmentedControl(
                         // interiors 236..244 on 254) and it casts a soft
                         // drop shadow while lifted.
                         .tint(Color::rgba(0.0, 0.0, 0.0, 0.08))
-                        .shadow(true)
-                        .rim_reflection(0.12)
+                        // Bottom-biased: the reference puck's shadow lives
+                        // under its lower arc only; the default lens shadow
+                        // (r10/y3/s-6) blurs past the crest and reads as a
+                        // dark eyebrow arc on the card.
+                        .shadow_style(GlassShadow::new(
+                            Color::BLACK.with_alpha(0.12),
+                            6.0,
+                            4.5,
+                            -5.0,
+                        ))
+                        .rim_reflection(0.04)
                         // The full continuous wcKSRD dome (example/
                         // shaders.txt): glyph warps and rim replay come from
                         // ONE mapping; soft interior per the original's blur.
@@ -336,6 +350,12 @@ pub fn LiquidSegmentedControl(
                                 MARKER_REST_ACTIVITY
                                     + (1.0 - MARKER_REST_ACTIVITY) * grow.clamp(0.0, 1.0),
                             ),
+                            // The settled puck is a SHALLOW bead: thin dark
+                            // rim arc, no bright inner ring (reference f_045
+                            // rim: 1.4dp dark arc straight into the flat
+                            // interior). The raise deepens the dome to the
+                            // full vivid band of the riding oval.
+                            press_depth: Some(0.12 + 0.88 * grow.clamp(0.0, 1.0)),
                             // The lens paints NO body of its own: the white
                             // pill lives BELOW the labels (plain indicator)
                             // and stays visible through the pressed dwell —
