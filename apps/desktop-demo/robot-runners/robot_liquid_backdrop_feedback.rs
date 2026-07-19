@@ -16,8 +16,11 @@ use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 800;
-/// A face is "materialized" once it clearly left the raw dark pill.
-const MATERIALIZED_LUMA_FLOOR: f32 = 100.0;
+/// A face is "materialized" once it clearly left the raw dark pill
+/// (~24 luma). The two-point-solved dark material (tint alpha 155) puts
+/// the settled face over the pill near ~60 — the old floor of 100 was
+/// calibrated on the pre-solve translucent panel.
+const MATERIALIZED_LUMA_FLOOR: f32 = 45.0;
 /// Feedback pushed the face +65 luma within two frames; honest per-frame
 /// material/animation variation stays well under this.
 const MAX_LATER_BRIGHTENING: f32 = 18.0;

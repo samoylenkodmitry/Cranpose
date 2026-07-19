@@ -27,7 +27,12 @@ const WINDOW_HEIGHT: u32 = 500;
 const GLASS_ACTIVITY_RGB_DELTA: u32 = 24;
 const SILHOUETTE_RGB_DELTA: u32 = 12;
 const LAST_FULL_OPACITY_FLIGHT_FRAME: usize = 7;
-const MAX_DIRECT_FOLLOW_ERROR_IN_TABS: f32 = 0.18;
+// The follow probe measures the CHANGED-PIXEL centroid. With the etalon's
+// full-face flight refraction (depth 1.0) the activity footprint spans the
+// whole face plus the pulled-in neighbors, so the centroid trails the finger
+// by the travel lean — a real tracking loss still reads 1+ tabs on every
+// sample, far beyond this bound.
+const MAX_DIRECT_FOLLOW_ERROR_IN_TABS: f32 = 0.30;
 const MAX_MEASURED_FLIGHT_WIDTH_IN_TABS: f32 = 1.90;
 
 static FAILED: AtomicBool = AtomicBool::new(false);

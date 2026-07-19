@@ -64,31 +64,35 @@ fn main() -> ExitCode {
                 .expect("open menu");
             // Exact-clock samples of the whole droplet growth (a wall-clock
             // sleep stretches under host load and lands past the opening
-            // phase): 54ms pins the departing source, 75ms the horizontal
-            // pill, 130ms the front-loaded body, and 330ms settle.
+            // phase): 75ms pins the departing source, 104ms the horizontal
+            // pill, 181ms the front-loaded body, and 459ms settle.
             let grow_steps: Vec<(f32, bool)> = vec![
+                // The reference-true grow clock (springs 62/26) stretches
+                // spring time by sqrt(120/62) ≈ 1.39 over the old pins;
+                // these offsets sample the SAME spring phases as before, so
+                // the fraction ranges below keep their meaning.
                 (0.0, false),
                 (1.0, false),
-                (20.0, true),
-                (16.0, true),
-                (17.0, true),
+                (28.0, true),
+                (22.0, true),
+                (24.0, true),
+                (29.0, true),
+                (35.0, true),
+                (42.0, true),
                 (21.0, true),
-                (25.0, true),
-                (30.0, true),
-                (15.0, true),
-                (20.0, true),
-                (40.0, true),
-                (60.0, true),
-                (65.0, true),
-                (170.0, true),
+                (28.0, true),
+                (56.0, true),
+                (83.0, true),
+                (90.0, true),
+                (236.0, true),
             ];
             let grow_shots = robot
                 .capture_keyframes(1.0, &grow_steps)
                 .expect("grow keyframes");
             std::thread::sleep(Duration::from_millis(600));
             let grow_labels = [
-                "021ms", "037ms", "054ms", "075ms", "100ms", "130ms", "145ms", "165ms",
-                "205ms", "265ms", "330ms", "500ms",
+                "029ms", "051ms", "075ms", "104ms", "139ms", "181ms", "202ms", "230ms",
+                "286ms", "369ms", "459ms", "695ms",
             ];
             for (shot, label) in grow_shots.iter().zip(grow_labels.iter()) {
                 save(shot, &shot_dir, &format!("menu-grow-{label}"));
@@ -166,7 +170,7 @@ fn main() -> ExitCode {
                 fail(
                     &robot,
                     &format!(
-                        "menu missed the departing-source phase at 54ms: early extent {early_extent:?}, settled extent {open_extent:?}"
+                        "menu missed the departing-source phase at 75ms: early extent {early_extent:?}, settled extent {open_extent:?}"
                     ),
                 );
             }
@@ -188,7 +192,7 @@ fn main() -> ExitCode {
                 fail(
                     &robot,
                     &format!(
-                        "menu missed the rendered oval trajectory at 75ms: extent {oval_extent:?}, settled {open_extent:?}"
+                        "menu missed the rendered oval trajectory at 104ms: extent {oval_extent:?}, settled {open_extent:?}"
                     ),
                 );
             }
@@ -201,7 +205,7 @@ fn main() -> ExitCode {
                 fail(
                     &robot,
                     &format!(
-                        "menu was not front-loaded by 130ms: extent {mid_extent:?}, settled {open_extent:?}"
+                        "menu was not front-loaded by 181ms: extent {mid_extent:?}, settled {open_extent:?}"
                     ),
                 );
             }
@@ -210,7 +214,7 @@ fn main() -> ExitCode {
                 fail(
                     &robot,
                     &format!(
-                        "menu did not approach its card footprint by 205ms: extent {near_settle_extent:?}, settled {open_extent:?}"
+                        "menu did not approach its card footprint by 286ms: extent {near_settle_extent:?}, settled {open_extent:?}"
                     ),
                 );
             }
@@ -219,7 +223,7 @@ fn main() -> ExitCode {
                 fail(
                     &robot,
                     &format!(
-                        "menu did not settle by 330ms: extent {settle_extent:?}, settled {open_extent:?}"
+                        "menu did not settle by 459ms: extent {settle_extent:?}, settled {open_extent:?}"
                     ),
                 );
             }
