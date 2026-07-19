@@ -64,8 +64,9 @@ fn main() -> ExitCode {
                 .expect("open menu");
             // Exact-clock samples of the whole droplet growth (a wall-clock
             // sleep stretches under host load and lands past the opening
-            // phase): 75ms pins the departing source, 104ms the horizontal
-            // pill, 181ms the front-loaded body, and 459ms settle.
+            // phase): 75ms pins the absorbed horizontal source cluster,
+            // 104ms its departure, 181ms the front-loaded body, and 459ms
+            // settle.
             let grow_steps: Vec<(f32, bool)> = vec![
                 // The reference-true grow clock (springs 62/26) stretches
                 // spring time by sqrt(120/62) ≈ 1.39 over the old pins;
@@ -159,40 +160,41 @@ fn main() -> ExitCode {
                 fail(&robot, "open menu drew almost no pixels over the clean page");
             }
             let early_aspect = early_extent.0 / early_extent.1.max(1.0);
-            // Ratios re-pinned for the 40dp card-header anchor (was the
-            // 54dp nav circle): height still arrives well before width.
-            if !(0.30..=0.48).contains(&early_width_fraction)
-                || !(0.68..=0.95).contains(&early_height_fraction)
-                || !(1.02..=1.60).contains(&early_aspect)
+            // The current reference geometry deliberately preserves the
+            // absorbed controls as one horizontal source cluster before the
+            // card body blooms (also pinned exactly by
+            // `menu_geometry_keeps_the_source_cluster_horizontal_before_card_growth`).
+            // This pixel contract therefore verifies that source phase here;
+            // the 181ms assertion below verifies the body growth itself.
+            if !(0.18..=0.30).contains(&early_width_fraction)
+                || !(0.10..=0.24).contains(&early_height_fraction)
+                || !(2.40..=4.50).contains(&early_aspect)
             {
                 save(absorbed, &shot_dir, "menu-early");
                 save(&open, &shot_dir, "menu-open");
                 fail(
                     &robot,
                     &format!(
-                        "menu missed the departing-source phase at 75ms: early extent {early_extent:?}, settled extent {open_extent:?}"
+                        "menu missed the horizontal source-cluster phase at 75ms: early extent {early_extent:?}, settled extent {open_extent:?}"
                     ),
                 );
             }
-            // This diff bbox includes the departed source position once the
-            // body follows its measured downward rebound. Exact live contour
-            // dimensions are pinned in the menu geometry unit test; here we
-            // verify that the shader rendered the expected width progression
-            // without mistaking travel distance for contour height. The 30dp
-            // frost and luma-compressed material intentionally make the outer
-            // white-on-white shoulder fall below this pixel-diff threshold,
-            // so retain a material-aware height floor and require visible
-            // growth from the preceding source frame instead of pinning the
-            // old 12dp-frost footprint.
-            if !(0.36..=0.65).contains(&oval_width_fraction)
-                || !(0.72..=1.12).contains(&oval_height_fraction)
+            // At 104ms the shader-visible source cluster must not regress
+            // before the body bloom. Exact live contour dimensions are pinned
+            // in the menu geometry unit test; this nearly white region makes
+            // the outer 30dp-frost shoulder fall below the pixel-diff
+            // threshold, so this check intentionally follows visible material
+            // rather than pretending the diff box is the whole SDF contour.
+            if !(0.18..=0.32).contains(&oval_width_fraction)
+                || !(0.10..=0.26).contains(&oval_height_fraction)
+                || oval_extent.0 < early_extent.0
                 || oval_extent.1 < early_extent.1
             {
                 save(wide_oval, &shot_dir, "menu-wide-oval");
                 fail(
                     &robot,
                     &format!(
-                        "menu missed the rendered oval trajectory at 104ms: extent {oval_extent:?}, settled {open_extent:?}"
+                        "menu source cluster regressed before card growth at 104ms: extent {oval_extent:?}, settled {open_extent:?}"
                     ),
                 );
             }
@@ -200,7 +202,9 @@ fn main() -> ExitCode {
             // bbox runs over a nearly white region, so the low-contrast outer
             // shoulder can fall below the diff threshold even while the
             // rendered contour is at the measured 205..216dp footprint.
-            if !(0.74..=0.94).contains(&mid_width_fraction) {
+            if !(0.74..=0.94).contains(&mid_width_fraction)
+                || !(0.80..=1.12).contains(&mid_height_fraction)
+            {
                 save(mid_growth, &shot_dir, "menu-mid-growth");
                 fail(
                     &robot,
