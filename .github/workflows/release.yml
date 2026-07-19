@@ -118,6 +118,8 @@ jobs:
           ref: ${{ github.ref_name }}
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
       - name: Provision Windows cross-build tooling
         run: |
@@ -125,10 +127,10 @@ jobs:
           command -v cargo-xwin >/dev/null \
             || cargo install cargo-xwin --locked --version 0.23.0
 
-      # Cross-compile the Windows MSVC binary on our Linux runner. cargo-xwin
+      # Cross-compile the Windows MSVC binary on our macOS runner. cargo-xwin
       # supplies Microsoft's CRT and SDK import libraries without a hosted
       # Windows VM, so this artifact no longer consumes hosted-runner quota.
-      - name: Build Windows desktop on Linux
+      - name: Build Windows desktop on macOS
         run: >
           cargo xwin build
           --package desktop-app
@@ -167,10 +169,8 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Configure machine-local Android SDK
-        run: |
-          echo "ANDROID_HOME=$HOME/Library/Android/sdk" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$HOME/Library/Android/sdk" >> "$GITHUB_ENV"
+      - name: Configure Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
         run: bash scripts/ci/install_android_ndk.sh 27.0.12077973
