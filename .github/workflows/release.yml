@@ -53,13 +53,14 @@ jobs:
           targets: ${{ matrix.target }}
           components: rust-src
 
-      - name: Install Linux dependencies
+      - name: Verify provisioned Linux dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev libxkbcommon-dev \
-            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev lld
+          # The persistent runner image owns its system packages; release jobs
+          # remain unprivileged and fail clearly if provisioning drifts.
+          command -v pkg-config
+          command -v lld
+          pkg-config --exists wayland-client xkbcommon x11 xrandr xcursor xi gl
 
       # Size-minimized distribution build (nightly build-std + abort panics;
       # see docs/binary_size.md). xtask picks per-OS linker flags.
@@ -118,13 +119,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux and Windows cross-build dependencies
+      - name: Provision Windows cross-build tooling
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev libxkbcommon-dev \
-            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev lld zip
-          cargo install cargo-xwin --locked --version 0.23.0
+          command -v zip
+          command -v cargo-xwin >/dev/null \
+            || cargo install cargo-xwin --locked --version 0.23.0
 
       # Cross-compile the Windows MSVC binary on our Linux runner. cargo-xwin
       # supplies Microsoft's CRT and SDK import libraries without a hosted
