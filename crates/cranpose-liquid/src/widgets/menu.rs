@@ -1752,7 +1752,14 @@ fn menu_item_row(
                 // panel top it lands on the reference's muted lavender
                 // instead of raw gradient heat).
                 let chip = if colors.is_dark {
-                    Color::WHITE.with_alpha(0.30)
+                    // Brighter chip: the reference active header is a light
+                    // lavender band (menu-expand expand f_040 = 160,121,160);
+                    // 0.30 left it a dark 85,55,89. The active/expanded
+                    // header is a touched-up surface — it reads HDR-brighter.
+                    // Light MAGENTA-white (not neutral): a pure-white chip
+                    // read lavender (G too high); the reference band holds
+                    // its magenta (160,121,160).
+                    Color::from_rgb_u8(255, 224, 248).with_alpha(0.52)
                 } else {
                     Color::BLACK.with_alpha(0.08)
                 };
