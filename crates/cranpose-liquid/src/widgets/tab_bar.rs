@@ -182,12 +182,15 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         //    re-image and its chromatic split (a damped branch erased the
         //    reference's vivid fringes);
         .transmission_refraction(1.0)
-        //  - the FOLD is the pinch: content just outside the silhouette is
-        //    re-imaged INSIDE the rim band, bowing the bar's edges inward
-        //    through the glass (the reference's bar-looks-smaller read);
-        .fold_depth(7.0)
-        //  - a mild face projection keeps the ridden glyph slightly
-        //    magnified like the reference recordings.
+        //  - the FOLD is the pinch and it is WIDE: outside content is
+        //    re-imaged inward across the outer zone of the bubble, so the
+        //    bar's edges bow in and the bar READS SMALLER through the
+        //    glass — the user's thrice-repeated requirement. A 7dp fold
+        //    was a thin trim the face-wide zoom overpowered;
+        .fold_depth(11.0)
+        //  - a mild apex-only projection (dome_interior-gated in the
+        //    shader) keeps just the ridden glyph slightly magnified —
+        //    never the bar.
         .optical_zoom(1.10)
         // The ride's rainbow (user feedback item 3): the riding bubble's
         // caps carry the toggle-class chromatic split; the REST bubble

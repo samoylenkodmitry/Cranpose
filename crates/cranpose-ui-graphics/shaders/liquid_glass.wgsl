@@ -298,6 +298,7 @@ fn channel_lens_displacement(
     transmission_refraction: f32,
     optical_zoom: f32,
     zoom_anchor: vec2<f32>,
+    dome_interior: f32,
     loupe_mode: f32,
     loupe_activity: f32,
     loupe_magnification: f32,
@@ -328,7 +329,15 @@ fn channel_lens_displacement(
         // line sequence (the reference "U"). With the steep gate the band
         // walks OUT to the unzoomed rim content, then the branch carries
         // it back to the boundary limit — one continuous sweep.
-        let projection_gate = interior * interior * interior * interior;
+        // ...gate on the GEOMETRIC dome interior, independent of the
+        // refraction band width: gating on the band interior magnified
+        // the whole transmitted backdrop whenever the band was thin (it
+        // saturates to 1 across the face), so the bar through the raised
+        // tab bubble read BIGGER — the exact opposite of the reference
+        // (user verdict, thrice): only the apex glyph magnifies; the bar
+        // must read SMALLER.
+        let projection_gate =
+            dome_interior * dome_interior * dome_interior * dome_interior;
         displacement += optical_position
             * (1.0 / optical_zoom - 1.0)
             * projection_gate;
@@ -761,6 +770,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             fold_absorb = smoothstep(0.62, 1.0, fold_tau) * 0.35;
         }
     }
+    // Geometric dome depth for the projection gate: silhouette 0 -> apex 1,
+    // independent of how wide the refraction band is.
+    let dome_interior = clamp(-d / inradius, 0.0, 1.0);
     let base_displacement = channel_lens_displacement(
         sampling_position,
         d,
@@ -770,6 +782,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         transmission_refraction,
         optical_zoom,
         zoom_anchor,
+        dome_interior,
         loupe_mode,
         loupe_activity,
         loupe_magnification,
@@ -812,6 +825,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                 transmission_refraction,
                 optical_zoom,
                 zoom_anchor,
+                dome_interior,
                 loupe_mode,
                 loupe_activity,
                 loupe_magnification,
@@ -832,6 +846,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                 transmission_refraction,
                 optical_zoom,
                 zoom_anchor,
+                dome_interior,
                 loupe_mode,
                 loupe_activity,
                 loupe_magnification,
