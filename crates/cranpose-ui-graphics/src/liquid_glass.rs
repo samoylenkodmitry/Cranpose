@@ -327,14 +327,27 @@ pub fn liquid_menu_glass_effect(
     // ~1px at settle, so backdrop text interleaved sharply with the menu
     // labels. Materialize still starts at full smudge and relaxes a
     // little as the labels sharpen.
-    let blur_radius = if blur_radius_px > 0.5 {
+    let requested_blur = if blur_radius_px > 0.5 {
         blur_radius_px * (1.0 - 0.4 * p)
     } else {
         0.0
     };
-    shader.set_float(GLASS_BLUR_RADIUS_UNIFORM, blur_radius);
-    shader.set_input_padding(12.0 + blur_radius);
-    RenderEffect::runtime_shader(shader)
+    // Split the blur exactly like the morph-glass material path: the
+    // wcKSRD optical blur is a 9x9 footprint, so spreading it over a large
+    // radius quantizes into a visible GRID (the "lines instead of blur"
+    // on the edit menu). Cap the optical tap at the safe radius and route
+    // everything heavier through the smooth Gaussian pass.
+    const WCKSRD_OPTICAL_BLUR_RADIUS_PX: f32 = 2.0;
+    let wcksrd_blur = requested_blur.min(WCKSRD_OPTICAL_BLUR_RADIUS_PX);
+    let gaussian_blur = (requested_blur - wcksrd_blur).max(0.0);
+    shader.set_float(GLASS_BLUR_RADIUS_UNIFORM, wcksrd_blur);
+    shader.set_input_padding(12.0 + requested_blur);
+    let optical = RenderEffect::runtime_shader(shader);
+    if gaussian_blur > f32::EPSILON {
+        RenderEffect::blur_with_edge_treatment(gaussian_blur, crate::TileMode::Mirror).then(optical)
+    } else {
+        optical
+    }
 }
 
 /// Build a chained `RenderEffect` for multiple liquid glass rects.
