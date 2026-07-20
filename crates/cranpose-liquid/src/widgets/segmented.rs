@@ -312,15 +312,15 @@ pub fn LiquidSegmentedControl(
                         // interiors 236..244 on 254) and it casts a soft
                         // drop shadow while lifted.
                         .tint(Color::rgba(0.0, 0.0, 0.0, 0.08))
-                        // Bottom-biased: the reference puck's shadow lives
-                        // under its lower arc only; the default lens shadow
-                        // (r10/y3/s-6) blurs past the crest and reads as a
-                        // dark eyebrow arc on the card.
+                        // The tab bubble's soft contact shadow (user: the
+                        // segmented bubble lacked a shadow; make it like the
+                        // bottom bar's "perfect shadow"). The old -5 spread
+                        // against a 6 radius cancelled to an invisible sliver.
                         .shadow_style(GlassShadow::new(
-                            Color::BLACK.with_alpha(0.12),
-                            6.0,
-                            4.5,
-                            -5.0,
+                            Color::BLACK.with_alpha(0.14),
+                            12.0,
+                            4.0,
+                            -2.0,
                         ))
                         .rim_reflection(0.04)
                         // The full continuous wcKSRD dome (example/

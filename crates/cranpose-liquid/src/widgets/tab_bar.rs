@@ -93,13 +93,15 @@ const BLOB_MARGIN: f32 = 4.0;
 /// past BOTH bar edges. A uniform 1.375x projection made a 1.5-pitch-wide
 /// capsule that sat over the neighbor cell and garbled its glyphs for the
 /// whole hold.
-const FLIGHT_LENS_HEIGHT_PROJECTION: f32 = 82.0 / BLOB_HEIGHT;
-/// How far the raised bubble's SDF blends from the rounded capsule toward
-/// a true ellipse (activity-scaled at the material layer, so the resting
-/// capsule is untouched). The reference held bubble is a continuously
-/// curved oval — with zero blend the taller body reads as a flat-topped
-/// rounded rectangle.
-const FLIGHT_ELLIPSE_BLEND: f32 = 0.55;
+const FLIGHT_LENS_HEIGHT_PROJECTION: f32 = 68.0 / BLOB_HEIGHT;
+/// A whisper of ellipse bow on the raised capsule — enough to soften the
+/// corners off a flat-topped rectangle (feedback item 7) without bowing
+/// it into a circle/oval. The reference raised bubble is a CURVED ROUNDED
+/// RECTANGLE: wider than tall, mostly-straight top and bottom edges,
+/// rounded corners (tab-swipe f_028 over "Account"). A 0.55 blend rounded
+/// it into a circle (user: "should not be this circle-like round, and not
+/// oval, more like curved rounded rectangle").
+const FLIGHT_ELLIPSE_BLEND: f32 = 0.25;
 /// Resting bubble width over the cell pitch. Measured on the reference
 /// (bottom-bar-click f_0000: bubble 96 over pitch 87.5): the bubble is
 /// barely wider than its cell, so a CELL-CENTERED rest keeps its edge
@@ -1026,7 +1028,7 @@ mod tests {
         // stands ~82dp against the 64dp bar, ~9dp past both edges.
         assert_eq!(raised.0, resting.0);
         assert!((raised.1 / resting.1 - FLIGHT_LENS_HEIGHT_PROJECTION).abs() < 0.001);
-        assert!((raised.1 - 82.0).abs() < 0.5);
+        assert!((raised.1 - 68.0).abs() < 0.5);
     }
 
     #[test]
