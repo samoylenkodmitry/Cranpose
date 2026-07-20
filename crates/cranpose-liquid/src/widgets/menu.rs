@@ -153,6 +153,11 @@ impl LiquidMenuSpec {
 }
 
 const MENU_WIDTH: f32 = 250.0;
+/// Headroom around the glass node for the card's drop shadow: the shadow
+/// renders inside the node surface, so without this pad its blur cuts to
+/// a hard-edged block at the node bounds (user-circled at the collapse's
+/// 2275ms).
+const MENU_SHADOW_PAD: f32 = 48.0;
 const MENU_RADIUS: f32 = 32.0;
 const MENU_GROW_DELAY: f32 = 0.050;
 const MENU_SOURCE_SEPARATE_END: f32 = 0.06;
@@ -1207,7 +1212,10 @@ pub fn LiquidMenu(
     PopupDismissableWhen(
         expanded,
         anchor,
-        Point::new(anchor.width - menu_width, 0.0),
+        Point::new(
+            anchor.width - menu_width - MENU_SHADOW_PAD,
+            -MENU_SHADOW_PAD,
+        ),
         move || scrim_dismiss(),
         {
             let absorbed = absorbed.clone();
@@ -1222,14 +1230,20 @@ pub fn LiquidMenu(
                 // bubble inflates into the menu card as one droplet. The
                 // anchor starts as its birth lobe and melts flat into the
                 // settled edge.
-                let anchor_center = (menu_width - anchor.width * 0.5, anchor.height * 0.5);
+                let anchor_center = (
+                    menu_width - anchor.width * 0.5 + MENU_SHADOW_PAD,
+                    anchor.height * 0.5 + MENU_SHADOW_PAD,
+                );
                 let anchor_shape = MenuShape::capsule(
                     anchor_center.0,
                     anchor_center.1,
                     anchor.width,
                     anchor.height,
                 );
-                let node_origin = Point::new(anchor.x + anchor.width - menu_width, anchor.y);
+                let node_origin = Point::new(
+                    anchor.x + anchor.width - menu_width - MENU_SHADOW_PAD,
+                    anchor.y - MENU_SHADOW_PAD,
+                );
                 let absorbed_shapes: Vec<MenuShape> = absorbed
                     .iter()
                     .filter_map(|source| MenuShape::from_window_rect(source.rect, node_origin))
@@ -1287,7 +1301,7 @@ pub fn LiquidMenu(
                         // recovers fully ~150dp out — the dark presentation
                         // carries a strong, wide ambient, not a card hint.
                         Color::BLACK.with_alpha(if colors.is_dark { 0.60 } else { 0.11 }),
-                        if colors.is_dark { 44.0 } else { 26.0 },
+                        if colors.is_dark { 32.0 } else { 26.0 },
                         if colors.is_dark { 10.0 } else { 8.0 },
                         0.0,
                     ))
@@ -1315,12 +1329,14 @@ pub fn LiquidMenu(
                             (x - glass_node_origin.x, y - glass_node_origin.y, 1.0f32)
                         });
                         let size = morph_size.get();
-                        let measured_h = (size.height - anchor_zone).max(24.0);
+                        let measured_h =
+                            (size.height - anchor_zone - MENU_SHADOW_PAD * 2.0).max(24.0);
                         // Accordion resize: spring from the previous measured
                         // height toward the new one; damping 0.78 gives the
                         // reference's visible size overshoot.
                         let resize_t = resize_state.get();
-                        let from_h = (resize_from.get() - anchor_zone).max(24.0);
+                        let from_h =
+                            (resize_from.get() - anchor_zone - MENU_SHADOW_PAD * 2.0).max(24.0);
                         let menu_h = if resize_from.get() > 1.0 {
                             from_h + (measured_h - from_h) * resize_t.max(0.0)
                         } else {
@@ -1331,8 +1347,8 @@ pub fn LiquidMenu(
                         // popup).
                         let settle_radius = (menu_h * 0.32).clamp(26.0, MENU_RADIUS);
                         let target = MenuShape {
-                            center_x: menu_width * 0.5,
-                            center_y: anchor_zone + menu_h * 0.5,
+                            center_x: menu_width * 0.5 + MENU_SHADOW_PAD,
+                            center_y: anchor_zone + MENU_SHADOW_PAD + menu_h * 0.5,
                             width: menu_width,
                             height: menu_h,
                             radius: settle_radius,
@@ -1421,7 +1437,7 @@ pub fn LiquidMenu(
                             ..Default::default()
                         }
                     })
-                    .width(menu_width);
+                    .width(menu_width + MENU_SHADOW_PAD * 2.0);
 
                 let has_checks = items.iter().any(|item| item.checked);
                 // Finger/pointer sliding through the menu highlights the row
@@ -1451,47 +1467,50 @@ pub fn LiquidMenu(
                     let on_item = Rc::clone(&on_item);
                     let on_dismiss = Rc::clone(&on_dismiss);
                     move || {
-                        Column(Modifier::empty().fill_max_width(), ColumnSpec::default(), {
-                            let items = items.clone();
-                            let typography = typography.clone();
-                            let on_item = Rc::clone(&on_item);
-                            let on_dismiss = Rc::clone(&on_dismiss);
-                            let gesture = gesture.clone();
-                            move || {
-                                Box(
-                                    Modifier::empty().height(anchor_zone),
-                                    BoxSpec::default(),
-                                    || {},
-                                );
-                                // The card's drop shadow belongs to the menu rect
-                                // only (the glass node also spans the anchor zone).
-                                // Soft and wide: the reference menu shadow is a
-                                // whisper. Content is absent on the initial stretch,
-                                // appears as a smudge during growth, and sharpens by
-                                // settle. While closing it rides the fast glass clock
-                                // so it contracts with the panel.
-                                let content = menu_content_progress(expanded, appear, reveal);
-                                // During an accordion resize the rows dip back
-                                // into the smudge and re-materialize as the
-                                // growth settles (reference expand frames).
-                                let resize_t = resize_state.get().clamp(0.0, 1.0);
-                                let content =
-                                    content * (0.45 + 0.55 * smoothstep(0.35, 1.0, resize_t));
-                                // Rows materialize from behind the glass and scale with
-                                // the droplet from the anchor corner; the content lives
-                                // on the growing surface instead of fading at full size.
-                                let content_scale = menu_content_scale(content);
-                                let content_blur = menu_content_blur(content);
-                                let content_translation_y = if expanded {
-                                    menu_vertical_rebound(
-                                        menu_geometry_phase(expanded, appear).path,
-                                    )
-                                } else {
-                                    0.0
-                                };
-                                let rows_wrap =
-                                    Modifier::empty().fill_max_width().graphics_layer(move || {
-                                        GraphicsLayer {
+                        Column(
+                            Modifier::empty().fill_max_width().padding(MENU_SHADOW_PAD),
+                            ColumnSpec::default(),
+                            {
+                                let items = items.clone();
+                                let typography = typography.clone();
+                                let on_item = Rc::clone(&on_item);
+                                let on_dismiss = Rc::clone(&on_dismiss);
+                                let gesture = gesture.clone();
+                                move || {
+                                    Box(
+                                        Modifier::empty().height(anchor_zone),
+                                        BoxSpec::default(),
+                                        || {},
+                                    );
+                                    // The card's drop shadow belongs to the menu rect
+                                    // only (the glass node also spans the anchor zone).
+                                    // Soft and wide: the reference menu shadow is a
+                                    // whisper. Content is absent on the initial stretch,
+                                    // appears as a smudge during growth, and sharpens by
+                                    // settle. While closing it rides the fast glass clock
+                                    // so it contracts with the panel.
+                                    let content = menu_content_progress(expanded, appear, reveal);
+                                    // During an accordion resize the rows dip back
+                                    // into the smudge and re-materialize as the
+                                    // growth settles (reference expand frames).
+                                    let resize_t = resize_state.get().clamp(0.0, 1.0);
+                                    let content =
+                                        content * (0.45 + 0.55 * smoothstep(0.35, 1.0, resize_t));
+                                    // Rows materialize from behind the glass and scale with
+                                    // the droplet from the anchor corner; the content lives
+                                    // on the growing surface instead of fading at full size.
+                                    let content_scale = menu_content_scale(content);
+                                    let content_blur = menu_content_blur(content);
+                                    let content_translation_y = if expanded {
+                                        menu_vertical_rebound(
+                                            menu_geometry_phase(expanded, appear).path,
+                                        )
+                                    } else {
+                                        0.0
+                                    };
+                                    let rows_wrap = Modifier::empty()
+                                        .fill_max_width()
+                                        .graphics_layer(move || GraphicsLayer {
                                             alpha: menu_content_alpha(content),
                                             scale_x: content_scale,
                                             scale_y: content_scale,
@@ -1504,40 +1523,41 @@ pub fn LiquidMenu(
                                             render_effect: (content_blur > 0.35)
                                                 .then(|| RenderEffect::blur(content_blur)),
                                             ..Default::default()
-                                        }
-                                    });
-                                Box(rows_wrap, BoxSpec::default(), {
-                                    let items = items.clone();
-                                    let typography = typography.clone();
-                                    let on_item = Rc::clone(&on_item);
-                                    let on_dismiss = Rc::clone(&on_dismiss);
-                                    let gesture = gesture.clone();
-                                    move || {
-                                        Column(
-                                            Modifier::empty().fill_max_width().padding_each(
-                                                0.0,
-                                                MENU_CONTENT_INSET_Y,
-                                                0.0,
-                                                MENU_CONTENT_INSET_Y,
-                                            ),
-                                            ColumnSpec::default(),
-                                            {
-                                                let items = items.clone();
-                                                let typography = typography.clone();
-                                                let on_item = Rc::clone(&on_item);
-                                                let on_dismiss = Rc::clone(&on_dismiss);
-                                                let gesture = gesture.clone();
-                                                move || {
-                                                    for (index, item) in items.iter().enumerate() {
-                                                        if item.section_start && index > 0 {
-                                                            // Whisper-subtle: the
-                                                            // reference surface reads
-                                                            // nearly seamless.
-                                                            let separator =
-                                                                colors.separator.with_alpha(
-                                                                    colors.separator.a() * 0.22,
-                                                                );
-                                                            Box(
+                                        });
+                                    Box(rows_wrap, BoxSpec::default(), {
+                                        let items = items.clone();
+                                        let typography = typography.clone();
+                                        let on_item = Rc::clone(&on_item);
+                                        let on_dismiss = Rc::clone(&on_dismiss);
+                                        let gesture = gesture.clone();
+                                        move || {
+                                            Column(
+                                                Modifier::empty().fill_max_width().padding_each(
+                                                    0.0,
+                                                    MENU_CONTENT_INSET_Y,
+                                                    0.0,
+                                                    MENU_CONTENT_INSET_Y,
+                                                ),
+                                                ColumnSpec::default(),
+                                                {
+                                                    let items = items.clone();
+                                                    let typography = typography.clone();
+                                                    let on_item = Rc::clone(&on_item);
+                                                    let on_dismiss = Rc::clone(&on_dismiss);
+                                                    let gesture = gesture.clone();
+                                                    move || {
+                                                        for (index, item) in
+                                                            items.iter().enumerate()
+                                                        {
+                                                            if item.section_start && index > 0 {
+                                                                // Whisper-subtle: the
+                                                                // reference surface reads
+                                                                // nearly seamless.
+                                                                let separator =
+                                                                    colors.separator.with_alpha(
+                                                                        colors.separator.a() * 0.22,
+                                                                    );
+                                                                Box(
                                                         Modifier::empty()
                                                             .fill_max_width()
                                                             .padding_symmetric(ROW_PADDING_X, 0.0)
@@ -1552,49 +1572,51 @@ pub fn LiquidMenu(
                                                         BoxSpec::default(),
                                                         || {},
                                                     );
-                                                        }
+                                                            }
 
-                                                        if item.header {
-                                                            menu_header_row(
+                                                            if item.header {
+                                                                menu_header_row(
+                                                                    item,
+                                                                    &typography,
+                                                                    has_checks,
+                                                                    colors,
+                                                                );
+                                                                continue;
+                                                            }
+                                                            // An accordion header with its children
+                                                            // present is EXPANDED: the reference lifts
+                                                            // it onto an inset rounded chip
+                                                            // (menu-expand f_045: chip 145,120,146
+                                                            // over body 90,81,91 — white ~0.33).
+                                                            let expanded_header = item.keeps_open
+                                                                && items
+                                                                    .get(index + 1)
+                                                                    .is_some_and(|next| {
+                                                                        !next.keeps_open
+                                                                            && !next.header
+                                                                    });
+                                                            menu_item_row(
+                                                                index,
                                                                 item,
                                                                 &typography,
                                                                 has_checks,
                                                                 colors,
+                                                                hovered,
+                                                                gesture_hover,
+                                                                expanded_header,
+                                                                gesture.item_rect(index),
+                                                                Rc::clone(&on_item),
+                                                                Rc::clone(&on_dismiss),
                                                             );
-                                                            continue;
                                                         }
-                                                        // An accordion header with its children
-                                                        // present is EXPANDED: the reference lifts
-                                                        // it onto an inset rounded chip
-                                                        // (menu-expand f_045: chip 145,120,146
-                                                        // over body 90,81,91 — white ~0.33).
-                                                        let expanded_header = item.keeps_open
-                                                            && items.get(index + 1).is_some_and(
-                                                                |next| {
-                                                                    !next.keeps_open && !next.header
-                                                                },
-                                                            );
-                                                        menu_item_row(
-                                                            index,
-                                                            item,
-                                                            &typography,
-                                                            has_checks,
-                                                            colors,
-                                                            hovered,
-                                                            gesture_hover,
-                                                            expanded_header,
-                                                            gesture.item_rect(index),
-                                                            Rc::clone(&on_item),
-                                                            Rc::clone(&on_dismiss),
-                                                        );
                                                     }
-                                                }
-                                            },
-                                        );
-                                    }
-                                });
-                            }
-                        });
+                                                },
+                                            );
+                                        }
+                                    });
+                                }
+                            },
+                        );
                     }
                 });
                 for source in absorbed.iter().cloned() {
