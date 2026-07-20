@@ -1297,7 +1297,7 @@ pub fn LiquidMenu(
                     // ~+45 luma; the absorption tint carries the drop.
                     glass
                         .contrast(0.37)
-                        .tint(Color::from_rgba_u8(24, 12, 28, 155))
+                        .tint(Color::from_rgba_u8(34, 10, 34, 146))
                 } else {
                     glass
                 };
