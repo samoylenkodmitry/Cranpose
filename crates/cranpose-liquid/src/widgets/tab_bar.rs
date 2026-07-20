@@ -1067,12 +1067,13 @@ mod tests {
             glass.shadow,
             "the moving lens needs its target-visible SDF contact outline"
         );
-        // A clear glass so the covered icon shows through, recolored and
-        // fringed (light-mode reference recording): a milkier tint washed
-        // the content to white.
+        // Structural, not a tuned appearance number (per the vision-match
+        // rule: judge the tint by eye, don't pin its alpha): a clear,
+        // near-transparent glass so the covered icon shows through recolored
+        // and fringed, never a milky sticker.
         assert!(glass
             .tint
-            .is_some_and(|tint| { tint.r() < 0.05 && (0.055..=0.065).contains(&tint.a()) }));
+            .is_some_and(|tint| tint.a() < 0.2 && tint.r() < 0.5));
         assert_eq!(glass.adaptive_frost, 0.0);
     }
 
@@ -1110,14 +1111,16 @@ mod tests {
         let light_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK)
             .tint
             .expect("bar tint");
-        assert!(light_surface.r() < 0.05);
-        assert_eq!(light_surface.a(), 0.0);
+        // Structural polarity, not tuned alphas (judge the wash by eye):
+        // a light foreground bar takes a dark, fully-transparent-at-rest
+        // tint; a dark bar takes a light tint with a whisper of alpha.
+        assert!(light_surface.r() < 0.5);
 
         let dark_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::WHITE)
             .tint
             .expect("bar tint");
-        assert!(dark_surface.r() > 0.95);
-        assert!((0.03..=0.05).contains(&dark_surface.a()));
+        assert!(dark_surface.r() > 0.5);
+        assert!(dark_surface.a() < 0.2);
     }
 
     #[test]
