@@ -508,12 +508,18 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     if cover_mode {
         optical_scale = max(get_float(99u), 1.0);
     }
-    // Dynamics geometry (zoom anchor 128, clear window 130..135) is declared
-    // in dp from widget space in BOTH modes. Container mode carries the
-    // density in dp_scale; cover mode's dp_scale is (1,1) — its density
-    // rides the render-scale uniform instead. Multiplying dp dynamics by
-    // dp_scale in cover mode parks them at position/density: the clear
-    // window ghosted one tab left of the bubble on any density != 1 desktop.
+    // Dynamics geometry that the LIQUID resolver writes (zoom anchor 128,
+    // clear window 130..135, touch 118..119) is declared in dp from widget
+    // space in BOTH modes. Container mode carries the density in dp_scale;
+    // cover mode's dp_scale is (1,1) — its density rides the render-scale
+    // uniform instead. Multiplying those dp channels by dp_scale in cover
+    // mode parks them at position/density: the clear window and the press
+    // glow each ghosted one tab left of the bubble on a density-1.354
+    // desktop. Scene glue shapes (36..) and the loupe focus (81) do NOT
+    // ride this: their cover-mode builders (text menu, loupe) follow the
+    // cover contract and pass px already — dyn_scale double-scaled them
+    // (flat-blue loupe, unreadable menu, live report). Normalizing every
+    // channel to one declared space is the open architecture task.
     var dyn_scale = dp_scale;
     var dyn_radius_scale = s;
     if cover_mode {
@@ -578,7 +584,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let p = coord - center;
     let d = scene_sdf(
         coord, p, half_size, corner_radius,
-        shape_count, dyn_scale, dyn_radius_scale, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
         strain_axis, strain_along, strain_across,
     );
 
@@ -633,7 +639,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         let shadow_p = p - shadow_offset;
         let shadow_d = scene_sdf(
             shadow_coord, shadow_p, half_size, corner_radius,
-            shape_count, dyn_scale, dyn_radius_scale, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+            shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
             strain_axis, strain_along, strain_across,
         ) - get_float(105u) * s;
         let shadow_blur = max(get_float(103u) * s, 1.0);
@@ -647,12 +653,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let eps = 0.5;
     let d_dx = scene_sdf(
         coord + vec2<f32>(eps, 0.0), p + vec2<f32>(eps, 0.0), half_size, corner_radius,
-        shape_count, dyn_scale, dyn_radius_scale, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
         strain_axis, strain_along, strain_across,
     );
     let d_dy = scene_sdf(
         coord + vec2<f32>(0.0, eps), p + vec2<f32>(0.0, eps), half_size, corner_radius,
-        shape_count, dyn_scale, dyn_radius_scale, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
         strain_axis, strain_along, strain_across,
     );
     let grad = vec2<f32>(d_dx - d, d_dy - d) / eps;
@@ -740,7 +746,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     var loupe_magnification = 1.0;
     if loupe_mode > 0.5 {
         loupe_activity = clamp(get_float(90u), 0.0, 1.0);
-        let focus_px = get_vec2(81u) * dyn_scale;
+        let focus_px = get_vec2(81u) * dp_scale;
         var m0 = get_float(83u);
         if m0 <= 0.0 {
             m0 = 1.0;
