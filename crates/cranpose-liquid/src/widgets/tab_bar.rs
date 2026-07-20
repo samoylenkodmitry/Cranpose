@@ -3,7 +3,8 @@
 //! circular accessory (the iOS 26 search button).
 
 use crate::material::{
-    neutral_surface_lift, neutral_surface_tint, Glass, GlassDynamics, GlassMorph, LiquidModifierExt,
+    neutral_surface_lift, neutral_surface_tint, Glass, GlassDynamics, GlassMorph, GlassShadow,
+    LiquidModifierExt,
 };
 use crate::motion::LiquidMotion;
 use crate::theme::{liquid_colors, liquid_typography, LiquidTypography};
@@ -169,7 +170,11 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         // the covered cell's teal label and threw vivid cyan streaks along
         // the lip where the reference shows a faint washed ghost.
         .fold_depth(2.5)
-        .dispersion(0.24)
+        // The ride's rainbow (user feedback item 3): the riding bubble's
+        // caps carry the toggle-class chromatic split; the REST bubble
+        // stays the verified subtle look because dispersion and the fold
+        // ride press_depth (shallow floor at rest, deep on the ride).
+        .dispersion(0.9)
         // Raised milk: the reference's held bubble face lifts modestly
         // toward white as it rises (on-white-click-hold sheet, held rows
         // f_0240+); lift scales by activity, so the verified resting look
@@ -177,6 +182,15 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         // heavy wash of earlier rounds read foggy.
         .lift(0.12)
         .highlight(0.35)
+        // Bottom-biased contact shadow (user feedback item 3: the ride
+        // bubble casts a visible soft shadow on the white bar; the default
+        // lens spread erased it on white-on-white).
+        .shadow_style(GlassShadow::new(
+            cranpose_ui_graphics::Color::BLACK.with_alpha(0.14),
+            12.0,
+            4.0,
+            -2.0,
+        ))
 }
 
 fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
@@ -489,6 +503,10 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
             zoom_anchor: (0.0, 0.0),
         }),
         activity: Some(activity),
+        // Ride depth: the raised bubble runs the full vivid rim (fold +
+        // dispersion at strength); the resting bubble keeps a shallow
+        // floor so its verified look is untouched.
+        press_depth: Some(0.3 + 0.7 * activity),
         resting_tint: Some(geometry.resting_tint),
         tint_alpha_multiplier: Some(tab_flight_tint_multiplier(geometry.lens_activity)),
         ..Default::default()
@@ -1039,7 +1057,10 @@ mod tests {
         // transmitting blank bar white (the two-cell milk blob).
         assert_eq!(glass.refraction_depth, 1.0);
         assert!(glass.refraction_curve < generic_lens.refraction_curve);
-        assert!(glass.dispersion < generic_lens.dispersion);
+        // The ride runs toggle-class dispersion; the REST bubble stays
+        // subtle because the dynamics floor press_depth 0.3 scales it —
+        // the effective resting split sits below the generic default.
+        assert!(glass.dispersion * 0.3 < generic_lens.dispersion);
         assert_eq!(glass.blur_radius, Some(0.0));
         assert!(glass.highlight < generic_lens.highlight);
         assert!(
