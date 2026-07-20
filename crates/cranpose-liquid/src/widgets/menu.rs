@@ -1322,13 +1322,17 @@ pub fn LiquidMenu(
                     remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
                 let glow_for_glass = Rc::clone(&glow_point);
                 let glass_node_origin = node_origin;
-                // The dark menu's low-activity body: bright frosted milk
-                // (menu-expand 400-466ms reads a gray-white blob over the
-                // purple header). The light menu keeps its transparent
-                // birth — its material is already near-white.
-                let birth_milk = colors
-                    .is_dark
-                    .then(|| Color::from_rgba_u8(208, 204, 214, 240));
+                // The birth droplet reads as a FROSTED blob, not clear
+                // glass: the dark menu births bright gray-white milk
+                // (menu-expand 400-466ms), the light menu a cool frosted
+                // near-white so the droplet has presence over the white
+                // list content (menu-open f_043..f_055 is a distinct
+                // frosted blob, not transparent).
+                let birth_milk = Some(if colors.is_dark {
+                    Color::from_rgba_u8(208, 204, 214, 240)
+                } else {
+                    Color::from_rgba_u8(246, 247, 250, 210)
+                });
                 let card = Modifier::empty()
                     .report_size(Rc::clone(&node_size))
                     .glass_effect_with(glass, move || {
