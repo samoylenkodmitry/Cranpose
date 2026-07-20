@@ -33,11 +33,15 @@ const THUMB_MARGIN: f32 = 1.5;
 /// compresses the transmitted content inward so the gray under the
 /// glass slims, while the dome itself stays grand. A small dome was the
 /// wrong fix; a spilling halo was the original defect.
-const LENS_WIDTH: f32 = 44.0;
+/// A WIDE GRAND capsule, not a round dome: the reference hold silhouette
+/// is ~1.5 wider than tall (interior aspect 1.41, rim ring 1.78 measured
+/// on the hold tile). The dome stays grand while the OPTICS thin the gray
+/// content inside it (user: "the dome itself stays grand"); a 44dp width
+/// read too circular against the 36dp height.
+const LENS_WIDTH: f32 = 54.0;
 /// TALLER than the 28dp track: the pressed dome pokes ~4dp past both bar
 /// edges (user: "the glass bubble should be wider in height than the
-/// toggle itself"). The reference "toggle in action" dome grows past the
-/// track vertically as it lifts toward the finger.
+/// toggle itself").
 const LENS_HEIGHT: f32 = 36.0;
 /// Centered on the track so the dome pokes symmetrically past the top
 /// and bottom edges.
@@ -513,7 +517,7 @@ mod tests {
         // Reference hold (6.27 px/dp): ring ~44 x 27dp — a big dome,
         // wider than the thumb (the gray sticks out via the LEAN), still
         // inside the track vertically.
-        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (44.0, 36.0));
+        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (54.0, 36.0));
         const { assert!(LENS_WIDTH > THUMB_WIDTH) };
         const { assert!(LENS_HEIGHT > TRACK_HEIGHT) };
         assert_eq!(
