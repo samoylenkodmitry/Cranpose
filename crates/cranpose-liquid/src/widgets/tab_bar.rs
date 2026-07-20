@@ -148,7 +148,7 @@ impl Default for LiquidTabBarSpec {
 fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Color) -> Glass {
     Glass::lens()
         .no_clip()
-        .tint(neutral_surface_tint(foreground, 0.13, 0.10))
+        .tint(neutral_surface_tint(foreground, 0.06, 0.05))
         // The color-mask act is the LENS's own optic: dark ink transmitted
         // through the bubble takes the accent (reference behavior); the
         // cells beneath keep their honest colors.
@@ -182,8 +182,8 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         // f_0240+); lift scales by activity, so the verified resting look
         // is untouched. Kept subtle — the fully clear face read flat, the
         // heavy wash of earlier rounds read foggy.
-        .lift(0.12)
-        .highlight(0.35)
+        .lift(0.05)
+        .highlight(0.18)
         // Bottom-biased contact shadow (user feedback item 3: the ride
         // bubble casts a visible soft shadow on the white bar; the default
         // lens spread erased it on white-on-white).
@@ -1069,9 +1069,12 @@ mod tests {
             glass.shadow,
             "the moving lens needs its target-visible SDF contact outline"
         );
+        // A clear glass so the covered icon shows through, recolored and
+        // fringed (light-mode reference recording): a milkier tint washed
+        // the content to white.
         assert!(glass
             .tint
-            .is_some_and(|tint| { tint.r() < 0.05 && (0.125..=0.135).contains(&tint.a()) }));
+            .is_some_and(|tint| { tint.r() < 0.05 && (0.055..=0.065).contains(&tint.a()) }));
         assert_eq!(glass.adaptive_frost, 0.0);
     }
 
