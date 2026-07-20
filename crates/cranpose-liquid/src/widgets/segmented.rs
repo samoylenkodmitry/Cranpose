@@ -60,7 +60,9 @@ const LENS_HEIGHT_LIFT_SCALE: f32 = 1.22;
 const LENS_PAD: f32 = 10.0;
 /// A segmented selection stays recognizably one cell wide while its surface
 /// carries the shared incompressible fluid strain.
-const SEGMENTED_STRAIN_RESPONSE: f32 = 0.18;
+/// Reference mid-drag oval elongates to ~1.15x its rest width (f_025:
+/// 138dp over the 120dp rest against 103dp cells).
+const SEGMENTED_STRAIN_RESPONSE: f32 = 0.30;
 /// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
 
@@ -419,6 +421,8 @@ mod tests {
         // The raise deepens, it does not widen into a worm.
         assert!(raised.width < resting.width * 1.10);
         assert!(raised.height > resting.height * 1.20);
-        assert!(segmented_strain(crate::dynamics::STRETCH_MAX) < 1.10);
+        // Max fluid stretch elongates ~1.15x like the reference mid-drag
+        // oval — never a two-cell worm.
+        assert!(segmented_strain(crate::dynamics::STRETCH_MAX) < 1.20);
     }
 }

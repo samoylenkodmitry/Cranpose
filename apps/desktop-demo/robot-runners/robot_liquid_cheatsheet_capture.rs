@@ -290,10 +290,16 @@ fn capture_segmented(robot: &cranpose::Robot, shot_dir: &Path) {
     let clock = std::time::Instant::now();
     std::thread::sleep(Duration::from_millis(150));
     let mut ride = Vec::new();
-    let waypoints = [0.25f32, 0.5, 0.75, 1.0, 0.75, 0.5, 0.25, 0.0, 0.35, 0.7];
+    // The reference finger crosses at human pace (~2.1s for the full
+    // there-and-back ride); an unpaced rip compressed the whole ride into
+    // ~1s and starved the droplet stretch of its speed phases.
+    let waypoints = [
+        0.15f32, 0.3, 0.45, 0.6, 0.75, 0.9, 1.0, 0.85, 0.65, 0.45, 0.25, 0.0, 0.2, 0.45, 0.7,
+    ];
     for t in waypoints {
         let x = sx + (rx - sx) * t;
         robot.mouse_move(x, y).expect("ride segment lens");
+        std::thread::sleep(Duration::from_millis(60));
         let shot = robot.screenshot().expect("segment ride frame");
         ride.push((clock.elapsed().as_millis() as f32, shot));
     }
