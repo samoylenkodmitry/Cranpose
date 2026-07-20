@@ -154,16 +154,14 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         // cells beneath keep their honest colors.
         .ink_recolor(accent, 0.85)
         .blur_radius(0.0)
-        // The bubble MAGNIFIES its content (light-mode recording): the icon
-        // and label under the bubble read visibly bigger than the same
-        // glyphs outside it, while the tab spacing compresses inward — a
-        // true lens, not a 1:1 pass-through. The etalon's full-face field
-        // (depth 1.0) pulls the neighbours in; the modest optical zoom
-        // scales the ridden cell up so the covered icon is "a little
-        // bigger" like the reference.
+        // The etalon full-face field (depth 1.0) pulls the covered cell in.
         .refraction_depth(1.0)
         .refraction_curve(0.25)
-        .optical_zoom(1.22)
+        // The droplet BENDS light so the covered content looks SMALLER: a
+        // real convex droplet MINIFIES its background. optical_zoom < 1
+        // samples a wider footprint so the icon/label read a touch smaller
+        // (user: target minifies, ours wrongly zoomed bigger).
+        .optical_zoom(0.82)
         // The raised bubble's rim is a FOLD band like the toggle's: the
         // reference hold frames (raw recording f_0260) read a thin darker
         // ring re-imaging the content just outside the silhouette, with
