@@ -90,6 +90,10 @@ fn capture_toggle_press(robot: &cranpose::Robot, shot_dir: &Path) {
 
     robot.mouse_move(cx, cy).expect("hover toggle");
     robot.mouse_down().expect("press toggle");
+    // The reference recording opens on an ESTABLISHED hold: its press
+    // happened before f_001 (T0 face already washed, dome fully charged).
+    // Charge ours before the capture clock starts so A0 aligns with T0.
+    std::thread::sleep(Duration::from_millis(180));
     let mut frames = keyframe_series(robot, &dense(33.0, 5), 0.0);
     robot.mouse_up().expect("release toggle");
     let mut flight_offsets = dense(33.0, 17);
