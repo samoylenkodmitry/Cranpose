@@ -578,7 +578,11 @@ fn menu_morph_geometry(
         primary.center_y += menu_vertical_rebound(phase.path);
     }
     let blob_radius = primary.height * 0.5;
-    let squareness = smoothstep(0.45, 0.62, phase.path);
+    // The reference droplet keeps its capsule-fat corners through most of
+    // the growth (menu-open f_043..f_055: corners ~40-50% of height, edges
+    // bowed) and squares off only near settle — squaring at mid-path read
+    // as "just a rounded rectangle" (user feedback items 2/6b).
+    let squareness = smoothstep(0.55, 0.88, phase.path);
     primary.radius = if !expanded {
         blob_radius
     } else if phase.path >= 1.0 {
@@ -595,7 +599,10 @@ fn menu_morph_geometry(
 }
 
 fn menu_ellipse_blend(path: f32) -> f32 {
-    0.42 * smoothstep(0.08, 0.28, path) * (1.0 - smoothstep(0.45, 0.62, path))
+    // The organic bow (SDF blended toward an ellipse) rides the WHOLE
+    // growth and releases only as the panel squares for settle — dying at
+    // 0.62 dropped the droplet into a rounded rectangle mid-flight.
+    0.5 * smoothstep(0.06, 0.22, path) * (1.0 - smoothstep(0.62, 0.88, path))
 }
 
 fn menu_content_progress(expanded: bool, appear: f32, reveal: f32) -> f32 {
