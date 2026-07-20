@@ -34,12 +34,14 @@ const THUMB_MARGIN: f32 = 1.5;
 /// glass slims, while the dome itself stays grand. A small dome was the
 /// wrong fix; a spilling halo was the original defect.
 const LENS_WIDTH: f32 = 44.0;
-const LENS_HEIGHT: f32 = 27.0;
-/// Near-centered: the 27dp dome leaves ~2.5dp of washed strip above AND
-/// below the squashed body — the -1.3 lift (tuned for the old 24.5 dome)
-/// starved the top band and pooled all the white at the bottom
-/// (user-flagged vertical asymmetry).
-const LENS_VERTICAL_OFFSET: f32 = -0.3;
+/// TALLER than the 28dp track: the pressed dome pokes ~4dp past both bar
+/// edges (user: "the glass bubble should be wider in height than the
+/// toggle itself"). The reference "toggle in action" dome grows past the
+/// track vertically as it lifts toward the finger.
+const LENS_HEIGHT: f32 = 36.0;
+/// Centered on the track so the dome pokes symmetrically past the top
+/// and bottom edges.
+const LENS_VERTICAL_OFFSET: f32 = 0.0;
 /// The raised lens leans toward the travel side, measured from the thumb
 /// center on the reference press and settle frames (~6-8dp in every phase:
 /// press leans toward the destination, flight leads the thumb, settle
@@ -511,9 +513,9 @@ mod tests {
         // Reference hold (6.27 px/dp): ring ~44 x 27dp — a big dome,
         // wider than the thumb (the gray sticks out via the LEAN), still
         // inside the track vertically.
-        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (44.0, 27.0));
+        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (44.0, 36.0));
         const { assert!(LENS_WIDTH > THUMB_WIDTH) };
-        const { assert!(LENS_HEIGHT < TRACK_HEIGHT) };
+        const { assert!(LENS_HEIGHT > TRACK_HEIGHT) };
         assert_eq!(
             toggle_lens_material().shape,
             LiquidShape::Capsule,
@@ -522,7 +524,7 @@ mod tests {
         // The dome rides high enough to expose the white face strip under
         // its top rim (reference f_009: ~1.3dp of washed face between dome
         // top and blob top feeds the luminous band).
-        assert!((LENS_VERTICAL_OFFSET + 0.3).abs() < 1.0e-6);
+        assert!(LENS_VERTICAL_OFFSET.abs() < 1.0e-6);
 
         let mid = interpolate_track_color(
             cranpose_ui_graphics::Color::from_rgb_u8(187, 186, 188),
