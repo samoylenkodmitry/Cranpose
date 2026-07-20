@@ -90,6 +90,10 @@ fn toggle_lens_material() -> Glass {
         // rainbow (zoomed f_008). The fold is this same re-image faked as a
         // separate band; the true branch replaces it.
         .refraction_depth(0.43)
+        // The reference band is the fold REPLAY: the blob edge and white
+        // strip mirrored across ~5dp of the rim (f_009 band y45-60). The
+        // etalon branch alone only draws their compressed boundary line.
+        .fold_depth(5.0)
         .refraction_curve(0.45)
         .optical_zoom(1.3)
         .transmission_refraction(1.0)
