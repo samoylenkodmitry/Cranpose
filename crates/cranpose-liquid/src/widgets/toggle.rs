@@ -26,15 +26,15 @@ pub(crate) const TRACK_HEIGHT: f32 = 28.0;
 const THUMB_WIDTH: f32 = 37.0;
 const THUMB_HEIGHT: f32 = 25.0;
 const THUMB_MARGIN: f32 = 1.5;
-/// The pressed dome is THUMB-sized, not a track-wide chamber: anchored
-/// to the 63dp track capsule in the hold tile (6.83 px/dp), the
-/// chromatic rim spans ~31.5 x 24dp — a wide-FLAT dome slightly
-/// narrower than the 37dp thumb, staying inside the track vertically,
-/// with the gray visibly sticking out past the rim. A wider lens spills
-/// its rim onto the white and reads inflated (user-arbitrated: target
-/// thinner, ours wider).
-const LENS_WIDTH: f32 = 34.0;
-const LENS_HEIGHT: f32 = 24.5;
+/// The pressed dome anchored to the 63dp track (user-corrected twice):
+/// the chromatic ring spans ~44 x 27dp (T133/T266 at 6.27 px/dp) — a
+/// BIG dome leaning toward the travel side with the gray sticking out
+/// its trailing edge. The "thinner" read is OPTICAL: the rim band
+/// compresses the transmitted content inward so the gray under the
+/// glass slims, while the dome itself stays grand. A small dome was the
+/// wrong fix; a spilling halo was the original defect.
+const LENS_WIDTH: f32 = 44.0;
+const LENS_HEIGHT: f32 = 27.0;
 const LENS_VERTICAL_OFFSET: f32 = -1.3;
 /// The raised lens leans toward the travel side, measured from the thumb
 /// center on the reference press and settle frames (~6-8dp in every phase:
@@ -79,9 +79,9 @@ fn toggle_lens_material() -> Glass {
         // (toggle-press T133: the magnified thumb fills the face, the white
         // well confined to a thin crescent hugging the rim). Coverage
         // geometry with the zoom anchored on the thumb: the 37dp thumb
-        // must span the 34dp face past a 7dp lean — 18.5·z ≥ 17+7 ⇒
-        // z ≈ 1.3 (1.95 belonged to the old 58dp chamber and over-zoomed
-        // the smaller face into flat gray, erasing the crescent).
+        // must span the 44dp face past a 7dp lean — 18.5·z ≥ 22+7 ⇒
+        // z ≈ 1.55 (1.95 belonged to the 58dp chamber; 1.3 to the
+        // too-small 34dp dome).
         // The rim band is the descending branch run to its boundary limit:
         // curve near 1 removes the x^0.25 step at the silhouette so the
         // sweep to the lens CENTER spans the whole ~6dp band (depth·29dp
@@ -89,13 +89,13 @@ fn toggle_lens_material() -> Glass {
         // per-channel index split fans it into the reference's gray-phase
         // rainbow (zoomed f_008). The fold is this same re-image faked as a
         // separate band; the true branch replaces it.
-        .refraction_depth(0.43)
+        .refraction_depth(0.58)
         // The reference band is the fold REPLAY: the blob edge and white
         // strip mirrored across ~5dp of the rim (f_009 band y45-60). The
         // etalon branch alone only draws their compressed boundary line.
         .fold_depth(5.0)
         .refraction_curve(0.45)
-        .optical_zoom(1.3)
+        .optical_zoom(1.55)
         .transmission_refraction(1.0)
         // The reference rim band reads LIGHT with a thin multi-hue edge
         // (T133/T500) — the heavy absorption + full-strength split painted
@@ -487,10 +487,15 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                 // the white strips above/below the blob widen and feed the
                 // fold replay its luminous content).
                 let squash = 3.0 * raise;
+                // The dome gathers the body inward on BOTH axes — the
+                // reference's pressed gray reads visibly THINNER inside
+                // the big dome (user-corrected: the thinning is the curve
+                // compressing the content, not a smaller dome).
+                let squash_w = 5.0 * raise;
                 let rect = cranpose_ui_graphics::Rect {
-                    x: 0.0,
+                    x: squash_w * 0.5,
                     y: squash * 0.5,
-                    width: THUMB_WIDTH,
+                    width: THUMB_WIDTH - squash_w,
                     height: THUMB_HEIGHT - squash,
                 };
                 scope.draw_round_rect_at(
@@ -571,11 +576,11 @@ mod tests {
     fn toggle_geometry_matches_the_reference_proportions() {
         assert_eq!((TRACK_WIDTH, TRACK_HEIGHT), (63.0, 28.0));
         assert_eq!((THUMB_WIDTH, THUMB_HEIGHT), (37.0, 25.0));
-        // Reference hold tile (6.83 px/dp): the dome rim spans
-        // ~31.5 x 24dp — narrower than the resting thumb, wide-flat,
+        // Reference hold (6.27 px/dp): ring ~44 x 27dp — a big dome,
+        // wider than the thumb (the gray sticks out via the LEAN), still
         // inside the track vertically.
-        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (34.0, 24.5));
-        const { assert!(LENS_WIDTH < THUMB_WIDTH) };
+        assert_eq!((LENS_WIDTH, LENS_HEIGHT), (44.0, 27.0));
+        const { assert!(LENS_WIDTH > THUMB_WIDTH) };
         const { assert!(LENS_HEIGHT < TRACK_HEIGHT) };
         assert_eq!(
             toggle_lens_material().shape,
