@@ -160,6 +160,23 @@ pub struct GlassDynamics {
     /// 0 the released bead relaxes shallow and its split fades with it
     /// (the reference's thin settled ring). `None` = 1.
     pub press_depth: Option<f32>,
+    /// A riding lens is a WINDOW through this surface's milk: the reference
+    /// store bar shows the tile MORE vividly inside the raised bubble than
+    /// through the surrounding frost. Inside this node-local dp rect the
+    /// surface thins its lift, tint and adaptive frost by `strength`
+    /// (blur, a separate pass, stays — matching the reference's soft
+    /// legibility through the bubble).
+    pub clear_window: Option<GlassClearWindow>,
+}
+
+/// Node-local dp footprint a riding lens clears in its host surface.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct GlassClearWindow {
+    pub center: (f32, f32),
+    pub size: (f32, f32),
+    /// Corner radius in dp; negative = capsule (half the short side).
+    pub radius: f32,
+    pub strength: f32,
 }
 
 impl GlassDynamics {
@@ -491,9 +508,12 @@ impl Glass {
         self
     }
 
-    /// Sets the uniform face magnification of a riding lens (1.0 = none).
+    /// Sets the uniform face projection of a riding lens's transmitted
+    /// image (1.0 = none). Above 1.0 the ridden content magnifies (the
+    /// loupe family); below 1.0 the lens compresses its background — a
+    /// raised droplet bending light so the covered surface reads smaller.
     pub fn optical_zoom(mut self, zoom: f32) -> Self {
-        self.optical_zoom = zoom.max(1.0);
+        self.optical_zoom = zoom.clamp(0.5, 2.0);
         self
     }
 
@@ -793,7 +813,7 @@ impl ResolvedGlass {
         );
         shader.set_float(
             GLASS_OPTICAL_ZOOM_UNIFORM,
-            1.0 + (self.optical_zoom - 1.0).max(0.0) * activity,
+            1.0 + (self.optical_zoom - 1.0) * activity,
         );
         let zoom_anchor = dynamics
             .morph
@@ -805,6 +825,11 @@ impl ResolvedGlass {
             zoom_anchor.0,
             zoom_anchor.1,
         );
+        let clear_window = dynamics.clear_window.unwrap_or_default();
+        shader.set_float2(130, clear_window.center.0, clear_window.center.1);
+        shader.set_float2(132, clear_window.size.0, clear_window.size.1);
+        shader.set_float(134, clear_window.radius);
+        shader.set_float(135, clear_window.strength.clamp(0.0, 1.0));
         shader.set_float(121, self.rim_reflection.max(0.001));
         let (ink_color, ink_strength) = self
             .ink_recolor

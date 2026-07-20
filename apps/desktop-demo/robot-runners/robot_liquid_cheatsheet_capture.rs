@@ -238,6 +238,30 @@ fn capture_tab_swipe_and_form(robot: &cranpose::Robot, shot_dir: &Path) {
         2,
         3000.0,
     );
+
+    // Raised-hold still: the big bubble held over the store bar's vivid
+    // tiles — the state where the bar must read SMALLER through the glass
+    // (reference raised frames; user-flagged live screenshot).
+    let Some(arcade) = scroll_to_button(robot, "Arcade", 430.0) else {
+        eprintln!("SKIP bottom-bar-form hold: store bar not found");
+        return;
+    };
+    settle(robot, 600);
+    let (arcade_x, arcade_y) = center(arcade);
+    robot.mouse_move(arcade_x, arcade_y).expect("hover arcade");
+    robot.mouse_down().expect("press arcade");
+    std::thread::sleep(Duration::from_millis(500));
+    let held = robot.screenshot().expect("bar form hold");
+    save(
+        &held,
+        shot_dir,
+        "bottom-bar-form",
+        (0.0, arcade_y - 66.0, WINDOW_WIDTH as f32, 133.0),
+        3,
+        4500.0,
+    );
+    robot.mouse_up().expect("release arcade");
+    settle(robot, 700);
 }
 
 /// Reference `segmented` (Receiving | Sending | Errored @60fps): a tap

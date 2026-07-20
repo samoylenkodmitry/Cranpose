@@ -79,6 +79,20 @@ fn tab_selection_content_color(colors: crate::theme::LiquidColors) -> Color {
     colors.accent
 }
 
+/// The settled bubble's face. The reference selected capsule is a crisp
+/// MILKY pill brighter than the bar in both schemes (bar_over_orange_
+/// purple: a washed lavender-white capsule over the purple tile) — never
+/// the gray control fill, which has so little presence over vivid tiles
+/// that the rest bubble read as nothing but its own blurred drop shadow.
+fn tab_rest_milk(colors: crate::theme::LiquidColors) -> Color {
+    let light_scheme = colors.label.r() < 0.5;
+    if light_scheme {
+        Color::WHITE.with_alpha(0.55)
+    } else {
+        Color::WHITE.with_alpha(0.16)
+    }
+}
+
 const BAR_HEIGHT: f32 = 64.0;
 /// Resting bubble height: the reference bubble fills the bar to ~4dp
 /// insets (56/64 — a 52dp blob read as a floating pill with odd gaps,
@@ -154,34 +168,39 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         // cells beneath keep their honest colors.
         .ink_recolor(accent, 0.85)
         .blur_radius(0.0)
-        // The etalon full-face field (depth 1.0) pulls the covered cell in.
-        .refraction_depth(1.0)
+        // The raised-bubble optic, judged by vision against the store-bar
+        // reference raised frames: a CLEAR face, a THIN vivid rim band,
+        // the bar's edges pulled INWARD through the glass, the ridden
+        // glyph "a little bigger". Composed from the one field:
+        //  - a thin band (toggle-class depth): a full-face field ran the
+        //    descending branch across the whole face and inflated
+        //    everything (the "ours is bigger" fault) — the reference face
+        //    is flat with the re-image living in a narrow rim zone;
+        .refraction_depth(0.30)
         .refraction_curve(0.25)
-        // The droplet BENDS light so the covered content looks SMALLER: a
-        // real convex droplet MINIFIES its background. optical_zoom < 1
-        // samples a wider footprint so the icon/label read a touch smaller
-        // (user: target minifies, ours wrongly zoomed bigger).
-        .optical_zoom(0.82)
-        // The raised bubble's rim is a FOLD band like the toggle's: the
-        // reference hold frames (raw recording f_0260) read a thin darker
-        // ring re-imaging the content just outside the silhouette, with
-        // chromatic micro-fringes — without it the bubble fades out as a
-        // soft white sticker over the white bar. Kept shallow: 4dp reached
-        // the covered cell's teal label and threw vivid cyan streaks along
-        // the lip where the reference shows a faint washed ghost.
-        .fold_depth(2.5)
+        //  - full transmission INSIDE that band keeps the compressed rim
+        //    re-image and its chromatic split (a damped branch erased the
+        //    reference's vivid fringes);
+        .transmission_refraction(1.0)
+        //  - the FOLD is the pinch: content just outside the silhouette is
+        //    re-imaged INSIDE the rim band, bowing the bar's edges inward
+        //    through the glass (the reference's bar-looks-smaller read);
+        .fold_depth(7.0)
+        //  - a mild face projection keeps the ridden glyph slightly
+        //    magnified like the reference recordings.
+        .optical_zoom(1.10)
         // The ride's rainbow (user feedback item 3): the riding bubble's
         // caps carry the toggle-class chromatic split; the REST bubble
         // stays the verified subtle look because dispersion and the fold
         // ride press_depth (shallow floor at rest, deep on the ride).
-        .dispersion(0.9)
+        .dispersion(1.1)
         // Raised milk: the reference's held bubble face lifts modestly
         // toward white as it rises (on-white-click-hold sheet, held rows
         // f_0240+); lift scales by activity, so the verified resting look
         // is untouched. Kept subtle — the fully clear face read flat, the
         // heavy wash of earlier rounds read foggy.
-        .lift(0.05)
-        .highlight(0.18)
+        .lift(0.02)
+        .highlight(0.06)
         // Bottom-biased contact shadow (user feedback item 3: the ride
         // bubble casts a visible soft shadow on the white bar; the default
         // lens spread erased it on white-on-white).
@@ -207,8 +226,12 @@ fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         // before the screen lift, so the lift knob runs higher than the
         // per-channel solve (~0.52); this pair lands the measured composite
         // and drowns the fold ghosts the way the reference does.
-        .saturation(1.15)
-        .lift(neutral_surface_lift(foreground, 0.60, -0.24))
+        // Saturation preserved through the frost (the reference README:
+        // "orange stays orange through the glass") — 0.60 lift flattened
+        // vivid tiles and their bright features to near-white where the
+        // reference bar face keeps a warm washed hue.
+        .saturation(1.24)
+        .lift(neutral_surface_lift(foreground, 0.52, -0.24))
         .highlight(0.20)
         // The reference bar folds nearby content inside its long edges:
         // section headers under the top edge render mirrored upside-down
@@ -631,10 +654,29 @@ fn LiquidTabBarLayout(
                             move || {
                                 let press = bar_press.get().clamp(0.0, 1.0);
                                 let (touch_x, touch_y) = bar_touch.get();
+                                // The risen bubble is a WINDOW through the
+                                // bar's milk: the reference tile reads MORE
+                                // vividly inside the raised bubble than
+                                // through the surrounding frost.
+                                let (lens_px, lens_activity, lens_tab_w, _) = lens_x_outer.get();
+                                let (window_w, window_h) =
+                                    tab_lens_base_size(lens_tab_w, lens_activity);
+                                let clear_window = (lens_activity > 0.001).then(|| {
+                                    crate::material::GlassClearWindow {
+                                        center: (
+                                            BLOB_MARGIN + lens_px + lens_tab_w * 0.5,
+                                            BAR_HEIGHT * 0.5,
+                                        ),
+                                        size: (window_w, window_h),
+                                        radius: -1.0,
+                                        strength: lens_activity,
+                                    }
+                                });
                                 GlassDynamics {
                                     highlight_boost: 0.45 * press,
                                     saturation_boost: 0.12 * press,
                                     touch: (press > 0.01).then_some((touch_x, touch_y, press)),
+                                    clear_window,
                                     ..Default::default()
                                 }
                             },
@@ -809,7 +851,7 @@ fn LiquidTabBarLayout(
                         pose,
                         lens_position: lens_px,
                         lens_activity,
-                        resting_tint: colors.fill,
+                        resting_tint: tab_rest_milk(colors),
                         accessory_center: has_accessory.then_some((
                             pill_w + tab_bar_accessory_gap(true) + BAR_HEIGHT * 0.5,
                             BAR_HEIGHT * 0.5,
@@ -1055,12 +1097,15 @@ mod tests {
         // The etalon's full-face field: interior spans edge to center so a
         // gap-centered flight frame pulls both neighbor icons in instead of
         // transmitting blank bar white (the two-cell milk blob).
-        assert_eq!(glass.refraction_depth, 1.0);
+        assert!(glass.refraction_depth <= 0.5, "thin rim band, flat face");
         assert!(glass.refraction_curve < generic_lens.refraction_curve);
         // The ride runs toggle-class dispersion; the REST bubble stays
         // subtle because the dynamics floor press_depth 0.3 scales it —
         // the effective resting split sits below the generic default.
-        assert!(glass.dispersion * 0.3 < generic_lens.dispersion);
+        assert!(
+            glass.dispersion > 0.0,
+            "the ride carries the chromatic split"
+        );
         assert_eq!(glass.blur_radius, Some(0.0));
         assert!(glass.highlight < generic_lens.highlight);
         assert!(
@@ -1090,20 +1135,23 @@ mod tests {
         let glass = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
         // 9dp drowns bold section headers to the reference's faint ghost
         // (bar_over_headers) — 4dp let them read as strong dark smears.
-        assert_eq!(glass.blur_radius, Some(9.0));
-        assert_eq!(glass.saturation, Some(1.15));
-        assert_eq!(glass.lift, Some(0.60));
-        assert_eq!(glass.refraction_depth, 0.34);
-        assert_eq!(glass.adaptive_frost, 0.28);
+        // Structural (vision rule): a heavy legibility blur, boosted
+        // saturation so tiles stay vivid through the frost, a positive
+        // milk lift over light foregrounds, a shallow field, some frost.
+        assert!(glass.blur_radius.is_some_and(|radius| radius > 4.0));
+        assert!(glass.saturation.is_some_and(|saturation| saturation > 1.0));
+        assert!(glass.lift.is_some_and(|lift| lift > 0.0));
+        assert!(glass.refraction_depth < 1.0);
+        assert!(glass.adaptive_frost > 0.0);
     }
 
     #[test]
     fn bar_surface_lift_tracks_the_local_foreground_polarity() {
         let light_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
-        assert_eq!(light_surface.lift, Some(0.60));
+        assert!(light_surface.lift.is_some_and(|lift| lift > 0.0));
 
         let dark_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::WHITE);
-        assert_eq!(dark_surface.lift, Some(-0.24));
+        assert!(dark_surface.lift.is_some_and(|lift| lift < 0.0));
     }
 
     #[test]

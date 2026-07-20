@@ -476,16 +476,26 @@ mod tests {
         assert_eq!(loupe.uniforms()[80], 1.0);
         assert!(loupe.input_padding() >= 75.0);
 
-        let RenderEffect::Shader { shader: menu } =
+        // Settled blur stays heavy (reference c_072: backdrop text is an
+        // illegible smudge through the settled capsule) — and heavy blur
+        // routes through a Gaussian pass chained INTO the optical shader:
+        // the wcKSRD 9x9 tap caps at its safe radius, so the remainder
+        // never quantizes into the grid the edit menu showed.
+        let RenderEffect::Chain { first, second } =
             liquid_menu_glass_effect((240.0, 44.0), 8.0, 1.0)
         else {
-            panic!("menu must use the shared runtime shader");
+            panic!("a heavy settled blur must chain a Gaussian into the shader");
+        };
+        let RenderEffect::Blur { radius_x, .. } = *first else {
+            panic!("the chain's first stage is the Gaussian remainder");
+        };
+        assert!(radius_x > 0.0);
+        let RenderEffect::Shader { shader: menu } = *second else {
+            panic!("the chain's second stage is the wcKSRD program");
         };
         assert_eq!(menu.uniforms()[9], 0.10);
         assert_eq!(menu.uniforms()[GLASS_REFRACTION_CURVE_UNIFORM], 0.25);
-        // Settled blur stays heavy (reference c_072: backdrop text is an
-        // illegible smudge through the settled capsule).
-        assert!((menu.uniforms()[GLASS_BLUR_RADIUS_UNIFORM] - 4.8).abs() < 1.0e-6);
+        assert!(menu.uniforms()[GLASS_BLUR_RADIUS_UNIFORM] <= 2.0 + 1.0e-6);
     }
 
     #[test]

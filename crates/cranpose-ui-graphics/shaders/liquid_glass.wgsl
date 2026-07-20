@@ -319,7 +319,7 @@ fn channel_lens_displacement(
     let optical_position = sampling_position - zoom_anchor;
     var displacement = optical_position * (lens_scale - 1.0)
         * transmission_refraction;
-    if optical_zoom > 1.0 && loupe_mode <= 0.5 {
+    if abs(optical_zoom - 1.0) > 0.0005 && loupe_mode <= 0.5 {
         // The projection gate follows the 4th power of the interior — the
         // dome is thickest at its apex and sheds the zoom well before the
         // rim band. A linear gate held mid-band samples pinned inside the
@@ -569,15 +569,11 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let lens_refraction = max(inradius * refraction_depth, 0.001);
     let rounded_box = clamp(-d / lens_refraction, 0.0, 1.0);
     // Coverage AA rides the material's refraction band (wcKSRD's rb1·32).
-    // A DRAINED lens (material activity 0) is a soft tint pool, not
-    // defined glass: the reference's resting bar bubble edge fades over
-    // ~8dp (bar_over_orange_purple) — a crisp resting edge doubles with
-    // the pill's rim line into an onion contour. Activity sharpens the
-    // edge back to the AA band as the lens rises.
-    let rest_feather = 8.0 * optical_scale;
-    let coverage_ramp = floored_band_width(
-        mix(rest_feather, lens_refraction / 32.0, material_activity),
-    );
+    // ONE coverage law at every activity: the reference's settled bar
+    // bubble is a CRISP-bordered milky capsule (bar_over_orange_purple,
+    // user vision verdict) — an earlier 8dp resting feather melted it
+    // into its own blurred shadow.
+    let coverage_ramp = floored_band_width(lens_refraction / 32.0);
     let coverage = smoothstep(0.0, 1.0, clamp(-d / coverage_ramp, 0.0, 1.0));
     let optical_coverage = smoothstep(
         0.0,
@@ -698,7 +694,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // it rides (the toggle thumb) — anchoring the magnification there keeps
     // the face filled by the ridden content instead of pulling in the well
     // beyond it.
-    let optical_zoom = max(get_float(89u), 1.0);
+    let optical_zoom = clamp(get_float(89u), 0.5, 2.0);
     let zoom_anchor = get_vec2(128u) * dp_scale;
     // Displacement that translates the image without bending the ray (the
     // loupe's focus offset — optically a flat-slab shift). Translation does
@@ -1078,6 +1074,31 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     outer_rgb = mix(vec3<f32>(outer_luma), outer_rgb, max(saturation, 0.0));
     let outer_tone_luma = dot(outer_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     outer_rgb = outer_rgb + vec3<f32>((outer_tone_luma - 0.5) * (contrast - 1.0));
+    // Lens clear-window (uniforms 130-135, node-local dp): a raised bubble
+    // is a WINDOW through this surface's milk — the reference store bar
+    // shows the tile MORE vividly inside the raised bubble than through
+    // the surrounding frost (bar_over_orange_purple raised frames). The
+    // window thins lift, tint and adaptive frost inside the lens
+    // footprint; the Gaussian blur pass stays, matching the reference's
+    // soft legibility through the bubble.
+    let window_strength = clamp(get_float(135u), 0.0, 1.0);
+    var window_clear = 0.0;
+    if window_strength > 0.0 {
+        let window_center = get_vec2(130u) * dp_scale;
+        let window_size = get_vec2(132u) * dp_scale;
+        var window_radius = get_float(134u) * s;
+        if window_radius < 0.0 {
+            window_radius = 0.5 * min(window_size.x, window_size.y);
+        }
+        let window_d = sd_round_rect(
+            coord - window_center,
+            window_size * 0.5,
+            window_radius,
+        );
+        window_clear = (1.0
+            - smoothstep(-4.0 * optical_scale, 2.0 * optical_scale, window_d))
+            * window_strength;
+    }
     // Interactive lenses frost their face without bleaching the meniscus:
     // the target toggle keeps saturated green/cyan at the outer rise while
     // its recessed chamber approaches white. Surface glass uses uniform lift.
@@ -1085,7 +1106,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         lift,
         lift * mix(0.18, 1.0, interior),
         rim_style,
-    );
+    ) * (1.0 - window_clear);
     if face_lift >= 0.0 {
         rgb = vec3<f32>(1.0) - (vec3<f32>(1.0) - rgb) * (1.0 - face_lift);
         outer_rgb = vec3<f32>(1.0)
@@ -1096,8 +1117,10 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // The wcKSRD interior ramp keeps an interactive lens clearer at its edge;
-    // surface glass retains a uniform tint across its body.
-    let optical_tint_alpha = tint_color.a * mix(1.0, interior, rim_style);
+    // surface glass retains a uniform tint across its body. The clear
+    // window thins the wash like it thins the lift.
+    let optical_tint_alpha =
+        tint_color.a * mix(1.0, interior, rim_style) * (1.0 - window_clear);
     rgb = mix(rgb, tint_color.rgb, optical_tint_alpha);
     // The bevel's specular return, on the outermost surface of the glass.
     rgb = vec3<f32>(1.0) - (vec3<f32>(1.0) - rgb) * (1.0 - bevel_light);
@@ -1124,7 +1147,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // too close to the foreground, then moves the surface toward the opposite
     // luminance pole. Both sampled backdrop and actual foreground determine
     // the correction, preventing white-on-white and black-on-black alike.
-    let adaptive_frost = clamp(get_float(91u), 0.0, 1.0);
+    let adaptive_frost = clamp(get_float(91u), 0.0, 1.0) * (1.0 - window_clear);
     if adaptive_frost > 0.0 {
         let foreground_luma = clamp(get_float(97u), 0.0, 1.0);
         let frost_luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
