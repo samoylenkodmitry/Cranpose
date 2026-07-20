@@ -747,6 +747,11 @@ path = "robot-runners/robot_text_loupe.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
+name = "robot_light_menu"
+path = "robot-runners/robot_light_menu.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
 name = "robot_liquid_cheatsheet_capture"
 path = "robot-runners/robot_liquid_cheatsheet_capture.rs"
 required-features = ["desktop", "robot-app"]
