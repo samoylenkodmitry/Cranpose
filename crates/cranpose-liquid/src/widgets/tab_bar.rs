@@ -154,16 +154,16 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         // cells beneath keep their honest colors.
         .ink_recolor(accent, 0.85)
         .blur_radius(0.0)
-        // Reference bubble optic (bottom-bar-click f_0635..f_0665): the
-        // face passes the covered cells through at 1:1 — NO magnification;
-        // the etalon's full-face field (depth 1.0: interior spans edge to
-        // center, sin(pow(x,0.25))) leaves the exact center honest while
-        // the rest of the face pulls neighboring cells inward. A shallow
-        // band left a gap-centered flight frame transmitting blank bar
-        // white (the two-cell milk blob); the reference pulls both
-        // neighbor icons into the lens instead.
+        // The bubble MAGNIFIES its content (light-mode recording): the icon
+        // and label under the bubble read visibly bigger than the same
+        // glyphs outside it, while the tab spacing compresses inward — a
+        // true lens, not a 1:1 pass-through. The etalon's full-face field
+        // (depth 1.0) pulls the neighbours in; the modest optical zoom
+        // scales the ridden cell up so the covered icon is "a little
+        // bigger" like the reference.
         .refraction_depth(1.0)
         .refraction_curve(0.25)
+        .optical_zoom(1.22)
         // The raised bubble's rim is a FOLD band like the toggle's: the
         // reference hold frames (raw recording f_0260) read a thin darker
         // ring re-imaging the content just outside the silhouette, with
