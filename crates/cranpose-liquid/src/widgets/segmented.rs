@@ -352,12 +352,18 @@ pub fn LiquidSegmentedControl(
                                 MARKER_REST_ACTIVITY
                                     + (1.0 - MARKER_REST_ACTIVITY) * grow.clamp(0.0, 1.0),
                             ),
-                            // The settled puck is a SHALLOW bead: thin dark
-                            // rim arc, no bright inner ring (reference f_045
-                            // rim: 1.4dp dark arc straight into the flat
-                            // interior). The raise deepens the dome to the
-                            // full vivid band of the riding oval.
-                            press_depth: Some(0.12 + 0.88 * grow.clamp(0.0, 1.0)),
+                            // Depth follows MOTION, not the raise: the
+                            // reference distorts the glyphs only while the
+                            // marker MOVES (segmented-drag spectral fringing),
+                            // and keeps the text crisp under a stationary
+                            // held press (tap-flight T83..T300 "Errored" stays
+                            // sharp). Keying the deep dome to grow alone ran a
+                            // motionless hold at full depth and washed the
+                            // label to gray.
+                            press_depth: Some(
+                                (0.12 + 0.30 * grow.clamp(0.0, 1.0) + 0.58 * pose.energy())
+                                    .clamp(0.0, 1.0),
+                            ),
                             // The lens paints NO body of its own: the white
                             // pill lives BELOW the labels (plain indicator)
                             // and stays visible through the pressed dwell —
