@@ -483,7 +483,21 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                     toggle_press_blob_color(track_color),
                     raise,
                 );
-                scope.draw_round_rect(Brush::solid(body), CornerRadii::uniform(THUMB_HEIGHT * 0.5));
+                // The press squashes the body vertically (reference hold:
+                // the white strips above/below the blob widen and feed the
+                // fold replay its luminous content).
+                let squash = 3.0 * raise;
+                let rect = cranpose_ui_graphics::Rect {
+                    x: 0.0,
+                    y: squash * 0.5,
+                    width: THUMB_WIDTH,
+                    height: THUMB_HEIGHT - squash,
+                };
+                scope.draw_round_rect_at(
+                    rect,
+                    Brush::solid(body),
+                    CornerRadii::uniform((THUMB_HEIGHT - squash) * 0.5),
+                );
             });
         Box(thumb, BoxSpec::default(), || {});
 
