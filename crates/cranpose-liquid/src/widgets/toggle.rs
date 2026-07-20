@@ -94,7 +94,7 @@ fn toggle_lens_material() -> Glass {
         .transmission_refraction(1.0)
         .dispersion(0.9)
         .highlight(0.04)
-        .lift(0.0)
+        .lift(0.16)
         .shadow_style(GlassShadow::new(
             cranpose_ui_graphics::Color::BLACK.with_alpha(0.14),
             14.0,
