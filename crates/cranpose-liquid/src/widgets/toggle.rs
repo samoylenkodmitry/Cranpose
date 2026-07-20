@@ -35,7 +35,11 @@ const THUMB_MARGIN: f32 = 1.5;
 /// wrong fix; a spilling halo was the original defect.
 const LENS_WIDTH: f32 = 44.0;
 const LENS_HEIGHT: f32 = 27.0;
-const LENS_VERTICAL_OFFSET: f32 = -1.3;
+/// Near-centered: the 27dp dome leaves ~2.5dp of washed strip above AND
+/// below the squashed body — the -1.3 lift (tuned for the old 24.5 dome)
+/// starved the top band and pooled all the white at the bottom
+/// (user-flagged vertical asymmetry).
+const LENS_VERTICAL_OFFSET: f32 = -0.3;
 /// The raised lens leans toward the travel side, measured from the thumb
 /// center on the reference press and settle frames (~6-8dp in every phase:
 /// press leans toward the destination, flight leads the thumb, settle
@@ -592,7 +596,7 @@ mod tests {
         // The dome rides high enough to expose the white face strip under
         // its top rim (reference f_009: ~1.3dp of washed face between dome
         // top and blob top feeds the luminous band).
-        assert!((LENS_VERTICAL_OFFSET + 1.3).abs() < 1.0e-6);
+        assert!((LENS_VERTICAL_OFFSET + 0.3).abs() < 1.0e-6);
 
         let mid = interpolate_track_color(
             cranpose_ui_graphics::Color::from_rgb_u8(187, 186, 188),
@@ -606,9 +610,9 @@ mod tests {
 
     #[test]
     fn toggle_lens_leans_toward_the_travel_side() {
-        // Reference press/settle frames: the lens center sits ~6-8dp toward
-        // the side the gesture heads to, in every phase.
-        assert_eq!(LENS_TRAVEL_LEAN, 7.0);
+        // T133 detail geometry: ~12dp of gray outside the trailing rim with
+        // the 44dp dome -> the center leans ~13dp into the travel.
+        assert_eq!(LENS_TRAVEL_LEAN, 13.0);
         // A fresh press has no motion yet: the only travel side is the
         // opposite end of the track.
         assert_eq!(lens_press_travel(false), 1.0);
