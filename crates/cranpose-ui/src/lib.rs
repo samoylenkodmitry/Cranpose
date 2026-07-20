@@ -157,6 +157,7 @@ pub use widgets::clickable_text::ClickableText;
 pub use widgets::lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec};
 pub use widgets::linked_text::LinkedText;
 pub use widgets::swipe_to_dismiss::{SwipeDismissSide, SwipeToDismiss, SwipeToDismissSpec};
+pub use widgets::text_selection_menu::local_on_light_surface;
 
 // Debug utilities
 pub use debug::{

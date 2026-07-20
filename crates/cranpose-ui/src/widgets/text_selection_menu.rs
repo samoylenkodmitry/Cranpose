@@ -44,16 +44,64 @@ const MENU_SCREEN_MARGIN: f32 = 20.0;
 const MENU_GAP_ABOVE_LINE: f32 = 15.0;
 /// Horizontal padding on each side of an item label.
 const ITEM_PADDING: f32 = 20.0;
-/// Hairline separator between labels: 1×17 dp, white at 0.07.
+/// Hairline separator between labels: 1×17 dp.
 const SEPARATOR_WIDTH: f32 = 1.0;
 const SEPARATOR_HEIGHT: f32 = 17.0;
-const SEPARATOR_COLOR: Color = Color(1.0, 1.0, 1.0, 0.07);
-/// Label color and size.
-const MENU_FG: Color = Color(0.96, 0.96, 0.98, 1.0);
 const MENU_FONT_SP: f32 = 15.0;
-/// The chevron disc: lighter glass filling the end cap.
-const DISC_COLOR: Color = Color(1.0, 1.0, 1.0, 0.19);
-const DISC_PRESSED_COLOR: Color = Color(1.0, 1.0, 1.0, 0.9);
+
+/// CompositionLocal marking the surface the floating glass sits over as
+/// LIGHT. Liquid glass is transparent, so its labels and hairlines must
+/// flip to dark ink over a light backdrop to stay readable — the same
+/// content over a dark app keeps its near-white ink. Defaults to `false`
+/// (dark surface), preserving the existing look; a light-themed screen
+/// provides `true`.
+pub fn local_on_light_surface() -> cranpose_core::CompositionLocal<bool> {
+    use std::cell::RefCell;
+    thread_local! {
+        static LOCAL: RefCell<Option<cranpose_core::CompositionLocal<bool>>> =
+            const { RefCell::new(None) };
+    }
+    LOCAL.with(|cell| {
+        cell.borrow_mut()
+            .get_or_insert_with(|| cranpose_core::compositionLocalOf(|| false))
+            .clone()
+    })
+}
+
+/// Label ink: near-white over a dark surface, near-black over a light one.
+fn menu_fg(on_light: bool) -> Color {
+    if on_light {
+        Color(0.08, 0.08, 0.10, 1.0)
+    } else {
+        Color(0.96, 0.96, 0.98, 1.0)
+    }
+}
+
+/// Hairline separator: a whisper of the ink polarity.
+fn separator_color(on_light: bool) -> Color {
+    if on_light {
+        Color(0.0, 0.0, 0.0, 0.10)
+    } else {
+        Color(1.0, 1.0, 1.0, 0.07)
+    }
+}
+
+/// The chevron disc glass fill and its pressed flash follow the polarity.
+fn disc_color(on_light: bool) -> Color {
+    if on_light {
+        Color(0.0, 0.0, 0.0, 0.10)
+    } else {
+        Color(1.0, 1.0, 1.0, 0.19)
+    }
+}
+
+fn disc_pressed_color(on_light: bool) -> Color {
+    if on_light {
+        Color(0.0, 0.0, 0.0, 0.55)
+    } else {
+        Color(1.0, 1.0, 1.0, 0.9)
+    }
+}
 /// Backdrop blur behind the capsule, dp.
 /// The materialize smudge radius; the effect resolves it to ~a fifth as the
 /// menu sharpens (the settled reference pill keeps backdrop text readable).
@@ -65,9 +113,9 @@ const MENU_DISSOLVE_MS: u64 = 70;
 const MENU_MATERIALIZE_MS: u64 = 140;
 const MENU_RETURN_DELAY_MS: u64 = 250;
 
-fn menu_text_style() -> TextStyle {
+fn menu_text_style(on_light: bool) -> TextStyle {
     let mut style = TextStyle::default();
-    style.span_style.color = Some(MENU_FG);
+    style.span_style.color = Some(menu_fg(on_light));
     style.span_style.font_size = TextUnit::Sp(MENU_FONT_SP);
     style
 }
@@ -347,7 +395,8 @@ pub fn LiquidTextMenu(
         return;
     }
 
-    let style = menu_text_style();
+    let on_light = local_on_light_surface().current();
+    let style = menu_text_style(on_light);
     let viewport = local_popup_viewport().current().get();
     let max_width = if viewport.width > 0.0 {
         viewport.width - 2.0 * MENU_SCREEN_MARGIN
@@ -478,7 +527,7 @@ pub fn LiquidTextMenu(
                                             width: SEPARATOR_WIDTH,
                                             height: SEPARATOR_HEIGHT,
                                         })
-                                        .background(SEPARATOR_COLOR),
+                                        .background(separator_color(on_light)),
                                     BoxSpec::default(),
                                     || {},
                                 );
@@ -495,10 +544,13 @@ pub fn LiquidTextMenu(
                                         // Slide hover: the reference lights the
                                         // item under the sliding finger.
                                         if slide_hovered {
+                                            let hover = if on_light {
+                                                Color(0.0, 0.0, 0.0, 0.08)
+                                            } else {
+                                                Color(1.0, 1.0, 1.0, 0.10)
+                                            };
                                             scope.draw_round_rect(
-                                                cranpose_ui_graphics::Brush::solid(Color(
-                                                    1.0, 1.0, 1.0, 0.10,
-                                                )),
+                                                cranpose_ui_graphics::Brush::solid(hover),
                                                 cranpose_ui_graphics::CornerRadii::uniform(10.0),
                                             );
                                         }
@@ -507,7 +559,7 @@ pub fn LiquidTextMenu(
                                         &item.label,
                                         Rc::clone(&item.action),
                                     )),
-                                menu_text_style(),
+                                menu_text_style(on_light),
                             );
                         }
                         if page_count > 1 {
@@ -528,9 +580,9 @@ pub fn LiquidTextMenu(
                                         height: MENU_HEIGHT,
                                     })
                                     .background(if pressed_now {
-                                        DISC_PRESSED_COLOR
+                                        disc_pressed_color(on_light)
                                     } else {
-                                        DISC_COLOR
+                                        disc_color(on_light)
                                     })
                                     .rounded_corners(MENU_HEIGHT * 0.5)
                                     .then(disc_pointer_input(
@@ -540,11 +592,11 @@ pub fn LiquidTextMenu(
                                     )),
                                 BoxSpec::default()
                                     .content_alignment(cranpose_ui_layout::Alignment::CENTER),
-                                || {
+                                move || {
                                     Text(
                                         "\u{203A}".to_string(),
                                         Modifier::empty(),
-                                        menu_text_style(),
+                                        menu_text_style(on_light),
                                     );
                                 },
                             );
@@ -720,7 +772,8 @@ mod tests {
     #[test]
     fn pagination_reserves_the_disc_only_when_overflowing() {
         let _app_context = crate::render_state::app_context_test_scope();
-        let style = menu_text_style();
+        let on_light = local_on_light_surface().current();
+        let style = menu_text_style(on_light);
         let items: Vec<TextMenuItem> = ["Copy", "Cut", "Paste", "Select all"]
             .iter()
             .map(|label| TextMenuItem::new(*label, || {}))

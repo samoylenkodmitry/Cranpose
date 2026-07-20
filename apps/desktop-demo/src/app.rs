@@ -811,6 +811,56 @@ fn text_input_example() {
                 height: 16.0,
             });
 
+            // Adaptive-on-light showcase: the SAME liquid-glass text chrome
+            // over a WHITE surface. Providing local_on_light_surface(true)
+            // flips the transparent glass's ink — the edit menu's labels,
+            // hairlines and chevron go dark so they stay readable over the
+            // light backdrop, and the field text is dark too.
+            Text(
+                "On a light surface (double-tap — the glass ink flips dark):",
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
+
+            Spacer(Size {
+                width: 0.0,
+                height: 8.0,
+            });
+
+            cranpose_core::CompositionLocalProvider(
+                vec![cranpose_ui::local_on_light_surface().provides(true)],
+                || {
+                    let state = cranpose_core::remember(|| {
+                        TextFieldState::new(
+                            "Silence. Melody. Then beats. Subtle electronics                          weave through mantra trance, pulsing, catching                          melodies that rise and dissolve like glass.",
+                        )
+                    })
+                    .with(|state| state.clone());
+                    let mut style = TextStyle::default();
+                    style.span_style.font_size = cranpose_ui::text::TextUnit::Sp(16.0);
+                    style.span_style.color = Some(Color(0.1, 0.1, 0.12, 1.0));
+                    style.paragraph_style.line_height = cranpose_ui::text::TextUnit::Sp(24.0);
+                    BasicTextFieldWithOptions(
+                        state,
+                        Modifier::empty()
+                            .fill_max_width()
+                            .padding(14.0)
+                            .background(Color(1.0, 1.0, 1.0, 1.0))
+                            .rounded_corners(10.0),
+                        BasicTextFieldOptions {
+                            text_style: style,
+                            cursor_color: Color(0.965, 0.208, 0.557, 1.0),
+                            ..BasicTextFieldOptions::default()
+                        },
+                    );
+                },
+            );
+
+            Spacer(Size {
+                width: 0.0,
+                height: 16.0,
+            });
+
             // Buttons to manipulate text programmatically
             Text(
                 "Programmatic Actions:",
