@@ -162,6 +162,32 @@ pub struct GlassDynamics {
     pub press_depth: Option<f32>,
 }
 
+impl GlassDynamics {
+    /// The universal touched-up state (user-directed law): a pressed
+    /// liquid surface comes closer to the user while its OWN colors go
+    /// HDR-bright and saturated, with a radial glow following the finger.
+    /// Never a repaint with alternate colors — the boosts amplify whatever
+    /// the surface already is. `press` is 0..1; `finger` is node-local dp
+    /// (falls back to `center`, the surface's own heart).
+    pub fn touched_up(
+        mut self,
+        press: f32,
+        finger: Option<(f32, f32)>,
+        center: (f32, f32),
+    ) -> Self {
+        let press = press.clamp(0.0, 1.0);
+        if press <= 0.0 {
+            return self;
+        }
+        self.highlight_boost += 0.85 * press;
+        self.saturation_boost += 0.45 * press;
+        let (fx, fy) = finger.unwrap_or(center);
+        let carried = self.touch.map(|(_, _, i)| i).unwrap_or(0.0);
+        self.touch = Some((fx, fy, (carried + press).clamp(0.0, 1.0)));
+        self
+    }
+}
+
 fn foreground_is_dark(foreground: Color) -> bool {
     let foreground_luma =
         0.2126 * foreground.r() + 0.7152 * foreground.g() + 0.0722 * foreground.b();

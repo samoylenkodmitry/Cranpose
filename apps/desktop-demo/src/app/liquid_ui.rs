@@ -899,13 +899,17 @@ fn SortFilterReferenceStage() {
                                                                 1.0f32,
                                                             )
                                                         });
+                                                    let rect = glow_rect.get();
                                                     GlassDynamics {
                                                         activity: Some(press),
-                                                        highlight_boost: 0.55 * press,
-                                                        saturation_boost: 0.45 * press,
-                                                        touch,
+                                                        touch: None,
                                                         ..Default::default()
                                                     }
+                                                    .touched_up(
+                                                        press,
+                                                        touch.map(|(x, y, _)| (x, y)),
+                                                        (rect.width * 0.5, rect.height * 0.5),
+                                                    )
                                                 }
                                             },
                                         );

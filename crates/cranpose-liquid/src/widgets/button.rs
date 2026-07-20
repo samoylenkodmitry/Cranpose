@@ -333,11 +333,12 @@ pub fn GlassButton(
             .report_size(std::rc::Rc::clone(&glow_size))
             .glass_effect_with(glass, move || {
                 let size = glow_size_for_glass.get();
-                GlassDynamics {
-                    highlight_boost: if pressed_for_glass.get() { 0.85 } else { 0.0 },
-                    touch: (pressed_for_glass.get() && size.width > 0.0 && size.height > 0.0)
-                        .then_some((size.width * 0.5, size.height * 0.5, 1.0)),
-                    ..Default::default()
+                let press = if pressed_for_glass.get() { 1.0 } else { 0.0 };
+                let dynamics = GlassDynamics::default();
+                if size.width > 0.0 && size.height > 0.0 {
+                    dynamics.touched_up(press, None, (size.width * 0.5, size.height * 0.5))
+                } else {
+                    dynamics
                 }
             });
     }
@@ -457,9 +458,10 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
     let mut base = Modifier::empty();
     if let Some(glass) = material {
         let pressed_for_glass = pressed;
-        base = base.glass_effect_with(glass, move || GlassDynamics {
-            highlight_boost: if pressed_for_glass.get() { 0.85 } else { 0.0 },
-            ..Default::default()
+        let half = diameter * 0.5;
+        base = base.glass_effect_with(glass, move || {
+            let press = if pressed_for_glass.get() { 1.0 } else { 0.0 };
+            GlassDynamics::default().touched_up(press, None, (half, half))
         });
     }
 
