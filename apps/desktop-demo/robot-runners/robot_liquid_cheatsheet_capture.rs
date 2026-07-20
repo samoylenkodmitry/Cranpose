@@ -447,6 +447,16 @@ fn capture_on_white(robot: &cranpose::Robot, shot_dir: &Path) {
         let shot = robot.screenshot().expect("held drag frame");
         held.push((clock.elapsed().as_millis() as f32, shot));
     }
+    // Dwell HELD on the destination cell: the reference keeps the raised
+    // bubble ON Conversation for ~1.6s (gesture-1 f_0240..f_0335) before
+    // releasing. Without this the sheet's late frames all sample mid-drag
+    // and read as a bubble parked between cells (a phantom widget bug).
+    std::thread::sleep(Duration::from_millis(250));
+    for _ in 0..3 {
+        let shot = robot.screenshot().expect("held dwell frame");
+        held.push((clock.elapsed().as_millis() as f32, shot));
+        std::thread::sleep(Duration::from_millis(250));
+    }
     robot.mouse_up().expect("release held lens");
     let release_base = clock.elapsed().as_millis() as f32;
     let mut release_offsets = dense(25.0, 5);
