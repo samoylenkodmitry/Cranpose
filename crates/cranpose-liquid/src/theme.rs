@@ -83,7 +83,11 @@ impl LiquidColors {
             destructive: Color::from_rgb_u8(255, 59, 48),
             success: Color::from_rgb_u8(52, 199, 89),
             toggle_on: Color::from_rgb_u8(43, 189, 76),
-            toggle_off: Color::from_rgb_u8(170, 170, 181),
+            // Freshly measured on the reference OFF track (toggle-press
+            // f_001 face): a NEUTRAL gray (184,183,185), not the blue
+            // 170,170,181 an earlier note recorded — that blue tinted the
+            // pressed dome interior blue where the reference reads neutral.
+            toggle_off: Color::from_rgb_u8(184, 183, 185),
             warning: Color::from_rgb_u8(255, 149, 0),
             glass_tint: Color::from_rgba_u8(255, 255, 255, 18),
             glass_stroke: Color::from_rgba_u8(255, 255, 255, 120),
