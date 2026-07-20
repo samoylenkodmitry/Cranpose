@@ -40,7 +40,7 @@ const LENS_VERTICAL_OFFSET: f32 = -1.3;
 /// center on the reference press and settle frames (~6-8dp in every phase:
 /// press leans toward the destination, flight leads the thumb, settle
 /// overhangs the arrival end).
-const LENS_TRAVEL_LEAN: f32 = 7.0;
+const LENS_TRAVEL_LEAN: f32 = 13.0;
 /// Glass node span beyond the lens shape (rim glow + wobble live here).
 /// The full dome plus the travel lean needs real headroom — 10dp cut the
 /// leaning edge flat (live report).
@@ -89,19 +89,19 @@ fn toggle_lens_material() -> Glass {
         // per-channel index split fans it into the reference's gray-phase
         // rainbow (zoomed f_008). The fold is this same re-image faked as a
         // separate band; the true branch replaces it.
-        .refraction_depth(0.58)
+        .refraction_depth(0.45)
         // The reference band is the fold REPLAY: the blob edge and white
         // strip mirrored across ~5dp of the rim (f_009 band y45-60). The
         // etalon branch alone only draws their compressed boundary line.
         .fold_depth(5.0)
         .refraction_curve(0.45)
-        .optical_zoom(1.55)
+        .optical_zoom(1.9)
         .transmission_refraction(1.0)
         // The reference rim band reads LIGHT with a thin multi-hue edge
         // (T133/T500) — the heavy absorption + full-strength split painted
         // a dark arc and a hot wide amber crescent.
-        .meniscus_absorption(0.55)
-        .dispersion(1.1)
+        .meniscus_absorption(0.30)
+        .dispersion(1.4)
         // The reference press face is the magnified track, not a lit dome —
         // its luma matches the sampled backdrop (toggle-press detail).
         .highlight(0.04)
@@ -452,6 +452,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     Box(track.then(modifier), BoxSpec::default(), move || {
         let thumb_x_for_layer = thumb_x;
         let lens_for_thumb = lens_progress;
+        let travel_for_thumb = travel_dir;
         // The thumb NEVER vanishes: the raise crossfades the white capsule
         // into the pressed gray body that stays visible UNDER the dome
         // (reference f_009: the gray blob rides inside the glass while the
@@ -487,13 +488,14 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                 // the white strips above/below the blob widen and feed the
                 // fold replay its luminous content).
                 let squash = 3.0 * raise;
-                // The dome gathers the body inward on BOTH axes — the
-                // reference's pressed gray reads visibly THINNER inside
-                // the big dome (user-corrected: the thinning is the curve
-                // compressing the content, not a smaller dome).
-                let squash_w = 5.0 * raise;
+                // The dome gathers the body from its LEADING edge only —
+                // the trailing gray keeps sticking out past the rim like
+                // the reference (a symmetric gather cancelled the lean's
+                // stick-out entirely).
+                let squash_w = 6.0 * raise;
+                let leading = travel_for_thumb.get();
                 let rect = cranpose_ui_graphics::Rect {
-                    x: squash_w * 0.5,
+                    x: if leading >= 0.0 { 0.0 } else { squash_w },
                     y: squash * 0.5,
                     width: THUMB_WIDTH - squash_w,
                     height: THUMB_HEIGHT - squash,
