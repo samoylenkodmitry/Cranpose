@@ -227,8 +227,15 @@ fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
         // dark smears; the reference face (bar_over_headers) drowns them
         // to a faint ghost while the color wash survives. The flat-tile
         // composite solve below is blur-invariant, so the measured
-        // tint/saturation/lift stay pinned.
-        .blur_radius(9.0)
+        // tint/saturation/lift stay pinned. 9dp left the bright 10dp
+        // inter-tile page gap as a distinct bright column through the
+        // face (its saturated tile edges ringed it into blobs); the
+        // reference dissolves the gap into one continuous wash — 12dp
+        // does while the folded headers still ghost through (their
+        // mirrored text is softer than the reference's, whose rim fold
+        // reads SHARPER than its face frost; giving the fold its own
+        // less-blurred sample source is the real fix for that).
+        .blur_radius(12.0)
         // Measured on bar_over_orange_purple: tile (242,150,77) reads
         // (253,210,168) through the bar. Saturation deepens the channels
         // before the screen lift, so the lift knob runs higher than the

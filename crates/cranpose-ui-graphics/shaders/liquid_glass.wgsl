@@ -578,7 +578,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let p = coord - center;
     let d = scene_sdf(
         coord, p, half_size, corner_radius,
-        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+        shape_count, dyn_scale, dyn_radius_scale, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
         strain_axis, strain_along, strain_across,
     );
 
@@ -633,7 +633,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         let shadow_p = p - shadow_offset;
         let shadow_d = scene_sdf(
             shadow_coord, shadow_p, half_size, corner_radius,
-            shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+            shape_count, dyn_scale, dyn_radius_scale, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
             strain_axis, strain_along, strain_across,
         ) - get_float(105u) * s;
         let shadow_blur = max(get_float(103u) * s, 1.0);
@@ -647,12 +647,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let eps = 0.5;
     let d_dx = scene_sdf(
         coord + vec2<f32>(eps, 0.0), p + vec2<f32>(eps, 0.0), half_size, corner_radius,
-        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+        shape_count, dyn_scale, dyn_radius_scale, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
         strain_axis, strain_along, strain_across,
     );
     let d_dy = scene_sdf(
         coord + vec2<f32>(0.0, eps), p + vec2<f32>(0.0, eps), half_size, corner_radius,
-        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+        shape_count, dyn_scale, dyn_radius_scale, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
         strain_axis, strain_along, strain_across,
     );
     let grad = vec2<f32>(d_dx - d, d_dy - d) / eps;
@@ -740,7 +740,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     var loupe_magnification = 1.0;
     if loupe_mode > 0.5 {
         loupe_activity = clamp(get_float(90u), 0.0, 1.0);
-        let focus_px = get_vec2(81u) * dp_scale;
+        let focus_px = get_vec2(81u) * dyn_scale;
         var m0 = get_float(83u);
         if m0 <= 0.0 {
             m0 = 1.0;
@@ -1190,7 +1190,11 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // backdrops stay safe.
     let touch_strength = clamp(get_float(120u), 0.0, 1.0);
     if touch_strength > 0.0 {
-        let touch_px = vec2<f32>(get_float(118u), get_float(119u)) * dp_scale;
+        // dyn_scale, NOT dp_scale: touch is node-local dp from widget space
+        // (same law as the zoom anchor and clear window) — dp_scale is
+        // (1,1) in cover mode, which parked this glow a tab left of the
+        // finger on a density-1.354 desktop.
+        let touch_px = vec2<f32>(get_float(118u), get_float(119u)) * dyn_scale;
         let touch_reach = 58.0 * optical_scale;
         let touch_falloff =
             1.0 - smoothstep(0.0, touch_reach, distance(coord, touch_px));
