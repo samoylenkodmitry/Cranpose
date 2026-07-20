@@ -182,16 +182,21 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
         //    re-image and its chromatic split (a damped branch erased the
         //    reference's vivid fringes);
         .transmission_refraction(1.0)
-        //  - the FOLD is the pinch and it is WIDE: outside content is
-        //    re-imaged inward across the outer zone of the bubble, so the
-        //    bar's edges bow in and the bar READS SMALLER through the
-        //    glass — the user's thrice-repeated requirement. A 7dp fold
-        //    was a thin trim the face-wide zoom overpowered;
+        //  - the rim fold re-images outside content inward at the edge;
         .fold_depth(11.0)
-        //  - a mild apex-only projection (dome_interior-gated in the
-        //    shader) keeps just the ridden glyph slightly magnified —
-        //    never the bar.
-        .optical_zoom(1.10)
+        //  - the PINCH is the whole-dome minify: the bar seen through the
+        //    bubble samples outward across the entire geometric interior
+        //    and READS SMALLER — the user's thrice-repeated requirement.
+        //    A rim-band fold alone never compressed the bar's mid-face,
+        //    and an apex zoom > 1 enlarged it (shipped once; wrong). The
+        //    reference raised frame squeezes neighbor glyphs and the
+        //    bar's white bottom edge INTO the rim — the pinch is overt,
+        //    not homeopathic.
+        .dome_zoom(0.84)
+        //  - the anchor-centered apex core magnifies the ridden glyph
+        //    (the reference rocket swells well past its cell); the core is
+        //    tight enough that the label row below stays in the pinch.
+        .optical_zoom(1.3)
         // The ride's rainbow (user feedback item 3): the riding bubble's
         // caps carry the toggle-class chromatic split; the REST bubble
         // stays the verified subtle look because dispersion and the fold
@@ -526,7 +531,11 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
                 // 1.5) read as a two-cell worm.
                 1.0 + (geometry.pose.stretch - 1.0) * activity * TAB_STRAIN_RESPONSE,
             )),
-            zoom_anchor: (0.0, 0.0),
+            // The optical axis rides the GLYPH row, not the bubble center:
+            // the reference re-images the raised cell around its icon (the
+            // rocket swells from its own center; the label below squeezes
+            // into the rim with the rest of the bar).
+            zoom_anchor: (0.0, -5.0),
         }),
         activity: Some(activity),
         // Ride depth: the raised bubble runs the full vivid rim (fold +

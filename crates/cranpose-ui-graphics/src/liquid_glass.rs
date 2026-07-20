@@ -25,9 +25,13 @@ pub const GLASS_MENISCUS_ABSORPTION_UNIFORM: usize = 100;
 /// Uniform slot containing the interactive rim-fold band depth in dp (the
 /// shader resolves it against the live shape inradius; zero = fold off).
 pub const GLASS_FOLD_DEPTH_UNIFORM: usize = 88;
-/// Uniform slot containing the uniform face magnification ratio of a riding
-/// lens (values <= 1 mean no zoom; the rim band keeps the wcKSRD mapping).
+/// Uniform slot containing the apex-core projection ratio of a riding lens
+/// (1.0 = none; only the tightest dome core takes it).
 pub const GLASS_OPTICAL_ZOOM_UNIFORM: usize = 89;
+/// Uniform slot containing the whole-dome projection ratio of the covered
+/// surface (1.0 = none; below 1.0 the surface reads smaller through the
+/// dome — the raised tab bubble's pinch).
+pub const GLASS_DOME_ZOOM_UNIFORM: usize = 136;
 /// Uniform slot (two floats) containing the optical-zoom axis offset from
 /// the SDF center, in dp — a leaning lens magnifies about the content it
 /// rides, not its shifted silhouette.

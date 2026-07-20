@@ -248,7 +248,15 @@ fn capture_tab_swipe_and_form(robot: &cranpose::Robot, shot_dir: &Path) {
     };
     settle(robot, 600);
     let (arcade_x, arcade_y) = center(arcade);
+    // Select Arcade FIRST so the raised lens sits at a far-from-origin
+    // cell: any coordinate-space slip between the bubble and the bar's
+    // clear window scales with x, so a hold at the leftmost (selected)
+    // cell hides it — exactly how the density ghost shipped unseen.
     robot.mouse_move(arcade_x, arcade_y).expect("hover arcade");
+    robot.mouse_down().expect("select arcade");
+    std::thread::sleep(Duration::from_millis(80));
+    robot.mouse_up().expect("confirm arcade");
+    settle(robot, 900);
     robot.mouse_down().expect("press arcade");
     std::thread::sleep(Duration::from_millis(500));
     let held = robot.screenshot().expect("bar form hold");

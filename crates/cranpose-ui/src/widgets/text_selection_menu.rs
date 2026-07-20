@@ -772,8 +772,10 @@ mod tests {
     #[test]
     fn pagination_reserves_the_disc_only_when_overflowing() {
         let _app_context = crate::render_state::app_context_test_scope();
-        let on_light = local_on_light_surface().current();
-        let style = menu_text_style(on_light);
+        // Pagination is polarity-independent (ink color never enters
+        // item_width); reading the CompositionLocal here needs an active
+        // composer that a bare unit test does not have.
+        let style = menu_text_style(false);
         let items: Vec<TextMenuItem> = ["Copy", "Cut", "Paste", "Select all"]
             .iter()
             .map(|label| TextMenuItem::new(*label, || {}))

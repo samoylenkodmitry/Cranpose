@@ -297,8 +297,10 @@ fn channel_lens_displacement(
     refraction_curve: f32,
     transmission_refraction: f32,
     optical_zoom: f32,
+    dome_zoom: f32,
     zoom_anchor: vec2<f32>,
     dome_interior: f32,
+    apex_core: f32,
     loupe_mode: f32,
     loupe_activity: f32,
     loupe_magnification: f32,
@@ -320,27 +322,24 @@ fn channel_lens_displacement(
     let optical_position = sampling_position - zoom_anchor;
     var displacement = optical_position * (lens_scale - 1.0)
         * transmission_refraction;
-    if abs(optical_zoom - 1.0) > 0.0005 && loupe_mode <= 0.5 {
-        // The projection gate follows the 4th power of the interior — the
-        // dome is thickest at its apex and sheds the zoom well before the
-        // rim band. A linear gate held mid-band samples pinned inside the
-        // ridden content, so the descending branch never revisited the
-        // well around it and the rim re-image lost its white ring + dark
-        // line sequence (the reference "U"). With the steep gate the band
-        // walks OUT to the unzoomed rim content, then the branch carries
-        // it back to the boundary limit — one continuous sweep.
-        // ...gate on the GEOMETRIC dome interior, independent of the
-        // refraction band width: gating on the band interior magnified
-        // the whole transmitted backdrop whenever the band was thin (it
-        // saturates to 1 across the face), so the bar through the raised
-        // tab bubble read BIGGER — the exact opposite of the reference
-        // (user verdict, thrice): only the apex glyph magnifies; the bar
-        // must read SMALLER.
-        let projection_gate =
-            dome_interior * dome_interior * dome_interior * dome_interior;
+    if (abs(optical_zoom - 1.0) > 0.0005 || abs(dome_zoom - 1.0) > 0.0005)
+        && loupe_mode <= 0.5 {
+        // Dome projection profile (user verdict, three times): the covered
+        // surface must read SMALLER through a raised droplet. dome_zoom < 1
+        // samples OUTWARD across the whole geometric interior — the bar's
+        // edges bow inward through the glass — and only the anchor-centered
+        // apex core crossfades to optical_zoom, so the ridden glyph alone
+        // may read slightly larger. Three past failures to keep dead:
+        // gating on the refraction-band interior (saturates to 1 when the
+        // band is thin — magnified the whole bar), applying a > 1 zoom
+        // outside the apex core (same enlargement), and deriving the core
+        // from the SDF depth (a capsule's medial LINE saturates it — the
+        // core must be a spot around the optical axis, not a band).
+        let local_zoom = mix(dome_zoom, optical_zoom, apex_core);
+        let dome_gate = smoothstep(0.0, 0.4, dome_interior);
         displacement += optical_position
-            * (1.0 / optical_zoom - 1.0)
-            * projection_gate;
+            * (1.0 / local_zoom - 1.0)
+            * dome_gate;
     }
     if loupe_mode > 0.5 {
         let rim_bend = sampling_position
@@ -508,6 +507,18 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     var optical_scale = s;
     if cover_mode {
         optical_scale = max(get_float(99u), 1.0);
+    }
+    // Dynamics geometry (zoom anchor 128, clear window 130..135) is declared
+    // in dp from widget space in BOTH modes. Container mode carries the
+    // density in dp_scale; cover mode's dp_scale is (1,1) — its density
+    // rides the render-scale uniform instead. Multiplying dp dynamics by
+    // dp_scale in cover mode parks them at position/density: the clear
+    // window ghosted one tab left of the bubble on any density != 1 desktop.
+    var dyn_scale = dp_scale;
+    var dyn_radius_scale = s;
+    if cover_mode {
+        dyn_scale = vec2<f32>(optical_scale);
+        dyn_radius_scale = optical_scale;
     }
     let gradient_extent = WCKSRD_GRADIENT_EXTENT_DP * optical_scale;
     let edge_extent = WCKSRD_EDGE_EXTENT_DP * optical_scale;
@@ -704,7 +715,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // the face filled by the ridden content instead of pulling in the well
     // beyond it.
     let optical_zoom = clamp(get_float(89u), 0.5, 2.0);
-    let zoom_anchor = get_vec2(128u) * dp_scale;
+    let dome_zoom = clamp(get_float(136u), 0.5, 2.0);
+    let zoom_anchor = get_vec2(128u) * dyn_scale;
     // Displacement that translates the image without bending the ray (the
     // loupe's focus offset — optically a flat-slab shift). Translation does
     // not disperse; only the ray-bend components built per channel below
@@ -773,6 +785,18 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // Geometric dome depth for the projection gate: silhouette 0 -> apex 1,
     // independent of how wide the refraction band is.
     let dome_interior = clamp(-d / inradius, 0.0, 1.0);
+    // Apex core measured from the optical axis, NOT from the SDF depth: a
+    // capsule's -d/inradius saturates to 1 along its whole medial line, so
+    // an SDF-derived core spread the apex zoom across the entire face band
+    // — magnifying the bar through the raised tab bubble (the thrice-
+    // flagged failure). Distance from the anchor keeps the core a
+    // glyph-sized spot.
+    let apex_core = 1.0
+        - smoothstep(
+            0.0,
+            0.7 * inradius,
+            length(sampling_position - zoom_anchor),
+        );
     let base_displacement = channel_lens_displacement(
         sampling_position,
         d,
@@ -781,8 +805,10 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         refraction_curve,
         transmission_refraction,
         optical_zoom,
+        dome_zoom,
         zoom_anchor,
         dome_interior,
+        apex_core,
         loupe_mode,
         loupe_activity,
         loupe_magnification,
@@ -824,8 +850,10 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                 refraction_curve,
                 transmission_refraction,
                 optical_zoom,
+                dome_zoom,
                 zoom_anchor,
                 dome_interior,
+                apex_core,
                 loupe_mode,
                 loupe_activity,
                 loupe_magnification,
@@ -845,8 +873,10 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
                 refraction_curve,
                 transmission_refraction,
                 optical_zoom,
+                dome_zoom,
                 zoom_anchor,
                 dome_interior,
+                apex_core,
                 loupe_mode,
                 loupe_activity,
                 loupe_magnification,
@@ -1099,9 +1129,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let window_strength = clamp(get_float(135u), 0.0, 1.0);
     var window_clear = 0.0;
     if window_strength > 0.0 {
-        let window_center = get_vec2(130u) * dp_scale;
-        let window_size = get_vec2(132u) * dp_scale;
-        var window_radius = get_float(134u) * s;
+        let window_center = get_vec2(130u) * dyn_scale;
+        let window_size = get_vec2(132u) * dyn_scale;
+        var window_radius = get_float(134u) * dyn_radius_scale;
         if window_radius < 0.0 {
             window_radius = 0.5 * min(window_size.x, window_size.y);
         }

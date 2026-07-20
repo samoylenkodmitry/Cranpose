@@ -9,10 +9,10 @@ use cranpose_ui::Modifier;
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader, TileMode,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
-    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM, GLASS_LIGHT_DIRECTION_UNIFORM,
-    GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM,
-    GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
-    GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
+    GLASS_DOME_ZOOM_UNIFORM, GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM,
+    GLASS_LIGHT_DIRECTION_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM,
+    GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM, GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
+    GLASS_RESTING_TINT_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -357,10 +357,15 @@ pub struct Glass {
     /// interior mirrored toward the edge (a pure displacement). Zero
     /// disables the fold.
     pub fold_depth: f32,
-    /// Uniform face magnification of a riding lens (1.0 = no zoom): the
-    /// backdrop projects enlarged across the whole face while the rim band
-    /// keeps the wcKSRD edge mapping.
+    /// Apex-core projection of a riding lens (1.0 = no zoom): crossfaded in
+    /// over the tightest dome core, so only the ridden content directly
+    /// under the apex takes it.
     pub optical_zoom: f32,
+    /// Whole-dome projection of the covered surface (1.0 = none). Below 1.0
+    /// the dome samples outward across its entire geometric interior — the
+    /// surface seen through the raised droplet reads SMALLER (the tab
+    /// bubble's pinch). The apex core crossfades to `optical_zoom`.
+    pub dome_zoom: f32,
     /// Meniscus rim reflectivity multiplier (1.0 = the reference toggle's
     /// visible rim line; near 0 = the segmented lens's invisible body).
     pub rim_reflection: f32,
@@ -407,6 +412,7 @@ impl Glass {
             meniscus_absorption: 1.0,
             fold_depth: 0.0,
             optical_zoom: 1.0,
+            dome_zoom: 1.0,
             rim_reflection: 1.0,
             ink_recolor: None,
             highlight: 0.9,
@@ -444,6 +450,7 @@ impl Glass {
             meniscus_absorption: 1.0,
             fold_depth: 0.0,
             optical_zoom: 1.0,
+            dome_zoom: 1.0,
             rim_reflection: 1.0,
             ink_recolor: None,
             highlight: 1.15,
@@ -508,12 +515,20 @@ impl Glass {
         self
     }
 
-    /// Sets the uniform face projection of a riding lens's transmitted
-    /// image (1.0 = none). Above 1.0 the ridden content magnifies (the
-    /// loupe family); below 1.0 the lens compresses its background — a
-    /// raised droplet bending light so the covered surface reads smaller.
+    /// Sets the apex-core projection of a riding lens's transmitted image
+    /// (1.0 = none). Slightly above 1.0 the ridden glyph under the apex
+    /// reads a little larger; the rest of the dome follows `dome_zoom`.
     pub fn optical_zoom(mut self, zoom: f32) -> Self {
         self.optical_zoom = zoom.clamp(0.5, 2.0);
+        self
+    }
+
+    /// Sets the whole-dome projection of the covered surface (1.0 = none).
+    /// Below 1.0 the surface through the raised droplet reads smaller —
+    /// the reference tab bubble's pinch. IRON RULE: for the tab lens this
+    /// must stay below 1.0; the bar must never enlarge through the bubble.
+    pub fn dome_zoom(mut self, zoom: f32) -> Self {
+        self.dome_zoom = zoom.clamp(0.5, 2.0);
         self
     }
 
@@ -644,6 +659,7 @@ impl Glass {
             meniscus_absorption: self.meniscus_absorption,
             fold_depth: self.fold_depth,
             optical_zoom: self.optical_zoom,
+            dome_zoom: self.dome_zoom,
             rim_reflection: self.rim_reflection,
             ink_recolor: self.ink_recolor,
             highlight: self.highlight,
@@ -692,6 +708,7 @@ pub(crate) struct ResolvedGlass {
     pub meniscus_absorption: f32,
     pub fold_depth: f32,
     pub optical_zoom: f32,
+    pub dome_zoom: f32,
     pub rim_reflection: f32,
     pub ink_recolor: Option<(Color, f32)>,
     pub highlight: f32,
@@ -814,6 +831,10 @@ impl ResolvedGlass {
         shader.set_float(
             GLASS_OPTICAL_ZOOM_UNIFORM,
             1.0 + (self.optical_zoom - 1.0) * activity,
+        );
+        shader.set_float(
+            GLASS_DOME_ZOOM_UNIFORM,
+            1.0 + (self.dome_zoom - 1.0) * activity,
         );
         let zoom_anchor = dynamics
             .morph
