@@ -44,7 +44,7 @@ const LENS_VERTICAL_OFFSET: f32 = -0.3;
 /// center on the reference press and settle frames (~6-8dp in every phase:
 /// press leans toward the destination, flight leads the thumb, settle
 /// overhangs the arrival end).
-const LENS_TRAVEL_LEAN: f32 = 13.0;
+const LENS_TRAVEL_LEAN: f32 = 7.0;
 /// Glass node span beyond the lens shape (rim glow + wobble live here).
 /// The full dome plus the travel lean needs real headroom — 10dp cut the
 /// leaning edge flat (live report).
@@ -68,46 +68,25 @@ fn toggle_track_motion() -> AnimationType {
 }
 
 fn toggle_lens_material() -> Glass {
+    // ONE continuous light path (example/shaders.txt wcKSRD etalon): a
+    // single `sin(pow(clamp(-sdf/refraction), 0.25) * 1.57)` displacement
+    // field, blurred, with the etalon's border + gradient lighting. The
+    // ONLY honest chromatic addition is tracing that SAME field per RGB
+    // channel at its own refractive index (dispersion) — real material
+    // aberration, not a separate spectral band. No fold crutch, no zoom
+    // chamber, no meniscus/absorption overrides, no leading-edge content
+    // gather: those layered "cratches" read as cheated compound parts.
+    // The reference press look is this etalon field over the pressed
+    // content (white-washed face + gray blob).
     Glass::lens()
         .shape(LiquidShape::Capsule)
         .tint(cranpose_ui_graphics::Color::WHITE.with_alpha(0.02))
-        // The original wcKSRD blurs inside the lens (its 9x9 loop at half-px
-        // steps): content edges under the dome read soft, never cut. 2.0
-        // washed the rim band's fringe pairs below visibility.
         .blur_radius(0.8)
-        // The reference lens transmits the track at full saturation with a
-        // clear face and vivid chromatic rim (toggle-press cheatsheet); the
-        // milky wash came from over-absorbing the transmitted ray.
         .saturation(1.0)
-        // The reference press optic decomposes as face zoom + etalon rim
-        // (toggle-press T133: the magnified thumb fills the face, the white
-        // well confined to a thin crescent hugging the rim). Coverage
-        // geometry with the zoom anchored on the thumb: the 37dp thumb
-        // must span the 44dp face past a 7dp lean — 18.5·z ≥ 22+7 ⇒
-        // z ≈ 1.55 (1.95 belonged to the 58dp chamber; 1.3 to the
-        // too-small 34dp dome).
-        // The rim band is the descending branch run to its boundary limit:
-        // curve near 1 removes the x^0.25 step at the silhouette so the
-        // sweep to the lens CENTER spans the whole ~6dp band (depth·29dp
-        // inradius) — the compressed dark thumb line rings the rim and the
-        // per-channel index split fans it into the reference's gray-phase
-        // rainbow (zoomed f_008). The fold is this same re-image faked as a
-        // separate band; the true branch replaces it.
-        .refraction_depth(0.45)
-        // The reference band is the fold REPLAY: the blob edge and white
-        // strip mirrored across ~5dp of the rim (f_009 band y45-60). The
-        // etalon branch alone only draws their compressed boundary line.
-        .fold_depth(5.0)
-        .refraction_curve(0.45)
-        .optical_zoom(1.9)
+        .refraction_depth(0.55)
+        .refraction_curve(0.25)
         .transmission_refraction(1.0)
-        // The reference rim band reads LIGHT with a thin multi-hue edge
-        // (T133/T500) — the heavy absorption + full-strength split painted
-        // a dark arc and a hot wide amber crescent.
-        .meniscus_absorption(0.30)
-        .dispersion(1.4)
-        // The reference press face is the magnified track, not a lit dome —
-        // its luma matches the sampled backdrop (toggle-press detail).
+        .dispersion(0.9)
         .highlight(0.04)
         .lift(0.0)
         .shadow_style(GlassShadow::new(
@@ -456,7 +435,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     Box(track.then(modifier), BoxSpec::default(), move || {
         let thumb_x_for_layer = thumb_x;
         let lens_for_thumb = lens_progress;
-        let travel_for_thumb = travel_dir;
         // The thumb NEVER vanishes: the raise crossfades the white capsule
         // into the pressed gray body that stays visible UNDER the dome
         // (reference f_009: the gray blob rides inside the glass while the
@@ -491,17 +469,15 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                 // The press squashes the body vertically (reference hold:
                 // the white strips above/below the blob widen and feed the
                 // fold replay its luminous content).
-                let squash = 3.0 * raise;
-                // The dome gathers the body from its LEADING edge only —
-                // the trailing gray keeps sticking out past the rim like
-                // the reference (a symmetric gather cancelled the lean's
-                // stick-out entirely).
-                let squash_w = 6.0 * raise;
-                let leading = travel_for_thumb.get();
+                // The finger compresses the pressed blob SYMMETRICALLY
+                // (physical squeeze, not a directional gather): a smaller
+                // gray body leaves more washed-white face for the single
+                // etalon field to re-image into its luminous rim band.
+                let squash = 5.0 * raise;
                 let rect = cranpose_ui_graphics::Rect {
-                    x: if leading >= 0.0 { 0.0 } else { squash_w },
+                    x: squash * 0.5,
                     y: squash * 0.5,
-                    width: THUMB_WIDTH - squash_w,
+                    width: THUMB_WIDTH - squash,
                     height: THUMB_HEIGHT - squash,
                 };
                 scope.draw_round_rect_at(
@@ -612,7 +588,7 @@ mod tests {
     fn toggle_lens_leans_toward_the_travel_side() {
         // T133 detail geometry: ~12dp of gray outside the trailing rim with
         // the 44dp dome -> the center leans ~13dp into the travel.
-        assert_eq!(LENS_TRAVEL_LEAN, 13.0);
+        assert_eq!(LENS_TRAVEL_LEAN, 7.0);
         // A fresh press has no motion yet: the only travel side is the
         // opposite end of the track.
         assert_eq!(lens_press_travel(false), 1.0);
