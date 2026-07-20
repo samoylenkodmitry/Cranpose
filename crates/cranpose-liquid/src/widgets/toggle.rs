@@ -135,33 +135,6 @@ fn lens_translation_x(thumb_x: f32, node_width: f32) -> f32 {
     thumb_x + (THUMB_WIDTH - node_width) * 0.5
 }
 
-/// How far the pressed hold drains the track face toward white
-/// (reference f_009: the face around the blob reads 252-254 while the
-/// pigment concentrates in the pressed body).
-const PRESS_FACE_WASH: f32 = 0.95;
-const PRESS_FACE_WASH_TARGET: (u8, u8, u8) = (252, 252, 252);
-
-/// The pressed body under the dome: the track color washed up and
-/// desaturated (f_009 blob: near-neutral 181-187 at high luma against
-/// the saturated green rest track). This gray body is exactly what the
-/// dome's rim band compresses into its dark line — with the white face
-/// around it feeding the wide luminous band.
-fn toggle_press_blob_color(track: cranpose_ui_graphics::Color) -> cranpose_ui_graphics::Color {
-    let washed = interpolate_track_color(
-        track,
-        cranpose_ui_graphics::Color::from_rgb_u8(252, 252, 252),
-        0.45,
-    );
-    let luma = 0.2126 * washed.r() + 0.7152 * washed.g() + 0.0722 * washed.b();
-    let keep = 0.08;
-    cranpose_ui_graphics::Color::rgba(
-        (luma + (washed.r() - luma) * keep) * 0.93,
-        (luma + (washed.g() - luma) * keep) * 0.93,
-        (luma + (washed.b() - luma) * keep) * 0.93,
-        1.0,
-    )
-}
-
 /// The reference track is a recessed WELL, not a flat fill (rest frame
 /// f_001, center column at 3x): a cool-bright blue-tinted edge fading over
 /// ~2.5dp at the top, the base face, and a warm bright lip peaking ~1.5dp
@@ -177,9 +150,12 @@ fn track_well_brush(track: cranpose_ui_graphics::Color) -> Brush {
             c.a(),
         )
     };
-    let cool_top = scale(track, 1.12, 1.16, 1.20);
-    let lip = scale(track, 1.46, 1.40, 1.31);
-    let seam = scale(track, 1.09, 1.07, 1.02);
+    // A whisper of a recess, not a lit lip: the strong bottom lip
+    // (1.46x) re-imaged by the dome as a weird bright highlight. The
+    // reference well is nearly flat with only a faint cool top edge.
+    let cool_top = scale(track, 1.05, 1.07, 1.09);
+    let lip = scale(track, 1.08, 1.07, 1.04);
+    let seam = scale(track, 1.02, 1.02, 1.0);
     Brush::vertical_gradient_stops(
         vec![
             (0.0, cool_top),
@@ -310,7 +286,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     );
 
     let on_change = std::rc::Rc::new(on_change);
-    let press_for_face = press_depth;
     let track = Modifier::empty()
         .size(Size::new(TRACK_WIDTH, TRACK_HEIGHT))
         // The controlled value is part of the gesture identity. Once a
@@ -413,21 +388,12 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             }
         })
         .draw_behind(move |scope| {
-            // The press drains the face toward white while the pigment
-            // concentrates into the blob (reference f_009); release floods
-            // the color back on the press-depth clock.
-            let wash = ((press_for_face.get() - 0.45) / 0.55).clamp(0.0, 1.0) * PRESS_FACE_WASH;
-            let face = interpolate_track_color(
-                track_color,
-                cranpose_ui_graphics::Color::from_rgb_u8(
-                    PRESS_FACE_WASH_TARGET.0,
-                    PRESS_FACE_WASH_TARGET.1,
-                    PRESS_FACE_WASH_TARGET.2,
-                ),
-                wash,
-            );
+            // The track is a solid recessed well that only INTERPOLATES its
+            // color (gray -> green). It must never carry moving content: a
+            // press-time white wash + a gray blob made the backdrop slide
+            // with the dome during a drag instead of just changing color.
             scope.draw_round_rect(
-                track_well_brush(face),
+                track_well_brush(track_color),
                 CornerRadii::uniform(TRACK_HEIGHT * 0.5),
             );
         });
@@ -435,17 +401,22 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     Box(track.then(modifier), BoxSpec::default(), move || {
         let thumb_x_for_layer = thumb_x;
         let lens_for_thumb = lens_progress;
-        // The thumb NEVER vanishes: the raise crossfades the white capsule
-        // into the pressed gray body that stays visible UNDER the dome
-        // (reference f_009: the gray blob rides inside the glass while the
-        // white face surrounds it — vanishing it left the rim band nothing
-        // to re-image but flat track).
+        // Resting thumb: a plain white capsule. It dissolves into the glass
+        // as the lens rises and rematerializes near the settle's end, so
+        // while the dome rides there is only the uniform track color beneath
+        // it — the refraction distorts nothing that reads as sliding
+        // background.
         let thumb = Modifier::empty()
             .size(Size::new(THUMB_WIDTH, THUMB_HEIGHT))
             .offset(0.0, (TRACK_HEIGHT - THUMB_HEIGHT) * 0.5)
-            .graphics_layer(move || GraphicsLayer {
-                translation_x: thumb_x_for_layer.get(),
-                ..Default::default()
+            .graphics_layer(move || {
+                let lens = lens_for_thumb.get();
+                let alpha = ((0.30 - lens) / 0.22).clamp(0.0, 1.0);
+                GraphicsLayer {
+                    translation_x: thumb_x_for_layer.get(),
+                    alpha,
+                    ..Default::default()
+                }
             })
             // A soft whisper lifting the thumb off the track (the reference
             // thumb floats; nothing dark).
@@ -460,30 +431,9 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                 },
             )
             .draw_behind(move |scope| {
-                let raise = lens_for_thumb.get().clamp(0.0, 1.0);
-                let body = interpolate_track_color(
-                    cranpose_ui_graphics::Color::WHITE,
-                    toggle_press_blob_color(track_color),
-                    raise,
-                );
-                // The press squashes the body vertically (reference hold:
-                // the white strips above/below the blob widen and feed the
-                // fold replay its luminous content).
-                // The finger compresses the pressed blob SYMMETRICALLY
-                // (physical squeeze, not a directional gather): a smaller
-                // gray body leaves more washed-white face for the single
-                // etalon field to re-image into its luminous rim band.
-                let squash = 5.0 * raise;
-                let rect = cranpose_ui_graphics::Rect {
-                    x: squash * 0.5,
-                    y: squash * 0.5,
-                    width: THUMB_WIDTH - squash,
-                    height: THUMB_HEIGHT - squash,
-                };
-                scope.draw_round_rect_at(
-                    rect,
-                    Brush::solid(body),
-                    CornerRadii::uniform((THUMB_HEIGHT - squash) * 0.5),
+                scope.draw_round_rect(
+                    Brush::solid(cranpose_ui_graphics::Color::WHITE),
+                    CornerRadii::uniform(THUMB_HEIGHT * 0.5),
                 );
             });
         Box(thumb, BoxSpec::default(), || {});
