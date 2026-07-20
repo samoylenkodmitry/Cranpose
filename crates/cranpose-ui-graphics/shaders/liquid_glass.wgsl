@@ -714,8 +714,21 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // it rides (the toggle thumb) — anchoring the magnification there keeps
     // the face filled by the ridden content instead of pulling in the well
     // beyond it.
-    let optical_zoom = clamp(get_float(89u), 0.5, 2.0);
-    let dome_zoom = clamp(get_float(136u), 0.5, 2.0);
+    // Unwritten zoom channels read 0 and MUST mean identity, matching the
+    // other optional channels (fold 0 = off, window strength 0 = off): the
+    // loupe/menu programs build this shader without the liquid material
+    // resolver and never write these slots — a low-end clamp alone turned
+    // that 0 into a 0.5 projection and smeared the live edit menu 2x.
+    var optical_zoom = get_float(89u);
+    if optical_zoom <= 0.0 {
+        optical_zoom = 1.0;
+    }
+    optical_zoom = clamp(optical_zoom, 0.5, 2.0);
+    var dome_zoom = get_float(136u);
+    if dome_zoom <= 0.0 {
+        dome_zoom = 1.0;
+    }
+    dome_zoom = clamp(dome_zoom, 0.5, 2.0);
     let zoom_anchor = get_vec2(128u) * dyn_scale;
     // Displacement that translates the image without bending the ray (the
     // loupe's focus offset — optically a flat-slab shift). Translation does

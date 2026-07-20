@@ -500,6 +500,15 @@ mod tests {
         assert_eq!(menu.uniforms()[9], 0.10);
         assert_eq!(menu.uniforms()[GLASS_REFRACTION_CURVE_UNIFORM], 0.25);
         assert!(menu.uniforms()[GLASS_BLUR_RADIUS_UNIFORM] <= 2.0 + 1.0e-6);
+        // These programs never write the zoom channels; the shader treats
+        // the unwritten 0 as identity. A low-end clamp once turned that 0
+        // into a 0.5 projection and smeared the live edit menu 2x — if a
+        // projection is ever wanted here it must be written explicitly.
+        for program in [&loupe, &menu] {
+            let written = |idx: usize| program.uniforms().get(idx).copied().unwrap_or(0.0);
+            assert_eq!(written(GLASS_OPTICAL_ZOOM_UNIFORM), 0.0);
+            assert_eq!(written(GLASS_DOME_ZOOM_UNIFORM), 0.0);
+        }
     }
 
     #[test]
