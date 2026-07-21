@@ -238,38 +238,6 @@ fn capture_tab_swipe_and_form(robot: &cranpose::Robot, shot_dir: &Path) {
         2,
         3000.0,
     );
-
-    // Raised-hold still: the big bubble held over the store bar's vivid
-    // tiles — the state where the bar must read SMALLER through the glass
-    // (reference raised frames; user-flagged live screenshot).
-    let Some(arcade) = scroll_to_button(robot, "Arcade", 430.0) else {
-        eprintln!("SKIP bottom-bar-form hold: store bar not found");
-        return;
-    };
-    settle(robot, 600);
-    let (arcade_x, arcade_y) = center(arcade);
-    // Select Arcade FIRST so the raised lens sits at a far-from-origin
-    // cell: any coordinate-space slip between the bubble and the bar's
-    // clear window scales with x, so a hold at the leftmost (selected)
-    // cell hides it — exactly how the density ghost shipped unseen.
-    robot.mouse_move(arcade_x, arcade_y).expect("hover arcade");
-    robot.mouse_down().expect("select arcade");
-    std::thread::sleep(Duration::from_millis(80));
-    robot.mouse_up().expect("confirm arcade");
-    settle(robot, 900);
-    robot.mouse_down().expect("press arcade");
-    std::thread::sleep(Duration::from_millis(500));
-    let held = robot.screenshot().expect("bar form hold");
-    save(
-        &held,
-        shot_dir,
-        "bottom-bar-form",
-        (0.0, arcade_y - 66.0, WINDOW_WIDTH as f32, 133.0),
-        3,
-        4500.0,
-    );
-    robot.mouse_up().expect("release arcade");
-    settle(robot, 700);
 }
 
 /// Reference `segmented` (Receiving | Sending | Errored @60fps): a tap
@@ -446,16 +414,6 @@ fn capture_on_white(robot: &cranpose::Robot, shot_dir: &Path) {
         std::thread::sleep(Duration::from_millis(90));
         let shot = robot.screenshot().expect("held drag frame");
         held.push((clock.elapsed().as_millis() as f32, shot));
-    }
-    // Dwell HELD on the destination cell: the reference keeps the raised
-    // bubble ON Conversation for ~1.6s (gesture-1 f_0240..f_0335) before
-    // releasing. Without this the sheet's late frames all sample mid-drag
-    // and read as a bubble parked between cells (a phantom widget bug).
-    std::thread::sleep(Duration::from_millis(250));
-    for _ in 0..3 {
-        let shot = robot.screenshot().expect("held dwell frame");
-        held.push((clock.elapsed().as_millis() as f32, shot));
-        std::thread::sleep(Duration::from_millis(250));
     }
     robot.mouse_up().expect("release held lens");
     let release_base = clock.elapsed().as_millis() as f32;

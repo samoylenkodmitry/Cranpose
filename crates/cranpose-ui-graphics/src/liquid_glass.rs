@@ -25,13 +25,9 @@ pub const GLASS_MENISCUS_ABSORPTION_UNIFORM: usize = 100;
 /// Uniform slot containing the interactive rim-fold band depth in dp (the
 /// shader resolves it against the live shape inradius; zero = fold off).
 pub const GLASS_FOLD_DEPTH_UNIFORM: usize = 88;
-/// Uniform slot containing the apex-core projection ratio of a riding lens
-/// (1.0 = none; only the tightest dome core takes it).
+/// Uniform slot containing the uniform face magnification ratio of a riding
+/// lens (values <= 1 mean no zoom; the rim band keeps the wcKSRD mapping).
 pub const GLASS_OPTICAL_ZOOM_UNIFORM: usize = 89;
-/// Uniform slot containing the whole-dome projection ratio of the covered
-/// surface (1.0 = none; below 1.0 the surface reads smaller through the
-/// dome — the raised tab bubble's pinch).
-pub const GLASS_DOME_ZOOM_UNIFORM: usize = 136;
 /// Uniform slot (two floats) containing the optical-zoom axis offset from
 /// the SDF center, in dp — a leaning lens magnifies about the content it
 /// rides, not its shifted silhouette.
@@ -480,35 +476,16 @@ mod tests {
         assert_eq!(loupe.uniforms()[80], 1.0);
         assert!(loupe.input_padding() >= 75.0);
 
-        // Settled blur stays heavy (reference c_072: backdrop text is an
-        // illegible smudge through the settled capsule) — and heavy blur
-        // routes through a Gaussian pass chained INTO the optical shader:
-        // the wcKSRD 9x9 tap caps at its safe radius, so the remainder
-        // never quantizes into the grid the edit menu showed.
-        let RenderEffect::Chain { first, second } =
+        let RenderEffect::Shader { shader: menu } =
             liquid_menu_glass_effect((240.0, 44.0), 8.0, 1.0)
         else {
-            panic!("a heavy settled blur must chain a Gaussian into the shader");
-        };
-        let RenderEffect::Blur { radius_x, .. } = *first else {
-            panic!("the chain's first stage is the Gaussian remainder");
-        };
-        assert!(radius_x > 0.0);
-        let RenderEffect::Shader { shader: menu } = *second else {
-            panic!("the chain's second stage is the wcKSRD program");
+            panic!("menu must use the shared runtime shader");
         };
         assert_eq!(menu.uniforms()[9], 0.10);
         assert_eq!(menu.uniforms()[GLASS_REFRACTION_CURVE_UNIFORM], 0.25);
-        assert!(menu.uniforms()[GLASS_BLUR_RADIUS_UNIFORM] <= 2.0 + 1.0e-6);
-        // These programs never write the zoom channels; the shader treats
-        // the unwritten 0 as identity. A low-end clamp once turned that 0
-        // into a 0.5 projection and smeared the live edit menu 2x — if a
-        // projection is ever wanted here it must be written explicitly.
-        for program in [&loupe, &menu] {
-            let written = |idx: usize| program.uniforms().get(idx).copied().unwrap_or(0.0);
-            assert_eq!(written(GLASS_OPTICAL_ZOOM_UNIFORM), 0.0);
-            assert_eq!(written(GLASS_DOME_ZOOM_UNIFORM), 0.0);
-        }
+        // Settled blur stays heavy (reference c_072: backdrop text is an
+        // illegible smudge through the settled capsule).
+        assert!((menu.uniforms()[GLASS_BLUR_RADIUS_UNIFORM] - 4.8).abs() < 1.0e-6);
     }
 
     #[test]
