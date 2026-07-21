@@ -757,18 +757,8 @@ path = "robot-runners/robot_liquid_cheatsheet_capture.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
-name = "robot_liquid_motion_contract"
-path = "robot-runners/robot_liquid_motion_contract.rs"
-required-features = ["desktop", "robot-app"]
-
-[[example]]
 name = "robot_liquid_backdrop_feedback"
 path = "robot-runners/robot_liquid_backdrop_feedback.rs"
-required-features = ["desktop", "robot-app"]
-
-[[example]]
-name = "robot_liquid_bubble_physics"
-path = "robot-runners/robot_liquid_bubble_physics.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
