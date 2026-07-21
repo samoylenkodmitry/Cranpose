@@ -216,6 +216,15 @@ pub mod recorder;
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 pub mod web;
 
+// The canvas drawing-buffer sizing policy is pure arithmetic shared with the
+// web runtime. Compile it for the wasm web build (where `web` consumes it) and
+// under `test` so its HiDPI regression guards run in the host test suite.
+#[cfg(any(
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
+    test
+))]
+mod web_surface_scale;
+
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_accessibility;
 

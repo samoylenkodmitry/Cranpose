@@ -163,18 +163,16 @@ pub async fn run(
         .map_err(|e| format!("failed to find suitable adapter: {:?}", e))?;
 
     let adapter_info = adapter.get_info();
-    // Browser WebGPU presents a high-DPI swapchain at the canvas' CSS size.
-    // The WebGL path already maps its drawing buffer to CSS pixels, so applying
-    // devicePixelRatio there a second time makes every scene render zoomed and
-    // clipped. Keep WebGL at CSS resolution while preserving Retina rendering
-    // for Browser WebGPU.
-    let render_scale = if adapter_info.backend == wgpu::Backend::BrowserWebGpu {
-        scale_factor
-    } else {
-        1.0
-    };
-    canvas.set_width((width as f64 * render_scale) as u32);
-    canvas.set_height((height as f64 * render_scale) as u32);
+    // Both browser backends render into a canvas drawing buffer sized in
+    // physical device pixels so HiDPI displays stay crisp. The CSS box keeps
+    // the logical size set above and the browser samples the physical buffer
+    // down to fit it. Sizing the buffer at CSS resolution instead leaves the
+    // browser upscaling a low-resolution image (the blurry-canvas regression).
+    let render_scale = crate::web_surface_scale::web_canvas_buffer_scale(scale_factor);
+    let (buffer_width, buffer_height) =
+        crate::web_surface_scale::web_canvas_buffer_dimensions(width, height, scale_factor);
+    canvas.set_width(buffer_width);
+    canvas.set_height(buffer_height);
     let adapter_limits = adapter.limits();
     let required_limits =
         required_limits_for_web_backend(adapter_info.backend, adapter_limits.clone());
@@ -211,8 +209,8 @@ pub async fn run(
     let surface_config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
-        width: (width as f64 * render_scale) as u32,
-        height: (height as f64 * render_scale) as u32,
+        width: buffer_width,
+        height: buffer_height,
         present_mode,
         alpha_mode,
         view_formats: vec![],
@@ -284,7 +282,7 @@ pub async fn run(
         content,
         (actual_width, actual_height),
         (width as f32, height as f32),
-        scale_factor as f32,
+        effective_scale as f32,
     )));
     app.borrow_mut().set_semantics_enabled(true);
     let accessibility = Rc::new(RefCell::new(
