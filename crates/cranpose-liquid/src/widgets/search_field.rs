@@ -60,7 +60,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
             let typography = typography.clone();
             let state = state.clone();
             Row(
-                Modifier::empty(),
+                Modifier::empty().fill_max_width(),
                 RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
                 move || {
                     crate::icons::Icon(crate::icons::SEARCH, 18.0, colors.secondary_label);
@@ -77,7 +77,11 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                     let placeholder = placeholder.clone();
                     let placeholder_typography = typography.clone();
                     let state = state.clone();
-                    Box(Modifier::empty(), BoxSpec::default(), move || {
+                    // The field must fill the pill so it has a non-zero width
+                    // (and stays hit-testable) even when empty — otherwise an
+                    // empty search field measures to 0px and rejects every tap,
+                    // so focus + the soft keyboard never fire.
+                    Box(Modifier::empty().weight(1.0), BoxSpec::default(), move || {
                         if is_empty {
                             let placeholder_style = TextStyle {
                                 span_style: SpanStyle {
@@ -88,7 +92,11 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                             };
                             Text(placeholder.clone(), Modifier::empty(), placeholder_style);
                         }
-                        BasicTextField(state.clone(), Modifier::empty(), field_style.clone());
+                        BasicTextField(
+                            state.clone(),
+                            Modifier::empty().fill_max_width(),
+                            field_style.clone(),
+                        );
                     });
                 },
             );
