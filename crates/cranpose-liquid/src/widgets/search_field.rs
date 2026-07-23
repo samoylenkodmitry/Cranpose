@@ -81,23 +81,27 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                     // (and stays hit-testable) even when empty — otherwise an
                     // empty search field measures to 0px and rejects every tap,
                     // so focus + the soft keyboard never fire.
-                    Box(Modifier::empty().weight(1.0), BoxSpec::default(), move || {
-                        if is_empty {
-                            let placeholder_style = TextStyle {
-                                span_style: SpanStyle {
-                                    color: Some(colors.tertiary_label),
-                                    ..placeholder_typography.body.span_style.clone()
-                                },
-                                ..placeholder_typography.body.clone()
-                            };
-                            Text(placeholder.clone(), Modifier::empty(), placeholder_style);
-                        }
-                        BasicTextField(
-                            state.clone(),
-                            Modifier::empty().fill_max_width(),
-                            field_style.clone(),
-                        );
-                    });
+                    Box(
+                        Modifier::empty().weight(1.0),
+                        BoxSpec::default(),
+                        move || {
+                            if is_empty {
+                                let placeholder_style = TextStyle {
+                                    span_style: SpanStyle {
+                                        color: Some(colors.tertiary_label),
+                                        ..placeholder_typography.body.span_style.clone()
+                                    },
+                                    ..placeholder_typography.body.clone()
+                                };
+                                Text(placeholder.clone(), Modifier::empty(), placeholder_style);
+                            }
+                            BasicTextField(
+                                state.clone(),
+                                Modifier::empty().fill_max_width(),
+                                field_style.clone(),
+                            );
+                        },
+                    );
                 },
             );
         },
