@@ -129,10 +129,13 @@ impl FrameDelegate {
     }
 }
 
+/// Resolves one pending still capture: the encoded JPEG, or `None` on failure.
+type PhotoSender = mpsc::Sender<Option<Vec<u8>>>;
+
 /// The pending still capture's result channel. One capture runs at a time
 /// (guarded by [`capture_photo`]'s lock); the photo delegate resolves it.
-fn photo_result_slot() -> &'static Mutex<Option<mpsc::Sender<Option<Vec<u8>>>>> {
-    static SLOT: OnceLock<Mutex<Option<mpsc::Sender<Option<Vec<u8>>>>>> = OnceLock::new();
+fn photo_result_slot() -> &'static Mutex<Option<PhotoSender>> {
+    static SLOT: OnceLock<Mutex<Option<PhotoSender>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
