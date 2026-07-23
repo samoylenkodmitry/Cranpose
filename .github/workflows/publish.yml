@@ -398,3 +398,77 @@ jobs:
           while IFS= read -r crate; do
             publish_if_needed "$crate"
           done < publish-order.txt
+
+  bump_isolated_demo:
+    name: Point isolated demo at the release
+    runs-on: [self-hosted, macOS, ARM64]
+    needs: publish
+    permissions:
+      contents: write
+    env:
+      TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: dtolnay/rust-toolchain@stable
+
+      # apps/isolated-demo is the canary that proves a release is consumable
+      # from crates.io, so `sync_versions` deliberately leaves it alone before
+      # publishing (the version does not exist in the registry yet). Bump it
+      # here instead — otherwise check_cranpose_versions.py fails and main goes
+      # red after every release until someone edits it by hand.
+      - name: Wait for crates.io to serve the release
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["TAG_NAME"].lstrip("v")
+          for crate in ("cranpose", "cranpose-core"):
+              for _ in range(30):
+                  url = f"https://crates.io/api/v1/crates/{crate}/{version}"
+                  try:
+                      with urllib.request.urlopen(url) as response:
+                          if response.status == 200:
+                              print(f"{crate} {version} is on crates.io.")
+                              break
+                  except urllib.error.HTTPError as exc:
+                      if exc.code != 404:
+                          raise
+                  except Exception as exc:  # transient registry/network blips
+                      print(f"query for {crate} failed ({exc}); retrying")
+                  time.sleep(10)
+              else:
+                  raise SystemExit(f"{crate} {version} never appeared on crates.io")
+          PY
+
+      - name: Point the isolated demo at the release
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          python3 scripts/sync_isolated_demo.py "$version"
+          cargo update --manifest-path apps/isolated-demo/Cargo.toml \
+            -p cranpose -p cranpose-core
+
+      - name: Land the bump on the default branch
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- apps/isolated-demo; then
+            echo "Isolated demo already points at ${TAG_NAME}."
+            exit 0
+          fi
+          git diff --stat -- apps/isolated-demo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
+          git commit -m "chore: point isolated demo at ${TAG_NAME}"
+          # Pushes made with GITHUB_TOKEN do not retrigger workflows, so this
+          # cannot recurse into another Publish run.
+          git pull --rebase origin "$DEFAULT_BRANCH"
+          git push origin "HEAD:$DEFAULT_BRANCH"
