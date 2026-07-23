@@ -8,7 +8,7 @@
 #![allow(unsafe_code)]
 
 use block2::RcBlock;
-use cranpose_services::{set_platform_camera, Camera, CameraError, CameraFrame};
+use cranpose_services::{set_platform_camera, Camera, CameraError, CameraFrame, CameraStill};
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
@@ -16,11 +16,13 @@ use objc2::{define_class, msg_send, AllocAnyThread};
 use objc2_av_foundation::{
     AVCaptureAutoFocusRangeRestriction, AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceInput,
     AVCaptureDevicePosition, AVCaptureDeviceType, AVCaptureDeviceTypeBuiltInDualWideCamera,
-    AVCaptureDeviceTypeBuiltInTripleCamera, AVCaptureFocusMode, AVCaptureOutput,
+    AVCaptureDeviceTypeBuiltInTripleCamera, AVCaptureFocusMode, AVCaptureOutput, AVCapturePhoto,
+    AVCapturePhotoCaptureDelegate, AVCapturePhotoOutput, AVCapturePhotoSettings,
     AVCapturePrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions,
     AVCapturePrimaryConstituentDeviceSwitchingBehavior, AVCaptureSession,
-    AVCaptureSessionPreset1280x720, AVCaptureVideoDataOutput,
-    AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaType, AVMediaTypeVideo,
+    AVCaptureSessionPresetPhoto, AVCaptureVideoDataOutput,
+    AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaType, AVMediaTypeVideo, AVVideoCodecKey,
+    AVVideoCodecTypeJPEG,
 };
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{
@@ -28,10 +30,12 @@ use objc2_core_video::{
     CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth,
     CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
 };
-use objc2_foundation::{NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 /// `'BGRA'` — 32-bit BGRA, the pixel format we request from the video output.
 const PIXEL_FORMAT_32BGRA: u32 = 0x4247_5241;
@@ -47,6 +51,7 @@ fn latest() -> &'static Mutex<Option<CameraFrame>> {
 /// `Send` lets it live behind the session mutex.
 struct SessionHolder {
     session: Retained<AVCaptureSession>,
+    photo_output: Retained<AVCapturePhotoOutput>,
     _delegate: Retained<FrameDelegate>,
     _queue: DispatchRetained<DispatchQueue>,
 }
@@ -74,6 +79,10 @@ impl Camera for IosCamera {
 
     fn latest_frame(&self) -> Option<CameraFrame> {
         latest().lock().ok().and_then(|f| f.clone())
+    }
+
+    fn capture_still(&self) -> Option<CameraStill> {
+        capture_photo()
     }
 
     fn stop(&self) {
@@ -118,6 +127,100 @@ impl FrameDelegate {
         let this = Self::alloc().set_ivars(());
         unsafe { msg_send![super(this), init] }
     }
+}
+
+/// The pending still capture's result channel. One capture runs at a time
+/// (guarded by [`capture_photo`]'s lock); the photo delegate resolves it.
+fn photo_result_slot() -> &'static Mutex<Option<mpsc::Sender<Option<Vec<u8>>>>> {
+    static SLOT: OnceLock<Mutex<Option<mpsc::Sender<Option<Vec<u8>>>>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "CranposePhotoDelegate"]
+    #[ivars = ()]
+    struct PhotoDelegate;
+
+    unsafe impl NSObjectProtocol for PhotoDelegate {}
+
+    unsafe impl AVCapturePhotoCaptureDelegate for PhotoDelegate {
+        #[unsafe(method(captureOutput:didFinishProcessingPhoto:error:))]
+        unsafe fn did_finish_photo(
+            &self,
+            _output: &AVCapturePhotoOutput,
+            photo: &AVCapturePhoto,
+            error: Option<&NSError>,
+        ) {
+            let jpeg = if error.is_some() {
+                None
+            } else {
+                unsafe { photo.fileDataRepresentation() }.map(|data| data.to_vec())
+            };
+            if let Ok(mut slot) = photo_result_slot().lock() {
+                if let Some(sender) = slot.take() {
+                    let _ = sender.send(jpeg);
+                }
+            }
+        }
+    }
+);
+
+impl PhotoDelegate {
+    fn new() -> Retained<Self> {
+        let this = Self::alloc().set_ivars(());
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+/// Capture one full-resolution JPEG still through `AVCapturePhotoOutput`.
+///
+/// Blocks the calling (worker) thread until the photo pipeline delivers the
+/// encoded image or a timeout passes. The EXIF orientation in the JPEG carries
+/// the sensor rotation, matching the assumption the portrait viewfinder makes.
+fn capture_photo() -> Option<CameraStill> {
+    // Serialize captures: the delegate resolves the single pending channel.
+    static CAPTURE_GATE: Mutex<()> = Mutex::new(());
+    let _gate = CAPTURE_GATE.lock().ok()?;
+
+    let (sender, receiver) = mpsc::channel::<Option<Vec<u8>>>();
+    // The delegate must outlive the async capture; hold it until the callback
+    // (or timeout) resolves the channel below.
+    let delegate = PhotoDelegate::new();
+    {
+        let slot = session_slot().lock().ok()?;
+        let holder = slot.as_ref()?;
+        if let Ok(mut result) = photo_result_slot().lock() {
+            *result = Some(sender);
+        }
+        let codec_key: &NSString = unsafe { AVVideoCodecKey }?;
+        let codec_value: &NSString = unsafe { AVVideoCodecTypeJPEG }?;
+        let codec: &AnyObject = codec_value.as_ref();
+        let format = NSDictionary::from_slices(&[codec_key], &[codec]);
+        let settings = unsafe { AVCapturePhotoSettings::photoSettingsWithFormat(Some(&format)) };
+        // `maxPhotoDimensions` (iOS 16+) supersedes these, but the deprecated
+        // switches still map onto it and keep the iOS 15 floor working.
+        #[allow(deprecated)]
+        unsafe {
+            settings.setHighResolutionPhotoEnabled(true);
+        }
+        unsafe {
+            holder
+                .photo_output
+                .capturePhotoWithSettings_delegate(&settings, ProtocolObject::from_ref(&*delegate));
+        }
+    }
+
+    let jpeg = receiver.recv_timeout(Duration::from_secs(5)).ok().flatten();
+    if jpeg.is_none() {
+        // Timeout or failure: clear any unresolved channel so a later capture
+        // starts clean.
+        if let Ok(mut result) = photo_result_slot().lock() {
+            *result = None;
+        }
+    }
+    drop(delegate);
+    jpeg.map(|jpeg| CameraStill { jpeg })
 }
 
 /// Convert one BGRA sample buffer to a tightly-packed RGBA frame.
@@ -236,7 +339,10 @@ fn start_session() -> Result<String, CameraError> {
 
     let session = unsafe { AVCaptureSession::new() };
     unsafe { session.beginConfiguration() };
-    let preset = unsafe { AVCaptureSessionPreset1280x720 };
+    // The photo preset unlocks full-sensor stills through the photo output;
+    // the video data output then streams preview-resolution 4:3 frames
+    // (device-dependent, ~1440x1080) instead of 720p.
+    let preset = unsafe { AVCaptureSessionPresetPhoto };
     if unsafe { session.canSetSessionPreset(preset) } {
         unsafe { session.setSessionPreset(preset) };
     }
@@ -264,12 +370,29 @@ fn start_session() -> Result<String, CameraError> {
         return Err(CameraError::Failed("cannot add camera output".into()));
     }
     unsafe { session.addOutput(&output) };
+
+    // Dedicated photo pipeline for full-resolution stills (see
+    // [`Camera::capture_still`]). High-resolution capture must be opted into
+    // before the session starts.
+    let photo_output = unsafe { AVCapturePhotoOutput::new() };
+    if !unsafe { session.canAddOutput(&photo_output) } {
+        return Err(CameraError::Failed("cannot add photo output".into()));
+    }
+    unsafe { session.addOutput(&photo_output) };
+    // `maxPhotoDimensions` (iOS 16+) supersedes this, but the deprecated
+    // switch still maps onto it and keeps the iOS 15 floor working.
+    #[allow(deprecated)]
+    unsafe {
+        photo_output.setHighResolutionCaptureEnabled(true);
+    }
+
     unsafe { session.commitConfiguration() };
     unsafe { session.startRunning() };
 
     if let Ok(mut slot) = session_slot().lock() {
         *slot = Some(SessionHolder {
             session,
+            photo_output,
             _delegate: delegate,
             _queue: queue,
         });

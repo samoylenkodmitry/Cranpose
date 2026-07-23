@@ -27,7 +27,8 @@ pub use background::{
     set_platform_background_activity, BackgroundActivity, BackgroundActivityRef,
 };
 pub use camera::{
-    camera, clear_platform_camera, set_platform_camera, Camera, CameraError, CameraFrame, CameraRef,
+    camera, clear_platform_camera, set_platform_camera, Camera, CameraError, CameraFrame,
+    CameraRef, CameraStill,
 };
 pub use device_info::{
     clear_platform_device_info, device_info, set_platform_device_info, DeviceInfo, DeviceInfoRef,

@@ -23,6 +23,18 @@ pub struct CameraFrame {
     pub rgba: Vec<u8>,
 }
 
+/// A full-resolution still photograph as an encoded image.
+///
+/// Unlike [`CameraFrame`] (a viewfinder-resolution stream frame), a still is
+/// captured through the platform's dedicated photo pipeline at full sensor
+/// resolution — on iOS that is `AVCapturePhotoOutput`, roughly 12 MP versus the
+/// 720p-class viewfinder. The bytes are an encoded JPEG whose EXIF orientation
+/// tag reflects the device rotation; decode with an orientation-aware decoder.
+#[derive(Clone)]
+pub struct CameraStill {
+    pub jpeg: Vec<u8>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CameraError {
     /// No live camera backend on this platform.
@@ -44,6 +56,15 @@ pub trait Camera: Send + Sync {
     fn start(&self) -> Result<String, CameraError>;
     /// The most recent frame, or `None` if none has arrived yet.
     fn latest_frame(&self) -> Option<CameraFrame>;
+    /// Capture a full-resolution still through the platform photo pipeline.
+    ///
+    /// Blocks up to a few seconds while the device exposes and encodes.
+    /// Returns `None` where the backend has no dedicated photo path (callers
+    /// should fall back to [`latest_frame`](Self::latest_frame)) or when the
+    /// capture fails.
+    fn capture_still(&self) -> Option<CameraStill> {
+        None
+    }
     /// Stop the session and release the device.
     fn stop(&self);
 }
