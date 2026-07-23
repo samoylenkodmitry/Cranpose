@@ -82,7 +82,9 @@ impl LiquidColors {
             on_accent: Color::WHITE,
             destructive: Color::from_rgb_u8(255, 59, 48),
             success: Color::from_rgb_u8(52, 199, 89),
-            toggle_on: Color::from_rgb_u8(43, 189, 76),
+            // Switch "on" track follows the theme accent (not a fixed iOS green)
+            // so toggles read as part of the app's own color language.
+            toggle_on: accent,
             toggle_off: Color::from_rgb_u8(170, 170, 181),
             warning: Color::from_rgb_u8(255, 149, 0),
             glass_tint: Color::from_rgba_u8(255, 255, 255, 18),
@@ -106,7 +108,8 @@ impl LiquidColors {
             on_accent: Color::WHITE,
             destructive: Color::from_rgb_u8(255, 69, 58),
             success: Color::from_rgb_u8(48, 209, 88),
-            toggle_on: Color::from_rgb_u8(48, 209, 88),
+            // Switch "on" track follows the theme accent (see light()).
+            toggle_on: accent,
             toggle_off: Color::from_rgb_u8(99, 99, 102),
             warning: Color::from_rgb_u8(255, 159, 10),
             glass_tint: Color::from_rgba_u8(20, 20, 24, 40),
@@ -256,7 +259,9 @@ mod tests {
         assert_eq!(light.accent, dark.accent);
         assert_ne!(light.background, dark.background);
         assert_ne!(light.glass_tint, dark.glass_tint);
-        assert_ne!(light.toggle_on, dark.toggle_on);
+        // The "on" track now follows the accent in both schemes.
+        assert_eq!(light.toggle_on, accent);
+        assert_eq!(dark.toggle_on, accent);
         assert_ne!(light.toggle_off, dark.toggle_off);
     }
 
