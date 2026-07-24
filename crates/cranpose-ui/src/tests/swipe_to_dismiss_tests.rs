@@ -526,3 +526,46 @@ fn pressing_mid_flight_pins_the_content() {
     assert!(drag.is_consumed());
     assert_eq!(harness.offset(), mid_flight + 20.0);
 }
+
+#[test]
+fn identity_change_resets_a_dismissed_controller() {
+    // The bug this guards: an UNKEYED lazy list reuses composition slots by
+    // index, so after a dismissal the slot's remembered controller — content
+    // translated off-screen, background revealed, height collapsed — is
+    // handed to the NEXT item ("items go shuffled, red boxes stick"). With
+    // `SwipeToDismissSpec::with_key`, the composable resets the controller
+    // whenever the key changes; this drives that reset directly.
+    let mut harness = Harness::new(200.0, 0.5);
+
+    harness.send(&down(10.0, 10.0));
+    harness.send(&move_to(30.0, 12.0)); // capture
+    harness.send(&move_to(180.0, 12.0)); // past the 100 px threshold
+    harness.send(&up(180.0, 12.0));
+    harness.pump_frames(240); // fling + settle + collapse
+    assert_eq!(harness.dismiss_count.get(), 1);
+    assert!(
+        harness.collapse() < 0.05,
+        "dismissed row should have collapsed (got {})",
+        harness.collapse()
+    );
+
+    // The slot is reused for a different item: SwipeToDismiss sees a new
+    // spec key and resets. The new item must start pristine.
+    harness.controller.identity.set(Some(7));
+    harness.controller.reset_to_rest();
+    assert_eq!(harness.offset(), 0.0, "offset must snap back to rest");
+    assert!(
+        (harness.collapse() - 1.0).abs() < 1e-6,
+        "row height must be restored"
+    );
+    assert!(!harness.revealed(), "background must not stay revealed");
+    assert!(!harness.controller.dismissed.get());
+
+    // And the new item swipes like new — including firing its own dismissal.
+    harness.send(&down(10.0, 10.0));
+    harness.send(&move_to(30.0, 12.0));
+    harness.send(&move_to(180.0, 12.0));
+    harness.send(&up(180.0, 12.0));
+    harness.pump_frames(240);
+    assert_eq!(harness.dismiss_count.get(), 2);
+}
