@@ -78,6 +78,14 @@ pub struct SwipeToDismissSpec {
     /// revealed as the row slides away. Receives the [`SwipeDismissSide`] the
     /// row is being swiped toward so the reveal can follow the swipe direction.
     background: Option<BackgroundFn>,
+    /// Identity of the wrapped content (e.g. the row's database id). When a
+    /// composition slot is reused for a DIFFERENT item — unkeyed lazy-list
+    /// rows all shift up after a removal — the remembered swipe state must
+    /// not leak onto the new item: without a key, the next row inherits the
+    /// dismissed row's displacement, revealed background and collapsed
+    /// height ("items go shuffled, red boxes stick"). `None` keeps the
+    /// legacy per-slot behaviour.
+    pub key: Option<u64>,
 }
 
 impl SwipeToDismissSpec {
@@ -85,7 +93,15 @@ impl SwipeToDismissSpec {
         Self {
             threshold_fraction: 0.5,
             background: None,
+            key: None,
         }
+    }
+
+    /// Declares the identity of the wrapped content. When the key changes,
+    /// the swipe state resets to rest — the new item starts untouched.
+    pub fn with_key(mut self, key: u64) -> Self {
+        self.key = Some(key);
+        self
     }
 
     /// Sets the dismiss threshold as a fraction of the content width.
@@ -208,6 +224,9 @@ struct SwipeToDismissController {
     settle_watcher: RefCell<Option<FrameCallbackRegistration>>,
     /// Frame callback driving the post-dismiss height collapse.
     collapse_watcher: RefCell<Option<FrameCallbackRegistration>>,
+    /// Identity of the content this controller's state belongs to (from
+    /// [`SwipeToDismissSpec::with_key`]); state resets when it changes.
+    identity: Cell<Option<u64>>,
 }
 
 impl SwipeToDismissController {
@@ -226,7 +245,22 @@ impl SwipeToDismissController {
             node_id: Cell::new(None),
             settle_watcher: RefCell::new(None),
             collapse_watcher: RefCell::new(None),
+            identity: Cell::new(None),
         })
+    }
+
+    /// Instantly return to the untouched state. Used when the composition
+    /// slot is reused for a different item (the spec key changed): the new
+    /// item must not inherit the old item's displacement, reveal, collapse
+    /// or a pending dismissal.
+    fn reset_to_rest(&self) {
+        self.settle_watcher.borrow_mut().take();
+        self.collapse_watcher.borrow_mut().take();
+        self.offset.borrow_mut().snapTo(0.0);
+        self.collapse.borrow_mut().snapTo(1.0);
+        self.phase.set(SwipePhase::Idle);
+        self.dismissed.set(false);
+        self.set_revealed(false);
     }
 
     fn current_offset(&self) -> f32 {
@@ -540,6 +574,14 @@ where
             composer.remember(|| SwipeToDismissController::new(runtime));
         owned.with(Rc::clone)
     });
+
+    // Content identity: when this composition slot is reused for a different
+    // item (unkeyed lazy rows shifting up after a removal), the remembered
+    // controller must not leak the old item's swipe state onto the new one.
+    if controller.identity.get() != spec.key {
+        controller.reset_to_rest();
+        controller.identity.set(spec.key);
+    }
 
     // Refresh the per-recomposition inputs so the pointer handler (which
     // lives across recompositions) observes the latest values.
