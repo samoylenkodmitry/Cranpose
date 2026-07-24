@@ -84,7 +84,7 @@ pub struct SwipeToDismissSpec {
     /// not leak onto the new item: without a key, the next row inherits the
     /// dismissed row's displacement, revealed background and collapsed
     /// height ("items go shuffled, red boxes stick"). `None` keeps the
-    /// legacy per-slot behaviour.
+    /// keyless per-slot behaviour unchanged.
     pub key: Option<u64>,
 }
 
