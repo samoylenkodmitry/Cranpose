@@ -157,6 +157,13 @@ mod desktop_input;
 #[cfg(any(feature = "desktop-shell", all(feature = "ios", target_os = "ios")))]
 mod winit_pointer;
 
+/// Multi-touch id routing for the winit ingress. Only the iOS shell consumes it
+/// today (desktop pointers are single-finger), but it is built on every target
+/// that compiles the winit translation so its tests run on the host.
+#[cfg(any(feature = "desktop-shell", all(feature = "ios", target_os = "ios")))]
+#[cfg_attr(not(all(feature = "ios", target_os = "ios")), allow(dead_code))]
+mod winit_touch;
+
 /// Renderer-agnostic robot testing harness shared by the desktop shells.
 #[cfg(all(
     feature = "robot",
